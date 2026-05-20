@@ -161,6 +161,7 @@ async def login(
             user_id=user.id,
             session_id=session_id,
             tenant_id=None,
+            is_system_admin=user.is_system_admin,
         )
 
         return LoginResponse(

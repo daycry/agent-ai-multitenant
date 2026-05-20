@@ -28,7 +28,7 @@ from api_server.auth.jwt import InvalidTokenError, decode_jwt
 from api_server.auth.rate_limit import RateLimiter
 from api_server.auth.sessions import SessionStore
 from api_server.config import get_settings
-from api_server.db.session import get_sessionmaker
+from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +41,7 @@ class AuthPrincipal:
     user_id: UUID
     session_id: UUID
     tenant_id: UUID | None
+    is_system_admin: bool = False
 
 
 def _parse_bearer(authorization: str | None) -> str:
@@ -134,7 +135,26 @@ async def get_principal(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return AuthPrincipal(user_id=user_id, session_id=session_id, tenant_id=tenant_id)
+    is_system_admin = bool(claims.get("sys", False))
+
+    return AuthPrincipal(
+        user_id=user_id,
+        session_id=session_id,
+        tenant_id=tenant_id,
+        is_system_admin=is_system_admin,
+    )
+
+
+def require_system_admin(
+    principal: AuthPrincipal = Depends(get_principal),
+) -> AuthPrincipal:
+    """Gate an endpoint to System Admin only. 403 otherwise."""
+    if not principal.is_system_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="system admin role required",
+        )
+    return principal
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +182,25 @@ async def get_tenant_session(
                 text("SELECT set_config('app.tenant_id', :tid, true)"),
                 {"tid": str(principal.tenant_id)},
             )
+        yield session
+
+
+async def get_admin_session(
+    principal: AuthPrincipal = Depends(require_system_admin),
+) -> AsyncIterator[AsyncSession]:
+    """Yield an AsyncSession bound to the BYPASSRLS admin engine.
+
+    Used by /admin/* endpoints: System Admin sees and writes
+    everything cross-tenant, including audit_log rows with
+    tenant_id IS NULL.
+    """
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        # app.user_id is still set so audit_log rows carry the actor.
+        await session.execute(
+            text("SELECT set_config('app.user_id', :uid, true)"),
+            {"uid": str(principal.user_id)},
+        )
         yield session
 
 

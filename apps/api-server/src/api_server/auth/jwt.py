@@ -31,13 +31,19 @@ def encode_jwt(
     user_id: UUID,
     session_id: UUID,
     tenant_id: UUID | None = None,
+    is_system_admin: bool = False,
     expires_in: timedelta | None = None,
     extra_claims: dict[str, Any] | None = None,
 ) -> str:
-    """Sign a token. `session_id` is mandatory — every token issued by
-    this service is bound to a server-side session in Redis (see
-    `auth.sessions`), so logout can revoke instantly. `expires_in`
-    overrides the default settings TTL."""
+    """Sign a token.
+
+    - `session_id` is mandatory — every token is bound to a server-side
+      session in Redis so logout can revoke instantly.
+    - `is_system_admin` lifts the user out of RLS for admin endpoints.
+      Phase-0 caveat: this flag is fixed at login time; revoking
+      admin in the DB does NOT invalidate already-issued tokens until
+      they expire or the session is revoked.
+    """
     settings = get_settings()
     now = datetime.now(tz=UTC)
     ttl = expires_in or timedelta(minutes=settings.jwt_expiration_minutes)
@@ -49,6 +55,8 @@ def encode_jwt(
     }
     if tenant_id is not None:
         claims["tid"] = str(tenant_id)
+    if is_system_admin:
+        claims["sys"] = True
     if extra_claims:
         claims.update(extra_claims)
     encoded: str = jwt.encode(

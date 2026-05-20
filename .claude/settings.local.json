@@ -8,7 +8,9 @@
       "Bash(docker compose *)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/integration/test_auth.py -v)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/ -v)",
-      "Bash(git commit -m 'feat\\(api-server\\): auth endpoints with Argon2id, Redis sessions, rate limit \\(task_00_10\\) *)"
+      "Bash(git commit -m 'feat\\(api-server\\): auth endpoints with Argon2id, Redis sessions, rate limit \\(task_00_10\\) *)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/integration/test_admin_rbac.py -v)",
+      "Bash(git commit -m 'feat\\(api-server\\): /admin/* endpoints with System Admin RBAC + audit log \\(task_00_11\\) *)"
     ]
   }
 }

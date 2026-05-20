@@ -23,6 +23,15 @@ class Settings(BaseSettings):
         "@localhost:15432/agentic_platform",
         description="SQLAlchemy URL for the *application* role (NOBYPASSRLS).",
     )
+    admin_database_url: str = Field(
+        default="postgresql+asyncpg://migrations_user:changeme-migrations-dev-only"
+        "@localhost:15432/agentic_platform",
+        description=(
+            "SQLAlchemy URL for the System Admin endpoints. Connects as a "
+            "BYPASSRLS role so cross-tenant reads and audit_log inserts go "
+            "through without setting app.tenant_id."
+        ),
+    )
 
     # ----- Auth / sessions -----
     jwt_secret: SecretStr = Field(

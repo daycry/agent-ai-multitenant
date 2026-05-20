@@ -166,6 +166,16 @@ def app_database_url() -> str:
 
 
 @pytest.fixture()
+def admin_database_url() -> str:
+    """SQLAlchemy URL as migrations_user (BYPASSRLS). Used by /admin/*
+    endpoints so System Admin can read across tenants and write
+    audit_log rows with tenant_id IS NULL."""
+    return (
+        f"postgresql+asyncpg://{PG_MIG_USER}:{PG_MIG_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
+    )
+
+
+@pytest.fixture()
 def test_redis_url() -> str:
     """Redis URL the FastAPI app under test should use."""
     return TEST_REDIS_URL

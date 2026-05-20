@@ -301,7 +301,7 @@ Objetivo: API base con auth, multi-tenancy y RLS funcionando.
 
 #### `task_00_11` — Endpoints Admin
 
-- [ ] **Título**: Endpoints /admin/tenants (CRUD), /admin/users (CRUD), /admin/system-health
+- [x] **Título**: Endpoints /admin/tenants (CRUD), /admin/users (CRUD), /admin/system-health
 - **Descripción**: Endpoints solo accesibles a System Admin que permiten crear tenants, asignar Tenant Admins, listar usuarios cross-tenant (con disclaimer de auditoría), y consultar salud del sistema. Cada acción en audit_log con quién, cuándo, qué.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
