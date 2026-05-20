@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `10-asistente-personal` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `06-testing-revision-git` |
-| **Tiempo estimado (calendario)** | 3-4 semanas |
-| **Tiempo estimado (persona-días)** | 60-80 |
-| **Previsión de coste — humano** | 24.000 € – 32.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 120 € – 180 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/10-asistente-personal` |
-| **Secciones del .docx** | [17] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `10-asistente-personal`                   |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `06-testing-revision-git`                 |
+| **Tiempo estimado (calendario)**   | 3-4 semanas                               |
+| **Tiempo estimado (persona-días)** | 60-80                                     |
+| **Previsión de coste — humano**    | 24.000 € – 32.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 120 € – 180 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/10-asistente-personal`              |
+| **Secciones del .docx**            | [17]                                      |
 
 ---
 
@@ -70,10 +70,10 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| WhatsApp requiere aprobación de plantillas en Meta | Alta | Medio | Documentar bien el proceso. Empezar con Telegram + Email. |
-| Spam de notificaciones molesta al usuario | Media | Alto | Rate limiting por canal, agrupación de eventos similares, preferencias granulares. |
+| Riesgo                                             | Probabilidad | Impacto | Mitigación                                                                         |
+| -------------------------------------------------- | ------------ | ------- | ---------------------------------------------------------------------------------- |
+| WhatsApp requiere aprobación de plantillas en Meta | Alta         | Medio   | Documentar bien el proceso. Empezar con Telegram + Email.                          |
+| Spam de notificaciones molesta al usuario          | Media        | Alto    | Rate limiting por canal, agrupación de eventos similares, preferencias granulares. |
 
 ---
 
@@ -416,7 +416,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "Devuelve listado consolidado cross-proyecto"
     - "Puede aprobar planes pendientes desde el chat con el asistente"
     - "Mantiene contexto entre mensajes"
-
 ```
 
 ---

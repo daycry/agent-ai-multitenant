@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `06-testing-revision-git` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `03-chat-planning-aprobacion`, `05-mcp-tools-avanzadas` |
-| **Tiempo estimado (calendario)** | 4-5 semanas |
-| **Tiempo estimado (persona-días)** | 85-105 |
-| **Previsión de coste — humano** | 34.000 € – 42.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 200 € – 320 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/06-testing-revision-git` |
-| **Secciones del .docx** | [12.4, 14, 31.12] |
+| Campo                              | Valor                                                   |
+| ---------------------------------- | ------------------------------------------------------- |
+| **ID del Plan**                    | `06-testing-revision-git`                               |
+| **Estado**                         | `pending_approval`                                      |
+| **Bloqueado por**                  | `03-chat-planning-aprobacion`, `05-mcp-tools-avanzadas` |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                                             |
+| **Tiempo estimado (persona-días)** | 85-105                                                  |
+| **Previsión de coste — humano**    | 34.000 € – 42.000 € (tarifa media 50 €/h)               |
+| **Previsión de coste — IA**        | 200 € – 320 €                                           |
+| **Aprobador propuesto**            | System Admin                                            |
+| **Rama git**                       | `plan/06-testing-revision-git`                          |
+| **Secciones del .docx**            | [12.4, 14, 31.12]                                       |
 
 ---
 
@@ -79,11 +79,11 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Catálogo de runtimes mal mantenido se queda obsoleto | Media | Alto | Job nocturno de update + CI que valida builds. Versionado semver. |
-| Bug en git worktrees corrompe repo del proyecto | Baja | Crítico | Tests exhaustivos. Backup del bare repo antes de cada worktree de plan. |
-| Cap de review-runtimes saturado bloquea equipos | Media | Medio | Notificaciones de cap alcanzado. Configuración generosa por defecto. |
+| Riesgo                                               | Probabilidad | Impacto | Mitigación                                                              |
+| ---------------------------------------------------- | ------------ | ------- | ----------------------------------------------------------------------- |
+| Catálogo de runtimes mal mantenido se queda obsoleto | Media        | Alto    | Job nocturno de update + CI que valida builds. Versionado semver.       |
+| Bug en git worktrees corrompe repo del proyecto      | Baja         | Crítico | Tests exhaustivos. Backup del bare repo antes de cada worktree de plan. |
+| Cap de review-runtimes saturado bloquea equipos      | Media        | Medio   | Notificaciones de cap alcanzado. Configuración generosa por defecto.    |
 
 ---
 
@@ -817,7 +817,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "Los worktrees se crean y destruyen sin errores"
     - "git fsck en cada bare repo al final pasa sin warnings"
     - "Ningún worktree huérfano queda tras los 30 días"
-
 ```
 
 ---

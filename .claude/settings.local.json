@@ -1,7 +1,5 @@
 {
   "permissions": {
-    "allow": [
-      "Bash(grep -E '\\\\.\\(yml|yaml|toml|json|xml\\)$')"
-    ]
+    "allow": ["Bash(grep -E '\\\\.\\(yml|yaml|toml|json|xml\\)$')"]
   }
 }

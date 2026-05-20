@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `02-ejecucion-agentes` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `01-dominio-minimo` |
-| **Tiempo estimado (calendario)** | 4-5 semanas |
-| **Tiempo estimado (persona-días)** | 80-100 |
-| **Previsión de coste — humano** | 32.000 € – 40.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 150 € – 250 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/02-ejecucion-agentes` |
-| **Secciones del .docx** | [5.5, 12, 13, 21] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `02-ejecucion-agentes`                    |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `01-dominio-minimo`                       |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                               |
+| **Tiempo estimado (persona-días)** | 80-100                                    |
+| **Previsión de coste — humano**    | 32.000 € – 40.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 150 € – 250 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/02-ejecucion-agentes`               |
+| **Secciones del .docx**            | [5.5, 12, 13, 21]                         |
 
 ---
 
@@ -52,7 +52,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 - Worker base que recoge jobs y lanza contenedores agent-runtime.
 - Imagen agent-runtime Python 3.12 + LangGraph + tools builtin.
 - Agent Loop completo: perceive → recall → plan → act → observe → reflect → finalize → self_review.
-- Tools builtin funcionales: shell_exec, file_*, http_request (con allowlist), kanban_update, task_comment, notify_user, agent_invoke. Placeholders para memory_*, document_convert (Fase 4).
+- Tools builtin funcionales: shell*exec, file*_, http*request (con allowlist), kanban_update, task_comment, notify_user, agent_invoke. Placeholders para memory*_, document_convert (Fase 4).
 - Captura completa de Executions con steps_log JSONB.
 - UI de Timeline de Ejecución (paso a paso jerárquico).
 - Streaming de logs y eventos vía WebSocket.
@@ -78,11 +78,11 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Bug en aislamiento permite escape de contenedor | Baja | Crítico | Pentest interno antes de cerrar fase. Configuración seccomp + AppArmor validada con test. |
-| Loops infinitos consumen recursos | Media | Alto | max_iterations + detección de loops repetitivos + circuit breaker + budget caps. |
-| WebSocket no escala con muchas ejecuciones simultáneas | Media | Medio | Sticky sessions con nginx. Pruebas de carga con 50+ ejecuciones. |
+| Riesgo                                                 | Probabilidad | Impacto | Mitigación                                                                                |
+| ------------------------------------------------------ | ------------ | ------- | ----------------------------------------------------------------------------------------- |
+| Bug en aislamiento permite escape de contenedor        | Baja         | Crítico | Pentest interno antes de cerrar fase. Configuración seccomp + AppArmor validada con test. |
+| Loops infinitos consumen recursos                      | Media        | Alto    | max_iterations + detección de loops repetitivos + circuit breaker + budget caps.          |
+| WebSocket no escala con muchas ejecuciones simultáneas | Media        | Medio   | Sticky sessions con nginx. Pruebas de carga con 50+ ejecuciones.                          |
 
 ---
 
@@ -630,7 +630,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "Eventos de ejecución se reflejan en menos de 1s en todas las pestañas"
     - "Transiciones de tarea (in_progress → done) se ven en el Kanban sin refrescar"
     - "Cerrar y reabrir el WebSocket recupera el estado actual sin pérdida"
-
 ```
 
 ---

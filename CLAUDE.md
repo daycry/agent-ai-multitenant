@@ -85,24 +85,24 @@ agentic-platform/
 
 ## Stack Tecnológico (Resumen)
 
-| Capa | Tecnología |
-|------|-----------|
-| Lenguaje backend | Python 3.12 |
-| Framework web | FastAPI + Uvicorn |
-| ORM | SQLAlchemy 2.x async + Alembic |
-| BD relacional | PostgreSQL 16 |
-| BD vectorial | pgvector (en el mismo PostgreSQL) |
-| Cache/broker | Redis 7 |
-| Cola de tareas | Celery 5 |
-| Orquestación agentes | LangGraph |
-| LLM abstracción | LiteLLM + Claude Agent SDK + GitHub Copilot OAuth |
-| Object storage | MinIO (S3-compatible) |
-| Secrets | HashiCorp Vault |
-| Ingestión documental | Docling (IBM) + docling-serve + docling-mcp |
-| Frontend | Next.js 14 + React + TanStack Query + Tailwind + shadcn/ui |
-| Tiempo real | WebSocket + SSE |
-| Observabilidad | OpenTelemetry + Prometheus + Grafana + Loki |
-| Antivirus | ClamAV |
+| Capa                 | Tecnología                                                 |
+| -------------------- | ---------------------------------------------------------- |
+| Lenguaje backend     | Python 3.12                                                |
+| Framework web        | FastAPI + Uvicorn                                          |
+| ORM                  | SQLAlchemy 2.x async + Alembic                             |
+| BD relacional        | PostgreSQL 16                                              |
+| BD vectorial         | pgvector (en el mismo PostgreSQL)                          |
+| Cache/broker         | Redis 7                                                    |
+| Cola de tareas       | Celery 5                                                   |
+| Orquestación agentes | LangGraph                                                  |
+| LLM abstracción      | LiteLLM + Claude Agent SDK + GitHub Copilot OAuth          |
+| Object storage       | MinIO (S3-compatible)                                      |
+| Secrets              | HashiCorp Vault                                            |
+| Ingestión documental | Docling (IBM) + docling-serve + docling-mcp                |
+| Frontend             | Next.js 14 + React + TanStack Query + Tailwind + shadcn/ui |
+| Tiempo real          | WebSocket + SSE                                            |
+| Observabilidad       | OpenTelemetry + Prometheus + Grafana + Loki                |
+| Antivirus            | ClamAV                                                     |
 
 ## Convenciones de Código
 
@@ -186,17 +186,17 @@ tengan `status: completed`.
 
 ### Estados Válidos del Frontmatter
 
-| status | Significado |
-|---|---|
-| `pending_approval` | Plan definido pero no empezado |
-| `approved` | Aprobado por humano, listo para empezar (estado intermedio opcional) |
-| `in_progress` | Plan activo ahora mismo (solo uno a la vez) |
-| `blocked` | Plan empezado pero pausado por bloqueo externo |
-| `pending_human_validation` | Todas las tareas done, esperando tests humanos del plan |
-| `completed` | Plan cerrado completamente |
-| `cancelled` | Plan abandonado |
-| `rejected` | Plan revisado y rechazado por humano |
-| `archived` | Plan completado y movido a histórico |
+| status                     | Significado                                                          |
+| -------------------------- | -------------------------------------------------------------------- |
+| `pending_approval`         | Plan definido pero no empezado                                       |
+| `approved`                 | Aprobado por humano, listo para empezar (estado intermedio opcional) |
+| `in_progress`              | Plan activo ahora mismo (solo uno a la vez)                          |
+| `blocked`                  | Plan empezado pero pausado por bloqueo externo                       |
+| `pending_human_validation` | Todas las tareas done, esperando tests humanos del plan              |
+| `completed`                | Plan cerrado completamente                                           |
+| `cancelled`                | Plan abandonado                                                      |
+| `rejected`                 | Plan revisado y rechazado por humano                                 |
+| `archived`                 | Plan completado y movido a histórico                                 |
 
 ---
 

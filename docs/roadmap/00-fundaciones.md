@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `00-fundaciones` |
-| **Estado** | `in_progress` |
-| **Bloqueado por** | — (es el plan inicial) |
-| **Tiempo estimado (calendario)** | 3-4 semanas |
-| **Tiempo estimado (persona-días)** | 60-75 |
-| **Previsión de coste — humano** | 24.000 € – 30.000 € (con tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 80 € – 150 € (Claude Code asistiendo el desarrollo) |
-| **Ahorro estimado** | ~99% (la mayor parte del trabajo es asistencia, no autonomía total) |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/00-fundaciones` |
+| Campo                              | Valor                                                               |
+| ---------------------------------- | ------------------------------------------------------------------- |
+| **ID del Plan**                    | `00-fundaciones`                                                    |
+| **Estado**                         | `in_progress`                                                       |
+| **Bloqueado por**                  | — (es el plan inicial)                                              |
+| **Tiempo estimado (calendario)**   | 3-4 semanas                                                         |
+| **Tiempo estimado (persona-días)** | 60-75                                                               |
+| **Previsión de coste — humano**    | 24.000 € – 30.000 € (con tarifa media 50 €/h)                       |
+| **Previsión de coste — IA**        | 80 € – 150 € (Claude Code asistiendo el desarrollo)                 |
+| **Ahorro estimado**                | ~99% (la mayor parte del trabajo es asistencia, no autonomía total) |
+| **Aprobador propuesto**            | System Admin                                                        |
+| **Rama git**                       | `plan/00-fundaciones`                                               |
 
 ---
 
@@ -46,6 +46,7 @@ El sistema se ejecuta como un stack Docker Compose en una sola máquina (modelo 
 ### Alcance
 
 **Entra en este plan**:
+
 - Setup del monorepo con estructura definida.
 - Stack Docker Compose con servicios base (Postgres+pgvector, Redis, MinIO, Vault, ClamAV).
 - FastAPI esqueleto con auth JWT, sesiones server-side en Redis.
@@ -57,6 +58,7 @@ El sistema se ejecuta como un stack Docker Compose en una sola máquina (modelo 
 - CI/CD básico (lint, tests unitarios, build de imágenes).
 
 **Queda fuera (otras fases)**:
+
 - Cualquier modelo de dominio (agentes, equipos, proyectos, etc.) → Fase 01.
 - Ejecución de agentes → Fase 02.
 - SSO empresarial avanzado (OIDC/SAML/SCIM) → Fase 08.
@@ -79,12 +81,12 @@ El sistema se ejecuta como un stack Docker Compose en una sola máquina (modelo 
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Bug en RLS deja escape cross-tenant | Media | Crítico | Suite de tests automáticos de aislamiento obligatorios en CI antes de cerrar fase. |
-| Pérdida de unseal keys de Vault | Baja | Crítico | Documentar procedimiento de backup de unseal keys en runbook obligatorio. |
-| Configuración de Docker insegura en host | Media | Alto | Validación de prerequisitos al arrancar (Docker, permisos, capabilities); script `scripts/validate-host.sh`. |
-| Logs filtran PII | Media | Alto | Filtros de logging activos desde el día uno con detección de patrones (email, tokens, IBAN). |
+| Riesgo                                   | Probabilidad | Impacto | Mitigación                                                                                                   |
+| ---------------------------------------- | ------------ | ------- | ------------------------------------------------------------------------------------------------------------ |
+| Bug en RLS deja escape cross-tenant      | Media        | Crítico | Suite de tests automáticos de aislamiento obligatorios en CI antes de cerrar fase.                           |
+| Pérdida de unseal keys de Vault          | Baja         | Crítico | Documentar procedimiento de backup de unseal keys en runbook obligatorio.                                    |
+| Configuración de Docker insegura en host | Media        | Alto    | Validación de prerequisitos al arrancar (Docker, permisos, capabilities); script `scripts/validate-host.sh`. |
+| Logs filtran PII                         | Media        | Alto    | Filtros de logging activos desde el día uno con detección de patrones (email, tokens, IBAN).                 |
 
 ---
 
@@ -193,7 +195,7 @@ Objetivo: stack con servicios de infraestructura levantándose limpio.
     description: "Las extensiones pgvector y pg_trgm están instaladas"
     check_type: automated
     runtime: generic-shell
-    command: "docker compose exec -T postgres psql -U postgres -c \"SELECT extname FROM pg_extension WHERE extname IN ('vector','pg_trgm')\" | grep -c vector"
+    command: 'docker compose exec -T postgres psql -U postgres -c "SELECT extname FROM pg_extension WHERE extname IN (''vector'',''pg_trgm'')" | grep -c vector'
     expected_signal: "stdout contains 1"
   ```
 
@@ -212,7 +214,7 @@ Objetivo: stack con servicios de infraestructura levantándose limpio.
     check_type: automated
     runtime: generic-shell
     command: "docker compose exec -T vault vault status -format=json | jq -r '.initialized'"
-    expected_signal: "stdout == \"true\""
+    expected_signal: 'stdout == "true"'
   ```
 
 ### Fase C — FastAPI Esqueleto con Multi-Tenancy

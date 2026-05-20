@@ -2,7 +2,24 @@
 plan_id: 15-instalador-produccion
 title: Instalador, Endurecimiento y Producción
 status: pending_approval
-blocking_plan: [00-fundaciones, 01-dominio-minimo, 02-ejecucion-agentes, 03-chat-planning-aprobacion, 04-memoria-rag-kbs, 05-mcp-tools-avanzadas, 06-testing-revision-git, 07-documentacion-visor, 08-sso-empresarial, 09-marketplace, 10-asistente-personal, 11-guardrails-precios, 12-backup-restore, 13-api-publica-webhooks, 14-evals-estadisticas]
+blocking_plan:
+  [
+    00-fundaciones,
+    01-dominio-minimo,
+    02-ejecucion-agentes,
+    03-chat-planning-aprobacion,
+    04-memoria-rag-kbs,
+    05-mcp-tools-avanzadas,
+    06-testing-revision-git,
+    07-documentacion-visor,
+    08-sso-empresarial,
+    09-marketplace,
+    10-asistente-personal,
+    11-guardrails-precios,
+    12-backup-restore,
+    13-api-publica-webhooks,
+    14-evals-estadisticas,
+  ]
 started_at: null
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
@@ -18,18 +35,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `15-instalador-produccion` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | todas las fases anteriores (`00-fundaciones` … `14-evals-estadisticas`) |
-| **Tiempo estimado (calendario)** | 4-5 semanas |
-| **Tiempo estimado (persona-días)** | 80-100 |
-| **Previsión de coste — humano** | 32.000 € – 40.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 150 € – 240 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/15-instalador-produccion` |
-| **Secciones del .docx** | [22] |
+| Campo                              | Valor                                                                   |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| **ID del Plan**                    | `15-instalador-produccion`                                              |
+| **Estado**                         | `pending_approval`                                                      |
+| **Bloqueado por**                  | todas las fases anteriores (`00-fundaciones` … `14-evals-estadisticas`) |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                                                             |
+| **Tiempo estimado (persona-días)** | 80-100                                                                  |
+| **Previsión de coste — humano**    | 32.000 € – 40.000 € (tarifa media 50 €/h)                               |
+| **Previsión de coste — IA**        | 150 € – 240 €                                                           |
+| **Aprobador propuesto**            | System Admin                                                            |
+| **Rama git**                       | `plan/15-instalador-produccion`                                         |
+| **Secciones del .docx**            | [22]                                                                    |
 
 ---
 
@@ -78,10 +95,10 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Instalador frágil en máquinas con configuraciones exóticas | Alta | Medio | Validación exhaustiva de prerequisitos + mensajes de error explícitos + soporte CLI manual para casos avanzados. |
-| Pentest descubre vulnerabilidades críticas tarde | Media | Crítico | Pentest interno temprano (Fase 12), pentest externo final. |
+| Riesgo                                                     | Probabilidad | Impacto | Mitigación                                                                                                       |
+| ---------------------------------------------------------- | ------------ | ------- | ---------------------------------------------------------------------------------------------------------------- |
+| Instalador frágil en máquinas con configuraciones exóticas | Alta         | Medio   | Validación exhaustiva de prerequisitos + mensajes de error explícitos + soporte CLI manual para casos avanzados. |
+| Pentest descubre vulnerabilidades críticas tarde           | Media        | Crítico | Pentest interno temprano (Fase 12), pentest externo final.                                                       |
 
 ---
 
@@ -643,7 +660,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "API Reference completa y precisa"
     - "SDKs documentados con ejemplos"
     - "Runbooks cubren los escenarios operativos típicos"
-
 ```
 
 ---

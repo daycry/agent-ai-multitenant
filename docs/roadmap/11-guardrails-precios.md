@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `11-guardrails-precios` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `02-ejecucion-agentes` |
-| **Tiempo estimado (calendario)** | 3-4 semanas |
-| **Tiempo estimado (persona-días)** | 60-80 |
-| **Previsión de coste — humano** | 24.000 € – 32.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 150 € – 240 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/11-guardrails-precios` |
-| **Secciones del .docx** | [19.5, 30.8] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `11-guardrails-precios`                   |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `02-ejecucion-agentes`                    |
+| **Tiempo estimado (calendario)**   | 3-4 semanas                               |
+| **Tiempo estimado (persona-días)** | 60-80                                     |
+| **Previsión de coste — humano**    | 24.000 € – 32.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 150 € – 240 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/11-guardrails-precios`              |
+| **Secciones del .docx**            | [19.5, 30.8]                              |
 
 ---
 
@@ -73,10 +73,10 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Guardrails falsos positivos bloquean trabajo legítimo | Media | Medio | Modo 'warn' para fase de aprendizaje; 'block' tras curva de calibración. |
-| Precios desactualizados producen estimaciones incorrectas | Media | Bajo | Sincronización diaria + alerta si lleva >7 días sin sync. |
+| Riesgo                                                    | Probabilidad | Impacto | Mitigación                                                               |
+| --------------------------------------------------------- | ------------ | ------- | ------------------------------------------------------------------------ |
+| Guardrails falsos positivos bloquean trabajo legítimo     | Media        | Medio   | Modo 'warn' para fase de aprendizaje; 'block' tras curva de calibración. |
+| Precios desactualizados producen estimaciones incorrectas | Media        | Bajo    | Sincronización diaria + alerta si lleva >7 días sin sync.                |
 
 ---
 
@@ -525,7 +525,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "Si subida >10%, requiere confirmación explícita"
     - "Tras aplicar, los nuevos cálculos de coste reflejan precios actualizados"
     - "Audit log muestra qué cambió, quién lo hizo, desde dónde"
-
 ```
 
 ---

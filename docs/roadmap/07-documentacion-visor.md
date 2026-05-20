@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `07-documentacion-visor` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `06-testing-revision-git` |
-| **Tiempo estimado (calendario)** | 3 semanas |
-| **Tiempo estimado (persona-días)** | 55-65 |
-| **Previsión de coste — humano** | 22.000 € – 26.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 100 € – 160 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/07-documentacion-visor` |
-| **Secciones del .docx** | [15, 16] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `07-documentacion-visor`                  |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `06-testing-revision-git`                 |
+| **Tiempo estimado (calendario)**   | 3 semanas                                 |
+| **Tiempo estimado (persona-días)** | 55-65                                     |
+| **Previsión de coste — humano**    | 22.000 € – 26.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 100 € – 160 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/07-documentacion-visor`             |
+| **Secciones del .docx**            | [15, 16]                                  |
 
 ---
 
@@ -72,10 +72,10 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Technical Writer agente produce docs de baja calidad | Media | Medio | Validación con guardrails + revisión humana del plan incluye revisar docs. |
-| Visor lento con miles de docs | Baja | Medio | Indexación incremental + paginación + lazy load. |
+| Riesgo                                               | Probabilidad | Impacto | Mitigación                                                                 |
+| ---------------------------------------------------- | ------------ | ------- | -------------------------------------------------------------------------- |
+| Technical Writer agente produce docs de baja calidad | Media        | Medio   | Validación con guardrails + revisión humana del plan incluye revisar docs. |
+| Visor lento con miles de docs                        | Baja         | Medio   | Indexación incremental + paginación + lazy load.                           |
 
 ---
 
@@ -472,7 +472,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "El sidebar solo muestra Proyecto A"
     - "Búsqueda no devuelve resultados de Proyecto B aunque haya match"
     - "Si conoce la URL directa de un .md de Proyecto B, recibe 403"
-
 ```
 
 ---

@@ -29,6 +29,7 @@ Documento de un solo vistazo. Para detalle profundo de cada capa, consultar el `
 **Aplicación**: api-server, orchestrator, personal-assistant, notification-dispatcher, webhook-dispatcher, memorizer.
 
 **Workers** (escalables manualmente):
+
 - worker-default: tareas estándar
 - worker-heavy: tareas pesadas
 - worker-gpu: si GPU habilitada

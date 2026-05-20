@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `05-mcp-tools-avanzadas` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `04-memoria-rag-kbs` |
-| **Tiempo estimado (calendario)** | 2-3 semanas |
-| **Tiempo estimado (persona-días)** | 40-55 |
-| **Previsión de coste — humano** | 16.000 € – 22.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 80 € – 120 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/05-mcp-tools-avanzadas` |
-| **Secciones del .docx** | [9] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `05-mcp-tools-avanzadas`                  |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `04-memoria-rag-kbs`                      |
+| **Tiempo estimado (calendario)**   | 2-3 semanas                               |
+| **Tiempo estimado (persona-días)** | 40-55                                     |
+| **Previsión de coste — humano**    | 16.000 € – 22.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 80 € – 120 €                              |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/05-mcp-tools-avanzadas`             |
+| **Secciones del .docx**            | [9]                                       |
 
 ---
 
@@ -70,10 +70,10 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| MCP servers de terceros mal mantenidos rompen el sistema | Media | Medio | Wrapping con timeout y circuit breaker. Marketplace en Fase 9 con niveles de confianza. |
-| Demasiadas tools confunden al agente | Media | Medio | Filtrar al agente solo las tools relevantes a su skill set. |
+| Riesgo                                                   | Probabilidad | Impacto | Mitigación                                                                              |
+| -------------------------------------------------------- | ------------ | ------- | --------------------------------------------------------------------------------------- |
+| MCP servers de terceros mal mantenidos rompen el sistema | Media        | Medio   | Wrapping con timeout y circuit breaker. Marketplace en Fase 9 con niveles de confianza. |
+| Demasiadas tools confunden al agente                     | Media        | Medio   | Filtrar al agente solo las tools relevantes a su skill set.                             |
 
 ---
 
@@ -391,7 +391,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
   checklist:
     - "La invocación falla con error explícito sobre allowlist"
     - "El intento queda en audit_log con el dominio bloqueado"
-
 ```
 
 ---

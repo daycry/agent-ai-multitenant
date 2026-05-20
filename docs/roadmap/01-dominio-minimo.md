@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `01-dominio-minimo` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `00-fundaciones` |
-| **Tiempo estimado (calendario)** | 4-5 semanas |
-| **Tiempo estimado (persona-días)** | 75-95 |
-| **Previsión de coste — humano** | 30.000 € – 38.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 120 € – 200 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/01-dominio-minimo` |
-| **Secciones del .docx** | [3, 5, 6, 7] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `01-dominio-minimo`                       |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `00-fundaciones`                          |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                               |
+| **Tiempo estimado (persona-días)** | 75-95                                     |
+| **Previsión de coste — humano**    | 30.000 € – 38.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 120 € – 200 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/01-dominio-minimo`                  |
+| **Secciones del .docx**            | [3, 5, 6, 7]                              |
 
 ---
 
@@ -76,10 +76,10 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Plantillas built-in mal diseñadas se convierten en deuda | Media | Alto | Revisión por humano experto antes de seed. Tests con plantillas en varios idiomas. |
-| Linked vs forked confuso en UI | Media | Medio | Diálogo claro con preview de impacto. Documentación en /docs/03-guides/. |
+| Riesgo                                                   | Probabilidad | Impacto | Mitigación                                                                         |
+| -------------------------------------------------------- | ------------ | ------- | ---------------------------------------------------------------------------------- |
+| Plantillas built-in mal diseñadas se convierten en deuda | Media        | Alto    | Revisión por humano experto antes de seed. Tests con plantillas en varios idiomas. |
+| Linked vs forked confuso en UI                           | Media        | Medio   | Diálogo claro con preview de impacto. Documentación en /docs/03-guides/.           |
 
 ---
 
@@ -601,7 +601,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "Click en un plan abre el detalle con el Kanban de Tareas filtrado"
     - "El breadcrumb (Proyecto > Planes > [Plan X] > Tareas) es claro y navegable"
     - "Mover una tarjeta de Backlog a Ready manualmente funciona (en esta fase el resto es manual también)"
-
 ```
 
 ---

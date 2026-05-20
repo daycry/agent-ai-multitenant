@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `14-evals-estadisticas` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `06-testing-revision-git` |
-| **Tiempo estimado (calendario)** | 3-4 semanas |
-| **Tiempo estimado (persona-días)** | 60-80 |
-| **Previsión de coste — humano** | 24.000 € – 32.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 180 € – 280 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/14-evals-estadisticas` |
-| **Secciones del .docx** | [27, 28] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `14-evals-estadisticas`                   |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `06-testing-revision-git`                 |
+| **Tiempo estimado (calendario)**   | 3-4 semanas                               |
+| **Tiempo estimado (persona-días)** | 60-80                                     |
+| **Previsión de coste — humano**    | 24.000 € – 32.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 180 € – 280 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/14-evals-estadisticas`              |
+| **Secciones del .docx**            | [27, 28]                                  |
 
 ---
 
@@ -72,10 +72,10 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| LLM-as-judge tiene sesgo | Media | Medio | Usar modelo distinto + criterios objetivos + revisión humana periódica de samples. |
-| Datasets desactualizados producen métricas engañosas | Media | Medio | Refresh del dataset con nuevas tareas reales cada N días. |
+| Riesgo                                               | Probabilidad | Impacto | Mitigación                                                                         |
+| ---------------------------------------------------- | ------------ | ------- | ---------------------------------------------------------------------------------- |
+| LLM-as-judge tiene sesgo                             | Media        | Medio   | Usar modelo distinto + criterios objetivos + revisión humana periódica de samples. |
+| Datasets desactualizados producen métricas engañosas | Media        | Medio   | Refresh del dataset con nuevas tareas reales cada N días.                          |
 
 ---
 
@@ -402,7 +402,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
   checklist:
     - "PDF generado con cabecera, gráficas, tablas"
     - "CSV exportable con datos crudos para análisis externo"
-
 ```
 
 ---

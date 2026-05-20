@@ -124,6 +124,7 @@ Scopes recomendados: nombre del módulo o capa (`users`, `auth`, `kanban`, `docs
 ### Merge Policy
 
 Determinado por el campo `push_policy` del repo:
+
 - `forbidden`: bloqueado.
 - `branch_only_pr_required` (default): PR abierto, merge manual humano.
 - `direct_to_default_allowed`: merge automático si CI passes.
@@ -181,16 +182,20 @@ deciders: [system_admin, tech_lead]
 # 0007 — Use git worktrees for task parallelism
 
 ## Context
+
 What problem we're solving and why.
 
 ## Decision
+
 What we've decided.
 
 ## Alternatives Considered
+
 - Option A: ...
 - Option B: ...
 
 ## Consequences
+
 Positive and negative implications.
 ```
 

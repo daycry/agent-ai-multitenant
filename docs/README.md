@@ -4,15 +4,15 @@ Esta carpeta es una **plantilla**. Cuando crees un proyecto en el sistema (real,
 
 La estructura tiene **7 carpetas numeradas obligatorias** que un guardrail estructural valida en CI:
 
-| Carpeta | Contenido |
-|---------|-----------|
-| `01-overview/` | Introducción al proyecto, arquitectura, decisiones de alto nivel |
-| `02-getting-started/` | Instalación, configuración, primer arranque, primer uso |
-| `03-guides/` | Guías how-to por tarea concreta (orientadas a problemas) |
-| `04-reference/` | Referencia técnica: API, schemas, modelo de dominio, configuración |
-| `05-architecture-decisions/` | ADRs numerados secuencialmente (0001, 0002, ...) |
-| `06-runbooks/` | Procedimientos operativos: backup, restore, troubleshooting, upgrade |
-| `07-changelog/` | Una entrada por plan completado: `{plan_id}-{slug}.md` |
+| Carpeta                      | Contenido                                                            |
+| ---------------------------- | -------------------------------------------------------------------- |
+| `01-overview/`               | Introducción al proyecto, arquitectura, decisiones de alto nivel     |
+| `02-getting-started/`        | Instalación, configuración, primer arranque, primer uso              |
+| `03-guides/`                 | Guías how-to por tarea concreta (orientadas a problemas)             |
+| `04-reference/`              | Referencia técnica: API, schemas, modelo de dominio, configuración   |
+| `05-architecture-decisions/` | ADRs numerados secuencialmente (0001, 0002, ...)                     |
+| `06-runbooks/`               | Procedimientos operativos: backup, restore, troubleshooting, upgrade |
+| `07-changelog/`              | Una entrada por plan completado: `{plan_id}-{slug}.md`               |
 
 Esta estructura es un Diátaxis adaptado: amplía las 4 categorías originales (tutorials, how-to, reference, explanation) a 7 más operativas para proyectos software profesionales.
 
@@ -21,6 +21,7 @@ Esta estructura es un Diátaxis adaptado: amplía las 4 categorías originales (
 Cada archivo Markdown:
 
 1. **Frontmatter YAML obligatorio**:
+
    ```yaml
    ---
    title: Título del Documento
