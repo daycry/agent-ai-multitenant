@@ -1,0 +1,20 @@
+# Development dependencies for the agentic platform monorepo.
+# Installed by scripts/dev/bootstrap.{ps1,sh} into ./.venv/.
+#
+# Keep pinned to compatible major ranges to allow patch-level updates
+# without breaking the toolchain. Upgrade together when bumping.
+
+# Pre-commit hook runner.
+pre-commit>=3.7,<4
+
+# Python formatters and linters.
+black>=24.4,<25
+ruff>=0.5,<1
+mypy>=1.10,<2
+
+# Test runner.
+pytest>=8.2,<9
+pytest-asyncio>=0.23,<1
+
+# YAML / TOML helpers used by tooling and CI checks.
+pyyaml>=6.0,<7
