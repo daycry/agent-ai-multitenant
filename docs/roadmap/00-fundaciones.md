@@ -277,7 +277,7 @@ Objetivo: API base con auth, multi-tenancy y RLS funcionando.
 
 #### `task_00_10` — Endpoints de Auth
 
-- [ ] **Título**: Endpoints /auth/register, /auth/login, /auth/logout, /auth/me
+- [x] **Título**: Endpoints /auth/register, /auth/login, /auth/logout, /auth/me
 - **Descripción**: Implementar registro con email+password (Argon2id), login que devuelve JWT firmado con clave del Vault, logout que revoca la sesión en Redis, /me que devuelve datos del usuario actual. Rate limiting de 5 intentos en 15 min por IP.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m

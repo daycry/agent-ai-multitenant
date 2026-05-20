@@ -27,18 +27,23 @@ class InvalidTokenError(Exception):
 
 
 def encode_jwt(
-    user_id: UUID,
-    tenant_id: UUID | None = None,
     *,
+    user_id: UUID,
+    session_id: UUID,
+    tenant_id: UUID | None = None,
     expires_in: timedelta | None = None,
     extra_claims: dict[str, Any] | None = None,
 ) -> str:
-    """Sign a token. `expires_in` overrides the default settings TTL."""
+    """Sign a token. `session_id` is mandatory — every token issued by
+    this service is bound to a server-side session in Redis (see
+    `auth.sessions`), so logout can revoke instantly. `expires_in`
+    overrides the default settings TTL."""
     settings = get_settings()
     now = datetime.now(tz=UTC)
     ttl = expires_in or timedelta(minutes=settings.jwt_expiration_minutes)
     claims: dict[str, Any] = {
         "sub": str(user_id),
+        "sid": str(session_id),
         "iat": int(now.timestamp()),
         "exp": int((now + ttl).timestamp()),
     }

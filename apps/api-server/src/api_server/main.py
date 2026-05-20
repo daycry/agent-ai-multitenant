@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
 from api_server.db.models import UserOrganizationMembership
+from api_server.routers.auth import router as auth_router
 
 
 def create_app() -> FastAPI:
@@ -27,6 +28,8 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         redoc_url=None,
     )
+
+    app.include_router(auth_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

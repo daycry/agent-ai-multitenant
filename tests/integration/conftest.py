@@ -29,6 +29,8 @@ PG_HOST = os.environ.get("TEST_PG_HOST", "localhost")
 # Default 15432 matches docker/docker-compose.dev.yml — avoids clashing
 # with any local postgres on the host. Override TEST_PG_PORT for CI.
 PG_PORT = int(os.environ.get("TEST_PG_PORT", "15432"))
+# Redis test DB — uses DB 15 so it cannot clobber the dev DB 0.
+TEST_REDIS_URL = os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/15")
 PG_ADMIN_USER = os.environ.get("TEST_PG_ADMIN_USER", "postgres")
 PG_ADMIN_PASSWORD = os.environ.get("TEST_PG_ADMIN_PASSWORD", "changeme-dev-only")
 PG_MIG_USER = os.environ.get("TEST_PG_MIGRATIONS_USER", "migrations_user")
@@ -161,3 +163,20 @@ def app_database_url() -> str:
     return (
         f"postgresql+asyncpg://{PG_APP_USER}:{PG_APP_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
     )
+
+
+@pytest.fixture()
+def test_redis_url() -> str:
+    """Redis URL the FastAPI app under test should use."""
+    return TEST_REDIS_URL
+
+
+async def _flush_redis(url: str) -> None:
+    """Wipe the test Redis DB. Idempotent."""
+    from redis.asyncio import Redis
+
+    client = Redis.from_url(url, decode_responses=True)
+    try:
+        await client.flushdb()
+    finally:
+        await client.aclose()

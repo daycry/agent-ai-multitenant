@@ -38,6 +38,12 @@ class Settings(BaseSettings):
         description="Redis connection URL.",
     )
 
+    # ----- Rate limits -----
+    login_rate_limit_count: int = Field(default=5, description="Max login attempts per window.")
+    login_rate_limit_window_seconds: int = Field(
+        default=15 * 60, description="Sliding window for login rate limiting."
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."

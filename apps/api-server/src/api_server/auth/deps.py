@@ -1,41 +1,45 @@
 """FastAPI dependencies for auth + tenant scoping.
 
-The key dependency is `get_tenant_session`:
+The two key dependencies are:
 
-  1. Extract the JWT from the Authorization: Bearer header.
-  2. Decode it (raises 401 on failure).
-  3. Open an async SQLAlchemy session inside a transaction.
-  4. Emit `SET LOCAL app.user_id = '<uuid>'` and (if present)
-     `SET LOCAL app.tenant_id = '<uuid>'`. PostgreSQL RLS policies
-     consume those settings to scope every subsequent query.
-  5. Yield the session to the endpoint.
-  6. On exit, the transaction commits (or rolls back on exception)
-     and the SET LOCAL values are discarded automatically.
+  - `get_principal`         decode JWT + look up the server-side
+                            session in Redis. 401 on any failure.
+  - `get_tenant_session`    yields an AsyncSession with
+                            `app.user_id` (and `app.tenant_id` when
+                            present) bound for the request, so RLS
+                            policies scope every query.
 
-Endpoints that read tenant-scoped data MUST use this dependency;
-otherwise queries will simply see zero rows (which is the safer
-failure mode but obscures the bug).
+Endpoints that read tenant-scoped data MUST use `get_tenant_session`.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from functools import lru_cache
 from uuid import UUID
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
+from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.jwt import InvalidTokenError, decode_jwt
+from api_server.auth.rate_limit import RateLimiter
+from api_server.auth.sessions import SessionStore
+from api_server.config import get_settings
 from api_server.db.session import get_sessionmaker
 
 
+# ---------------------------------------------------------------------------
+# Principal
+# ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class AuthPrincipal:
-    """Decoded JWT context for the current request."""
+    """Decoded + validated context for the current request."""
 
     user_id: UUID
+    session_id: UUID
     tenant_id: UUID | None
 
 
@@ -56,10 +60,41 @@ def _parse_bearer(authorization: str | None) -> str:
     return token
 
 
+# ---------------------------------------------------------------------------
+# Redis client (process-wide singleton)
+# ---------------------------------------------------------------------------
+@lru_cache(maxsize=1)
+def get_redis() -> Redis:
+    """Lazy singleton Redis client. Tests reset via `reset_redis_cache()`."""
+    settings = get_settings()
+    client: Redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    return client
+
+
+def reset_redis_cache() -> None:
+    """Drop the cached Redis client so the next `get_redis()` call
+    picks up a new REDIS_URL. Tests use this after monkey-patching
+    env vars."""
+    get_redis.cache_clear()
+
+
+def get_session_store(redis: Redis = Depends(get_redis)) -> SessionStore:
+    return SessionStore(redis)
+
+
+def get_rate_limiter(redis: Redis = Depends(get_redis)) -> RateLimiter:
+    return RateLimiter(redis)
+
+
+# ---------------------------------------------------------------------------
+# Principal dependency — JWT + Redis session check
+# ---------------------------------------------------------------------------
 async def get_principal(
     authorization: str | None = Header(default=None),
+    sessions: SessionStore = Depends(get_session_store),
 ) -> AuthPrincipal:
-    """Decode the JWT and return its principal. 401 on any failure."""
+    """Decode the JWT, verify the session id still exists in Redis,
+    return the principal. 401 on any failure."""
     token = _parse_bearer(authorization)
     try:
         claims = decode_jwt(token)
@@ -72,10 +107,11 @@ async def get_principal(
 
     try:
         user_id = UUID(claims["sub"])
-    except (KeyError, ValueError) as exc:
+        session_id = UUID(claims["sid"])
+    except (KeyError, ValueError, TypeError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="token missing/invalid 'sub' claim",
+            detail="token missing/invalid 'sub' or 'sid' claim",
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
@@ -90,9 +126,20 @@ async def get_principal(
                 headers={"WWW-Authenticate": "Bearer"},
             ) from exc
 
-    return AuthPrincipal(user_id=user_id, tenant_id=tenant_id)
+    # Server-side check: a revoked session must surface immediately.
+    if not await sessions.get(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="session has been revoked",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return AuthPrincipal(user_id=user_id, session_id=session_id, tenant_id=tenant_id)
 
 
+# ---------------------------------------------------------------------------
+# Tenant-scoped session dependency
+# ---------------------------------------------------------------------------
 async def get_tenant_session(
     principal: AuthPrincipal = Depends(get_principal),
 ) -> AsyncIterator[AsyncSession]:
@@ -116,3 +163,15 @@ async def get_tenant_session(
                 {"tid": str(principal.tenant_id)},
             )
         yield session
+
+
+# ---------------------------------------------------------------------------
+# Client IP — best-effort helper for rate limiting / audit
+# ---------------------------------------------------------------------------
+def get_client_ip(request: Request) -> str:
+    """Pull the client IP out of the request. Prefers X-Forwarded-For
+    (left-most entry) when present; falls back to the socket peer."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"

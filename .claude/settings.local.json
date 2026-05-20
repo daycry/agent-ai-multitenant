@@ -3,7 +3,12 @@
     "allow": [
       "Bash(grep -E '\\\\.\\(yml|yaml|toml|json|xml\\)$')",
       "Bash(git add *)",
-      "Bash(git commit -m 'feat\\(api-server\\): multi-tenant JWT dependency + RLS-scoped session \\(task_00_09\\) *)"
+      "Bash(git commit -m 'feat\\(api-server\\): multi-tenant JWT dependency + RLS-scoped session \\(task_00_09\\) *)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/)",
+      "Bash(docker compose *)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/integration/test_auth.py -v)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/ -v)",
+      "Bash(git commit -m 'feat\\(api-server\\): auth endpoints with Argon2id, Redis sessions, rate limit \\(task_00_10\\) *)"
     ]
   }
 }

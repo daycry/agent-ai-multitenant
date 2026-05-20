@@ -23,6 +23,7 @@ import asyncpg
 import pytest
 from alembic import command
 from httpx import ASGITransport, AsyncClient
+from uuid6 import uuid7
 
 pytestmark = pytest.mark.integration
 
@@ -95,28 +96,23 @@ async def _seed(dsn: str) -> dict[str, UUID]:
 def configured_app(
     alembic_config,
     app_database_url: str,
+    test_redis_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Build a FastAPI app whose engine talks as the NOBYPASSRLS app_user.
-
-    Steps:
-      1. Run alembic upgrade head to ensure schema + RLS.
-      2. Point api_server.config.Settings at the test DB URL via env.
-      3. Clear the cached engine so the next get_engine() picks it up.
-      4. Build a fresh FastAPI app instance.
-      5. On teardown, dispose the engine.
-    """
+    """Build a FastAPI app wired to the throwaway test DB + Redis."""
     command.upgrade(alembic_config, "head")
 
     # The default privileges configured in conftest._drop_create_db only
     # apply to tables created *afterwards*. Migrations may have run
     # already (e.g. by an earlier test), so retro-grant DML on the live
     # tables before the app starts querying them as app_user.
-    from tests.integration.conftest import _grant_app_user_existing_tables
+    from tests.integration.conftest import _flush_redis, _grant_app_user_existing_tables
 
     asyncio.run(_grant_app_user_existing_tables())
+    asyncio.run(_flush_redis(test_redis_url))
 
     monkeypatch.setenv("API_SERVER_DATABASE_URL", app_database_url)
+    monkeypatch.setenv("API_SERVER_REDIS_URL", test_redis_url)
     monkeypatch.setenv("API_SERVER_JWT_SECRET", "test-secret")
 
     # Rebuild the settings cache so the new env vars take effect.
@@ -124,9 +120,11 @@ def configured_app(
 
     get_settings.cache_clear()
 
+    from api_server.auth.deps import reset_redis_cache
     from api_server.db.session import reset_engine_cache
 
     reset_engine_cache()
+    reset_redis_cache()
 
     from api_server.main import create_app
 
@@ -141,7 +139,20 @@ def configured_app(
         # mid-close on Windows. Letting the engine GC at process exit is
         # safe for tests.
         reset_engine_cache()
+        reset_redis_cache()
         get_settings.cache_clear()
+
+
+async def _create_session_and_token(user_id: UUID, tenant_id: UUID | None = None) -> str:
+    """Mint a JWT and persist its sid in Redis so get_principal accepts it."""
+    from api_server.auth.deps import get_redis
+    from api_server.auth.jwt import encode_jwt
+    from api_server.auth.sessions import SessionStore
+
+    sid = uuid7()
+    store = SessionStore(get_redis())
+    await store.create(sid, user_id=user_id, tenant_id=tenant_id, ttl_seconds=3600)
+    return encode_jwt(user_id=user_id, session_id=sid, tenant_id=tenant_id)
 
 
 # ---------------------------------------------------------------------------
@@ -155,10 +166,8 @@ async def test_cross_tenant_isolation(
     """User A's JWT must see only tenant A's memberships, never B's."""
     seeded = await _seed(migrations_pg_dsn)
 
-    from api_server.auth.jwt import encode_jwt
-
-    token_a = encode_jwt(user_id=seeded["user_a"], tenant_id=seeded["tenant_a"])
-    token_b = encode_jwt(user_id=seeded["user_b"], tenant_id=seeded["tenant_b"])
+    token_a = await _create_session_and_token(seeded["user_a"], seeded["tenant_a"])
+    token_b = await _create_session_and_token(seeded["user_b"], seeded["tenant_b"])
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
@@ -232,6 +241,7 @@ async def test_invalid_jwt_signature_is_401(configured_app) -> None:
     bad_token = jose_jwt.encode(
         {
             "sub": str(uuid4()),
+            "sid": str(uuid4()),
             "tid": str(uuid4()),
             "iat": int(datetime.now(tz=UTC).timestamp()),
             "exp": int((datetime.now(tz=UTC) + timedelta(hours=1)).timestamp()),
