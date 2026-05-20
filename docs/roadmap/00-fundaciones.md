@@ -118,7 +118,7 @@ Objetivo: dejar el repositorio estructurado y arrancable con pipelines mínimos.
 
 #### `task_00_02` — Pre-commit Hooks y Linters
 
-- [ ] **Título**: Configurar pre-commit con black, ruff, mypy, prettier, eslint
+- [x] **Título**: Configurar pre-commit con black, ruff, mypy, prettier, eslint
 - **Descripción**: Configurar `.pre-commit-config.yaml` con hooks para los formatters y linters de Python y TypeScript. Configurar `pyproject.toml` con configuración de black, ruff, mypy (modo strict). Configurar `.eslintrc.json` y `.prettierrc`.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
