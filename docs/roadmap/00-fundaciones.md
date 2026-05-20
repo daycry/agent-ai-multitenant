@@ -241,7 +241,7 @@ Objetivo: API base con auth, multi-tenancy y RLS funcionando.
 
 #### `task_00_08` — Migración Alembic Inicial
 
-- [ ] **Título**: Crear migración inicial Alembic con tablas base + RLS
+- [x] **Título**: Crear migración inicial Alembic con tablas base + RLS
 - **Descripción**: Migración inicial que crea las tablas con sus índices y activa políticas RLS por `tenant_id` en `current_setting('app.tenant_id')`. Migración reversible obligatoria.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m

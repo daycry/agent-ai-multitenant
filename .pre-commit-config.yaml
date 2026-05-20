@@ -58,6 +58,10 @@ repos:
           - "alembic>=1.13,<2"
         args: [--config-file=pyproject.toml]
         files: ^(apps|packages)/.*\.py$
+        # Alembic migrations are template-generated and import the local
+        # `api_server` package, which is editable-installed in the dev
+        # venv but absent from the isolated mypy hook venv.
+        exclude: ^apps/[^/]+/migrations/.*\.py$
 
   # -------------------- TypeScript / JavaScript --------------------
   - repo: https://github.com/pre-commit/mirrors-prettier

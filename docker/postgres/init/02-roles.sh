@@ -13,11 +13,15 @@ MIG_PASS="${MIGRATIONS_USER_PASSWORD:-changeme-migrations-dev-only}"
 APP_PASS="${APP_USER_PASSWORD:-changeme-app-dev-only}"
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
-    -- migrations_user: full DDL rights on the database.
+    -- migrations_user: full DDL rights AND BYPASSRLS so it can run
+    -- Alembic migrations (which create the RLS policies themselves)
+    -- without tripping over them.
     DO \$\$
     BEGIN
       IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'migrations_user') THEN
-        CREATE ROLE migrations_user WITH LOGIN PASSWORD '${MIG_PASS}';
+        CREATE ROLE migrations_user WITH LOGIN BYPASSRLS PASSWORD '${MIG_PASS}';
+      ELSE
+        ALTER ROLE migrations_user WITH LOGIN BYPASSRLS;
       END IF;
     END
     \$\$;
@@ -26,11 +30,15 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
     GRANT ALL PRIVILEGES ON DATABASE "${POSTGRES_DB}" TO migrations_user;
     GRANT ALL ON SCHEMA public TO migrations_user;
 
-    -- app_user: DML only. No CREATE/DROP/ALTER.
+    -- app_user: DML only. NOBYPASSRLS — every query MUST respect the
+    -- row-level security policies. Cross-tenant leaks would otherwise
+    -- be invisible to the platform.
     DO \$\$
     BEGIN
       IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app_user') THEN
-        CREATE ROLE app_user WITH LOGIN PASSWORD '${APP_PASS}';
+        CREATE ROLE app_user WITH LOGIN NOBYPASSRLS PASSWORD '${APP_PASS}';
+      ELSE
+        ALTER ROLE app_user WITH LOGIN NOBYPASSRLS;
       END IF;
     END
     \$\$;
