@@ -1,9 +1,9 @@
 ---
 plan_id: 00-fundaciones
 title: Fundaciones del Sistema
-status: pending_approval
+status: in_progress
 blocking_plan: null
-started_at: null
+started_at: 2026-05-20
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 60-75
@@ -21,7 +21,7 @@ docs_language: es
 | Campo | Valor |
 |-------|-------|
 | **ID del Plan** | `00-fundaciones` |
-| **Estado** | `pending_approval` |
+| **Estado** | `in_progress` |
 | **Bloqueado por** | — (es el plan inicial) |
 | **Tiempo estimado (calendario)** | 3-4 semanas |
 | **Tiempo estimado (persona-días)** | 60-75 |
@@ -98,7 +98,7 @@ Objetivo: dejar el repositorio estructurado y arrancable con pipelines mínimos.
 
 #### `task_00_01` — Estructura del Monorepo
 
-- [ ] **Título**: Crear estructura monorepo según convención
+- [x] **Título**: Crear estructura monorepo según convención
 - **Descripción**: Crear el árbol de directorios `apps/`, `packages/`, `docker/`, `docs/`, `scripts/`, `tests/`. Inicializar Git con `main` como rama default. Añadir `.gitignore` apropiado para Python + Node + Docker.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: xs

@@ -1,0 +1,128 @@
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtualenvs
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+wheels/
+pip-wheel-metadata/
+
+# Test / type-check / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.hypothesis/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# Tooling
+.ipynb_checkpoints/
+
+# =============================================================================
+# Node / JavaScript / TypeScript
+# =============================================================================
+node_modules/
+.pnpm-store/
+.yarn/cache
+.yarn/install-state.gz
+
+# Build outputs
+.next/
+out/
+.turbo/
+.svelte-kit/
+.nuxt/
+.cache/
+.parcel-cache/
+
+# TypeScript
+*.tsbuildinfo
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =============================================================================
+# Docker / Compose
+# =============================================================================
+# Local override (developers may keep their own)
+docker-compose.override.yml
+
+# =============================================================================
+# Environment / Secrets
+# =============================================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+vault-unseal-keys.txt
+vault-root-token.txt
+
+# =============================================================================
+# Data (mounted volumes, local stacks)
+# =============================================================================
+data/
+/data/
+*.sqlite
+*.sqlite3
+*.db
+
+# =============================================================================
+# IDE / Editor
+# =============================================================================
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.example.json
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+
+# =============================================================================
+# OS
+# =============================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =============================================================================
+# Logs / Temp
+# =============================================================================
+*.log
+logs/
+tmp/
+temp/
+
+# =============================================================================
+# Claude Code / local agent state
+# =============================================================================
+# .claude/settings.local.json is tracked when desired; keep this rule explicit
+# to avoid accidentally committing local-only overrides if the convention changes.
+# (currently tracked — uncomment to ignore again)
+# .claude/settings.local.json
