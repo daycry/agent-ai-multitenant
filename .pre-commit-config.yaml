@@ -1,9 +1,11 @@
 # Pre-commit hook configuration for the agentic platform monorepo.
 # Run locally: `pre-commit install && pre-commit run --all-files`
 # CI runs the same hooks in lint job; both must agree.
-
-default_language_version:
-  python: python3.12
+#
+# Hooks run under whatever python pre-commit finds (typically the venv's
+# interpreter). The *output* of black/ruff is pinned to py312 via
+# pyproject.toml (target-version), so it's fine if the interpreter is
+# newer (3.12, 3.13, etc.).
 
 repos:
   # -------------------- generic / hygiene --------------------
@@ -29,7 +31,6 @@ repos:
     rev: 24.4.2
     hooks:
       - id: black
-        language_version: python3.12
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.5.0
