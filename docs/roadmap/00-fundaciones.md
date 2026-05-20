@@ -323,7 +323,7 @@ Objetivo: UI Next.js mínima con login y dashboard.
 
 #### `task_00_12` — Setup Next.js + Tailwind + shadcn/ui
 
-- [ ] **Título**: Crear `apps/admin-panel/` con Next.js 14 App Router, Tailwind, shadcn/ui
+- [x] **Título**: Crear `apps/admin-panel/` con Next.js 14 App Router, Tailwind, shadcn/ui
 - **Descripción**: Inicializar proyecto Next.js con TypeScript estricto. Configurar Tailwind y shadcn/ui. Crear estructura de carpetas: `app/`, `components/`, `lib/`, `types/`. Generar tipos del API con `openapi-typescript`.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
