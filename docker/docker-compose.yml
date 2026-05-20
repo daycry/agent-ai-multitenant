@@ -33,6 +33,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme-dev-only}
       POSTGRES_DB: ${POSTGRES_DB:-agentic_platform}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+      # Consumed by docker/postgres/init/02-roles.sh on first start.
+      MIGRATIONS_USER_PASSWORD: ${MIGRATIONS_USER_PASSWORD:-changeme-migrations-dev-only}
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD:-changeme-app-dev-only}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro

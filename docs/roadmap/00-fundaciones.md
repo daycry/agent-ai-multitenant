@@ -183,7 +183,7 @@ Objetivo: stack con servicios de infraestructura levantándose limpio.
 
 #### `task_00_05` — Inicialización de Postgres
 
-- [ ] **Título**: Script de inicialización de PostgreSQL con extensiones y roles
+- [x] **Título**: Script de inicialización de PostgreSQL con extensiones y roles
 - **Descripción**: Script SQL ejecutado al primer arranque que crea las extensiones `pgvector` y `pg_trgm`, configura roles base (`app_user` con permisos limitados, `migrations_user` con DDL), y habilita logging de queries lentas.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
