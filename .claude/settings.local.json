@@ -16,7 +16,9 @@
       "Bash(npm run *)",
       "Bash(echo \"EXIT: $?\")",
       "Read(//tmp/**)",
-      "Bash(git commit -m 'feat\\(admin-panel\\): Next.js 14 + Tailwind + shadcn/ui scaffold \\(task_00_12\\) *)"
-    ]
+      "Bash(git commit -m 'feat\\(admin-panel\\): Next.js 14 + Tailwind + shadcn/ui scaffold \\(task_00_12\\) *)",
+      "Bash(git commit -m 'feat\\(admin-panel\\): login + dashboard pages; CORS in api-server \\(task_00_13\\) *)"
+    ],
+    "additionalDirectories": ["\\tmp"]
   }
 }

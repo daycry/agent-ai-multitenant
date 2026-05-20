@@ -13,10 +13,12 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.config import get_settings
 from api_server.db.models import UserOrganizationMembership
 from api_server.routers.admin import router as admin_router
 from api_server.routers.auth import router as auth_router
@@ -28,6 +30,15 @@ def create_app() -> FastAPI:
         version="0.0.0",
         docs_url="/docs",
         redoc_url=None,
+    )
+
+    settings = get_settings()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     app.include_router(auth_router)

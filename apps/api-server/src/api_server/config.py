@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."
     )
+    cors_allowed_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:3000"],
+        description="Origins allowed by CORS (frontend admin-panel, etc.).",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
