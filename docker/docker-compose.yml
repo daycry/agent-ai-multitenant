@@ -1,0 +1,165 @@
+# Production-shaped stack for the agentic platform.
+#
+# Brings up the five infrastructure services described in plan 00:
+# PostgreSQL (with pgvector), Redis, MinIO, Vault, ClamAV. All ports
+# are kept inside the compose network — expose them via
+# docker-compose.dev.yml for local development.
+#
+# Named volumes are used so the stack is portable across Linux/Windows
+# hosts. For production hardening (bind-mount to /data/agent-platform,
+# TLS, secrets from Vault), see the installer rolled out in phase 15.
+
+name: agentic-platform
+
+x-restart: &default-restart
+  restart: unless-stopped
+
+x-logging: &default-logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 + pgvector (vector store lives in the same DB).
+  # pg_trgm is built-in and enabled by docker/postgres/init/*.sql (task_00_05).
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme-dev-only}
+      POSTGRES_DB: ${POSTGRES_DB:-agentic_platform}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-agentic_platform}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 — sessions (server-side), Celery broker, rate-limit counters.
+  # Persists with AOF + periodic RDB snapshots.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --save
+      - "60 1"
+      - --maxmemory
+      - ${REDIS_MAX_MEM:-512mb}
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
+  # MinIO — S3-compatible object storage. The web console runs on 9001.
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-changeme-dev-only}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
+  # HashiCorp Vault in server mode with file backend.
+  # task_00_06 ships scripts/init-vault.sh that initializes Vault and
+  # captures unseal keys + root token securely.
+  # ---------------------------------------------------------------------------
+  vault:
+    image: hashicorp/vault:1.17
+    cap_add: [IPC_LOCK]
+    environment:
+      VAULT_ADDR: http://0.0.0.0:8200
+      VAULT_API_ADDR: http://0.0.0.0:8200
+    volumes:
+      - vault_data:/vault/file
+      - vault_logs:/vault/logs
+      - ./vault/config.hcl:/vault/config/config.hcl:ro
+    command: ["server", "-config=/vault/config/config.hcl"]
+    healthcheck:
+      # 200 = unsealed+active, 429 = standby, 472 = recovery, 473 = perf
+      # standby, 501 = not initialized, 503 = sealed. Anything other than
+      # 5xx counts as alive. wget returns 0 only on 2xx, so map sealed
+      # (503) to 200 via the query string.
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- 'http://127.0.0.1:8200/v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200' || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
+  # ClamAV — antivirus scanning for user-uploaded files (RAG ingestion,
+  # KB documents). Definitions update via freshclam inside the container.
+  # First start downloads ~200MB of signatures (start_period 120s).
+  # ---------------------------------------------------------------------------
+  clamav:
+    image: clamav/clamav:1.4
+    environment:
+      CLAMAV_NO_FRESHCLAMD: "false"
+    volumes:
+      - clamav_data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  vault_data:
+  vault_logs:
+  clamav_data:
+
+networks:
+  agentic-net:
+    name: agentic-net
+    driver: bridge

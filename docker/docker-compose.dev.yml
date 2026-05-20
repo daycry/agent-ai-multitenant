@@ -1,0 +1,44 @@
+# Development overrides for docker-compose.yml.
+#
+# Exposes service ports on the host so they're reachable from local
+# tooling (psql, redis-cli, MinIO web UI, Vault UI, clamdscan), and
+# runs Vault in dev mode with a known root token — non-persistent,
+# convenient for local experimentation.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
+
+services:
+  postgres:
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+  redis:
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+  minio:
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+
+  vault:
+    # Dev mode: in-memory storage, auto-unsealed, well-known root token.
+    # File backend (production mode) is what docker-compose.yml ships.
+    command:
+      [
+        "server",
+        "-dev",
+        "-dev-listen-address=0.0.0.0:8200",
+        "-dev-root-token-id=${VAULT_DEV_ROOT_TOKEN:-dev-root-token}",
+      ]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN:-dev-root-token}
+    ports:
+      - "${VAULT_PORT:-8200}:8200"
+    # Dev mode keeps everything in memory; the prod volumes are harmless
+    # but unused. No override needed.
+
+  clamav:
+    ports:
+      - "${CLAMAV_PORT:-3310}:3310"
