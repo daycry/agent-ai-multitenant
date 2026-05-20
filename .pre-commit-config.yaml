@@ -39,13 +39,24 @@ repos:
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
 
+  # mypy runs in its own pre-commit-managed venv. Runtime libs whose
+  # types we import (sqlalchemy, pydantic, fastapi, ...) must be listed
+  # under additional_dependencies so the type checker can resolve them.
+  # Add a new lib here when a new app starts importing it.
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.10.0
     hooks:
       - id: mypy
-        additional_dependencies: []
+        additional_dependencies:
+          - "sqlalchemy[asyncio]>=2.0,<3"
+          - "uuid6>=2024.1"
+          - "pydantic>=2.5,<3"
+          - "pydantic-settings>=2.2,<3"
+          - "fastapi>=0.110,<1"
+          - "structlog>=24.1,<25"
+          - "redis>=5.0,<6"
+          - "alembic>=1.13,<2"
         args: [--config-file=pyproject.toml]
-        # Run mypy only on tracked .py files under apps/ and packages/.
         files: ^(apps|packages)/.*\.py$
 
   # -------------------- TypeScript / JavaScript --------------------

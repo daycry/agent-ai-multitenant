@@ -46,7 +46,17 @@ echo "==> Upgrading pip"
 echo "==> Installing requirements-dev.txt"
 "$VENV_PY" -m pip install -r "$REPO_ROOT/requirements-dev.txt"
 
-# 5) Register the pre-commit git hook.
+# 5) Install each app/ package editable, so `from <pkg> import ...` works
+#    and pytest can discover modules. New apps must be added here.
+APP_PACKAGES=("apps/api-server")
+for pkg in "${APP_PACKAGES[@]}"; do
+    if [ -f "$REPO_ROOT/$pkg/pyproject.toml" ]; then
+        echo "==> pip install -e ${pkg}[dev]"
+        "$VENV_PY" -m pip install -e "$REPO_ROOT/$pkg[dev]"
+    fi
+done
+
+# 6) Register the pre-commit git hook.
 echo "==> Installing pre-commit git hook"
 "$VENV_PY" -m pre_commit install
 

@@ -46,7 +46,18 @@ Write-Host "==> Upgrading pip" -ForegroundColor Cyan
 Write-Host "==> Installing requirements-dev.txt" -ForegroundColor Cyan
 & $VenvPython -m pip install -r (Join-Path $RepoRoot "requirements-dev.txt")
 
-# 5) Register the pre-commit git hook.
+# 5) Install each app/ package editable, so `from <pkg> import ...` works
+#    and pytest can discover modules. New apps must be added here.
+$AppPackages = @("apps/api-server")
+foreach ($pkg in $AppPackages) {
+    $pkgPath = Join-Path $RepoRoot $pkg
+    if (Test-Path (Join-Path $pkgPath "pyproject.toml")) {
+        Write-Host "==> pip install -e $pkg`[dev`]" -ForegroundColor Cyan
+        & $VenvPython -m pip install -e "$pkgPath[dev]"
+    }
+}
+
+# 6) Register the pre-commit git hook.
 Write-Host "==> Installing pre-commit git hook" -ForegroundColor Cyan
 & $VenvPython -m pre_commit install
 

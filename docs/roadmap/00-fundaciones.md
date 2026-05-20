@@ -223,7 +223,7 @@ Objetivo: API base con auth, multi-tenancy y RLS funcionando.
 
 #### `task_00_07` — Modelos SQLAlchemy Base
 
-- [ ] **Título**: Modelos Organization, User, UserOrganizationMembership, Session, AuditLog
+- [x] **Título**: Modelos Organization, User, UserOrganizationMembership, Session, AuditLog
 - **Descripción**: Crear modelos SQLAlchemy 2.x async para las entidades base. Todas las tenant-scoped llevan `tenant_id UUID NOT NULL`. UUIDs v7 como PK. Soft-delete con `deleted_at`. Timestamps con TIMESTAMPTZ.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
