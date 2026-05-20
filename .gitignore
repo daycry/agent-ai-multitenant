@@ -81,6 +81,7 @@ docker-compose.override.yml
 *.crt
 vault-unseal-keys.txt
 vault-root-token.txt
+vault-init-output/
 
 # =============================================================================
 # Data (mounted volumes, local stacks)

@@ -116,7 +116,10 @@ services:
       - vault_data:/vault/file
       - vault_logs:/vault/logs
       - ./vault/config.hcl:/vault/config/config.hcl:ro
-    command: ["server", "-config=/vault/config/config.hcl"]
+    # The entrypoint already appends `-config=/vault/config/`, so we only
+    # pass `server` here — adding a second `-config=...` would bind the
+    # same listener twice and the container loops with EADDRINUSE.
+    command: ["server"]
     healthcheck:
       # 200 = unsealed+active, 429 = standby, 472 = recovery, 473 = perf
       # standby, 501 = not initialized, 503 = sealed. Anything other than

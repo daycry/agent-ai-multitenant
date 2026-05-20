@@ -158,7 +158,7 @@ Objetivo: stack con servicios de infraestructura levantándose limpio.
 
 #### `task_00_04` — docker-compose.yml Base
 
-- [ ] **Título**: Definir docker-compose.yml con servicios postgres, redis, minio, vault, clamav
+- [x] **Título**: Definir docker-compose.yml con servicios postgres, redis, minio, vault, clamav
 - **Descripción**: Crear `docker/docker-compose.yml` con los 5 servicios de infraestructura. PostgreSQL 16 con extensiones pgvector y pg_trgm habilitadas. Redis 7 con persistencia AOF+RDB. MinIO con consola web. Vault en modo dev solo en `docker-compose.dev.yml`, en producción modo server con KV v2. ClamAV con definiciones actualizadas. Todos con healthchecks Docker nativos. Volúmenes bind-mounted a `/data/agent-platform/`.
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
@@ -201,7 +201,7 @@ Objetivo: stack con servicios de infraestructura levantándose limpio.
 
 #### `task_00_06` — Inicialización de Vault
 
-- [ ] **Título**: Bootstrap de Vault con KV v2 y unseal keys gestionadas
+- [x] **Título**: Bootstrap de Vault con KV v2 y unseal keys gestionadas
 - **Descripción**: Script `scripts/init-vault.sh` que en el primer arranque inicializa Vault, genera 5 unseal keys (Shamir 3 of 5), las muestra al operador con instrucciones de almacenamiento seguro (NO en disco del host por defecto), habilita KV v2 en path `secret/`, y crea políticas iniciales para los servicios.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
