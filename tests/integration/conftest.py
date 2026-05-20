@@ -33,6 +33,8 @@ PG_ADMIN_USER = os.environ.get("TEST_PG_ADMIN_USER", "postgres")
 PG_ADMIN_PASSWORD = os.environ.get("TEST_PG_ADMIN_PASSWORD", "changeme-dev-only")
 PG_MIG_USER = os.environ.get("TEST_PG_MIGRATIONS_USER", "migrations_user")
 PG_MIG_PASSWORD = os.environ.get("TEST_PG_MIGRATIONS_PASSWORD", "changeme-migrations-dev-only")
+PG_APP_USER = os.environ.get("TEST_PG_APP_USER", "app_user")
+PG_APP_PASSWORD = os.environ.get("TEST_PG_APP_PASSWORD", "changeme-app-dev-only")
 PG_TEST_DB = os.environ.get("TEST_PG_DB_NAME", "agentic_platform_test")
 
 
@@ -57,13 +59,41 @@ async def _drop_create_db() -> None:
         await conn.close()
 
     # Enable the extensions the production init scripts add (pgvector,
-    # pg_trgm, pgcrypto, uuid-ossp) so migrations referencing them work.
+    # pg_trgm, pgcrypto, uuid-ossp), grant baseline schema USAGE to
+    # app_user, and set the ALTER DEFAULT PRIVILEGES that production
+    # also configures (so any later CREATE TABLE BY migrations_user
+    # auto-grants DML to app_user — same behaviour as prod).
     target = await asyncpg.connect(_admin_dsn(db=PG_TEST_DB))
     try:
         for ext in ("vector", "pg_trgm", "pgcrypto", "uuid-ossp"):
             await target.execute(f'CREATE EXTENSION IF NOT EXISTS "{ext}"')
+        await target.execute(f'GRANT USAGE ON SCHEMA public TO "{PG_APP_USER}"')
+        await target.execute(
+            f'ALTER DEFAULT PRIVILEGES FOR ROLE "{PG_MIG_USER}" IN SCHEMA public '
+            f'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{PG_APP_USER}"'
+        )
+        await target.execute(
+            f'ALTER DEFAULT PRIVILEGES FOR ROLE "{PG_MIG_USER}" IN SCHEMA public '
+            f'GRANT USAGE, SELECT ON SEQUENCES TO "{PG_APP_USER}"'
+        )
     finally:
         await target.close()
+
+
+async def _grant_app_user_existing_tables() -> None:
+    """Retro-grant DML on tables that already exist (the default privs
+    above only apply to tables created *after* they are set). Idempotent."""
+    conn = await asyncpg.connect(_admin_dsn(db=PG_TEST_DB))
+    try:
+        await conn.execute(
+            "GRANT SELECT, INSERT, UPDATE, DELETE"
+            f' ON ALL TABLES IN SCHEMA public TO "{PG_APP_USER}"'
+        )
+        await conn.execute(
+            "GRANT USAGE, SELECT" f' ON ALL SEQUENCES IN SCHEMA public TO "{PG_APP_USER}"'
+        )
+    finally:
+        await conn.close()
 
 
 async def _drop_db() -> None:
@@ -115,3 +145,19 @@ def alembic_config(test_database_url: str) -> Iterator[object]:
 def admin_pg_dsn() -> str:
     """Sync-style DSN for ad-hoc inspection queries by admin (BYPASSRLS)."""
     return _admin_dsn(db=PG_TEST_DB)
+
+
+@pytest.fixture()
+def migrations_pg_dsn() -> str:
+    """DSN as migrations_user — has BYPASSRLS, used to seed test data
+    bypassing RLS policies."""
+    return f"postgresql://{PG_MIG_USER}:{PG_MIG_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
+
+
+@pytest.fixture()
+def app_database_url() -> str:
+    """SQLAlchemy URL as app_user (NOBYPASSRLS). Use this for the
+    FastAPI app under test so it goes through RLS like in production."""
+    return (
+        f"postgresql+asyncpg://{PG_APP_USER}:{PG_APP_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
+    )

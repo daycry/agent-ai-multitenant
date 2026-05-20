@@ -259,7 +259,7 @@ Objetivo: API base con auth, multi-tenancy y RLS funcionando.
 
 #### `task_00_09` — Middleware Multi-Tenant
 
-- [ ] **Título**: Middleware FastAPI que extrae tenant_id del JWT e inyecta en sesión PostgreSQL
+- [x] **Título**: Middleware FastAPI que extrae tenant_id del JWT e inyecta en sesión PostgreSQL
 - **Descripción**: Middleware que decodifica el JWT del header Authorization, extrae `tenant_id`, abre transacción y ejecuta `SET LOCAL app.tenant_id = '...'` para que RLS aplique. Si no hay JWT en endpoints autenticados → 401. Si hay JWT pero tenant_id no coincide con el del recurso → 403.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m

@@ -56,6 +56,7 @@ repos:
           - "structlog>=24.1,<25"
           - "redis>=5.0,<6"
           - "alembic>=1.13,<2"
+          - "types-python-jose>=3.3,<4"
         args: [--config-file=pyproject.toml]
         files: ^(apps|packages)/.*\.py$
         # Alembic migrations are template-generated and import the local

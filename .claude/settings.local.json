@@ -1,5 +1,9 @@
 {
   "permissions": {
-    "allow": ["Bash(grep -E '\\\\.\\(yml|yaml|toml|json|xml\\)$')"]
+    "allow": [
+      "Bash(grep -E '\\\\.\\(yml|yaml|toml|json|xml\\)$')",
+      "Bash(git add *)",
+      "Bash(git commit -m 'feat\\(api-server\\): multi-tenant JWT dependency + RLS-scoped session \\(task_00_09\\) *)"
+    ]
   }
 }

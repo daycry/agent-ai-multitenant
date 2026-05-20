@@ -28,7 +28,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import INET, JSONB, TIMESTAMP
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from api_server.db.base import (
     Base,
@@ -80,10 +80,10 @@ class Organization(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
-    memberships: Mapped[list[UserOrganizationMembership]] = relationship(
-        back_populates="organization",
-        cascade="all, delete-orphan",
-    )
+    # No ORM `memberships` relationship: tenant_id is NOT a formal FK
+    # to organizations.id (the migration intentionally omits the
+    # constraint so RLS policies cannot create circular dependencies
+    # during bulk loads). Use explicit queries instead.
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"Organization(id={self.id!r}, slug={self.slug!r})"
@@ -105,10 +105,9 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     last_login_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
-    memberships: Mapped[list[UserOrganizationMembership]] = relationship(
-        back_populates="user",
-        cascade="all, delete-orphan",
-    )
+    # Memberships are reached via explicit queries (see endpoints in
+    # task 00_11). Keeping the model graph thin avoids RLS / FK
+    # coupling pitfalls that bit us in phase 0.
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"User(id={self.id!r}, email={self.email!r})"
@@ -138,12 +137,8 @@ class UserOrganizationMembership(
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
-    user: Mapped[User] = relationship(back_populates="memberships")
-    organization: Mapped[Organization] = relationship(
-        primaryjoin="UserOrganizationMembership.tenant_id == Organization.id",
-        foreign_keys="UserOrganizationMembership.tenant_id",
-        back_populates="memberships",
-    )
+    # No ORM `user` / `organization` back-refs — see Organization /
+    # User class comments. Resolve via explicit JOIN when needed.
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (

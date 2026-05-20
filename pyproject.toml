@@ -45,6 +45,21 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["ARG", "PLR2004", "S101"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection helpers are the canonical way to declare
+# dependencies on routes — calling them in argument defaults is correct
+# and idiomatic, not a B008 violation.
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.Header",
+  "fastapi.Query",
+  "fastapi.Body",
+  "fastapi.Path",
+  "fastapi.Form",
+  "fastapi.Cookie",
+  "fastapi.File",
+]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
