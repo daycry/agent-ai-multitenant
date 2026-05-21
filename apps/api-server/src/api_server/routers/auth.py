@@ -71,14 +71,30 @@ async def _fetch_user_by_email(session: AsyncSession, email: str) -> User | None
     status_code=status.HTTP_201_CREATED,
 )
 async def register(payload: RegisterRequest) -> UserResponse:
-    """Create a new user. Email uniqueness is enforced by the DB."""
+    """Create a new user. Email uniqueness is enforced by the DB.
+
+    First-user promotion: when the `users` table is empty (fresh
+    install / dev bootstrap), the registered user is automatically
+    flagged as `is_system_admin=true`. This is what gives the very
+    first operator the cross-tenant superpowers wired in
+    `auth/deps.py` (BYPASSRLS reads + `X-Tenant-Id` writes). All
+    subsequent users default to `is_system_admin=false` and a
+    superadmin must promote them via /admin/users if needed. The
+    check + insert run inside the same transaction so a race
+    between two simultaneous registers can never produce two
+    superadmins.
+    """
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session, session.begin():
+        existing_users = await session.execute(select(User.id).limit(1))
+        is_first_user = existing_users.scalar_one_or_none() is None
+
         user = User(
             id=uuid7(),
             email=payload.email.lower(),
             password_hash=hash_password(payload.password),
             full_name=payload.full_name,
+            is_system_admin=is_first_user,
         )
         session.add(user)
         try:
