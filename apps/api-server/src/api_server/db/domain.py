@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -497,7 +498,9 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     secrets_vault_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
 
     # --- Budget (see spec §28.7 for tenant-vs-project budget interaction) ---
-    budget_amount: Mapped[float | None] = mapped_column(
+    # Numeric(14,2) maps to Decimal in Python so the schema's Decimal
+    # type stays consistent end-to-end (no float rounding on currency).
+    budget_amount: Mapped[Decimal | None] = mapped_column(
         Numeric(precision=14, scale=2), nullable=True
     )
     budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)

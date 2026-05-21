@@ -22,7 +22,13 @@ from api_server.config import get_settings
 from api_server.db.models import UserOrganizationMembership
 from api_server.logging import configure_logging
 from api_server.routers.admin import router as admin_router
+from api_server.routers.agents import router as agents_router
 from api_server.routers.auth import router as auth_router
+from api_server.routers.projects import router as projects_router
+from api_server.routers.skills import router as skills_router
+from api_server.routers.tasks import router as tasks_router
+from api_server.routers.teams import router as teams_router
+from api_server.routers.tools import router as tools_router
 from api_server.telemetry import configure_tracing, instrument_fastapi
 from api_server.telemetry.setup import add_console_exporter
 
@@ -50,6 +56,12 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(admin_router)
+    app.include_router(agents_router)
+    app.include_router(skills_router)
+    app.include_router(tools_router)
+    app.include_router(teams_router)
+    app.include_router(projects_router)
+    app.include_router(tasks_router)
 
     instrument_fastapi(app)
 
