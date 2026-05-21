@@ -1,0 +1,377 @@
+"use client";
+
+/**
+ * task_01_23 — Configurar Política de Validación Humana.
+ *
+ * Single-screen flow for picking a built-in preset (Sandbox /
+ * Desarrollo / Producción / Cliente Externo) and optionally overriding
+ * individual categories. When a project is selected the "Guardar"
+ * button copies the resulting `categories` map into that project's
+ * `human_approval_policy` field.
+ *
+ * Without a selected project the screen still works as a *preview*:
+ * the preset row selects which row to inspect and the category table
+ * shows the would-be decisions. Useful for understanding what each
+ * preset bundles before adopting one.
+ */
+
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ShieldCheck } from "lucide-react";
+
+import { PageHeader } from "@/components/layout/page-header";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
+import { ApiError, apiFetch } from "@/lib/api";
+
+// --------------------------------------------------------------------------
+// Domain
+// --------------------------------------------------------------------------
+type Decision = "auto" | "human_required";
+
+interface ApprovalPolicy {
+  id: string;
+  name: string;
+  description: string | null;
+  is_builtin: boolean;
+  categories: { categories: Record<string, Decision> };
+}
+
+interface Project {
+  id: string;
+  name: string;
+  is_template: boolean;
+  human_approval_policy: { categories?: Record<string, Decision> } | null;
+}
+
+// Stable label/order for the 13 categories (spec §7.7-7.8).
+const CATEGORY_LABELS: Array<{ id: string; label: string; hint: string }> = [
+  { id: "code_changes", label: "Cambios de código", hint: "Edición de ficheros" },
+  { id: "git_commit", label: "Commit", hint: "git commit local" },
+  { id: "git_push", label: "Push", hint: "git push remoto" },
+  { id: "external_http_get", label: "HTTP GET externo", hint: "Lecturas a internet" },
+  { id: "external_http_post", label: "HTTP POST externo", hint: "Escrituras a internet" },
+  { id: "secrets_access", label: "Acceso a secretos", hint: "Lectura de Vault" },
+  { id: "data_migration", label: "Migración de datos", hint: "DDL / alembic" },
+  { id: "production_deploy", label: "Despliegue producción", hint: "Rolling out a prod" },
+  { id: "infra_provision", label: "Aprovisionar infra", hint: "Crear recursos" },
+  { id: "secret_rotation", label: "Rotación de secretos", hint: "Vault rotate" },
+  {
+    id: "external_communication",
+    label: "Comunicación externa",
+    hint: "Email / Slack hacia fuera",
+  },
+  { id: "data_export_pii", label: "Exportar PII", hint: "Datos personales fuera del sistema" },
+  { id: "user_management", label: "Gestión de usuarios", hint: "Alta / baja / RBAC" },
+];
+
+const DECISION_BADGE: Record<Decision, { label: string; variant: "success" | "warning" }> = {
+  auto: { label: "Auto", variant: "success" },
+  human_required: { label: "Humano", variant: "warning" },
+};
+
+// --------------------------------------------------------------------------
+// Page
+// --------------------------------------------------------------------------
+export default function ApprovalPolicyPage() {
+  const queryClient = useQueryClient();
+
+  const policiesQuery = useQuery({
+    queryKey: ["approval-policies"],
+    queryFn: () => apiFetch<ApprovalPolicy[]>("/approval-policies?builtin_only=true"),
+    refetchOnWindowFocus: false,
+  });
+
+  const projectsQuery = useQuery({
+    queryKey: ["projects", "tenant"],
+    queryFn: () => apiFetch<Project[]>("/projects"),
+    refetchOnWindowFocus: false,
+  });
+
+  const policies = policiesQuery.data ?? [];
+  const projects = useMemo(
+    () => (projectsQuery.data ?? []).filter((p) => !p.is_template),
+    [projectsQuery.data],
+  );
+
+  const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const [overrides, setOverrides] = useState<Record<string, Decision>>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitOk, setSubmitOk] = useState(false);
+
+  // Auto-select the first preset (Sandbox) once policies load.
+  useEffect(() => {
+    if (!selectedPolicyId && policies.length > 0) {
+      setSelectedPolicyId(policies[0].id);
+    }
+  }, [policies, selectedPolicyId]);
+
+  // Reset overrides when the preset changes.
+  useEffect(() => {
+    setOverrides({});
+    setSubmitOk(false);
+  }, [selectedPolicyId]);
+
+  const activePolicy = policies.find((p) => p.id === selectedPolicyId) ?? null;
+  const baseDecisions: Record<string, Decision> = activePolicy
+    ? activePolicy.categories.categories
+    : {};
+  const effectiveDecisions: Record<string, Decision> = {
+    ...baseDecisions,
+    ...overrides,
+  };
+
+  function toggle(category: string) {
+    const current = effectiveDecisions[category] ?? "auto";
+    const next: Decision = current === "auto" ? "human_required" : "auto";
+    setOverrides((prev) => {
+      const copy = { ...prev };
+      if (baseDecisions[category] === next) {
+        // back to baseline -> drop the override entry
+        delete copy[category];
+      } else {
+        copy[category] = next;
+      }
+      return copy;
+    });
+    setSubmitOk(false);
+  }
+
+  const dirty = Object.keys(overrides).length > 0;
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!selectedProjectId) throw new Error("Selecciona un proyecto.");
+      const payload = {
+        human_approval_policy: { categories: effectiveDecisions },
+      };
+      return apiFetch<Project>(`/projects/${selectedProjectId}`, {
+        method: "PUT",
+        body: payload,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["projects", "tenant"] });
+      setSubmitError(null);
+      setSubmitOk(true);
+      setOverrides({});
+    },
+    onError: (err: unknown) => {
+      setSubmitOk(false);
+      setSubmitError(err instanceof ApiError ? err.body : String(err));
+    },
+  });
+
+  return (
+    <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <PageHeader
+        icon={<ShieldCheck className="h-6 w-6 sm:h-7 sm:w-7" />}
+        title="Validación humana"
+        description="Elige una plantilla y, si lo necesitas, ajusta categorías concretas antes de aplicarla a un proyecto."
+      />
+
+      {policiesQuery.isLoading && (
+        <p className="text-muted-foreground text-sm">Cargando plantillas…</p>
+      )}
+
+      {policiesQuery.isError && (
+        <Card className="border-destructive p-4">
+          <p className="text-destructive text-sm">
+            Could not load policies:{" "}
+            {policiesQuery.error instanceof ApiError
+              ? policiesQuery.error.body
+              : String(policiesQuery.error)}
+          </p>
+        </Card>
+      )}
+
+      {/* ============ Preset selector ============ */}
+      {policies.length > 0 && (
+        <section data-testid="presets-row" className="mb-6">
+          <div
+            className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
+            data-testid="presets-grid"
+          >
+            {policies.map((p) => {
+              const active = p.id === selectedPolicyId;
+              const decisions = p.categories.categories;
+              const humanCount = Object.values(decisions).filter(
+                (d) => d === "human_required",
+              ).length;
+              return (
+                <Card
+                  key={p.id}
+                  data-testid={`preset-${p.id}`}
+                  data-active={active ? "true" : "false"}
+                  interactive
+                  onClick={() => setSelectedPolicyId(p.id)}
+                  className={cn(
+                    "flex h-full flex-col",
+                    active && "border-primary shadow-md ring-1 ring-primary/30",
+                  )}
+                >
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">{p.name}</CardTitle>
+                    <Badge
+                      variant={
+                        humanCount === 0 ? "success" : humanCount >= 10 ? "danger" : "warning"
+                      }
+                      className="w-fit"
+                    >
+                      {humanCount === 0
+                        ? "Todo automático"
+                        : `${humanCount}/${CATEGORY_LABELS.length} requieren humano`}
+                    </Badge>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-muted-foreground text-xs">{p.description ?? ""}</p>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* ============ Category override table ============ */}
+      {activePolicy && (
+        <section data-testid="category-table" className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <Card className="lg:col-span-2">
+            <CardHeader>
+              <CardTitle className="text-base">Categorías ({CATEGORY_LABELS.length})</CardTitle>
+              <p className="text-muted-foreground text-xs">
+                Plantilla base: <strong>{activePolicy.name}</strong>. Pulsa una celda para invertir
+                la decisión de esa categoría — el override queda marcado y se aplica al guardar.
+              </p>
+            </CardHeader>
+            <CardContent className="p-0">
+              <ul className="divide-y" data-testid="category-list">
+                {CATEGORY_LABELS.map(({ id, label, hint }) => {
+                  const baseline = baseDecisions[id] ?? "auto";
+                  const current = effectiveDecisions[id] ?? "auto";
+                  const isOverride = baseline !== current;
+                  const badge = DECISION_BADGE[current];
+                  return (
+                    <li
+                      key={id}
+                      data-testid={`category-${id}`}
+                      data-decision={current}
+                      data-override={isOverride ? "true" : "false"}
+                      className="flex items-center justify-between gap-3 px-5 py-2.5"
+                    >
+                      <div>
+                        <p className="text-sm font-medium">{label}</p>
+                        <p className="text-muted-foreground text-xs">{hint}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isOverride && (
+                          <Badge variant="info" data-testid={`override-${id}`}>
+                            Override
+                          </Badge>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => toggle(id)}
+                          data-testid={`toggle-${id}`}
+                          className={cn(
+                            "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                            current === "auto"
+                              ? "bg-success-soft text-success-soft-foreground hover:bg-success-soft/80"
+                              : "bg-warning-soft text-warning-soft-foreground hover:bg-warning-soft/80",
+                          )}
+                          aria-label={`Cambiar ${label} (actual: ${badge.label})`}
+                        >
+                          {badge.label}
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </CardContent>
+          </Card>
+
+          {/* ============ Apply to project ============ */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Aplicar a un proyecto</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="project">Proyecto</Label>
+                <select
+                  id="project"
+                  className="border-input bg-background ring-offset-background focus-visible:ring-ring h-10 rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+                  value={selectedProjectId}
+                  onChange={(e) => {
+                    setSelectedProjectId(e.target.value);
+                    setSubmitOk(false);
+                    setSubmitError(null);
+                  }}
+                  data-testid="project-select"
+                  disabled={projects.length === 0}
+                >
+                  <option value="">— Selecciona —</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                {projects.length === 0 && (
+                  <p className="text-muted-foreground text-xs" data-testid="no-projects-hint">
+                    Este tenant aún no tiene proyectos. Crea uno desde /admin/projects/new para
+                    poder guardar la política.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <p className="text-muted-foreground text-xs uppercase">Resumen</p>
+                <p className="text-sm">
+                  {Object.values(effectiveDecisions).filter((d) => d === "auto").length} auto ·{" "}
+                  {Object.values(effectiveDecisions).filter((d) => d === "human_required").length}{" "}
+                  humano
+                  {dirty && (
+                    <Badge variant="info" className="ml-2" data-testid="dirty-badge">
+                      Cambios sin guardar
+                    </Badge>
+                  )}
+                </p>
+              </div>
+
+              {submitError && (
+                <p
+                  className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
+                  data-testid="submit-error"
+                >
+                  {submitError}
+                </p>
+              )}
+              {submitOk && (
+                <p
+                  className="bg-success-soft text-success-soft-foreground rounded p-2 text-xs"
+                  data-testid="submit-ok"
+                >
+                  Política aplicada al proyecto.
+                </p>
+              )}
+
+              <Button
+                onClick={() => save.mutate()}
+                disabled={save.isPending || !selectedProjectId || projects.length === 0}
+                data-testid="save-policy"
+              >
+                {save.isPending ? "Guardando…" : "Aplicar política"}
+              </Button>
+            </CardContent>
+          </Card>
+        </section>
+      )}
+    </div>
+  );
+}

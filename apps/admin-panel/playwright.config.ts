@@ -18,16 +18,29 @@ import { defineConfig } from "@playwright/test";
  *                         (default: http://localhost:3000).
  *   E2E_ADMIN_EMAIL       login email   (default: root@example.com).
  *   E2E_ADMIN_PASSWORD    login password (default: longenoughpw).
+ *   E2E_SLOW_MO           Delay (ms) between actions when headed.
+ *                         Playwright has no --slow-mo CLI flag, so the
+ *                         wrapper script (scripts/dev/run-e2e.ps1
+ *                         -SlowMo N) sets this env var which we apply
+ *                         via launchOptions.
  */
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
+  // Force a single worker. With Next dev compiling pages on demand,
+  // parallel workers race for compile time and a first-time navigation
+  // can blow past the 5 s default toHaveURL timeout. Serial keeps the
+  // suite small-and-fast and predictable.
+  workers: 1,
   retries: 0,
   reporter: process.env.CI ? "github" : "list",
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
+    launchOptions: {
+      slowMo: Number(process.env.E2E_SLOW_MO ?? 0),
+    },
   },
   webServer: {
     command: "npm run dev",

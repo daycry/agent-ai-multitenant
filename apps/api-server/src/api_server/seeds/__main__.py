@@ -1,0 +1,52 @@
+"""CLI entry point: `python -m api_server.seeds`.
+
+Runs every built-in seed in order under the BYPASSRLS admin engine.
+Idempotent -- safe to re-run after a migration.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import structlog
+
+from api_server.db.session import get_admin_sessionmaker
+from api_server.logging import configure_logging
+from api_server.seeds.builtin_agents import seed_builtin_agents
+from api_server.seeds.builtin_approval_policies import seed_builtin_approval_policies
+from api_server.seeds.builtin_project_templates import seed_builtin_project_templates
+from api_server.seeds.builtin_skills import seed_builtin_skills
+from api_server.seeds.builtin_teams import seed_builtin_teams
+from api_server.seeds.builtin_tools import seed_builtin_tools
+from api_server.seeds.platform import ensure_platform_tenant
+
+
+async def main() -> None:
+    configure_logging(service="seed-runner")
+    log = structlog.get_logger("seed-runner")
+
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        await ensure_platform_tenant(session)
+        n_agents = await seed_builtin_agents(session)
+        n_skills = await seed_builtin_skills(session)
+        n_tools = await seed_builtin_tools(session)
+        # Teams depend on agents being present (FK on team_members.agent_id).
+        n_teams = await seed_builtin_teams(session)
+        # Project templates depend on teams (FK on projects.team_id).
+        n_proj_templates = await seed_builtin_project_templates(session)
+        n_policies = await seed_builtin_approval_policies(session)
+
+    log.info(
+        "seed.completed",
+        agents=n_agents,
+        skills=n_skills,
+        tools=n_tools,
+        teams=n_teams,
+        project_templates=n_proj_templates,
+        approval_policies=n_policies,
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

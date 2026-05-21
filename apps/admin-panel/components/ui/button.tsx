@@ -26,16 +26,33 @@ const buttonVariants = cva(
 );
 
 export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {}
+  extends React.ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {
+  /**
+   * Render the styles on the first child element instead of a `<button>`.
+   * Lets us style a Next.js `<Link>` (or any element) as a button without
+   * nesting `<button>` inside `<a>` (invalid HTML) or duplicating
+   * classes. The child must accept `className`.
+   */
+  asChild?: boolean;
+}
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, type = "button", ...props }, ref) => (
-    <button
-      ref={ref}
-      type={type}
-      className={cn(buttonVariants({ variant, size, className }))}
-      {...props}
-    />
-  ),
+  ({ className, variant, size, type = "button", asChild = false, children, ...props }, ref) => {
+    const computed = cn(buttonVariants({ variant, size, className }));
+
+    if (asChild && React.isValidElement(children)) {
+      const child = children as React.ReactElement<{ className?: string }>;
+      return React.cloneElement(child, {
+        ...props,
+        className: cn(computed, child.props.className),
+      });
+    }
+
+    return (
+      <button ref={ref} type={type} className={computed} {...props}>
+        {children}
+      </button>
+    );
+  },
 );
 Button.displayName = "Button";

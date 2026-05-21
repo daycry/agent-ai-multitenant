@@ -1,10 +1,10 @@
 ---
 plan_id: 00-fundaciones
 title: Fundaciones del Sistema
-status: in_progress
+status: completed
 blocking_plan: null
 started_at: 2026-05-20
-completed_at: null
+completed_at: 2026-05-21
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 60-75
 estimated_cost_human_eur: 24000-30000

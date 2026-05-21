@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { type FormEvent, useState } from "react";
+import { Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -49,7 +50,20 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-4">
+    <main className="flex min-h-screen flex-col items-center justify-center gap-6 px-4 py-12">
+      <div className="flex flex-col items-center gap-3" data-testid="login-brand">
+        <span
+          className="bg-brand-gradient inline-flex h-14 w-14 items-center justify-center rounded-2xl shadow-[0_0_36px_-6px_hsl(var(--gradient-from)/0.65)]"
+          aria-hidden="true"
+        >
+          <Sparkles className="h-7 w-7 text-white" />
+        </span>
+        <div className="text-center">
+          <h1 className="text-foreground text-xl font-semibold tracking-tight">Agentic Platform</h1>
+          <p className="text-muted-foreground text-sm">Panel de administración multi-tenant</p>
+        </div>
+      </div>
+
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle>Sign in</CardTitle>

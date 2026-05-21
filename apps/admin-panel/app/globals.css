@@ -2,44 +2,143 @@
 @tailwind components;
 @tailwind utilities;
 
-/* shadcn/ui design tokens — Slate palette, default radius 0.5rem. */
+/*
+ * Design tokens for the Agentic Platform admin-panel.
+ *
+ * Brand: indigo-600 (HSL 239 84% 56%). Picked in Plan 01 over violet /
+ * teal / monochrome. Slate base palette underneath (shadcn/ui default).
+ *
+ * Semantic colors: success / warning / danger / info. We reuse them
+ * across Kanban statuses, system health states, and approval-policy
+ * decisions. Each has a `-soft` background variant for badge fills.
+ *
+ * Dark mode lives in `.dark`; every token here has a matching entry
+ * there. Tailwind wires these vars via `tailwind.config.ts`.
+ */
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* --- Surfaces ---
+     * Paleta solicitada por el usuario:
+     *   surface       #1a1a2e  = hsl(240 28% 14%)   -- background
+     *   border        #2d2d5e  = hsl(240 35% 27%)   -- border / input
+     *   accent        #7c3aed  = hsl(263 83% 58%)   -- primary (violet)
+     *   accent-light  #a78bfa  = hsl(255 91% 76%)   -- ring / sidebar-active
+     */
+    --background: 240 28% 14%;
+    --foreground: 240 12% 92%;
+    --card: 240 28% 17%;
+    --card-foreground: 240 12% 92%;
+    --popover: 240 28% 17%;
+    --popover-foreground: 240 12% 92%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    /* --- Neutrals --- */
+    --muted: 240 30% 22%;
+    --muted-foreground: 240 10% 70%;
+    --border: 240 35% 27%;
+    --input: 240 35% 27%;
+    --secondary: 240 30% 22%;
+    --secondary-foreground: 240 12% 92%;
+    --accent: 240 30% 22%;
+    --accent-foreground: 240 12% 92%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    /* --- Brand: violet (#7c3aed) + lavender (#a78bfa) accent --- */
+    --primary: 263 83% 58%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 255 91% 76%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    /* --- Semantic: success (emerald) --- */
+    --success: 142 71% 55%;
+    --success-foreground: 0 0% 100%;
+    --success-soft: 142 60% 18%;
+    --success-soft-foreground: 142 71% 85%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    /* --- Semantic: warning (amber) --- */
+    --warning: 38 92% 60%;
+    --warning-foreground: 26 83% 14%;
+    --warning-soft: 38 70% 18%;
+    --warning-soft-foreground: 38 92% 85%;
 
-    --radius: 0.5rem;
+    /* --- Semantic: danger (red); maps to shadcn's destructive --- */
+    --destructive: 0 70% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --danger: 0 70% 55%;
+    --danger-foreground: 0 0% 100%;
+    --danger-soft: 0 60% 22%;
+    --danger-soft-foreground: 0 80% 88%;
+
+    /* --- Semantic: info (blue) --- */
+    --info: 217 91% 65%;
+    --info-foreground: 0 0% 100%;
+    --info-soft: 217 70% 22%;
+    --info-soft-foreground: 217 91% 88%;
+
+    /* --- Sidebar (más profundo que --background) ---
+     * sidebar 10% < background 14% < card 17%.
+     * Activo usa lavender (#a78bfa) sobre wash violeta (#7c3aed @22%).
+     */
+    --sidebar: 240 32% 10%;
+    --sidebar-foreground: 240 12% 86%;
+    --sidebar-border: 240 35% 22%;
+    --sidebar-muted-foreground: 240 10% 62%;
+    --sidebar-active: 255 91% 76%;
+    --sidebar-active-bg: 263 83% 58% / 0.22;
+
+    /* --- Brand gradient (mantiene la firma indigo→violet en headers/CTAs) --- */
+    --gradient-from: 239 84% 56%;  /* indigo-600 */
+    --gradient-to:   263 83% 58%;  /* violet (#7c3aed) */
+
+    --radius: 0.625rem;
   }
 
   .dark {
+    /* --- Surfaces --- */
     --background: 222.2 84% 4.9%;
     --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
 
+    /* --- Neutrals --- */
     --muted: 217.2 32.6% 17.5%;
     --muted-foreground: 215 20.2% 65.1%;
-
     --border: 217.2 32.6% 17.5%;
     --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
 
-    --primary: 210 40% 98%;
+    /* --- Brand: indigo-500 (slightly lighter on dark for contrast) --- */
+    --primary: 239 84% 67%;
     --primary-foreground: 222.2 47.4% 11.2%;
+    --ring: 239 84% 67%;
 
-    --destructive: 0 62.8% 30.6%;
+    /* --- Semantic: success --- */
+    --success: 142 71% 55%;
+    --success-foreground: 0 0% 100%;
+    --success-soft: 142 71% 18%;
+    --success-soft-foreground: 142 71% 85%;
+
+    /* --- Semantic: warning --- */
+    --warning: 38 92% 60%;
+    --warning-foreground: 26 83% 14%;
+    --warning-soft: 38 92% 18%;
+    --warning-soft-foreground: 38 92% 85%;
+
+    /* --- Semantic: danger --- */
+    --destructive: 0 62% 50%;
     --destructive-foreground: 210 40% 98%;
+    --danger: 0 62% 50%;
+    --danger-foreground: 210 40% 98%;
+    --danger-soft: 0 62% 18%;
+    --danger-soft-foreground: 0 62% 85%;
+
+    /* --- Semantic: info --- */
+    --info: 217 91% 70%;
+    --info-foreground: 222.2 47.4% 11.2%;
+    --info-soft: 217 91% 18%;
+    --info-soft-foreground: 217 91% 85%;
   }
 
   body {
@@ -47,5 +146,28 @@
     font-feature-settings:
       "rlig" 1,
       "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* Utility classes for the brand gradient (icons, buttons, accent strips). */
+@layer utilities {
+  .bg-brand-gradient {
+    background-image: linear-gradient(
+      135deg,
+      hsl(var(--gradient-from)) 0%,
+      hsl(var(--gradient-to)) 100%
+    );
+  }
+  .text-brand-gradient {
+    background-image: linear-gradient(
+      135deg,
+      hsl(var(--gradient-from)) 0%,
+      hsl(var(--gradient-to)) 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
   }
 }
