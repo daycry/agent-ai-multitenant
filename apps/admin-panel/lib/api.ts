@@ -8,7 +8,10 @@
 
 import { getToken } from "@/lib/auth";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// Default 8001 (not the more usual 8000) because a typical Windows
+// dev box has something else parked on 8000. Override at build time
+// with NEXT_PUBLIC_API_URL=... when needed.
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
 
 export class ApiError extends Error {
   status: number;

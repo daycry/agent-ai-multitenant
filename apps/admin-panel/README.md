@@ -41,7 +41,7 @@ npm run lint         # eslint
 ## Generating API types
 
 The Python api-server publishes an OpenAPI schema at
-`/openapi.json`. With the stack up:
+`/openapi.json` (default port: **8001**). With the stack up:
 
 ```bash
 npm run generate:api-types

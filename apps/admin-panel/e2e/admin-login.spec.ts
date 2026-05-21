@@ -6,7 +6,7 @@ import { expect, test } from "@playwright/test";
  *
  * Pre-conditions (caller's responsibility):
  *   - docker compose stack is up.
- *   - api-server is running on http://localhost:8000 with CORS allowing
+ *   - api-server is running on http://localhost:8001 with CORS allowing
  *     http://localhost:3000.
  *   - There is a User row with is_system_admin=true matching the
  *     E2E_ADMIN_* env vars (defaults: root@example.com / longenoughpw).

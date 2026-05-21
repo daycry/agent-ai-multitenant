@@ -31,10 +31,10 @@ y activa las **policies RLS**.
 
 ```bash
 cd apps/api-server
-.venv/Scripts/uvicorn api_server.main:app --reload --port 8000
+.venv/Scripts/uvicorn api_server.main:app --reload --port 8001
 ```
 
-→ http://localhost:8000/docs (OpenAPI interactivo).
+→ http://localhost:8001/docs (OpenAPI interactivo).
 
 ## 4. Registra el primer usuario
 
@@ -42,7 +42,7 @@ Desde el admin-panel (http://localhost:3000/login → enlace de
 registro próximamente; por ahora vía API):
 
 ```bash
-curl -X POST http://localhost:8000/auth/register \
+curl -X POST http://localhost:8001/auth/register \
   -H "Content-Type: application/json" \
   -d '{"email":"root@example.com","password":"longenoughpw","full_name":"Root"}'
 ```
@@ -71,7 +71,7 @@ Ve a http://localhost:3000/login, entra con
 O por API:
 
 ```bash
-curl -X POST http://localhost:8000/auth/login \
+curl -X POST http://localhost:8001/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"root@example.com","password":"longenoughpw"}'
 ```
@@ -83,7 +83,7 @@ Obtienes un JWT con el claim `sys: true`.
 ```bash
 TOKEN="<el access_token del paso anterior>"
 
-curl -X POST http://localhost:8000/admin/tenants \
+curl -X POST http://localhost:8001/admin/tenants \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"Mi Empresa","slug":"mi-empresa"}'
