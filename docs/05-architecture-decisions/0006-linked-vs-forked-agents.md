@@ -16,7 +16,7 @@ configuración cuidadas. Los tenants quieren dos cosas a la vez y
 están en tensión:
 
 1. **Aprovechar las mejoras del catálogo**: cuando la plataforma
-   actualiza el system_prompt del _Backend Dev_ para añadir un patrón
+   actualiza el `system_prompt` del _Backend Dev_ para añadir un patrón
    de seguridad nuevo, todos los proyectos que lo usan deberían
    beneficiarse automáticamente.
 2. **Personalizar sin tocar a los demás**: un proyecto financiero
