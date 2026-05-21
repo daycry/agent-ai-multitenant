@@ -10,7 +10,7 @@ estimated_effort_person_days: 80-100
 estimated_cost_human_eur: 32.000 € – 40.000 €
 estimated_cost_ai_eur: 150 € – 250 €
 created_by: system_architect
-spec_sections_referenced: [5.5, 12, 13, 21]
+spec_sections_referenced: [5.5, 12, 12.5, 12.6, 13, 21]
 docs_language: es
 ---
 
@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `02-ejecucion-agentes` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `01-dominio-minimo` |
-| **Tiempo estimado (calendario)** | 4-5 semanas |
-| **Tiempo estimado (persona-días)** | 80-100 |
-| **Previsión de coste — humano** | 32.000 € – 40.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 150 € – 250 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/02-ejecucion-agentes` |
-| **Secciones del .docx** | [5.5, 12, 13, 21] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `02-ejecucion-agentes`                    |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `01-dominio-minimo`                       |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                               |
+| **Tiempo estimado (persona-días)** | 80-100                                    |
+| **Previsión de coste — humano**    | 32.000 € – 40.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 150 € – 250 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/02-ejecucion-agentes`               |
+| **Secciones del .docx**            | [5.5, 12, 12.5, 12.6, 13, 21]             |
 
 ---
 
@@ -37,11 +37,11 @@ docs_language: es
 
 ### Resumen Ejecutivo
 
-Dar vida al sistema: orquestador, workers Celery, agent-runtime con LangGraph, tools builtin funcionales, captura completa de ejecuciones, aplicación real de human_approval_policy. Sin testing heterogéneo todavía (Fase 6).
+Dar vida al sistema: orquestador, workers Celery, contenedores de runtime de los agentes con LangGraph, tools builtin funcionales, captura completa de ejecuciones, aplicación real de human_approval_policy. En esta fase los contenedores aún se lanzan en modo simple (uno por tarea) con vistas al pool elástico por plan que se introduce en Fase 6 junto con los worktrees (ver sección 12.5 del .docx). Sin testing heterogéneo todavía (Fase 6).
 
 ### Contexto
 
-Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes reales: el agent loop completo con LangGraph corre dentro de contenedores agent-runtime aislados, observable en tiempo real desde la UI.
+Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes reales: el agent loop completo con LangGraph corre dentro de contenedores de runtime aislados, observable en tiempo real desde la UI. El modelo de gestión del pool elástico por plan (sección 12.5 del .docx) es el objetivo arquitectónico; en esta fase se prepara la base (un contenedor por tarea sin reutilización inter-paso) y el pool completo aterriza en Fase 6 cuando llegan los worktrees y la rama del plan compartida.
 
 ### Alcance
 
@@ -49,10 +49,10 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 - Servicio Orchestrator con políticas skill_match / load_balanced / round_robin / manual.
 - Celery con colas: default, heavy, gpu (opcional), ingestion, test (placeholder), review (placeholder), privileged.
-- Worker base que recoge jobs y lanza contenedores agent-runtime.
-- Imagen agent-runtime Python 3.12 + LangGraph + tools builtin.
+- Worker base que recoge jobs y gestiona contenedores agent-runtime (modelo simple en esta fase: uno por tarea; preparación para el pool elástico por plan de Fase 6, sección 12.5 del .docx).
+- Imagen agent-runtime Python 3.12 + LangGraph + tools builtin, diseñada desde el inicio para soportar reutilización inter-paso con limpieza entre ejecuciones (sección 12.5.5 del .docx).
 - Agent Loop completo: perceive → recall → plan → act → observe → reflect → finalize → self_review.
-- Tools builtin funcionales: shell_exec, file_*, http_request (con allowlist), kanban_update, task_comment, notify_user, agent_invoke. Placeholders para memory_*, document_convert (Fase 4).
+- Tools builtin funcionales: shell*exec, file*_, http*request (con allowlist), kanban_update, task_comment, notify_user, agent_invoke. Placeholders para memory*_, document_convert (Fase 4).
 - Captura completa de Executions con steps_log JSONB.
 - UI de Timeline de Ejecución (paso a paso jerárquico).
 - Streaming de logs y eventos vía WebSocket.
@@ -75,14 +75,15 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 - Celery con Redis Streams como broker (no RabbitMQ): menos componentes, ya tenemos Redis.
 - Streams Redis específicos por ejecución para los logs en tiempo real (no DB writes constantes).
 - Aislamiento por contenedor obligatorio sin excepción: ningún tool builtin se ejecuta en el worker.
+- Modelo simple "un contenedor por tarea" en esta fase, sabiendo que en Fase 6 se evoluciona a pool elástico por plan (sección 12.5 del .docx). Por eso la imagen agent-runtime y el agent loop se diseñan desde el principio para soportar reutilización inter-paso (no asumir que cada ejecución arranca proceso Python desde cero).
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Bug en aislamiento permite escape de contenedor | Baja | Crítico | Pentest interno antes de cerrar fase. Configuración seccomp + AppArmor validada con test. |
-| Loops infinitos consumen recursos | Media | Alto | max_iterations + detección de loops repetitivos + circuit breaker + budget caps. |
-| WebSocket no escala con muchas ejecuciones simultáneas | Media | Medio | Sticky sessions con nginx. Pruebas de carga con 50+ ejecuciones. |
+| Riesgo                                                 | Probabilidad | Impacto | Mitigación                                                                                |
+| ------------------------------------------------------ | ------------ | ------- | ----------------------------------------------------------------------------------------- |
+| Bug en aislamiento permite escape de contenedor        | Baja         | Crítico | Pentest interno antes de cerrar fase. Configuración seccomp + AppArmor validada con test. |
+| Loops infinitos consumen recursos                      | Media        | Alto    | max_iterations + detección de loops repetitivos + circuit breaker + budget caps.          |
+| WebSocket no escala con muchas ejecuciones simultáneas | Media        | Medio   | Sticky sessions con nginx. Pruebas de carga con 50+ ejecuciones.                          |
 
 ---
 
@@ -300,20 +301,26 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
     expected_signal: "exit_code == 0"
   ```
 
-#### `task_02_13` — Salvaguardas: max_iterations, max_tokens, max_cost, max_wall_clock, max_tool_calls
+#### `task_02_13` — Salvaguardas: max_iterations, max_tokens, max_cost, max_wall_clock, max_tool_calls, max_review_retries
 
-- [ ] **Título**: Salvaguardas: max_iterations, max_tokens, max_cost, max_wall_clock, max_tool_calls
-- **Tiempo estimado**: 8 h
+- [ ] **Título**: Salvaguardas: max_iterations, max_tokens, max_cost, max_wall_clock, max_tool_calls, max_review_retries (este último como límite duro de plataforma, default 3, configurable únicamente por System Admin; ver sección 7.9 del .docx)
+- **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
 - **Dependencias**: `task_02_12`
 - **Tests automáticos**:
   ```yaml
   - id: auto_02_13_a
-    description: "Salvaguardas: max_iterations, max_tokens, max_cost, max_wall_clock, max_tool_calls"
+    description: "Salvaguardas básicas: max_iterations, max_tokens, max_cost, max_wall_clock, max_tool_calls"
     check_type: automated
     runtime: python-pytest
     command: "pytest tests/integration/test_safeguards.py -v"
+    expected_signal: "exit_code == 0"
+  - id: auto_02_13_b
+    description: "max_review_retries como ajuste global de plataforma: Tenant Admin no puede sobrescribirlo, System Admin sí"
+    check_type: automated
+    runtime: python-pytest
+    command: "pytest tests/integration/test_max_review_retries_scope.py -v"
     expected_signal: "exit_code == 0"
   ```
 
@@ -630,7 +637,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "Eventos de ejecución se reflejan en menos de 1s en todas las pestañas"
     - "Transiciones de tarea (in_progress → done) se ven en el Kanban sin refrescar"
     - "Cerrar y reabrir el WebSocket recupera el estado actual sin pérdida"
-
 ```
 
 ---

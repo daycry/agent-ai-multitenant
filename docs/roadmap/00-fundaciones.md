@@ -1,9 +1,9 @@
 ---
 plan_id: 00-fundaciones
 title: Fundaciones del Sistema
-status: pending_approval
+status: in_progress
 blocking_plan: null
-started_at: null
+started_at: 2026-05-20
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 60-75
@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `00-fundaciones` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | — (es el plan inicial) |
-| **Tiempo estimado (calendario)** | 3-4 semanas |
-| **Tiempo estimado (persona-días)** | 60-75 |
-| **Previsión de coste — humano** | 24.000 € – 30.000 € (con tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 80 € – 150 € (Claude Code asistiendo el desarrollo) |
-| **Ahorro estimado** | ~99% (la mayor parte del trabajo es asistencia, no autonomía total) |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/00-fundaciones` |
+| Campo                              | Valor                                                               |
+| ---------------------------------- | ------------------------------------------------------------------- |
+| **ID del Plan**                    | `00-fundaciones`                                                    |
+| **Estado**                         | `in_progress`                                                       |
+| **Bloqueado por**                  | — (es el plan inicial)                                              |
+| **Tiempo estimado (calendario)**   | 3-4 semanas                                                         |
+| **Tiempo estimado (persona-días)** | 60-75                                                               |
+| **Previsión de coste — humano**    | 24.000 € – 30.000 € (con tarifa media 50 €/h)                       |
+| **Previsión de coste — IA**        | 80 € – 150 € (Claude Code asistiendo el desarrollo)                 |
+| **Ahorro estimado**                | ~99% (la mayor parte del trabajo es asistencia, no autonomía total) |
+| **Aprobador propuesto**            | System Admin                                                        |
+| **Rama git**                       | `plan/00-fundaciones`                                               |
 
 ---
 
@@ -46,6 +46,7 @@ El sistema se ejecuta como un stack Docker Compose en una sola máquina (modelo 
 ### Alcance
 
 **Entra en este plan**:
+
 - Setup del monorepo con estructura definida.
 - Stack Docker Compose con servicios base (Postgres+pgvector, Redis, MinIO, Vault, ClamAV).
 - FastAPI esqueleto con auth JWT, sesiones server-side en Redis.
@@ -57,6 +58,7 @@ El sistema se ejecuta como un stack Docker Compose en una sola máquina (modelo 
 - CI/CD básico (lint, tests unitarios, build de imágenes).
 
 **Queda fuera (otras fases)**:
+
 - Cualquier modelo de dominio (agentes, equipos, proyectos, etc.) → Fase 01.
 - Ejecución de agentes → Fase 02.
 - SSO empresarial avanzado (OIDC/SAML/SCIM) → Fase 08.
@@ -79,12 +81,12 @@ El sistema se ejecuta como un stack Docker Compose en una sola máquina (modelo 
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Bug en RLS deja escape cross-tenant | Media | Crítico | Suite de tests automáticos de aislamiento obligatorios en CI antes de cerrar fase. |
-| Pérdida de unseal keys de Vault | Baja | Crítico | Documentar procedimiento de backup de unseal keys en runbook obligatorio. |
-| Configuración de Docker insegura en host | Media | Alto | Validación de prerequisitos al arrancar (Docker, permisos, capabilities); script `scripts/validate-host.sh`. |
-| Logs filtran PII | Media | Alto | Filtros de logging activos desde el día uno con detección de patrones (email, tokens, IBAN). |
+| Riesgo                                   | Probabilidad | Impacto | Mitigación                                                                                                   |
+| ---------------------------------------- | ------------ | ------- | ------------------------------------------------------------------------------------------------------------ |
+| Bug en RLS deja escape cross-tenant      | Media        | Crítico | Suite de tests automáticos de aislamiento obligatorios en CI antes de cerrar fase.                           |
+| Pérdida de unseal keys de Vault          | Baja         | Crítico | Documentar procedimiento de backup de unseal keys en runbook obligatorio.                                    |
+| Configuración de Docker insegura en host | Media        | Alto    | Validación de prerequisitos al arrancar (Docker, permisos, capabilities); script `scripts/validate-host.sh`. |
+| Logs filtran PII                         | Media        | Alto    | Filtros de logging activos desde el día uno con detección de patrones (email, tokens, IBAN).                 |
 
 ---
 
@@ -98,7 +100,7 @@ Objetivo: dejar el repositorio estructurado y arrancable con pipelines mínimos.
 
 #### `task_00_01` — Estructura del Monorepo
 
-- [ ] **Título**: Crear estructura monorepo según convención
+- [x] **Título**: Crear estructura monorepo según convención
 - **Descripción**: Crear el árbol de directorios `apps/`, `packages/`, `docker/`, `docs/`, `scripts/`, `tests/`. Inicializar Git con `main` como rama default. Añadir `.gitignore` apropiado para Python + Node + Docker.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: xs
@@ -116,7 +118,7 @@ Objetivo: dejar el repositorio estructurado y arrancable con pipelines mínimos.
 
 #### `task_00_02` — Pre-commit Hooks y Linters
 
-- [ ] **Título**: Configurar pre-commit con black, ruff, mypy, prettier, eslint
+- [x] **Título**: Configurar pre-commit con black, ruff, mypy, prettier, eslint
 - **Descripción**: Configurar `.pre-commit-config.yaml` con hooks para los formatters y linters de Python y TypeScript. Configurar `pyproject.toml` con configuración de black, ruff, mypy (modo strict). Configurar `.eslintrc.json` y `.prettierrc`.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
@@ -134,7 +136,7 @@ Objetivo: dejar el repositorio estructurado y arrancable con pipelines mínimos.
 
 #### `task_00_03` — Pipeline CI Básico
 
-- [ ] **Título**: Configurar GitHub Actions (o GitLab CI) con jobs lint, test, build
+- [x] **Título**: Configurar GitHub Actions (o GitLab CI) con jobs lint, test, build
 - **Descripción**: Pipeline que en cada push corre: lint Python (black + ruff + mypy), lint TS (prettier + eslint), unit tests, integration tests contra docker-compose de test, build de imágenes Docker. Cache de dependencias entre ejecuciones.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
@@ -156,7 +158,7 @@ Objetivo: stack con servicios de infraestructura levantándose limpio.
 
 #### `task_00_04` — docker-compose.yml Base
 
-- [ ] **Título**: Definir docker-compose.yml con servicios postgres, redis, minio, vault, clamav
+- [x] **Título**: Definir docker-compose.yml con servicios postgres, redis, minio, vault, clamav
 - **Descripción**: Crear `docker/docker-compose.yml` con los 5 servicios de infraestructura. PostgreSQL 16 con extensiones pgvector y pg_trgm habilitadas. Redis 7 con persistencia AOF+RDB. MinIO con consola web. Vault en modo dev solo en `docker-compose.dev.yml`, en producción modo server con KV v2. ClamAV con definiciones actualizadas. Todos con healthchecks Docker nativos. Volúmenes bind-mounted a `/data/agent-platform/`.
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
@@ -181,7 +183,7 @@ Objetivo: stack con servicios de infraestructura levantándose limpio.
 
 #### `task_00_05` — Inicialización de Postgres
 
-- [ ] **Título**: Script de inicialización de PostgreSQL con extensiones y roles
+- [x] **Título**: Script de inicialización de PostgreSQL con extensiones y roles
 - **Descripción**: Script SQL ejecutado al primer arranque que crea las extensiones `pgvector` y `pg_trgm`, configura roles base (`app_user` con permisos limitados, `migrations_user` con DDL), y habilita logging de queries lentas.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
@@ -193,13 +195,13 @@ Objetivo: stack con servicios de infraestructura levantándose limpio.
     description: "Las extensiones pgvector y pg_trgm están instaladas"
     check_type: automated
     runtime: generic-shell
-    command: "docker compose exec -T postgres psql -U postgres -c \"SELECT extname FROM pg_extension WHERE extname IN ('vector','pg_trgm')\" | grep -c vector"
+    command: 'docker compose exec -T postgres psql -U postgres -c "SELECT extname FROM pg_extension WHERE extname IN (''vector'',''pg_trgm'')" | grep -c vector'
     expected_signal: "stdout contains 1"
   ```
 
 #### `task_00_06` — Inicialización de Vault
 
-- [ ] **Título**: Bootstrap de Vault con KV v2 y unseal keys gestionadas
+- [x] **Título**: Bootstrap de Vault con KV v2 y unseal keys gestionadas
 - **Descripción**: Script `scripts/init-vault.sh` que en el primer arranque inicializa Vault, genera 5 unseal keys (Shamir 3 of 5), las muestra al operador con instrucciones de almacenamiento seguro (NO en disco del host por defecto), habilita KV v2 en path `secret/`, y crea políticas iniciales para los servicios.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
@@ -212,7 +214,7 @@ Objetivo: stack con servicios de infraestructura levantándose limpio.
     check_type: automated
     runtime: generic-shell
     command: "docker compose exec -T vault vault status -format=json | jq -r '.initialized'"
-    expected_signal: "stdout == \"true\""
+    expected_signal: 'stdout == "true"'
   ```
 
 ### Fase C — FastAPI Esqueleto con Multi-Tenancy
@@ -221,7 +223,7 @@ Objetivo: API base con auth, multi-tenancy y RLS funcionando.
 
 #### `task_00_07` — Modelos SQLAlchemy Base
 
-- [ ] **Título**: Modelos Organization, User, UserOrganizationMembership, Session, AuditLog
+- [x] **Título**: Modelos Organization, User, UserOrganizationMembership, Session, AuditLog
 - **Descripción**: Crear modelos SQLAlchemy 2.x async para las entidades base. Todas las tenant-scoped llevan `tenant_id UUID NOT NULL`. UUIDs v7 como PK. Soft-delete con `deleted_at`. Timestamps con TIMESTAMPTZ.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
@@ -239,7 +241,7 @@ Objetivo: API base con auth, multi-tenancy y RLS funcionando.
 
 #### `task_00_08` — Migración Alembic Inicial
 
-- [ ] **Título**: Crear migración inicial Alembic con tablas base + RLS
+- [x] **Título**: Crear migración inicial Alembic con tablas base + RLS
 - **Descripción**: Migración inicial que crea las tablas con sus índices y activa políticas RLS por `tenant_id` en `current_setting('app.tenant_id')`. Migración reversible obligatoria.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
@@ -257,7 +259,7 @@ Objetivo: API base con auth, multi-tenancy y RLS funcionando.
 
 #### `task_00_09` — Middleware Multi-Tenant
 
-- [ ] **Título**: Middleware FastAPI que extrae tenant_id del JWT e inyecta en sesión PostgreSQL
+- [x] **Título**: Middleware FastAPI que extrae tenant_id del JWT e inyecta en sesión PostgreSQL
 - **Descripción**: Middleware que decodifica el JWT del header Authorization, extrae `tenant_id`, abre transacción y ejecuta `SET LOCAL app.tenant_id = '...'` para que RLS aplique. Si no hay JWT en endpoints autenticados → 401. Si hay JWT pero tenant_id no coincide con el del recurso → 403.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
@@ -275,7 +277,7 @@ Objetivo: API base con auth, multi-tenancy y RLS funcionando.
 
 #### `task_00_10` — Endpoints de Auth
 
-- [ ] **Título**: Endpoints /auth/register, /auth/login, /auth/logout, /auth/me
+- [x] **Título**: Endpoints /auth/register, /auth/login, /auth/logout, /auth/me
 - **Descripción**: Implementar registro con email+password (Argon2id), login que devuelve JWT firmado con clave del Vault, logout que revoca la sesión en Redis, /me que devuelve datos del usuario actual. Rate limiting de 5 intentos en 15 min por IP.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
@@ -299,7 +301,7 @@ Objetivo: API base con auth, multi-tenancy y RLS funcionando.
 
 #### `task_00_11` — Endpoints Admin
 
-- [ ] **Título**: Endpoints /admin/tenants (CRUD), /admin/users (CRUD), /admin/system-health
+- [x] **Título**: Endpoints /admin/tenants (CRUD), /admin/users (CRUD), /admin/system-health
 - **Descripción**: Endpoints solo accesibles a System Admin que permiten crear tenants, asignar Tenant Admins, listar usuarios cross-tenant (con disclaimer de auditoría), y consultar salud del sistema. Cada acción en audit_log con quién, cuándo, qué.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
@@ -321,7 +323,7 @@ Objetivo: UI Next.js mínima con login y dashboard.
 
 #### `task_00_12` — Setup Next.js + Tailwind + shadcn/ui
 
-- [ ] **Título**: Crear `apps/admin-panel/` con Next.js 14 App Router, Tailwind, shadcn/ui
+- [x] **Título**: Crear `apps/admin-panel/` con Next.js 14 App Router, Tailwind, shadcn/ui
 - **Descripción**: Inicializar proyecto Next.js con TypeScript estricto. Configurar Tailwind y shadcn/ui. Crear estructura de carpetas: `app/`, `components/`, `lib/`, `types/`. Generar tipos del API con `openapi-typescript`.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
@@ -339,7 +341,7 @@ Objetivo: UI Next.js mínima con login y dashboard.
 
 #### `task_00_13` — Pantalla de Login y Dashboard del System Admin
 
-- [ ] **Título**: Implementar pantallas /login y /admin/dashboard
+- [x] **Título**: Implementar pantallas /login y /admin/dashboard
 - **Descripción**: Login con form email+password, manejo de errores. Dashboard que muestra: lista de servicios del stack con su estado de salud (verde/amarillo/rojo), uso de recursos del host (CPU/RAM/disco) leídos del endpoint /admin/system-health. Refresh automático cada 30 s.
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
@@ -361,7 +363,7 @@ Objetivo: trazabilidad y self-healing operativos.
 
 #### `task_00_14` — Logging Estructurado JSON
 
-- [ ] **Título**: Configurar structlog con campos estándar
+- [x] **Título**: Configurar structlog con campos estándar
 - **Descripción**: Configurar `structlog` (o `python-json-logger`) en todos los servicios Python con campos obligatorios: timestamp, level, service, trace_id, span_id, tenant_id, user_id, project_id. Filtros automáticos para enmascarar PII (email, tokens, IBAN, DNI).
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
@@ -379,7 +381,7 @@ Objetivo: trazabilidad y self-healing operativos.
 
 #### `task_00_15` — OpenTelemetry
 
-- [ ] **Título**: Instrumentar todos los servicios con OpenTelemetry
+- [x] **Título**: Instrumentar todos los servicios con OpenTelemetry
 - **Descripción**: Instrumentación automática de FastAPI, SQLAlchemy, Redis, Celery con OpenTelemetry. Exporter a stdout en esta fase (Loki/Tempo en Fase 12). Propagación de trace_id en headers entre servicios.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
@@ -397,7 +399,7 @@ Objetivo: trazabilidad y self-healing operativos.
 
 #### `task_00_16` — Watchdog de Servicios
 
-- [ ] **Título**: Implementar watchdog Python con backoff exponencial
+- [x] **Título**: Implementar watchdog Python con backoff exponencial
 - **Descripción**: Servicio `apps/watchdog/` que cada 30 s consulta el estado de healthcheck de cada contenedor. Si un servicio cae: reinicia con backoff exponencial (10s, 30s, 90s, máx 5 intentos). Tras 5 fallos: alerta al canal del System Admin (en esta fase, solo log estructurado en stderr; las notificaciones reales llegan en Fase 10).
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
@@ -420,7 +422,7 @@ Objetivo: dejar el repo navegable y entendible.
 
 #### `task_00_17` — Estructura Canónica de /docs
 
-- [ ] **Título**: Crear estructura canónica /docs/ con 7 carpetas
+- [x] **Título**: Crear estructura canónica /docs/ con 7 carpetas
 - **Descripción**: Crear las 7 carpetas obligatorias (01-overview, 02-getting-started, 03-guides, 04-reference, 05-architecture-decisions, 06-runbooks, 07-changelog) con READMEs vacíos en cada una. Crear `/docs/README.md` como índice principal.
 - **Tiempo estimado**: 2 h
 - **Complejidad**: xs
@@ -438,7 +440,7 @@ Objetivo: dejar el repo navegable y entendible.
 
 #### `task_00_18` — Documentación Inicial de Arquitectura
 
-- [ ] **Título**: Escribir docs base: introduction, architecture, installation, first-run
+- [x] **Título**: Escribir docs base: introduction, architecture, installation, first-run
 - **Descripción**: Redactar `/docs/01-overview/01-introduction.md`, `/docs/01-overview/02-architecture.md`, `/docs/02-getting-started/01-installation.md`, `/docs/02-getting-started/03-first-run.md`. En idioma del proyecto (es por defecto en esta instalación). Diagramas con Mermaid embebido.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: s
@@ -456,7 +458,7 @@ Objetivo: dejar el repo navegable y entendible.
 
 #### `task_00_19` — ADRs Iniciales
 
-- [ ] **Título**: Generar ADRs 0001-0005 con decisiones técnicas clave de esta fase
+- [x] **Título**: Generar ADRs 0001-0005 con decisiones técnicas clave de esta fase
 - **Descripción**: Redactar al menos 5 ADRs documentando: 0001 PostgreSQL + RLS, 0002 sesiones server-side en Redis (no JWT stateless), 0003 Vault desde día uno, 0004 monorepo con apps/ y packages/, 0005 Argon2id para passwords.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
@@ -474,7 +476,7 @@ Objetivo: dejar el repo navegable y entendible.
 
 #### `task_00_20` — Changelog del Plan 00
 
-- [ ] **Título**: Generar entrada de changelog para este plan
+- [x] **Título**: Generar entrada de changelog para este plan
 - **Descripción**: Crear `/docs/07-changelog/00-fundaciones.md` siguiendo el formato canónico: cabecera con plan_id y fechas, resumen de lo construido, lista de tareas con sus commits, decisiones tomadas, link al PR.
 - **Tiempo estimado**: 2 h
 - **Complejidad**: xs

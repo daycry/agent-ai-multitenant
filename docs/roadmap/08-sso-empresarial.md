@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `08-sso-empresarial` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `00-fundaciones` |
-| **Tiempo estimado (calendario)** | 2-3 semanas |
-| **Tiempo estimado (persona-días)** | 40-55 |
-| **Previsión de coste — humano** | 16.000 € – 22.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 60 € – 100 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/08-sso-empresarial` |
-| **Secciones del .docx** | [20] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `08-sso-empresarial`                      |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `00-fundaciones`                          |
+| **Tiempo estimado (calendario)**   | 2-3 semanas                               |
+| **Tiempo estimado (persona-días)** | 40-55                                     |
+| **Previsión de coste — humano**    | 16.000 € – 22.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 60 € – 100 €                              |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/08-sso-empresarial`                 |
+| **Secciones del .docx**            | [20]                                      |
 
 ---
 
@@ -70,10 +70,10 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Cada IdP tiene quirks: implementación frágil | Media | Medio | Usar authlib (Python) y python3-saml en lugar de implementar desde cero. Plantillas testeadas por IdP. |
-| SCIM mal implementado deja usuarios huérfanos | Media | Alto | Reconciliación periódica + tests con suite SCIM oficial. |
+| Riesgo                                        | Probabilidad | Impacto | Mitigación                                                                                             |
+| --------------------------------------------- | ------------ | ------- | ------------------------------------------------------------------------------------------------------ |
+| Cada IdP tiene quirks: implementación frágil  | Media        | Medio   | Usar authlib (Python) y python3-saml en lugar de implementar desde cero. Plantillas testeadas por IdP. |
+| SCIM mal implementado deja usuarios huérfanos | Media        | Alto    | Reconciliación periódica + tests con suite SCIM oficial.                                               |
 
 ---
 
@@ -340,7 +340,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "Los usuarios aparecen en el sistema al instante de la creación"
     - "Las actualizaciones de atributos del IdP se reflejan"
     - "Cuando el IdP marca usuario como suspended, se le revoca acceso inmediatamente"
-
 ```
 
 ---

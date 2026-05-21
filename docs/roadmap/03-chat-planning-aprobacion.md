@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `03-chat-planning-aprobacion` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `02-ejecucion-agentes` |
-| **Tiempo estimado (calendario)** | 4-5 semanas |
-| **Tiempo estimado (persona-días)** | 80-100 |
-| **Previsión de coste — humano** | 32.000 € – 40.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 180 € – 280 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/03-chat-planning-aprobacion` |
-| **Secciones del .docx** | [8] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `03-chat-planning-aprobacion`             |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `02-ejecucion-agentes`                    |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                               |
+| **Tiempo estimado (persona-días)** | 80-100                                    |
+| **Previsión de coste — humano**    | 32.000 € – 40.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 180 € – 280 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/03-chat-planning-aprobacion`        |
+| **Secciones del .docx**            | [8]                                       |
 
 ---
 
@@ -75,10 +75,10 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Conversación de planning se descontrola con muchos agentes hablando | Media | Medio | PM agente como portavoz único por defecto. Otros agentes solo intervienen cuando aportan valor específico. |
-| Plan generado con tareas con dependencias circulares | Media | Alto | Validación DAG (detección de ciclos por DFS) antes de persistir. |
+| Riesgo                                                              | Probabilidad | Impacto | Mitigación                                                                                                 |
+| ------------------------------------------------------------------- | ------------ | ------- | ---------------------------------------------------------------------------------------------------------- |
+| Conversación de planning se descontrola con muchos agentes hablando | Media        | Medio   | PM agente como portavoz único por defecto. Otros agentes solo intervienen cuando aportan valor específico. |
+| Plan generado con tareas con dependencias circulares                | Media        | Alto    | Validación DAG (detección de ciclos por DFS) antes de persistir.                                           |
 
 ---
 
@@ -681,7 +681,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "Tras la primera aprobación el plan pasa a pending_second_approval"
     - "Solo otro usuario con permisos puede aprobar la segunda firma"
     - "Tras la segunda firma el plan pasa a approved"
-
 ```
 
 ---

@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `10-asistente-personal` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `06-testing-revision-git` |
-| **Tiempo estimado (calendario)** | 3-4 semanas |
-| **Tiempo estimado (persona-días)** | 60-80 |
-| **Previsión de coste — humano** | 24.000 € – 32.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 120 € – 180 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/10-asistente-personal` |
-| **Secciones del .docx** | [17] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `10-asistente-personal`                   |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `06-testing-revision-git`                 |
+| **Tiempo estimado (calendario)**   | 3-4 semanas                               |
+| **Tiempo estimado (persona-días)** | 60-80                                     |
+| **Previsión de coste — humano**    | 24.000 € – 32.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 120 € – 180 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/10-asistente-personal`              |
+| **Secciones del .docx**            | [17]                                      |
 
 ---
 
@@ -37,7 +37,7 @@ docs_language: es
 
 ### Resumen Ejecutivo
 
-Asistente personal cross-proyecto configurable en 3 capas (plataforma/tenant/usuario) con canales Telegram, WhatsApp, Email, Slack, Teams, Discord, SMS, webhooks salientes con plantillas pre-configuradas, firma HMAC, reintentos, dead-letter queue.
+Asistente personal cross-proyecto **por tenant, accesible únicamente a Tenant Admins** (ver nota de revisión vigente en sección 17 del .docx). Identidad personalizable a nivel tenant (nombre, avatar, tono, idioma, tools habilitadas) y preferencias de canal por Tenant Admin individual. Canales Telegram, WhatsApp, Email, Slack, Teams, Discord, SMS, webhooks salientes con plantillas pre-configuradas, firma HMAC, reintentos, dead-letter queue. Toggle `Organization.personal_assistant_enabled` por tenant (default false).
 
 ### Contexto
 
@@ -51,9 +51,11 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 - Modelos NotificationChannel, NotificationPreference, NotificationLog.
 - Canales: Telegram, WhatsApp Cloud API, Email (SMTP), Slack, Microsoft Teams, Discord, SMS (Twilio), webhooks salientes.
 - Plantillas pre-configuradas (Slack message blocks, Teams Adaptive Cards, Discord embeds, Jinja2 custom).
-- Configuración en 3 capas: System Admin define plataformas habilitadas, Tenant Admin sus canales, usuario sus preferencias personales.
-- Asistente personal conversacional cross-proyecto (responde a queries del estado global por chat).
-- Eventos del sistema mapeados a notificaciones: task_blocked, plan_approved, review_needed, budget_alert, etc.
+- Configuración del asistente a nivel tenant: identidad (nombre, avatar, tono, idioma, system_prompt override, lista de tools habilitadas). Configuración de canales y preferencias de notificación a nivel Tenant Admin individual. System Admin define plataformas habilitadas globalmente.
+- Toggle `Organization.personal_assistant_enabled` (default false). Si false, ningún Tenant Admin del tenant puede interactuar con el asistente.
+- Tools del asistente con visibilidad cross-project del tenant: `tenant_projects_status`, `tenant_plans_summary`, `tenant_budget_status`, `tenant_recent_activity`, etc., respetando RBAC del admin que pregunta.
+- Asistente personal conversacional cross-proyecto — **solo accesible para users con role=admin del tenant**. Users con role=member NO pueden interactuar con él.
+- Eventos del sistema mapeados a notificaciones: task_blocked, plan_approved, review_needed, **budget_alert (umbrales cruzados, ver Fase 11 y sección 28.7 del .docx)**, escalado a humano tras max_review_retries, etc.
 - Firma HMAC para webhooks salientes.
 - Reintentos con backoff exponencial y dead-letter queue.
 
@@ -70,10 +72,10 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| WhatsApp requiere aprobación de plantillas en Meta | Alta | Medio | Documentar bien el proceso. Empezar con Telegram + Email. |
-| Spam de notificaciones molesta al usuario | Media | Alto | Rate limiting por canal, agrupación de eventos similares, preferencias granulares. |
+| Riesgo                                             | Probabilidad | Impacto | Mitigación                                                                         |
+| -------------------------------------------------- | ------------ | ------- | ---------------------------------------------------------------------------------- |
+| WhatsApp requiere aprobación de plantillas en Meta | Alta         | Medio   | Documentar bien el proceso. Empezar con Telegram + Email.                          |
+| Spam de notificaciones molesta al usuario          | Media        | Alto    | Rate limiting por canal, agrupación de eventos similares, preferencias granulares. |
 
 ---
 
@@ -416,7 +418,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "Devuelve listado consolidado cross-proyecto"
     - "Puede aprobar planes pendientes desde el chat con el asistente"
     - "Mantiene contexto entre mensajes"
-
 ```
 
 ---

@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `09-marketplace` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `05-mcp-tools-avanzadas` |
-| **Tiempo estimado (calendario)** | 3-4 semanas |
-| **Tiempo estimado (persona-días)** | 60-80 |
-| **Previsión de coste — humano** | 24.000 € – 32.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 120 € – 200 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/09-marketplace` |
-| **Secciones del .docx** | [32] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `09-marketplace`                          |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `05-mcp-tools-avanzadas`                  |
+| **Tiempo estimado (calendario)**   | 3-4 semanas                               |
+| **Tiempo estimado (persona-días)** | 60-80                                     |
+| **Previsión de coste — humano**    | 24.000 € – 32.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 120 € – 200 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/09-marketplace`                     |
+| **Secciones del .docx**            | [32]                                      |
 
 ---
 
@@ -74,10 +74,10 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Tool malicioso del marketplace compromete proyecto | Baja | Crítico | Análisis estático + sandbox + revisión humana en niveles community. Verified requiere firma por equipo Anthropic. |
-| Marketplace público se contamina con basura | Media | Bajo | Moderación + reporting + delisting. |
+| Riesgo                                             | Probabilidad | Impacto | Mitigación                                                                                                        |
+| -------------------------------------------------- | ------------ | ------- | ----------------------------------------------------------------------------------------------------------------- |
+| Tool malicioso del marketplace compromete proyecto | Baja         | Crítico | Análisis estático + sandbox + revisión humana en niveles community. Verified requiere firma por equipo Anthropic. |
+| Marketplace público se contamina con basura        | Media        | Bajo    | Moderación + reporting + delisting.                                                                               |
 
 ---
 
@@ -457,7 +457,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "Sin opt-in explícito de ambos, no se puede compartir"
     - "Con opt-in, el System Admin ve el evento en audit_log"
     - "Tenant B ve la skill como 'compartida por Tenant A' con badge"
-
 ```
 
 ---

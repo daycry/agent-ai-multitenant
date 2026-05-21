@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `13-api-publica-webhooks` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `01-dominio-minimo` |
-| **Tiempo estimado (calendario)** | 3-4 semanas |
-| **Tiempo estimado (persona-días)** | 60-80 |
-| **Previsión de coste — humano** | 24.000 € – 32.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 120 € – 200 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/13-api-publica-webhooks` |
-| **Secciones del .docx** | [26] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `13-api-publica-webhooks`                 |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `01-dominio-minimo`                       |
+| **Tiempo estimado (calendario)**   | 3-4 semanas                               |
+| **Tiempo estimado (persona-días)** | 60-80                                     |
+| **Previsión de coste — humano**    | 24.000 € – 32.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 120 € – 200 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/13-api-publica-webhooks`            |
+| **Secciones del .docx**            | [26]                                      |
 
 ---
 
@@ -72,10 +72,10 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Token comprometido da acceso total al tenant | Media | Alto | TTL configurable, revocación inmediata, IP allowlist opcional, rotación recomendada. |
-| Webhooks entrantes pueden ser DDoS vector | Media | Medio | Rate limiting agresivo + circuit breaker. |
+| Riesgo                                       | Probabilidad | Impacto | Mitigación                                                                           |
+| -------------------------------------------- | ------------ | ------- | ------------------------------------------------------------------------------------ |
+| Token comprometido da acceso total al tenant | Media        | Alto    | TTL configurable, revocación inmediata, IP allowlist opcional, rotación recomendada. |
+| Webhooks entrantes pueden ser DDoS vector    | Media        | Medio   | Rate limiting agresivo + circuit breaker.                                            |
 
 ---
 
@@ -385,7 +385,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "pip install funciona desde el registry interno"
     - "Ejemplo del README ejecuta sin errores"
     - "Type hints disponibles en IDE"
-
 ```
 
 ---

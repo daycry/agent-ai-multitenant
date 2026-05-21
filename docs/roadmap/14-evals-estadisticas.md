@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `14-evals-estadisticas` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `06-testing-revision-git` |
-| **Tiempo estimado (calendario)** | 3-4 semanas |
-| **Tiempo estimado (persona-días)** | 60-80 |
-| **Previsión de coste — humano** | 24.000 € – 32.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 180 € – 280 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/14-evals-estadisticas` |
-| **Secciones del .docx** | [27, 28] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `14-evals-estadisticas`                   |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `06-testing-revision-git`                 |
+| **Tiempo estimado (calendario)**   | 3-4 semanas                               |
+| **Tiempo estimado (persona-días)** | 60-80                                     |
+| **Previsión de coste — humano**    | 24.000 € – 32.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 180 € – 280 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/14-evals-estadisticas`              |
+| **Secciones del .docx**            | [27, 28]                                  |
 
 ---
 
@@ -37,7 +37,7 @@ docs_language: es
 
 ### Resumen Ejecutivo
 
-Evals continuos: golden dataset desde tareas reales aprobadas, LLM-as-judge custom, regression evals en CI bloqueando merges, shadow evals 5% en producción. Dashboard de estadísticas de agentes por tenant: tasa éxito, coste medio, throughput.
+Evals continuos: golden dataset desde tareas reales aprobadas, LLM-as-judge custom, regression evals en CI bloqueando merges, shadow evals 5% en producción. Dashboard de estadísticas de agentes por tenant: tasa éxito, coste medio, throughput. **Dashboard de consumo del proyecto** (sección 13.7 del .docx) con totales tokens/dinero, segmentaciones por plan/agente/modelo/temporal, indicador de budget. **Explorador de runs del proyecto** (sección 13.8 del .docx) tabla filtrable con exportación CSV/XLSX. **Tabla de Runs en la vista de detalle de tarea** (sección 13.6.5) con totales por tarea incluidos los reintentos.
 
 ### Contexto
 
@@ -58,6 +58,10 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 - Alertas configurables ('si tasa éxito de X baja del 70%, avisa').
 - Exportación CSV/PDF de reportes.
 - Comparativa cross-tenant solo para System Admin (no para tenants).
+- **Dashboard de consumo del proyecto** (sección 13.7 del .docx): tarjetas de resumen (coste acumulado, tokens totales input/output/cached, número de runs, coste medio, run más costoso, indicador de budget con barra de progreso y marcadores de umbrales), segmentaciones por plan/agente/modelo/temporal, indicador de alertas recientes de budget y banner si pausado al 100%.
+- **Explorador de runs del proyecto** (sección 13.8 del .docx): tabla filtrable con columnas timestamp/plan/tarea/agente/rol/modelo/duración/tokens/coste USD/coste moneda tenant/verdict/retry_count. Filtros por rango temporal, plan, tarea, agente, rol, modelo, verdict, umbral mínimo de coste. Filtros combinados guardables. Exportación CSV/XLSX. URL compartible con filtros aplicados.
+- **Tabla de Runs en detalle de tarea** (sección 13.6.5 del .docx): una fila por execution con timestamp/agente/rol/modelo/duración/tokens (input, cached, output)/coste USD/coste moneda tenant/verdict. Pie con totales agregados.
+- Toggle "ver en moneda del tenant" / "ver en USD" en el explorador. Tooltip de trazabilidad con el rate aplicado.
 
 **Queda fuera (otras fases)**:
 
@@ -72,10 +76,10 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| LLM-as-judge tiene sesgo | Media | Medio | Usar modelo distinto + criterios objetivos + revisión humana periódica de samples. |
-| Datasets desactualizados producen métricas engañosas | Media | Medio | Refresh del dataset con nuevas tareas reales cada N días. |
+| Riesgo                                               | Probabilidad | Impacto | Mitigación                                                                         |
+| ---------------------------------------------------- | ------------ | ------- | ---------------------------------------------------------------------------------- |
+| LLM-as-judge tiene sesgo                             | Media        | Medio   | Usar modelo distinto + criterios objetivos + revisión humana periódica de samples. |
+| Datasets desactualizados producen métricas engañosas | Media        | Medio   | Refresh del dataset con nuevas tareas reales cada N días.                          |
 
 ---
 
@@ -402,7 +406,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
   checklist:
     - "PDF generado con cabecera, gráficas, tablas"
     - "CSV exportable con datos crudos para análisis externo"
-
 ```
 
 ---

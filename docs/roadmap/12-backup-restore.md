@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `12-backup-restore` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `00-fundaciones` |
-| **Tiempo estimado (calendario)** | 2-3 semanas |
-| **Tiempo estimado (persona-días)** | 40-55 |
-| **Previsión de coste — humano** | 16.000 € – 22.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 60 € – 100 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/12-backup-restore` |
-| **Secciones del .docx** | [25] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `12-backup-restore`                       |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `00-fundaciones`                          |
+| **Tiempo estimado (calendario)**   | 2-3 semanas                               |
+| **Tiempo estimado (persona-días)** | 40-55                                     |
+| **Previsión de coste — humano**    | 16.000 € – 22.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 60 € – 100 €                              |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/12-backup-restore`                  |
+| **Secciones del .docx**            | [25]                                      |
 
 ---
 
@@ -70,10 +70,10 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Backup corrupto sin detectar | Media | Crítico | Verificación post-backup (pg_restore --list, tar -tf). Test de restore semanal en máquina paralela. |
-| Espacio en disco se llena con backups | Media | Alto | Política de rotación + alertas tempranas + sincronización inmediata a destino remoto. |
+| Riesgo                                | Probabilidad | Impacto | Mitigación                                                                                          |
+| ------------------------------------- | ------------ | ------- | --------------------------------------------------------------------------------------------------- |
+| Backup corrupto sin detectar          | Media        | Crítico | Verificación post-backup (pg_restore --list, tar -tf). Test de restore semanal en máquina paralela. |
+| Espacio en disco se llena con backups | Media        | Alto    | Política de rotación + alertas tempranas + sincronización inmediata a destino remoto.               |
 
 ---
 
@@ -419,7 +419,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "Alerta llega al canal del System Admin en menos de 5 min"
     - "El sistema entra en modo degradado: pausa workers no críticos, evita escribir más backups"
     - "Tras liberar espacio, alerta de recuperación"
-
 ```
 
 ---

@@ -1,0 +1,58 @@
+# Development overrides for docker-compose.yml.
+#
+# Exposes service ports on the host so they're reachable from local
+# tooling (psql, redis-cli, MinIO web UI, Vault UI, clamdscan), and
+# runs Vault in dev mode with a known root token — non-persistent,
+# convenient for local experimentation.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
+
+services:
+  postgres:
+    # Default 15432 (not 5432) so the container does not clash with
+    # whatever local postgres a Windows dev may already have (Laragon,
+    # PostgreSQL.app, system service, ...). Override with POSTGRES_PORT
+    # if you want the standard port.
+    ports:
+      - "${POSTGRES_PORT:-15432}:5432"
+
+  redis:
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+  minio:
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+
+  vault:
+    # Dev mode: in-memory storage, auto-unsealed, well-known root token.
+    # File backend (production mode) is what docker-compose.yml ships.
+    command:
+      [
+        "server",
+        "-dev",
+        "-dev-listen-address=0.0.0.0:8200",
+        "-dev-root-token-id=${VAULT_DEV_ROOT_TOKEN:-dev-root-token}",
+      ]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN:-dev-root-token}
+    ports:
+      - "${VAULT_PORT:-8200}:8200"
+    # IMPORTANT: in -dev mode Vault opens its own listener on
+    # 0.0.0.0:8200. The base compose mounts vault/config.hcl which
+    # ALSO declares a tcp listener on the same port; both bind ->
+    # EADDRINUSE and the container restart-loops. The `!reset` tag
+    # tells docker-compose to DISCARD the base list of volumes (a
+    # plain `volumes:` block would otherwise be merged, not replaced,
+    # for items at the same key in some Compose versions) before
+    # applying our shorter list. The in-memory dev backend doesn't
+    # need the named volumes either.
+    volumes: !reset
+      - vault_data:/vault/file
+      - vault_logs:/vault/logs
+
+  clamav:
+    ports:
+      - "${CLAMAV_PORT:-3310}:3310"

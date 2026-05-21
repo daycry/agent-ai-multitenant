@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo | Valor |
-|-------|-------|
-| **ID del Plan** | `04-memoria-rag-kbs` |
-| **Estado** | `pending_approval` |
-| **Bloqueado por** | `02-ejecucion-agentes` |
-| **Tiempo estimado (calendario)** | 4-5 semanas |
-| **Tiempo estimado (persona-días)** | 80-100 |
-| **Previsión de coste — humano** | 32.000 € – 40.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA** | 200 € – 350 € |
-| **Aprobador propuesto** | System Admin |
-| **Rama git** | `plan/04-memoria-rag-kbs` |
-| **Secciones del .docx** | [10, 11] |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `04-memoria-rag-kbs`                      |
+| **Estado**                         | `pending_approval`                        |
+| **Bloqueado por**                  | `02-ejecucion-agentes`                    |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                               |
+| **Tiempo estimado (persona-días)** | 80-100                                    |
+| **Previsión de coste — humano**    | 32.000 € – 40.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 200 € – 350 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/04-memoria-rag-kbs`                 |
+| **Secciones del .docx**            | [10, 11]                                  |
 
 ---
 
@@ -76,11 +76,11 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 ### Riesgos Identificados
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Docling es nuevo y puede tener inestabilidades en formatos exóticos | Media | Medio | Fallback a Unstructured.io para tipos no soportados. Tests con corpus variado. |
-| Embeddings de baja calidad afectan a todo el sistema | Media | Alto | Eval continuo de calidad de recuperación con dataset golden. |
-| Coste de embeddings explota con tenants que ingieren TBs | Baja | Alto | Quotas por tenant. Por defecto modelo local sin coste por token. |
+| Riesgo                                                              | Probabilidad | Impacto | Mitigación                                                                     |
+| ------------------------------------------------------------------- | ------------ | ------- | ------------------------------------------------------------------------------ |
+| Docling es nuevo y puede tener inestabilidades en formatos exóticos | Media        | Medio   | Fallback a Unstructured.io para tipos no soportados. Tests con corpus variado. |
+| Embeddings de baja calidad afectan a todo el sistema                | Media        | Alto    | Eval continuo de calidad de recuperación con dataset golden.                   |
+| Coste de embeddings explota con tenants que ingieren TBs            | Baja         | Alto    | Quotas por tenant. Por defecto modelo local sin coste por token.               |
 
 ---
 
@@ -592,7 +592,6 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
     - "La reindexación es asíncrona con progreso visible"
     - "Las consultas durante la reindexación devuelven resultados (con el modelo antiguo) sin error"
     - "Tras completar, las consultas usan el modelo nuevo"
-
 ```
 
 ---

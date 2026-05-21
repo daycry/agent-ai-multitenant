@@ -7,7 +7,7 @@ status: published
 
 # Planes de Construcción del Sistema
 
-Esta carpeta contiene **16 planes de construcción**, uno por fase del Plan de Implementación (sección 33 del documento maestro). Cada archivo sigue la **plantilla canónica de Plan** definida en la sección 8.8 del documento maestro: la misma plantilla que el sistema usará después para generar sus propios planes.
+Esta carpeta contiene **17 planes de construcción** (16 originales + 16-human-agents añadido tras la revisión vigente), uno por fase del Plan de Implementación (sección 33 del documento maestro). Cada archivo sigue la **plantilla canónica de Plan** definida en la sección 8.8 del documento maestro: la misma plantilla que el sistema usará después para generar sus propios planes.
 
 Esto es intencional: el sistema se construye con el mismo formato con el que opera. Claude Code puede leer cada plan como si lo hubiera generado el Project Manager agente del propio sistema.
 
@@ -22,24 +22,25 @@ Cada archivo contiene:
 
 ## Orden de Ejecución
 
-| # | Plan | Duración | Depende de |
-|---|------|----------|-----------|
-| 00 | [00-fundaciones.md](./00-fundaciones.md) | 3-4 sem | — |
-| 01 | [01-dominio-minimo.md](./01-dominio-minimo.md) | 4-5 sem | 00 |
-| 02 | [02-ejecucion-agentes.md](./02-ejecucion-agentes.md) | 4-5 sem | 01 |
-| 03 | [03-chat-planning-aprobacion.md](./03-chat-planning-aprobacion.md) | 4-5 sem | 02 |
-| 04 | [04-memoria-rag-kbs.md](./04-memoria-rag-kbs.md) | 4-5 sem | 02 |
-| 05 | [05-mcp-tools-avanzadas.md](./05-mcp-tools-avanzadas.md) | 2-3 sem | 04 |
-| 06 | [06-testing-revision-git.md](./06-testing-revision-git.md) | 4-5 sem | 03, 05 |
-| 07 | [07-documentacion-visor.md](./07-documentacion-visor.md) | 3 sem | 06 |
-| 08 | [08-sso-empresarial.md](./08-sso-empresarial.md) | 2-3 sem | 00 |
-| 09 | [09-marketplace.md](./09-marketplace.md) | 3-4 sem | 05 |
-| 10 | [10-asistente-personal.md](./10-asistente-personal.md) | 3-4 sem | 06 |
-| 11 | [11-guardrails-precios.md](./11-guardrails-precios.md) | 3-4 sem | 02 |
-| 12 | [12-backup-restore.md](./12-backup-restore.md) | 2-3 sem | 00 |
-| 13 | [13-api-publica-webhooks.md](./13-api-publica-webhooks.md) | 3-4 sem | 01 |
-| 14 | [14-evals-estadisticas.md](./14-evals-estadisticas.md) | 3-4 sem | 06 |
-| 15 | [15-instalador-produccion.md](./15-instalador-produccion.md) | 4-5 sem | todos |
+| #   | Plan                                                               | Duración | Depende de |
+| --- | ------------------------------------------------------------------ | -------- | ---------- |
+| 00  | [00-fundaciones.md](./00-fundaciones.md)                           | 3-4 sem  | —          |
+| 01  | [01-dominio-minimo.md](./01-dominio-minimo.md)                     | 4-5 sem  | 00         |
+| 02  | [02-ejecucion-agentes.md](./02-ejecucion-agentes.md)               | 4-5 sem  | 01         |
+| 03  | [03-chat-planning-aprobacion.md](./03-chat-planning-aprobacion.md) | 4-5 sem  | 02         |
+| 04  | [04-memoria-rag-kbs.md](./04-memoria-rag-kbs.md)                   | 4-5 sem  | 02         |
+| 05  | [05-mcp-tools-avanzadas.md](./05-mcp-tools-avanzadas.md)           | 2-3 sem  | 04         |
+| 06  | [06-testing-revision-git.md](./06-testing-revision-git.md)         | 4-5 sem  | 03, 05     |
+| 07  | [07-documentacion-visor.md](./07-documentacion-visor.md)           | 3 sem    | 06         |
+| 08  | [08-sso-empresarial.md](./08-sso-empresarial.md)                   | 2-3 sem  | 00         |
+| 09  | [09-marketplace.md](./09-marketplace.md)                           | 3-4 sem  | 05         |
+| 10  | [10-asistente-personal.md](./10-asistente-personal.md)             | 3-4 sem  | 06         |
+| 11  | [11-guardrails-precios.md](./11-guardrails-precios.md)             | 3-4 sem  | 02         |
+| 12  | [12-backup-restore.md](./12-backup-restore.md)                     | 2-3 sem  | 00         |
+| 13  | [13-api-publica-webhooks.md](./13-api-publica-webhooks.md)         | 3-4 sem  | 01         |
+| 14  | [14-evals-estadisticas.md](./14-evals-estadisticas.md)             | 3-4 sem  | 06         |
+| 15  | [15-instalador-produccion.md](./15-instalador-produccion.md)       | 4-5 sem  | todos      |
+| 16  | [16-human-agents.md](./16-human-agents.md)                         | 4-5 sem  | 06, 10, 11 |
 
 ## MVP Funcional
 

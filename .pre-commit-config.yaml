@@ -1,0 +1,95 @@
+# Pre-commit hook configuration for the agentic platform monorepo.
+# Run locally: `pre-commit install && pre-commit run --all-files`
+# CI runs the same hooks in lint job; both must agree.
+#
+# Hooks run under whatever python pre-commit finds (typically the venv's
+# interpreter). The *output* of black/ruff is pinned to py312 via
+# pyproject.toml (target-version), so it's fine if the interpreter is
+# newer (3.12, 3.13, etc.).
+
+repos:
+  # -------------------- generic / hygiene --------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.md$
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # --unsafe so docker-compose's custom tags (!reset, !override)
+        # don't trip the PyYAML loader.
+        args: [--allow-multiple-documents, --unsafe]
+      - id: check-json
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        # Windows-native scripts must keep CRLF (see .gitattributes).
+        # mixed-line-ending doesn't honour .gitattributes, so we
+        # exclude them explicitly here.
+        exclude: \.(ps1|cmd|bat)$
+
+  # -------------------- Python --------------------
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.0
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # mypy runs in its own pre-commit-managed venv. Runtime libs whose
+  # types we import (sqlalchemy, pydantic, fastapi, ...) must be listed
+  # under additional_dependencies so the type checker can resolve them.
+  # Add a new lib here when a new app starts importing it.
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - "sqlalchemy[asyncio]>=2.0,<3"
+          - "uuid6>=2024.1"
+          - "pydantic>=2.5,<3"
+          - "pydantic-settings>=2.2,<3"
+          - "fastapi>=0.110,<1"
+          - "structlog>=24.1,<25"
+          - "redis>=5.0,<6"
+          - "alembic>=1.13,<2"
+          - "argon2-cffi>=23.1,<24"
+          - "types-python-jose>=3.3,<4"
+          - "opentelemetry-api>=1.27,<2"
+          - "opentelemetry-sdk>=1.27,<2"
+          - "opentelemetry-instrumentation-fastapi>=0.48b0,<1"
+          - "opentelemetry-instrumentation-sqlalchemy>=0.48b0,<1"
+          - "opentelemetry-instrumentation-asyncpg>=0.48b0,<1"
+          - "opentelemetry-instrumentation-redis>=0.48b0,<1"
+          - "opentelemetry-instrumentation-httpx>=0.48b0,<1"
+          - "httpx>=0.27,<1"
+          - "docker>=7.1,<8"
+        args: [--config-file=pyproject.toml]
+        files: ^(apps|packages)/.*\.py$
+        # Skip files that import sibling local packages — the hook
+        # venv only sees PyPI deps, not our editable apps/<x>:
+        #   apps/<x>/migrations/*.py  -> uses api_server.db
+        #   apps/watchdog/...         -> uses api_server.logging
+        exclude: ^apps/(([^/]+/migrations/.*)|watchdog/.*)\.py$
+
+  # -------------------- TypeScript / JavaScript --------------------
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        types_or: [javascript, jsx, ts, tsx, json, yaml, markdown]
+        exclude: |
+          (?x)^(
+            \.venv/.*|
+            node_modules/.*|
+            .*\.min\.(js|css)
+          )$
