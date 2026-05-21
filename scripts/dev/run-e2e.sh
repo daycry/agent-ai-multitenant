@@ -130,6 +130,64 @@ if [[ "$pg_health" != "healthy" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 2b) Port preflight + stray-uvicorn cleanup.
+# If a previous run crashed (or Ctrl-C beat the trap), a stray uvicorn may
+# still own $API_PORT. Kill ours and proceed; anything that doesn't look
+# like uvicorn is foreign and we bail rather than nuke it.
+# ---------------------------------------------------------------------------
+if command -v lsof >/dev/null 2>&1; then
+    port_owner_pid="$(lsof -ti "tcp:$API_PORT" -sTCP:LISTEN 2>/dev/null | head -n1 || true)"
+    if [[ -n "$port_owner_pid" ]]; then
+        port_cmd="$(ps -p "$port_owner_pid" -o command= 2>/dev/null || true)"
+        # 'ours' if any of:
+        #   - command line contains 'uvicorn' (parent process)
+        #   - command line is a multiprocessing-spawn worker that uvicorn
+        #     created on macOS / Python 3.8+ (on Linux uvicorn uses fork,
+        #     so the worker keeps 'uvicorn' in argv -- spawn workers don't)
+        #   - executable path is our repo's .venv python
+        if [[ "$port_cmd" == *uvicorn* ]] \
+           || [[ "$port_cmd" == *spawn_main* ]] \
+           || [[ "$port_cmd" == *multiprocessing* ]] \
+           || [[ "$port_cmd" == *"$REPO_ROOT/.venv/"* ]]; then
+            echo "==> Port $API_PORT held by stray uvicorn (pid $port_owner_pid). Killing tree."
+            # Kill the process group if we can detect it, else just the pid.
+            owner_pgid="$(ps -o pgid= -p "$port_owner_pid" 2>/dev/null | tr -d ' ' || true)"
+            if [[ -n "$owner_pgid" ]]; then
+                kill -- "-$owner_pgid" 2>/dev/null || true
+            fi
+            kill "$port_owner_pid" 2>/dev/null || true
+            freed=0
+            for _ in $(seq 1 10); do
+                sleep 0.5
+                if ! lsof -ti "tcp:$API_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+                    freed=1
+                    break
+                fi
+            done
+            if [[ "$freed" -ne 1 ]]; then
+                # Hardest case: kill -9 any remaining listener PIDs.
+                for rpid in $(lsof -ti "tcp:$API_PORT" -sTCP:LISTEN 2>/dev/null || true); do
+                    kill -9 "$rpid" 2>/dev/null || true
+                done
+                sleep 1
+                if lsof -ti "tcp:$API_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+                    echo "ERROR: port $API_PORT still busy after kill -9" >&2
+                    exit 1
+                fi
+            fi
+        else
+            echo "ERROR: port $API_PORT held by pid $port_owner_pid -- not uvicorn." >&2
+            echo "       Command line: $port_cmd" >&2
+            echo "       Refusing to kill an unknown process." >&2
+            echo "       Stop it manually or rerun with --api-port <free port>." >&2
+            exit 1
+        fi
+    fi
+else
+    echo "    (lsof not installed; skipping port preflight)" >&2
+fi
+
+# ---------------------------------------------------------------------------
 # 3) Alembic migrations
 # ---------------------------------------------------------------------------
 echo "==> Applying Alembic migrations"
@@ -169,7 +227,7 @@ while [[ "$(date +%s)" -lt "$hz_deadline" ]]; do
         tail -n 30 "$API_ERR" >&2 || true
         exit 1
     fi
-    if curl -sf "http://localhost:$API_PORT/healthz" >/dev/null 2>&1; then
+    if curl -sf "http://127.0.0.1:$API_PORT/healthz" >/dev/null 2>&1; then
         api_up=1
         break
     fi
@@ -186,25 +244,88 @@ fi
 
 # ---------------------------------------------------------------------------
 # 6) Register + promote admin
+#
+# Login-first to handle the case where the email already exists in the DB
+# with a DIFFERENT password. A naive 409-is-ok branch would let the script
+# "succeed" and Playwright would later fail with 401.
+#
+# We also clear Redis rate-limit keys for the login endpoint before probing:
+# repeated dev runs accumulate failures and trip the 429 brownout, which
+# would then mask actual password mismatches.
 # ---------------------------------------------------------------------------
 echo "==> Ensuring admin user '$ADMIN_EMAIL' is registered + promoted"
+
+# Wipe per-email + per-IP rate limit counters. Safe in the dev stack.
+docker compose "${COMPOSE_ARGS[@]}" exec -T redis redis-cli \
+    DEL "rl:login:email:$ADMIN_EMAIL" "rl:login:ip:127.0.0.1" >/dev/null 2>&1 || true
+
+login_body=$(python3 -c "
+import json
+print(json.dumps({'email': '$ADMIN_EMAIL', 'password': '$ADMIN_PASSWORD'}))
+")
 register_body=$(python3 -c "
 import json
 print(json.dumps({'email': '$ADMIN_EMAIL', 'password': '$ADMIN_PASSWORD', 'full_name': 'E2E Admin'}))
 ")
-register_code=$(
-    curl -sS -o /dev/null -w "%{http_code}" \
-        -X POST \
-        -H "Content-Type: application/json" \
-        -d "$register_body" \
-        "http://localhost:$API_PORT/auth/register" || echo "000"
-)
-case "$register_code" in
-    201) echo "    Registered new user." ;;
-    409) echo "    User already exists (409) -- continuing." ;;
-    *)
-        echo "ERROR: register failed with HTTP $register_code" >&2
+
+# Echoes one of: ok | bad-password | rate-limited | no-user | other:<code>
+get_admin_login_status() {
+    local code
+    code=$(
+        curl -sS -o /dev/null -w "%{http_code}" \
+            -X POST -H "Content-Type: application/json" \
+            -d "$login_body" \
+            "http://127.0.0.1:$API_PORT/auth/login" || echo "000"
+    )
+    case "$code" in
+        200) echo "ok" ;;
+        401) echo "bad-password" ;;
+        429) echo "rate-limited" ;;
+        404) echo "no-user" ;;
+        *)   echo "other:$code" ;;
+    esac
+}
+
+login_status=$(get_admin_login_status)
+case "$login_status" in
+    ok)
+        echo "    User already exists with the expected password."
+        ;;
+    rate-limited)
+        echo "ERROR: /auth/login is rate-limited even after clearing Redis keys. Wait a minute and rerun." >&2
         exit 1
+        ;;
+    *)
+        register_code=$(
+            curl -sS -o /dev/null -w "%{http_code}" \
+                -X POST -H "Content-Type: application/json" \
+                -d "$register_body" \
+                "http://127.0.0.1:$API_PORT/auth/register" || echo "000"
+        )
+        case "$register_code" in
+            201) echo "    Registered new user." ;;
+            409)
+                echo "ERROR: user '$ADMIN_EMAIL' exists in the DB with a DIFFERENT password than '$ADMIN_PASSWORD'." >&2
+                echo "       Either:" >&2
+                echo "         - rerun with --admin-password <the password it actually has>, or" >&2
+                echo "         - delete it and re-run:" >&2
+                echo "             docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml exec postgres \\" >&2
+                echo "               psql -U postgres -d agentic_platform -c \"DELETE FROM users WHERE email = '$ADMIN_EMAIL'\"" >&2
+                exit 1
+                ;;
+            *)
+                echo "ERROR: register failed with HTTP $register_code" >&2
+                exit 1
+                ;;
+        esac
+        # Clear rate limits again (the failed login above counted) and re-verify.
+        docker compose "${COMPOSE_ARGS[@]}" exec -T redis redis-cli \
+            DEL "rl:login:email:$ADMIN_EMAIL" "rl:login:ip:127.0.0.1" >/dev/null 2>&1 || true
+        post_status=$(get_admin_login_status)
+        if [[ "$post_status" != "ok" ]]; then
+            echo "ERROR: registered '$ADMIN_EMAIL' but /auth/login returns '$post_status' -- aborting." >&2
+            exit 1
+        fi
         ;;
 esac
 
@@ -223,6 +344,10 @@ playwright_exit=0
     cd "$REPO_ROOT/apps/admin-panel"
     export E2E_ADMIN_EMAIL="$ADMIN_EMAIL"
     export E2E_ADMIN_PASSWORD="$ADMIN_PASSWORD"
+    # Next dev server bakes lib/api.ts's API_URL from NEXT_PUBLIC_API_URL.
+    # Without this the browser tests would call the default
+    # http://localhost:8001 even when we run uvicorn on a different port.
+    export NEXT_PUBLIC_API_URL="http://127.0.0.1:$API_PORT"
     npm run e2e
 ) || playwright_exit=$?
 

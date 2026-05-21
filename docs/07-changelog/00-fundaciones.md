@@ -4,21 +4,23 @@ title: Fundaciones del Sistema
 started_at: 2026-05-20
 completed_at: null
 status: pending_human_validation
-tasks_done: 19
+tasks_done: 20
 tasks_total: 20
-tasks_pending_local: [task_00_13]
-tests_automated_passing: 94
+tasks_pending_local: []
+tests_automated_passing: 96
 human_validations_passing: TBD
 docs_language: es
 ---
 
-> **Estado:** el plan aún no está formalmente cerrado. Queda
-> `task_00_13` (Playwright) pendiente de verificación local más los
-> cinco tests humanos (`human_00_01..05`). `task_00_03` ya cerrada
+> **Estado:** el plan está completo a nivel de tests automáticos
+> (96 tests verdes, incluido Playwright). Pendiente solo la
+> validación humana (`human_00_01..05`). `task_00_03` cerrada
 > tras el primer run verde de GitHub Actions sobre la rama
-> `plan/00-fundaciones`. Cuando el operador humano valide, se pasa
-> el frontmatter del roadmap a `status: completed` y se rellena
-> `completed_at`.
+> `plan/00-fundaciones`; `task_00_13` cerrada tras el primer pase
+> verde de Playwright en local con `scripts/dev/run-e2e.ps1`.
+> Cuando el operador humano valide los cinco tests humanos, se
+> pasa el frontmatter del roadmap a `status: completed` y se
+> rellena `completed_at`.
 
 # Changelog — Plan 00 · Fundaciones del Sistema
 
@@ -102,10 +104,10 @@ system-health}` con RBAC (`require_system_admin`), audit log
 - `task_00_12` ✅ — `apps/admin-panel/` con Next.js 14 App Router,
   Tailwind, shadcn/ui (tokens + cn helper + UI primitives inline).
   `npm run build` exit 0.
-- `task_00_13` ⬜ implementación verde (login + dashboard +
-  TanStack Query con refresh 30 s + Playwright spec). E2E pendiente
-  de instalar browsers (`npm run e2e:install`) y arrancar el stack
-  con un user system admin seeded.
+- `task_00_13` ✅ — login + dashboard + TanStack Query con refresh
+  30 s + Playwright spec. Verde en local (2 tests, ~18 s) vía
+  `scripts/dev/run-e2e.ps1`, que automatiza el stack, las
+  migraciones, el seed del admin y la ejecución de los specs.
 
 ### Fase E — Observabilidad y self-healing
 
@@ -136,19 +138,22 @@ system-health}` con RBAC (`require_system_admin`), audit log
 
 ### Bonus — `docs/03-guides/gotchas/`
 
-17 notas de troubleshooting que NO estaban en el plan original
+22 notas de troubleshooting que NO estaban en el plan original
 pero documentan trampas no-obvias encontradas y resueltas
 (`docker-compose-volumes-merge`, `vault-dev-mode-port-conflict`,
 `asyncpg-set-local-no-bind-params`, `mypy-local-package-imports`,
 `otel-console-exporter-pytest-stdout`,
-`windows-asyncio-engine-dispose`, `windows-git-crlf-vs-hooks`, etc.).
+`windows-asyncio-engine-dispose`, `windows-tcp-ghost-listener`,
+`powershell-invoke-restmethod-localhost-hang`,
+`uvicorn-windows-multiprocessing-spawn`,
+`nextjs-public-env-build-time`, `auth-rate-limit-dev-loop`, etc.).
 
 ## Métricas
 
 - **Commits en `plan/00-fundaciones`:** ≈25 (uno por tarea, más
   fixes, gotchas y roadmap maintenance).
-- **Tests automáticos:** 94 passing (69 unit + 25 integration),
-  1 skipped (E2E watchdog opt-in).
+- **Tests automáticos:** 96 passing (69 unit + 25 integration +
+  2 Playwright E2E), 1 skipped (E2E watchdog opt-in).
 - **Cobertura crítica:** auth + multi-tenancy ≥ 70 % (objetivo
   cumplido).
 - **Líneas commiteadas:** ~7 000 (incluye docs y plan files).
@@ -161,13 +166,9 @@ ADRs arriba).
 
 ## Tareas pendientes (deuda)
 
-| Tarea        | Razón                                                                        | Cómo cerrarla                                                                                |
-| ------------ | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `task_00_13` | E2E Playwright necesita browsers (~300 MB) + un user system admin pre-seeded | `cd apps/admin-panel && npm run e2e:install && npm run e2e` con el stack y un admin en la BD |
-
-Ambas son **verificación**, no implementación. El código está
-escrito y los tests intermedios (`npm run build`, YAML parseable)
-pasan localmente.
+Ninguna a nivel de tests automáticos. Solo restan las cinco
+validaciones humanas (`human_00_01..05`) — responsabilidad del
+operador.
 
 ## Tests humanos del plan
 

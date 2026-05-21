@@ -74,6 +74,9 @@ playwright/.cache/
 .e2e-api-server.log
 .e2e-api-server.err.log
 
+# Detached dev stack state (scripts/dev/up.{ps1,sh} + down.{ps1,sh})
+.dev/
+
 # =============================================================================
 # Docker / Compose
 # =============================================================================

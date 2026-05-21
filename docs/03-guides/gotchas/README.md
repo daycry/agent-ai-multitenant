@@ -85,12 +85,30 @@ el problema ya esté documentado.
 - [windows-git-crlf-vs-hooks.md](./windows-git-crlf-vs-hooks.md)
   — `core.autocrlf` pelea con `mixed-line-ending`; arreglado con
   `.gitattributes`.
+- [windows-tcp-ghost-listener.md](./windows-tcp-ghost-listener.md)
+  — `Get-NetTCPConnection` reporta un listener cuyo PID ya no
+  existe; bind real (no la query) es la única fuente fiable.
+- [powershell-invoke-restmethod-localhost-hang.md](./powershell-invoke-restmethod-localhost-hang.md)
+  — `Invoke-RestMethod http://localhost:N/...` se cuelga porque
+  resuelve `::1` antes de `127.0.0.1`; usa la IP explícita.
+- [uvicorn-windows-multiprocessing-spawn.md](./uvicorn-windows-multiprocessing-spawn.md)
+  — `Stop-Process` no mata workers spawnados por `multiprocessing`;
+  usa `taskkill /F /T`.
 
 ### next.js / typescript
 
 - [nextjs-eslint-root-inherit.md](./nextjs-eslint-root-inherit.md)
   — `.eslintrc.json` hereda del root y exige plugins TS ausentes;
   `root: true`.
+- [nextjs-public-env-build-time.md](./nextjs-public-env-build-time.md)
+  — `NEXT_PUBLIC_*` se inlinea al compilar; setearla después de
+  `npm run dev` no la actualiza.
+
+### redis / auth
+
+- [auth-rate-limit-dev-loop.md](./auth-rate-limit-dev-loop.md)
+  — el rate limit de `/auth/login` se acumula entre runs del E2E
+  y trips 429; limpia `rl:login:*` antes de probar.
 
 ### ci / github actions
 

@@ -2,7 +2,67 @@
 
 Cómo arrancar el sistema vacío y registrar un primer System Admin.
 
-## 1. Verifica que el stack está sano
+## Vía rápida — `up.ps1` / `up.sh`
+
+Si ya hiciste el bootstrap (Python + `npm install` en `apps/admin-panel`),
+un solo comando levanta todo, deja los servicios corriendo en background
+y te imprime las URLs:
+
+```powershell
+.\scripts\dev\up.ps1                       # Windows
+```
+
+```bash
+./scripts/dev/up.sh                        # Linux / macOS
+```
+
+Esto hace, en orden: arranca Docker, espera a postgres `healthy`, aplica
+migraciones Alembic, lanza `uvicorn` en `:8001` (detached, log en
+`.dev/api-server.log`), espera `/healthz`, lanza `next dev` en `:3000`
+(detached, log en `.dev/admin-panel.log`) con `NEXT_PUBLIC_API_URL`
+apuntado al api correcto, y espera a que el SPA compile. Puedes cerrar
+la terminal: los procesos siguen vivos (PIDs en `.dev/*.pid`).
+
+Para parar:
+
+```powershell
+.\scripts\dev\down.ps1                     # mata api + admin
+.\scripts\dev\down.ps1 -Docker             # además baja el stack Docker
+```
+
+```bash
+./scripts/dev/down.sh
+./scripts/dev/down.sh --docker
+```
+
+Parámetros opcionales: `-ApiPort` / `-AdminPort` (ps1) y `--api-port` /
+`--admin-port` (sh) si los defaults chocan con algo. Si lanzas `up`
+dos veces sin `down`, aborta con "already running (pid X)" para no
+apilar huérfanos.
+
+### URLs y credenciales por defecto
+
+| URL                           | Servicio        | Credenciales                                   |
+| ----------------------------- | --------------- | ---------------------------------------------- |
+| http://localhost:3000/login   | Admin panel     | `root@example.com` / `longenoughpw` (paso 4–5) |
+| http://localhost:8001/docs    | API (Swagger)   | —                                              |
+| http://localhost:8001/healthz | API healthcheck | —                                              |
+| http://localhost:9001         | MinIO console   | `minioadmin` / `changeme-dev-only`             |
+| http://localhost:8200/ui      | Vault UI        | token: `dev-root-token`                        |
+| postgres `localhost:15432`    | PostgreSQL      | `postgres` / `changeme-dev-only`               |
+| redis `localhost:6379`        | Redis           | sin auth en dev                                |
+
+Las credenciales vienen de `docker/.env.example`; puedes sobreescribirlas
+con un `.env` propio en `docker/`.
+
+---
+
+## Paso a paso manual (si quieres entender qué hace `up.ps1`)
+
+Lo siguiente es lo que `up.ps1` automatiza. Útil para depurar o para la
+primera vez que quieras ver el flujo completo.
+
+### 1. Verifica que el stack está sano
 
 ```bash
 docker compose \
@@ -13,7 +73,7 @@ docker compose \
 
 Los cinco servicios deben aparecer como `Up X (healthy)`.
 
-## 2. Aplica las migraciones
+### 2. Aplica las migraciones
 
 ```bash
 cd apps/api-server
@@ -27,7 +87,7 @@ Esto crea las cinco tablas (`organizations`, `users`,
 `user_org_memberships`, `sessions`, `audit_log`) con sus índices
 y activa las **policies RLS**.
 
-## 3. Levanta el api-server
+### 3. Levanta el api-server
 
 ```bash
 cd apps/api-server
@@ -36,7 +96,7 @@ cd apps/api-server
 
 → http://localhost:8001/docs (OpenAPI interactivo).
 
-## 4. Registra el primer usuario
+### 4. Registra el primer usuario
 
 Desde el admin-panel (http://localhost:3000/login → enlace de
 registro próximamente; por ahora vía API):
@@ -47,7 +107,7 @@ curl -X POST http://localhost:8001/auth/register \
   -d '{"email":"root@example.com","password":"longenoughpw","full_name":"Root"}'
 ```
 
-## 5. Promueve a System Admin
+### 5. Promueve a System Admin
 
 En esta fase no hay endpoint de bootstrap del primer admin: lo
 haces directamente en la base de datos. Después de Fase 15 (el
@@ -62,7 +122,7 @@ docker compose \
        -c "UPDATE users SET is_system_admin = true WHERE email = 'root@example.com'"
 ```
 
-## 6. Login y dashboard
+### 6. Login y dashboard
 
 Ve a http://localhost:3000/login, entra con
 `root@example.com / longenoughpw`. Aterrizas en
@@ -78,7 +138,7 @@ curl -X POST http://localhost:8001/auth/login \
 
 Obtienes un JWT con el claim `sys: true`.
 
-## 7. Crea tu primer tenant
+### 7. Crea tu primer tenant
 
 ```bash
 TOKEN="<el access_token del paso anterior>"
@@ -97,13 +157,17 @@ proyectos, equipos, miembros, planes con tareas...
 En dev Vault va en modo `-dev` (auto-unsealed, root token conocido).
 Si quieres practicar el flujo de **producción** con Shamir 3-of-5:
 
+```powershell
+.\scripts\init-vault.ps1                   # Windows
+```
+
 ```bash
-./scripts/init-vault.sh
+./scripts/init-vault.sh                    # Linux / macOS
 ```
 
 Genera 5 unseal keys + root token bajo `./vault-init-output/`
-(gitignored, modo 600). La nota está en `scripts/init-vault.sh` y
-la lógica completa en la sección 4.x del documento maestro.
+(gitignored, ACL/`chmod 600`). La lógica completa está en la
+sección 4.x del documento maestro.
 
 ## Correr los tests E2E (Playwright)
 

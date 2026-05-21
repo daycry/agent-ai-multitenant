@@ -341,7 +341,7 @@ Objetivo: UI Next.js mínima con login y dashboard.
 
 #### `task_00_13` — Pantalla de Login y Dashboard del System Admin
 
-- [ ] **Título**: Implementar pantallas /login y /admin/dashboard
+- [x] **Título**: Implementar pantallas /login y /admin/dashboard
 - **Descripción**: Login con form email+password, manejo de errores. Dashboard que muestra: lista de servicios del stack con su estado de salud (verde/amarillo/rojo), uso de recursos del host (CPU/RAM/disco) leídos del endpoint /admin/system-health. Refresh automático cada 30 s.
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
