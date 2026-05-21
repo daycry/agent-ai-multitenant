@@ -4,20 +4,21 @@ title: Fundaciones del Sistema
 started_at: 2026-05-20
 completed_at: null
 status: pending_human_validation
-tasks_done: 18
+tasks_done: 19
 tasks_total: 20
-tasks_pending_local: [task_00_03, task_00_13]
+tasks_pending_local: [task_00_13]
 tests_automated_passing: 94
 human_validations_passing: TBD
 docs_language: es
 ---
 
-> **Estado:** el plan aún no está formalmente cerrado. Quedan
-> `task_00_03` (actionlint) y `task_00_13` (Playwright) pendientes
-> de verificación local más los cinco tests humanos (`human_00_01..05`).
-> Este changelog se escribe ya porque toda la implementación está
-> verde; cuando el operador humano valide, se pasa el frontmatter
-> del roadmap a `status: completed` y se rellena `completed_at`.
+> **Estado:** el plan aún no está formalmente cerrado. Queda
+> `task_00_13` (Playwright) pendiente de verificación local más los
+> cinco tests humanos (`human_00_01..05`). `task_00_03` ya cerrada
+> tras el primer run verde de GitHub Actions sobre la rama
+> `plan/00-fundaciones`. Cuando el operador humano valide, se pasa
+> el frontmatter del roadmap a `status: completed` y se rellena
+> `completed_at`.
 
 # Changelog — Plan 00 · Fundaciones del Sistema
 
@@ -57,9 +58,12 @@ Al cierre del plan, un operador puede:
   Bootstrap scripts (`scripts/dev/bootstrap.{ps1,sh}`) reproducibles.
   `.gitattributes` con `eol=lf` para evitar conflictos con autocrlf
   en Windows.
-- `task_00_03` ⬜ implementación verde (workflow CI con 5 jobs y
-  auto-skip por inputs); `actionlint` pendiente de validación local
-  o primer push a GitHub.
+- `task_00_03` ✅ — workflow CI con 5 jobs (lint-python via
+  pre-commit, lint-typescript con next build, test-unit,
+  test-integration contra el stack docker, build-images). Verde
+  en el primer run remoto sobre `plan/00-fundaciones`. Ese run sirve
+  como sustituto válido de `actionlint` (que solo valida sintaxis;
+  el workflow ya pasó la ejecución real).
 
 ### Fase B — Docker Compose base
 
@@ -157,10 +161,9 @@ ADRs arriba).
 
 ## Tareas pendientes (deuda)
 
-| Tarea        | Razón                                                                        | Cómo cerrarla                                                                                                      |
-| ------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `task_00_03` | `actionlint` no estaba disponible localmente                                 | correr `actionlint .github/workflows/ci.yml` o esperar al primer push y ver el workflow en verde en GitHub Actions |
-| `task_00_13` | E2E Playwright necesita browsers (~300 MB) + un user system admin pre-seeded | `cd apps/admin-panel && npm run e2e:install && npm run e2e` con el stack y un admin en la BD                       |
+| Tarea        | Razón                                                                        | Cómo cerrarla                                                                                |
+| ------------ | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `task_00_13` | E2E Playwright necesita browsers (~300 MB) + un user system admin pre-seeded | `cd apps/admin-panel && npm run e2e:install && npm run e2e` con el stack y un admin en la BD |
 
 Ambas son **verificación**, no implementación. El código está
 escrito y los tests intermedios (`npm run build`, YAML parseable)

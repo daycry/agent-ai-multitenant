@@ -136,7 +136,7 @@ Objetivo: dejar el repositorio estructurado y arrancable con pipelines mínimos.
 
 #### `task_00_03` — Pipeline CI Básico
 
-- [ ] **Título**: Configurar GitHub Actions (o GitLab CI) con jobs lint, test, build
+- [x] **Título**: Configurar GitHub Actions (o GitLab CI) con jobs lint, test, build
 - **Descripción**: Pipeline que en cada push corre: lint Python (black + ruff + mypy), lint TS (prettier + eslint), unit tests, integration tests contra docker-compose de test, build de imágenes Docker. Cache de dependencias entre ejecuciones.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
