@@ -7,7 +7,7 @@ status: completed
 tasks_done: 27
 tasks_total: 27
 tasks_pending_local: []
-tests_automated_passing: 225
+tests_automated_passing: 240
 human_validations_passing: 0
 docs_language: es
 ---
@@ -15,10 +15,12 @@ docs_language: es
 > **Estado:** plan cerrado. Backend completo para los seis catálogos
 > built-in (agentes, skills, tools, teams, plantillas de proyecto y
 > políticas de aprobación) con sus endpoints REST y RLS multi-tenant.
-> Panel admin Next.js 14 con seis pantallas funcionales (Dashboard,
+> Panel admin Next.js 14 con siete pantallas funcionales (Dashboard,
 > Catálogo de Agentes, Equipos, Proyectos, Wizard de creación,
-> Tablero doble Kanban, Validación humana). 209 tests pytest + 16
-> tests Playwright en verde (uno skipped por dependencia de Plan 02).
+> Tablero doble Kanban, Validación humana). Sobre estas tareas se
+> añadió un bloque transversal de **superadmin cross-tenant** (ADR 0010) que desbloquea al primer operador sin necesidad del
+> selector de tenant post-login (eso queda en Plan 02). 217 tests
+> pytest + 23 tests Playwright en verde, 0 skipped.
 
 # Changelog — Plan 01 · Dominio Mínimo
 
@@ -125,6 +127,42 @@ Al cierre del plan, un tenant puede:
   acumulados en la decisión arquitectónica: 8.
 - `task_01_27` — Este changelog.
 
+## Bloque adicional — superadmin cross-tenant
+
+Tras cerrar las 27 tareas se añadió un bloque transversal que el
+documento maestro había diferido a Plan 02 pero que resultaba
+bloqueante para los tests humanos del Plan 01:
+
+- **`is_system_admin` ahora ve y modifica todos los tenants**, no
+  sólo los endpoints `/admin/*`. `get_tenant_session` despacha a
+  `migrations_user` (BYPASSRLS) cuando el superadmin no tiene
+  tenant activo → vista portfolio.
+- **Header `X-Tenant-Id`** permite al superadmin actuar _como_
+  cualquier tenant para reads y writes; para tenant users el
+  header se ignora silenciosamente (RLS sigue intacto). Garbage
+  no-UUID en el header → 400.
+- **Auto-promoción del primer usuario** registrado a
+  `is_system_admin=true` en `/auth/register`, dentro de la misma
+  transacción del INSERT para evitar carreras.
+- **Panel: selector de tenant en el header** (sólo superadmin)
+  alimentado por `/admin/tenants`, con opción "Todos los tenants"
+  para portfolio. La preferencia persiste en `localStorage` y
+  `apiFetch` la inyecta como `X-Tenant-Id` en cada call.
+- El tenant plataforma (`00000000-...0001`) queda filtrado del
+  selector.
+
+Decisión documentada en
+[ADR 0010](../05-architecture-decisions/0010-superadmin-cross-tenant.md).
+Tests: `tests/integration/test_superadmin_cross_tenant.py` (6
+casos) + `tests/integration/test_auth.py::test_register_*_user_*`
+(2 casos nuevos) + `e2e/tenant-picker.spec.ts` (3 casos).
+
+Side effect: el `team-detail.spec.ts::add-member dialog enforces
+project selection in fork mode`, que estaba `test.skip` esperando
+a la pantalla de selección de tenant, **queda desbloqueado y pasa
+a verde** — el setup del test crea un tenant propio via
+`/admin/tenants` y opera sobre él con el header.
+
 ## UI refresh (lateral al plan)
 
 Durante la implementación de Plan 01 se hizo un pase de modernización
@@ -136,20 +174,22 @@ debajo de `md`, fade-in al cambiar de página. Documentado en
 
 ## Tests automáticos
 
-| Capa                                             | Cantidad |
-| ------------------------------------------------ | -------- |
-| Unit + integration (`pytest`)                    | 209      |
-| E2E Playwright admin-panel                       | 16       |
-| Skipped (esperando Plan 02 — tid claim en login) | 1        |
+| Capa                          | Cantidad |
+| ----------------------------- | -------- |
+| Unit + integration (`pytest`) | 217      |
+| E2E Playwright admin-panel    | 23       |
+| Skipped                       | 0        |
 
 E2E breakdown:
 
 - `admin-login.spec.ts` × 2
 - `agents-catalog.spec.ts` × 3
-- `team-detail.spec.ts` × 2 (+1 skipped)
+- `team-detail.spec.ts` × 3 (incluye el forked-mode antes skipped)
 - `project-wizard.spec.ts` × 2
 - `dual-kanban.spec.ts` × 3
 - `approval-policy.spec.ts` × 4
+- `lang-switcher.spec.ts` × 3
+- `tenant-picker.spec.ts` × 3
 
 ## Diferencias respecto al alcance original del documento maestro
 
@@ -157,11 +197,11 @@ E2E breakdown:
   campos pero las tareas se agrupan por `project_id`. El
   orquestador (Plan 02) la activará materializando planes desde el
   Project Manager agent.
-- **Selección de tenant.** El login sigue emitiendo JWT sin claim
-  `tid` (igual que Plan 00); por eso un puñado de endpoints POST
-  no son alcanzables desde el panel sin claim. Cubierto por mocks
-  Playwright (`page.route(...)`) en `dual-kanban.spec.ts` y
-  `team-detail.spec.ts`. El selector de tenant llega con Plan 02.
+- **Selector de tenant tras login (forma "tid en JWT")** se queda
+  diferido a Plan 02. El acceso cross-tenant del superadmin SÍ
+  llega en este plan vía `X-Tenant-Id` (ADR 0010), lo que
+  desbloquea la operativa del primer operador sin necesidad de la
+  pantalla de selección post-login.
 
 ## Tests humanos (pendientes)
 
