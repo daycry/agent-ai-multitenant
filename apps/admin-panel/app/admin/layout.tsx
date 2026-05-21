@@ -3,12 +3,14 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { AdminShell } from "@/components/layout/admin-shell";
 import { getToken } from "@/lib/auth";
 
 /**
- * Client-side auth gate. Phase 0 only — phase 15 will move to a
- * middleware-level redirect once we use httpOnly cookies that the
- * Next.js edge can read at request time.
+ * Client-side auth gate + persistent admin shell (sidebar + topbar).
+ * Phase 0 only — phase 15 will move the gate to a middleware-level
+ * redirect once we use httpOnly cookies that the Next.js edge can
+ * read at request time.
  */
 export default function AdminLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -24,11 +26,11 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
   if (!ready) {
     return (
-      <main className="flex min-h-screen items-center justify-center">
+      <main className="bg-background flex min-h-screen items-center justify-center">
         <p className="text-muted-foreground text-sm">Loading…</p>
       </main>
     );
   }
 
-  return <>{children}</>;
+  return <AdminShell>{children}</AdminShell>;
 }
