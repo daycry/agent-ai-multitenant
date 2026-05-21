@@ -40,8 +40,18 @@ services:
       VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN:-dev-root-token}
     ports:
       - "${VAULT_PORT:-8200}:8200"
-    # Dev mode keeps everything in memory; the prod volumes are harmless
-    # but unused. No override needed.
+    # IMPORTANT: in -dev mode Vault opens its own listener on
+    # 0.0.0.0:8200. The base compose mounts vault/config.hcl which
+    # ALSO declares a tcp listener on the same port; both bind ->
+    # EADDRINUSE and the container restart-loops. The `!reset` tag
+    # tells docker-compose to DISCARD the base list of volumes (a
+    # plain `volumes:` block would otherwise be merged, not replaced,
+    # for items at the same key in some Compose versions) before
+    # applying our shorter list. The in-memory dev backend doesn't
+    # need the named volumes either.
+    volumes: !reset
+      - vault_data:/vault/file
+      - vault_logs:/vault/logs
 
   clamav:
     ports:

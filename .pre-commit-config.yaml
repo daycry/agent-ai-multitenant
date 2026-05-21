@@ -16,7 +16,9 @@ repos:
         exclude: \.md$
       - id: end-of-file-fixer
       - id: check-yaml
-        args: [--allow-multiple-documents]
+        # --unsafe so docker-compose's custom tags (!reset, !override)
+        # don't trip the PyYAML loader.
+        args: [--allow-multiple-documents, --unsafe]
       - id: check-json
       - id: check-toml
       - id: check-added-large-files
