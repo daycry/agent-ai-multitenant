@@ -13,7 +13,9 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Python lint: black, ruff, mypy (strict). No-op when no .py exists yet.
+  # Python lint: black + ruff + mypy via pre-commit so versions stay in
+  # lockstep with .pre-commit-config.yaml — never the surprise of
+  # "passes locally on black 24.10, fails on CI on black 25.x".
   # ---------------------------------------------------------------------------
   lint-python:
     name: Lint Python
@@ -26,34 +28,18 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Detect Python sources
-        id: detect
+      - name: Install the project (editable) so mypy resolves api_server / watchdog
         run: |
-          if find apps packages tests -type f -name "*.py" 2>/dev/null | grep -q .; then
-            echo "has_py=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_py=false" >> "$GITHUB_OUTPUT"
-            echo "No Python sources yet — skipping lint."
-          fi
+          python -m pip install --upgrade pip
+          python -m pip install -e "apps/api-server[dev]"
+          python -m pip install -e "apps/watchdog[dev]"
+          python -m pip install pre-commit
 
-      - name: Install lint tools
-        if: steps.detect.outputs.has_py == 'true'
-        run: python -m pip install --upgrade pip black ruff mypy
-
-      - name: black --check
-        if: steps.detect.outputs.has_py == 'true'
-        run: black --check .
-
-      - name: ruff check
-        if: steps.detect.outputs.has_py == 'true'
-        run: ruff check .
-
-      - name: mypy (apps + packages)
-        if: steps.detect.outputs.has_py == 'true'
-        run: mypy apps packages
+      - name: Run pre-commit on all files
+        run: pre-commit run --all-files --show-diff-on-failure
 
   # ---------------------------------------------------------------------------
-  # TypeScript lint: prettier + eslint. No-op until a package.json exists.
+  # TypeScript lint: prettier + eslint via the admin-panel package itself.
   # ---------------------------------------------------------------------------
   lint-typescript:
     name: Lint TypeScript
@@ -64,11 +50,11 @@ jobs:
       - name: Detect Node workspace
         id: detect
         run: |
-          if find apps packages -name "package.json" 2>/dev/null | grep -q .; then
+          if [ -f apps/admin-panel/package.json ]; then
             echo "has_node=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_node=false" >> "$GITHUB_OUTPUT"
-            echo "No package.json yet — skipping TS lint."
+            echo "No apps/admin-panel/package.json yet — skipping TS lint."
           fi
 
       - uses: actions/setup-node@v4
@@ -76,21 +62,31 @@ jobs:
         with:
           node-version: "20"
           cache: npm
+          cache-dependency-path: apps/admin-panel/package-lock.json
 
-      - name: Install root devDeps
+      - name: npm ci
         if: steps.detect.outputs.has_node == 'true'
-        run: npm install --no-save prettier eslint @typescript-eslint/parser @typescript-eslint/eslint-plugin
+        working-directory: apps/admin-panel
+        run: npm ci
 
-      - name: prettier --check
+      - name: typecheck
         if: steps.detect.outputs.has_node == 'true'
-        run: npx prettier --check "**/*.{ts,tsx,js,jsx,json,md,yml,yaml}"
+        working-directory: apps/admin-panel
+        run: npm run typecheck
 
-      - name: eslint
+      - name: next lint
         if: steps.detect.outputs.has_node == 'true'
-        run: npx eslint . --ext .ts,.tsx,.js,.jsx
+        working-directory: apps/admin-panel
+        run: npm run lint
+
+      - name: next build (smoke)
+        if: steps.detect.outputs.has_node == 'true'
+        working-directory: apps/admin-panel
+        run: npm run build
 
   # ---------------------------------------------------------------------------
-  # Python unit tests. No-op until tests exist.
+  # Python unit tests. Need the local editable installs so the imports
+  # `from api_server.* import ...` and `from watchdog.* import ...` work.
   # ---------------------------------------------------------------------------
   test-unit:
     name: Unit tests (Python)
@@ -113,17 +109,20 @@ jobs:
             echo "No unit tests yet — skipping."
           fi
 
-      - name: Install test deps
+      - name: Install project (editable) + test deps
         if: steps.detect.outputs.has_tests == 'true'
-        run: python -m pip install --upgrade pip pytest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "apps/api-server[dev]"
+          python -m pip install -e "apps/watchdog[dev]"
 
       - name: pytest tests/unit
         if: steps.detect.outputs.has_tests == 'true'
         run: pytest tests/unit -v
 
   # ---------------------------------------------------------------------------
-  # Integration tests against docker-compose. No-op until docker-compose.yml
-  # exists (task_00_04).
+  # Integration tests against docker-compose. Brings up the stack and
+  # runs the tenant/auth/admin/tracing tests against real Postgres + Redis.
   # ---------------------------------------------------------------------------
   test-integration:
     name: Integration tests
@@ -149,25 +148,41 @@ jobs:
 
       - name: docker compose config
         if: steps.detect.outputs.has_compose == 'true'
-        run: docker compose -f docker/docker-compose.yml config
+        run: docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml config
 
       - name: Bring up test stack
         if: steps.detect.outputs.has_compose == 'true'
-        run: docker compose -f docker/docker-compose.yml up -d --wait
+        run: |
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d --wait postgres redis vault minio
 
-      - name: Install + run integration tests
+      - name: Install project (editable) + test deps
         if: steps.detect.outputs.has_compose == 'true'
         run: |
-          python -m pip install --upgrade pip pytest
+          python -m pip install --upgrade pip
+          python -m pip install -e "apps/api-server[dev]"
+          python -m pip install -e "apps/watchdog[dev]"
+
+      - name: pytest tests/integration
+        if: steps.detect.outputs.has_compose == 'true'
+        env:
+          # In GH Actions there is no Laragon — bind the docker container
+          # to the standard port for ergonomic conftest defaults.
+          TEST_PG_PORT: "15432"
+          TEST_REDIS_URL: redis://localhost:6379/15
+        run: |
           if find tests/integration -type f -name "test_*.py" | grep -q .; then
             pytest tests/integration -v
           else
             echo "No integration tests yet."
           fi
 
+      - name: Stack logs on failure
+        if: failure() && steps.detect.outputs.has_compose == 'true'
+        run: docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml logs --tail=200
+
       - name: Tear down
         if: always() && steps.detect.outputs.has_compose == 'true'
-        run: docker compose -f docker/docker-compose.yml down -v
+        run: docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml down -v
 
   # ---------------------------------------------------------------------------
   # Docker image build smoke test (per app with a Dockerfile).
