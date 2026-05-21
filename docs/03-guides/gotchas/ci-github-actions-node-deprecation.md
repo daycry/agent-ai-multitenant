@@ -56,9 +56,18 @@ visibles para nuestros usos).
 - uses: docker/setup-buildx-action@v4
 ```
 
-En esta fase solo `actions/checkout@v5` apareció en el warning
-explícito; las demás se mantienen mientras no avisen
-individualmente.
+El warning del runner aparece **una acción a la vez** (la primera
+que evalúa de cada job). Conviene subir todas las que tengas
+declaradas en cuanto sepas que existe la siguiente mayor, para no
+ir arreglando una y arreglando otra al run siguiente. Lo aprendimos
+en dos rondas:
+
+| Acción                       | Cuándo avisó             | Subimos a |
+| ---------------------------- | ------------------------ | --------- |
+| `actions/checkout`           | run inicial              | `@v5`     |
+| `actions/setup-python`       | tras subir checkout      | `@v6`     |
+| `actions/setup-node`         | tras subir checkout      | `@v5`     |
+| `docker/setup-buildx-action` | aún no avisó; preventivo | `@v4`     |
 
 ## Workaround temporal (no recomendado)
 
