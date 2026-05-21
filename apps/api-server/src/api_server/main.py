@@ -20,8 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
 from api_server.config import get_settings
 from api_server.db.models import UserOrganizationMembership
+from api_server.logging import configure_logging
 from api_server.routers.admin import router as admin_router
 from api_server.routers.auth import router as auth_router
+
+configure_logging(service="api-server")
 
 
 def create_app() -> FastAPI:

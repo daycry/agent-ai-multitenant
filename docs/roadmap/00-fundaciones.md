@@ -363,7 +363,7 @@ Objetivo: trazabilidad y self-healing operativos.
 
 #### `task_00_14` — Logging Estructurado JSON
 
-- [ ] **Título**: Configurar structlog con campos estándar
+- [x] **Título**: Configurar structlog con campos estándar
 - **Descripción**: Configurar `structlog` (o `python-json-logger`) en todos los servicios Python con campos obligatorios: timestamp, level, service, trace_id, span_id, tenant_id, user_id, project_id. Filtros automáticos para enmascarar PII (email, tokens, IBAN, DNI).
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
