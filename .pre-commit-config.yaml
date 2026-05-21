@@ -65,12 +65,14 @@ repos:
           - "opentelemetry-instrumentation-asyncpg>=0.48b0,<1"
           - "opentelemetry-instrumentation-redis>=0.48b0,<1"
           - "opentelemetry-instrumentation-httpx>=0.48b0,<1"
+          - "docker>=7.1,<8"
         args: [--config-file=pyproject.toml]
         files: ^(apps|packages)/.*\.py$
-        # Alembic migrations are template-generated and import the local
-        # `api_server` package, which is editable-installed in the dev
-        # venv but absent from the isolated mypy hook venv.
-        exclude: ^apps/[^/]+/migrations/.*\.py$
+        # Skip files that import sibling local packages — the hook
+        # venv only sees PyPI deps, not our editable apps/<x>:
+        #   apps/<x>/migrations/*.py  -> uses api_server.db
+        #   apps/watchdog/...         -> uses api_server.logging
+        exclude: ^apps/(([^/]+/migrations/.*)|watchdog/.*)\.py$
 
   # -------------------- TypeScript / JavaScript --------------------
   - repo: https://github.com/pre-commit/mirrors-prettier

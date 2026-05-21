@@ -48,7 +48,7 @@ echo "==> Installing requirements-dev.txt"
 
 # 5) Install each app/ package editable, so `from <pkg> import ...` works
 #    and pytest can discover modules. New apps must be added here.
-APP_PACKAGES=("apps/api-server")
+APP_PACKAGES=("apps/api-server" "apps/watchdog")
 for pkg in "${APP_PACKAGES[@]}"; do
     if [ -f "$REPO_ROOT/$pkg/pyproject.toml" ]; then
         echo "==> pip install -e ${pkg}[dev]"

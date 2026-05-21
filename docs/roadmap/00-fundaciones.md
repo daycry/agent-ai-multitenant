@@ -399,7 +399,7 @@ Objetivo: trazabilidad y self-healing operativos.
 
 #### `task_00_16` — Watchdog de Servicios
 
-- [ ] **Título**: Implementar watchdog Python con backoff exponencial
+- [x] **Título**: Implementar watchdog Python con backoff exponencial
 - **Descripción**: Servicio `apps/watchdog/` que cada 30 s consulta el estado de healthcheck de cada contenedor. Si un servicio cae: reinicia con backoff exponencial (10s, 30s, 90s, máx 5 intentos). Tras 5 fallos: alerta al canal del System Admin (en esta fase, solo log estructurado en stderr; las notificaciones reales llegan en Fase 10).
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
