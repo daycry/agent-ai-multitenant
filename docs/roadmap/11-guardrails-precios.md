@@ -37,7 +37,7 @@ docs_language: es
 
 ### Resumen Ejecutivo
 
-Motor de guardrails declarativos en 4 puntos (pre_llm, post_llm, pre_tool, post_tool) con 12 tipos (PII, secret leakage, prompt injection, content safety, code safety, output schema, allowed domains, cost ceiling, etc.). Catálogo global de precios de modelos con sincronización LiteLLM upstream.
+Motor de guardrails declarativos en 4 puntos (pre_llm, post_llm, pre_tool, post_tool) con 12 tipos (PII, secret leakage, prompt injection, content safety, code safety, output schema, allowed domains, cost ceiling, etc.). Catálogo global de precios de modelos con sincronización LiteLLM upstream. **Soporte de cached_input_tokens (prompt caching) en model_calls y en el catálogo de precios**. **Sistema de Budgets de proyecto y tenant** con umbrales platform-global y pausado automático al 100% (ver sección 28.7 del .docx). **Manejo de moneda canónica USD + tabla exchange_rates con job diario contra ECB + conversión a moneda del tenant** (ver sección 29.9 del .docx).
 
 ### Contexto
 
@@ -53,12 +53,15 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 - Integraciones opcionales: NVIDIA NeMo Guardrails, Guardrails AI, Presidio, LlamaGuard, ShieldGemma.
 - 6 acciones posibles al disparar: block, redact/mask, warn, retry_with_feedback, escalate_to_human, transform.
 - Tabla guardrail_events + dashboard por tenant + alertas configurables.
-- Catálogo global de precios de modelos (model_prices) con vigencia y currency.
+- Catálogo global de precios de modelos (model_prices) con vigencia, **siempre en USD canónico** (ver 29.8.5 y 29.9 del .docx).
 - Pantalla 'Modelos & Precios' en menú global del System Admin.
 - Botón 'Sincronizar precios' con LiteLLM upstream + APIs de providers.
 - Sincronización programada (cron) + manual.
 - Snapshot del precio por llamada en model_calls.
-- Conversión de divisa configurable.
+- **Soporte de prompt caching**: campos `tokens_cached_input` y precio de cache en el catálogo (típicamente 10% del precio de input estándar; configurable por modelo).
+- **Tabla `exchange_rates`** con job diario `exchange-rates-fetcher` (Celery Beat, 06:00 UTC) contra ECB como fuente por defecto; alternativa configurable por System Admin.
+- **Moneda de visualización por tenant** (`Organization.display_currency`, default EUR). Cálculo on-the-fly desde USD canónico usando el rate del día de cada execution.
+- **Sistema de Budgets**: campos en Organization (`tenant_budget_amount/_currency/_period/_period_start_day/_period_length_days`) y Project (`budget_amount/_currency/_period/_paused_by_budget`). Umbrales de alerta configurables platform-global (default `[80, 90, 100]`). Notificaciones a Tenant Admins + asistente personal. Pausado automático de nuevos arranques al 100% sin matar ejecuciones activas. Override manual con audit_log.
 - Guardrails específicos del chat de planning (topic adherence, hallucination check sobre números, validación estructural antes de 'Generar Plan').
 
 **Queda fuera (otras fases)**:
