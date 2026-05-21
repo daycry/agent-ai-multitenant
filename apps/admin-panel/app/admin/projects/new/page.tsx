@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
 
 interface Project {
@@ -229,6 +230,7 @@ export default function NewProjectWizardPage() {
                   disabled={!name || createProject.isPending}
                   data-testid="wizard-submit"
                 >
+                  {createProject.isPending && <Spinner className="mr-2 h-4 w-4" />}
                   {createProject.isPending ? "Creando…" : "Crear proyecto"}
                 </Button>
               </div>

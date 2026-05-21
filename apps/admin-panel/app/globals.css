@@ -171,3 +171,19 @@
     color: transparent;
   }
 }
+
+/* Indeterminate progress bar (top of the admin shell while there's any
+   in-flight TanStack query/mutation). A bright shimmer slides across a
+   base gradient so the bar reads from the corner of the eye even at
+   1 px-thin proportions. */
+@keyframes progress-stripe {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(200%);
+  }
+}
+.animate-progress-stripe {
+  animation: progress-stripe 1.1s ease-in-out infinite;
+}

@@ -24,6 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
 
@@ -366,6 +367,7 @@ export default function ApprovalPolicyPage() {
                 disabled={save.isPending || !selectedProjectId || projects.length === 0}
                 data-testid="save-policy"
               >
+                {save.isPending && <Spinner className="mr-2 h-4 w-4" />}
                 {save.isPending ? "Guardando…" : "Aplicar política"}
               </Button>
             </CardContent>
