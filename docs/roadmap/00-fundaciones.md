@@ -422,7 +422,7 @@ Objetivo: dejar el repo navegable y entendible.
 
 #### `task_00_17` — Estructura Canónica de /docs
 
-- [ ] **Título**: Crear estructura canónica /docs/ con 7 carpetas
+- [x] **Título**: Crear estructura canónica /docs/ con 7 carpetas
 - **Descripción**: Crear las 7 carpetas obligatorias (01-overview, 02-getting-started, 03-guides, 04-reference, 05-architecture-decisions, 06-runbooks, 07-changelog) con READMEs vacíos en cada una. Crear `/docs/README.md` como índice principal.
 - **Tiempo estimado**: 2 h
 - **Complejidad**: xs
@@ -440,7 +440,7 @@ Objetivo: dejar el repo navegable y entendible.
 
 #### `task_00_18` — Documentación Inicial de Arquitectura
 
-- [ ] **Título**: Escribir docs base: introduction, architecture, installation, first-run
+- [x] **Título**: Escribir docs base: introduction, architecture, installation, first-run
 - **Descripción**: Redactar `/docs/01-overview/01-introduction.md`, `/docs/01-overview/02-architecture.md`, `/docs/02-getting-started/01-installation.md`, `/docs/02-getting-started/03-first-run.md`. En idioma del proyecto (es por defecto en esta instalación). Diagramas con Mermaid embebido.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: s
@@ -458,7 +458,7 @@ Objetivo: dejar el repo navegable y entendible.
 
 #### `task_00_19` — ADRs Iniciales
 
-- [ ] **Título**: Generar ADRs 0001-0005 con decisiones técnicas clave de esta fase
+- [x] **Título**: Generar ADRs 0001-0005 con decisiones técnicas clave de esta fase
 - **Descripción**: Redactar al menos 5 ADRs documentando: 0001 PostgreSQL + RLS, 0002 sesiones server-side en Redis (no JWT stateless), 0003 Vault desde día uno, 0004 monorepo con apps/ y packages/, 0005 Argon2id para passwords.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
@@ -476,7 +476,7 @@ Objetivo: dejar el repo navegable y entendible.
 
 #### `task_00_20` — Changelog del Plan 00
 
-- [ ] **Título**: Generar entrada de changelog para este plan
+- [x] **Título**: Generar entrada de changelog para este plan
 - **Descripción**: Crear `/docs/07-changelog/00-fundaciones.md` siguiendo el formato canónico: cabecera con plan_id y fechas, resumen de lo construido, lista de tareas con sus commits, decisiones tomadas, link al PR.
 - **Tiempo estimado**: 2 h
 - **Complejidad**: xs
