@@ -88,3 +88,8 @@ el problema ya esté documentado.
 - [nextjs-eslint-root-inherit.md](./nextjs-eslint-root-inherit.md)
   — `.eslintrc.json` hereda del root y exige plugins TS ausentes;
   `root: true`.
+
+### ci / github actions
+
+- [ci-github-actions-node-deprecation.md](./ci-github-actions-node-deprecation.md)
+  — Node 20 deprecado; `actions/checkout@v4 → v5`, etc.
