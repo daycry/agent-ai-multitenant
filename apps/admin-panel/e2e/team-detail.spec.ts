@@ -70,31 +70,49 @@ test("built-in team detail renders members and locks add-member", async ({ page 
   await expect(page.getByTestId("add-member-button")).toBeDisabled();
 });
 
-// Skipped: dialog workflow needs the admin JWT to carry `tid` so
-// POST /teams (tenant-scoped write) succeeds. Today /auth/login always
-// issues tid=null and /auth/select-tenant doesn't exist yet -- it
-// ships with the tenant-selector UI in a later phase. The
-// linked-vs-forked SEMANTICS are exhaustively covered by the 21
-// integration tests in tests/integration/test_fork_*.py and
-// test_linked_vs_forked_*.py; what's missing here is the dialog UX
-// E2E only.
-test.skip("add-member dialog enforces project selection in fork mode", async ({ page }) => {
+// Unblocked by the superadmin cross-tenant wiring:
+//   1. /auth/register auto-promotes the first user to system_admin,
+//      so root@example.com lands as superadmin.
+//   2. Superadmin writes accept the `X-Tenant-Id` header in lieu
+//      of a JWT `tid` claim.
+//   3. apiFetch injects that header from localStorage automatically.
+//
+// Setup creates a throwaway tenant via /admin/tenants, parks its
+// id in localStorage so the panel's own fetches scope to it, and
+// creates the team via POST /teams with the header set explicitly
+// (page.request bypasses the apiFetch wrapper). The dialog flow
+// itself is unchanged.
+test("add-member dialog enforces project selection in fork mode", async ({ page }) => {
   await login(page);
 
-  // Built-ins are read-only. Create a tenant team via the API so we
-  // have an editable target. Using fetch from the page context keeps
-  // the auth header (we re-read the token from localStorage).
   await page.goto("/admin/teams");
   const token: string | null = await page.evaluate(() => localStorage.getItem("agentic.token"));
   expect(token).toBeTruthy();
 
   const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8001";
-  const created = await page.request.post(`${apiBase}/teams`, {
+
+  // Each run gets its own tenant — the slug carries a random suffix
+  // because the dev DB persists across local runs and the slug has
+  // a unique index.
+  const slug = `e2e-team-${Date.now().toString(36)}`;
+  const tenantResp = await page.request.post(`${apiBase}/admin/tenants`, {
     headers: { Authorization: `Bearer ${token}` },
+    data: { name: `E2E team tenant ${slug}`, slug },
+  });
+  expect(tenantResp.status(), await tenantResp.text()).toBe(201);
+  const tenant = await tenantResp.json();
+
+  // Make the panel act as that tenant on every subsequent apiFetch.
+  await page.evaluate((id: string) => localStorage.setItem("admin-panel.tenant-id", id), tenant.id);
+
+  // Create the editable team. page.request doesn't pass through
+  // apiFetch so the header has to be set inline here.
+  const teamResp = await page.request.post(`${apiBase}/teams`, {
+    headers: { Authorization: `Bearer ${token}`, "X-Tenant-Id": tenant.id },
     data: { name: "E2E test team" },
   });
-  expect(created.status()).toBe(201);
-  const team = await created.json();
+  expect(teamResp.status(), await teamResp.text()).toBe(201);
+  const team = await teamResp.json();
 
   await page.goto(`/admin/teams/${team.id}`);
   await expect(page.getByTestId("team-name")).toHaveText("E2E test team");
