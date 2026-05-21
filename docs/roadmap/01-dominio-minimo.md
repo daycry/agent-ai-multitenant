@@ -1,7 +1,7 @@
 ---
 plan_id: 01-dominio-minimo
 title: Dominio Mínimo
-status: in_progress
+status: pending_human_validation
 blocking_plan: [00-fundaciones]
 started_at: 2026-05-21
 completed_at: null
@@ -91,7 +91,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_01` — Modelos SQLAlchemy de Agent, Skill, Tool, AgentSkill, AgentTool, Team, TeamMember, Project, Plan, Task, TaskDependency
 
-- [ ] **Título**: Modelos SQLAlchemy de Agent, Skill, Tool, AgentSkill, AgentTool, Team, TeamMember, Project, Plan, Task, TaskDependency
+- [x] **Título**: Modelos SQLAlchemy de Agent, Skill, Tool, AgentSkill, AgentTool, Team, TeamMember, Project, Plan, Task, TaskDependency
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -108,7 +108,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_02` — Migración Alembic con todas las tablas, índices, FKs y políticas RLS
 
-- [ ] **Título**: Migración Alembic con todas las tablas, índices, FKs y políticas RLS
+- [x] **Título**: Migración Alembic con todas las tablas, índices, FKs y políticas RLS
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -125,7 +125,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_03` — Modelo extendido de Agent con scope (global_builtin/global_tenant_template/project_local), forked_from_agent_id, forked_from_version, anchored_version
 
-- [ ] **Título**: Modelo extendido de Agent con scope (global_builtin/global_tenant_template/project_local), forked_from_agent_id, forked_from_version, anchored_version
+- [x] **Título**: Modelo extendido de Agent con scope (global_builtin/global_tenant_template/project_local), forked_from_agent_id, forked_from_version, anchored_version
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -144,7 +144,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_04` — Endpoints /agents (GET, POST, PUT, DELETE) con filtros por scope
 
-- [ ] **Título**: Endpoints /agents (GET, POST, PUT, DELETE) con filtros por scope
+- [x] **Título**: Endpoints /agents (GET, POST, PUT, DELETE) con filtros por scope
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -161,7 +161,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_05` — Endpoints /skills y /tools (catálogo + custom por tenant)
 
-- [ ] **Título**: Endpoints /skills y /tools (catálogo + custom por tenant)
+- [x] **Título**: Endpoints /skills y /tools (catálogo + custom por tenant)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -178,7 +178,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_06` — Endpoints /teams con M:N a agents
 
-- [ ] **Título**: Endpoints /teams con M:N a agents
+- [x] **Título**: Endpoints /teams con M:N a agents
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -195,7 +195,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_07` — Endpoints /projects con todos los campos clave (team_id, mcp_servers placeholder, rag_knowledge_bases placeholder, repository_config, human_approval_policy)
 
-- [ ] **Título**: Endpoints /projects con todos los campos clave (team_id, mcp_servers placeholder, rag_knowledge_bases placeholder, repository_config, human_approval_policy)
+- [x] **Título**: Endpoints /projects con todos los campos clave (team_id, mcp_servers placeholder, rag_knowledge_bases placeholder, repository_config, human_approval_policy)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -212,7 +212,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_08` — Endpoints /projects/{id}/tasks con CRUD básico y movimiento entre columnas
 
-- [ ] **Título**: Endpoints /projects/{id}/tasks con CRUD básico y movimiento entre columnas
+- [x] **Título**: Endpoints /projects/{id}/tasks con CRUD básico y movimiento entre columnas
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -231,7 +231,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_09` — Script de seed con 11 agentes plantilla (PM, Arquitecto, Backend Senior/Junior, Frontend, QA, DevOps, Technical Writer, Researcher, Reviewer, Security Specialist) con system_prompts curados en es+en
 
-- [ ] **Título**: Script de seed con 11 agentes plantilla (PM, Arquitecto, Backend Senior/Junior, Frontend, QA, DevOps, Technical Writer, Researcher, Reviewer, Security Specialist) con system_prompts curados en es+en
+- [x] **Título**: Script de seed con 11 agentes plantilla (PM, Arquitecto, Backend Senior/Junior, Frontend, QA, DevOps, Technical Writer, Researcher, Reviewer, Security Specialist) con system_prompts curados en es+en
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: arquitecto + technical-writer
@@ -248,7 +248,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_10` — Seed de 30-40 skills agrupadas por categoría (backend, frontend, devops, qa, research, docs)
 
-- [ ] **Título**: Seed de 30-40 skills agrupadas por categoría (backend, frontend, devops, qa, research, docs)
+- [x] **Título**: Seed de 30-40 skills agrupadas por categoría (backend, frontend, devops, qa, research, docs)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: arquitecto
@@ -265,7 +265,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_11` — Seed de 15-20 tools builtin con sus schemas (sin implementación todavía)
 
-- [ ] **Título**: Seed de 15-20 tools builtin con sus schemas (sin implementación todavía)
+- [x] **Título**: Seed de 15-20 tools builtin con sus schemas (sin implementación todavía)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -282,7 +282,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_12` — Seed de 5 equipos plantilla (Full-Stack Web, Backend API, Research & Spec, DevOps & Platform, Data)
 
-- [ ] **Título**: Seed de 5 equipos plantilla (Full-Stack Web, Backend API, Research & Spec, DevOps & Platform, Data)
+- [x] **Título**: Seed de 5 equipos plantilla (Full-Stack Web, Backend API, Research & Spec, DevOps & Platform, Data)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: arquitecto
@@ -299,7 +299,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_13` — Seed de 8 plantillas de proyecto completo (API REST, Webapp, Data Pipeline, Migración Legacy, Investigación, DevOps Bootstrap, E2E, Doc Modernization) con políticas de validación humana asociadas
 
-- [ ] **Título**: Seed de 8 plantillas de proyecto completo (API REST, Webapp, Data Pipeline, Migración Legacy, Investigación, DevOps Bootstrap, E2E, Doc Modernization) con políticas de validación humana asociadas
+- [x] **Título**: Seed de 8 plantillas de proyecto completo (API REST, Webapp, Data Pipeline, Migración Legacy, Investigación, DevOps Bootstrap, E2E, Doc Modernization) con políticas de validación humana asociadas
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: arquitecto
@@ -316,7 +316,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_14` — Seed de 4 plantillas de human_approval_policy (Sandbox, Desarrollo, Producción, Cliente Externo)
 
-- [ ] **Título**: Seed de 4 plantillas de human_approval_policy (Sandbox, Desarrollo, Producción, Cliente Externo)
+- [x] **Título**: Seed de 4 plantillas de human_approval_policy (Sandbox, Desarrollo, Producción, Cliente Externo)
 - **Tiempo estimado**: 3 h
 - **Complejidad**: s
 - **Rol sugerido**: arquitecto
@@ -335,7 +335,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_15` — Lógica de fork: clonar agente global a project_local con todos sus campos y puntero al origen
 
-- [ ] **Título**: Lógica de fork: clonar agente global a project_local con todos sus campos y puntero al origen
+- [x] **Título**: Lógica de fork: clonar agente global a project_local con todos sus campos y puntero al origen
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -352,7 +352,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_16` — Endpoint para ver diff entre fork y su agente origen (campo a campo)
 
-- [ ] **Título**: Endpoint para ver diff entre fork y su agente origen (campo a campo)
+- [x] **Título**: Endpoint para ver diff entre fork y su agente origen (campo a campo)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -369,7 +369,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_17` — Endpoint para 'absorber mejoras del global' (merge selectivo)
 
-- [ ] **Título**: Endpoint para 'absorber mejoras del global' (merge selectivo)
+- [x] **Título**: Endpoint para 'absorber mejoras del global' (merge selectivo)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -386,7 +386,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_18` — Tests que verifican: editar un fork NO altera el global; actualizar el global SÍ se ve en los linked
 
-- [ ] **Título**: Tests que verifican: editar un fork NO altera el global; actualizar el global SÍ se ve en los linked
+- [x] **Título**: Tests que verifican: editar un fork NO altera el global; actualizar el global SÍ se ve en los linked
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -405,7 +405,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_19` — Pantalla 'Catálogo de Agentes' con tabs (global built-in, plantillas del tenant, locales del proyecto)
 
-- [ ] **Título**: Pantalla 'Catálogo de Agentes' con tabs (global built-in, plantillas del tenant, locales del proyecto)
+- [x] **Título**: Pantalla 'Catálogo de Agentes' con tabs (global built-in, plantillas del tenant, locales del proyecto)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -422,7 +422,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_20` — Pantalla 'Detalle de Equipo' con miembros, diálogo de añadir agente (linked vs forked)
 
-- [ ] **Título**: Pantalla 'Detalle de Equipo' con miembros, diálogo de añadir agente (linked vs forked)
+- [x] **Título**: Pantalla 'Detalle de Equipo' con miembros, diálogo de añadir agente (linked vs forked)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -439,7 +439,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_21` — Wizard de creación de proyecto desde plantilla
 
-- [ ] **Título**: Wizard de creación de proyecto desde plantilla
+- [x] **Título**: Wizard de creación de proyecto desde plantilla
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -456,7 +456,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_22` — Doble Kanban estático: vista de Planes (tarjetas placeholder) + vista de Tareas con drag&drop manual entre columnas
 
-- [ ] **Título**: Doble Kanban estático: vista de Planes (tarjetas placeholder) + vista de Tareas con drag&drop manual entre columnas
+- [x] **Título**: Doble Kanban estático: vista de Planes (tarjetas placeholder) + vista de Tareas con drag&drop manual entre columnas
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: frontend-dev
@@ -473,7 +473,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_23` — Pantalla 'Configurar Política de Validación Humana' con plantillas y override por categoría
 
-- [ ] **Título**: Pantalla 'Configurar Política de Validación Humana' con plantillas y override por categoría
+- [x] **Título**: Pantalla 'Configurar Política de Validación Humana' con plantillas y override por categoría
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -492,7 +492,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_24` — Generar /docs/04-reference/domain-model.md con esquema completo del dominio
 
-- [ ] **Título**: Generar /docs/04-reference/domain-model.md con esquema completo del dominio
+- [x] **Título**: Generar /docs/04-reference/domain-model.md con esquema completo del dominio
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
@@ -509,7 +509,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_25` — Generar /docs/03-guides/01-create-first-project.md
 
-- [ ] **Título**: Generar /docs/03-guides/01-create-first-project.md
+- [x] **Título**: Generar /docs/03-guides/01-create-first-project.md
 - **Tiempo estimado**: 3 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
@@ -526,7 +526,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_26` — Generar ADRs sobre decisiones de esta fase (linked-vs-forked, seed strategy, dual kanban)
 
-- [ ] **Título**: Generar ADRs sobre decisiones de esta fase (linked-vs-forked, seed strategy, dual kanban)
+- [x] **Título**: Generar ADRs sobre decisiones de esta fase (linked-vs-forked, seed strategy, dual kanban)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: arquitecto
@@ -543,7 +543,7 @@ El cimiento técnico de Fase 0 ya está sólido. Ahora se pone encima el dominio
 
 #### `task_01_27` — Changelog /docs/07-changelog/01-dominio-minimo.md
 
-- [ ] **Título**: Changelog /docs/07-changelog/01-dominio-minimo.md
+- [x] **Título**: Changelog /docs/07-changelog/01-dominio-minimo.md
 - **Tiempo estimado**: 2 h
 - **Complejidad**: xs
 - **Rol sugerido**: technical-writer
