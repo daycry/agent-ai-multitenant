@@ -47,6 +47,18 @@ class Settings(BaseSettings):
         description="Redis connection URL.",
     )
 
+    # ----- External services (probed by /admin/system-health) -----
+    vault_url: str = Field(
+        default="http://localhost:8200",
+        description="Vault HTTP base URL.",
+    )
+    minio_url: str = Field(
+        default="http://localhost:9000",
+        description="MinIO HTTP API base URL.",
+    )
+    clamav_host: str = Field(default="localhost", description="ClamAV TCP host.")
+    clamav_port: int = Field(default=3310, description="ClamAV TCP port (INSTREAM).")
+
     # ----- Rate limits -----
     login_rate_limit_count: int = Field(default=5, description="Max login attempts per window.")
     login_rate_limit_window_seconds: int = Field(

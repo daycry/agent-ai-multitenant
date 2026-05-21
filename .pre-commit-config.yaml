@@ -71,6 +71,7 @@ repos:
           - "opentelemetry-instrumentation-asyncpg>=0.48b0,<1"
           - "opentelemetry-instrumentation-redis>=0.48b0,<1"
           - "opentelemetry-instrumentation-httpx>=0.48b0,<1"
+          - "httpx>=0.27,<1"
           - "docker>=7.1,<8"
         args: [--config-file=pyproject.toml]
         files: ^(apps|packages)/.*\.py$

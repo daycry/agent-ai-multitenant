@@ -10,10 +10,14 @@ are read-only summaries.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from redis.asyncio import Redis
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
@@ -23,8 +27,10 @@ from api_server.auth.deps import (
     AuthPrincipal,
     get_admin_session,
     get_client_ip,
+    get_redis,
     require_system_admin,
 )
+from api_server.config import get_settings
 from api_server.db.models import AuditAction, Organization, User
 from api_server.schemas.admin import (
     ServiceHealth,
@@ -34,6 +40,8 @@ from api_server.schemas.admin import (
     TenantUpdateRequest,
     UserListItem,
 )
+
+_PROBE_TIMEOUT_S = 2.0
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -216,26 +224,82 @@ async def list_users(
 
 
 # ---------------------------------------------------------------------------
-# /admin/system-health — placeholder summary (phase 0)
+# /admin/system-health — five-service summary
+#
+# Each probe has a 2 s ceiling so a hung service can't stall the dashboard.
+# Probes run concurrently with asyncio.gather. The aggregate `status` is
+# driven by postgres only (the API can't function without it). Other
+# services degrade individually but don't flip the overall state — letting
+# the operator see them as yellow without the dashboard going "down".
 # ---------------------------------------------------------------------------
+def _truncate(detail: str, max_len: int = 200) -> str:
+    return detail if len(detail) <= max_len else detail[: max_len - 1] + "…"
+
+
+async def _check_postgres(session: AsyncSession) -> ServiceHealth:
+    try:
+        await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=_PROBE_TIMEOUT_S)
+        return ServiceHealth(name="postgres", status="ok")
+    except Exception as exc:
+        return ServiceHealth(name="postgres", status="down", detail=_truncate(str(exc)))
+
+
+async def _check_redis(redis: Redis) -> ServiceHealth:
+    try:
+        await asyncio.wait_for(redis.ping(), timeout=_PROBE_TIMEOUT_S)
+        return ServiceHealth(name="redis", status="ok")
+    except Exception as exc:
+        return ServiceHealth(name="redis", status="down", detail=_truncate(str(exc)))
+
+
+async def _check_http_ok(name: str, url: str) -> ServiceHealth:
+    """Probe an HTTP endpoint. 200 -> ok; other status -> degraded; no
+    response -> down. Used for vault (/v1/sys/health) and minio
+    (/minio/health/live)."""
+    try:
+        async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT_S) as client:
+            r = await client.get(url)
+        if r.status_code == 200:
+            return ServiceHealth(name=name, status="ok")
+        return ServiceHealth(name=name, status="degraded", detail=f"HTTP {r.status_code}")
+    except Exception as exc:
+        return ServiceHealth(name=name, status="down", detail=_truncate(str(exc)))
+
+
+async def _check_tcp(name: str, host: str, port: int) -> ServiceHealth:
+    """TCP connect probe -- enough to know the daemon is accepting
+    connections. Used for clamav, whose protocol is not HTTP."""
+    writer: asyncio.StreamWriter | None = None
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=_PROBE_TIMEOUT_S
+        )
+        return ServiceHealth(name=name, status="ok")
+    except Exception as exc:
+        return ServiceHealth(name=name, status="down", detail=_truncate(str(exc)))
+    finally:
+        if writer is not None:
+            writer.close()
+            with contextlib.suppress(Exception):  # best-effort close
+                await writer.wait_closed()
+
+
 @router.get("/system-health", response_model=SystemHealthResponse)
 async def system_health(
     _: AuthPrincipal = Depends(require_system_admin),
     session: AsyncSession = Depends(get_admin_session),
+    redis: Redis = Depends(get_redis),
 ) -> SystemHealthResponse:
-    """Lightweight health summary. Phase 0 only checks the DB — the
-    watchdog (task_00_16) will expose the full container view."""
-    services: list[ServiceHealth] = []
-    overall = "ok"
-
-    # PostgreSQL
-    try:
-        from sqlalchemy import text
-
-        await session.execute(text("SELECT 1"))
-        services.append(ServiceHealth(name="postgres", status="ok"))
-    except Exception as exc:  # - we want to record any failure
-        services.append(ServiceHealth(name="postgres", status="down", detail=str(exc)))
-        overall = "degraded"
-
-    return SystemHealthResponse(status=overall, services=services)
+    settings = get_settings()
+    postgres, redis_h, vault_h, minio_h, clamav_h = await asyncio.gather(
+        _check_postgres(session),
+        _check_redis(redis),
+        _check_http_ok("vault", f"{settings.vault_url}/v1/sys/health"),
+        _check_http_ok("minio", f"{settings.minio_url}/minio/health/live"),
+        _check_tcp("clamav", settings.clamav_host, settings.clamav_port),
+    )
+    overall = "ok" if postgres.status == "ok" else "down"
+    return SystemHealthResponse(
+        status=overall,
+        services=[postgres, redis_h, vault_h, minio_h, clamav_h],
+    )
