@@ -2,23 +2,20 @@
 
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   Bot,
   FolderKanban,
   LayoutDashboard,
   LayoutGrid,
-  LogOut,
-  Menu,
   ShieldCheck,
   Sparkles,
   Users,
   X,
 } from "lucide-react";
 
+import { AdminHeader } from "@/components/layout/admin-header";
 import { cn } from "@/lib/utils";
-import { ApiError, apiFetch } from "@/lib/api";
-import { clearToken } from "@/lib/auth";
 
 interface NavItem {
   href: string;
@@ -37,19 +34,7 @@ const NAV: NavItem[] = [
 
 export function AdminShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
-
-  async function onLogout() {
-    try {
-      await apiFetch<void>("/auth/logout", { method: "POST" });
-    } catch (err) {
-      if (!(err instanceof ApiError)) console.error(err);
-    } finally {
-      clearToken();
-      router.replace("/login");
-    }
-  }
 
   const isActive = (href: string) => pathname === href || pathname?.startsWith(href + "/") === true;
 
@@ -63,11 +48,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
           "hidden md:flex",
         )}
       >
-        <SidebarContent
-          isActive={isActive}
-          onLogout={onLogout}
-          onItemClick={() => setMobileOpen(false)}
-        />
+        <SidebarContent isActive={isActive} onItemClick={() => setMobileOpen(false)} />
       </aside>
 
       {/* ============================= Sidebar (mobile drawer) ============================= */}
@@ -89,7 +70,6 @@ export function AdminShell({ children }: { children: ReactNode }) {
           >
             <SidebarContent
               isActive={isActive}
-              onLogout={onLogout}
               onItemClick={() => setMobileOpen(false)}
               showClose
               onClose={() => setMobileOpen(false)}
@@ -100,71 +80,27 @@ export function AdminShell({ children }: { children: ReactNode }) {
 
       {/* ============================= Main column ============================= */}
       <div className="flex flex-1 flex-col md:pl-64">
-        {/* Top bar (mobile only) */}
-        <header
-          className={cn(
-            "bg-background/80 sticky top-0 z-30 flex h-14 items-center justify-between",
-            "border-b px-4 backdrop-blur-md md:hidden",
-          )}
-        >
-          <button
-            type="button"
-            onClick={() => setMobileOpen(true)}
-            className="hover:bg-muted -ml-2 inline-flex h-10 w-10 items-center justify-center rounded-md"
-            aria-label="Abrir menú"
-            data-testid="open-mobile-nav"
-          >
-            <Menu className="h-5 w-5" />
-          </button>
-          <BrandMark />
-          <div className="w-10" /> {/* spacer */}
-        </header>
-
-        {/* Page content */}
+        <AdminHeader onOpenMobileNav={() => setMobileOpen(true)} />
         <main className="animate-fade-in flex-1">{children}</main>
       </div>
     </div>
   );
 }
 
-function BrandMark({ inverted = false }: { inverted?: boolean }) {
-  return (
-    <Link
-      href="/admin/dashboard"
-      className={cn(
-        "flex items-center gap-2 font-semibold tracking-tight",
-        inverted ? "text-sidebar-foreground" : "text-foreground",
-      )}
-    >
-      <span
-        className={cn(
-          "bg-brand-gradient inline-flex h-7 w-7 items-center justify-center rounded-md",
-          "shadow-[0_0_24px_-4px_hsl(var(--gradient-from)/0.65)]",
-        )}
-      >
-        <Sparkles className="h-4 w-4 text-white" />
-      </span>
-      <span>Agentic Platform</span>
-    </Link>
-  );
-}
-
 function SidebarContent({
   isActive,
-  onLogout,
   onItemClick,
   showClose = false,
   onClose,
 }: {
   isActive: (href: string) => boolean;
-  onLogout: () => void;
   onItemClick: () => void;
   showClose?: boolean;
   onClose?: () => void;
 }) {
   return (
     <>
-      <div className="border-sidebar-border flex h-14 items-center justify-between border-b px-4">
+      <div className="border-sidebar-border flex h-20 items-center justify-between border-b px-6">
         <Link
           href="/admin/dashboard"
           className="text-sidebar-foreground flex items-center gap-2 font-semibold tracking-tight"
@@ -229,22 +165,6 @@ function SidebarContent({
           })}
         </ul>
       </nav>
-
-      <div className="border-sidebar-border border-t p-3">
-        <button
-          type="button"
-          onClick={onLogout}
-          data-testid="logout"
-          className={cn(
-            "text-sidebar-muted-foreground hover:bg-sidebar-border hover:text-sidebar-foreground",
-            "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium",
-            "transition-colors",
-          )}
-        >
-          <LogOut className="h-4 w-4" />
-          <span>Cerrar sesión</span>
-        </button>
-      </div>
     </>
   );
 }

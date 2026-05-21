@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { AdminShell } from "@/components/layout/admin-shell";
+import { LanguageProvider } from "@/lib/lang-context";
 import { getToken } from "@/lib/auth";
 
 /**
@@ -32,5 +33,9 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     );
   }
 
-  return <AdminShell>{children}</AdminShell>;
+  return (
+    <LanguageProvider>
+      <AdminShell>{children}</AdminShell>
+    </LanguageProvider>
+  );
 }
