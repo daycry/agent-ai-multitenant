@@ -27,6 +27,10 @@ repos:
       - id: detect-private-key
       - id: mixed-line-ending
         args: [--fix=lf]
+        # Windows-native scripts must keep CRLF (see .gitattributes).
+        # mixed-line-ending doesn't honour .gitattributes, so we
+        # exclude them explicitly here.
+        exclude: \.(ps1|cmd|bat)$
 
   # -------------------- Python --------------------
   - repo: https://github.com/psf/black
