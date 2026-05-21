@@ -31,7 +31,20 @@
 param(
     [string]$AdminEmail = "",
     [string]$AdminPassword = "",
-    [int]$ApiPort = 8001
+    [int]$ApiPort = 8001,
+    # Open a real Chromium window. Default is headless (CI mode).
+    [switch]$Headed,
+    # Slow each action by N ms when visible. Only honored with -Headed.
+    [int]$SlowMo = 0,
+    # Path of a single spec file (relative to apps/admin-panel) to run
+    # instead of the full suite. Useful for focused walkthroughs.
+    [string]$Spec = "",
+    # Substring (or regex) of the test title to run. Useful with -Headed
+    # so you only get ONE browser window open instead of the suite
+    # opening Chromium per-test in sequence.
+    [string]$Grep = "",
+    # Open Playwright's interactive UI mode (overrides -Headed/-Spec).
+    [switch]$Ui
 )
 
 $ErrorActionPreference = "Stop"
@@ -197,6 +210,11 @@ $env:API_SERVER_DATABASE_URL = "postgresql+asyncpg://app_user:changeme-app-dev-o
 $env:API_SERVER_ADMIN_DATABASE_URL = "postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform"
 $env:API_SERVER_REDIS_URL = "redis://localhost:6379/0"
 $env:API_SERVER_JWT_SECRET = "dev-only-jwt-secret-change-me"
+# Each Playwright spec performs a fresh login. With the default 5
+# attempts / 15 min limit we'd trip 429 once we have a handful of
+# screen tests. Loosen it for E2E only.
+$env:API_SERVER_LOGIN_RATE_LIMIT_COUNT = "1000"
+$env:API_SERVER_LOGIN_RATE_LIMIT_WINDOW_SECONDS = "60"
 
 $apiLog = Join-Path $RepoRoot ".e2e-api-server.log"
 $apiErr = Join-Path $RepoRoot ".e2e-api-server.err.log"
@@ -343,9 +361,52 @@ Either:
     if ($LASTEXITCODE -ne 0) { throw "UPDATE is_system_admin failed" }
 
     # -----------------------------------------------------------------------
+    # 6b) Apply built-in seeds (agents/skills/tools/teams/templates/policies).
+    # Plan-01 Playwright tests assume the 11 built-in agents exist.
+    # The seed module is idempotent (ON CONFLICT DO UPDATE).
+    # -----------------------------------------------------------------------
+    Write-Host "==> Applying built-in seeds" -ForegroundColor Cyan
+    $env:API_SERVER_ADMIN_DATABASE_URL = "postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform"
+    Push-Location (Join-Path $RepoRoot "apps\api-server")
+    try {
+        & $venvPython -m api_server.seeds
+        if ($LASTEXITCODE -ne 0) { throw "seed run failed" }
+    } finally {
+        Pop-Location
+    }
+
+    # -----------------------------------------------------------------------
     # 7) Run Playwright (which auto-starts npm run dev via webServer:)
     # -----------------------------------------------------------------------
-    Write-Host "==> Running Playwright" -ForegroundColor Cyan
+    # Build the Playwright args.
+    # Modes:
+    #   -Ui              -> `playwright test --ui` (interactive)
+    #   -Headed          -> `--headed`; pair with -SlowMo for delay
+    #   -SlowMo N        -> sets E2E_SLOW_MO so the config applies
+    #                       launchOptions.slowMo (Playwright has no
+    #                       --slow-mo CLI flag).
+    #   -Spec <path>     -> only that file
+    #   default          -> full suite, headless
+    $pwArgs = @()
+    if ($Ui)         { $pwArgs += "--ui" }
+    elseif ($Headed) { $pwArgs += "--headed" }
+    if ($Grep) {
+        $pwArgs += "--grep"
+        $pwArgs += $Grep
+    }
+    if ($Spec) {
+        # Playwright treats the spec arg as a regex; Windows backslashes
+        # poison that (`\p` becomes a regex escape, the matcher finds
+        # nothing). Normalize to forward slashes.
+        $pwArgs += $Spec.Replace('\', '/')
+    }
+    if ($SlowMo -gt 0 -and $Headed) {
+        $env:E2E_SLOW_MO = "$SlowMo"
+    } else {
+        Remove-Item Env:\E2E_SLOW_MO -ErrorAction SilentlyContinue
+    }
+
+    Write-Host ("==> Running Playwright" + $(if ($pwArgs) { " (" + ($pwArgs -join ' ') + ")" } else { "" })) -ForegroundColor Cyan
     Push-Location (Join-Path $RepoRoot "apps\admin-panel")
     try {
         $env:E2E_ADMIN_EMAIL = $AdminEmail
@@ -354,7 +415,15 @@ Either:
         # Without this the browser tests would call the default
         # http://localhost:8001 even when we run uvicorn on a different port.
         $env:NEXT_PUBLIC_API_URL = "http://127.0.0.1:$ApiPort"
-        & npm run e2e
+        # Call playwright directly via npx -- `npm run e2e -- ...` eats
+        # `--headed` / `--slow-mo=` on Windows because npm interprets
+        # them before forwarding (only the trailing positional arg makes
+        # it through).
+        if ($pwArgs.Count -gt 0) {
+            & npx playwright test @pwArgs
+        } else {
+            & npx playwright test
+        }
         $playwrightExit = $LASTEXITCODE
     } finally {
         Pop-Location

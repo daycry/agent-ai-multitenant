@@ -206,6 +206,10 @@ export API_SERVER_DATABASE_URL="postgresql+asyncpg://app_user:changeme-app-dev-o
 export API_SERVER_ADMIN_DATABASE_URL="postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform"
 export API_SERVER_REDIS_URL="redis://localhost:6379/0"
 export API_SERVER_JWT_SECRET="dev-only-jwt-secret-change-me"
+# Each Playwright spec performs a fresh login. The default 5 / 15 min
+# limit trips 429 once we have a handful of screen tests; loosen for E2E.
+export API_SERVER_LOGIN_RATE_LIMIT_COUNT="1000"
+export API_SERVER_LOGIN_RATE_LIMIT_WINDOW_SECONDS="60"
 
 rm -f "$API_LOG" "$API_ERR"
 
@@ -334,6 +338,17 @@ docker compose "${COMPOSE_ARGS[@]}" exec -T postgres \
     psql -U postgres -d agentic_platform \
     -c "UPDATE users SET is_system_admin = true WHERE email = '$ADMIN_EMAIL'" \
     >/dev/null
+
+# ---------------------------------------------------------------------------
+# 6b) Apply built-in seeds (idempotent). Plan-01 Playwright tests
+# assume the 11 built-in agents exist.
+# ---------------------------------------------------------------------------
+echo "==> Applying built-in seeds"
+(
+    export API_SERVER_ADMIN_DATABASE_URL="postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform"
+    cd "$REPO_ROOT/apps/api-server"
+    "$VENV_PY" -m api_server.seeds
+)
 
 # ---------------------------------------------------------------------------
 # 7) Run Playwright (which auto-starts npm run dev via webServer:)

@@ -191,6 +191,23 @@ Parámetros opcionales:
 .\scripts\dev\run-e2e.ps1 -ApiPort 8002 -AdminEmail other@x.test
 ```
 
+Para verlos correr en vivo en un Chromium real (útil para revisión visual):
+
+```powershell
+# Todos los specs en headed con 800 ms entre acciones para poder leer.
+.\scripts\dev\run-e2e.ps1 -Headed -SlowMo 800
+
+# Solo un spec en concreto:
+.\scripts\dev\run-e2e.ps1 -Headed -SlowMo 800 -Spec e2e/project-wizard.spec.ts
+
+# Modo interactivo (Playwright UI): time-travel, pasos manuales,
+# re-run con hot reload.
+.\scripts\dev\run-e2e.ps1 -Ui
+```
+
+Guía completa con las 4 maneras de ver / depurar los E2E, atajos,
+y resolución de problemas: [docs/03-guides/watching-e2e-tests.md](../03-guides/watching-e2e-tests.md).
+
 Pre-requisitos (una sola vez):
 
 ```powershell
