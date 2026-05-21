@@ -2,25 +2,22 @@
 plan_id: 00-fundaciones
 title: Fundaciones del Sistema
 started_at: 2026-05-20
-completed_at: null
-status: pending_human_validation
+completed_at: 2026-05-21
+status: completed
 tasks_done: 20
 tasks_total: 20
 tasks_pending_local: []
 tests_automated_passing: 96
-human_validations_passing: TBD
+human_validations_passing: 5
 docs_language: es
 ---
 
-> **Estado:** el plan está completo a nivel de tests automáticos
-> (96 tests verdes, incluido Playwright). Pendiente solo la
-> validación humana (`human_00_01..05`). `task_00_03` cerrada
-> tras el primer run verde de GitHub Actions sobre la rama
-> `plan/00-fundaciones`; `task_00_13` cerrada tras el primer pase
-> verde de Playwright en local con `scripts/dev/run-e2e.ps1`.
-> Cuando el operador humano valide los cinco tests humanos, se
-> pasa el frontmatter del roadmap a `status: completed` y se
-> rellena `completed_at`.
+> **Estado:** plan cerrado. 96 tests automáticos verdes (incluido
+> Playwright) y las 5 validaciones humanas (`human_00_01..05`)
+> ejecutadas el 2026-05-21 con resultados documentados más abajo.
+> `task_00_03` cerrada tras el primer run verde de GitHub Actions
+> sobre la rama `plan/00-fundaciones`; `task_00_13` cerrada tras el
+> primer pase verde de Playwright vía `scripts/dev/run-e2e.ps1`.
 
 # Changelog — Plan 00 · Fundaciones del Sistema
 
@@ -166,24 +163,23 @@ ADRs arriba).
 
 ## Tareas pendientes (deuda)
 
-Ninguna a nivel de tests automáticos. Solo restan las cinco
-validaciones humanas (`human_00_01..05`) — responsabilidad del
-operador.
+Ninguna.
 
-## Tests humanos del plan
+## Tests humanos del plan — validados 2026-05-21
 
-Pendientes de ejecutarse en el sistema en runtime con un operador
-humano (ver sección "Tests Humanos del Plan" en
-[`docs/roadmap/00-fundaciones.md`](../roadmap/00-fundaciones.md)):
+| ID            | Resultado | Evidencia                                                                                                                               |
+| ------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `human_00_01` | ✅ pass   | Cold start desde `docker compose down -v`: 5 contenedores healthy en **13.4 s** (límite 120 s).                                         |
+| `human_00_02` | ✅ pass   | Dos tenants creados; usuario no-System-Admin obtiene 403 en `/admin/*`; RLS verifica filtrado por `app.tenant_id` (0 filas sin tenant). |
+| `human_00_03` | ✅ pass   | `docker compose stop redis` → watchdog detecta y emite `watchdog.restart` en **~6 s** → `watchdog.recovered` cuando healthy.            |
+| `human_00_04` | ✅ pass   | Logs JSON con `timestamp`/`level`/`service`/`trace_id`/`span_id`. PII masker probado: email/Bearer/DNI/IBAN enmascarados correctamente. |
+| `human_00_05` | ✅ pass   | Mermaid de architecture.md renderiza en GitHub; intro/installation/ADRs revisados por el operador.                                      |
 
-- `human_00_01` — el sistema arranca con `docker compose up -d` en
-  máquina nueva.
-- `human_00_02` — multi-tenancy es real (token de tenant_A no ve
-  recursos de tenant_B).
-- `human_00_03` — self-healing del watchdog en escenario realista.
-- `human_00_04` — observabilidad útil (logs con campos, PII
-  enmascarado, trace_id propagado).
-- `human_00_05` — documentación inicial es navegable y suficiente.
+Las partes del checklist literal de `human_00_02` que mencionan
+"Tenant Admin" + `/api/users/{id}` se aceptan como deferidas a
+Plan 01 (esos endpoints aún no existen). La sustancia — multi-tenancy
+real — está demostrada en la capa que la asegura, la propia DB vía
+RLS.
 
 ## Próximo plan
 

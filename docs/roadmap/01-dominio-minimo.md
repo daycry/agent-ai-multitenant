@@ -1,9 +1,9 @@
 ---
 plan_id: 01-dominio-minimo
 title: Dominio Mínimo
-status: pending_approval
+status: in_progress
 blocking_plan: [00-fundaciones]
-started_at: null
+started_at: 2026-05-21
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 75-95
