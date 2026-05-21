@@ -70,6 +70,10 @@ playwright-report/
 blob-report/
 playwright/.cache/
 
+# e2e runner logs from scripts/dev/run-e2e.ps1
+.e2e-api-server.log
+.e2e-api-server.err.log
+
 # =============================================================================
 # Docker / Compose
 # =============================================================================

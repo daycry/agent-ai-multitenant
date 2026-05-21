@@ -105,6 +105,36 @@ Genera 5 unseal keys + root token bajo `./vault-init-output/`
 (gitignored, modo 600). La nota está en `scripts/init-vault.sh` y
 la lógica completa en la sección 4.x del documento maestro.
 
+## Correr los tests E2E (Playwright)
+
+El flujo manual de "4 terminales" (docker / api-server / admin-panel /
+playwright) es tedioso. Hay un script que lo automatiza:
+
+```powershell
+.\scripts\dev\run-e2e.ps1
+```
+
+Hace en orden: levanta el stack, espera healthy, aplica migraciones,
+lanza `uvicorn` en `:8001` en background, espera `/healthz`, asegura
+que existe el user admin (registro + promoción a `is_system_admin`),
+corre Playwright (que arranca su propio `npm run dev` vía
+`webServer:` del config) y mata el uvicorn al terminar — incluso si
+los tests fallan.
+
+Parámetros opcionales:
+
+```powershell
+.\scripts\dev\run-e2e.ps1 -ApiPort 8002 -AdminEmail other@x.test
+```
+
+Pre-requisitos (una sola vez):
+
+```powershell
+.\scripts\dev\bootstrap.ps1               # crea .venv + deps Python
+cd apps\admin-panel; npm install          # deps Node
+npm run e2e:install                       # descarga Chromium (~300 MB)
+```
+
 ## Si algo falla
 
 [`docs/03-guides/gotchas/`](../03-guides/gotchas/) cubre los issues
