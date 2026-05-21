@@ -7,6 +7,7 @@
  */
 
 import { getToken } from "@/lib/auth";
+import { getTenantId } from "@/lib/tenant-storage";
 
 // Default 8001 (not the more usual 8000) because a typical Windows
 // dev box has something else parked on 8000. Override at build time
@@ -40,6 +41,15 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   const token = getToken();
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  // For superadmins the backend honors this header as the acting
+  // tenant; for non-admins it's silently ignored, so we can always
+  // send it without leaking scope. Empty value (= "all tenants"
+  // portfolio view) just doesn't send the header.
+  const tenantId = getTenantId();
+  if (tenantId && !headers.has("X-Tenant-Id")) {
+    headers.set("X-Tenant-Id", tenantId);
   }
 
   const response = await fetch(`${API_URL}${path}`, {
