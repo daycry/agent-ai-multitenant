@@ -21,11 +21,24 @@ from __future__ import annotations
 
 import asyncio
 
+import asyncpg
 import pytest
 from alembic import command
 from httpx import ASGITransport, AsyncClient
 
 pytestmark = pytest.mark.integration
+
+
+async def _truncate_users(dsn: str) -> None:
+    """Wipe the users + memberships tables so first-user promotion
+    behaves deterministically regardless of test ordering. The
+    session-scoped test DB persists between tests, so per-test state
+    has to be explicit."""
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute("TRUNCATE user_org_memberships, users RESTART IDENTITY CASCADE")
+    finally:
+        await conn.close()
 
 
 @pytest.fixture()
@@ -75,7 +88,13 @@ def configured_app(
 # /auth/register
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_register_creates_user(configured_app) -> None:
+async def test_register_first_user_becomes_system_admin(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Fresh install: the very first registered user is auto-promoted
+    to system admin so the operator has a way in. Subsequent users
+    default to non-admin (covered by the next test)."""
+    await _truncate_users(migrations_pg_dsn)
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://test",
@@ -93,12 +112,42 @@ async def test_register_creates_user(configured_app) -> None:
     body = resp.json()
     assert body["email"] == "alice@example.com"
     assert body["full_name"] == "Alice"
-    assert body["is_system_admin"] is False
+    assert body["is_system_admin"] is True
     assert body["is_active"] is True
     assert "id" in body
     # Password must never round-trip.
     assert "password" not in body
     assert "password_hash" not in body
+
+
+@pytest.mark.asyncio
+async def test_register_subsequent_user_is_not_admin(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Second user (and onward) keeps the DB default
+    `is_system_admin=false`. Promotion to admin afterwards is the
+    job of /admin/users (system-admin gated)."""
+    await _truncate_users(migrations_pg_dsn)
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        # Seed a first user; this one becomes admin.
+        first = await client.post(
+            "/auth/register",
+            json={"email": "operator@example.com", "password": "longenoughpw"},
+        )
+        assert first.status_code == 201
+        assert first.json()["is_system_admin"] is True
+
+        # Anyone after is non-admin until promoted.
+        resp = await client.post(
+            "/auth/register",
+            json={"email": "alice@example.com", "password": "longenoughpw"},
+        )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["is_system_admin"] is False
 
 
 @pytest.mark.asyncio

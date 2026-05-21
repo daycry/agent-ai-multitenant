@@ -92,10 +92,20 @@ def get_rate_limiter(redis: Redis = Depends(get_redis)) -> RateLimiter:
 # ---------------------------------------------------------------------------
 async def get_principal(
     authorization: str | None = Header(default=None),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
     sessions: SessionStore = Depends(get_session_store),
 ) -> AuthPrincipal:
     """Decode the JWT, verify the session id still exists in Redis,
-    return the principal. 401 on any failure."""
+    return the principal. 401 on any failure.
+
+    For users with `is_system_admin=true`, an `X-Tenant-Id` request
+    header overrides the JWT's `tid` claim. This lets a superadmin
+    switch the tenant context per-request without re-issuing tokens —
+    the admin-panel uses this to act on behalf of any tenant from the
+    header's tenant picker. For non-admin users the header is ignored
+    (the JWT is the only source of truth so tenants can't escape
+    their own scope).
+    """
     token = _parse_bearer(authorization)
     try:
         claims = decode_jwt(token)
@@ -137,6 +147,17 @@ async def get_principal(
 
     is_system_admin = bool(claims.get("sys", False))
 
+    # Superadmin tenant override via header. Non-admins can't use this
+    # path — even if they send the header, we ignore it.
+    if is_system_admin and x_tenant_id:
+        try:
+            tenant_id = UUID(x_tenant_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid X-Tenant-Id header (expected UUID)",
+            ) from exc
+
     return AuthPrincipal(
         user_id=user_id,
         session_id=session_id,
@@ -165,13 +186,33 @@ async def get_tenant_session(
 ) -> AsyncIterator[AsyncSession]:
     """Yield an AsyncSession with `app.user_id` (and `app.tenant_id` if
     the JWT carried one) bound for the lifetime of the request, so
-    PostgreSQL RLS policies can scope every query."""
+    PostgreSQL RLS policies can scope every query.
+
+    Two flavours of session, selected from the principal:
+
+      - Regular tenant user: app_user (NOBYPASSRLS) — queries are
+        filtered by RLS to rows whose tenant_id matches the JWT's
+        tid. Writes go into that tenant.
+      - Superadmin without tenant context (no JWT tid and no
+        `X-Tenant-Id` header): migrations_user (BYPASSRLS) — reads
+        return rows from all tenants. Writes that need
+        `require_tenant_id` will 400 with a helpful message until
+        the admin picks a tenant.
+      - Superadmin with tenant context: app_user (NOBYPASSRLS) again,
+        scoped to the picked tenant. The admin "acts as" that tenant
+        for both reads and writes, which is what the per-tenant
+        view in the admin-panel needs.
+    """
     # NOTE: PostgreSQL `SET LOCAL` is a utility command and does NOT
     # accept bound parameters via asyncpg's prepared-statement protocol
     # (it raises "syntax error at or near $1"). We use `set_config(...,
     # is_local := true)` instead, which IS a regular function call and
     # binds parameters cleanly while still applying transaction-scope.
-    sessionmaker = get_sessionmaker()
+    if principal.is_system_admin and principal.tenant_id is None:
+        sessionmaker = get_admin_sessionmaker()
+    else:
+        sessionmaker = get_sessionmaker()
+
     async with sessionmaker() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.user_id', :uid, true)"),

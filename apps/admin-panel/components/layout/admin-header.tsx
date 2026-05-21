@@ -20,10 +20,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronDown, LogOut, Menu, Sparkles } from "lucide-react";
 
+import { TenantPicker } from "@/components/layout/tenant-picker";
 import { useLang, type Lang } from "@/lib/lang-context";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
 import { clearToken } from "@/lib/auth";
+import { setTenantId as clearStoredTenant } from "@/lib/tenant-storage";
 
 export function AdminHeader({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
   const { lang, setLang } = useLang();
@@ -37,6 +39,8 @@ export function AdminHeader({ onOpenMobileNav }: { onOpenMobileNav: () => void }
       if (!(err instanceof ApiError)) console.error(err);
     } finally {
       clearToken();
+      // Drop the active-tenant choice too — next login starts fresh.
+      clearStoredTenant(null);
       router.replace("/login");
     }
   }
@@ -80,8 +84,9 @@ export function AdminHeader({ onOpenMobileNav }: { onOpenMobileNav: () => void }
         </Link>
       </div>
 
-      {/* Right: lang switcher + user menu */}
+      {/* Right: tenant picker (superadmin only) + lang switcher + user menu */}
       <div className="flex items-center gap-3">
+        <TenantPicker />
         <LangSwitcher lang={lang} onChange={setLang} />
         <UserMenu open={menuOpen} setOpen={setMenuOpen} onLogout={onLogout} />
       </div>
