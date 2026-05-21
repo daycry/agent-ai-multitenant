@@ -67,6 +67,9 @@ el problema ya esté documentado.
 - [mypy-local-package-imports.md](./mypy-local-package-imports.md)
   — el hook venv no ve los `apps/<x>` editables; usar `additional_dependencies`
   o `exclude:`.
+- [precommit-mixed-line-ending-vs-gitattributes.md](./precommit-mixed-line-ending-vs-gitattributes.md)
+  — `mixed-line-ending --fix=lf` no respeta `.gitattributes`; hay que
+  excluir `.ps1` / `.cmd` / `.bat` del hook.
 
 ### opentelemetry
 
