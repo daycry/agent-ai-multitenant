@@ -31,6 +31,13 @@ dependencies = [
 
   # Observability
   "structlog>=24.1,<25",
+  "opentelemetry-api>=1.27,<2",
+  "opentelemetry-sdk>=1.27,<2",
+  "opentelemetry-instrumentation-fastapi>=0.48b0,<1",
+  "opentelemetry-instrumentation-sqlalchemy>=0.48b0,<1",
+  "opentelemetry-instrumentation-asyncpg>=0.48b0,<1",
+  "opentelemetry-instrumentation-redis>=0.48b0,<1",
+  "opentelemetry-instrumentation-httpx>=0.48b0,<1",
 
   # HTTP client (used by tests, watchdog, integrations)
   "httpx>=0.27,<1",

@@ -23,7 +23,11 @@ from api_server.db.models import UserOrganizationMembership
 from api_server.logging import configure_logging
 from api_server.routers.admin import router as admin_router
 from api_server.routers.auth import router as auth_router
+from api_server.telemetry import configure_tracing, instrument_fastapi
+from api_server.telemetry.setup import add_console_exporter
 
+configure_tracing(service_name="api-server")
+add_console_exporter()
 configure_logging(service="api-server")
 
 
@@ -46,6 +50,8 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(admin_router)
+
+    instrument_fastapi(app)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

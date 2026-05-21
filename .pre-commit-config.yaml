@@ -58,6 +58,13 @@ repos:
           - "alembic>=1.13,<2"
           - "argon2-cffi>=23.1,<24"
           - "types-python-jose>=3.3,<4"
+          - "opentelemetry-api>=1.27,<2"
+          - "opentelemetry-sdk>=1.27,<2"
+          - "opentelemetry-instrumentation-fastapi>=0.48b0,<1"
+          - "opentelemetry-instrumentation-sqlalchemy>=0.48b0,<1"
+          - "opentelemetry-instrumentation-asyncpg>=0.48b0,<1"
+          - "opentelemetry-instrumentation-redis>=0.48b0,<1"
+          - "opentelemetry-instrumentation-httpx>=0.48b0,<1"
         args: [--config-file=pyproject.toml]
         files: ^(apps|packages)/.*\.py$
         # Alembic migrations are template-generated and import the local

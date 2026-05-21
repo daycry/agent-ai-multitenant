@@ -24,6 +24,7 @@ import structlog
 from structlog.types import EventDict, Processor, WrappedLogger
 
 from api_server.logging.pii import mask_pii_processor
+from api_server.telemetry.setup import add_otel_trace_context
 
 
 def _add_service_name(service: str) -> Processor:
@@ -54,6 +55,9 @@ def configure_logging(
         structlog.stdlib.add_logger_name,
         timestamper,
         _add_service_name(service),
+        # OTEL context: stamp trace_id / span_id when a span is active
+        # so log lines correlate with traces in Tempo (phase 12).
+        add_otel_trace_context,
         # PII goes last among the meta-processors so any nested dicts/
         # lists bound earlier get walked too.
         mask_pii_processor,

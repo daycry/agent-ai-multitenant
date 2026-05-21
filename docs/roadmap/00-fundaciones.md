@@ -381,7 +381,7 @@ Objetivo: trazabilidad y self-healing operativos.
 
 #### `task_00_15` — OpenTelemetry
 
-- [ ] **Título**: Instrumentar todos los servicios con OpenTelemetry
+- [x] **Título**: Instrumentar todos los servicios con OpenTelemetry
 - **Descripción**: Instrumentación automática de FastAPI, SQLAlchemy, Redis, Celery con OpenTelemetry. Exporter a stdout en esta fase (Loki/Tempo en Fase 12). Propagación de trace_id en headers entre servicios.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
