@@ -193,6 +193,15 @@ class ExecutionStatus(enum.StrEnum):
     DONE = "done"
     ABORTED = "aborted"
     FAILED = "failed"
+    # Paused mid-run waiting on a human_approval_policy decision (Fase F).
+    AWAITING_HUMAN_APPROVAL = "awaiting_human_approval"
+
+
+class ApprovalRequestStatus(enum.StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    TIMED_OUT = "timed_out"
 
 
 # =============================================================================
@@ -722,8 +731,9 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
         nullable=True,
     )
 
+    # 32 chars — wide enough for 'awaiting_human_approval' (Plan 02 Fase F).
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default=text("'running'")
+        String(32), nullable=False, server_default=text("'running'")
     )
     # Set when status='aborted' — a SafeguardCode (max_iterations_exceeded,
     # repetitive_loop_detected, …). NULL on a clean run.
@@ -748,7 +758,68 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
 
+# =============================================================================
+# ApprovalRequest (a human_approval_policy decision an agent is waiting on)
+# =============================================================================
+class ApprovalRequest(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """One sensitive action an agent paused on, awaiting a human (spec §7.7).
+
+    The approval engine (Plan 02 Fase F) intercepts an action whose
+    category the project's `human_approval_policy` marks `human_required`,
+    persists it here as `pending`, and parks the execution in
+    `awaiting_human_approval`. A reviewer approves or rejects it; an
+    unanswered request times out (task_02_27).
+    """
+
+    __tablename__ = "approval_requests"
+    __table_args__ = (
+        Index("ix_approval_requests_tenant_status", "tenant_id", "status"),
+        Index("ix_approval_requests_execution_id", "execution_id"),
+    )
+
+    execution_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("executions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    task_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # One of the 13 sensitive-action categories (spec §7.7).
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    # The proposed action the agent paused on (tool + args, …).
+    action: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'pending'")
+    )
+    # The reviewer's optional note; on a timeout, why it expired.
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    requested_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    resolved_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+
 __all__ = [
+    "ApprovalRequest",
+    "ApprovalRequestStatus",
     "Agent",
     "AgentRole",
     "AgentScope",

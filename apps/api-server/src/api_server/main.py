@@ -24,6 +24,7 @@ from api_server.logging import configure_logging
 from api_server.routers.admin import router as admin_router
 from api_server.routers.agents import router as agents_router
 from api_server.routers.approval_policies import router as approval_policies_router
+from api_server.routers.approvals import router as approvals_router
 from api_server.routers.auth import router as auth_router
 from api_server.routers.executions import router as executions_router
 from api_server.routers.projects import router as projects_router
@@ -66,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(projects_router)
     app.include_router(tasks_router)
     app.include_router(approval_policies_router)
+    app.include_router(approvals_router)
     app.include_router(executions_router)
     app.include_router(ws_router)
 
