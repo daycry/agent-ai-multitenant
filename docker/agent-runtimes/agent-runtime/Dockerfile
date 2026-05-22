@@ -1,17 +1,17 @@
 # syntax=docker/dockerfile:1.7
 # agent-runtime:v1 — the sandboxed container an agent's loop runs inside.
 #
-# Plan 02 Fase B (task_02_05). The image is intentionally minimal: a
-# Python 3.12 interpreter, LangGraph (the agent-loop engine, wired up
-# in Fase C / task_02_10) and the `agent_runtime` package. It carries
-# NO platform credentials and NO Docker client — isolation is enforced
-# by the worker that launches it (cap-drop ALL, read-only FS, seccomp,
-# dedicated network; see apps/workers/src/workers/isolation.py).
+# Plan 02 Fase B (task_02_05) + Fase C (task_02_10). The image carries a
+# Python 3.12 interpreter and the `agent_runtime` package — the LangGraph
+# agent loop (perceive → … → self_review). It carries NO platform
+# credentials and NO Docker client — isolation is enforced by the worker
+# that launches it (cap-drop ALL, read-only FS, seccomp, dedicated
+# network; see apps/workers/src/workers/isolation.py).
 #
 # Build (matches the task_02_05 automated test):
 #   docker build -t agent-runtime:v1 docker/agent-runtimes/agent-runtime/
 
-# ---- builder: resolve dependencies into an isolated venv -----------
+# ---- builder: install the agent_runtime package into an isolated venv ----
 FROM python:3.12-slim AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
@@ -27,15 +27,17 @@ RUN apt-get update \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# pyproject.toml is the single source of truth for the dependency set.
+COPY pyproject.toml ./
+COPY agent_runtime/ ./agent_runtime/
+RUN pip install --no-cache-dir .
 
 # ---- runtime: slim image, non-root, no build tools ----------------
 FROM python:3.12-slim AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime" \
       org.opencontainers.image.version="v1" \
-      org.opencontainers.image.description="Sandboxed runtime for the agent loop (Plan 02)." \
+      org.opencontainers.image.description="Sandboxed LangGraph agent loop runtime (Plan 02)." \
       org.opencontainers.image.source="https://github.com/daycry/agent-ai-multitenant"
 
 ENV PYTHONUNBUFFERED=1 \
@@ -50,12 +52,12 @@ RUN groupadd --gid 1000 agent \
  && mkdir -p /workspace \
  && chown -R 1000:1000 /workspace
 
+# The venv already holds the installed agent_runtime package + its deps.
 COPY --from=builder /opt/venv /opt/venv
-COPY --chown=1000:1000 agent_runtime/ /app/agent_runtime/
 
-WORKDIR /app
+WORKDIR /workspace
 USER 1000:1000
 
-# Fase B: the entrypoint is a self-check (verifies deps import, prints
-# a JSON banner, exits 0). The LangGraph agent loop lands in Fase C.
+# Fase B: the entrypoint is a dependency self-check. The LangGraph agent
+# loop (agent_runtime.graph) is wired in Fase C (task_02_10).
 ENTRYPOINT ["python", "-m", "agent_runtime"]
