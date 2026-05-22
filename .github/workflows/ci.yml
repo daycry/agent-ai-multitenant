@@ -224,3 +224,20 @@ jobs:
             docker buildx build --load -t "agentic-platform/$app_name:ci" "$app_dir"
             echo "::endgroup::"
           done
+
+      # Agent runtime images live under docker/agent-runtimes/, not apps/.
+      # This step is the automated check for task_02_05 — it runs the
+      # exact `docker build` the roadmap task expects.
+      - name: Build agent-runtime images
+        run: |
+          shopt -s nullglob
+          built=0
+          for dockerfile in docker/agent-runtimes/*/Dockerfile; do
+            rt_dir="$(dirname "$dockerfile")"
+            rt_name="$(basename "$rt_dir")"
+            echo "::group::docker build $rt_name:v1"
+            docker build -t "$rt_name:v1" "$rt_dir"
+            echo "::endgroup::"
+            built=1
+          done
+          [ "$built" -eq 1 ] || echo "No agent-runtime Dockerfiles yet."
