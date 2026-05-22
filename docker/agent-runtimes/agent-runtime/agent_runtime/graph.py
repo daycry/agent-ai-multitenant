@@ -29,11 +29,13 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
+from agent_runtime.approval import ApprovalGate
 from agent_runtime.loop_detection import DEFAULT_LOOP_THRESHOLD, LoopDetector
 from agent_runtime.model import DecisionKind, ModelClient
 from agent_runtime.safeguards import Budgets, SafeguardCode, SafeguardTracker
 from agent_runtime.state import (
     STATUS_ABORTED,
+    STATUS_AWAITING_APPROVAL,
     STATUS_DONE,
     AgentState,
     AgentTask,
@@ -67,6 +69,8 @@ class AgentDeps:
     model: ModelClient
     tools: ToolRegistry = field(default_factory=default_registry)
     recall: Callable[[AgentTask], list[dict[str, Any]]] = _no_recall
+    # When set, gates sensitive tool calls before they run (task_02_33).
+    approval: ApprovalGate | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,8 @@ class ExecutionResult:
     iterations: int
     steps: list[dict[str, Any]]
     usage: dict[str, float | int]
+    # Set when status is `awaiting_human_approval`: {category, action}.
+    approval: dict[str, Any] | None = None
 
     def succeeded(self) -> bool:
         return self.status == STATUS_DONE
@@ -91,6 +97,7 @@ class ExecutionResult:
             "output": self.output,
             "iterations": self.iterations,
             "usage": self.usage,
+            "approval": self.approval,
         }
 
 
@@ -98,7 +105,7 @@ class ExecutionResult:
 # Conditional-edge routers — pure functions of the state.
 # ---------------------------------------------------------------------------
 def _route_after_plan(state: AgentState) -> str:
-    if state["status"] == STATUS_ABORTED:
+    if state["status"] in (STATUS_ABORTED, STATUS_AWAITING_APPROVAL):
         return "finalize"
     decision = state["last_decision"]
     if decision is not None and decision["kind"] == str(DecisionKind.FINISH):
@@ -111,7 +118,7 @@ def _route_after_reflect(state: AgentState) -> str:
 
 
 def _route_after_review(state: AgentState) -> str:
-    if state["review_passed"] or state["status"] == STATUS_ABORTED:
+    if state["review_passed"] or state["status"] in (STATUS_ABORTED, STATUS_AWAITING_APPROVAL):
         return "end"
     return "retry"
 
@@ -219,6 +226,30 @@ class _AgentLoop:
                     "steps": steps,
                 }
 
+            # Approval gate: a sensitive tool is parked *before* it runs.
+            category = (
+                self.deps.approval.review(decision.tool) if self.deps.approval is not None else None
+            )
+            if category is not None:
+                steps.append(
+                    node_step(
+                        base + len(steps),
+                        "plan",
+                        f"Awaiting human approval for '{decision.tool}' ({category})",
+                        status="awaiting_human_approval",
+                    )
+                )
+                return {
+                    "status": STATUS_AWAITING_APPROVAL,
+                    "approval": {
+                        "category": category,
+                        "action": {"tool": decision.tool, "args": decision.tool_args},
+                    },
+                    "last_decision": decision.as_dict(),
+                    "iteration": self.tracker.usage.iterations,
+                    "steps": steps,
+                }
+
         return {
             "last_decision": decision.as_dict(),
             "iteration": self.tracker.usage.iterations,
@@ -275,7 +306,7 @@ class _AgentLoop:
 
     @staticmethod
     def finalize(state: AgentState) -> dict[str, Any]:
-        """Produce the final output (or the abort summary)."""
+        """Produce the final output (or the abort / approval summary)."""
         base = len(state["steps"])
         if state["status"] == STATUS_ABORTED:
             output = state["output"] or f"Execution aborted ({state['abort_code']})."
@@ -284,6 +315,20 @@ class _AgentLoop:
                 "finalize",
                 f"Finalized aborted execution ({state['abort_code']})",
                 status="aborted",
+            )
+            return {"output": output, "steps": [step]}
+        if state["status"] == STATUS_AWAITING_APPROVAL:
+            approval = state["approval"] or {}
+            action = approval.get("action", {})
+            output = (
+                f"Awaiting human approval for '{action.get('tool')}' "
+                f"({approval.get('category')})."
+            )
+            step = node_step(
+                base,
+                "finalize",
+                "Finalized — parked for human approval",
+                status="awaiting_human_approval",
             )
             return {"output": output, "steps": [step]}
         decision = state["last_decision"] or {}
@@ -295,10 +340,13 @@ class _AgentLoop:
         base = len(state["steps"])
         steps: list[dict[str, Any]] = []
 
-        if state["status"] == STATUS_ABORTED:
+        if state["status"] in (STATUS_ABORTED, STATUS_AWAITING_APPROVAL):
             steps.append(
                 node_step(
-                    base, "self_review", "Skipped review — execution aborted", status="aborted"
+                    base,
+                    "self_review",
+                    f"Skipped review — execution {state['status']}",
+                    status=state["status"],
                 )
             )
             return {"review_passed": False, "steps": steps}
@@ -445,4 +493,5 @@ def run_agent(
         iterations=tracker.usage.iterations,
         steps=final["steps"],
         usage=tracker.usage.as_dict(),
+        approval=final["approval"],
     )

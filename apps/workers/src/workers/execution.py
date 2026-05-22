@@ -25,7 +25,13 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from api_server.db.execution_repo import create_running_execution, finalize_execution
+from api_server.db.approval_repo import request_approval_if_needed
+from api_server.db.domain import Project, Task
+from api_server.db.execution_repo import (
+    create_running_execution,
+    finalize_execution,
+    get_execution,
+)
 from api_server.events import publish_execution_event
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -34,6 +40,11 @@ from workers.config import Settings
 from workers.container import AgentContainerRunner, ContainerSpec
 
 _log = structlog.get_logger("workers.execution")
+
+# Status the agent loop reports when it parks on a sensitive action —
+# mirrors agent_runtime.state.STATUS_AWAITING_APPROVAL and
+# ExecutionStatus.AWAITING_HUMAN_APPROVAL.
+_AWAITING_APPROVAL = "awaiting_human_approval"
 
 # A zeroed usage roll-up — used when a run produces no result line
 # (the container crashed or timed out before `execution.finished`).
@@ -117,12 +128,25 @@ class _RuntimeResult:
     usage: dict[str, Any]
 
 
-def _agent_spec(request: ExecutionRequest) -> dict[str, Any]:
+def _agent_spec(
+    request: ExecutionRequest, approval_policy: dict[str, Any] | None
+) -> dict[str, Any]:
     """The `AGENT_TASK_SPEC` payload for the container."""
     spec: dict[str, Any] = {"task": request.task, "model": request.model}
     if request.budgets:
         spec["budgets"] = request.budgets
+    # With a policy the loop gates sensitive tool calls (task_02_33).
+    if approval_policy:
+        spec["approval_policy"] = approval_policy
     return spec
+
+
+async def _load_project(session: AsyncSession, task_id: UUID) -> Project | None:
+    """The task's project — its `human_approval_policy` gates the run."""
+    task = await session.get(Task, task_id)
+    if task is None:
+        return None
+    return await session.get(Project, task.project_id)
 
 
 def _parse_line(line: str) -> dict[str, Any] | None:
@@ -198,6 +222,8 @@ async def conduct_execution(
             agent_id=UUID(request.agent_id) if request.agent_id else None,
         )
         execution_id = execution.id
+        project = await _load_project(session, task_id)
+        approval_policy = project.human_approval_policy if project is not None else None
     exec_id = str(execution_id)
     _log.info("workers.execution_started", execution_id=exec_id, task_id=request.task_id)
 
@@ -235,7 +261,7 @@ async def conduct_execution(
     drainer = asyncio.create_task(drain())
     container_spec = ContainerSpec(
         image=settings.agent_runtime_image,
-        env={"AGENT_TASK_SPEC": json.dumps(_agent_spec(request))},
+        env={"AGENT_TASK_SPEC": json.dumps(_agent_spec(request, approval_policy))},
         labels={"com.agentic-platform.execution-id": exec_id},
     )
     runner = AgentContainerRunner(settings)
@@ -250,8 +276,22 @@ async def conduct_execution(
         exit_code=container_result.exit_code,
         runtime_error=runtime_error,
     )
+    approval = final_result.get("approval") if final_result else None
     async with sessionmaker() as session, session.begin():
         await finalize_execution(session, execution_id, result=result)
+        # A run parked on a sensitive action becomes a real
+        # ApprovalRequest — the approval engine on the live run (task_02_33).
+        if result.status == _AWAITING_APPROVAL and approval:
+            execution = await get_execution(session, execution_id)
+            project = await _load_project(session, task_id)
+            if execution is not None and project is not None:
+                await request_approval_if_needed(
+                    session,
+                    execution=execution,
+                    project=project,
+                    category=str(approval.get("category", "")),
+                    action=dict(approval.get("action") or {}),
+                )
 
     _log.info("workers.execution_finished", execution_id=exec_id, status=result.status)
     return ExecutionOutcome(

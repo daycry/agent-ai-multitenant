@@ -15,6 +15,8 @@ from typing import Annotated, Any, TypedDict
 STATUS_RUNNING = "running"
 STATUS_DONE = "done"
 STATUS_ABORTED = "aborted"
+# Parked on a sensitive action awaiting a human decision (task_02_33).
+STATUS_AWAITING_APPROVAL = "awaiting_human_approval"
 
 
 class AgentTask(TypedDict):
@@ -44,6 +46,9 @@ class AgentState(TypedDict):
     review_retries: int
     review_passed: bool | None
 
+    # Set when the loop parks on a sensitive action: {category, action}.
+    approval: dict[str, Any] | None
+
     # The steps_log: an append-only record of everything the agent did.
     steps: Annotated[list[dict[str, Any]], operator.add]
 
@@ -62,5 +67,6 @@ def initial_state(task: AgentTask) -> AgentState:
         output=None,
         review_retries=0,
         review_passed=None,
+        approval=None,
         steps=[],
     )

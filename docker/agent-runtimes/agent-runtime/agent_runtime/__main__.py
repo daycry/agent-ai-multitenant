@@ -69,12 +69,19 @@ def _load_spec() -> dict[str, Any] | None:
 
 def run_task(spec: dict[str, Any]) -> int:
     """Run the agent loop for `spec`, streaming the steps_log as JSON lines."""
+    from agent_runtime.approval import ApprovalGate
     from agent_runtime.graph import AgentDeps, run_agent
     from agent_runtime.model import model_from_spec
     from agent_runtime.safeguards import Budgets
 
     task = spec["task"]
-    deps = AgentDeps(model=model_from_spec(spec["model"]))
+    # The worker passes the project's human_approval_policy here; with a
+    # policy the loop gates sensitive tool calls (task_02_33).
+    policy = spec.get("approval_policy")
+    deps = AgentDeps(
+        model=model_from_spec(spec["model"]),
+        approval=ApprovalGate(policy) if policy else None,
+    )
 
     budgets = None
     if spec.get("budgets"):

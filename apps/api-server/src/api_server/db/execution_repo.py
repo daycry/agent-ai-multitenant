@@ -124,7 +124,10 @@ async def finalize_execution(
     execution.total_cost_usd = Decimal(str(usage.get("cost_usd", 0)))
     execution.tool_call_count = int(usage.get("tool_calls", 0))
     execution.model_call_count = int(usage.get("model_calls", 0))
-    execution.completed_at = datetime.now(UTC)
+    # Only a terminal status completes the run — a run parked in
+    # `awaiting_human_approval` has not finished (task_02_33).
+    terminal = {ExecutionStatus.DONE, ExecutionStatus.ABORTED, ExecutionStatus.FAILED}
+    execution.completed_at = datetime.now(UTC) if result.status in terminal else None
     await session.flush()
     return execution
 

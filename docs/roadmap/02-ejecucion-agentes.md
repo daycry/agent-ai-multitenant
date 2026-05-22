@@ -668,7 +668,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_33` — Aprobación y salvaguardas sobre el run en vivo
 
-- [ ] **Título**: El motor de aprobación y las salvaguardas operan sobre la ejecución real: una acción sensible dispara request_approval_if_needed; una salvaguarda rota se refleja en la ejecución
+- [x] **Título**: El motor de aprobación y las salvaguardas operan sobre la ejecución real: una acción sensible dispara request_approval_if_needed; una salvaguarda rota se refleja en la ejecución
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
