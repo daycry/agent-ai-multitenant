@@ -188,6 +188,13 @@ class TaskComplexity(enum.StrEnum):
     XL = "xl"
 
 
+class ExecutionStatus(enum.StrEnum):
+    RUNNING = "running"
+    DONE = "done"
+    ABORTED = "aborted"
+    FAILED = "failed"
+
+
 # =============================================================================
 # Agent
 # =============================================================================
@@ -678,6 +685,69 @@ class ApprovalPolicyTemplate(
     is_builtin: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 
 
+# =============================================================================
+# Execution (one run of the agent loop against a task)
+# =============================================================================
+class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """One run of the agent loop against a task (spec §13).
+
+    The `steps_log` JSONB column is the heart of the table: an
+    append-only array of step records — one per graph node, model call,
+    tool call and memory read — produced by `agent_runtime` (Plan 02
+    Fase C). It drives the execution Timeline UI. The `total_*` and
+    `*_count` columns are denormalised roll-ups of the loop's usage so a
+    dashboard need not scan `steps_log`.
+
+    Executions are NOT soft-deleted — they are an immutable audit record
+    of what an agent did. A task can have several (retries).
+    """
+
+    __tablename__ = "executions"
+    __table_args__ = (
+        Index("ix_executions_task_id", "task_id"),
+        Index("ix_executions_tenant_status", "tenant_id", "status"),
+        CheckConstraint("iterations >= 0", name="ck_executions_iterations_non_negative"),
+        CheckConstraint("total_tokens >= 0", name="ck_executions_total_tokens_non_negative"),
+        CheckConstraint("total_cost_usd >= 0", name="ck_executions_total_cost_non_negative"),
+    )
+
+    task_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    agent_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("agents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'running'")
+    )
+    # Set when status='aborted' — a SafeguardCode (max_iterations_exceeded,
+    # repetitive_loop_detected, …). NULL on a clean run.
+    abort_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    output: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # The steps_log: one dict per step (node / model_call / tool_call /
+    # memory_read). Stored as JSONB so the shape can evolve migration-free.
+    steps_log: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
+    iterations: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    total_cost_usd: Mapped[Decimal] = mapped_column(
+        Numeric(precision=14, scale=6), nullable=False, server_default=text("0")
+    )
+    tool_call_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    model_call_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+
 __all__ = [
     "Agent",
     "AgentRole",
@@ -688,6 +758,8 @@ __all__ = [
     "AgentType",
     "ApprovalPolicyTemplate",
     "BudgetPeriod",
+    "Execution",
+    "ExecutionStatus",
     "MemoryScope",
     "Plan",
     "PlanStatus",
