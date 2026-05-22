@@ -1,7 +1,7 @@
 ---
 plan_id: 02-ejecucion-agentes
 title: Ejecución de Agentes
-status: pending_human_validation
+status: in_progress
 blocking_plan: [01-dominio-minimo]
 started_at: 2026-05-22
 completed_at: null
@@ -582,6 +582,117 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
     check_type: automated
     runtime: generic-shell
     command: "test -f docs/07-changelog/02-ejecucion-agentes.md"
+    expected_signal: "exit_code == 0"
+  ```
+
+### Fase G — Integración End-to-End
+
+> Añadida por **ADR 0017** (aprobado 2026-05-22). Las Fases A–F
+> entregaron los componentes; esta fase los conecta en un pipeline
+> vivo. Sin ella los tests humanos del plan (`human_02_01`..`_05`) no
+> son ejecutables. `task_02_29..31` y `task_02_33` se validan con el
+> `ScriptedModelClient` determinista; sólo `human_02_01` necesita un
+> proveedor LLM real (task_02_32).
+
+#### `task_02_29` — El agent-runtime ejecuta el agent loop
+
+- [ ] **Título**: El entrypoint del contenedor agent-runtime corre el agent loop: lee la especificación de tarea, ejecuta run_agent, emite cada step como línea JSON en stdout
+- **Tiempo estimado**: 10 h
+- **Complejidad**: m
+- **Rol sugerido**: ai-engineer
+- **Dependencias**: ninguna (primera tarea de la fase; usa el agent loop de Fase C)
+- **Tests automáticos**:
+  ```yaml
+  - id: auto_02_29_a
+    description: "El agent-runtime ejecuta el agent loop y emite el steps_log por stdout"
+    check_type: automated
+    runtime: python-pytest
+    command: "pytest tests/integration/test_agent_runtime_entrypoint.py -v"
+    expected_signal: "exit_code == 0"
+  ```
+
+#### `task_02_30` — El worker conduce una ejecución real
+
+- [ ] **Título**: El worker lanza el contenedor para una tarea, streamea su stdout, publica los step events al stream Redis por-ejecución y persiste la fila Execution
+- **Tiempo estimado**: 12 h
+- **Complejidad**: l
+- **Rol sugerido**: backend-dev
+- **Dependencias**: `task_02_29`
+- **Tests automáticos**:
+  ```yaml
+  - id: auto_02_30_a
+    description: "El worker conduce una ejecución end-to-end: contenedor, stream Redis, fila Execution persistida"
+    check_type: automated
+    runtime: python-pytest
+    command: "pytest tests/integration/test_worker_runs_execution.py -v"
+    expected_signal: "exit_code == 0"
+  ```
+
+#### `task_02_31` — El orchestrator despacha tareas
+
+- [ ] **Título**: Ante un evento de tarea el orchestrator elige agente (políticas de asignación), mueve la tarea a in_progress y encola la tarea Celery del worker
+- **Tiempo estimado**: 10 h
+- **Complejidad**: m
+- **Rol sugerido**: backend-dev
+- **Dependencias**: `task_02_30`
+- **Tests automáticos**:
+  ```yaml
+  - id: auto_02_31_a
+    description: "El orchestrator despacha: evento de tarea → asignación → encola el worker"
+    check_type: automated
+    runtime: python-pytest
+    command: "pytest tests/integration/test_orchestrator_dispatch.py -v"
+    expected_signal: "exit_code == 0"
+  ```
+
+#### `task_02_32` — ModelClients reales (LiteLLM, Claude Agent SDK, GitHub Copilot)
+
+- [ ] **Título**: Implementaciones reales de ModelClient detrás del protocolo cubriendo los tres caminos de proveedor de CLAUDE.md §9: gateway LiteLLM, Claude Agent SDK (Pro/Max) y GitHub Copilot (OAuth Device Flow)
+- **Tiempo estimado**: 16 h
+- **Complejidad**: l
+- **Rol sugerido**: ai-engineer
+- **Dependencias**: `task_02_29`
+- **Tests automáticos**:
+  ```yaml
+  - id: auto_02_32_a
+    description: "Los tres ModelClient reales conforman el protocolo y parsean respuestas (transports mockeados, sin credenciales reales)"
+    check_type: automated
+    runtime: python-pytest
+    command: "pytest tests/integration/test_model_clients.py -v"
+    expected_signal: "exit_code == 0"
+  ```
+
+#### `task_02_33` — Aprobación y salvaguardas sobre el run en vivo
+
+- [ ] **Título**: El motor de aprobación y las salvaguardas operan sobre la ejecución real: una acción sensible dispara request_approval_if_needed; una salvaguarda rota se refleja en la ejecución
+- **Tiempo estimado**: 8 h
+- **Complejidad**: m
+- **Rol sugerido**: backend-dev
+- **Dependencias**: `task_02_30`
+- **Tests automáticos**:
+  ```yaml
+  - id: auto_02_33_a
+    description: "Aprobación y salvaguardas en una ejecución real conducida por el worker"
+    check_type: automated
+    runtime: python-pytest
+    command: "pytest tests/integration/test_live_approval_safeguards.py -v"
+    expected_signal: "exit_code == 0"
+  ```
+
+#### `task_02_34` — Smoke test end-to-end y tests humanos
+
+- [ ] **Título**: Test de humo end-to-end automático (tarea → orchestrator → worker → contenedor → loop → steps → BD) y ejecución de los 5 tests humanos del plan
+- **Tiempo estimado**: 8 h
+- **Complejidad**: m
+- **Rol sugerido**: qa
+- **Dependencias**: `task_02_31`, `task_02_32`, `task_02_33`
+- **Tests automáticos**:
+  ```yaml
+  - id: auto_02_34_a
+    description: "Smoke test end-to-end del pipeline completo de ejecución de agentes"
+    check_type: automated
+    runtime: python-pytest
+    command: "pytest tests/integration/test_e2e_smoke.py -v"
     expected_signal: "exit_code == 0"
   ```
 

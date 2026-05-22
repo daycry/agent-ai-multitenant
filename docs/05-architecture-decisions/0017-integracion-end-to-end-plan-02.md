@@ -1,17 +1,17 @@
 ---
 adr: "0017"
 title: Fase de integración end-to-end del Plan 02
-status: proposed
+status: accepted
 date: 2026-05-22
-deciders: System Admin (pendiente de aprobación)
+deciders: System Admin
 phase: 02-ejecucion-agentes
 ---
 
 # ADR 0017 — Fase de integración end-to-end del Plan 02
 
-> **Estado: `proposed`.** Este ADR documenta un hueco del roadmap y
-> propone cerrarlo. Requiere aprobación humana antes de implementarse
-> (CLAUDE.md: una desviación del roadmap no la decide Claude solo).
+> **Estado: `accepted`.** El System Admin aprobó esta propuesta el
+> 2026-05-22. La **Fase G** (`task_02_29`..`task_02_34`) queda añadida
+> al roadmap del Plan 02, que vuelve a `in_progress`.
 
 ## Contexto
 
