@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  BellRing,
   Bot,
   FolderKanban,
   LayoutDashboard,
@@ -30,6 +31,7 @@ const NAV: NavItem[] = [
   { href: "/admin/teams", label: "Equipos", Icon: Users },
   { href: "/admin/projects", label: "Proyectos", Icon: FolderKanban },
   { href: "/admin/board", label: "Tablero", Icon: LayoutGrid },
+  { href: "/admin/approvals", label: "Aprobaciones", Icon: BellRing },
   { href: "/admin/approval-policy", label: "Validación humana", Icon: ShieldCheck },
 ];
 
