@@ -81,3 +81,38 @@ async def publish_task_status_changed(
             "payload": json.dumps(payload),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-execution live stream (Plan 02 Fase E).
+#
+# Each execution gets its own Redis stream `exec:{id}` for real-time
+# step events — the WebSocket `/ws/executions/{id}` tails it. Live logs
+# go through Redis, not constant DB writes (ADR 0011, Plan 02 §Fase C).
+# ---------------------------------------------------------------------------
+def execution_stream_key(execution_id: str) -> str:
+    """Redis stream key for one execution's live event log."""
+    return f"exec:{execution_id}"
+
+
+async def publish_execution_event(
+    redis: Redis,
+    execution_id: str,
+    *,
+    event_type: str,
+    payload: dict[str, Any],
+) -> None:
+    """Emit one event onto an execution's per-run stream (best-effort)."""
+    try:
+        await redis.xadd(
+            execution_stream_key(execution_id),
+            {
+                "type": event_type,
+                "occurred_at": datetime.now(UTC).isoformat(),
+                "payload": json.dumps(payload),
+            },
+            maxlen=_MAXLEN,
+            approximate=True,
+        )
+    except Exception as exc:  # live stream is best-effort, never fail the caller
+        _log.warning("api_server.execution_event_publish_failed", error=str(exc))
