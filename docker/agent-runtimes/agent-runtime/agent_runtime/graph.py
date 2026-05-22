@@ -146,6 +146,24 @@ class _AgentLoop:
         base = len(state["steps"])
         steps: list[dict[str, Any]] = []
 
+        # Iteration budget — checked before this turn is counted, so the
+        # reported iteration count never exceeds max_iterations.
+        if self.tracker.iteration_exhausted():
+            steps.append(
+                node_step(
+                    base,
+                    "plan",
+                    f"Safeguard tripped: {SafeguardCode.MAX_ITERATIONS}",
+                    status="aborted",
+                )
+            )
+            return {
+                "status": STATUS_ABORTED,
+                "abort_code": str(SafeguardCode.MAX_ITERATIONS),
+                "iteration": self.tracker.usage.iterations,
+                "steps": steps,
+            }
+
         self.tracker.tick_iteration()
         tripped = self.tracker.check()
         if tripped is not None:

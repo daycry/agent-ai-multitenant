@@ -110,11 +110,24 @@ class SafeguardTracker:
     def elapsed_s(self) -> float:
         return self._clock() - self._start
 
+    def iteration_exhausted(self) -> bool:
+        """True once the iteration budget is spent.
+
+        Checked *before* the next turn is counted, so `usage.iterations`
+        never exceeds `max_iterations` — a finished execution reports an
+        honest iteration count.
+        """
+        return self.usage.iterations >= self.budgets.max_iterations
+
     def check(self) -> SafeguardCode | None:
-        """Return the first breached budget, or None while within budget."""
+        """First breached *cumulative* budget — tokens, cost, tool calls
+        or wall clock — or None while within budget.
+
+        The iteration budget is handled separately by
+        `iteration_exhausted` (it must be tested before the turn is
+        counted, not after).
+        """
         budgets, usage = self.budgets, self.usage
-        if usage.iterations > budgets.max_iterations:
-            return SafeguardCode.MAX_ITERATIONS
         if usage.total_tokens > budgets.max_tokens:
             return SafeguardCode.MAX_TOKENS
         if usage.cost_usd > budgets.max_cost_usd:

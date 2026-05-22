@@ -213,10 +213,34 @@ class AuditLog(Base, UUIDPrimaryKeyMixin):
         return f"AuditLog(id={self.id!r}, action={self.action!r})"
 
 
+# ---------------------------------------------------------------------------
+# PlatformSetting — global, platform-wide configuration (spec §7.9).
+#
+# Deliberately NOT tenant-scoped: a platform setting is the same for
+# everyone and a tenant cannot override it. `max_review_retries` is the
+# first such setting (Plan 02 task_02_13). Write access is gated to the
+# System Admin by db/platform_settings.py.
+# ---------------------------------------------------------------------------
+class PlatformSetting(Base, TimestampMixin):
+    __tablename__ = "platform_settings"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    # The System Admin who last wrote this setting (NULL once they are
+    # deleted — the setting itself outlives the user).
+    updated_by: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return f"PlatformSetting(key={self.key!r})"
+
+
 __all__ = [
     "AuditAction",
     "AuditLog",
     "Organization",
+    "PlatformSetting",
     "Session",
     "User",
     "UserOrganizationMembership",
