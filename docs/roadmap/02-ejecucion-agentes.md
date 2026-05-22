@@ -647,7 +647,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_32` — ModelClients reales (LiteLLM, Claude Agent SDK, GitHub Copilot)
 
-- [ ] **Título**: Implementaciones reales de ModelClient detrás del protocolo cubriendo los tres caminos de proveedor de CLAUDE.md §9: gateway LiteLLM, Claude Agent SDK (Pro/Max) y GitHub Copilot (OAuth Device Flow)
+- [x] **Título**: Implementaciones reales de ModelClient detrás del protocolo cubriendo los tres caminos de proveedor de CLAUDE.md §9: gateway LiteLLM, Claude Agent SDK (Pro/Max) y GitHub Copilot (OAuth Device Flow)
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: ai-engineer

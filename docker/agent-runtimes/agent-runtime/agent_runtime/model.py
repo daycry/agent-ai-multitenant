@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 
 class DecisionKind(enum.StrEnum):
@@ -67,6 +67,7 @@ class ReviewResponse:
     cost_usd: float = 0.0
 
 
+@runtime_checkable
 class ModelClient(Protocol):
     """The seam between the agent loop and an LLM provider."""
 
@@ -136,9 +137,10 @@ def model_from_spec(spec: dict[str, Any]) -> ModelClient:
     """Build a ModelClient from a JSON spec — the agent-runtime entrypoint
     uses this to deserialise the model for a containerised run.
 
-    Only `kind: "scripted"` is supported here; the real provider clients
-    (LiteLLM gateway, Claude Agent SDK, GitHub Copilot) arrive in
-    task_02_32 and register their own kinds.
+    `kind: "scripted"` builds the deterministic test client here; the
+    real provider kinds (`litellm`, `copilot`, `claude_sdk`) are built
+    by `agent_runtime.providers` — imported lazily to keep the loop
+    independent of `httpx` / the Claude SDK when a scripted run is used.
     """
     kind = spec.get("kind", "scripted")
     if kind == "scripted":
@@ -146,4 +148,6 @@ def model_from_spec(spec: dict[str, Any]) -> ModelClient:
             decisions=[_decision_response(d) for d in spec.get("decisions", [])],
             reviews=[_review_response(r) for r in spec.get("reviews", [])],
         )
-    raise ValueError(f"unsupported model kind: {kind!r} (real providers arrive in task_02_32)")
+    from agent_runtime.providers import build_provider_client
+
+    return build_provider_client(spec)

@@ -94,6 +94,13 @@ module = ["docker", "docker.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
 
+# The Claude Agent SDK is an optional dependency of agent-runtime
+# (provider=claude only) — lazily imported, not installed in the hook
+# venv. Treat its imports as untyped rather than vendoring stubs.
+[[tool.mypy.overrides]]
+module = ["claude_agent_sdk", "claude_agent_sdk.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
