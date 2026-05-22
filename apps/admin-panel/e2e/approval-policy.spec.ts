@@ -103,10 +103,22 @@ test("toggling a category marks it as override and surfaces the dirty badge", as
 });
 
 test("save is disabled without a project", async ({ page }) => {
+  // Same rationale as in dual-kanban's empty-state test: the
+  // superadmin portfolio sees projects from every tenant on the
+  // persistent dev DB, so we mock /projects to [] to exercise the
+  // empty-state path deterministically.
+  await page.route("**/projects", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: "[]",
+    });
+  });
+
   await login(page);
   await page.goto("/admin/approval-policy");
 
-  // No tenant projects → empty hint + disabled save.
   await expect(page.getByTestId("no-projects-hint")).toBeVisible();
   await expect(page.getByTestId("save-policy")).toBeDisabled();
 });

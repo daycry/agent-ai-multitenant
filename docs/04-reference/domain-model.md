@@ -207,14 +207,37 @@ seeder no duplica filas y los IDs son estables en cada instalación.
 | `/projects/{id}/tasks` | `GET`, `GET /{tid}`, `POST`, `PUT /{tid}`, `DELETE /{tid}`                                                       |
 | `/approval-policies`   | `GET` (read-only catálogo, filtro `?builtin_only=true`)                                                          |
 
-Todas las rutas usan el middleware `auth/deps.py` que valida el JWT y,
-si trae claim `tid`, ejecuta `SELECT set_config('app.tenant_id', …,
-true)` antes de la query. Sin `tid` el endpoint sólo puede leer filas
-visibles por las policies `<tabla>_builtin_read`.
+## Auth y resolución del tenant activo
+
+`auth/deps.py:get_principal` decodifica el JWT y produce el
+`AuthPrincipal`. La fuente del `tenant_id` efectivo depende del rol:
+
+| Caso                                | Sesión SA                   | `app.tenant_id`    | Reads                       | Writes                           |
+| ----------------------------------- | --------------------------- | ------------------ | --------------------------- | -------------------------------- |
+| Tenant user con `tid` en JWT        | `app_user` (NOBYPASSRLS)    | = `tid`            | RLS filtra por `tid`        | tenant_id auto-inyectado = `tid` |
+| Tenant user sin `tid`               | `app_user` (NOBYPASSRLS)    | (sin set)          | sólo `<tabla>_builtin_read` | 400 "active tenant required"     |
+| Superadmin sin contexto             | `migrations_user` BYPASSRLS | (sin set)          | **todos los tenants**       | 400 "active tenant required"     |
+| Superadmin con `X-Tenant-Id` header | `app_user` (NOBYPASSRLS)    | = valor del header | scoped al tenant elegido    | tenant_id = valor del header     |
+| Superadmin con `tid` en JWT         | `app_user` (NOBYPASSRLS)    | = `tid`            | scoped a `tid`              | tenant_id = `tid`                |
+
+Reglas:
+
+- El header `X-Tenant-Id` **sólo se respeta para usuarios con
+  `is_system_admin=true`**. Si un tenant user lo manda, se ignora
+  silenciosamente y la sesión sigue usando el `tid` del JWT — los
+  tenants no pueden escapar de su scope.
+- `POST /auth/register` auto-promueve al **primer usuario** a
+  `is_system_admin=true` dentro de la misma transacción
+  (`SELECT id FROM users LIMIT 1` antes del `INSERT`), garantizando
+  que dos registers concurrentes no produzcan dos superadmins.
+- El tenant plataforma (`00000000-0000-0000-0000-000000000001`) se
+  filtra del selector de tenants del panel: está reservado para
+  catálogos built-in.
 
 ## Ver también
 
 - [ADR 0006 — Linked vs Forked](../05-architecture-decisions/0006-linked-vs-forked-agents.md)
 - [ADR 0007 — Estrategia de seeds idempotentes](../05-architecture-decisions/0007-idempotent-seed-strategy.md)
 - [ADR 0008 — Doble Kanban (Planes + Tareas)](../05-architecture-decisions/0008-dual-kanban-planes-tareas.md)
+- [ADR 0010 — Superadmin cross-tenant via BYPASSRLS + X-Tenant-Id](../05-architecture-decisions/0010-superadmin-cross-tenant.md)
 - [Guía — Crear tu primer proyecto](../03-guides/01-create-first-project.md)

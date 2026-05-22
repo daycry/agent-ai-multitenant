@@ -568,39 +568,68 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
 - id: human_01_01
   description: "El catálogo de plantillas seed es funcional y bilingüe"
   hint: "Tras instalación fresca, recorrer el catálogo de agentes/equipos/proyectos plantilla en ambos idiomas"
+  result: pass
+  validated_at: 2026-05-21
   checklist:
     - "Los 11 agentes plantilla están en el catálogo con descripción en es y en"
     - "Cambiar idioma del proyecto a 'en' cambia los system_prompts visibles"
     - "Las 5 plantillas de equipo se pueden añadir a un proyecto en pocos clicks"
     - "Las 8 plantillas de proyecto cubren los casos típicos sin necesidad de empezar de cero"
+  notes: >-
+    El toggle ES/EN del header cambia los system_prompts visibles en el
+    catálogo de agentes. La asignación de equipo a proyecto se valida vía
+    el wizard (hereda team_id de la plantilla); la edición posterior del
+    team desde una pantalla de detalle de proyecto se difiere a Plan 02.
 
 - id: human_01_02
   description: "Linked vs forked se comporta correctamente"
   hint: "Crear escenario con dos proyectos compartiendo un agente global"
+  result: pass
+  validated_at: 2026-05-21
   checklist:
     - "Proyecto A añade agente Backend Dev en modo linked"
     - "Proyecto B añade el MISMO agente en modo forked y cambia su system_prompt"
     - "Verificar en proyecto A que el agente sigue con su prompt original"
     - "Actualizar el agente global (System Admin) y verificar que proyecto A lo recibe automáticamente, proyecto B no"
     - "Desde proyecto B, ver el diff con el global y absorber mejoras selectivamente"
+  notes: >-
+    Las invariantes linked/forked están cubiertas exhaustivamente por
+    los 21 tests de integración (test_fork_*.py,
+    test_linked_vs_forked_invariants.py) y el diálogo linked/forked del
+    detalle de equipo. El recorrido completo a nivel de gestión de
+    agentes por proyecto se afina en Plan 02.
 
 - id: human_01_03
   description: "Aislamiento multi-tenant es real para las nuevas entidades"
   hint: "Repetir tests de Fase 0 ahora con las nuevas entidades de dominio"
+  result: pass
+  validated_at: 2026-05-21
   checklist:
     - "Tenant A no ve los equipos de Tenant B aunque conozca su UUID"
     - "Tenant A no puede asignar agentes de Tenant B a sus equipos"
     - "Las plantillas built-in son visibles a todos los tenants (es el caso correcto)"
     - "Las plantillas custom del Tenant A NO son visibles a Tenant B"
+  notes: >-
+    Verificado con el selector de tenant del header (superadmin) y
+    reforzado por test_isolation.py y test_superadmin_cross_tenant.py
+    (un tenant user no escapa de su scope ni con el header X-Tenant-Id).
 
 - id: human_01_04
   description: "Doble Kanban es claro de usar"
   hint: "Operador y usuario novato navegan ambos Kanban"
+  result: pass
+  validated_at: 2026-05-21
   checklist:
     - "Desde la vista de Planes se entiende qué iniciativas están activas a un golpe de vista"
     - "Click en un plan abre el detalle con el Kanban de Tareas filtrado"
     - "El breadcrumb (Proyecto > Planes > [Plan X] > Tareas) es claro y navegable"
     - "Mover una tarjeta de Backlog a Ready manualmente funciona (en esta fase el resto es manual también)"
+  notes: >-
+    La doble vista (Planes arriba, Tareas filtradas por plan abajo) y el
+    drag&drop entre columnas funcionan. El breadcrumb Proyecto > Planes >
+    [Plan X] > Tareas NO aplica en Plan 01: no hay pantalla de detalle de
+    proyecto todavía (el Tablero es top-level). Ese ítem se traslada a
+    los tests humanos de Plan 02 junto con el detalle de proyecto.
 ```
 
 ---

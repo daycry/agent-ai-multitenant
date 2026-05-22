@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
 
 interface TeamMember {
@@ -349,6 +350,7 @@ export default function TeamDetailPage() {
               }
               data-testid="add-member-submit"
             >
+              {addMember.isPending && <Spinner className="mr-2 h-4 w-4" />}
               {addMember.isPending ? "Añadiendo…" : "Añadir"}
             </Button>
           </DialogFooter>

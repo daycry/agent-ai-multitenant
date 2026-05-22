@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { AdminHeader } from "@/components/layout/admin-header";
+import { GlobalProgress } from "@/components/layout/global-progress";
 import { cn } from "@/lib/utils";
 
 interface NavItem {
@@ -40,6 +41,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="bg-background flex min-h-screen">
+      <GlobalProgress />
       {/* ============================= Sidebar (desktop) ============================= */}
       <aside
         className={cn(

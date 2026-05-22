@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
 import { setToken } from "@/lib/auth";
 
@@ -98,6 +99,7 @@ export default function LoginPage() {
               </p>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
+              {loading && <Spinner className="mr-2 h-4 w-4" />}
               {loading ? "Signing in…" : "Sign in"}
             </Button>
           </form>

@@ -43,6 +43,8 @@ interface TenantContextValue {
   setTenantId: (id: string | null) => void;
   tenants: TenantSummary[];
   tenantsLoading: boolean;
+  /** Re-fetch /admin/tenants — call after creating one. */
+  refreshTenants: () => void;
 }
 
 const TenantContext = createContext<TenantContextValue | null>(null);
@@ -86,6 +88,10 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     [queryClient],
   );
 
+  const refreshTenants = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["admin", "tenants"] });
+  }, [queryClient]);
+
   const value: TenantContextValue = {
     me: meQuery.data ?? null,
     isSuperadmin,
@@ -93,6 +99,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     setTenantId,
     tenants: tenantsQuery.data ?? [],
     tenantsLoading: tenantsQuery.isLoading,
+    refreshTenants,
   };
 
   return <TenantContext.Provider value={value}>{children}</TenantContext.Provider>;

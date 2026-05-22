@@ -38,12 +38,23 @@ async function login(page: Page) {
 test("nav-tablero opens the board and shows empty state for tenants with no plans", async ({
   page,
 }) => {
+  // The superadmin's portfolio view (BYPASSRLS) sees every project
+  // across every tenant, so a persistent dev DB will almost always
+  // have non-empty /projects. Mock it to [] to assert the empty-
+  // state UX in isolation.
+  await page.route("**/projects", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: "[]",
+    });
+  });
+
   await login(page);
   await page.getByTestId("nav-board").click();
   await expect(page).toHaveURL(/\/admin\/board$/);
 
-  // The wizard test never submits (no tid claim issuance yet), so the
-  // default tenant has 0 non-template projects → plans empty state.
   await expect(page.getByTestId("plans-empty")).toBeVisible();
   await expect(page.getByTestId("board-no-selection")).toBeVisible();
 });
