@@ -112,7 +112,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_02` — Configuración Celery con 7 colas (default, heavy, gpu, ingestion, test, review, privileged)
 
-- [ ] **Título**: Configuración Celery con 7 colas (default, heavy, gpu, ingestion, test, review, privileged)
+- [x] **Título**: Configuración Celery con 7 colas (default, heavy, gpu, ingestion, test, review, privileged)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
