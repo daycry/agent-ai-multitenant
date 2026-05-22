@@ -653,6 +653,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 - **Rol sugerido**: ai-engineer
 - **Dependencias**: `task_02_29`
 - **Proveedor prioritario**: Claude Agent SDK (suscripción Pro/Max) — decidido por el System Admin; se implementa primero para desbloquear `human_02_01`. El gateway LiteLLM y GitHub Copilot se añaden después.
+- **Referencia**: `docs/context/claude-agent-sdk-integration-example.md` — ejemplo de integración del Claude Agent SDK aportado por el operador (de otro proyecto; adaptar, no copiar literal). Incluye la tensión arquitectónica a resolver: el SDK es su propio runtime agéntico vs. el agent loop LangGraph de `agent_runtime` — probablemente requiera un ADR propio en la Fase G.
 - **Tests automáticos**:
   ```yaml
   - id: auto_02_32_a
