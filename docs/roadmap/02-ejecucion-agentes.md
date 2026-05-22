@@ -630,7 +630,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_31` — El orchestrator despacha tareas
 
-- [ ] **Título**: Ante un evento de tarea el orchestrator elige agente (políticas de asignación), mueve la tarea a in_progress y encola la tarea Celery del worker
+- [x] **Título**: Ante un evento de tarea el orchestrator elige agente (políticas de asignación), mueve la tarea a in_progress y encola la tarea Celery del worker
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

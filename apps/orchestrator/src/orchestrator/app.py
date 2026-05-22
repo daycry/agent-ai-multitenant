@@ -22,7 +22,7 @@ from fastapi import FastAPI
 from redis.asyncio import Redis
 
 from orchestrator.config import Settings, get_settings
-from orchestrator.consumer import StreamConsumer
+from orchestrator.consumer import EventHandler, StreamConsumer
 
 _log = structlog.get_logger("orchestrator.app")
 
@@ -44,14 +44,23 @@ async def _run_loop(consumer: StreamConsumer) -> None:
             await asyncio.sleep(1.0)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    """Build the FastAPI app. `settings` is injectable for tests."""
+def create_app(
+    settings: Settings | None = None,
+    *,
+    handler: EventHandler | None = None,
+) -> FastAPI:
+    """Build the FastAPI app. `settings` is injectable for tests.
+
+    `handler` is the consumer's event handler — `__main__` passes the
+    real `TaskDispatcher` (task_02_31); left None the consumer keeps its
+    log-only default (used by the consumer-loop tests).
+    """
     cfg = settings or get_settings()
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redis: Redis = Redis.from_url(cfg.redis_url, decode_responses=True)
-        consumer = StreamConsumer(redis, cfg)
+        consumer = StreamConsumer(redis, cfg, handler)
         await consumer.ensure_group()
 
         loop_task = asyncio.create_task(_run_loop(consumer))

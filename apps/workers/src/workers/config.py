@@ -26,6 +26,20 @@ class Settings(BaseSettings):
         description="Celery result backend URL. Redis DB 2.",
     )
 
+    # ----- Execution persistence + live stream (Plan 02 Fase G) -----
+    database_url: str = Field(
+        default="postgresql+asyncpg://migrations_user:changeme-migrations-dev-only"
+        "@localhost:5432/agentic_platform",
+        description="PostgreSQL URL the worker persists `executions` rows to. "
+        "A BYPASSRLS role — the worker writes execution records across tenants.",
+    )
+    events_redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        description="Redis URL hosting the per-execution event streams "
+        "(`exec:{id}`). DB 0 — the same instance the api-server WebSocket "
+        "tails, kept off the broker (DB 1) and result backend (DB 2).",
+    )
+
     # ----- Agent-runtime containers (Plan 02 Fase B) -----
     agent_runtime_image: str = Field(
         default="agent-runtime:v1",

@@ -42,6 +42,24 @@ class Settings(BaseSettings):
         description="Milliseconds XREADGROUP blocks waiting for new events.",
     )
 
+    # ----- Dispatch (task_02_31): task → agent → worker queue -----
+    database_url: str = Field(
+        default="postgresql+asyncpg://migrations_user:changeme-migrations-dev-only"
+        "@localhost:5432/agentic_platform",
+        description="PostgreSQL URL the dispatcher reads tasks/agents from and "
+        "writes the task → in_progress transition to. A BYPASSRLS role: the "
+        "orchestrator dispatches across every tenant.",
+    )
+    broker_url: str = Field(
+        default="redis://localhost:6379/1",
+        description="Celery broker URL — must match the workers' broker so "
+        "`workers.run_execution` lands on a queue a worker drains.",
+    )
+    dispatch_queue: str = Field(
+        default="default",
+        description="Celery queue the dispatcher enqueues agent runs onto.",
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."

@@ -63,6 +63,29 @@ class ExecutionRequest:
     model: dict[str, Any]
     budgets: dict[str, Any] | None = None
 
+    def as_dict(self) -> dict[str, Any]:
+        """JSON-safe dict — the Celery payload the orchestrator sends."""
+        return {
+            "tenant_id": self.tenant_id,
+            "task_id": self.task_id,
+            "agent_id": self.agent_id,
+            "task": self.task,
+            "model": self.model,
+            "budgets": self.budgets,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> ExecutionRequest:
+        """Rebuild a request from the Celery payload (worker side)."""
+        return cls(
+            tenant_id=raw["tenant_id"],
+            task_id=raw["task_id"],
+            agent_id=raw.get("agent_id"),
+            task=raw["task"],
+            model=raw["model"],
+            budgets=raw.get("budgets"),
+        )
+
 
 @dataclass(frozen=True)
 class ExecutionOutcome:
@@ -71,6 +94,14 @@ class ExecutionOutcome:
     execution_id: str
     status: str
     abort_code: str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        """JSON-safe summary — what the Celery result backend stores."""
+        return {
+            "execution_id": self.execution_id,
+            "status": self.status,
+            "abort_code": self.abort_code,
+        }
 
 
 @dataclass
