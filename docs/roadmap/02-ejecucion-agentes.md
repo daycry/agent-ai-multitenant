@@ -129,7 +129,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_03` — Políticas de asignación: skill_match (similitud coseno), load_balanced, round_robin, manual
 
-- [ ] **Título**: Políticas de asignación: skill_match (similitud coseno), load_balanced, round_robin, manual
+- [x] **Título**: Políticas de asignación: skill_match (similitud coseno), load_balanced, round_robin, manual
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -146,7 +146,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_04` — fn_compute_task_ready: recálculo automático del estado 'ready' al pasar dependencias a done
 
-- [ ] **Título**: fn_compute_task_ready: recálculo automático del estado 'ready' al pasar dependencias a done
+- [x] **Título**: fn_compute_task_ready: recálculo automático del estado 'ready' al pasar dependencias a done
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
