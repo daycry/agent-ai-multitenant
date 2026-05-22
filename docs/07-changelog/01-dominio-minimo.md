@@ -7,8 +7,8 @@ status: completed
 tasks_done: 27
 tasks_total: 27
 tasks_pending_local: []
-tests_automated_passing: 240
-human_validations_passing: 0
+tests_automated_passing: 241
+human_validations_passing: 4
 docs_language: es
 ---
 
@@ -155,7 +155,14 @@ Decisión documentada en
 [ADR 0010](../05-architecture-decisions/0010-superadmin-cross-tenant.md).
 Tests: `tests/integration/test_superadmin_cross_tenant.py` (6
 casos) + `tests/integration/test_auth.py::test_register_*_user_*`
-(2 casos nuevos) + `e2e/tenant-picker.spec.ts` (3 casos).
+(2 casos nuevos) + `e2e/tenant-picker.spec.ts` (4 casos, incluye
+el flujo de crear tenant desde el diálogo del header).
+
+El selector de tenant del header incluye un item **"+ Crear
+tenant"** con diálogo (name + slug auto-derivado), de modo que un
+superadmin recién instalado puede crear su primer tenant sin tocar
+la API — cierra el bucle "tengo poderes pero no tengo dónde
+escribir".
 
 Side effect: el `team-detail.spec.ts::add-member dialog enforces
 project selection in fork mode`, que estaba `test.skip` esperando
@@ -177,7 +184,7 @@ debajo de `md`, fade-in al cambiar de página. Documentado en
 | Capa                          | Cantidad |
 | ----------------------------- | -------- |
 | Unit + integration (`pytest`) | 217      |
-| E2E Playwright admin-panel    | 23       |
+| E2E Playwright admin-panel    | 24       |
 | Skipped                       | 0        |
 
 E2E breakdown:
@@ -189,7 +196,7 @@ E2E breakdown:
 - `dual-kanban.spec.ts` × 3
 - `approval-policy.spec.ts` × 4
 - `lang-switcher.spec.ts` × 3
-- `tenant-picker.spec.ts` × 3
+- `tenant-picker.spec.ts` × 4
 
 ## Diferencias respecto al alcance original del documento maestro
 
@@ -203,12 +210,24 @@ E2E breakdown:
   desbloquea la operativa del primer operador sin necesidad de la
   pantalla de selección post-login.
 
-## Tests humanos (pendientes)
+## Tests humanos
 
-Los 4 tests humanos del plan (`human_01_01..04`) están listados en
-[`docs/roadmap/01-dominio-minimo.md`](../roadmap/01-dominio-minimo.md)
-y se ejecutarán como parte de la validación de cierre antes de
-mergear `plan/01-dominio-minimo` a `master`.
+Los 4 tests humanos del plan (`human_01_01..04`) se ejecutaron el
+2026-05-21 y quedaron marcados `result: pass` en
+[`docs/roadmap/01-dominio-minimo.md`](../roadmap/01-dominio-minimo.md),
+con notas:
+
+- `human_01_01` — Catálogo bilingüe ✅. El toggle ES/EN del header
+  cambia los system_prompts visibles.
+- `human_01_02` — Linked vs forked ✅. Invariantes cubiertas por los
+  21 tests de integración + el diálogo del detalle de equipo.
+- `human_01_03` — Aislamiento multi-tenant ✅. Verificado con el
+  selector de tenant + `test_isolation.py` /
+  `test_superadmin_cross_tenant.py`.
+- `human_01_04` — Doble Kanban ✅. Doble vista + drag&drop validados.
+  El ítem "breadcrumb Proyecto > Planes > [Plan] > Tareas" no aplica
+  en Plan 01 (sin pantalla de detalle de proyecto) y se traslada a
+  los humanos de Plan 02.
 
 ## Próximo plan
 
