@@ -26,6 +26,57 @@ class Settings(BaseSettings):
         description="Celery result backend URL. Redis DB 2.",
     )
 
+    # ----- Agent-runtime containers (Plan 02 Fase B) -----
+    agent_runtime_image: str = Field(
+        default="agent-runtime:v1",
+        description="Image the worker launches for each agent task.",
+    )
+    agent_network: str = Field(
+        default="agentic-agents",
+        description="Dedicated Docker network for agent containers — kept "
+        "off agentic-net so agents cannot reach Postgres/Redis/Vault or "
+        "the platform services.",
+    )
+    agent_network_internal: bool = Field(
+        default=True,
+        description="Create the agent network as `internal` (no egress to "
+        "the host or the internet). Controlled egress for the http_request "
+        "tool arrives in Fase D.",
+    )
+    container_mem_limit: str = Field(
+        default="512m",
+        description="Hard memory cap for an agent container (a leak or a "
+        "runaway model can't take the host down).",
+    )
+    container_pids_limit: int = Field(
+        default=256,
+        description="Max process count inside an agent container — caps " "fork bombs.",
+    )
+    container_tmp_size: str = Field(
+        default="64m", description="Size of the /tmp tmpfs in an agent container."
+    )
+    container_workspace_size: str = Field(
+        default="256m",
+        description="Size of the /workspace tmpfs when no host workspace is "
+        "bind-mounted (real worktree mounts arrive in Plan 06).",
+    )
+    container_run_timeout_s: int = Field(
+        default=600,
+        description="Default wall-clock budget for one container run before "
+        "the worker kills it. Per-task overrides land with the Fase C "
+        "safeguards (task_02_13).",
+    )
+    seccomp_profile_path: str = Field(
+        default="",
+        description="Path to a custom seccomp JSON profile. Empty = rely on "
+        "Docker's built-in default-deny (SCMP_ACT_ERRNO) profile.",
+    )
+    apparmor_profile: str = Field(
+        default="",
+        description="AppArmor profile name to pin. Empty = Docker's automatic "
+        "docker-default profile where the host kernel supports AppArmor.",
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."

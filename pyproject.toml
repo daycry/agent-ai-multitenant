@@ -80,11 +80,19 @@ exclude = [
   "^node_modules/",
 ]
 
-# Celery and kombu ship incomplete inline types; treat their imports
-# as untyped rather than vendoring stub packages into the mypy hook.
+# Celery and kombu ship no py.typed marker; treat their imports as
+# untyped rather than vendoring stub packages into the hook.
 [[tool.mypy.overrides]]
 module = ["celery.*", "kombu.*"]
 ignore_missing_imports = true
+
+# The Docker SDK's inline types are incomplete (docker.from_env and
+# docker.errors are not visible to mypy). Skip following it entirely —
+# the worker deliberately treats the Docker client as Any.
+[[tool.mypy.overrides]]
+module = ["docker", "docker.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 minversion = "8.0"

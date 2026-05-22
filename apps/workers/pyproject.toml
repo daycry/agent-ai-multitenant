@@ -7,6 +7,9 @@ dependencies = [
   # Task queue
   "celery[redis]>=5.4,<6",
 
+  # Docker SDK — the worker launches agent-runtime containers with it.
+  "docker>=7.1,<8",
+
   # Validation / config
   "pydantic>=2.5,<3",
   "pydantic-settings>=2.2,<3",

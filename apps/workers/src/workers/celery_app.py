@@ -16,10 +16,9 @@ Queues (spec §12, Plan 02 Fase A):
   privileged   tasks touching secrets / infra — drained by a worker
                with a tighter security profile.
 
-Routing: there are no registered tasks yet (task_02_06 adds them),
-so this module only declares the topology. A task picks its queue at
-apply time via `apply_async(queue=...)`; unrouted tasks fall through
-to `default`.
+Routing: `workers.tasks` registers the tasks (task_02_06); a task
+picks its queue at apply time via `apply_async(queue=...)`, and
+unrouted tasks fall through to `default`.
 """
 
 from __future__ import annotations
@@ -54,6 +53,9 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
         # The 7 queues.
         task_queues=tuple(Queue(name) for name in QUEUE_NAMES),
         task_default_queue=DEFAULT_QUEUE,
+        # Task modules a real worker imports on boot so the tasks are
+        # registered (imported lazily — no circular import at config time).
+        imports=("workers.tasks",),
         # Agent runs are long; ack only after completion so a worker
         # crash re-queues the job instead of losing it.
         task_acks_late=True,
