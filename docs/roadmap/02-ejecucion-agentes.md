@@ -165,7 +165,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_05` — Dockerfile agent-runtime:v1 con Python 3.12 + LangGraph + libs internas
 
-- [ ] **Título**: Dockerfile agent-runtime:v1 con Python 3.12 + LangGraph + libs internas
+- [x] **Título**: Dockerfile agent-runtime:v1 con Python 3.12 + LangGraph + libs internas
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -182,7 +182,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_06` — Worker Celery base que lanza contenedores con docker SDK
 
-- [ ] **Título**: Worker Celery base que lanza contenedores con docker SDK
+- [x] **Título**: Worker Celery base que lanza contenedores con docker SDK
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -199,7 +199,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_07` — Aislamiento estricto: red dedicada, cap-drop ALL, seccomp default-deny, AppArmor, read-only FS
 
-- [ ] **Título**: Aislamiento estricto: red dedicada, cap-drop ALL, seccomp default-deny, AppArmor, read-only FS
+- [x] **Título**: Aislamiento estricto: red dedicada, cap-drop ALL, seccomp default-deny, AppArmor, read-only FS
 - **Tiempo estimado**: 10 h
 - **Complejidad**: l
 - **Rol sugerido**: devops + security
@@ -216,7 +216,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_08` — Inyección de credenciales vía Docker secrets (Vault → secrets file → /run/secrets/)
 
-- [ ] **Título**: Inyección de credenciales vía Docker secrets (Vault → secrets file → /run/secrets/)
+- [x] **Título**: Inyección de credenciales vía Docker secrets (Vault → secrets file → /run/secrets/)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -233,7 +233,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_09` — Test específico que verifica que NO se puede acceder al socket Docker desde dentro del contenedor
 
-- [ ] **Título**: Test específico que verifica que NO se puede acceder al socket Docker desde dentro del contenedor
+- [x] **Título**: Test específico que verifica que NO se puede acceder al socket Docker desde dentro del contenedor
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: security
