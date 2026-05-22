@@ -19,7 +19,7 @@
  * updates the cache; on failure we revert and surface an inline banner.
  */
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LayoutGrid } from "lucide-react";
 
@@ -28,6 +28,7 @@ import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useWebSocket, wsUrl } from "@/lib/ws";
 
 // --------------------------------------------------------------------------
 // Types
@@ -155,6 +156,37 @@ export default function BoardPage() {
     moveTask.mutate({ task, newStatus });
   }
 
+  // ---- Real-time: tail the selected plan's kanban WebSocket -------------
+  // task_02_21 / task_02_23 — a task.status_changed event (from any
+  // source: another user, an agent) moves the card live, no refresh.
+  const kanbanUrl = useMemo(
+    () => (effectiveSelected ? wsUrl(`/ws/kanban/${effectiveSelected}`) : null),
+    [effectiveSelected],
+  );
+
+  const onKanbanEvent = useCallback(
+    (data: unknown) => {
+      if (!effectiveSelected) return;
+      const event = data as {
+        type?: string;
+        task_id?: string;
+        payload?: { new_status?: string };
+      };
+      const key = ["tasks", "by-project", effectiveSelected];
+      const newStatus = event.payload?.new_status;
+      if (event.type === "task.status_changed" && event.task_id && newStatus) {
+        queryClient.setQueryData<Task[]>(key, (prev) =>
+          (prev ?? []).map((t) => (t.id === event.task_id ? { ...t, status: newStatus } : t)),
+        );
+      } else if (event.type === "task.created") {
+        void queryClient.invalidateQueries({ queryKey: key });
+      }
+    },
+    [effectiveSelected, queryClient],
+  );
+
+  useWebSocket(kanbanUrl, onKanbanEvent);
+
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
@@ -250,11 +282,18 @@ export default function BoardPage() {
               </span>
             )}
           </h2>
-          {tasksQuery.data && (
-            <p className="text-muted-foreground text-xs">
-              {tasksQuery.data.length} {tasksQuery.data.length === 1 ? "tarea" : "tareas"}
-            </p>
-          )}
+          <div className="flex items-center gap-3">
+            {effectiveSelected && (
+              <Badge variant="success" data-testid="board-live-indicator">
+                Tiempo real
+              </Badge>
+            )}
+            {tasksQuery.data && (
+              <p className="text-muted-foreground text-xs">
+                {tasksQuery.data.length} {tasksQuery.data.length === 1 ? "tarea" : "tareas"}
+              </p>
+            )}
+          </div>
         </div>
 
         {dragError && (
