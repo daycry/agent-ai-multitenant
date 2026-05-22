@@ -1,7 +1,7 @@
 ---
 plan_id: 02-ejecucion-agentes
 title: Ejecución de Agentes
-status: in_progress
+status: pending_human_validation
 blocking_plan: [01-dominio-minimo]
 started_at: 2026-05-22
 completed_at: null
@@ -502,7 +502,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_24` — Motor de aplicación de human_approval_policy: interceptar acciones de categorías sensibles, pausar ejecución, persistir solicitud
 
-- [ ] **Título**: Motor de aplicación de human_approval_policy: interceptar acciones de categorías sensibles, pausar ejecución, persistir solicitud
+- [x] **Título**: Motor de aplicación de human_approval_policy: interceptar acciones de categorías sensibles, pausar ejecución, persistir solicitud
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -519,7 +519,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_25` — Notificación in-app de solicitud de aprobación (canales externos en Fase 10)
 
-- [ ] **Título**: Notificación in-app de solicitud de aprobación (canales externos en Fase 10)
+- [x] **Título**: Notificación in-app de solicitud de aprobación (canales externos en Fase 10)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -536,7 +536,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_26` — UI de aprobación con botones Aprobar/Rechazar y motivo opcional
 
-- [ ] **Título**: UI de aprobación con botones Aprobar/Rechazar y motivo opcional
+- [x] **Título**: UI de aprobación con botones Aprobar/Rechazar y motivo opcional
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -553,7 +553,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_27` — Timeout automático tras 24h sin respuesta (configurable)
 
-- [ ] **Título**: Timeout automático tras 24h sin respuesta (configurable)
+- [x] **Título**: Timeout automático tras 24h sin respuesta (configurable)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -570,7 +570,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_28` — Documentación: ADRs, guías, changelog del plan
 
-- [ ] **Título**: Documentación: ADRs, guías, changelog del plan
+- [x] **Título**: Documentación: ADRs, guías, changelog del plan
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
