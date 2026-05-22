@@ -18,8 +18,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import (
+    AuthPrincipal,
+    get_principal,
+    get_redis,
+    get_tenant_session,
+)
 from api_server.db.domain import Project, Task, TaskDependency
+from api_server.events import publish_task_created, publish_task_status_changed
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -195,6 +201,9 @@ async def create_task(
 
     await session.refresh(task)
     deps = await _load_dependencies(session, task.id)
+    # Notify the orchestrator. Best-effort: a Redis blip won't fail
+    # the (already-committed-on-return) task creation.
+    await publish_task_created(get_redis(), task)
     return to_task_response(task, deps)
 
 
@@ -222,6 +231,11 @@ async def update_task(
         soft_delete_aware=False,
     )
 
+    # Snapshot the status before the update so we can tell whether the
+    # PUT actually moved the task across the Kanban (and thus whether
+    # the orchestrator needs a `task.status_changed` event).
+    old_status = task.status
+
     # Dependencies are handled out-of-band; remove them from the scalar
     # update so apply_partial_update doesn't try to setattr a list of
     # UUIDs onto the SA column.
@@ -242,6 +256,11 @@ async def update_task(
 
     await session.refresh(task)
     deps = await _load_dependencies(session, task.id)
+    # Best-effort orchestrator notification on a real status move.
+    if task.status != old_status:
+        await publish_task_status_changed(
+            get_redis(), task, old_status=old_status, new_status=task.status
+        )
     return to_task_response(task, deps)
 
 

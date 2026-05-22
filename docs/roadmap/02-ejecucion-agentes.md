@@ -95,7 +95,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_01` — Servicio Orchestrator FastAPI que escucha eventos Redis Streams
 
-- [ ] **Título**: Servicio Orchestrator FastAPI que escucha eventos Redis Streams
+- [x] **Título**: Servicio Orchestrator FastAPI que escucha eventos Redis Streams
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

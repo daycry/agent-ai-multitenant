@@ -33,6 +33,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e "apps/api-server[dev]"
           python -m pip install -e "apps/watchdog[dev]"
+          python -m pip install -e "apps/orchestrator[dev]"
           python -m pip install pre-commit
 
       - name: Run pre-commit on all files
@@ -115,6 +116,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e "apps/api-server[dev]"
           python -m pip install -e "apps/watchdog[dev]"
+          python -m pip install -e "apps/orchestrator[dev]"
 
       - name: pytest tests/unit
         if: steps.detect.outputs.has_tests == 'true'
@@ -161,6 +163,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e "apps/api-server[dev]"
           python -m pip install -e "apps/watchdog[dev]"
+          python -m pip install -e "apps/orchestrator[dev]"
 
       - name: pytest tests/integration
         if: steps.detect.outputs.has_compose == 'true'
