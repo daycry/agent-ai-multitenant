@@ -1,7 +1,7 @@
 ---
 plan_id: 02-ejecucion-agentes
 title: Ejecución de Agentes
-status: in_progress
+status: pending_human_validation
 blocking_plan: [01-dominio-minimo]
 started_at: 2026-05-22
 completed_at: null
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `02-ejecucion-agentes`                    |
-| **Estado**                         | `pending_approval`                        |
+| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `01-dominio-minimo`                       |
 | **Tiempo estimado (calendario)**   | 4-5 semanas                               |
 | **Tiempo estimado (persona-días)** | 80-100                                    |
@@ -685,7 +685,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_34` — Smoke test end-to-end y tests humanos
 
-- [ ] **Título**: Test de humo end-to-end automático (tarea → orchestrator → worker → contenedor → loop → steps → BD) y ejecución de los 5 tests humanos del plan
+- [x] **Título**: Test de humo end-to-end automático (tarea → orchestrator → worker → contenedor → loop → steps → BD) y ejecución de los 5 tests humanos del plan
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: qa

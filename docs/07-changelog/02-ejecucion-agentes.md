@@ -4,22 +4,23 @@ title: Ejecución de Agentes
 started_at: 2026-05-22
 completed_at: null
 status: pending_human_validation
-tasks_done: 28
-tasks_total: 28
+tasks_done: 34
+tasks_total: 34
 tasks_pending_local: []
-tests_automated_passing: 194
+tests_automated_passing: 466
 human_validations_passing: 0
 docs_language: es
 ---
 
-> **Estado:** todas las tareas (`task_02_01`..`task_02_28`) están en
-> `done` con sus tests automáticos en verde — 181 tests pytest + 13
+> **Estado:** las 34 tareas (`task_02_01`..`task_02_34`) están en
+> `done` con sus tests automáticos en verde — 466 tests pytest + 13
 > tests Playwright. El plan queda en `pending_human_validation`:
 > esperando los cinco tests humanos (`human_02_01`..`human_02_05`) y el
 > merge del PR a `main`. Sobre el dominio estático del Plan 01, el Plan
 > 02 da vida al sistema: orchestrator, workers, contenedores aislados,
 > el agent loop LangGraph, las tools builtin, la captura de ejecuciones,
-> la UI en tiempo real y la validación humana.
+> la UI en tiempo real, la validación humana — y, con la **Fase G**, el
+> cableado que hace que un agente ejecute una tarea de principio a fin.
 
 # Changelog — Plan 02 · Ejecución de Agentes
 
@@ -65,17 +66,27 @@ self_review`). Cada ejecución se captura en la tabla `executions`
    `awaiting_human_approval`, persiste la solicitud, la notifica
    in-app y ofrece la UI de aprobar/rechazar con motivo. Una solicitud
    sin respuesta expira tras 24 h (configurable).
+7. **Ejecutar de principio a fin** — la **Fase G** cablea todo lo
+   anterior en un pipeline vivo: un evento de tarea llega al
+   orchestrator, que elige agente y encola el worker; el worker conduce
+   la ejecución (lanza el contenedor, streamea sus steps al stream
+   Redis por-ejecución, persiste la fila `Execution`); el agent-runtime
+   corre el agent loop de verdad; las salvaguardas y el motor de
+   aprobación operan sobre ese run. Tres `ModelClient` reales —gateway
+   LiteLLM, Claude Agent SDK, GitHub Copilot— quedan enchufados detrás
+   del protocolo, además del `ScriptedModelClient` determinista.
 
 ## Fases
 
-| Fase                           | Tareas | Entregable                                                                                         |
-| ------------------------------ | ------ | -------------------------------------------------------------------------------------------------- |
-| A — Orchestrator y Celery      | 01–04  | Servicio Orchestrator, 7 colas, políticas de asignación, `fn_compute_task_ready`                   |
-| B — Worker y agent-runtime     | 05–09  | Imagen `agent-runtime:v1`, worker con docker SDK, aislamiento estricto, secrets, sin socket Docker |
-| C — Agent Loop LangGraph       | 10–14  | Grafo de 8 nodos, `executions`/`steps_log`, captura, salvaguardas, detección de loops              |
-| D — Tools Builtin              | 15–19  | shell*exec, file*\*, http_request, tools de orquestación, placeholders 501                         |
-| E — UI y Tiempo Real           | 20–23  | WebSockets, Timeline de Ejecución, Kanban reactivo                                                 |
-| F — Validación Humana y Cierre | 24–28  | Motor de aprobación, notificación in-app, UI de aprobación, timeout 24 h, docs                     |
+| Fase                           | Tareas | Entregable                                                                                                                                               |
+| ------------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A — Orchestrator y Celery      | 01–04  | Servicio Orchestrator, 7 colas, políticas de asignación, `fn_compute_task_ready`                                                                         |
+| B — Worker y agent-runtime     | 05–09  | Imagen `agent-runtime:v1`, worker con docker SDK, aislamiento estricto, secrets, sin socket Docker                                                       |
+| C — Agent Loop LangGraph       | 10–14  | Grafo de 8 nodos, `executions`/`steps_log`, captura, salvaguardas, detección de loops                                                                    |
+| D — Tools Builtin              | 15–19  | shell*exec, file*\*, http_request, tools de orquestación, placeholders 501                                                                               |
+| E — UI y Tiempo Real           | 20–23  | WebSockets, Timeline de Ejecución, Kanban reactivo                                                                                                       |
+| F — Validación Humana y Cierre | 24–28  | Motor de aprobación, notificación in-app, UI de aprobación, timeout 24 h, docs                                                                           |
+| G — Integración End-to-End     | 29–34  | Entrypoint que corre el loop, worker que conduce el run, dispatch del orchestrator, ModelClients reales, aprobación/salvaguardas en vivo, smoke test e2e |
 
 ## Decisiones de arquitectura (ADRs)
 
@@ -85,6 +96,8 @@ self_review`). Cada ejecución se captura en la tabla `executions`
 - **ADR 0014** — Tools builtin del agente: allowlists y efectos.
 - **ADR 0015** — UI en tiempo real: WebSocket sobre Redis Streams.
 - **ADR 0016** — Motor de validación humana.
+- **ADR 0017** — Fase de integración end-to-end del Plan 02 (Fase G).
+- **ADR 0018** — El Claude Agent SDK como `ModelClient` de un turno.
 
 ## Migraciones de base de datos
 
@@ -94,22 +107,31 @@ self_review`). Cada ejecución se captura en la tabla `executions`
 - `0012` — tabla `approval_requests`; `executions.status` ampliada a 32
   caracteres para `awaiting_human_approval`.
 
-Todas reversibles, verificadas por test.
+Todas reversibles, verificadas por test. La Fase G no añadió migraciones
+— sólo cableado sobre el esquema existente.
 
 ## Tests
 
-181 tests **pytest** (unit + integration) y 13 tests **Playwright**
+466 tests **pytest** (unit + integration) y 13 tests **Playwright**
 E2E, todos en verde. Los tests E2E son autocontenidos: mockean REST y
 WebSocket e inyectan el token, sin depender del api-server.
 
 El bucle agéntico se prueba de forma **determinista y offline** con un
-`ScriptedModelClient` — ningún test llama a un LLM real.
+`ScriptedModelClient` — ningún test automático llama a un LLM real. Los
+tres `ModelClient` reales (LiteLLM, Claude Agent SDK, Copilot) se
+ejercitan con transports mockeados (`httpx.MockTransport`, un `query`
+inyectado), sin credenciales. El smoke test end-to-end (`task_02_34`)
+recorre el pipeline completo —evento → orchestrator → worker →
+contenedor → loop → BD— con el modelo scriptado.
 
 ## Pendiente para cerrar el plan
 
 1. Tests humanos `human_02_01`..`human_02_05` validados por un revisor:
    ejecución end-to-end, aislamiento real del contenedor, salvaguardas,
-   pausa por validación humana y tiempo real.
+   pausa por validación humana y tiempo real. `human_02_01` requiere
+   además que el operador configure **uno** de los tres caminos de
+   proveedor LLM (API key de LiteLLM, suscripción Claude Pro/Max, o el
+   OAuth Device Flow de Copilot).
 2. CI en verde sobre la rama del plan.
 3. PR del plan mergeado a `main`.
 
@@ -120,11 +142,19 @@ Tras esos tres pasos el plan pasa a `completed`. El siguiente es el
 
 - El nodo `recall` y los steps `memory_read` son placeholders hasta el
   Plan 04 (memoria + RAG).
-- El cliente LLM real (LiteLLM) se enchufa detrás del protocolo
-  `ModelClient` en una tarea posterior; Fase C lo ejercita con el
-  cliente scriptado.
-- La aplicación de los efectos de las tools de orquestación por el
-  worker, y la integración del motor de aprobación con el agent loop
-  en ejecución, son trabajo de wiring de fases posteriores.
+- El Claude Agent SDK se integra como `ModelClient` de un turno (ADR
+  0018): el loop LangGraph sigue conduciendo las iteraciones. El
+  paquete `claude-agent-sdk` es un extra opcional de la imagen
+  `agent-runtime`; empaquetarlo —junto con el CLI de Node— es un paso
+  de despliegue del operador, sólo necesario si se elige
+  `provider=claude`.
+- El Device Flow de GitHub Copilot (obtención interactiva del token
+  OAuth) no tiene aún UI en el admin-panel; `CopilotAuth` cubre el
+  intercambio a JWT y su caché. La pantalla de "Sign in with GitHub"
+  es trabajo de una fase posterior.
+- La aprobación sobre el run en vivo aparca la ejecución en
+  `awaiting_human_approval` antes de ejecutar la acción sensible; la
+  reanudación tras la decisión humana (re-ejecución continuada) llega
+  con el pool elástico del Plan 06.
 - El modelo simple "un contenedor por tarea" evoluciona a pool elástico
   por plan en el Plan 06 (con los git worktrees).
