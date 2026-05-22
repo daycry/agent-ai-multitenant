@@ -1,10 +1,10 @@
 ---
 plan_id: 01-dominio-minimo
 title: Dominio Mínimo
-status: pending_human_validation
+status: completed
 blocking_plan: [00-fundaciones]
 started_at: 2026-05-21
-completed_at: null
+completed_at: 2026-05-22
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 75-95
 estimated_cost_human_eur: 30.000 € – 38.000 €

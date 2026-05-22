@@ -1,9 +1,9 @@
 ---
 plan_id: 02-ejecucion-agentes
 title: Ejecución de Agentes
-status: pending_approval
+status: in_progress
 blocking_plan: [01-dominio-minimo]
-started_at: null
+started_at: 2026-05-22
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 80-100
