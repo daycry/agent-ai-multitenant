@@ -1,7 +1,7 @@
 ---
 adr: "0019"
 title: Acceso de red del sandbox agent-runtime a los proveedores LLM
-status: proposed
+status: accepted
 date: 2026-05-22
 deciders: System Admin
 phase: 02-ejecucion-agentes
@@ -9,8 +9,13 @@ phase: 02-ejecucion-agentes
 
 # ADR 0019 — Acceso de red del sandbox agent-runtime a los proveedores LLM
 
-> **Estado: `proposed`.** Este ADR plantea opciones para que el System
-> Admin decida. No implementa nada por sí mismo.
+> **Estado: `accepted`.** El System Admin eligió la **Opción 1 — egress
+> controlado** el 2026-05-22, por ser la más sencilla y porque el tool
+> `http_request` necesita ese mismo mecanismo de todas formas. La
+> **Opción 2 (llamada intermediada por el worker)** queda documentada
+> abajo como alternativa, por si en el futuro hubiera que revisitar la
+> decisión. Este ADR no implementa nada: el cableado del egress es una
+> tarea de implementación aparte.
 
 ## Contexto
 
