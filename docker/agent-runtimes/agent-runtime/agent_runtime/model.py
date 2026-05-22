@@ -102,3 +102,48 @@ class ScriptedModelClient:
         index = min(self._review_cursor, len(self.reviews) - 1)
         self._review_cursor += 1
         return self.reviews[index]
+
+
+def _decision_response(raw: dict[str, Any]) -> ModelResponse:
+    decision = ModelDecision(
+        kind=DecisionKind(raw["kind"]),
+        tool=raw.get("tool"),
+        tool_args=dict(raw.get("tool_args", {})),
+        output=raw.get("output"),
+        rationale=raw.get("rationale", ""),
+    )
+    return ModelResponse(
+        decision=decision,
+        model=raw.get("model", "scripted"),
+        tokens_in=int(raw.get("tokens_in", 0)),
+        tokens_out=int(raw.get("tokens_out", 0)),
+        cost_usd=float(raw.get("cost_usd", 0.0)),
+    )
+
+
+def _review_response(raw: dict[str, Any]) -> ReviewResponse:
+    return ReviewResponse(
+        passed=bool(raw.get("passed", True)),
+        feedback=raw.get("feedback", ""),
+        model=raw.get("model", "scripted"),
+        tokens_in=int(raw.get("tokens_in", 0)),
+        tokens_out=int(raw.get("tokens_out", 0)),
+        cost_usd=float(raw.get("cost_usd", 0.0)),
+    )
+
+
+def model_from_spec(spec: dict[str, Any]) -> ModelClient:
+    """Build a ModelClient from a JSON spec — the agent-runtime entrypoint
+    uses this to deserialise the model for a containerised run.
+
+    Only `kind: "scripted"` is supported here; the real provider clients
+    (LiteLLM gateway, Claude Agent SDK, GitHub Copilot) arrive in
+    task_02_32 and register their own kinds.
+    """
+    kind = spec.get("kind", "scripted")
+    if kind == "scripted":
+        return ScriptedModelClient(
+            decisions=[_decision_response(d) for d in spec.get("decisions", [])],
+            reviews=[_review_response(r) for r in spec.get("reviews", [])],
+        )
+    raise ValueError(f"unsupported model kind: {kind!r} (real providers arrive in task_02_32)")

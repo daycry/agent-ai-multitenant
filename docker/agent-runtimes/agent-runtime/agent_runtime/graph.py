@@ -83,6 +83,16 @@ class ExecutionResult:
     def succeeded(self) -> bool:
         return self.status == STATUS_DONE
 
+    def as_dict(self) -> dict[str, Any]:
+        """JSON-safe summary — the steps are streamed separately."""
+        return {
+            "status": self.status,
+            "abort_code": self.abort_code,
+            "output": self.output,
+            "iterations": self.iterations,
+            "usage": self.usage,
+        }
+
 
 # ---------------------------------------------------------------------------
 # Conditional-edge routers — pure functions of the state.
@@ -398,8 +408,15 @@ def run_agent(
     budgets: Budgets | None = None,
     loop_threshold: int = DEFAULT_LOOP_THRESHOLD,
     clock: Callable[[], float] | None = None,
+    on_step: Callable[[dict[str, Any]], None] | None = None,
 ) -> ExecutionResult:
-    """Run one execution of the agent loop end to end."""
+    """Run one execution of the agent loop end to end.
+
+    `on_step`, when given, is called with each step the moment it is
+    produced — the graph is streamed node by node, so a live consumer
+    (the agent-runtime entrypoint, task_02_29) sees steps as they
+    happen rather than only at the end.
+    """
     budgets = budgets or Budgets()
     tracker = SafeguardTracker(budgets, clock=clock or time.monotonic)
     detector = LoopDetector(threshold=loop_threshold)
@@ -408,9 +425,19 @@ def run_agent(
     # LangGraph trips its own recursion guard after N super-steps; size it
     # well above the worst case our own safeguards would allow.
     recursion_limit = (budgets.max_iterations + budgets.max_review_retries + 2) * 8 + 100
-    final: AgentState = graph.invoke(
-        initial_state(task), config={"recursion_limit": recursion_limit}
-    )
+    config = {"recursion_limit": recursion_limit}
+
+    # Stream the full state after every super-step: the last one is the
+    # final state, and the growing `steps` list feeds `on_step` live.
+    final: AgentState = initial_state(task)
+    emitted = 0
+    for state in graph.stream(final, stream_mode="values", config=config):
+        final = state
+        if on_step is not None:
+            steps = state["steps"]
+            for step in steps[emitted:]:
+                on_step(step)
+            emitted = len(steps)
     return ExecutionResult(
         status=final["status"],
         abort_code=final["abort_code"],
