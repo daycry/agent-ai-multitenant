@@ -652,6 +652,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 - **Complejidad**: l
 - **Rol sugerido**: ai-engineer
 - **Dependencias**: `task_02_29`
+- **Proveedor prioritario**: Claude Agent SDK (suscripción Pro/Max) — decidido por el System Admin; se implementa primero para desbloquear `human_02_01`. El gateway LiteLLM y GitHub Copilot se añaden después.
 - **Tests automáticos**:
   ```yaml
   - id: auto_02_32_a
