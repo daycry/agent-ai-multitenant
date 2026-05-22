@@ -124,3 +124,67 @@ test("selecting a tenant injects X-Tenant-Id on subsequent fetches and persists"
   await page.reload();
   await expect.poll(() => lastTenantHeader, { timeout: 5_000 }).toBeNull();
 });
+
+test("creating a tenant from the dialog selects it and auto-derives the slug", async ({ page }) => {
+  // Start with an empty tenant list, then have the POST return a
+  // fresh tenant and the follow-up GET include it.
+  let created = false;
+  await page.route("**/admin/tenants", async (route) => {
+    const method = route.request().method();
+    if (method === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          created
+            ? [
+                {
+                  id: "22222222-2222-2222-2222-222222222222",
+                  name: "Equipo Plataforma",
+                  slug: "equipo-plataforma",
+                },
+              ]
+            : [],
+        ),
+      });
+      return;
+    }
+    if (method === "POST") {
+      const body = JSON.parse(route.request().postData() ?? "{}");
+      // The dialog must auto-derive the slug from the name.
+      expect(body).toMatchObject({
+        name: "Equipo Plataforma",
+        slug: "equipo-plataforma",
+      });
+      created = true;
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "22222222-2222-2222-2222-222222222222",
+          name: "Equipo Plataforma",
+          slug: "equipo-plataforma",
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await login(page);
+  await page.getByTestId("tenant-picker").click();
+  await expect(page.getByTestId("tenant-picker-empty")).toBeVisible();
+
+  await page.getByTestId("tenant-picker-create").click();
+  await expect(page.getByTestId("create-tenant-dialog")).toBeVisible();
+
+  // Typing the name auto-fills the slug field.
+  await page.getByTestId("create-tenant-name").fill("Equipo Plataforma");
+  await expect(page.getByTestId("create-tenant-slug")).toHaveValue("equipo-plataforma");
+
+  await page.getByTestId("create-tenant-submit").click();
+
+  // Dialog closes and the new tenant becomes the active selection.
+  await expect(page.getByTestId("create-tenant-dialog")).toHaveCount(0);
+  await expect(page.getByTestId("tenant-picker-label")).toHaveText("Equipo Plataforma");
+});
