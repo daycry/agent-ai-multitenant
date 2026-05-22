@@ -653,7 +653,9 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 - **Rol sugerido**: ai-engineer
 - **Dependencias**: `task_02_29`
 - **Proveedor prioritario**: Claude Agent SDK (suscripción Pro/Max) — decidido por el System Admin; se implementa primero para desbloquear `human_02_01`. El gateway LiteLLM y GitHub Copilot se añaden después.
-- **Referencia**: `docs/context/claude-agent-sdk-integration-example.md` — ejemplo de integración del Claude Agent SDK aportado por el operador (de otro proyecto; adaptar, no copiar literal). Incluye la tensión arquitectónica a resolver: el SDK es su propio runtime agéntico vs. el agent loop LangGraph de `agent_runtime` — probablemente requiera un ADR propio en la Fase G.
+- **Referencias** (ejemplos de integración aportados por el operador, de otro proyecto; adaptar, no copiar literal):
+  - `docs/context/claude-agent-sdk-integration-example.md` — Claude Agent SDK. Incluye la tensión arquitectónica a resolver: el SDK es su propio runtime agéntico vs. el agent loop LangGraph de `agent_runtime` — probablemente requiera un ADR propio en la Fase G.
+  - `docs/context/github-copilot-oauth-integration-example.md` — GitHub Copilot vía OAuth Device Flow. Endpoint `/chat/completions` OpenAI-compatible (encaja limpio en `ModelClient`); lo no trivial es el flujo de auth (Device Flow + exchange a JWT + caché).
 - **Tests automáticos**:
   ```yaml
   - id: auto_02_32_a
