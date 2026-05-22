@@ -596,7 +596,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_29` — El agent-runtime ejecuta el agent loop
 
-- [ ] **Título**: El entrypoint del contenedor agent-runtime corre el agent loop: lee la especificación de tarea, ejecuta run_agent, emite cada step como línea JSON en stdout
+- [x] **Título**: El entrypoint del contenedor agent-runtime corre el agent loop: lee la especificación de tarea, ejecuta run_agent, emite cada step como línea JSON en stdout
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -613,7 +613,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_30` — El worker conduce una ejecución real
 
-- [ ] **Título**: El worker lanza el contenedor para una tarea, streamea su stdout, publica los step events al stream Redis por-ejecución y persiste la fila Execution
+- [x] **Título**: El worker lanza el contenedor para una tarea, streamea su stdout, publica los step events al stream Redis por-ejecución y persiste la fila Execution
 - **Tiempo estimado**: 12 h
 - **Complejidad**: l
 - **Rol sugerido**: backend-dev

@@ -13,7 +13,9 @@ inside the image in Fase C — here we only orchestrate the sandbox.
 from __future__ import annotations
 
 import contextlib
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -114,13 +116,8 @@ class AgentContainerRunner:
             )
         return name
 
-    def run(self, spec: ContainerSpec, *, timeout: int | None = None) -> ContainerResult:
-        """Launch `spec`, wait for it, and return the captured result.
-
-        The container is always removed afterwards — even on timeout or
-        error — so a crashed run cannot leak a container onto the host.
-        """
-        budget = timeout if timeout is not None else self._settings.container_run_timeout_s
+    def _start(self, spec: ContainerSpec) -> Any:
+        """Apply the hardened isolation profile and launch `spec` detached."""
         self.ensure_network()
 
         kwargs = build_hardened_run_kwargs(
@@ -136,7 +133,7 @@ class AgentContainerRunner:
 
         environment = {**kwargs.pop("environment", {}), **spec.env}
 
-        container = self.client.containers.run(
+        return self.client.containers.run(
             spec.image,
             command=spec.command,
             environment=environment,
@@ -145,12 +142,73 @@ class AgentContainerRunner:
             detach=True,
             **kwargs,
         )
+
+    def run(self, spec: ContainerSpec, *, timeout: int | None = None) -> ContainerResult:
+        """Launch `spec`, wait for it, and return the captured result.
+
+        The container is always removed afterwards — even on timeout or
+        error — so a crashed run cannot leak a container onto the host.
+        """
+        budget = timeout if timeout is not None else self._settings.container_run_timeout_s
+        container = self._start(spec)
         try:
             timed_out = self._await_exit(container, budget)
             return self._capture(container, timed_out=timed_out)
         finally:
             with contextlib.suppress(Exception):
                 container.remove(force=True)
+
+    def run_streamed(
+        self,
+        spec: ContainerSpec,
+        on_line: Callable[[str], None],
+        *,
+        timeout: int | None = None,
+    ) -> ContainerResult:
+        """Launch `spec` and call `on_line` with each stdout/stderr line
+        as it is produced, then return the captured result.
+
+        The worker (task_02_30) uses this to forward an agent-runtime's
+        JSON step stream onto the per-execution Redis stream live —
+        rather than waiting for the run to finish. A background thread
+        pumps the log stream while the main thread runs the same
+        wall-clock poll loop as `run()`; the container is always reaped.
+        """
+        budget = timeout if timeout is not None else self._settings.container_run_timeout_s
+        container = self._start(spec)
+        pump = threading.Thread(target=self._pump_logs, args=(container, on_line), daemon=True)
+        try:
+            pump.start()
+            timed_out = self._await_exit(container, budget)
+            # The log stream closes when the container exits; give the
+            # pump a moment to drain the tail before we capture + reap.
+            pump.join(timeout=5.0)
+            return self._capture(container, timed_out=timed_out)
+        finally:
+            with contextlib.suppress(Exception):
+                container.remove(force=True)
+
+    @staticmethod
+    def _pump_logs(container: Any, on_line: Callable[[str], None]) -> None:
+        """Forward the container's log stream line by line to `on_line`.
+
+        Best-effort: a streaming hiccup is swallowed — `_capture` still
+        reads the full logs afterwards, so nothing is lost from the
+        persisted record even if the live tail drops a line.
+        """
+        buffer = b""
+        with contextlib.suppress(Exception):
+            for chunk in container.logs(stream=True, follow=True, stdout=True, stderr=True):
+                buffer += chunk
+                while b"\n" in buffer:
+                    raw, buffer = buffer.split(b"\n", 1)
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if line:
+                        on_line(line)
+        tail = buffer.decode("utf-8", errors="replace").strip()
+        if tail:
+            with contextlib.suppress(Exception):
+                on_line(tail)
 
     @staticmethod
     def _await_exit(container: Any, budget: int) -> bool:

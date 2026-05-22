@@ -16,6 +16,8 @@ import pytest
 from workers.config import Settings
 from workers.container import AgentContainerRunner, ContainerSpec
 
+import docker
+
 from ._docker_helpers import docker_client, requires_docker
 
 pytestmark = [pytest.mark.integration, requires_docker]
@@ -28,8 +30,6 @@ _DESCRIPTION = "exercise the containerised agent loop"
 @pytest.fixture(scope="module", autouse=True)
 def _agent_runtime_image() -> None:
     """Skip cleanly if agent-runtime:v1 has not been built on this host."""
-    import docker
-
     client = docker_client()
     try:
         client.images.get(_IMAGE)

@@ -80,7 +80,8 @@ repos:
         #   apps/<x>/migrations/*.py            -> uses api_server.db
         #   apps/watchdog/...                   -> uses api_server.logging
         #   apps/orchestrator/.../__main__.py   -> uses api_server.logging
-        exclude: ^apps/(([^/]+/migrations/.*)|watchdog/.*|orchestrator/src/orchestrator/__main__\.py)$
+        #   apps/workers/.../execution.py       -> uses api_server.db + .events
+        exclude: ^apps/(([^/]+/migrations/.*)|watchdog/.*|orchestrator/src/orchestrator/__main__\.py|workers/src/workers/execution\.py)$
 
   # -------------------- TypeScript / JavaScript --------------------
   - repo: https://github.com/pre-commit/mirrors-prettier
