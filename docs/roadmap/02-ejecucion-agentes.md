@@ -432,7 +432,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_20` — WebSocket /ws/executions/{id} con streaming de eventos del Redis Stream
 
-- [ ] **Título**: WebSocket /ws/executions/{id} con streaming de eventos del Redis Stream
+- [x] **Título**: WebSocket /ws/executions/{id} con streaming de eventos del Redis Stream
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -449,7 +449,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_21` — WebSocket /ws/kanban/{project_id} con updates de transiciones de tarea
 
-- [ ] **Título**: WebSocket /ws/kanban/{project_id} con updates de transiciones de tarea
+- [x] **Título**: WebSocket /ws/kanban/{project_id} con updates de transiciones de tarea
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -466,7 +466,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_22` — UI Timeline de Ejecución (jerárquico, expansible, con costes y tiempos por paso)
 
-- [ ] **Título**: UI Timeline de Ejecución (jerárquico, expansible, con costes y tiempos por paso)
+- [x] **Título**: UI Timeline de Ejecución (jerárquico, expansible, con costes y tiempos por paso)
 - **Tiempo estimado**: 14 h
 - **Complejidad**: l
 - **Rol sugerido**: frontend-dev
@@ -483,7 +483,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_23` — UI Kanban dual reactiva en tiempo real a los eventos del WebSocket
 
-- [ ] **Título**: UI Kanban dual reactiva en tiempo real a los eventos del WebSocket
+- [x] **Título**: UI Kanban dual reactiva en tiempo real a los eventos del WebSocket
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
