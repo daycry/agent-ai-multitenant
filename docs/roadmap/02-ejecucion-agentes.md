@@ -252,7 +252,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_10` — Grafo de estado del agent loop: nodos perceive, recall, plan, act, observe, reflect, finalize, self_review
 
-- [ ] **Título**: Grafo de estado del agent loop: nodos perceive, recall, plan, act, observe, reflect, finalize, self_review
+- [x] **Título**: Grafo de estado del agent loop: nodos perceive, recall, plan, act, observe, reflect, finalize, self_review
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: ai-engineer
@@ -269,7 +269,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_11` — Persistencia de steps_log JSONB con detalle de cada paso
 
-- [ ] **Título**: Persistencia de steps_log JSONB con detalle de cada paso
+- [x] **Título**: Persistencia de steps_log JSONB con detalle de cada paso
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -286,7 +286,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_12` — Captura completa de tool_calls, model_calls (con tokens y coste), memory_reads (placeholder)
 
-- [ ] **Título**: Captura completa de tool_calls, model_calls (con tokens y coste), memory_reads (placeholder)
+- [x] **Título**: Captura completa de tool_calls, model_calls (con tokens y coste), memory_reads (placeholder)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -303,7 +303,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_13` — Salvaguardas: max_iterations, max_tokens, max_cost, max_wall_clock, max_tool_calls, max_review_retries
 
-- [ ] **Título**: Salvaguardas: max_iterations, max_tokens, max_cost, max_wall_clock, max_tool_calls, max_review_retries (este último como límite duro de plataforma, default 3, configurable únicamente por System Admin; ver sección 7.9 del .docx)
+- [x] **Título**: Salvaguardas: max_iterations, max_tokens, max_cost, max_wall_clock, max_tool_calls, max_review_retries (este último como límite duro de plataforma, default 3, configurable únicamente por System Admin; ver sección 7.9 del .docx)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -326,7 +326,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_14` — Detección de loops repetitivos (misma acción >3 veces aborta con código específico)
 
-- [ ] **Título**: Detección de loops repetitivos (misma acción >3 veces aborta con código específico)
+- [x] **Título**: Detección de loops repetitivos (misma acción >3 veces aborta con código específico)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: ai-engineer
