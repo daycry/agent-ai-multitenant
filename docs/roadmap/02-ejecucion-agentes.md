@@ -345,7 +345,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_15` — Tool shell_exec con allowlist de comandos por proyecto + timeout + captura stdout/stderr
 
-- [ ] **Título**: Tool shell_exec con allowlist de comandos por proyecto + timeout + captura stdout/stderr
+- [x] **Título**: Tool shell_exec con allowlist de comandos por proyecto + timeout + captura stdout/stderr
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -362,7 +362,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_16` — Tools file_read, file_write, file_list scoped a /workspace
 
-- [ ] **Título**: Tools file_read, file_write, file_list scoped a /workspace
+- [x] **Título**: Tools file_read, file_write, file_list scoped a /workspace
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -379,7 +379,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_17` — Tool http_request con allowlist de dominios por proyecto + timeout + max body size
 
-- [ ] **Título**: Tool http_request con allowlist de dominios por proyecto + timeout + max body size
+- [x] **Título**: Tool http_request con allowlist de dominios por proyecto + timeout + max body size
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -396,7 +396,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_18` — Tools kanban_update, task_comment, notify_user, agent_invoke
 
-- [ ] **Título**: Tools kanban_update, task_comment, notify_user, agent_invoke
+- [x] **Título**: Tools kanban_update, task_comment, notify_user, agent_invoke
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -413,7 +413,7 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_19` — Placeholders memory_recall, memory_store, document_convert que devuelven 501 hasta Fase 4
 
-- [ ] **Título**: Placeholders memory_recall, memory_store, document_convert que devuelven 501 hasta Fase 4
+- [x] **Título**: Placeholders memory_recall, memory_store, document_convert que devuelven 501 hasta Fase 4
 - **Tiempo estimado**: 2 h
 - **Complejidad**: xs
 - **Rol sugerido**: backend-dev
