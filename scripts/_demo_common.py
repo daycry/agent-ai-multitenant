@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import time
+import warnings
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -23,6 +24,12 @@ from uuid import UUID, uuid4
 for _stream in (sys.stdout, sys.stderr):
     with contextlib.suppress(Exception):
         _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+
+# Silencia el "pending deprecation" de langgraph/langchain que ensucia
+# la salida de los demos — es informativo, no bloquea nada, y los demos
+# están pensados para leerse cómodamente desde la terminal.
+for _category in (DeprecationWarning, PendingDeprecationWarning):
+    warnings.filterwarnings("ignore", message=r".*allowed_objects.*", category=_category)
 
 # Conexiones del stack de desarrollo (sobrescribibles por entorno).
 DB_URL = os.environ.get(
