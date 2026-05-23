@@ -17,7 +17,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-from _demo_common import banner, check
+from _demo_common import banner, check, pause
 
 
 def _run(decisions: list[dict[str, Any]], **budget_kw: Any) -> Any:
@@ -47,6 +47,8 @@ def main() -> int:
         f"status={res.status} abort_code={res.abort_code} iteraciones={res.iterations}",
     )
 
+    pause(note="siguiente: detección de loops")
+
     # 2) Detección de loops — la MISMA acción repetida una y otra vez.
     same = [{"kind": "act", "tool": "echo", "tool_args": {"text": "igual"}} for _ in range(12)]
     res = _run(same)
@@ -55,6 +57,8 @@ def main() -> int:
         res.status == "aborted" and res.abort_code == "repetitive_loop_detected",
         f"abort_code={res.abort_code}",
     )
+
+    pause(note="siguiente: presupuesto de coste")
 
     # 3) max_cost — coste acumulado por encima del presupuesto.
     costly = [
@@ -67,6 +71,8 @@ def main() -> int:
         res.status == "aborted" and res.abort_code == "max_cost_exceeded",
         f"abort_code={res.abort_code} coste=${res.usage.get('cost_usd')}",
     )
+
+    pause(note="siguiente: timeout de pared (lanza un contenedor real)")
 
     # 4) Timeout de pared — un contenedor que se cuelga, matado por el worker.
     print()

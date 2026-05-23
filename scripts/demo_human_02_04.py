@@ -20,7 +20,15 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from _demo_common import DB_URL, REDIS_URL, banner, resolve_tenant, seed_scenario
+from _demo_common import (
+    DB_URL,
+    REDIS_URL,
+    apause,
+    banner,
+    load_demo_state,
+    resolve_tenant,
+    seed_scenario,
+)
 
 # El agente intenta una acción de categoría sensible: shell_exec mapea a
 # `code_execution`, que la política marca como human_required.
@@ -31,7 +39,7 @@ _SENSITIVE_MODEL = {
 _POLICY = {"categories": {"code_execution": "human_required"}}
 
 
-async def main() -> int:
+async def main() -> int:  # noqa: PLR0915 - script de demo, lineal por diseño
     from api_server.db.domain import ApprovalRequest
     from api_server.db.execution_repo import list_executions_for_task
     from redis.asyncio import Redis
@@ -41,6 +49,7 @@ async def main() -> int:
     from workers.execution import ExecutionRequest, conduct_execution
 
     banner("human_02_04 — la validación humana pausa la ejecución")
+    state = load_demo_state()
     engine = create_async_engine(DB_URL)
     redis: Redis = Redis.from_url(REDIS_URL, decode_responses=True)
     try:
@@ -54,13 +63,16 @@ async def main() -> int:
                 project_name="Demo aprobación humana",
                 task_title="Desplegar a producción",
                 approval_policy=_POLICY,
+                project_id=state["project_id"] if state else None,
+                agent_id=state["agent_id"] if state else None,
             )
+        scope = "proyecto compartido" if state else "proyecto recién creado"
         print(f"  Tenant   : {tenant.name} ({tenant.slug})")
-        print(f"  Proyecto : {ids['project']}")
+        print(f"  Proyecto : {ids['project']}  ({scope})")
         print(f"  Tarea    : {ids['task']}  «Desplegar a producción»")
-        print("  Política : code_execution → human_required")
+        print("  Política : code_execution -> human_required")
         print()
-        print("  Ejecutando — el agente intentará una acción sensible (shell_exec)...")
+        await apause(note="ejecutando — el agente intentará shell_exec")
 
         outcome = await conduct_execution(
             ExecutionRequest(
@@ -79,6 +91,8 @@ async def main() -> int:
             sessionmaker=sm,
             redis=redis,
         )
+
+        await apause(note="leyendo el resultado en la base de datos")
 
         async with sm() as session:
             execution = (await list_executions_for_task(session, ids["task"]))[0]

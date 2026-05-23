@@ -77,6 +77,10 @@ playwright/.cache/
 # Detached dev stack state (scripts/dev/up.{ps1,sh} + down.{ps1,sh})
 .dev/
 
+# Estado del setup_demo_project.py (ids del proyecto y agente compartidos
+# entre los demos de los tests humanos — local, no versionar).
+scripts/.demo_state.json
+
 # =============================================================================
 # Docker / Compose
 # =============================================================================

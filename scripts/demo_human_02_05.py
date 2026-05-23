@@ -25,7 +25,15 @@ import os
 import sys
 from typing import Any
 
-from _demo_common import DB_URL, REDIS_URL, banner, resolve_tenant, seed_scenario
+from _demo_common import (
+    DB_URL,
+    REDIS_URL,
+    apause,
+    banner,
+    load_demo_state,
+    resolve_tenant,
+    seed_scenario,
+)
 
 _MODEL = {
     "kind": "scripted",
@@ -34,8 +42,6 @@ _MODEL = {
         {"kind": "finish", "output": "tarea completada"},
     ],
 }
-# Pausa entre transiciones — da tiempo al revisor a verlas llegar.
-_PAUSE_S = 4.0
 
 
 def _wait_for_human(project_id: Any) -> None:
@@ -77,6 +83,7 @@ async def main() -> int:
     from workers.execution import ExecutionRequest, conduct_execution
 
     banner("human_02_05 — el tiempo real funciona")
+    state = load_demo_state()
     engine = create_async_engine(DB_URL)
     redis: Redis = Redis.from_url(REDIS_URL, decode_responses=True)
     try:
@@ -90,9 +97,12 @@ async def main() -> int:
                 project_name="Demo tiempo real",
                 task_title="Tarea observable en vivo",
                 task_status="backlog",
+                project_id=state["project_id"] if state else None,
+                agent_id=state["agent_id"] if state else None,
             )
+        scope = "proyecto compartido" if state else "proyecto recién creado"
         print(f"  Tenant   : {tenant.name} ({tenant.slug})")
-        print(f"  Proyecto : {ids['project']}")
+        print(f"  Proyecto : {ids['project']}  ({scope})")
         print()
         _wait_for_human(ids["project"])
         print()
@@ -100,9 +110,9 @@ async def main() -> int:
         # La tarea recorre el Kanban; cada transición se publica en vivo.
         await _publish_created(sm, redis, ids["task"])
         print("  · tarea creada (aparece en backlog)")
-        await asyncio.sleep(_PAUSE_S)
+        await apause(note="el board debería mostrarla en backlog")
         await _transition(sm, redis, ids["task"], "backlog", "ready")
-        await asyncio.sleep(_PAUSE_S)
+        await apause(note="ahora salta a ready")
         await _transition(sm, redis, ids["task"], "ready", "in_progress")
 
         print("  · ejecutando el agente (su stream alimenta el Timeline)...")
@@ -123,7 +133,7 @@ async def main() -> int:
             sessionmaker=sm,
             redis=redis,
         )
-        await asyncio.sleep(_PAUSE_S)
+        await apause(note="cierre — la tarea pasa a done")
         await _transition(sm, redis, ids["task"], "in_progress", "done")
 
         print()

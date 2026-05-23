@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import sys
 
-from _demo_common import banner, check
+from _demo_common import banner, check, pause
 
 # Sonda que corre DENTRO del contenedor: comprueba el aislamiento y emite
 # una línea JSON con los resultados.
@@ -61,7 +61,11 @@ def main() -> int:
     from workers.container import AgentContainerRunner, ContainerSpec
 
     banner("human_02_02 — aislamiento del contenedor agent-runtime")
-    print("  Lanzando un contenedor bajo el perfil endurecido del worker...")
+    print("  Bajo el perfil endurecido del worker se va a lanzar un contenedor")
+    print("  que prueba desde dentro: docker.sock, FS read-only, /workspace,")
+    print("  PID namespace y red interna.")
+    print()
+    pause(note="lanzando el contenedor con el perfil endurecido")
     print()
 
     result = AgentContainerRunner(Settings()).run(

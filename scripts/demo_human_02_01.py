@@ -131,40 +131,54 @@ async def _resolve_tenant(session: Any, ref: str) -> Any:
 
 
 async def _seed(sm: Any, model_spec: dict[str, Any]) -> dict[str, Any]:
-    """Crea un proyecto + agente Writer + tarea dentro de un tenant que YA
-    existe (`DEMO_TENANT`), para que el proyecto aparezca en tu admin-panel."""
+    """Crea la tarea dentro de un tenant que YA existe (DEMO_TENANT).
+
+    Si `setup_demo_project.py` se ejecutó antes, reutiliza el proyecto y
+    el agente compartidos (estado en `scripts/.demo_state.json`); si no,
+    crea proyecto + agente + tarea (comportamiento original)."""
+    from _demo_common import load_demo_state
     from api_server.db.domain import Agent, Project, Task
 
-    ids: dict[str, Any] = {"project": uuid4(), "agent": uuid4(), "task": uuid4()}
+    shared = load_demo_state()
+    ids: dict[str, Any] = {"task": uuid4()}
     suffix = ids["task"].hex[:8]
     async with sm() as session, session.begin():
         tenant = await _resolve_tenant(session, _DEMO_TENANT)
         ids["tenant"] = tenant.id
         ids["tenant_label"] = f"{tenant.name} ({tenant.slug})"
-        session.add(
-            Project(
-                id=ids["project"],
-                tenant_id=tenant.id,
-                name=f"Demo poema del mar ({suffix})",
-                status="active",
-                is_template=False,
+
+        if shared is not None:
+            ids["project"] = UUID(shared["project_id"])
+            ids["agent"] = UUID(shared["agent_id"])
+            ids["scope"] = "proyecto compartido (setup_demo_project)"
+        else:
+            ids["project"] = uuid4()
+            ids["agent"] = uuid4()
+            ids["scope"] = "proyecto recién creado"
+            session.add(
+                Project(
+                    id=ids["project"],
+                    tenant_id=tenant.id,
+                    name=f"Demo poema del mar ({suffix})",
+                    status="active",
+                    is_template=False,
+                )
             )
-        )
-        await session.flush()
-        session.add(
-            Agent(
-                id=ids["agent"],
-                tenant_id=tenant.id,
-                name="Writer",
-                role="writer",
-                system_prompt="Escribes poemas breves y cuidados.",
-                agent_type="ai",
-                scope="project_local",
-                project_id=ids["project"],
-                model_config=model_spec,
+            await session.flush()
+            session.add(
+                Agent(
+                    id=ids["agent"],
+                    tenant_id=tenant.id,
+                    name="Writer",
+                    role="writer",
+                    system_prompt="Escribes poemas breves y cuidados.",
+                    agent_type="ai",
+                    scope="project_local",
+                    project_id=ids["project"],
+                    model_config=model_spec,
+                )
             )
-        )
-        await session.flush()
+            await session.flush()
         session.add(
             Task(
                 id=ids["task"],
@@ -246,7 +260,7 @@ async def main() -> None:
         ids = await _seed(sm, model_spec)
         print("  Escenario creado en la base de datos de desarrollo:")
         print(f"    tenant    {ids['tenant_label']}")
-        print(f"    proyecto  {ids['project']}")
+        print(f"    proyecto  {ids['project']}  ({ids['scope']})")
         print(f"    agente    {ids['agent']}  «Writer»")
         print(f"    tarea     {ids['task']}  «Escribe un poema sobre el mar»")
         print()
