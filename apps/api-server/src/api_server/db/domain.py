@@ -55,6 +55,16 @@ from api_server.db.base import (
     UUIDPrimaryKeyMixin,
 )
 
+# Plan 03: Conversation/Message live in their own module but are re-exported
+# from `domain` so existing `from api_server.db import domain as d` callers
+# keep finding the whole multi-table domain in one place.
+from api_server.db.conversation import (  # (re-export)
+    ChatMode,
+    Conversation,
+    Message,
+    MessageAuthorKind,
+)
+
 
 # =============================================================================
 # Enums (StrEnum so values are stable strings persisted as TEXT)
@@ -834,9 +844,13 @@ __all__ = [
     "AgentType",
     "ApprovalPolicyTemplate",
     "BudgetPeriod",
+    "ChatMode",
+    "Conversation",
     "Execution",
     "ExecutionStatus",
     "MemoryScope",
+    "Message",
+    "MessageAuthorKind",
     "Plan",
     "PlanStatus",
     "Project",

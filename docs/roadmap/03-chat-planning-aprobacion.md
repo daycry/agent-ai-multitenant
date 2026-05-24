@@ -90,7 +90,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_01` — Modelos Conversation, Message con campos mode, attachments, related_plan_id
 
-- [ ] **Título**: Modelos Conversation, Message con campos mode, attachments, related_plan_id
+- [x] **Título**: Modelos Conversation, Message con campos mode, attachments, related_plan_id
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -107,7 +107,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_02` — Migración Alembic + RLS
 
-- [ ] **Título**: Migración Alembic + RLS
+- [x] **Título**: Migración Alembic + RLS
 - **Tiempo estimado**: 3 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -124,7 +124,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_03` — Endpoints REST /conversations y WebSocket /ws/conversation/{id}
 
-- [ ] **Título**: Endpoints REST /conversations y WebSocket /ws/conversation/{id}
+- [x] **Título**: Endpoints REST /conversations y WebSocket /ws/conversation/{id}
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -141,7 +141,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_04` — Compresión jerárquica de mensajes antiguos (sub-agente de resumen)
 
-- [ ] **Título**: Compresión jerárquica de mensajes antiguos (sub-agente de resumen)
+- [x] **Título**: Compresión jerárquica de mensajes antiguos (sub-agente de resumen)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer

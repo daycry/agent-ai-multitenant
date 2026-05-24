@@ -27,7 +27,11 @@ from redis.asyncio import Redis
 
 from api_server.auth.deps import get_redis
 from api_server.auth.jwt import InvalidTokenError, decode_jwt
-from api_server.events import EVENTS_STREAM, execution_stream_key
+from api_server.events import (
+    EVENTS_STREAM,
+    conversation_stream_key,
+    execution_stream_key,
+)
 
 _log = structlog.get_logger("api_server.ws")
 
@@ -140,3 +144,23 @@ async def kanban_stream(
     if not await _authenticate(ws, token):
         return
     await _pump(ws, redis, EVENTS_STREAM, project_filter=project_id)
+
+
+@router.websocket("/ws/conversation/{conversation_id}")
+async def conversation_stream(
+    ws: WebSocket,
+    conversation_id: str,
+    token: str | None = Query(default=None),
+    redis: Redis = Depends(get_redis),
+) -> None:
+    """Stream one conversation's message + mode-change events live.
+
+    Same pattern as `/ws/executions/{id}`: per-conversation Redis stream,
+    tailed from the start so a late connection still gets the recent
+    backlog. The REST endpoint POST /conversations/{id}/messages is the
+    sole producer.
+    """
+    await ws.accept()
+    if not await _authenticate(ws, token):
+        return
+    await _pump(ws, redis, conversation_stream_key(conversation_id), project_filter=None)
