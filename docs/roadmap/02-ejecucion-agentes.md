@@ -1,10 +1,10 @@
 ---
 plan_id: 02-ejecucion-agentes
 title: Ejecución de Agentes
-status: pending_human_validation
+status: completed
 blocking_plan: [01-dominio-minimo]
 started_at: 2026-05-22
-completed_at: null
+completed_at: 2026-05-24
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 80-100
 estimated_cost_human_eur: 32.000 € – 40.000 €
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `02-ejecucion-agentes`                    |
-| **Estado**                         | `pending_human_validation`                |
+| **Estado**                         | `completed`                               |
 | **Bloqueado por**                  | `01-dominio-minimo`                       |
 | **Tiempo estimado (calendario)**   | 4-5 semanas                               |
 | **Tiempo estimado (persona-días)** | 80-100                                    |
