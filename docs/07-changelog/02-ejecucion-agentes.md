@@ -4,19 +4,21 @@ title: Ejecución de Agentes
 started_at: 2026-05-22
 completed_at: 2026-05-24
 status: completed
-tasks_done: 34
-tasks_total: 34
+tasks_done: 35
+tasks_total: 35
 tasks_pending_local: []
-tests_automated_passing: 467
+tests_automated_passing: 471
 human_validations_passing: 5
 docs_language: es
 ---
 
-> **Estado:** plan **`completed`** (cerrado el 2026-05-24). Las 34
-> tareas (`task_02_01`..`task_02_34`) en `done` con sus tests
-> automáticos en verde — 467 tests pytest + 13 tests Playwright. Los
+> **Estado:** plan **`completed`** (cerrado el 2026-05-24). Las 35
+> tareas (`task_02_01`..`task_02_35`) en `done` con sus tests
+> automáticos en verde — 471 tests pytest + 13 tests Playwright. Los
 > cinco tests humanos (`human_02_01`..`human_02_05`) validados por el
-> revisor. Mergeado a `master`. Sobre el dominio estático del Plan 01, el Plan
+> revisor. `task_02_35` cierra el último cabo suelto de ADR 0019: el
+> `egress-proxy` allowlisted que permite al sandbox alcanzar a los
+> proveedores LLM sin abrir su red a internet. Sobre el dominio estático del Plan 01, el Plan
 > 02 da vida al sistema: orchestrator, workers, contenedores aislados,
 > el agent loop LangGraph, las tools builtin, la captura de ejecuciones,
 > la UI en tiempo real, la validación humana — y, con la **Fase G**, el
@@ -75,18 +77,25 @@ self_review`). Cada ejecución se captura en la tabla `executions`
    aprobación operan sobre ese run. Tres `ModelClient` reales —gateway
    LiteLLM, Claude Agent SDK, GitHub Copilot— quedan enchufados detrás
    del protocolo, además del `ScriptedModelClient` determinista.
+8. **Salir a internet de forma controlada** — `task_02_35` (ADR 0019)
+   añade el servicio `egress-proxy` (tinyproxy con `FilterDefaultDeny`)
+   en el docker-compose. El sandbox sigue en su red `internal`, pero
+   alcanza al proxy a través de ella; el proxy filtra contra una
+   allowlist de hosts (Anthropic, Copilot, gateway LiteLLM). Sin esta
+   pieza los tres `ModelClient` reales eran código que no podía hablar
+   con su proveedor desde dentro del contenedor.
 
 ## Fases
 
-| Fase                           | Tareas | Entregable                                                                                                                                               |
-| ------------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A — Orchestrator y Celery      | 01–04  | Servicio Orchestrator, 7 colas, políticas de asignación, `fn_compute_task_ready`                                                                         |
-| B — Worker y agent-runtime     | 05–09  | Imagen `agent-runtime:v1`, worker con docker SDK, aislamiento estricto, secrets, sin socket Docker                                                       |
-| C — Agent Loop LangGraph       | 10–14  | Grafo de 8 nodos, `executions`/`steps_log`, captura, salvaguardas, detección de loops                                                                    |
-| D — Tools Builtin              | 15–19  | shell*exec, file*\*, http_request, tools de orquestación, placeholders 501                                                                               |
-| E — UI y Tiempo Real           | 20–23  | WebSockets, Timeline de Ejecución, Kanban reactivo                                                                                                       |
-| F — Validación Humana y Cierre | 24–28  | Motor de aprobación, notificación in-app, UI de aprobación, timeout 24 h, docs                                                                           |
-| G — Integración End-to-End     | 29–34  | Entrypoint que corre el loop, worker que conduce el run, dispatch del orchestrator, ModelClients reales, aprobación/salvaguardas en vivo, smoke test e2e |
+| Fase                           | Tareas | Entregable                                                                                                                                                                                                     |
+| ------------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A — Orchestrator y Celery      | 01–04  | Servicio Orchestrator, 7 colas, políticas de asignación, `fn_compute_task_ready`                                                                                                                               |
+| B — Worker y agent-runtime     | 05–09  | Imagen `agent-runtime:v1`, worker con docker SDK, aislamiento estricto, secrets, sin socket Docker                                                                                                             |
+| C — Agent Loop LangGraph       | 10–14  | Grafo de 8 nodos, `executions`/`steps_log`, captura, salvaguardas, detección de loops                                                                                                                          |
+| D — Tools Builtin              | 15–19  | shell*exec, file*\*, http_request, tools de orquestación, placeholders 501                                                                                                                                     |
+| E — UI y Tiempo Real           | 20–23  | WebSockets, Timeline de Ejecución, Kanban reactivo                                                                                                                                                             |
+| F — Validación Humana y Cierre | 24–28  | Motor de aprobación, notificación in-app, UI de aprobación, timeout 24 h, docs                                                                                                                                 |
+| G — Integración End-to-End     | 29–35  | Entrypoint que corre el loop, worker que conduce el run, dispatch del orchestrator, ModelClients reales, aprobación/salvaguardas en vivo, smoke test e2e, egress controlado vía proxy allowlisted (task_02_35) |
 
 ## Decisiones de arquitectura (ADRs)
 

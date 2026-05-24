@@ -700,6 +700,30 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
     expected_signal: "exit_code == 0"
   ```
 
+#### `task_02_35` — Egress controlado del sandbox agent-runtime
+
+> Añadida por **ADR 0019** (aceptada Opción 1). Sin este cableado los
+> tres `ModelClient` reales no pueden alcanzar a su proveedor desde
+> dentro del contenedor (la red del sandbox sigue `internal`). El plan
+> se cierra al cumplir esta tarea, completando la promesa de Fase G:
+> agentes que ejecutan tareas de verdad contra un LLM real, no sólo
+> contra el `ScriptedModelClient`.
+
+- [x] **Título**: Proxy de egress allowlisted entre el contenedor `agent-runtime` y los proveedores LLM / dominios de `http_request`, sin abrir el sandbox a internet abierto.
+- **Tiempo estimado**: 6 h
+- **Complejidad**: m
+- **Rol sugerido**: devops + backend-dev
+- **Dependencias**: `task_02_32` (los clientes que necesitan red), `task_02_07` (perfil endurecido)
+- **Tests automáticos**:
+  ```yaml
+  - id: auto_02_35_a
+    description: "El contenedor agent-runtime recibe HTTP_PROXY/HTTPS_PROXY apuntando al proxy cuando egress_proxy_url está configurado; la red de agentes permite alcanzar al proxy"
+    check_type: automated
+    runtime: python-pytest
+    command: "pytest tests/integration/test_egress_proxy.py -v"
+    expected_signal: "exit_code == 0"
+  ```
+
 ---
 
 ## Tests Humanos del Plan
