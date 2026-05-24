@@ -149,9 +149,58 @@ def to_plan_response(p: Plan) -> PlanResponse:
 
 
 __all__ = [
+    "PlanCommentCreateRequest",
+    "PlanCommentResponse",
     "PlanCreateRequest",
     "PlanResponse",
     "PlanSpecification",
     "PlanUpdateRequest",
+    "to_plan_comment_response",
     "to_plan_response",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Inline plan comments (task_03_21)
+# ---------------------------------------------------------------------------
+class PlanCommentCreateRequest(BaseModel):
+    model_config = _BASE_CONFIG
+
+    target_kind: str = Field(pattern="^(plan|phase|task)$")
+    target_ref: str | None = Field(default=None, max_length=120)
+    content: str = Field(min_length=1, max_length=10_000)
+
+    @model_validator(mode="after")
+    def _target_ref_consistency(self) -> PlanCommentCreateRequest:
+        if self.target_kind == "plan":
+            if self.target_ref:
+                raise ValueError("target_kind='plan' must not carry target_ref")
+        elif not self.target_ref:
+            raise ValueError(f"target_kind='{self.target_kind}' requires target_ref")
+        return self
+
+
+class PlanCommentResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    tenant_id: UUID
+    plan_id: UUID
+    target_kind: str
+    target_ref: str | None
+    author_user_id: UUID | None
+    content: str
+    created_at: datetime
+
+
+def to_plan_comment_response(c) -> PlanCommentResponse:  # type: ignore[no-untyped-def]
+    return PlanCommentResponse(
+        id=c.id,
+        tenant_id=c.tenant_id,
+        plan_id=c.plan_id,
+        target_kind=c.target_kind,
+        target_ref=c.target_ref,
+        author_user_id=c.author_user_id,
+        content=c.content,
+        created_at=c.created_at,
+    )

@@ -30,15 +30,19 @@ from api_server.chat.plan_state_machine import (
 )
 from api_server.db.conversation import Conversation
 from api_server.db.domain import Plan, Project
+from api_server.db.plan_comment import PlanComment
 from api_server.routers._helpers import (
     get_writable_or_404,
     require_tenant_id,
     soft_delete,
 )
 from api_server.schemas.plans import (
+    PlanCommentCreateRequest,
+    PlanCommentResponse,
     PlanCreateRequest,
     PlanResponse,
     PlanUpdateRequest,
+    to_plan_comment_response,
     to_plan_response,
 )
 
@@ -238,6 +242,76 @@ async def delete_plan(
         session, Plan, plan_id, principal, not_found_detail="plan not found"
     )
     await soft_delete(session, plan)
+
+
+# ===========================================================================
+# Inline plan comments (task_03_21)
+# ===========================================================================
+@plans_router.post(
+    "/{plan_id}/comments",
+    response_model=PlanCommentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_plan_comment(
+    plan_id: UUID,
+    payload: PlanCommentCreateRequest,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> PlanCommentResponse:
+    tenant_id = require_tenant_id(principal)
+    plan = await _load_plan(session, plan_id)
+
+    # Validate the target_ref points to a real phase/task in the spec.
+    if payload.target_kind == "task":
+        task_ids = {t.get("id") for t in plan.specification.get("tasks") or []}
+        if payload.target_ref not in task_ids:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"task {payload.target_ref!r} not in plan specification",
+            )
+    elif payload.target_kind == "phase":
+        phases = plan.specification.get("phases") or []
+        try:
+            idx = int(payload.target_ref or "")
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="phase target_ref must be the phase index as a string",
+            ) from exc
+        if idx < 0 or idx >= len(phases):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"phase {idx} not in plan specification",
+            )
+
+    comment = PlanComment(
+        tenant_id=tenant_id,
+        plan_id=plan.id,
+        target_kind=payload.target_kind,
+        target_ref=payload.target_ref,
+        author_user_id=principal.user_id,
+        content=payload.content,
+    )
+    session.add(comment)
+    await session.flush()
+    await session.refresh(comment)
+    return to_plan_comment_response(comment)
+
+
+@plans_router.get("/{plan_id}/comments", response_model=list[PlanCommentResponse])
+async def list_plan_comments(
+    plan_id: UUID,
+    _: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[PlanCommentResponse]:
+    # Ensures the plan is visible under RLS before listing comments.
+    await _load_plan(session, plan_id)
+    result = await session.execute(
+        select(PlanComment)
+        .where(PlanComment.plan_id == plan_id, PlanComment.deleted_at.is_(None))
+        .order_by(PlanComment.created_at)
+    )
+    return [to_plan_comment_response(c) for c in result.scalars().all()]
 
 
 __all__ = ["plans_router", "project_plans_router"]

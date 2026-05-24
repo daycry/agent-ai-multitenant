@@ -370,7 +370,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_17` — Pestaña 'Planes' del proyecto con listado, filtros y badges de estado
 
-- [ ] **Título**: Pestaña 'Planes' del proyecto con listado, filtros y badges de estado
+- [x] **Título**: Pestaña 'Planes' del proyecto con listado, filtros y badges de estado
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -387,7 +387,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_18` — Vista de detalle del plan con renderizado de la plantilla canónica
 
-- [ ] **Título**: Vista de detalle del plan con renderizado de la plantilla canónica
+- [x] **Título**: Vista de detalle del plan con renderizado de la plantilla canónica
 - **Tiempo estimado**: 14 h
 - **Complejidad**: l
 - **Rol sugerido**: frontend-dev
@@ -404,7 +404,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_19` — Grafo visual del DAG de tareas (con D3.js o react-flow)
 
-- [ ] **Título**: Grafo visual del DAG de tareas (con D3.js o react-flow)
+- [x] **Título**: Grafo visual del DAG de tareas (con D3.js o react-flow)
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -421,7 +421,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_20` — Vista Gantt con duración estimada y línea crítica
 
-- [ ] **Título**: Vista Gantt con duración estimada y línea crítica
+- [x] **Título**: Vista Gantt con duración estimada y línea crítica
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -438,7 +438,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_21` — Comentarios in-line en el plan (que el equipo recoge si se refina)
 
-- [ ] **Título**: Comentarios in-line en el plan (que el equipo recoge si se refina)
+- [x] **Título**: Comentarios in-line en el plan (que el equipo recoge si se refina)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
