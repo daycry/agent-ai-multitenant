@@ -19,7 +19,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessagesSquare } from "lucide-react";
 
@@ -342,6 +342,13 @@ export default function ProjectChatPage() {
         <CardContent>
           <MessageFeed messages={messagesQuery.data ?? []} loading={messagesQuery.isLoading} />
           {activeConversation ? (
+            <GeneratePlanButton
+              messages={messagesQuery.data ?? []}
+              projectId={projectId}
+              conversationId={activeConversation.id}
+            />
+          ) : null}
+          {activeConversation ? (
             <ChatComposer
               disabled={postMessage.isPending}
               onSubmit={(content) =>
@@ -356,6 +363,94 @@ export default function ProjectChatPage() {
       </Card>
     </div>
   );
+}
+
+// --------------------------------------------------------------------------
+// "Generar Plan" button (task_03_13)
+//
+// Visibility rule: only shown when the LAST agent message in the feed
+// carries an attachment of the shape
+//   {"kind": "planning_directive", "intent": "finish_planning"}.
+// That attachment is appended by the chat endpoint (Fase G wiring)
+// whenever the planning sub-graph returns PMIntent.FINISH_PLANNING.
+//
+// Clicking the button POSTs `/projects/{id}/plans` with the
+// conversation id — the backend (task_03_14) materialises the
+// canonical-template Plan row from the chat history. We optimistic-
+// disable the button while the POST is in flight and surface any
+// error inline.
+// --------------------------------------------------------------------------
+interface GeneratePlanButtonProps {
+  messages: Message[];
+  projectId: string;
+  conversationId: string;
+}
+
+function GeneratePlanButton({ messages, projectId, conversationId }: GeneratePlanButtonProps) {
+  const queryClient = useQueryClient();
+  const router = useRouter();
+
+  const ready = isFinishPlanningReady(messages);
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      apiFetch<{ id: string }>(`/projects/${projectId}/plans`, {
+        method: "POST",
+        body: { conversation_id: conversationId },
+      }),
+    onSuccess: (created) => {
+      queryClient.invalidateQueries({ queryKey: ["plans", projectId] });
+      router.push(`/admin/projects/${projectId}/plans/${created.id}`);
+    },
+  });
+
+  if (!ready) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4" data-testid="generate-plan-cta">
+      <Button
+        data-testid="generate-plan-button"
+        disabled={mutation.isPending}
+        onClick={() => mutation.mutate()}
+      >
+        Generar Plan
+      </Button>
+      {mutation.isError ? (
+        <p className="text-destructive mt-2 text-xs" data-testid="generate-plan-error">
+          {mutation.error instanceof ApiError ? mutation.error.body : String(mutation.error)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Returns true when the most recent `agent` message in the feed has
+ * an attachment that signals the planning sub-graph wants to finish.
+ *
+ * The structure is intentionally permissive — Fase G may add more
+ * keys (rationale, estimated_phase_count, ...) but only `kind` and
+ * `intent` drive visibility.
+ */
+export function isFinishPlanningReady(messages: Message[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg.author_kind !== "agent") continue;
+    for (const att of msg.attachments) {
+      if (
+        att &&
+        typeof att === "object" &&
+        (att as Record<string, unknown>).kind === "planning_directive" &&
+        (att as Record<string, unknown>).intent === "finish_planning"
+      ) {
+        return true;
+      }
+    }
+    return false; // most recent agent message had no FINISH directive
+  }
+  return false;
 }
 
 // --------------------------------------------------------------------------

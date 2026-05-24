@@ -166,11 +166,26 @@ class BudgetPeriod(enum.StrEnum):
 
 
 class PlanStatus(enum.StrEnum):
+    """Full lifecycle of a plan (Plan 03 task_03_16).
+
+    Transitions are enforced in `api_server.chat.plan_state_machine`.
+    A freshly POSTed plan from the chat lands in ``draft``; the human
+    moves it to ``pending_approval`` to start the review, and from
+    there to ``approved`` / ``rejected``. Executions of approved plans
+    flip them through ``in_progress``, ``blocked``, then
+    ``pending_human_validation`` and finally ``completed``.
+    """
+
+    PENDING_APPROVAL = "pending_approval"
     DRAFT = "draft"
     APPROVED = "approved"
-    EXECUTING = "executing"
+    IN_PROGRESS = "in_progress"
+    BLOCKED = "blocked"
+    PENDING_HUMAN_VALIDATION = "pending_human_validation"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+    REJECTED = "rejected"
+    ARCHIVED = "archived"
 
 
 class TaskStatus(enum.StrEnum):
@@ -566,10 +581,28 @@ class Plan(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'draft'"))
+    # 32 chars so the wide ten-state machine (pending_approval,
+    # pending_human_validation, ...) introduced in task_03_16 fits.
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'draft'"))
 
-    # Soft-FK to a future conversations table (Plan 03 - chat sessions).
+    # Was a soft-FK in the Plan 01 migration; promoted to a real FK in
+    # migration 0014 once the conversations table existed.
     conversation_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # The canonical-template specification (Plan 03 §8.5). JSONB so the
+    # shape can evolve without migrations:
+    #   {
+    #     "summary":      {...},
+    #     "phases":       [{name, description, tasks: [{...}]}],
+    #     "tasks":        [task_spec],   # flat, dependencies by task_id
+    #     "estimates":    {...},
+    #     "tests_humans": [{...}],
+    #     "metadata":     {...}          # template version, generator, etc.
+    #   }
+    # Empty `{}` for a freshly created draft until the team fills it in.
+    specification: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
 
     created_by: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),

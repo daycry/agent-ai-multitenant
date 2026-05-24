@@ -300,7 +300,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_13` — Botón 'Generar Plan' contextual: aparece cuando el equipo ha producido propuesta estructurada
 
-- [ ] **Título**: Botón 'Generar Plan' contextual: aparece cuando el equipo ha producido propuesta estructurada
+- [x] **Título**: Botón 'Generar Plan' contextual: aparece cuando el equipo ha producido propuesta estructurada
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -317,7 +317,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_14` — Persistencia del Plan con plantilla canónica (cabecera + descripción + fases + tareas con tests automáticos)
 
-- [ ] **Título**: Persistencia del Plan con plantilla canónica (cabecera + descripción + fases + tareas con tests automáticos)
+- [x] **Título**: Persistencia del Plan con plantilla canónica (cabecera + descripción + fases + tareas con tests automáticos)
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -334,7 +334,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_15` — Validación DAG al persistir (detección de ciclos)
 
-- [ ] **Título**: Validación DAG al persistir (detección de ciclos)
+- [x] **Título**: Validación DAG al persistir (detección de ciclos)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -351,7 +351,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_16` — Máquina de estados del Plan completa (pending_approval, draft, approved, in_progress, blocked, pending_human_validation, completed, cancelled, rejected, archived)
 
-- [ ] **Título**: Máquina de estados del Plan completa (pending_approval, draft, approved, in_progress, blocked, pending_human_validation, completed, cancelled, rejected, archived)
+- [x] **Título**: Máquina de estados del Plan completa (pending_approval, draft, approved, in_progress, blocked, pending_human_validation, completed, cancelled, rejected, archived)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
