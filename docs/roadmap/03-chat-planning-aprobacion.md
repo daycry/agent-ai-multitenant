@@ -177,7 +177,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_06` — System prompts y configuración de tools por modo
 
-- [ ] **Título**: System prompts y configuración de tools por modo
+- [x] **Título**: System prompts y configuración de tools por modo
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -194,7 +194,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_07` — Cambio de modo: mensaje de sistema visible, contexto preservado, comportamiento del equipo cambia
 
-- [ ] **Título**: Cambio de modo: mensaje de sistema visible, contexto preservado, comportamiento del equipo cambia
+- [x] **Título**: Cambio de modo: mensaje de sistema visible, contexto preservado, comportamiento del equipo cambia
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -211,7 +211,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_08` — Modos custom configurables a nivel tenant
 
-- [ ] **Título**: Modos custom configurables a nivel tenant
+- [x] **Título**: Modos custom configurables a nivel tenant
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

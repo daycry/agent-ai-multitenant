@@ -42,6 +42,21 @@ interface Conversation {
   related_plan_id: string | null;
 }
 
+interface Message {
+  id: string;
+  tenant_id: string;
+  conversation_id: string;
+  author_kind: "user" | "agent" | "system";
+  author_user_id: string | null;
+  author_agent_id: string | null;
+  content: string;
+  mode: string;
+  attachments: Array<Record<string, unknown>>;
+  related_plan_id: string | null;
+  is_summary: boolean;
+  created_at: string;
+}
+
 interface ModeOption {
   value: string;
   labelEs: string;
@@ -186,11 +201,27 @@ export default function ProjectChatPage() {
         queryClient.setQueryData(["conversations", projectId], ctx.prev);
       }
     },
-    onSettled: () => {
+    onSettled: (_data, _err, vars) => {
       queryClient.invalidateQueries({
         queryKey: ["conversations", projectId],
       });
+      // The mode change posts a `system` "modo cambiado" message
+      // server-side. Refetch the feed so the banner appears without
+      // waiting for the WebSocket round-trip.
+      queryClient.invalidateQueries({
+        queryKey: ["messages", vars.conversationId],
+      });
     },
+  });
+
+  // Message feed for the active conversation. Disabled until we know
+  // which conversation to load; the chat-mode-selector test never
+  // exercises this query because it doesn't mock /messages.
+  const messagesQuery = useQuery({
+    queryKey: ["messages", activeConversationId],
+    queryFn: () => apiFetch<Message[]>(`/conversations/${activeConversationId}/messages`),
+    refetchOnWindowFocus: false,
+    enabled: Boolean(activeConversationId),
   });
 
   // ----------------------------------------------------------------
@@ -275,12 +306,71 @@ export default function ProjectChatPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-muted-foreground text-sm">
-            Los mensajes en vivo llegan en task_03_11 (Fase C). De momento, esta pantalla expone el
-            selector de modo y la conversación activa que será la base de las próximas iteraciones.
-          </p>
+          <MessageFeed messages={messagesQuery.data ?? []} loading={messagesQuery.isLoading} />
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Message feed
+// --------------------------------------------------------------------------
+interface MessageFeedProps {
+  messages: Message[];
+  loading: boolean;
+}
+
+function MessageFeed({ messages, loading }: MessageFeedProps) {
+  if (loading) {
+    return <p className="text-muted-foreground text-sm">Cargando mensajes…</p>;
+  }
+  if (messages.length === 0) {
+    return (
+      <p className="text-muted-foreground text-sm" data-testid="chat-feed-empty">
+        La conversación está vacía. Empieza a escribir para comenzar.
+      </p>
+    );
+  }
+  return (
+    <ol className="space-y-3" data-testid="chat-feed">
+      {messages.map((m) => (
+        <li key={m.id}>
+          <MessageRow message={m} />
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function MessageRow({ message }: { message: Message }) {
+  if (message.author_kind === "system") {
+    return (
+      <div
+        className={cn(
+          "border-muted-foreground/40 rounded border border-dashed",
+          "bg-muted/40 text-muted-foreground px-3 py-2 text-center text-xs italic",
+        )}
+        data-testid="chat-system-banner"
+        data-message-id={message.id}
+      >
+        {message.content}
+      </div>
+    );
+  }
+  const tone =
+    message.author_kind === "agent"
+      ? "border-indigo-500/40 bg-indigo-500/5"
+      : "border-emerald-500/40 bg-emerald-500/5";
+  return (
+    <div
+      className={cn("rounded border px-3 py-2 text-sm", tone)}
+      data-testid={`chat-message-${message.author_kind}`}
+    >
+      <p className="whitespace-pre-wrap">{message.content}</p>
+      <p className="text-muted-foreground mt-1 text-[10px] uppercase tracking-wide">
+        {message.author_kind} · {message.mode}
+      </p>
     </div>
   );
 }
