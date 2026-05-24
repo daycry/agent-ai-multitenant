@@ -1,0 +1,25 @@
+# Allowlist de hosts a los que el sandbox `agent-runtime` puede llegar
+# a través del egress-proxy (tinyproxy, FilterDefaultDeny Yes). Un regex
+# por línea, anclado: el campo que evalúa tinyproxy con `FilterURLs Off`
+# es el `Host:` header (sin esquema, sin path). ADR 0019 / task_02_35.
+
+# --- Proveedores LLM (CLAUDE.md §9 / task_02_32) -----------------------
+# Anthropic (Claude Agent SDK y API directa).
+^api\.anthropic\.com$
+
+# GitHub Copilot — endpoint OpenAI-compatible + el de minado del JWT.
+^api\.githubcopilot\.com$
+^api\.github\.com$
+^copilot-proxy\.githubusercontent\.com$
+
+# Gateway LiteLLM — servicio del propio compose, alcanzable por nombre
+# corto dentro de la red docker. Cubierto tanto `litellm` (cuando el
+# resolver añade el sufijo de la red) como `litellm.cualquier-red`.
+^litellm$
+^litellm\.[a-z0-9.-]+$
+
+# --- Plantilla para per-proyecto -------------------------------------
+# El tool `http_request` (Fase D) sigue aplicando su propia allowlist
+# por proyecto sobre lo que SÍ se permite a nivel de red. Si en el
+# futuro hay dominios "siempre permitidos" del producto (p.ej. un
+# registry, un CDN propio), se añaden aquí.

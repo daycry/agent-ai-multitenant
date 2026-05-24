@@ -157,6 +157,32 @@ services:
     networks: [agentic-net]
     <<: [*default-restart, *default-logging]
 
+  # ---------------------------------------------------------------------------
+  # egress-proxy — tinyproxy con allowlist (ADR 0019 / task_02_35).
+  # Conectado a DOS redes:
+  #  - `agentic-net`  → puerta a internet.
+  #  - `agentic-agents` (internal) → la única vía que el sandbox
+  #    `agent-runtime` tiene para alcanzar a un proveedor LLM real.
+  # Las credenciales LLM siguen entrando al contenedor por /run/secrets
+  # (Fase B); el proxy sólo controla qué hosts pueden salir.
+  # ---------------------------------------------------------------------------
+  egress-proxy:
+    build: ./egress-proxy
+    container_name: agentic-egress-proxy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - agentic-net
+      - agentic-agents
+    <<: [*default-restart, *default-logging]
+
 volumes:
   postgres_data:
   redis_data:
@@ -169,3 +195,15 @@ networks:
   agentic-net:
     name: agentic-net
     driver: bridge
+  # Red INTERNA por la que viven los contenedores agent-runtime — sin
+  # salida directa a internet, sólo alcanzan al `egress-proxy` que
+  # comparte esta red (ADR 0012 + ADR 0019 / task_02_35). ICC habilitado
+  # para que el agente pueda hablar con el proxy; el aislamiento real
+  # del sandbox vive en el perfil endurecido (cap-drop, read-only FS,
+  # seccomp, etc.), no en la red.
+  agentic-agents:
+    name: agentic-agents
+    driver: bridge
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "true"

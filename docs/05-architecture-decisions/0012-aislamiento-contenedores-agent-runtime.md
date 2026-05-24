@@ -56,9 +56,13 @@ excepción, los kwargs de `docker.containers.run`:
 - **Root filesystem read-only.** Sólo `/workspace` y `/tmp` son
   escribibles, ambos como `tmpfs` con tamaño acotado. Cuando llegue el
   worktree compartido (Plan 06), `/workspace` será un bind read-write.
-- **Red dedicada `agentic-agents`**, `internal` (sin egress) y con ICC
-  desactivado (`enable_icc=false`): el agente no alcanza ni los
-  servicios de plataforma (Postgres/Redis/Vault) ni a otro agente.
+- **Red dedicada `agentic-agents`**, `internal` (sin egress directo a
+  host ni a internet). ICC se habilitó (`enable_icc=true`) en
+  `task_02_35` / ADR 0019 para que el agente pueda alcanzar al servicio
+  `egress-proxy` que comparte esa red; cualquier otro destino externo
+  pasa filtrado por ese proxy (allowlist). El agente sigue sin alcanzar
+  los servicios de plataforma (Postgres/Redis/Vault) porque éstos viven
+  en `agentic-net`, otra red.
 - **Usuario no-root** (uid/gid 1000).
 - **Límites de pids y memoria** — una fork bomb o una fuga no tumban
   el host.

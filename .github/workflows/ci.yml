@@ -244,3 +244,19 @@ jobs:
             built=1
           done
           [ "$built" -eq 1 ] || echo "No agent-runtime Dockerfiles yet."
+
+      # Infra images bajo docker/* que no son agent-runtimes
+      # (egress-proxy, …). task_02_35 / ADR 0019.
+      - name: Build infra images under docker/
+        run: |
+          shopt -s nullglob
+          for dockerfile in docker/*/Dockerfile; do
+            d="$(dirname "$dockerfile")"
+            case "$d" in
+              docker/agent-runtimes) continue ;;  # ya cubiertas arriba
+            esac
+            name="$(basename "$d")"
+            echo "::group::docker build agentic-$name:v1"
+            docker build -t "agentic-$name:v1" "$d"
+            echo "::endgroup::"
+          done

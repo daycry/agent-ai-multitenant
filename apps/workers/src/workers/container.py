@@ -99,9 +99,12 @@ class AgentContainerRunner:
     def ensure_network(self) -> str:
         """Create the dedicated agent network if it does not exist yet.
 
-        The network is `internal` (no egress) with inter-container
-        communication disabled — an agent can reach neither the platform
-        services nor a sibling agent.
+        La red sigue `internal` (sin egress directo al host ni a
+        internet). ICC habilitado para que el agente pueda alcanzar al
+        `egress-proxy` cuando éste está en la misma red — ADR 0019 /
+        task_02_35. El aislamiento del sandbox sigue viviendo en el
+        perfil endurecido (cap-drop, FS read-only, seccomp, sin socket
+        Docker), no en la red.
         """
         name = self._settings.agent_network
         try:
@@ -111,7 +114,7 @@ class AgentContainerRunner:
                 name,
                 driver="bridge",
                 internal=self._settings.agent_network_internal,
-                options={"com.docker.network.bridge.enable_icc": "false"},
+                options={"com.docker.network.bridge.enable_icc": "true"},
                 labels=dict(_BASE_LABELS),
             )
         return name
@@ -132,6 +135,15 @@ class AgentContainerRunner:
         assert_no_docker_socket(kwargs)
 
         environment = {**kwargs.pop("environment", {}), **spec.env}
+
+        # ADR 0019 / task_02_35: si hay un egress-proxy configurado,
+        # los clientes HTTP del agente lo usan transparentemente vía las
+        # variables estándar. Sin proxy configurado, el sandbox queda
+        # sin red de salida — sólo el ScriptedModelClient funciona.
+        proxy_url = self._settings.egress_proxy_url
+        if proxy_url:
+            for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+                environment.setdefault(key, proxy_url)
 
         return self.client.containers.run(
             spec.image,

@@ -54,8 +54,19 @@ class Settings(BaseSettings):
     agent_network_internal: bool = Field(
         default=True,
         description="Create the agent network as `internal` (no egress to "
-        "the host or the internet). Controlled egress for the http_request "
-        "tool arrives in Fase D.",
+        "the host or the internet). El egress controlado a proveedores LLM "
+        "y a la allowlist de `http_request` va por `egress_proxy_url` "
+        "(ADR 0019 / task_02_35), no abriendo esta red.",
+    )
+    egress_proxy_url: str = Field(
+        default="",
+        description="URL del proxy de egress allowlisted que el sandbox "
+        "agent-runtime usa para alcanzar a los proveedores LLM y a los "
+        "dominios de `http_request`. Cuando está vacío NO se inyecta "
+        "HTTP_PROXY en el contenedor — los ModelClient reales no podrán "
+        "salir desde dentro del sandbox y sólo funcionará el "
+        "ScriptedModelClient (ADR 0019). En producción: "
+        "`http://egress-proxy:8888` (el servicio del compose, task_02_35).",
     )
     container_mem_limit: str = Field(
         default="512m",
