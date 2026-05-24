@@ -160,7 +160,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_05` — Selector de modo persistente en cabecera del chat (Planning, Discusión, Ejecución)
 
-- [ ] **Título**: Selector de modo persistente en cabecera del chat (Planning, Discusión, Ejecución)
+- [x] **Título**: Selector de modo persistente en cabecera del chat (Planning, Discusión, Ejecución)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: frontend-dev
