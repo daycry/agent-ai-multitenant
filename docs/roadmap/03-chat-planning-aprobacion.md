@@ -1,9 +1,9 @@
 ---
 plan_id: 03-chat-planning-aprobacion
 title: Chat, Planning Multi-Agente y Aprobación
-status: pending_approval
+status: in_progress
 blocking_plan: [02-ejecucion-agentes]
-started_at: null
+started_at: 2026-05-24
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 80-100
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `03-chat-planning-aprobacion`             |
-| **Estado**                         | `pending_approval`                        |
+| **Estado**                         | `in_progress`                             |
 | **Bloqueado por**                  | `02-ejecucion-agentes`                    |
 | **Tiempo estimado (calendario)**   | 4-5 semanas                               |
 | **Tiempo estimado (persona-días)** | 80-100                                    |

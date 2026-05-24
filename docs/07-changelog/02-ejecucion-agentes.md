@@ -2,8 +2,8 @@
 plan_id: 02-ejecucion-agentes
 title: Ejecución de Agentes
 started_at: 2026-05-22
-completed_at: null
-status: pending_human_validation
+completed_at: 2026-05-24
+status: completed
 tasks_done: 34
 tasks_total: 34
 tasks_pending_local: []
@@ -12,11 +12,11 @@ human_validations_passing: 5
 docs_language: es
 ---
 
-> **Estado:** las 34 tareas (`task_02_01`..`task_02_34`) están en
-> `done` con sus tests automáticos en verde — 467 tests pytest + 13
-> tests Playwright. Los cinco tests humanos (`human_02_01`..`human_02_05`)
-> han sido validados por el revisor. Queda únicamente el merge a `main`
-> de los commits locales pendientes para que el plan pase a `completed`. Sobre el dominio estático del Plan 01, el Plan
+> **Estado:** plan **`completed`** (cerrado el 2026-05-24). Las 34
+> tareas (`task_02_01`..`task_02_34`) en `done` con sus tests
+> automáticos en verde — 467 tests pytest + 13 tests Playwright. Los
+> cinco tests humanos (`human_02_01`..`human_02_05`) validados por el
+> revisor. Mergeado a `master`. Sobre el dominio estático del Plan 01, el Plan
 > 02 da vida al sistema: orchestrator, workers, contenedores aislados,
 > el agent loop LangGraph, las tools builtin, la captura de ejecuciones,
 > la UI en tiempo real, la validación humana — y, con la **Fase G**, el
