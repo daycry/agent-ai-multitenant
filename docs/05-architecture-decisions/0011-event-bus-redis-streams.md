@@ -98,7 +98,7 @@ siguiente cambio de estado", recuperable a mano.
    suscrito en el instante exacto, el evento se pierde. Rompe el
    requisito 2. Streams + consumer group da persistencia + replay.
 2. **Celery como bus de eventos.** Celery ya entra en Plan 02
-   (task_02_02) para _ejecutar_ trabajo. Pero una task de Celery es
+   (`task_02_02`) para _ejecutar_ trabajo. Pero una task de Celery es
    "haz esto", no "ha pasado esto" — usarlo como event bus acopla al
    emisor con la firma de la task. Streams mantiene la semántica
    pub/sub-con-persistencia limpia. Celery y el bus coexisten:
