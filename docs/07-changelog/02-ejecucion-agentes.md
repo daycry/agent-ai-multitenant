@@ -7,16 +7,16 @@ status: pending_human_validation
 tasks_done: 34
 tasks_total: 34
 tasks_pending_local: []
-tests_automated_passing: 466
-human_validations_passing: 0
+tests_automated_passing: 467
+human_validations_passing: 5
 docs_language: es
 ---
 
 > **Estado:** las 34 tareas (`task_02_01`..`task_02_34`) están en
-> `done` con sus tests automáticos en verde — 466 tests pytest + 13
-> tests Playwright. El plan queda en `pending_human_validation`:
-> esperando los cinco tests humanos (`human_02_01`..`human_02_05`) y el
-> merge del PR a `main`. Sobre el dominio estático del Plan 01, el Plan
+> `done` con sus tests automáticos en verde — 467 tests pytest + 13
+> tests Playwright. Los cinco tests humanos (`human_02_01`..`human_02_05`)
+> han sido validados por el revisor. Queda únicamente el merge a `main`
+> de los commits locales pendientes para que el plan pase a `completed`. Sobre el dominio estático del Plan 01, el Plan
 > 02 da vida al sistema: orchestrator, workers, contenedores aislados,
 > el agent loop LangGraph, las tools builtin, la captura de ejecuciones,
 > la UI en tiempo real, la validación humana — y, con la **Fase G**, el
@@ -120,7 +120,7 @@ Todas reversibles, verificadas por test.
 
 ## Tests
 
-466 tests **pytest** (unit + integration) y 13 tests **Playwright**
+467 tests **pytest** (unit + integration) y 13 tests **Playwright**
 E2E, todos en verde. Los tests E2E son autocontenidos: mockean REST y
 WebSocket e inyectan el token, sin depender del api-server.
 
