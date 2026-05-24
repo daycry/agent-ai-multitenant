@@ -27,6 +27,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
+import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { cn } from "@/lib/utils";
 
 // --------------------------------------------------------------------------
@@ -56,6 +57,22 @@ interface Message {
   is_summary: boolean;
   created_at: string;
 }
+
+// Built-in PlanningRoles mirrored from
+// `api_server.chat.planning_graph.PlanningRole`. Used by the @-mention
+// autocomplete (task_03_12) — the operator can address a specific
+// specialist directly from the chat composer.
+const PLANNING_ROLES = [
+  "project_manager",
+  "architect",
+  "backend_dev",
+  "frontend_dev",
+  "qa",
+  "reviewer",
+  "devops",
+  "security",
+  "technical_writer",
+] as const;
 
 interface ModeOption {
   value: string;
@@ -224,6 +241,23 @@ export default function ProjectChatPage() {
     enabled: Boolean(activeConversationId),
   });
 
+  // POST a new user message. The composer below uses this; the
+  // @-mention chips are part of the content string itself (no
+  // separate field) so the backend's existing schema accepts them
+  // without changes.
+  const postMessage = useMutation({
+    mutationFn: async ({ conversationId, content }: { conversationId: string; content: string }) =>
+      apiFetch<Message>(`/conversations/${conversationId}/messages`, {
+        method: "POST",
+        body: { author_kind: "user", content },
+      }),
+    onSuccess: (created) => {
+      queryClient.setQueryData<Message[]>(["messages", created.conversation_id], (prev) =>
+        prev ? [...prev, created] : [created],
+      );
+    },
+  });
+
   // ----------------------------------------------------------------
   // Render
   // ----------------------------------------------------------------
@@ -307,6 +341,17 @@ export default function ProjectChatPage() {
         </CardHeader>
         <CardContent>
           <MessageFeed messages={messagesQuery.data ?? []} loading={messagesQuery.isLoading} />
+          {activeConversation ? (
+            <ChatComposer
+              disabled={postMessage.isPending}
+              onSubmit={(content) =>
+                postMessage.mutate({
+                  conversationId: activeConversation.id,
+                  content,
+                })
+              }
+            />
+          ) : null}
         </CardContent>
       </Card>
     </div>
@@ -362,15 +407,126 @@ function MessageRow({ message }: { message: Message }) {
     message.author_kind === "agent"
       ? "border-indigo-500/40 bg-indigo-500/5"
       : "border-emerald-500/40 bg-emerald-500/5";
+  // Agents may emit structured plan drafts as markdown (tables, lists,
+  // headings). Users type plain text so we only run the renderer for
+  // agent turns; user messages stay verbatim.
+  const body =
+    message.author_kind === "agent" ? (
+      renderPlanDraft(message.content)
+    ) : (
+      <p className="whitespace-pre-wrap">{message.content}</p>
+    );
   return (
     <div
       className={cn("rounded border px-3 py-2 text-sm", tone)}
       data-testid={`chat-message-${message.author_kind}`}
     >
-      <p className="whitespace-pre-wrap">{message.content}</p>
+      {body}
       <p className="text-muted-foreground mt-1 text-[10px] uppercase tracking-wide">
         {message.author_kind} · {message.mode}
       </p>
     </div>
   );
+}
+
+// --------------------------------------------------------------------------
+// Composer with @-mention autocomplete (task_03_12)
+// --------------------------------------------------------------------------
+interface ChatComposerProps {
+  disabled: boolean;
+  onSubmit: (content: string) => void;
+}
+
+function ChatComposer({ disabled, onSubmit }: ChatComposerProps) {
+  const [value, setValue] = useState("");
+  // The @-trigger is open when the cursor sits in the middle of a
+  // partial mention token ("@" followed by 0+ word-chars, no space).
+  const mention = parsePendingMention(value);
+
+  const suggestions = mention
+    ? PLANNING_ROLES.filter((r) => r.startsWith(mention.query.toLowerCase()))
+    : [];
+
+  const pickMention = (role: string) => {
+    if (!mention) return;
+    const before = value.slice(0, mention.start);
+    const after = value.slice(mention.start + mention.length);
+    setValue(`${before}@${role} ${after}`);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = value.trim();
+    if (!trimmed || disabled) return;
+    onSubmit(trimmed);
+    setValue("");
+  };
+
+  return (
+    <form className="mt-4 relative" onSubmit={handleSubmit} data-testid="chat-composer">
+      <textarea
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="Escribe un mensaje. Usa @ para mencionar a un agente."
+        rows={3}
+        disabled={disabled}
+        data-testid="chat-input"
+        className={cn(
+          "w-full resize-none rounded border px-3 py-2 text-sm",
+          "bg-background focus:outline-none focus:ring-2 focus:ring-indigo-500/40",
+        )}
+      />
+      {suggestions.length > 0 ? (
+        <ul
+          data-testid="mention-suggestions"
+          className={cn(
+            "bg-popover border-muted absolute left-0 z-10 -mt-2 rounded border",
+            "max-h-48 w-64 overflow-y-auto py-1 shadow-md",
+          )}
+        >
+          {suggestions.map((role) => (
+            <li key={role}>
+              <button
+                type="button"
+                data-testid={`mention-suggestion-${role}`}
+                onClick={() => pickMention(role)}
+                className="hover:bg-muted w-full px-3 py-1 text-left text-sm"
+              >
+                @{role}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="mt-2 flex justify-end">
+        <Button
+          type="submit"
+          disabled={disabled || value.trim().length === 0}
+          data-testid="chat-send"
+        >
+          Enviar
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * Returns metadata about the @-mention the user is currently typing
+ * (the token immediately before the cursor / value end), or null if
+ * there isn't one.
+ */
+export function parsePendingMention(
+  value: string,
+): { start: number; length: number; query: string } | null {
+  // Match `@word` at the end of the buffer (we don't track caret
+  // position here — a simple end-of-text match is good enough for the
+  // common "type @ and pick" flow).
+  const match = /@(\w*)$/.exec(value);
+  if (!match) return null;
+  return {
+    start: match.index,
+    length: match[0].length,
+    query: match[1],
+  };
 }

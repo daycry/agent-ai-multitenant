@@ -81,9 +81,11 @@ exclude = [
 ]
 
 # Celery and kombu ship no py.typed marker; treat their imports as
-# untyped rather than vendoring stub packages into the hook.
+# untyped rather than vendoring stub packages into the hook. Same for
+# LangGraph — the planning sub-graph imports `langgraph.graph` but the
+# package has no py.typed marker either.
 [[tool.mypy.overrides]]
-module = ["celery.*", "kombu.*"]
+module = ["celery.*", "kombu.*", "langgraph.*"]
 ignore_missing_imports = true
 
 # The Docker SDK's inline types are incomplete (docker.from_env and

@@ -230,7 +230,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_09` — Coordinación con LangGraph: PM como portavoz, otros agentes intervienen según pertinencia
 
-- [ ] **Título**: Coordinación con LangGraph: PM como portavoz, otros agentes intervienen según pertinencia
+- [x] **Título**: Coordinación con LangGraph: PM como portavoz, otros agentes intervienen según pertinencia
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: ai-engineer
@@ -247,7 +247,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_10` — Construcción de contexto: chat actual + Kanban estado + planes anteriores + memoria + KBs
 
-- [ ] **Título**: Construcción de contexto: chat actual + Kanban estado + planes anteriores + memoria + KBs
+- [x] **Título**: Construcción de contexto: chat actual + Kanban estado + planes anteriores + memoria + KBs
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -264,7 +264,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_11` — Generación de borradores estructurados del plan en el chat con tablas y listas
 
-- [ ] **Título**: Generación de borradores estructurados del plan en el chat con tablas y listas
+- [x] **Título**: Generación de borradores estructurados del plan en el chat con tablas y listas
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -281,7 +281,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_12` — @-mentions a agentes específicos para dirigirse a uno concreto
 
-- [ ] **Título**: @-mentions a agentes específicos para dirigirse a uno concreto
+- [x] **Título**: @-mentions a agentes específicos para dirigirse a uno concreto
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: frontend-dev + backend-dev
