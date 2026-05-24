@@ -143,8 +143,12 @@ async def test_human_required_action_parks_the_execution(
 
         async with sm() as s:
             execution = await s.get(Execution, ids["execution"])
-            assert execution is not None
+            task = await s.get(Task, ids["task"])
+            assert execution is not None and task is not None
             assert execution.status == "awaiting_human_approval"
+            # ADR 0020 — la tarea también se aparca y el agente queda libre.
+            assert task.status == "awaiting_human_approval"
+            assert task.assigned_agent_id is None
             pending = await list_pending_approvals(s)
         assert [r.id for r in pending] == [request_id]
         assert pending[0].category == "production_deploy"
@@ -181,9 +185,11 @@ async def test_auto_action_does_not_create_a_request(
 
 
 @pytest.mark.asyncio
-async def test_approving_a_request_resumes_the_execution(
+async def test_approving_a_request_sends_the_task_back_to_backlog(
     _migrated: None, admin_database_url: str
 ) -> None:
+    """ADR 0020 — aprobar cierra la ejecución y devuelve la tarea al
+    backlog con su agente liberado, para que el dispatcher la re-asigne."""
     engine = create_async_engine(admin_database_url)
     try:
         sm = async_sessionmaker(engine, expire_on_commit=False)
@@ -206,8 +212,12 @@ async def test_approving_a_request_resumes_the_execution(
 
         async with sm() as s:
             execution = await s.get(Execution, ids["execution"])
-            assert execution is not None
-            assert execution.status == "running"
+            task = await s.get(Task, ids["task"])
+            assert execution is not None and task is not None
+            assert execution.status == "done"
+            assert execution.completed_at is not None
+            assert task.status == "backlog"
+            assert task.assigned_agent_id is None
             request = await s.get(ApprovalRequest, request_id)
         assert request is not None
         assert request.status == "approved"
@@ -247,6 +257,13 @@ async def test_rejecting_a_request_records_the_reason(
             )
 
         async with sm() as s:
+            execution = await s.get(Execution, ids["execution"])
+            task = await s.get(Task, ids["task"])
+            assert execution is not None and task is not None
+            # ADR 0020 — rechazar cierra la ejecución y bloquea la tarea.
+            assert execution.status == "aborted"
+            assert execution.abort_code == "approval_rejected"
+            assert task.status == "blocked"
             request = await s.get(ApprovalRequest, request_id)
         assert request is not None
         assert request.status == "rejected"

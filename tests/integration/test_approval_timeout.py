@@ -187,3 +187,10 @@ def test_migration_0012_is_reversible(alembic_config: object) -> None:
     command.upgrade(alembic_config, "head")
     command.downgrade(alembic_config, "0011_platform_settings")
     command.upgrade(alembic_config, "head")
+
+
+def test_migration_0013_is_reversible(alembic_config: object) -> None:
+    """ADR 0020 — `tasks.status` widening: downgrade then upgrade again."""
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "0012_approval_requests")
+    command.upgrade(alembic_config, "head")

@@ -40,7 +40,7 @@ _POLICY = {"categories": {"code_execution": "human_required"}}
 
 
 async def main() -> int:  # noqa: PLR0915 - script de demo, lineal por diseño
-    from api_server.db.domain import ApprovalRequest
+    from api_server.db.domain import ApprovalRequest, Task
     from api_server.db.execution_repo import list_executions_for_task
     from redis.asyncio import Redis
     from sqlalchemy import select
@@ -96,6 +96,7 @@ async def main() -> int:  # noqa: PLR0915 - script de demo, lineal por diseño
 
         async with sm() as session:
             execution = (await list_executions_for_task(session, ids["task"]))[0]
+            task = await session.get(Task, ids["task"])
             requests = (
                 (
                     await session.execute(
@@ -108,7 +109,17 @@ async def main() -> int:  # noqa: PLR0915 - script de demo, lineal por diseño
 
         print()
         print(f"  Ejecución {execution.id}  ·  estado: {execution.status}")
-        ok = outcome.status == "awaiting_human_approval" and len(requests) == 1
+        if task is not None:
+            print(
+                f"  Tarea     {task.id}  ·  estado: {task.status}  "
+                f"·  assigned_agent_id: {task.assigned_agent_id}"
+            )
+        ok = (
+            outcome.status == "awaiting_human_approval"
+            and len(requests) == 1
+            and task is not None
+            and task.status == "awaiting_human_approval"
+        )
         if requests:
             req = requests[0]
             print(f"  Solicitud de aprobación {req.id}")
@@ -117,14 +128,15 @@ async def main() -> int:  # noqa: PLR0915 - script de demo, lineal por diseño
             print(f"    acción    : {req.action}")
         print()
         if ok:
-            print("  ✓ La ejecución quedó APARCADA esperando decisión humana — la")
-            print("    acción sensible NO se ejecutó.")
+            print("  ✓ Ejecución y tarea APARCADAS esperando decisión humana — la")
+            print("    acción sensible NO se ejecutó. El agente Writer queda libre.")
+            print("    En el board verás la tarea en la columna 'Pendiente de aprobación'.")
             print()
-            print("  Ahora, en el admin-panel, completa el test humano:")
+            print("  Ahora, en el admin-panel, completa el test humano (ADR 0020):")
             print("    1. Entra en Aprobaciones — verás la solicitud pendiente.")
-            print("    2. Al APROBAR, la tarea continúa con la acción aplicada.")
-            print("    3. Al RECHAZAR, la tarea vuelve a in_progress con feedback.")
-            print("    4. Sin respuesta en 24 h, la tarea pasa a blocked.")
+            print("    2. Al APROBAR, la tarea vuelve a backlog (dispatcher la re-asignará).")
+            print("    3. Al RECHAZAR, la tarea pasa a blocked.")
+            print("    4. Sin respuesta en 24 h, la tarea pasa a blocked por timeout.")
         else:
             print("  REVISAR — la ejecución no quedó aparcada como se esperaba.")
         return 0 if ok else 1

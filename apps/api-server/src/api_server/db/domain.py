@@ -167,6 +167,10 @@ class TaskStatus(enum.StrEnum):
     BACKLOG = "backlog"
     READY = "ready"
     IN_PROGRESS = "in_progress"
+    # La tarea está aparcada esperando una decisión humana sobre una
+    # acción sensible (ADR 0020). El agente queda libre; al aprobar la
+    # tarea vuelve a `backlog`; al rechazar pasa a `blocked`.
+    AWAITING_HUMAN_APPROVAL = "awaiting_human_approval"
     IN_REVIEW = "in_review"
     BLOCKED = "blocked"
     DONE = "done"
@@ -598,8 +602,9 @@ class Task(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
 
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 32 chars — wide enough for `awaiting_human_approval` (ADR 0020).
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default=text("'backlog'")
+        String(32), nullable=False, server_default=text("'backlog'")
     )
     priority: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'medium'")

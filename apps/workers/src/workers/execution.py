@@ -32,7 +32,7 @@ from api_server.db.execution_repo import (
     finalize_execution,
     get_execution,
 )
-from api_server.events import publish_execution_event
+from api_server.events import publish_execution_event, publish_task_status_changed
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -205,7 +205,7 @@ def _assemble_result(
     )
 
 
-async def conduct_execution(
+async def conduct_execution(  # noqa: PLR0915 - tramos lineales (seed/run/finalize/publish)
     request: ExecutionRequest,
     *,
     settings: Settings,
@@ -277,14 +277,19 @@ async def conduct_execution(
         runtime_error=runtime_error,
     )
     approval = final_result.get("approval") if final_result else None
+    task_event: tuple[Any, str, str] | None = None
     async with sessionmaker() as session, session.begin():
         await finalize_execution(session, execution_id, result=result)
         # A run parked on a sensitive action becomes a real
         # ApprovalRequest — the approval engine on the live run (task_02_33).
+        # request_approval_if_needed also moves the TASK to
+        # `awaiting_human_approval` and frees its agent (ADR 0020).
         if result.status == _AWAITING_APPROVAL and approval:
             execution = await get_execution(session, execution_id)
             project = await _load_project(session, task_id)
-            if execution is not None and project is not None:
+            task = await session.get(Task, task_id)
+            if execution is not None and project is not None and task is not None:
+                old_status = task.status
                 await request_approval_if_needed(
                     session,
                     execution=execution,
@@ -292,6 +297,14 @@ async def conduct_execution(
                     category=str(approval.get("category", "")),
                     action=dict(approval.get("action") or {}),
                 )
+                if task.status != old_status:
+                    task_event = (task, old_status, task.status)
+
+    # Publish the task event AFTER the commit so the board sees a
+    # consistent state. publish_* is best-effort and swallows its own errors.
+    if task_event is not None:
+        task_obj, old, new = task_event
+        await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
 
     _log.info("workers.execution_finished", execution_id=exec_id, status=result.status)
     return ExecutionOutcome(

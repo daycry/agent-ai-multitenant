@@ -300,6 +300,8 @@ def test_task_status_values() -> None:
         "backlog",
         "ready",
         "in_progress",
+        # ADR 0020 — tarea aparcada esperando decisión humana.
+        "awaiting_human_approval",
         "in_review",
         "blocked",
         "done",

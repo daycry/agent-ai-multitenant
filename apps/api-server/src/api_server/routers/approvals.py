@@ -10,15 +10,17 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import AuthPrincipal, get_principal, get_redis, get_tenant_session
 from api_server.db.approval_repo import (
     get_approval_request,
     list_pending_approvals,
     resolve_approval,
 )
-from api_server.db.domain import ApprovalRequestStatus
+from api_server.db.domain import ApprovalRequestStatus, Task, TaskStatus
+from api_server.events import publish_task_status_changed
 from api_server.schemas.approvals import (
     ApprovalRequestResponse,
     ApprovalResolveRequest,
@@ -42,8 +44,14 @@ async def resolve_approval_request(
     payload: ApprovalResolveRequest,
     principal: AuthPrincipal = Depends(get_principal),
     session: AsyncSession = Depends(get_tenant_session),
+    redis: Redis = Depends(get_redis),
 ) -> ApprovalRequestResponse:
-    """Approve or reject a pending request and resume its execution."""
+    """Approve or reject a pending request (ADR 0020).
+
+    Approve -> task back to `backlog`; reject -> task to `blocked`.
+    `resolve_approval` does the DB moves; here we publish the task
+    transition so the board reacts in real time.
+    """
     request = await get_approval_request(session, request_id)
     if request is None:
         raise HTTPException(
@@ -61,4 +69,14 @@ async def resolve_approval_request(
         resolver_id=principal.user_id,
         reason=payload.reason,
     )
+    # Tell the board about the task transition (best-effort).
+    new_status = TaskStatus.BACKLOG if payload.approved else TaskStatus.BLOCKED
+    task = await session.get(Task, resolved.task_id)
+    if task is not None:
+        await publish_task_status_changed(
+            redis,
+            task,
+            old_status=TaskStatus.AWAITING_HUMAN_APPROVAL,
+            new_status=new_status,
+        )
     return to_approval_response(resolved)

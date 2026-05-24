@@ -69,6 +69,9 @@ const COLUMNS: Array<{
   { id: "backlog", label: "Backlog", variant: "muted" },
   { id: "ready", label: "Ready", variant: "info" },
   { id: "in_progress", label: "En curso", variant: "primary" },
+  // ADR 0020 — el agente queda libre; al aprobar la tarea vuelve a backlog,
+  // al rechazar pasa a blocked.
+  { id: "awaiting_human_approval", label: "Pendiente de aprobación", variant: "warning" },
   { id: "in_review", label: "Revisión", variant: "warning" },
   { id: "blocked", label: "Bloqueada", variant: "danger" },
   { id: "done", label: "Hecho", variant: "success" },

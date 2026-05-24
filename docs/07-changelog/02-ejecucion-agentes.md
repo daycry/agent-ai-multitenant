@@ -98,6 +98,13 @@ self_review`). Cada ejecución se captura en la tabla `executions`
 - **ADR 0016** — Motor de validación humana.
 - **ADR 0017** — Fase de integración end-to-end del Plan 02 (Fase G).
 - **ADR 0018** — El Claude Agent SDK como `ModelClient` de un turno.
+- **ADR 0019** — Egress de red del sandbox agent-runtime (Opción 1:
+  egress controlado).
+- **ADR 0020** — Ciclo de vida `awaiting_human_approval` en la
+  `Task` (Opción A: agente libre + vuelta a backlog al aprobar /
+  blocked al rechazar). Refinamiento de ADR 0016 nacido al ejecutar
+  `human_02_04` y observar que la tarea aparcada no aparecía en el
+  board.
 
 ## Migraciones de base de datos
 
@@ -106,9 +113,10 @@ self_review`). Cada ejecución se captura en la tabla `executions`
 - `0011` — tabla `platform_settings` (ajustes globales de plataforma).
 - `0012` — tabla `approval_requests`; `executions.status` ampliada a 32
   caracteres para `awaiting_human_approval`.
+- `0013` — `tasks.status` ampliada a 32 caracteres por el mismo motivo
+  (ADR 0020).
 
-Todas reversibles, verificadas por test. La Fase G no añadió migraciones
-— sólo cableado sobre el esquema existente.
+Todas reversibles, verificadas por test.
 
 ## Tests
 

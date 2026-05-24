@@ -34,6 +34,9 @@ from api_server.db.domain import (
 
 # Abort code stamped on an execution whose approval request timed out.
 APPROVAL_TIMEOUT_ABORT_CODE = "approval_timeout_exceeded"
+# Abort code stamped on an execution whose approval request was rejected
+# by a human reviewer (ADR 0020).
+APPROVAL_REJECTED_ABORT_CODE = "approval_rejected"
 
 
 def requires_human_approval(policy: dict[str, Any] | None, category: str) -> bool:
@@ -79,6 +82,15 @@ async def request_approval_if_needed(
     )
     session.add(request)
     execution.status = ExecutionStatus.AWAITING_HUMAN_APPROVAL
+
+    # ADR 0020: la TAREA también se aparca y el agente queda libre, para
+    # que el dispatcher pueda darle otra tarea y para que el board
+    # muestre la espera en una columna propia.
+    task = await session.get(Task, execution.task_id)
+    if task is not None and task.status != TaskStatus.AWAITING_HUMAN_APPROVAL:
+        task.status = TaskStatus.AWAITING_HUMAN_APPROVAL
+        task.assigned_agent_id = None
+
     await session.flush()
     return request
 
@@ -106,10 +118,17 @@ async def resolve_approval(
     resolver_id: UUID | None = None,
     reason: str | None = None,
 ) -> ApprovalRequest:
-    """Approve or reject a pending request and resume its execution.
+    """Approve or reject a pending request — ADR 0020.
 
-    Either decision lifts the execution back to `running`; on a
-    rejection the reviewer's `reason` is the feedback the agent receives.
+    APPROVE: the original execution closes as `done`; the task goes
+    back to `backlog` with its agent cleared, so the dispatcher re-picks
+    when it becomes `ready` again (the original agent may be busy with
+    another task by then).
+
+    REJECT: the task is `blocked` — the human said no, and the action
+    will not be retried automatically. The reviewer's `reason` lives
+    on the `ApprovalRequest` for audit (Opción B del ADR 0020, no
+    implementada todavía: pasarlo de vuelta al agente como feedback).
     """
     request.status = ApprovalRequestStatus.APPROVED if approved else ApprovalRequestStatus.REJECTED
     request.resolved_at = datetime.now(UTC)
@@ -117,8 +136,23 @@ async def resolve_approval(
     request.reason = reason
 
     execution = await session.get(Execution, request.execution_id)
-    if execution is not None:
-        execution.status = ExecutionStatus.RUNNING
+    task = await session.get(Task, request.task_id)
+
+    if approved:
+        if execution is not None:
+            execution.status = ExecutionStatus.DONE
+            execution.completed_at = datetime.now(UTC)
+        if task is not None:
+            task.status = TaskStatus.BACKLOG
+            task.assigned_agent_id = None
+    else:
+        if execution is not None:
+            execution.status = ExecutionStatus.ABORTED
+            execution.abort_code = APPROVAL_REJECTED_ABORT_CODE
+            execution.completed_at = datetime.now(UTC)
+        if task is not None:
+            task.status = TaskStatus.BLOCKED
+
     await session.flush()
     return request
 

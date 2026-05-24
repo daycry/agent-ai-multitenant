@@ -737,13 +737,13 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
 
 - id: human_02_04
   description: "Validación humana pausa correctamente"
-  hint: "Configurar proyecto con policy 'production_deploy: require_human' y disparar una tarea que la requiera"
+  hint: "Configurar proyecto con policy 'code_execution: human_required' y disparar una tarea que la requiera (ver scripts/demo_human_02_04.py). ADR 0020 fija la semántica."
   checklist:
-    - "La tarea pasa a awaiting_human_approval"
-    - "Aparece notificación in-app al project_owner"
-    - "Al aprobar, la tarea continúa con la acción aplicada"
-    - "Al rechazar, la tarea vuelve a in_progress y el agente recibe feedback"
-    - "Tras 24h sin respuesta, la tarea pasa a blocked"
+    - "La tarea pasa a awaiting_human_approval (columna 'Pendiente de aprobación' del board); el agente queda libre (assigned_agent_id NULL)"
+    - "Aparece notificación in-app al project_owner / aparece la solicitud pendiente en la pantalla Aprobaciones"
+    - "Al aprobar, la tarea vuelve a backlog (el dispatcher la re-asigna cuando llegue a ready)"
+    - "Al rechazar, la tarea pasa a blocked y la ejecución queda aborted con abort_code=approval_rejected"
+    - "Tras 24h sin respuesta, la solicitud se marca timed_out y la tarea pasa a blocked"
 
 - id: human_02_05
   description: "Tiempo real funciona"

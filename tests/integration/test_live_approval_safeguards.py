@@ -19,7 +19,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
-from api_server.db.domain import ApprovalRequest, ExecutionStatus, Project, Task
+from api_server.db.domain import ApprovalRequest, ExecutionStatus, Project, Task, TaskStatus
 from api_server.db.execution_repo import list_executions_for_task
 from api_server.db.models import Organization
 from redis.asyncio import Redis
@@ -128,6 +128,7 @@ async def test_a_sensitive_action_parks_the_execution_for_approval(
 
         async with sm() as s:
             execution = (await list_executions_for_task(s, ids["task"]))[0]
+            task = await s.get(Task, ids["task"])
             requests = (
                 (
                     await s.execute(
@@ -139,6 +140,10 @@ async def test_a_sensitive_action_parks_the_execution_for_approval(
             )
         assert execution.status == ExecutionStatus.AWAITING_HUMAN_APPROVAL
         assert execution.completed_at is None  # parked, not finished
+        # ADR 0020 — la tarea también se aparca y el agente queda libre.
+        assert task is not None
+        assert task.status == TaskStatus.AWAITING_HUMAN_APPROVAL
+        assert task.assigned_agent_id is None
         assert len(requests) == 1
         request = requests[0]
         assert request.status == "pending"
