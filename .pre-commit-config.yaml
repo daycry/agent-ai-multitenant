@@ -82,7 +82,9 @@ repos:
         #   apps/orchestrator/.../__main__.py    -> uses api_server.logging
         #   apps/orchestrator/.../dispatch.py    -> uses api_server.db
         #   apps/workers/.../{execution,tasks}.py -> use api_server.db + .events
-        exclude: ^apps/(([^/]+/migrations/.*)|watchdog/.*|orchestrator/src/orchestrator/(__main__|dispatch)\.py|workers/src/workers/(execution|tasks)\.py)$
+        # Also skip tests under packages — the hook venv has no pytest
+        # available and tests carry untyped decorators by design.
+        exclude: ^(apps/(([^/]+/migrations/.*)|watchdog/.*|orchestrator/src/orchestrator/(__main__|dispatch)\.py|workers/src/workers/(execution|tasks)\.py)|packages/[^/]+/tests/.*)$
 
   # -------------------- TypeScript / JavaScript --------------------
   - repo: https://github.com/pre-commit/mirrors-prettier

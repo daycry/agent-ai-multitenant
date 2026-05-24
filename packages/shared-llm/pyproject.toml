@@ -1,0 +1,26 @@
+[project]
+name = "shared-llm"
+version = "0.0.0"
+description = "Unified async LLM provider layer for the agentic platform (ADR 0021)."
+requires-python = ">=3.12"
+dependencies = [
+  "httpx>=0.27,<1",
+]
+
+[project.optional-dependencies]
+# Provider=claude only — the Claude Agent SDK. Optional so a deployment
+# that uses Copilot / Azure Foundry / Ollama doesn't drag the SDK in.
+claude = [
+  "claude-agent-sdk>=0.2.82",
+]
+dev = [
+  "pytest>=8.2,<9",
+  "pytest-asyncio>=0.23,<1",
+]
+
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shared_llm"]

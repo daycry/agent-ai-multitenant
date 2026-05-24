@@ -7,9 +7,10 @@ The loop never imports an LLM SDK directly — it depends on the
   review(state)  → ReviewResponse — does the final output pass?
 
 `ScriptedModelClient` replays a fixed sequence — deterministic, offline,
-and the way the loop / capture / safeguard tests drive the graph. The
-real LiteLLM-backed client (Plan 02 §LLM, ADR 0009) plugs in behind the
-same protocol in a later task.
+and the way the loop / capture / safeguard tests drive the graph. Real
+providers (Azure Foundry APIM, GitHub Copilot, Claude Agent SDK, Ollama)
+plug in behind the same protocol via `agent_runtime.providers`, which
+adapts the async `shared_llm.LLMProvider` layer (ADR 0021).
 """
 
 from __future__ import annotations
@@ -138,9 +139,10 @@ def model_from_spec(spec: dict[str, Any]) -> ModelClient:
     uses this to deserialise the model for a containerised run.
 
     `kind: "scripted"` builds the deterministic test client here; the
-    real provider kinds (`litellm`, `copilot`, `claude_sdk`) are built
-    by `agent_runtime.providers` — imported lazily to keep the loop
-    independent of `httpx` / the Claude SDK when a scripted run is used.
+    real provider kinds (`azure_foundry`, `copilot`, `claude_sdk`,
+    `ollama` — ADR 0021) are built by `agent_runtime.providers` —
+    imported lazily to keep the loop independent of `httpx` / the
+    Claude SDK when a scripted run is used.
     """
     kind = spec.get("kind", "scripted")
     if kind == "scripted":

@@ -20,7 +20,15 @@ extend-exclude = '''
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = [".venv", "build", "dist", "node_modules"]
+extend-exclude = [
+  ".venv",
+  "build",
+  "dist",
+  "node_modules",
+  # Reference designs the user provided as input to ADR 0021. Kept in
+  # the repo for traceability but not part of the codebase.
+  "docs/provider-example",
+]
 
 [tool.ruff.lint]
 select = [
@@ -44,6 +52,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["ARG", "PLR2004", "S101"]
+"packages/*/tests/**/*.py" = ["ARG", "PLR2004", "S101"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection helpers are the canonical way to declare

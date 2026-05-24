@@ -3,7 +3,7 @@
 # por línea, anclado: el campo que evalúa tinyproxy con `FilterURLs Off`
 # es el `Host:` header (sin esquema, sin path). ADR 0019 / task_02_35.
 
-# --- Proveedores LLM (CLAUDE.md §9 / task_02_32) -----------------------
+# --- Proveedores LLM (catálogo cerrado, ADR 0021) ----------------------
 # Anthropic (Claude Agent SDK y API directa).
 ^api\.anthropic\.com$
 
@@ -12,11 +12,17 @@
 ^api\.github\.com$
 ^copilot-proxy\.githubusercontent\.com$
 
-# Gateway LiteLLM — servicio del propio compose, alcanzable por nombre
-# corto dentro de la red docker. Cubierto tanto `litellm` (cuando el
-# resolver añade el sufijo de la red) como `litellm.cualquier-red`.
-^litellm$
-^litellm\.[a-z0-9.-]+$
+# Azure AI Foundry vía Azure API Management — patrón por convención
+# `<name>.azure-api.net`. Si el operador usa un custom domain
+# (p.ej. `apim.miempresa.com`) o ataca Azure OpenAI directo
+# (`<resource>.openai.azure.com`), lo añade aquí.
+^[a-z0-9-]+\.azure-api\.net$
+
+# Ollama cloud. Un Ollama LOCAL (host:11434) o un servidor Ollama
+# propio en la red interna del compose NO sale por este proxy: para
+# alcanzarlo basta con que el contenedor del modelo esté en el
+# network `agentic-agents`.
+^ollama\.com$
 
 # --- Plantilla para per-proyecto -------------------------------------
 # El tool `http_request` (Fase D) sigue aplicando su propia allowlist
