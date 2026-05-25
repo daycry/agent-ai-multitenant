@@ -64,6 +64,17 @@ class Settings(BaseSettings):
         default=SecretStr("changeme-dev-only"),
         description="MinIO secret key (S3 secret_access_key). Vault-sourced in prod.",
     )
+    docling_serve_url: str = Field(
+        default="http://localhost:5001",
+        description="docling-serve HTTP base URL (Plan 04 Fase C).",
+    )
+    ollama_url: str = Field(
+        default="http://localhost:11434",
+        description=(
+            "Ollama HTTP base URL — used for local embeddings"
+            " (default nomic-embed-text-v1.5, Plan 04 task_04_14)."
+        ),
+    )
     clamav_host: str = Field(default="localhost", description="ClamAV TCP host.")
     clamav_port: int = Field(default=3310, description="ClamAV TCP port (INSTREAM).")
 

@@ -249,7 +249,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_10` — Despliegue de docling-serve como contenedor del stack
 
-- [ ] **Título**: Despliegue de docling-serve como contenedor del stack
+- [x] **Título**: Despliegue de docling-serve como contenedor del stack
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -266,7 +266,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_11` — Worker de ingestión que llama a docling-serve y produce chunks estructurales
 
-- [ ] **Título**: Worker de ingestión que llama a docling-serve y produce chunks estructurales
+- [x] **Título**: Worker de ingestión que llama a docling-serve y produce chunks estructurales
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -283,7 +283,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_12` — Soporte para audio (transcripción con Whisper integrada en Docling)
 
-- [ ] **Título**: Soporte para audio (transcripción con Whisper integrada en Docling)
+- [x] **Título**: Soporte para audio (transcripción con Whisper integrada en Docling)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -300,7 +300,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_13` — Antivirus ClamAV antes de ingestión
 
-- [ ] **Título**: Antivirus ClamAV antes de ingestión
+- [x] **Título**: Antivirus ClamAV antes de ingestión
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: security
@@ -317,7 +317,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_14` — Embeddings con modelo configurable (default nomic-embed-text-v1.5 vía Ollama o transformers locales)
 
-- [ ] **Título**: Embeddings con modelo configurable (default nomic-embed-text-v1.5 vía Ollama o transformers locales)
+- [x] **Título**: Embeddings con modelo configurable (default nomic-embed-text-v1.5 vía Ollama o transformers locales)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -334,7 +334,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_15` — Progreso de indexación expuesto vía WebSocket
 
-- [ ] **Título**: Progreso de indexación expuesto vía WebSocket
+- [x] **Título**: Progreso de indexación expuesto vía WebSocket
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + frontend-dev

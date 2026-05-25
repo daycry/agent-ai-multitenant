@@ -30,6 +30,7 @@ from api_server.auth.jwt import InvalidTokenError, decode_jwt
 from api_server.events import (
     EVENTS_STREAM,
     conversation_stream_key,
+    document_stream_key,
     execution_stream_key,
 )
 
@@ -164,3 +165,22 @@ async def conversation_stream(
     if not await _authenticate(ws, token):
         return
     await _pump(ws, redis, conversation_stream_key(conversation_id), project_filter=None)
+
+
+@router.websocket("/ws/documents/{document_id}")
+async def document_stream(
+    ws: WebSocket,
+    document_id: str,
+    token: str | None = Query(default=None),
+    redis: Redis = Depends(get_redis),
+) -> None:
+    """Stream KB document ingestion progress (Plan 04 task_04_15).
+
+    The producer is the Celery ingestion task — it publishes
+    ``document.status`` and ``document.progress`` events to the
+    per-document Redis stream as it walks scan → parse → embed →
+    persist. The UI bar tails this socket to render the progress."""
+    await ws.accept()
+    if not await _authenticate(ws, token):
+        return
+    await _pump(ws, redis, document_stream_key(document_id), project_filter=None)
