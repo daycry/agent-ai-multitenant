@@ -20,7 +20,15 @@ extend-exclude = '''
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = [".venv", "build", "dist", "node_modules"]
+extend-exclude = [
+  ".venv",
+  "build",
+  "dist",
+  "node_modules",
+  # Reference designs the user provided as input to ADR 0021. Kept in
+  # the repo for traceability but not part of the codebase.
+  "docs/provider-example",
+]
 
 [tool.ruff.lint]
 select = [
@@ -43,7 +51,27 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["ARG", "PLR2004", "S101"]
+# Tests often pull deps lazily and use ambiguous unicode in
+# comments (e.g. `×` for multiplication, currency glyphs) — that's
+# fine here.
+"tests/**/*.py" = ["ARG", "PLR2004", "S101", "PLC0415", "RUF002", "RUF003", "N802"]
+"packages/*/tests/**/*.py" = [
+  "ARG",
+  "PLR2004",
+  "S101",
+  "PLC0415",
+  "RUF002",
+  "RUF003",
+  "N802",
+]
+# Process entry points use lazy imports inside `main()` so logging
+# is configured before the app builds. Intentional, not a smell.
+"apps/orchestrator/src/orchestrator/__main__.py" = ["PLC0415"]
+"apps/watchdog/src/watchdog/__main__.py" = ["PLC0415"]
+# The Claude Agent SDK is an optional extra of `shared-llm`. Loading
+# it at module import time would force every deployment that doesn't
+# use Claude to carry the SDK + its Node CLI.
+"packages/shared-llm/src/shared_llm/providers/claude_agent.py" = ["PLC0415"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection helpers are the canonical way to declare
@@ -81,9 +109,11 @@ exclude = [
 ]
 
 # Celery and kombu ship no py.typed marker; treat their imports as
-# untyped rather than vendoring stub packages into the hook.
+# untyped rather than vendoring stub packages into the hook. Same for
+# LangGraph — the planning sub-graph imports `langgraph.graph` but the
+# package has no py.typed marker either.
 [[tool.mypy.overrides]]
-module = ["celery.*", "kombu.*"]
+module = ["celery.*", "kombu.*", "langgraph.*"]
 ignore_missing_imports = true
 
 # The Docker SDK's inline types are incomplete (docker.from_env and
@@ -99,6 +129,13 @@ follow_imports = "skip"
 # venv. Treat its imports as untyped rather than vendoring stubs.
 [[tool.mypy.overrides]]
 module = ["claude_agent_sdk", "claude_agent_sdk.*"]
+ignore_missing_imports = true
+
+# `python-jose` ships without type stubs. We only use a narrow surface
+# (jwt.encode / jwt.decode / JWTError) so adopting types-python-jose
+# would add weight without buying much.
+[[tool.mypy.overrides]]
+module = ["jose", "jose.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

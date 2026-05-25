@@ -90,7 +90,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_01` — Modelos Conversation, Message con campos mode, attachments, related_plan_id
 
-- [ ] **Título**: Modelos Conversation, Message con campos mode, attachments, related_plan_id
+- [x] **Título**: Modelos Conversation, Message con campos mode, attachments, related_plan_id
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -107,7 +107,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_02` — Migración Alembic + RLS
 
-- [ ] **Título**: Migración Alembic + RLS
+- [x] **Título**: Migración Alembic + RLS
 - **Tiempo estimado**: 3 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -124,7 +124,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_03` — Endpoints REST /conversations y WebSocket /ws/conversation/{id}
 
-- [ ] **Título**: Endpoints REST /conversations y WebSocket /ws/conversation/{id}
+- [x] **Título**: Endpoints REST /conversations y WebSocket /ws/conversation/{id}
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -141,7 +141,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_04` — Compresión jerárquica de mensajes antiguos (sub-agente de resumen)
 
-- [ ] **Título**: Compresión jerárquica de mensajes antiguos (sub-agente de resumen)
+- [x] **Título**: Compresión jerárquica de mensajes antiguos (sub-agente de resumen)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -160,7 +160,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_05` — Selector de modo persistente en cabecera del chat (Planning, Discusión, Ejecución)
 
-- [ ] **Título**: Selector de modo persistente en cabecera del chat (Planning, Discusión, Ejecución)
+- [x] **Título**: Selector de modo persistente en cabecera del chat (Planning, Discusión, Ejecución)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: frontend-dev
@@ -177,7 +177,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_06` — System prompts y configuración de tools por modo
 
-- [ ] **Título**: System prompts y configuración de tools por modo
+- [x] **Título**: System prompts y configuración de tools por modo
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -194,7 +194,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_07` — Cambio de modo: mensaje de sistema visible, contexto preservado, comportamiento del equipo cambia
 
-- [ ] **Título**: Cambio de modo: mensaje de sistema visible, contexto preservado, comportamiento del equipo cambia
+- [x] **Título**: Cambio de modo: mensaje de sistema visible, contexto preservado, comportamiento del equipo cambia
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -211,7 +211,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_08` — Modos custom configurables a nivel tenant
 
-- [ ] **Título**: Modos custom configurables a nivel tenant
+- [x] **Título**: Modos custom configurables a nivel tenant
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -230,7 +230,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_09` — Coordinación con LangGraph: PM como portavoz, otros agentes intervienen según pertinencia
 
-- [ ] **Título**: Coordinación con LangGraph: PM como portavoz, otros agentes intervienen según pertinencia
+- [x] **Título**: Coordinación con LangGraph: PM como portavoz, otros agentes intervienen según pertinencia
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: ai-engineer
@@ -247,7 +247,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_10` — Construcción de contexto: chat actual + Kanban estado + planes anteriores + memoria + KBs
 
-- [ ] **Título**: Construcción de contexto: chat actual + Kanban estado + planes anteriores + memoria + KBs
+- [x] **Título**: Construcción de contexto: chat actual + Kanban estado + planes anteriores + memoria + KBs
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -264,7 +264,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_11` — Generación de borradores estructurados del plan en el chat con tablas y listas
 
-- [ ] **Título**: Generación de borradores estructurados del plan en el chat con tablas y listas
+- [x] **Título**: Generación de borradores estructurados del plan en el chat con tablas y listas
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -281,7 +281,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_12` — @-mentions a agentes específicos para dirigirse a uno concreto
 
-- [ ] **Título**: @-mentions a agentes específicos para dirigirse a uno concreto
+- [x] **Título**: @-mentions a agentes específicos para dirigirse a uno concreto
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -300,7 +300,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_13` — Botón 'Generar Plan' contextual: aparece cuando el equipo ha producido propuesta estructurada
 
-- [ ] **Título**: Botón 'Generar Plan' contextual: aparece cuando el equipo ha producido propuesta estructurada
+- [x] **Título**: Botón 'Generar Plan' contextual: aparece cuando el equipo ha producido propuesta estructurada
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -317,7 +317,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_14` — Persistencia del Plan con plantilla canónica (cabecera + descripción + fases + tareas con tests automáticos)
 
-- [ ] **Título**: Persistencia del Plan con plantilla canónica (cabecera + descripción + fases + tareas con tests automáticos)
+- [x] **Título**: Persistencia del Plan con plantilla canónica (cabecera + descripción + fases + tareas con tests automáticos)
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -334,7 +334,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_15` — Validación DAG al persistir (detección de ciclos)
 
-- [ ] **Título**: Validación DAG al persistir (detección de ciclos)
+- [x] **Título**: Validación DAG al persistir (detección de ciclos)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -351,7 +351,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_16` — Máquina de estados del Plan completa (pending_approval, draft, approved, in_progress, blocked, pending_human_validation, completed, cancelled, rejected, archived)
 
-- [ ] **Título**: Máquina de estados del Plan completa (pending_approval, draft, approved, in_progress, blocked, pending_human_validation, completed, cancelled, rejected, archived)
+- [x] **Título**: Máquina de estados del Plan completa (pending_approval, draft, approved, in_progress, blocked, pending_human_validation, completed, cancelled, rejected, archived)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -370,7 +370,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_17` — Pestaña 'Planes' del proyecto con listado, filtros y badges de estado
 
-- [ ] **Título**: Pestaña 'Planes' del proyecto con listado, filtros y badges de estado
+- [x] **Título**: Pestaña 'Planes' del proyecto con listado, filtros y badges de estado
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -387,7 +387,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_18` — Vista de detalle del plan con renderizado de la plantilla canónica
 
-- [ ] **Título**: Vista de detalle del plan con renderizado de la plantilla canónica
+- [x] **Título**: Vista de detalle del plan con renderizado de la plantilla canónica
 - **Tiempo estimado**: 14 h
 - **Complejidad**: l
 - **Rol sugerido**: frontend-dev
@@ -404,7 +404,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_19` — Grafo visual del DAG de tareas (con D3.js o react-flow)
 
-- [ ] **Título**: Grafo visual del DAG de tareas (con D3.js o react-flow)
+- [x] **Título**: Grafo visual del DAG de tareas (con D3.js o react-flow)
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -421,7 +421,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_20` — Vista Gantt con duración estimada y línea crítica
 
-- [ ] **Título**: Vista Gantt con duración estimada y línea crítica
+- [x] **Título**: Vista Gantt con duración estimada y línea crítica
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -438,7 +438,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_21` — Comentarios in-line en el plan (que el equipo recoge si se refina)
 
-- [ ] **Título**: Comentarios in-line en el plan (que el equipo recoge si se refina)
+- [x] **Título**: Comentarios in-line en el plan (que el equipo recoge si se refina)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -457,7 +457,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_22` — Cálculo de coste humano (tarifa única tenant × tiempo estimado por tarea)
 
-- [ ] **Título**: Cálculo de coste humano (tarifa única tenant × tiempo estimado por tarea)
+- [x] **Título**: Cálculo de coste humano (tarifa única tenant × tiempo estimado por tarea)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -474,7 +474,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_23` — Cálculo de coste IA (catálogo de precios placeholder + rango por complejidad)
 
-- [ ] **Título**: Cálculo de coste IA (catálogo de precios placeholder + rango por complejidad)
+- [x] **Título**: Cálculo de coste IA (catálogo de precios placeholder + rango por complejidad)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -491,7 +491,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_24` — Desglose de coste tabular en la UI
 
-- [ ] **Título**: Desglose de coste tabular en la UI
+- [x] **Título**: Desglose de coste tabular en la UI
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -508,7 +508,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_25` — Flujo de aprobación con doble firma opcional sobre umbral configurable
 
-- [ ] **Título**: Flujo de aprobación con doble firma opcional sobre umbral configurable
+- [x] **Título**: Flujo de aprobación con doble firma opcional sobre umbral configurable
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -525,7 +525,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_26` — Configuración de tarifa horaria del tenant en panel admin
 
-- [ ] **Título**: Configuración de tarifa horaria del tenant en panel admin
+- [x] **Título**: Configuración de tarifa horaria del tenant en panel admin
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -544,7 +544,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_27` — Botón 'Sincronizar al Kanban' con opciones (total / por fase / selección custom)
 
-- [ ] **Título**: Botón 'Sincronizar al Kanban' con opciones (total / por fase / selección custom)
+- [x] **Título**: Botón 'Sincronizar al Kanban' con opciones (total / por fase / selección custom)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -561,7 +561,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_28` — Materialización de tareas en el Kanban con dependencias en task_dependencies
 
-- [ ] **Título**: Materialización de tareas en el Kanban con dependencias en task_dependencies
+- [x] **Título**: Materialización de tareas en el Kanban con dependencias en task_dependencies
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -578,7 +578,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_29` — Idempotencia de la sincronización (no duplicar tareas si se reintenta)
 
-- [ ] **Título**: Idempotencia de la sincronización (no duplicar tareas si se reintenta)
+- [x] **Título**: Idempotencia de la sincronización (no duplicar tareas si se reintenta)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -595,7 +595,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_30` — Garantías DAG en transiciones (rechazo 422 si dependencias no done)
 
-- [ ] **Título**: Garantías DAG en transiciones (rechazo 422 si dependencias no done)
+- [x] **Título**: Garantías DAG en transiciones (rechazo 422 si dependencias no done)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -612,7 +612,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_31` — Documentación: ADRs, guías y changelog
 
-- [ ] **Título**: Documentación: ADRs, guías y changelog
+- [x] **Título**: Documentación: ADRs, guías y changelog
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer

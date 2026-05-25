@@ -9,6 +9,15 @@ phase: 02-ejecucion-agentes
 
 # ADR 0009 — LangGraph como motor del agent loop y del supervisor multi-agente en chat Planning
 
+> **Nota (2026-05-25, ADR 0021).** Las referencias a **LiteLLM** que
+> aparecen en este ADR como "gateway primario de proveedor LLM" están
+> **superseded por ADR 0021**: la plataforma ya no usa LiteLLM y opera
+> con un catálogo cerrado de cuatro proveedores (Claude Agent SDK,
+> GitHub Copilot, Azure AI Foundry vía APIM, Ollama local + cloud).
+> La decisión sobre LangGraph como motor del agent loop y del
+> supervisor multi-agente del chat Planning **sigue vigente** y no
+> queda afectada.
+
 ## Contexto
 
 La plataforma necesita un motor de máquinas de estado con persistencia y

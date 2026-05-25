@@ -1,0 +1,286 @@
+"""GitHub Copilot via OAuth Device Flow + minted JWT (ADR 0021).
+
+Three-step authentication:
+
+  1. **Device Flow**: `start_device_flow()` returns a `user_code` for
+     the operator to enter at `verification_uri`. `poll_device_flow()`
+     polls until the operator authorises and returns the long-lived
+     GitHub OAuth token. `authenticate_interactive()` wraps both.
+  2. **JWT mint**: the OAuth token is exchanged at
+     `api.github.com/copilot_internal/v2/token` for a short-lived JWT
+     (~30 min TTL). The provider re-mints it with 60 seconds of
+     margin before expiry — never on the back of a 401.
+  3. **Chat**: `complete()` / `stream()` use the JWT against
+     `api.githubcopilot.com/chat/completions` with the editor headers
+     GitHub's internal endpoint expects.
+
+WARNING: Copilot has no public API for third parties. The endpoints
+used here are the ones the official VS Code plugin uses; they can
+change without notice and using them outside the IDE may violate
+GitHub's Terms of Service. The operator opts in by configuring this
+provider (see ADR 0021 and the docs/context/github-copilot-* note).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+
+from shared_llm.exceptions import AuthError, ProviderError
+from shared_llm.providers._openai_compat import (
+    check_status,
+    parse_chat_completion,
+    parse_sse_delta,
+    to_openai_messages,
+)
+from shared_llm.types import CompletionResponse, Message, StreamChunk
+
+# The VS Code Copilot plugin's public OAuth client id. Using your own
+# would require registering a GitHub App with Copilot scope, which
+# GitHub does not grant to third-party apps.
+VSCODE_CLIENT_ID = "01ab8ac9400c4e429b23"
+
+# Headers that make every request look like VS Code Copilot Chat.
+EDITOR_HEADERS: dict[str, str] = {
+    "User-Agent": "GitHubCopilotChat/0.24.0",
+    "Editor-Version": "vscode/1.96.2",
+    "Editor-Plugin-Version": "copilot-chat/0.24.0",
+    "Copilot-Integration-Id": "vscode-chat",
+}
+
+_DEVICE_CODE_URL = "https://github.com/login/device/code"
+_OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token"
+_COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
+_COPILOT_API = "https://api.githubcopilot.com"
+
+# Re-mint the JWT once it has under this many seconds of life left.
+_JWT_REFRESH_MARGIN_S = 60.0
+
+
+@dataclass
+class DeviceCodeInfo:
+    """Returned by `start_device_flow` — what the UI shows the operator."""
+
+    device_code: str
+    user_code: str
+    verification_uri: str
+    expires_in: int
+    interval: int
+
+
+class CopilotProvider:
+    name = "github_copilot"
+
+    def __init__(
+        self,
+        *,
+        github_token: str | None = None,
+        timeout: float = 60.0,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        """Initialise the provider.
+
+        `github_token` is the long-lived OAuth token (`gho_*` / `ghu_*`)
+        the device flow returns. If you don't have one yet, leave it
+        None and call `authenticate_interactive()` first.
+        """
+        self._github_token = github_token
+        self._jwt: str | None = None
+        self._jwt_expires_at = 0.0
+        if http_client is not None:
+            self._client = http_client
+            self._owns_client = False
+        else:
+            self._client = httpx.AsyncClient(timeout=timeout)
+            self._owns_client = True
+
+    # ------------------------------------------------------------------
+    # Device flow — interactive auth bootstrap
+    # ------------------------------------------------------------------
+    async def start_device_flow(self) -> DeviceCodeInfo:
+        """Step 1 — request the user_code the operator types into GitHub."""
+        resp = await self._client.post(
+            _DEVICE_CODE_URL,
+            headers={"Accept": "application/json", **EDITOR_HEADERS},
+            data={"client_id": VSCODE_CLIENT_ID, "scope": "read:user"},
+        )
+        if resp.status_code >= 400:
+            raise AuthError(f"device/code failed: {resp.text}")
+        d = resp.json()
+        return DeviceCodeInfo(
+            device_code=d["device_code"],
+            user_code=d["user_code"],
+            verification_uri=d["verification_uri"],
+            expires_in=int(d["expires_in"]),
+            interval=int(d["interval"]),
+        )
+
+    async def poll_device_flow(self, info: DeviceCodeInfo) -> str:
+        """Step 2-3 — poll until the operator authorises; returns the
+        long-lived GitHub OAuth token and stores it on the provider."""
+        deadline = time.time() + info.expires_in
+        interval = info.interval
+        while time.time() < deadline:
+            await asyncio.sleep(interval)
+            resp = await self._client.post(
+                _OAUTH_TOKEN_URL,
+                headers={"Accept": "application/json", **EDITOR_HEADERS},
+                data={
+                    "client_id": VSCODE_CLIENT_ID,
+                    "device_code": info.device_code,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                },
+            )
+            d = resp.json()
+            if "access_token" in d:
+                token = str(d["access_token"])
+                self._github_token = token
+                return token
+            err = d.get("error")
+            if err == "authorization_pending":
+                continue
+            if err == "slow_down":
+                interval += 5
+                continue
+            if err in ("expired_token", "access_denied"):
+                raise AuthError(f"Device flow aborted: {err}")
+        raise AuthError("Device flow expired without authorisation")
+
+    async def authenticate_interactive(
+        self,
+        on_user_code: Callable[[DeviceCodeInfo], Awaitable[None]] | None = None,
+    ) -> str:
+        """Helper that runs both steps. `on_user_code` is your hook to
+        show the user_code in whatever UI you have (CLI, web banner, …)."""
+        info = await self.start_device_flow()
+        if on_user_code is not None:
+            await on_user_code(info)
+        return await self.poll_device_flow(info)
+
+    # ------------------------------------------------------------------
+    # JWT mint — refreshed with margin, never on the back of a 401
+    # ------------------------------------------------------------------
+    async def _ensure_jwt(self) -> str:
+        now = time.time()
+        if self._jwt is not None and now < self._jwt_expires_at - _JWT_REFRESH_MARGIN_S:
+            return self._jwt
+        if not self._github_token:
+            raise AuthError("no GitHub token — run authenticate_interactive() first")
+        resp = await self._client.get(
+            _COPILOT_TOKEN_URL,
+            headers={
+                "Authorization": f"token {self._github_token}",
+                "Accept": "application/json",
+                "User-Agent": EDITOR_HEADERS["User-Agent"],
+            },
+        )
+        if resp.status_code == 401:
+            raise AuthError("GitHub token invalid or lacks Copilot access")
+        if resp.status_code >= 400:
+            raise ProviderError(
+                f"copilot_internal/v2/token: {resp.text}",
+                status_code=resp.status_code,
+            )
+        d = resp.json()
+        self._jwt = str(d["token"])
+        self._jwt_expires_at = float(d.get("expires_at", now + 1500.0))
+        return self._jwt
+
+    async def _chat_headers(self) -> dict[str, str]:
+        jwt = await self._ensure_jwt()
+        return {
+            "Authorization": f"Bearer {jwt}",
+            "Content-Type": "application/json",
+            "Openai-Intent": "conversation-panel",
+            "Openai-Organization": "github-copilot",
+            **EDITOR_HEADERS,
+        }
+
+    # ------------------------------------------------------------------
+    # LLMProvider Protocol
+    # ------------------------------------------------------------------
+    async def complete(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: str | None = None,
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> CompletionResponse:
+        model_id = model or "gpt-4o"
+        body: dict[str, Any] = {
+            "model": model_id,
+            "messages": to_openai_messages(messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": False,
+            **kwargs,
+        }
+        if tools:
+            body["tools"] = tools
+        resp = await self._client.post(
+            f"{_COPILOT_API}/chat/completions",
+            headers=await self._chat_headers(),
+            json=body,
+        )
+        # 401 here means the JWT expired between mint and call — re-mint
+        # once and retry. Anything else is a real provider error.
+        if resp.status_code == 401:
+            self._jwt = None
+            resp = await self._client.post(
+                f"{_COPILOT_API}/chat/completions",
+                headers=await self._chat_headers(),
+                json=body,
+            )
+        check_status(resp, provider=self.name)
+        return parse_chat_completion(resp.json(), provider=self.name, fallback_model=model_id)
+
+    async def stream(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: str | None = None,
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[StreamChunk]:
+        model_id = model or "gpt-4o"
+        body: dict[str, Any] = {
+            "model": model_id,
+            "messages": to_openai_messages(messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+            **kwargs,
+        }
+        if tools:
+            body["tools"] = tools
+        async with self._client.stream(
+            "POST",
+            f"{_COPILOT_API}/chat/completions",
+            headers=await self._chat_headers(),
+            json=body,
+        ) as resp:
+            check_status(resp, provider=self.name)
+            async for line in resp.aiter_lines():
+                delta, done = parse_sse_delta(line)
+                if done:
+                    yield StreamChunk(delta="", done=True)
+                    return
+                if delta:
+                    yield StreamChunk(delta=delta)
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
+
+
+__all__ = ["EDITOR_HEADERS", "VSCODE_CLIENT_ID", "CopilotProvider", "DeviceCodeInfo"]

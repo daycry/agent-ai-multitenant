@@ -17,6 +17,16 @@ phase: 02-ejecucion-agentes
 > decisión. Este ADR no implementa nada: el cableado del egress es una
 > tarea de implementación aparte.
 
+> **Nota (2026-05-25, ADR 0021).** La **estructura del egress**
+> (sandbox `internal: true` + tinyproxy con `FilterDefaultDeny`) **sigue
+> vigente**. Lo que ha cambiado es **la allowlist concreta**: LiteLLM
+> ya no aparece (se retiró del catálogo), Azure AI Foundry vía APIM
+> entra con el patrón `^[a-z0-9-]+\.azure-api\.net$`, y Ollama cloud
+> añade `^ollama\.com$` (un Ollama local en el host o en otro
+> contenedor del compose no sale por el proxy: alcanza al sandbox por
+> la red interna `agentic-agents`). El fichero `docker/egress-proxy/filter.txt`
+> es la fuente de verdad del listado actual.
+
 ## Contexto
 
 `task_02_32` (Fase G) implementó tres `ModelClient` reales —gateway

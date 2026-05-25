@@ -7,6 +7,14 @@
 > (#9, #13, #26…) y números de run NO son de este repo. Es una **idea**, no
 > una receta a copiar literal.
 
+> **Nota (2026-05-25, ADR 0021).** Este documento es **referencia
+> histórica** del diseño aportado por el operador. La integración
+> actual del Claude SDK vive en `packages/shared-llm` como
+> `ClaudeAgentProvider`, con un adaptador `ClaudeSDKModelClient` en
+> `agent_runtime.providers`. Donde el texto cita "LiteLLM" como
+> implementación hermana del `ModelClient`, hoy se lee
+> "AzureFoundry / Copilot / Ollama vía `shared-llm`".
+
 ## Claves a retener para nuestra implementación
 
 - Usar el SDK oficial **`claude-agent-sdk`** (≥ 0.2.82). Internamente arranca

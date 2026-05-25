@@ -26,6 +26,16 @@ docs_language: es
 
 # Changelog — Plan 02 · Ejecución de Agentes
 
+> **Nota (2026-05-25, ADR 0021).** Las menciones de **LiteLLM** en
+> este changelog reflejan el estado del Plan 02 en su cierre
+> (2026-05-24). La capa de proveedores LLM se reescribió en 2026-05-25
+> (ADR 0021): LiteLLM se retiró del catálogo y los `ModelClient` del
+> agent-runtime pasan a ser adaptadores delgados sobre el paquete
+> `packages/shared-llm`. El catálogo soportado hoy es Claude Agent
+> SDK + GitHub Copilot + Azure AI Foundry vía APIM + Ollama
+> (local + cloud). El cableado e2e descrito abajo (Fase G) sigue
+> vigente; lo que cambia es **qué proveedores cubre**.
+
 Fase **2** del Plan de Implementación. El Plan 01 dejó el dominio
 modelado pero estático; el Plan 02 lo pone a ejecutar: agentes reales
 corriendo un bucle de razonamiento dentro de contenedores aislados,

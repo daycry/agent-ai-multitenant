@@ -58,7 +58,22 @@
 
 ## Términos de Provider LLM
 
-**LiteLLM**: gateway proxy unificado que soporta 100+ providers tras la interfaz OpenAI-compatible. Provider principal del sistema.
+**`shared-llm`**: paquete Python en `packages/shared-llm` con la capa
+común `LLMProvider` async (`complete`/`stream`/`aclose`). Implementa
+el catálogo cerrado de cuatro proveedores (ADR 0021). Sustituye al
+LiteLLM gateway que se usó hasta 2026-05.
+
+**Azure AI Foundry vía APIM**: gateway empresarial OpenAI-compatible
+publicado a través de Azure API Management. Camino del catálogo
+ADR 0021 para organizaciones con governance/billing en Azure.
+
+**Ollama**: server local (`ollama serve` en el host o en un
+contenedor adyacente) o cloud (`ollama.com`). Mismo wrapper para los
+dos despliegues — `OllamaProvider.local()` / `.cloud()`.
+
+**LiteLLM**: (HISTÓRICO) gateway proxy unificado que se usó hasta
+2026-05 como provider principal. Retirado por ADR 0021 en favor del
+catálogo cerrado de cuatro proveedores.
 
 **Claude Agent SDK**: SDK oficial de Anthropic que permite usar suscripción Claude Pro/Max vía OAuth en lugar de API metered.
 

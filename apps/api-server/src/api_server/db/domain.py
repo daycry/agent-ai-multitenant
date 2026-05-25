@@ -55,6 +55,16 @@ from api_server.db.base import (
     UUIDPrimaryKeyMixin,
 )
 
+# Plan 03: Conversation/Message live in their own module but are re-exported
+# from `domain` so existing `from api_server.db import domain as d` callers
+# keep finding the whole multi-table domain in one place.
+from api_server.db.conversation import (  # (re-export)
+    ChatMode,
+    Conversation,
+    Message,
+    MessageAuthorKind,
+)
+
 
 # =============================================================================
 # Enums (StrEnum so values are stable strings persisted as TEXT)
@@ -156,11 +166,34 @@ class BudgetPeriod(enum.StrEnum):
 
 
 class PlanStatus(enum.StrEnum):
+    """Full lifecycle of a plan (Plan 03 task_03_16 / task_03_25).
+
+    Transitions are enforced in `api_server.chat.plan_state_machine`.
+    A freshly POSTed plan from the chat lands in ``draft``; the human
+    moves it to ``pending_approval`` to start the review.
+
+    When the AI cost estimate exceeds the platform-configured double-
+    signature threshold (task_03_25), the first approval moves the
+    plan to ``pending_second_approval``; a **different** signer must
+    confirm to reach ``approved``. Below the threshold a single firma
+    is enough (``pending_approval -> approved``).
+
+    Executions of approved plans flip them through ``in_progress``,
+    ``blocked``, then ``pending_human_validation`` and finally
+    ``completed``.
+    """
+
+    PENDING_APPROVAL = "pending_approval"
+    PENDING_SECOND_APPROVAL = "pending_second_approval"
     DRAFT = "draft"
     APPROVED = "approved"
-    EXECUTING = "executing"
+    IN_PROGRESS = "in_progress"
+    BLOCKED = "blocked"
+    PENDING_HUMAN_VALIDATION = "pending_human_validation"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+    REJECTED = "rejected"
+    ARCHIVED = "archived"
 
 
 class TaskStatus(enum.StrEnum):
@@ -556,10 +589,28 @@ class Plan(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'draft'"))
+    # 32 chars so the wide ten-state machine (pending_approval,
+    # pending_human_validation, ...) introduced in task_03_16 fits.
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'draft'"))
 
-    # Soft-FK to a future conversations table (Plan 03 - chat sessions).
+    # Was a soft-FK in the Plan 01 migration; promoted to a real FK in
+    # migration 0014 once the conversations table existed.
     conversation_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # The canonical-template specification (Plan 03 §8.5). JSONB so the
+    # shape can evolve without migrations:
+    #   {
+    #     "summary":      {...},
+    #     "phases":       [{name, description, tasks: [{...}]}],
+    #     "tasks":        [task_spec],   # flat, dependencies by task_id
+    #     "estimates":    {...},
+    #     "tests_humans": [{...}],
+    #     "metadata":     {...}          # template version, generator, etc.
+    #   }
+    # Empty `{}` for a freshly created draft until the team fills it in.
+    specification: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
 
     created_by: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -572,6 +623,17 @@ class Plan(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
         nullable=True,
     )
     approved_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # First-signature trail for the double-firma flow (task_03_25).
+    # NULL on single-signature plans. The state machine asserts the
+    # second signer is a different user than `first_approved_by`.
+    first_approved_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    first_approved_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
 
 
 # =============================================================================
@@ -823,8 +885,6 @@ class ApprovalRequest(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMix
 
 
 __all__ = [
-    "ApprovalRequest",
-    "ApprovalRequestStatus",
     "Agent",
     "AgentRole",
     "AgentScope",
@@ -833,10 +893,16 @@ __all__ = [
     "AgentTool",
     "AgentType",
     "ApprovalPolicyTemplate",
+    "ApprovalRequest",
+    "ApprovalRequestStatus",
     "BudgetPeriod",
+    "ChatMode",
+    "Conversation",
     "Execution",
     "ExecutionStatus",
     "MemoryScope",
+    "Message",
+    "MessageAuthorKind",
     "Plan",
     "PlanStatus",
     "Project",

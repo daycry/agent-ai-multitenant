@@ -83,7 +83,7 @@ no intencionada).
 | `agent_type`                              | `agent_type`         | worker por defecto.                                                                                                                    |
 | `name`, `description`                     | `text`               | Bilingüe ES/EN: el sufijo `_en` se almacena en `description_en`, `system_prompt_en`.                                                   |
 | `system_prompt`                           | `text NOT NULL`      | Prompt base. El fork copia este campo.                                                                                                 |
-| `llm_provider`, `llm_model`, `llm_config` | `text / jsonb`       | Provider desacoplado (LiteLLM, Anthropic SDK, Copilot OAuth).                                                                          |
+| `llm_provider`, `llm_model`, `llm_config` | `text / jsonb`       | Provider desacoplado del catálogo cerrado (ADR 0021): `claude_sdk`, `copilot`, `azure_foundry`, `ollama`.                              |
 | `temperature`, `max_tokens`               | `numeric / int`      | Defaults sensatos en la migración.                                                                                                     |
 | `is_builtin`                              | `bool DEFAULT false` | Bandera redundante con scope=global_builtin que simplifica RLS.                                                                        |
 | `deleted_at`                              | `timestamptz NULL`   | Soft delete.                                                                                                                           |

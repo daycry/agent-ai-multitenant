@@ -647,6 +647,15 @@ Tras Fase 1 el dominio está modelado pero estático. Ahora se ejecutan agentes 
 
 #### `task_02_32` — ModelClients reales (LiteLLM, Claude Agent SDK, GitHub Copilot)
 
+> **Nota (2026-05-25, ADR 0021).** La tarea quedó en su día con tres
+> proveedores reales (LiteLLM, Claude SDK, Copilot). El catálogo se
+> reescribió posteriormente en ADR 0021: LiteLLM se retira, Azure AI
+> Foundry vía APIM ocupa su hueco como gateway empresarial y se añade
+> Ollama (local + cloud). Los `ModelClient` reales pasan a ser
+> adaptadores delgados sobre `packages/shared-llm`. El check `[x]`
+> se mantiene porque la tarea cumplió su contrato en el momento del
+> cierre del Plan 02; el estado actual del código vive bajo ADR 0021.
+
 - [x] **Título**: Implementaciones reales de ModelClient detrás del protocolo cubriendo los tres caminos de proveedor de CLAUDE.md §9: gateway LiteLLM, Claude Agent SDK (Pro/Max) y GitHub Copilot (OAuth Device Flow)
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l

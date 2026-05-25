@@ -116,3 +116,42 @@ async def publish_execution_event(
         )
     except Exception as exc:  # live stream is best-effort, never fail the caller
         _log.warning("api_server.execution_event_publish_failed", error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Per-conversation live stream (Plan 03 Fase A).
+#
+# Each conversation gets its own Redis stream `conv:{id}` for real-time
+# message events — the WebSocket `/ws/conversation/{id}` tails it. Same
+# pattern as per-execution streams above.
+# ---------------------------------------------------------------------------
+EVENT_MESSAGE_CREATED = "message.created"
+EVENT_CONVERSATION_MODE_CHANGED = "conversation.mode_changed"
+
+
+def conversation_stream_key(conversation_id: str) -> str:
+    """Redis stream key for one conversation's live event log."""
+    return f"conv:{conversation_id}"
+
+
+async def publish_conversation_event(
+    redis: Redis,
+    conversation_id: str,
+    *,
+    event_type: str,
+    payload: dict[str, Any],
+) -> None:
+    """Emit one event onto a conversation's per-chat stream (best-effort)."""
+    try:
+        await redis.xadd(
+            conversation_stream_key(conversation_id),
+            {
+                "type": event_type,
+                "occurred_at": datetime.now(UTC).isoformat(),
+                "payload": json.dumps(payload),
+            },
+            maxlen=_MAXLEN,
+            approximate=True,
+        )
+    except Exception as exc:  # live stream is best-effort, never fail the caller
+        _log.warning("api_server.conversation_event_publish_failed", error=str(exc))

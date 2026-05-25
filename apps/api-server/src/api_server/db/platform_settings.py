@@ -70,3 +70,25 @@ async def get_max_review_retries(session: AsyncSession) -> int:
         session, MAX_REVIEW_RETRIES_KEY, default=DEFAULT_MAX_REVIEW_RETRIES
     )
     return int(value)
+
+
+# ---------------------------------------------------------------------------
+# Plan approval — double-signature threshold (Plan 03 task_03_25)
+# ---------------------------------------------------------------------------
+PLAN_DOUBLE_SIGNATURE_THRESHOLD_KEY = "plan_approval_double_signature_threshold"
+# Default 0 = single firma always. The operator raises this from the
+# admin panel to force a second signer on expensive plans. Value is
+# read as a Decimal in the currency of the plan's AI estimate.
+DEFAULT_DOUBLE_SIGNATURE_THRESHOLD = "0"
+
+
+async def get_double_signature_threshold(session: AsyncSession) -> str:
+    """Threshold (string-decimal) above which an AI cost estimate
+    triggers the double-signature path. Returned as a string so the
+    caller picks the right Decimal precision for its currency."""
+    value = await get_platform_setting(
+        session,
+        PLAN_DOUBLE_SIGNATURE_THRESHOLD_KEY,
+        default=DEFAULT_DOUBLE_SIGNATURE_THRESHOLD,
+    )
+    return str(value)

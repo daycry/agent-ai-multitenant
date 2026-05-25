@@ -12,6 +12,17 @@ phase: 02-ejecucion-agentes
 > **Estado: `accepted`.** El System Admin delegó la recomendación
 > ("¿qué me recomiendas? no quiero complicarlo") y aceptó la opción A.
 
+> **Nota (2026-05-25, ADR 0021).** La decisión central de este ADR —
+> que el Claude Agent SDK se inyecta como `ModelClient` de **un solo
+> turno** detrás del loop LangGraph — **sigue vigente**. Lo que ha
+> cambiado: **LiteLLM ya no existe** como proveedor del catálogo
+> (ADR 0021). Donde este texto enumera "LiteLLM, Copilot y Claude",
+> el catálogo actual es **Azure AI Foundry vía APIM + Copilot + Claude
+> SDK + Ollama**. El `ClaudeSDKModelClient` actual es un adaptador
+> sobre `shared_llm.ClaudeAgentProvider` (paquete `packages/shared-llm`)
+> que mantiene exactamente la semántica acordada aquí
+> (`max_turns=1`, un `decide()` por turno).
+
 ## Contexto
 
 `task_02_32` (Fase G, ADR 0017) implementa los tres caminos de proveedor

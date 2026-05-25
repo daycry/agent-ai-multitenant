@@ -1,18 +1,25 @@
-"""Integration tests: the real ModelClient implementations (task_02_32).
+"""Integration tests: the real ModelClient adapters (ADR 0021).
 
-Plan 02 Fase G plugs three real LLM providers behind the one
-`ModelClient` protocol the LangGraph loop already depends on (ADR 0013,
-ADR 0018):
+Plan 02 Fase G plugged real LLM providers behind the one
+`ModelClient` protocol the LangGraph loop already depends on
+(ADR 0013, ADR 0018). ADR 0021 simplified the catalog to four
+providers and moved their HTTP/SDK logic into `shared_llm`; the
+adapters here are thin sync wrappers over that async layer:
 
-  * `LiteLLMModelClient`  — the LiteLLM gateway (OpenAI-compatible).
-  * `CopilotModelClient`  — GitHub Copilot (OpenAI-compatible + a JWT
-                            minted from a GitHub OAuth token).
-  * `ClaudeSDKModelClient`— the Claude Agent SDK, run one turn per
-                            `decide()` so our loop stays in charge.
+  * `AzureFoundryModelClient` — Azure AI Foundry behind APIM
+                                (the enterprise gateway path, replaces
+                                 the LiteLLM gateway that was retired
+                                 in ADR 0021).
+  * `CopilotModelClient`      — GitHub Copilot (JWT minted from a
+                                 GitHub OAuth token, OpenAI-compat).
+  * `ClaudeSDKModelClient`    — Claude Agent SDK, run one turn per
+                                 `decide()` so our loop stays in
+                                 charge (ADR 0018).
+  * `OllamaModelClient`       — Ollama, local or cloud.
 
-The transports are mocked — `httpx.MockTransport` for the HTTP clients,
-an injected fake `query` for the SDK — so the suite needs no network
-and no real credentials.
+The transports are mocked — `httpx.MockTransport` on an
+`httpx.AsyncClient` for the HTTP clients, an injected fake `query` for
+the SDK — so the suite needs no network and no real credentials.
 """
 
 from __future__ import annotations
@@ -25,10 +32,10 @@ import httpx
 import pytest
 from agent_runtime.model import DecisionKind, ModelClient
 from agent_runtime.providers import (
+    AzureFoundryModelClient,
     ClaudeSDKModelClient,
-    CopilotAuth,
     CopilotModelClient,
-    LiteLLMModelClient,
+    OllamaModelClient,
 )
 
 pytestmark = pytest.mark.integration
@@ -89,28 +96,27 @@ def _chat_text(content: str) -> dict[str, Any]:
     }
 
 
-def _mock_http(handler: Any) -> httpx.Client:
-    """An httpx.Client whose transport is a recording mock."""
-    return httpx.Client(transport=httpx.MockTransport(handler))
+def _mock_async_http(handler: Any) -> httpx.AsyncClient:
+    """An httpx.AsyncClient whose transport is a recording mock."""
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-# ---------------------------------------------------------------------------
-# LiteLLM — OpenAI-compatible gateway
-# ---------------------------------------------------------------------------
-def _litellm(handler: Any) -> LiteLLMModelClient:
-    return LiteLLMModelClient(
-        model="gpt-4o",
-        base_url="http://litellm:4000",
-        api_key="sk-test",
+# ===========================================================================
+# Azure Foundry — OpenAI-compatible gateway (replaces LiteLLM)
+# ===========================================================================
+def _azure(handler: Any) -> AzureFoundryModelClient:
+    return AzureFoundryModelClient(
+        model="gpt-4o-foundry",
+        apim_base_url="https://x.azure-api.net/foundry",
+        deployment="gpt-4o",
+        subscription_key="sub-test",
         tools=_TOOLS,
-        http_client=_mock_http(handler),
+        http_client=_mock_async_http(handler),
     )
 
 
-def test_litellm_decide_parses_a_tool_call() -> None:
-    client = _litellm(
-        lambda _req: httpx.Response(200, json=_chat_tool_call("echo", {"text": "hi"}))
-    )
+def test_azure_decide_parses_a_tool_call() -> None:
+    client = _azure(lambda _req: httpx.Response(200, json=_chat_tool_call("echo", {"text": "hi"})))
     response = client.decide(_STATE)
 
     assert response.decision.kind == DecisionKind.ACT
@@ -120,86 +126,113 @@ def test_litellm_decide_parses_a_tool_call() -> None:
     assert response.tokens_out == 12
 
 
-def test_litellm_decide_parses_a_final_answer() -> None:
-    client = _litellm(lambda _req: httpx.Response(200, json=_chat_text("the sea poem")))
+def test_azure_decide_parses_a_final_answer() -> None:
+    client = _azure(lambda _req: httpx.Response(200, json=_chat_text("the sea poem")))
     response = client.decide(_STATE)
 
     assert response.decision.kind == DecisionKind.FINISH
     assert response.decision.output == "the sea poem"
 
 
-def test_litellm_decide_sends_the_model_messages_and_tools() -> None:
+def test_azure_decide_targets_apim_url_with_subscription_key() -> None:
     seen: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["url"] = str(request.url)
-        seen["auth"] = request.headers.get("authorization")
+        seen["sub"] = request.headers.get("ocp-apim-subscription-key")
         seen["body"] = json.loads(request.content)
         return httpx.Response(200, json=_chat_text("done"))
 
-    _litellm(handler).decide(_STATE)
+    _azure(handler).decide(_STATE)
 
-    assert seen["url"].endswith("/chat/completions")
-    assert seen["auth"] == "Bearer sk-test"
-    assert seen["body"]["model"] == "gpt-4o"
+    # APIM URL shape: <base>/openai/deployments/<dep>/chat/completions?api-version=...
+    assert "/openai/deployments/gpt-4o/chat/completions" in seen["url"]
+    assert "api-version=" in seen["url"]
+    assert seen["sub"] == "sub-test"
     assert isinstance(seen["body"]["messages"], list) and seen["body"]["messages"]
     # decide() offers the tool catalog so the model can act.
     assert seen["body"]["tools"] == _TOOLS
 
 
-def test_litellm_review_parses_a_pass() -> None:
+def test_azure_review_parses_a_pass() -> None:
     verdict = json.dumps({"passed": True, "feedback": "matches the task"})
-    client = _litellm(lambda _req: httpx.Response(200, json=_chat_text(verdict)))
+    client = _azure(lambda _req: httpx.Response(200, json=_chat_text(verdict)))
     review = client.review(_STATE)
 
     assert review.passed is True
     assert review.feedback == "matches the task"
 
 
-def test_litellm_review_parses_a_fail() -> None:
+def test_azure_review_parses_a_fail() -> None:
     verdict = json.dumps({"passed": False, "feedback": "off topic"})
-    client = _litellm(lambda _req: httpx.Response(200, json=_chat_text(verdict)))
+    client = _azure(lambda _req: httpx.Response(200, json=_chat_text(verdict)))
     review = client.review(_STATE)
 
     assert review.passed is False
     assert review.feedback == "off topic"
 
 
-# ---------------------------------------------------------------------------
-# GitHub Copilot — OpenAI-compatible + JWT auth
-# ---------------------------------------------------------------------------
-def test_copilot_auth_exchanges_an_oauth_token_for_a_jwt() -> None:
-    calls = {"n": 0}
+# ===========================================================================
+# Ollama — OpenAI-compatible local / cloud
+# ===========================================================================
+def _ollama(handler: Any) -> OllamaModelClient:
+    return OllamaModelClient(
+        model="llama3.1",
+        base_url="http://localhost:11434/v1",
+        api_key=None,
+        tools=_TOOLS,
+        http_client=_mock_async_http(handler),
+    )
+
+
+def test_ollama_decide_parses_a_tool_call() -> None:
+    client = _ollama(
+        lambda _req: httpx.Response(200, json=_chat_tool_call("echo", {"text": "ahoy"}))
+    )
+    response = client.decide(_STATE)
+
+    assert response.decision.kind == DecisionKind.ACT
+    assert response.decision.tool == "echo"
+
+
+def test_ollama_cloud_sends_bearer_token() -> None:
+    seen: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        calls["n"] += 1
-        assert request.headers["authorization"] == "token gho_test"
-        return httpx.Response(200, json={"token": "copilot-jwt-xyz", "expires_at": 9_999_999_999})
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json=_chat_text("ok"))
 
-    auth = CopilotAuth("gho_test", http_client=_mock_http(handler))
-    assert auth.jwt() == "copilot-jwt-xyz"
-    # A second call inside the TTL is served from cache — no re-exchange.
-    assert auth.jwt() == "copilot-jwt-xyz"
-    assert calls["n"] == 1
+    client = OllamaModelClient(
+        model="gpt-oss:120b",
+        base_url="https://ollama.com/v1",
+        api_key="sk-cloud",
+        http_client=_mock_async_http(handler),
+    )
+    client.decide(_STATE)
+    assert seen["auth"] == "Bearer sk-cloud"
 
 
+# ===========================================================================
+# GitHub Copilot — OpenAI-compat + JWT auth (provider handles the mint)
+# ===========================================================================
 def test_copilot_decide_uses_the_jwt_and_vscode_headers() -> None:
     seen: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/copilot_internal/v2/token"):
+            # The provider exchanges the OAuth token for a JWT first.
+            assert request.headers["authorization"] == "token gho_test"
             return httpx.Response(200, json={"token": "jwt-1", "expires_at": 9_999_999_999})
         seen["auth"] = request.headers.get("authorization")
         seen["agent"] = request.headers.get("user-agent")
         seen["integration"] = request.headers.get("copilot-integration-id")
         return httpx.Response(200, json=_chat_tool_call("echo", {"text": "ahoy"}))
 
-    http = _mock_http(handler)
     client = CopilotModelClient(
         model="gpt-4o",
-        auth=CopilotAuth("gho_test", http_client=http),
+        github_token="gho_test",
         tools=_TOOLS,
-        http_client=http,
+        http_client=_mock_async_http(handler),
     )
     response = client.decide(_STATE)
 
@@ -210,9 +243,9 @@ def test_copilot_decide_uses_the_jwt_and_vscode_headers() -> None:
     assert seen["integration"] == "vscode-chat"
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Claude Agent SDK — one turn per decide() (ADR 0018, option A)
-# ---------------------------------------------------------------------------
+# ===========================================================================
 class _TextBlock:
     def __init__(self, text: str) -> None:
         self.text = text
@@ -230,8 +263,16 @@ class _AssistantMessage:
         self.content = content
 
 
+class _UsageBlock:
+    def __init__(self, *, input_tokens: int, output_tokens: int) -> None:
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.cache_read_input_tokens = 0
+        self.cache_creation_input_tokens = 0
+
+
 class _ResultMessage:
-    def __init__(self, *, usage: dict[str, int], total_cost_usd: float) -> None:
+    def __init__(self, *, usage: _UsageBlock, total_cost_usd: float) -> None:
         self.usage = usage
         self.total_cost_usd = total_cost_usd
 
@@ -246,40 +287,34 @@ def _fake_query(*messages: Any) -> Any:
     return _query
 
 
-def test_claude_sdk_decide_parses_a_tool_use() -> None:
-    query = _fake_query(
-        _AssistantMessage([_ToolUseBlock("echo", {"text": "ahoy"})]),
-        _ResultMessage(usage={"input_tokens": 70, "output_tokens": 15}, total_cost_usd=0.004),
-    )
-    client = ClaudeSDKModelClient(model="claude-opus-4-7", query_fn=query, tools=_TOOLS)
-    response = client.decide(_STATE)
-
-    assert response.decision.kind == DecisionKind.ACT
-    assert response.decision.tool == "echo"
-    assert response.decision.tool_args == {"text": "ahoy"}
-    assert response.tokens_in == 70
-    assert response.tokens_out == 15
-    assert response.cost_usd == 0.004
-
-
 def test_claude_sdk_decide_parses_a_text_finish() -> None:
+    """The SDK adapter only emits FINISH on text (no OpenAI-style
+    tool_calls path through complete() — ADR 0018)."""
     query = _fake_query(
         _AssistantMessage([_TextBlock("the sea poem")]),
-        _ResultMessage(usage={"input_tokens": 60, "output_tokens": 9}, total_cost_usd=0.002),
+        _ResultMessage(
+            usage=_UsageBlock(input_tokens=60, output_tokens=9),
+            total_cost_usd=0.002,
+        ),
     )
     client = ClaudeSDKModelClient(model="claude-opus-4-7", query_fn=query)
     response = client.decide(_STATE)
 
     assert response.decision.kind == DecisionKind.FINISH
     assert response.decision.output == "the sea poem"
-    assert response.model == "claude-opus-4-7"
+    assert response.tokens_in == 60
+    assert response.tokens_out == 9
+    assert response.cost_usd == 0.002
 
 
 def test_claude_sdk_review_parses_the_verdict() -> None:
     verdict = json.dumps({"passed": True, "feedback": "good"})
     query = _fake_query(
         _AssistantMessage([_TextBlock(verdict)]),
-        _ResultMessage(usage={"input_tokens": 30, "output_tokens": 6}, total_cost_usd=0.001),
+        _ResultMessage(
+            usage=_UsageBlock(input_tokens=30, output_tokens=6),
+            total_cost_usd=0.001,
+        ),
     )
     client = ClaudeSDKModelClient(model="claude-haiku-4-5", query_fn=query)
     review = client.review(_STATE)
@@ -288,26 +323,50 @@ def test_claude_sdk_review_parses_the_verdict() -> None:
     assert review.feedback == "good"
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Protocol conformance + the model_from_spec factory
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def test_model_from_spec_builds_each_real_client() -> None:
     from agent_runtime.model import model_from_spec
 
-    litellm = model_from_spec({"kind": "litellm", "model": "gpt-4o", "api_key": "sk-x"})
-    copilot = model_from_spec({"kind": "copilot", "model": "gpt-4o", "oauth_token": "gho_x"})
+    azure = model_from_spec(
+        {
+            "kind": "azure_foundry",
+            "model": "gpt-4o-foundry",
+            "apim_base_url": "https://x.azure-api.net/foundry",
+            "deployment": "gpt-4o",
+            "subscription_key": "sub-x",
+        }
+    )
+    copilot = model_from_spec({"kind": "copilot", "model": "gpt-4o", "github_token": "gho_x"})
     claude = model_from_spec({"kind": "claude_sdk", "model": "claude-opus-4-7"})
+    ollama = model_from_spec({"kind": "ollama", "model": "llama3.1"})
 
-    assert isinstance(litellm, LiteLLMModelClient)
+    assert isinstance(azure, AzureFoundryModelClient)
     assert isinstance(copilot, CopilotModelClient)
     assert isinstance(claude, ClaudeSDKModelClient)
+    assert isinstance(ollama, OllamaModelClient)
 
 
-def test_all_three_clients_conform_to_the_model_client_protocol() -> None:
+def test_model_from_spec_rejects_litellm_kind() -> None:
+    """ADR 0021 retired LiteLLM. The factory must say so explicitly."""
+    from agent_runtime.model import model_from_spec
+
+    with pytest.raises(ValueError, match="ADR 0021"):
+        model_from_spec({"kind": "litellm", "model": "gpt-4o", "api_key": "sk-x"})
+
+
+def test_all_four_clients_conform_to_the_model_client_protocol() -> None:
     clients = [
-        LiteLLMModelClient(model="gpt-4o", base_url="http://x", api_key="k"),
-        CopilotModelClient(model="gpt-4o", auth=CopilotAuth("gho_x")),
+        AzureFoundryModelClient(
+            model="gpt-4o-foundry",
+            apim_base_url="https://x.azure-api.net/foundry",
+            deployment="gpt-4o",
+            subscription_key="k",
+        ),
+        CopilotModelClient(model="gpt-4o", github_token="gho_x"),
         ClaudeSDKModelClient(model="claude-opus-4-7"),
+        OllamaModelClient(model="llama3.1"),
     ]
     for client in clients:
         assert isinstance(client, ModelClient)

@@ -37,7 +37,7 @@ docs_language: es
 
 ### Resumen Ejecutivo
 
-Motor de guardrails declarativos en 4 puntos (pre_llm, post_llm, pre_tool, post_tool) con 12 tipos (PII, secret leakage, prompt injection, content safety, code safety, output schema, allowed domains, cost ceiling, etc.). Catálogo global de precios de modelos con sincronización LiteLLM upstream. **Soporte de cached_input_tokens (prompt caching) en model_calls y en el catálogo de precios**. **Sistema de Budgets de proyecto y tenant** con umbrales platform-global y pausado automático al 100% (ver sección 28.7 del .docx). **Manejo de moneda canónica USD + tabla exchange_rates con job diario contra ECB + conversión a moneda del tenant** (ver sección 29.9 del .docx).
+Motor de guardrails declarativos en 4 puntos (pre_llm, post_llm, pre_tool, post_tool) con 12 tipos (PII, secret leakage, prompt injection, content safety, code safety, output schema, allowed domains, cost ceiling, etc.). Catálogo global de precios de modelos: el botón "Sincronizar precios" lee el JSON público de precios que LiteLLM publica como referencia comunitaria (`model_prices_and_context_window.json`) — **es sólo un proveedor de datos**, no implica usar LiteLLM como runtime (ADR 0021 lo retiró del catálogo de proveedores). **Soporte de cached_input_tokens (prompt caching) en model_calls y en el catálogo de precios**. **Sistema de Budgets de proyecto y tenant** con umbrales platform-global y pausado automático al 100% (ver sección 28.7 del .docx). **Manejo de moneda canónica USD + tabla exchange_rates con job diario contra ECB + conversión a moneda del tenant** (ver sección 29.9 del .docx).
 
 ### Contexto
 
@@ -55,7 +55,7 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 - Tabla guardrail_events + dashboard por tenant + alertas configurables.
 - Catálogo global de precios de modelos (model_prices) con vigencia, **siempre en USD canónico** (ver 29.8.5 y 29.9 del .docx).
 - Pantalla 'Modelos & Precios' en menú global del System Admin.
-- Botón 'Sincronizar precios' con LiteLLM upstream + APIs de providers.
+- Botón 'Sincronizar precios' contra el JSON público de precios de LiteLLM (sólo como fuente de datos comunitaria — el sistema NO usa LiteLLM como runtime, ADR 0021) + APIs de providers.
 - Sincronización programada (cron) + manual.
 - Snapshot del precio por llamada en model_calls.
 - **Soporte de prompt caching**: campos `tokens_cached_input` y precio de cache en el catálogo (típicamente 10% del precio de input estándar; configurable por modelo).
@@ -333,9 +333,16 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 
 ### Fase D — Sincronización de Precios
 
-#### `task_11_15` — Botón 'Sincronizar precios' que lee LiteLLM upstream
+#### `task_11_15` — Botón 'Sincronizar precios' que lee el JSON público de precios de LiteLLM
 
-- [ ] **Título**: Botón 'Sincronizar precios' que lee LiteLLM upstream
+> **Nota (ADR 0021).** Esta tarea lee el JSON público de precios que
+> mantiene la comunidad de LiteLLM
+> (`model_prices_and_context_window.json`) como **fuente de datos** —
+> no implica usar LiteLLM como runtime de proveedor. La plataforma
+> opera con el catálogo cerrado de ADR 0021 (Claude SDK + Copilot +
+> Azure Foundry APIM + Ollama).
+
+- [ ] **Título**: Botón 'Sincronizar precios' que lee el JSON público de precios de LiteLLM (data feed)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

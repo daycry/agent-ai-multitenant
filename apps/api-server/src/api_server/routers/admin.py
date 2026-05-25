@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import UTC, datetime
 from uuid import UUID
 
 import httpx
@@ -177,8 +178,6 @@ async def delete_tenant(
     session: AsyncSession = Depends(get_admin_session),
 ) -> None:
     """Soft-delete: stamps `deleted_at` rather than dropping the row."""
-    from datetime import UTC, datetime
-
     org = await _get_tenant_or_404(session, tenant_id)
     if org.deleted_at is not None:
         return  # already deleted — idempotent

@@ -8,8 +8,12 @@
 # that launches it (cap-drop ALL, read-only FS, seccomp, dedicated
 # network; see apps/workers/src/workers/isolation.py).
 #
-# Build (matches the task_02_05 automated test):
-#   docker build -t agent-runtime:v1 docker/agent-runtimes/agent-runtime/
+# Build context is the **repo root** so we can pull `packages/shared-llm/`
+# (ADR 0021) into the builder stage. The CI step in `.github/workflows/ci.yml`
+# uses:
+#
+#   docker build -f docker/agent-runtimes/agent-runtime/Dockerfile \
+#                -t agent-runtime:v1 .
 
 # ---- builder: install the agent_runtime package into an isolated venv ----
 FROM python:3.12-slim AS builder
@@ -27,9 +31,16 @@ RUN apt-get update \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# shared-llm is a path dependency of agent-runtime (ADR 0021); install
+# it first so the next `pip install .` resolves the `shared-llm` name
+# from the already-installed local wheel instead of asking PyPI.
+COPY packages/shared-llm/ /src/shared-llm/
+RUN pip install --no-cache-dir /src/shared-llm
+
 # pyproject.toml is the single source of truth for the dependency set.
-COPY pyproject.toml ./
-COPY agent_runtime/ ./agent_runtime/
+WORKDIR /build
+COPY docker/agent-runtimes/agent-runtime/pyproject.toml ./
+COPY docker/agent-runtimes/agent-runtime/agent_runtime/ ./agent_runtime/
 RUN pip install --no-cache-dir .
 
 # ---- runtime: slim image, non-root, no build tools ----------------

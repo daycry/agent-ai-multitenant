@@ -90,13 +90,17 @@ def _model_spec() -> tuple[dict[str, Any], str]:
     if not kind:
         return _SCRIPTED_MODEL, "determinista (sin credenciales)"
     model = os.environ.get("DEMO_MODEL", "")
-    if kind == "litellm":
+    if kind == "azure_foundry":
         return {
-            "kind": "litellm",
-            "model": model or "gpt-4o",
-            "base_url": os.environ.get("DEMO_BASE_URL", "http://localhost:4000"),
-            "api_key": os.environ.get("DEMO_API_KEY"),
-        }, f"LiteLLM ({model or 'gpt-4o'})"
+            "kind": "azure_foundry",
+            "model": model or "gpt-4o-foundry",
+            "apim_base_url": os.environ.get(
+                "DEMO_APIM_BASE_URL", "https://x.azure-api.net/foundry"
+            ),
+            "deployment": os.environ.get("DEMO_APIM_DEPLOYMENT", model or "gpt-4o"),
+            "subscription_key": os.environ.get("DEMO_APIM_SUBSCRIPTION_KEY"),
+            "bearer_token": os.environ.get("DEMO_APIM_BEARER_TOKEN"),
+        }, f"Azure Foundry APIM ({model or 'gpt-4o'})"
     if kind in ("claude_sdk", "claude"):
         return {"kind": "claude_sdk", "model": model or "claude-opus-4-7"}, (
             f"Claude Agent SDK ({model or 'claude-opus-4-7'})"
@@ -105,8 +109,20 @@ def _model_spec() -> tuple[dict[str, Any], str]:
         return {
             "kind": "copilot",
             "model": model or "gpt-4o",
-            "oauth_token": os.environ.get("DEMO_GITHUB_TOKEN", ""),
+            "github_token": os.environ.get("DEMO_GITHUB_TOKEN", ""),
         }, f"GitHub Copilot ({model or 'gpt-4o'})"
+    if kind == "ollama":
+        return {
+            "kind": "ollama",
+            "model": model or "llama3.1",
+            "base_url": os.environ.get("DEMO_OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+            "api_key": os.environ.get("DEMO_OLLAMA_API_KEY"),
+        }, f"Ollama ({model or 'llama3.1'})"
+    if kind == "litellm":
+        raise SystemExit(
+            "DEMO_MODEL_KIND=litellm ya no se soporta (ADR 0021). "
+            "Usa: azure_foundry, claude_sdk, copilot, ollama."
+        )
     raise SystemExit(f"DEMO_MODEL_KIND no reconocido: {kind!r}")
 
 
@@ -308,15 +324,23 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 # Para un poema escrito por un LLM real (human_02_01 "de verdad")
 # ---------------------------------------------------------------------------
-# Define variables de entorno antes de ejecutar y elige UN proveedor:
+# Catálogo cerrado de cuatro proveedores (ADR 0021). Define variables
+# de entorno antes de ejecutar y elige UNO:
 #
-#   LiteLLM (gateway con API key):
-#     DEMO_MODEL_KIND=litellm  DEMO_MODEL=gpt-4o
-#     DEMO_BASE_URL=http://localhost:4000  DEMO_API_KEY=sk-...
+#   Azure AI Foundry vía APIM (gateway empresarial — sucesor de LiteLLM):
+#     DEMO_MODEL_KIND=azure_foundry  DEMO_MODEL=gpt-4o
+#     DEMO_APIM_BASE_URL=https://miempresa.azure-api.net/foundry
+#     DEMO_APIM_DEPLOYMENT=gpt-4o
+#     DEMO_APIM_SUBSCRIPTION_KEY=...    # o DEMO_APIM_BEARER_TOKEN
 #
 #   Claude Agent SDK (suscripción Pro/Max — requiere el CLI de Claude
 #   Code y el paquete `claude-agent-sdk` instalados en el entorno):
 #     DEMO_MODEL_KIND=claude_sdk  DEMO_MODEL=claude-opus-4-7
 #
-#   GitHub Copilot (token OAuth de GitHub):
+#   GitHub Copilot (OAuth token de GitHub con acceso a Copilot):
 #     DEMO_MODEL_KIND=copilot  DEMO_MODEL=gpt-4o  DEMO_GITHUB_TOKEN=gho_...
+#
+#   Ollama (local o cloud):
+#     DEMO_MODEL_KIND=ollama  DEMO_MODEL=llama3.1
+#     DEMO_OLLAMA_BASE_URL=http://localhost:11434/v1   # local: sin api key
+#     DEMO_OLLAMA_API_KEY=...                          # cloud: requerido

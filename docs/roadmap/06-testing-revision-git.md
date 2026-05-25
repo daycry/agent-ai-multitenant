@@ -496,7 +496,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_20b3` — Cambio de rol dentro de un mismo contenedor del pool sin reiniciar proceso Python
 
-- [ ] **Título**: Cambio de rol dentro de un mismo contenedor del pool: nuevo system_prompt + nuevo set de tools + nuevo contexto sin reiniciar proceso Python, sin reiniciar conexiones HTTP de LiteLLM, sin recargar tokenizer. El contenedor pasa de Backend Senior a Reviewer a Memorizer manteniendo caliente proceso, conexiones, cliente MCP y tokenizer.
+- [ ] **Título**: Cambio de rol dentro de un mismo contenedor del pool: nuevo system_prompt + nuevo set de tools + nuevo contexto sin reiniciar proceso Python, sin reiniciar conexiones HTTP de los proveedores LLM (`shared-llm`, ADR 0021), sin recargar tokenizer. El contenedor pasa de Backend Senior a Reviewer a Memorizer manteniendo caliente proceso, conexiones, cliente MCP y tokenizer.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: l
 - **Rol sugerido**: ai-engineer + backend-dev
@@ -513,7 +513,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_20b4` — Limpieza entre pasos: desmontar worktree, limpiar /tmp, unset vars, matar hijos huérfanos, reiniciar handlers de señales
 
-- [ ] **Título**: Rutina de limpieza al devolver un contenedor al pool: desmontar worktree del paso anterior (no borrarlo del FS), limpiar `/tmp`, unset de variables TASK_ID/EXECUTION_ID/secrets, matar procesos hijos huérfanos, reiniciar handlers de señales. Mantener caliente proceso Python, conexiones LiteLLM, cliente MCP, tokenizer, dep-cache.
+- [ ] **Título**: Rutina de limpieza al devolver un contenedor al pool: desmontar worktree del paso anterior (no borrarlo del FS), limpiar `/tmp`, unset de variables TASK_ID/EXECUTION_ID/secrets, matar procesos hijos huérfanos, reiniciar handlers de señales. Mantener caliente proceso Python, conexiones HTTP de los proveedores LLM (`shared-llm`, ADR 0021), cliente MCP, tokenizer, dep-cache.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security

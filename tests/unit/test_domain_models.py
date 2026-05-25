@@ -318,12 +318,20 @@ def test_task_complexity_values() -> None:
 
 
 def test_plan_status_values() -> None:
+    # Plan 03 task_03_16 widened the lifecycle; task_03_25 added the
+    # extra `pending_second_approval` state for the double-firma flow.
     assert {s.value for s in d.PlanStatus} == {
+        "pending_approval",
+        "pending_second_approval",
         "draft",
         "approved",
-        "executing",
+        "in_progress",
+        "blocked",
+        "pending_human_validation",
         "completed",
         "cancelled",
+        "rejected",
+        "archived",
     }
 
 

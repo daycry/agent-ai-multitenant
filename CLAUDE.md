@@ -26,7 +26,7 @@ El sistema se opera como un stack **Docker Compose en una sola máquina** (no Ku
 
 8. **Documentación obligatoria en `/docs/`** con estructura canónica de 7 carpetas (`01-overview/`, `02-getting-started/`, `03-guides/`, `04-reference/`, `05-architecture-decisions/`, `06-runbooks/`, `07-changelog/`). El Technical Writer agente la mantiene al cierre de cada plan.
 
-9. **LLM providers desacoplados**: LiteLLM como gateway principal (cubre Anthropic, OpenAI, Gemini, Ollama, Bedrock, etc.). Soporte adicional para Claude Agent SDK (suscripción Pro/Max) y GitHub Copilot OAuth Device Flow.
+9. **LLM providers desacoplados, catálogo cerrado** (ADR 0021): los cuatro caminos soportados son **Claude Agent SDK** (suscripción Pro/Max), **GitHub Copilot** (OAuth Device Flow + JWT minted), **Azure AI Foundry vía APIM** (gateway empresarial OpenAI-compatible) y **Ollama** (local + cloud). La capa común vive en `packages/shared-llm` (Protocol async `LLMProvider`). **LiteLLM ya no se usa**: añadir un quinto proveedor pide un ADR explícito.
 
 10. **Guardrails declarativos por capas** (plataforma → tenant → proyecto) en cuatro puntos del ciclo: pre_llm, post_llm, pre_tool, post_tool.
 
@@ -54,7 +54,7 @@ agentic-platform/
 │   ├── shared-domain/               # Modelos Pydantic compartidos
 │   ├── shared-db/                   # SQLAlchemy + Alembic
 │   ├── shared-auth/                 # JWT + RBAC + Casbin
-│   ├── shared-llm/                  # Wrapper LiteLLM + Claude SDK + Copilot
+│   ├── shared-llm/                  # Capa LLM async (Claude SDK + Copilot + Azure Foundry + Ollama) — ADR 0021
 │   ├── shared-mcp/                  # Cliente MCP genérico
 │   ├── shared-guardrails/           # Motor de guardrails
 │   └── shared-test-runtimes/        # Definiciones de runtime templates
@@ -85,24 +85,24 @@ agentic-platform/
 
 ## Stack Tecnológico (Resumen)
 
-| Capa                 | Tecnología                                                 |
-| -------------------- | ---------------------------------------------------------- |
-| Lenguaje backend     | Python 3.12                                                |
-| Framework web        | FastAPI + Uvicorn                                          |
-| ORM                  | SQLAlchemy 2.x async + Alembic                             |
-| BD relacional        | PostgreSQL 16                                              |
-| BD vectorial         | pgvector (en el mismo PostgreSQL)                          |
-| Cache/broker         | Redis 7                                                    |
-| Cola de tareas       | Celery 5                                                   |
-| Orquestación agentes | LangGraph                                                  |
-| LLM abstracción      | LiteLLM + Claude Agent SDK + GitHub Copilot OAuth          |
-| Object storage       | MinIO (S3-compatible)                                      |
-| Secrets              | HashiCorp Vault                                            |
-| Ingestión documental | Docling (IBM) + docling-serve + docling-mcp                |
-| Frontend             | Next.js 14 + React + TanStack Query + Tailwind + shadcn/ui |
-| Tiempo real          | WebSocket + SSE                                            |
-| Observabilidad       | OpenTelemetry + Prometheus + Grafana + Loki                |
-| Antivirus            | ClamAV                                                     |
+| Capa                 | Tecnología                                                                              |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| Lenguaje backend     | Python 3.12                                                                             |
+| Framework web        | FastAPI + Uvicorn                                                                       |
+| ORM                  | SQLAlchemy 2.x async + Alembic                                                          |
+| BD relacional        | PostgreSQL 16                                                                           |
+| BD vectorial         | pgvector (en el mismo PostgreSQL)                                                       |
+| Cache/broker         | Redis 7                                                                                 |
+| Cola de tareas       | Celery 5                                                                                |
+| Orquestación agentes | LangGraph                                                                               |
+| LLM abstracción      | `packages/shared-llm` — Claude SDK + Copilot + Azure Foundry (APIM) + Ollama (ADR 0021) |
+| Object storage       | MinIO (S3-compatible)                                                                   |
+| Secrets              | HashiCorp Vault                                                                         |
+| Ingestión documental | Docling (IBM) + docling-serve + docling-mcp                                             |
+| Frontend             | Next.js 14 + React + TanStack Query + Tailwind + shadcn/ui                              |
+| Tiempo real          | WebSocket + SSE                                                                         |
+| Observabilidad       | OpenTelemetry + Prometheus + Grafana + Loki                                             |
+| Antivirus            | ClamAV                                                                                  |
 
 ## Convenciones de Código
 

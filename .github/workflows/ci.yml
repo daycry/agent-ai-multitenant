@@ -35,6 +35,10 @@ jobs:
           python -m pip install -e "apps/watchdog[dev]"
           python -m pip install -e "apps/orchestrator[dev]"
           python -m pip install -e "apps/workers[dev]"
+          # shared-llm is a path dep of agent-runtime (ADR 0021); install
+          # it first so the next line resolves the name from the local
+          # editable wheel instead of asking PyPI.
+          python -m pip install -e "packages/shared-llm[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
           python -m pip install pre-commit
 
@@ -120,6 +124,10 @@ jobs:
           python -m pip install -e "apps/watchdog[dev]"
           python -m pip install -e "apps/orchestrator[dev]"
           python -m pip install -e "apps/workers[dev]"
+          # shared-llm is a path dep of agent-runtime (ADR 0021); install
+          # it first so the next line resolves the name from the local
+          # editable wheel instead of asking PyPI.
+          python -m pip install -e "packages/shared-llm[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
 
       - name: pytest tests/unit
@@ -169,6 +177,10 @@ jobs:
           python -m pip install -e "apps/watchdog[dev]"
           python -m pip install -e "apps/orchestrator[dev]"
           python -m pip install -e "apps/workers[dev]"
+          # shared-llm is a path dep of agent-runtime (ADR 0021); install
+          # it first so the next line resolves the name from the local
+          # editable wheel instead of asking PyPI.
+          python -m pip install -e "packages/shared-llm[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
 
       - name: pytest tests/integration
@@ -231,6 +243,10 @@ jobs:
       # Agent runtime images live under docker/agent-runtimes/, not apps/.
       # This step is the automated check for task_02_05 — it runs the
       # exact `docker build` the roadmap task expects.
+      #
+      # Context is the repo **root** (not $rt_dir) so the Dockerfile can
+      # COPY in packages/shared-llm/ — the agent-runtime ModelClient
+      # adapters depend on the local shared-llm package (ADR 0021).
       - name: Build agent-runtime images
         run: |
           shopt -s nullglob
@@ -239,7 +255,7 @@ jobs:
             rt_dir="$(dirname "$dockerfile")"
             rt_name="$(basename "$rt_dir")"
             echo "::group::docker build $rt_name:v1"
-            docker build -t "$rt_name:v1" "$rt_dir"
+            docker build -f "$dockerfile" -t "$rt_name:v1" .
             echo "::endgroup::"
             built=1
           done

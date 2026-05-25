@@ -49,9 +49,11 @@ El bucle nunca importa un SDK de LLM. Depende de `AgentDeps` —
 `ModelClient`, `ToolRegistry`, función de `recall`— inyectado. Eso hace
 el bucle **ejecutable offline y determinista**: los tests lo mueven con
 `ScriptedModelClient`, que reproduce una secuencia fija de decisiones y
-revisiones. El cliente real respaldado por LiteLLM (ADR 0009) se
-enchufa detrás del protocolo `ModelClient` en una tarea posterior — sin
-tocar el grafo.
+revisiones. Los clientes reales (Azure AI Foundry vía APIM, GitHub
+Copilot, Claude Agent SDK, Ollama — catálogo cerrado de ADR 0021;
+LiteLLM se retiró) se enchufan detrás del protocolo `ModelClient`
+como adaptadores delgados sobre `packages/shared-llm`, sin tocar el
+grafo.
 
 Ningún test de Fase C llama a un LLM real: un bucle agéntico probado
 contra un modelo no determinista no es un test, es una apuesta.
