@@ -196,7 +196,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_07` — Modelos KnowledgeBase, Document, Chunk con relación M:N a Project
 
-- [ ] **Título**: Modelos KnowledgeBase, Document, Chunk con relación M:N a Project
+- [x] **Título**: Modelos KnowledgeBase, Document, Chunk con relación M:N a Project
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -213,7 +213,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_08` — Migración con índice HNSW para chunks
 
-- [ ] **Título**: Migración con índice HNSW para chunks
+- [x] **Título**: Migración con índice HNSW para chunks
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -230,7 +230,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_09` — Endpoints CRUD de KB + upload de documentos a MinIO
 
-- [ ] **Título**: Endpoints CRUD de KB + upload de documentos a MinIO
+- [x] **Título**: Endpoints CRUD de KB + upload de documentos a MinIO
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

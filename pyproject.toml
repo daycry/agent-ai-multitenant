@@ -153,6 +153,14 @@ ignore_missing_imports = true
 module = ["shared_llm", "shared_llm.*"]
 ignore_missing_imports = true
 
+# `minio` Python client ships partial type info: `minio.error` has no
+# stubs in the published wheel. Treat the whole package as untyped —
+# we only touch a handful of methods (put_object, get_object,
+# remove_object, stat_object, bucket_exists, make_bucket).
+[[tool.mypy.overrides]]
+module = ["minio", "minio.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

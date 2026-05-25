@@ -250,6 +250,23 @@ class ExecutionStatus(enum.StrEnum):
     AWAITING_HUMAN_APPROVAL = "awaiting_human_approval"
 
 
+class DocumentStatus(enum.StrEnum):
+    """Lifecycle of a `Document` in a Knowledge Base (Plan 04 task_04_07).
+
+    A freshly uploaded document lands in ``pending``. The ingestion
+    worker (Plan 04 Fase C, task_04_11) flips it to ``processing``
+    while Docling parses + chunks + embeds, then to ``indexed`` on
+    success or ``failed`` on error. The transitions are linear and
+    one-way — re-ingestion creates a *new* Document row, never
+    rewinds the existing one.
+    """
+
+    PENDING = "pending"
+    PROCESSING = "processing"
+    INDEXED = "indexed"
+    FAILED = "failed"
+
+
 class ApprovalRequestStatus(enum.StrEnum):
     PENDING = "pending"
     APPROVED = "approved"

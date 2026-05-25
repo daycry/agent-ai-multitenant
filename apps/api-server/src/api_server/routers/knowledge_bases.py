@@ -1,0 +1,388 @@
+"""`/knowledge-bases` + document upload endpoints (Plan 04 task_04_09).
+
+Three resource families on this router:
+
+  - **KB CRUD** — POST/GET/PUT/DELETE under `/knowledge-bases`.
+  - **KB ↔ Project grants** — POST/DELETE/GET under
+    `/knowledge-bases/{id}/projects` and the project-side accessor
+    `/projects/{id}/knowledge-bases` that lists what a project sees.
+  - **Documents** — POST (multipart upload), GET (list/single),
+    DELETE under `/knowledge-bases/{id}/documents`.
+
+A document upload writes the raw bytes to MinIO under the canonical
+key `kb/{tenant_id}/{kb_id}/{document_id}/{filename}` and persists
+a `documents` row with ``status='pending'``. The ingestion worker
+(Plan 04 Fase C, task_04_11) picks it up from there; this endpoint
+returns 201 immediately.
+"""
+
+from __future__ import annotations
+
+import contextlib
+from uuid import UUID, uuid4
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.db.domain import Project
+from api_server.db.knowledge import (
+    Document,
+    KnowledgeBase,
+    KnowledgeBaseProject,
+)
+from api_server.routers._helpers import require_tenant_id, soft_delete
+from api_server.schemas.knowledge import (
+    DocumentResponse,
+    KnowledgeBaseCreateRequest,
+    KnowledgeBaseGrantRequest,
+    KnowledgeBaseGrantResponse,
+    KnowledgeBaseResponse,
+    KnowledgeBaseUpdateRequest,
+    to_document_response,
+    to_kb_response,
+)
+from api_server.storage import ObjectStorage, ObjectStorageError, get_object_storage
+
+router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"])
+project_kb_router = APIRouter(
+    prefix="/projects/{project_id}/knowledge-bases", tags=["knowledge-bases"]
+)
+
+# Hard caps on uploaded files — keeps a runaway client from filling
+# MinIO with garbage. Real virus / mime sniffing is task_04_13.
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MiB
+
+
+# ===========================================================================
+# Helpers
+# ===========================================================================
+async def _load_kb(session: AsyncSession, kb_id: UUID) -> KnowledgeBase:
+    result = await session.execute(
+        select(KnowledgeBase).where(KnowledgeBase.id == kb_id, KnowledgeBase.deleted_at.is_(None))
+    )
+    kb = result.scalar_one_or_none()
+    if kb is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="kb not found")
+    return kb
+
+
+async def _load_document(session: AsyncSession, document_id: UUID) -> Document:
+    result = await session.execute(
+        select(Document).where(Document.id == document_id, Document.deleted_at.is_(None))
+    )
+    doc = result.scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
+    return doc
+
+
+async def _verify_project_in_tenant(session: AsyncSession, project_id: UUID) -> None:
+    result = await session.execute(
+        select(Project.id).where(Project.id == project_id, Project.deleted_at.is_(None))
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
+
+
+def _storage_key(*, tenant_id: UUID, kb_id: UUID, document_id: UUID, filename: str) -> str:
+    """Canonical MinIO key for a document. Tenant id is the first
+    path component so cross-tenant access through the storage layer
+    (i.e. if RLS ever leaked) would still require guessing UUIDs."""
+    return f"kb/{tenant_id}/{kb_id}/{document_id}/{filename}"
+
+
+# ===========================================================================
+# KB CRUD
+# ===========================================================================
+@router.post("", response_model=KnowledgeBaseResponse, status_code=status.HTTP_201_CREATED)
+async def create_kb(
+    payload: KnowledgeBaseCreateRequest,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> KnowledgeBaseResponse:
+    tenant_id = require_tenant_id(principal)
+    kb = KnowledgeBase(
+        tenant_id=tenant_id,
+        name=payload.name,
+        description=payload.description,
+        embedding_model_id=payload.embedding_model_id or "nomic-embed-text-v1.5",
+        created_by=principal.user_id,
+    )
+    session.add(kb)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"kb name already exists in tenant: {exc.orig}",
+        ) from exc
+    await session.refresh(kb)
+    return to_kb_response(kb)
+
+
+@router.get("", response_model=list[KnowledgeBaseResponse])
+async def list_kbs(
+    _: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[KnowledgeBaseResponse]:
+    result = await session.execute(
+        select(KnowledgeBase)
+        .where(KnowledgeBase.deleted_at.is_(None))
+        .order_by(KnowledgeBase.created_at.desc())
+    )
+    return [to_kb_response(kb) for kb in result.scalars().all()]
+
+
+@router.get("/{kb_id}", response_model=KnowledgeBaseResponse)
+async def get_kb(
+    kb_id: UUID,
+    _: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> KnowledgeBaseResponse:
+    return to_kb_response(await _load_kb(session, kb_id))
+
+
+@router.put("/{kb_id}", response_model=KnowledgeBaseResponse)
+async def update_kb(
+    kb_id: UUID,
+    payload: KnowledgeBaseUpdateRequest,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> KnowledgeBaseResponse:
+    require_tenant_id(principal)
+    kb = await _load_kb(session, kb_id)
+    if payload.name is not None:
+        kb.name = payload.name
+    if payload.description is not None:
+        kb.description = payload.description
+    if payload.embedding_model_id is not None:
+        kb.embedding_model_id = payload.embedding_model_id
+    await session.flush()
+    await session.refresh(kb)
+    return to_kb_response(kb)
+
+
+@router.delete("/{kb_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_kb(
+    kb_id: UUID,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> None:
+    require_tenant_id(principal)
+    kb = await _load_kb(session, kb_id)
+    await soft_delete(session, kb)
+
+
+# ===========================================================================
+# KB ↔ Project grants (M:N)
+# ===========================================================================
+@router.post(
+    "/{kb_id}/projects",
+    response_model=KnowledgeBaseGrantResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def grant_kb_to_project(
+    kb_id: UUID,
+    payload: KnowledgeBaseGrantRequest,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> KnowledgeBaseGrantResponse:
+    """Make the KB visible to a project. Idempotent: re-granting
+    returns the existing row."""
+    tenant_id = require_tenant_id(principal)
+    kb = await _load_kb(session, kb_id)
+    await _verify_project_in_tenant(session, payload.project_id)
+
+    existing = await session.execute(
+        select(KnowledgeBaseProject).where(
+            KnowledgeBaseProject.kb_id == kb.id,
+            KnowledgeBaseProject.project_id == payload.project_id,
+        )
+    )
+    grant = existing.scalar_one_or_none()
+    if grant is None:
+        grant = KnowledgeBaseProject(
+            kb_id=kb.id,
+            project_id=payload.project_id,
+            tenant_id=tenant_id,
+            granted_by=principal.user_id,
+        )
+        session.add(grant)
+        await session.flush()
+        await session.refresh(grant)
+
+    return KnowledgeBaseGrantResponse(
+        kb_id=grant.kb_id,
+        project_id=grant.project_id,
+        tenant_id=grant.tenant_id,
+        granted_at=grant.granted_at,
+        granted_by=grant.granted_by,
+    )
+
+
+@router.delete("/{kb_id}/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_kb_from_project(
+    kb_id: UUID,
+    project_id: UUID,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> None:
+    require_tenant_id(principal)
+    await _load_kb(session, kb_id)
+    result = await session.execute(
+        select(KnowledgeBaseProject).where(
+            KnowledgeBaseProject.kb_id == kb_id,
+            KnowledgeBaseProject.project_id == project_id,
+        )
+    )
+    grant = result.scalar_one_or_none()
+    if grant is None:
+        # Idempotent — revoking a non-existent grant is a no-op.
+        return
+    await session.delete(grant)
+    await session.flush()
+
+
+@project_kb_router.get("", response_model=list[KnowledgeBaseResponse])
+async def list_kbs_for_project(
+    project_id: UUID,
+    _: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[KnowledgeBaseResponse]:
+    """List the KBs a project has been granted."""
+    await _verify_project_in_tenant(session, project_id)
+    stmt = (
+        select(KnowledgeBase)
+        .join(KnowledgeBaseProject, KnowledgeBaseProject.kb_id == KnowledgeBase.id)
+        .where(
+            KnowledgeBaseProject.project_id == project_id,
+            KnowledgeBase.deleted_at.is_(None),
+        )
+        .order_by(KnowledgeBase.created_at.desc())
+    )
+    result = await session.execute(stmt)
+    return [to_kb_response(kb) for kb in result.scalars().all()]
+
+
+# ===========================================================================
+# Document upload + CRUD
+# ===========================================================================
+@router.post(
+    "/{kb_id}/documents",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_document(
+    kb_id: UUID,
+    file: UploadFile = File(...),
+    title: str | None = Form(default=None),
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+    storage: ObjectStorage = Depends(get_object_storage),
+) -> DocumentResponse:
+    """Upload a file into a KB. The bytes go to MinIO; the metadata
+    row lands in `documents` with ``status='pending'``."""
+    tenant_id = require_tenant_id(principal)
+    kb = await _load_kb(session, kb_id)
+
+    # Read the upload up-front so we can size-check before we touch MinIO.
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="empty upload")
+    if len(payload) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"upload exceeds {MAX_UPLOAD_BYTES} bytes",
+        )
+
+    document_id = uuid4()
+    filename = file.filename or "unknown"
+    storage_key = _storage_key(
+        tenant_id=tenant_id, kb_id=kb.id, document_id=document_id, filename=filename
+    )
+
+    try:
+        await storage.put_object(
+            key=storage_key,
+            data=payload,
+            content_type=file.content_type or "application/octet-stream",
+        )
+    except ObjectStorageError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"storage backend failed: {exc}",
+        ) from exc
+
+    doc = Document(
+        id=document_id,
+        tenant_id=tenant_id,
+        kb_id=kb.id,
+        title=title or filename,
+        source_filename=filename,
+        source_mime_type=file.content_type or "application/octet-stream",
+        source_storage_key=storage_key,
+        source_size_bytes=len(payload),
+        status="pending",
+        created_by=principal.user_id,
+    )
+    session.add(doc)
+    await session.flush()
+    await session.refresh(doc)
+    return to_document_response(doc)
+
+
+@router.get("/{kb_id}/documents", response_model=list[DocumentResponse])
+async def list_documents(
+    kb_id: UUID,
+    _: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[DocumentResponse]:
+    await _load_kb(session, kb_id)
+    result = await session.execute(
+        select(Document)
+        .where(Document.kb_id == kb_id, Document.deleted_at.is_(None))
+        .order_by(Document.created_at.desc())
+    )
+    return [to_document_response(d) for d in result.scalars().all()]
+
+
+@router.get("/{kb_id}/documents/{document_id}", response_model=DocumentResponse)
+async def get_document(
+    kb_id: UUID,
+    document_id: UUID,
+    _: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> DocumentResponse:
+    doc = await _load_document(session, document_id)
+    if doc.kb_id != kb_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not in this kb")
+    return to_document_response(doc)
+
+
+@router.delete("/{kb_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_document(
+    kb_id: UUID,
+    document_id: UUID,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+    storage: ObjectStorage = Depends(get_object_storage),
+) -> None:
+    """Soft-delete the metadata row + drop the MinIO blob. We do the
+    blob deletion best-effort — a 503 from the storage backend
+    shouldn't block the audit-trail update on the DB row."""
+    require_tenant_id(principal)
+    doc = await _load_document(session, document_id)
+    if doc.kb_id != kb_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not in this kb")
+    # Best-effort blob drop — metadata is the source of truth. A
+    # storage hiccup leaves an orphan that the GC job sweeps later.
+    with contextlib.suppress(ObjectStorageError):
+        await storage.delete_object(key=doc.source_storage_key)
+    await soft_delete(session, doc)
+
+
+__all__ = ["project_kb_router", "router"]

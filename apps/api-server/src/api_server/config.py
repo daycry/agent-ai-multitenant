@@ -56,6 +56,14 @@ class Settings(BaseSettings):
         default="http://localhost:9000",
         description="MinIO HTTP API base URL.",
     )
+    minio_access_key: str = Field(
+        default="minioadmin",
+        description="MinIO access key (S3 access_key_id). Matches MINIO_ROOT_USER in dev.",
+    )
+    minio_secret_key: SecretStr = Field(
+        default=SecretStr("changeme-dev-only"),
+        description="MinIO secret key (S3 secret_access_key). Vault-sourced in prod.",
+    )
     clamav_host: str = Field(default="localhost", description="ClamAV TCP host.")
     clamav_port: int = Field(default=3310, description="ClamAV TCP port (INSTREAM).")
 
