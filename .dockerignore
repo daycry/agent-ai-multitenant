@@ -1,0 +1,39 @@
+# Repo-root .dockerignore. Applies when any image is built with the
+# repo root as the context (currently: docker/agent-runtimes/*/Dockerfile
+# do this so they can pull in packages/shared-llm — see ADR 0021).
+
+# Python build artefacts.
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Virtualenvs and Node modules — never want these in the image context.
+.venv/
+.venv*/
+node_modules/
+
+# IDE / OS noise.
+.vscode/
+.idea/
+.DS_Store
+
+# Git metadata. The agent-runtime image does not need it; if a future
+# image does it can override with its own .dockerignore.
+.git/
+.github/
+
+# Test outputs.
+coverage.xml
+htmlcov/
+.coverage
+test-results/
+playwright-report/
+
+# Docs are not needed inside images.
+docs/
