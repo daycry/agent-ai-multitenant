@@ -544,7 +544,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_27` — Botón 'Sincronizar al Kanban' con opciones (total / por fase / selección custom)
 
-- [ ] **Título**: Botón 'Sincronizar al Kanban' con opciones (total / por fase / selección custom)
+- [x] **Título**: Botón 'Sincronizar al Kanban' con opciones (total / por fase / selección custom)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -561,7 +561,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_28` — Materialización de tareas en el Kanban con dependencias en task_dependencies
 
-- [ ] **Título**: Materialización de tareas en el Kanban con dependencias en task_dependencies
+- [x] **Título**: Materialización de tareas en el Kanban con dependencias en task_dependencies
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -578,7 +578,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_29` — Idempotencia de la sincronización (no duplicar tareas si se reintenta)
 
-- [ ] **Título**: Idempotencia de la sincronización (no duplicar tareas si se reintenta)
+- [x] **Título**: Idempotencia de la sincronización (no duplicar tareas si se reintenta)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -595,7 +595,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_30` — Garantías DAG en transiciones (rechazo 422 si dependencias no done)
 
-- [ ] **Título**: Garantías DAG en transiciones (rechazo 422 si dependencias no done)
+- [x] **Título**: Garantías DAG en transiciones (rechazo 422 si dependencias no done)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -612,7 +612,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_31` — Documentación: ADRs, guías y changelog
 
-- [ ] **Título**: Documentación: ADRs, guías y changelog
+- [x] **Título**: Documentación: ADRs, guías y changelog
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer

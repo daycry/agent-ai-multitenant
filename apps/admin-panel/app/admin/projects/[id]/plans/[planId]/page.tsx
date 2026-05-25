@@ -28,6 +28,14 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ApiError, apiFetch } from "@/lib/api";
 import { PlanDAG } from "@/lib/plan-dag";
 import { PlanGantt } from "@/lib/plan-gantt";
@@ -186,12 +194,238 @@ export default function PlanDetailPage() {
       <SummarySection summary={spec.summary} />
       <EstimatesSection estimates={spec.estimates} />
       <CostBreakdownSection planId={plan.id} />
+      <SyncToKanbanSection
+        planId={plan.id}
+        phases={spec.phases ?? []}
+        taskIds={(spec.tasks ?? []).map((t) => t.id)}
+      />
       <PhasesSection phases={spec.phases} tasks={spec.tasks} />
       <DAGSection tasks={spec.tasks} />
       <GanttSection tasks={spec.tasks} />
       <TasksSection tasks={spec.tasks} />
       <CommentsSection planId={plan.id} taskIds={(spec.tasks ?? []).map((t) => t.id)} />
     </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Sync to Kanban (task_03_27)
+// --------------------------------------------------------------------------
+type SyncScope = "total" | "phase" | "selection";
+
+interface SyncResponse {
+  created_task_ids: Record<string, string>;
+  skipped_task_ids: Record<string, string>;
+  dependencies_created: number;
+}
+
+function SyncToKanbanSection({
+  planId,
+  phases,
+  taskIds,
+}: {
+  planId: string;
+  phases: PlanPhaseSpec[];
+  taskIds: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [scope, setScope] = useState<SyncScope>("total");
+  const [phaseIndex, setPhaseIndex] = useState<number>(0);
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+  const [lastResult, setLastResult] = useState<SyncResponse | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation({
+    mutationFn: () => {
+      const body: { scope: SyncScope; phase_index?: number; task_ids?: string[] } = {
+        scope,
+      };
+      if (scope === "phase") body.phase_index = phaseIndex;
+      if (scope === "selection") body.task_ids = Array.from(selection);
+      return apiFetch<SyncResponse>(`/plans/${planId}/sync-to-kanban`, {
+        method: "POST",
+        body,
+      });
+    },
+    onSuccess: (data) => {
+      setLastResult(data);
+      setErrorMsg(null);
+      // The Kanban tab caches its tasks query — invalidate so the UI
+      // reflects the freshly-materialised cards.
+      queryClient.invalidateQueries({ queryKey: ["project-tasks"] });
+    },
+    onError: (err) => {
+      setLastResult(null);
+      setErrorMsg(err instanceof ApiError ? err.body : String(err));
+    },
+  });
+
+  const canSubmit =
+    !mutation.isPending &&
+    (scope !== "selection" || selection.size > 0) &&
+    (scope !== "phase" || (phases.length > 0 && phaseIndex >= 0 && phaseIndex < phases.length));
+
+  return (
+    <Card className="mt-6" data-testid="plan-sync-to-kanban">
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle>Sincronizar al Kanban</CardTitle>
+        <Button
+          onClick={() => {
+            setLastResult(null);
+            setErrorMsg(null);
+            setOpen(true);
+          }}
+          disabled={taskIds.length === 0}
+          data-testid="plan-sync-open"
+        >
+          Sincronizar al Kanban
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {taskIds.length === 0 ? (
+          <p className="text-muted-foreground text-sm italic" data-testid="plan-sync-empty">
+            El plan aún no tiene tareas para materializar.
+          </p>
+        ) : lastResult ? (
+          <SyncResultLine result={lastResult} />
+        ) : (
+          <p className="text-muted-foreground text-sm">
+            Materializa las tareas del plan como tarjetas del Kanban. Puedes sincronizar el plan
+            completo, una fase concreta o una selección.
+          </p>
+        )}
+      </CardContent>
+
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!mutation.isPending) setOpen(next);
+        }}
+      >
+        <DialogContent data-testid="plan-sync-dialog">
+          <DialogHeader>
+            <DialogTitle>Sincronizar al Kanban</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <fieldset className="flex flex-col gap-2 text-sm">
+              <label className="flex items-center gap-2" data-testid="plan-sync-scope-total-row">
+                <input
+                  type="radio"
+                  name="sync-scope"
+                  value="total"
+                  checked={scope === "total"}
+                  onChange={() => setScope("total")}
+                  data-testid="plan-sync-scope-total"
+                />
+                <span>Plan completo ({taskIds.length} tareas)</span>
+              </label>
+              <label className="flex items-center gap-2" data-testid="plan-sync-scope-phase-row">
+                <input
+                  type="radio"
+                  name="sync-scope"
+                  value="phase"
+                  checked={scope === "phase"}
+                  onChange={() => setScope("phase")}
+                  disabled={phases.length === 0}
+                  data-testid="plan-sync-scope-phase"
+                />
+                <span>Una fase</span>
+                {scope === "phase" ? (
+                  <select
+                    value={phaseIndex}
+                    onChange={(e) => setPhaseIndex(Number(e.target.value))}
+                    data-testid="plan-sync-phase-select"
+                    className="bg-background border-muted rounded border px-2 py-1 text-xs"
+                  >
+                    {phases.map((p, i) => (
+                      <option key={i} value={i}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+              </label>
+              <label
+                className="flex items-center gap-2"
+                data-testid="plan-sync-scope-selection-row"
+              >
+                <input
+                  type="radio"
+                  name="sync-scope"
+                  value="selection"
+                  checked={scope === "selection"}
+                  onChange={() => setScope("selection")}
+                  data-testid="plan-sync-scope-selection"
+                />
+                <span>Selección custom</span>
+              </label>
+
+              {scope === "selection" ? (
+                <ul
+                  className="border-muted mt-1 max-h-48 overflow-y-auto rounded border px-2 py-1 text-xs"
+                  data-testid="plan-sync-selection-list"
+                >
+                  {taskIds.map((tid) => (
+                    <li key={tid} className="flex items-center gap-2 py-0.5">
+                      <input
+                        type="checkbox"
+                        checked={selection.has(tid)}
+                        onChange={(e) => {
+                          const next = new Set(selection);
+                          if (e.target.checked) next.add(tid);
+                          else next.delete(tid);
+                          setSelection(next);
+                        }}
+                        data-testid={`plan-sync-selection-${tid}`}
+                      />
+                      <span className="font-mono">{tid}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </fieldset>
+
+            {errorMsg ? (
+              <p className="text-destructive text-xs" data-testid="plan-sync-error">
+                {errorMsg}
+              </p>
+            ) : null}
+          </DialogBody>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setOpen(false)}
+              disabled={mutation.isPending}
+              data-testid="plan-sync-cancel"
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => mutation.mutate()}
+              disabled={!canSubmit}
+              data-testid="plan-sync-confirm"
+            >
+              {mutation.isPending ? "Sincronizando…" : "Sincronizar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}
+
+function SyncResultLine({ result }: { result: SyncResponse }) {
+  const created = Object.keys(result.created_task_ids).length;
+  const skipped = Object.keys(result.skipped_task_ids).length;
+  return (
+    <p className="text-sm" data-testid="plan-sync-result">
+      Materializadas <span className="font-semibold">{created}</span> tareas nuevas,{" "}
+      <span className="font-semibold">{skipped}</span> ya existían.{" "}
+      <span className="text-muted-foreground">
+        {result.dependencies_created} dependencias creadas.
+      </span>
+    </p>
   );
 }
 

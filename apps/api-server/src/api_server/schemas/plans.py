@@ -164,6 +164,8 @@ __all__ = [
     "PlanCreateRequest",
     "PlanResponse",
     "PlanSpecification",
+    "PlanSyncRequest",
+    "PlanSyncResponse",
     "PlanUpdateRequest",
     "TaskAICostResponse",
     "TaskHumanCostResponse",
@@ -275,3 +277,47 @@ def to_plan_comment_response(c) -> PlanCommentResponse:  # type: ignore[no-untyp
         content=c.content,
         created_at=c.created_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Plan → Kanban sync (task_03_27, task_03_28, task_03_29)
+# ---------------------------------------------------------------------------
+class PlanSyncRequest(BaseModel):
+    """Body of POST /plans/{plan_id}/sync-to-kanban.
+
+    The three scopes mirror the UI options:
+      - ``total``: every task in the spec.
+      - ``phase``: tasks of one phase (``phase_index`` required).
+      - ``selection``: an explicit list of spec task ids.
+    """
+
+    model_config = _BASE_CONFIG
+
+    scope: str = Field(pattern="^(total|phase|selection)$")
+    phase_index: int | None = Field(default=None, ge=0)
+    task_ids: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _scope_consistency(self) -> PlanSyncRequest:
+        if self.scope == "phase" and self.phase_index is None:
+            raise ValueError("scope='phase' requires phase_index")
+        if self.scope == "selection" and not self.task_ids:
+            raise ValueError("scope='selection' requires a non-empty task_ids")
+        return self
+
+
+class PlanSyncResponse(BaseModel):
+    """Outcome the UI uses to render the toast + reload the Kanban.
+
+    Maps directly from :class:`api_server.chat.sync_to_kanban.SyncResult`:
+
+      - ``created_task_ids``: spec id -> newly created Task.id
+      - ``skipped_task_ids``: spec id -> existing Task.id (idempotency)
+      - ``dependencies_created``: number of task_dependencies rows added
+    """
+
+    model_config = _BASE_CONFIG
+
+    created_task_ids: dict[str, UUID] = Field(default_factory=dict)
+    skipped_task_ids: dict[str, UUID] = Field(default_factory=dict)
+    dependencies_created: int = 0

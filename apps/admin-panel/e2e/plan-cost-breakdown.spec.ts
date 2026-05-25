@@ -76,7 +76,7 @@ const COST_FIXTURE = {
         cost_max: "0.3000",
       },
     ],
-    missing_models: [],
+    missing_models: [] as string[],
   },
 };
 

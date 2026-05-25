@@ -24,7 +24,7 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args: object) -> None:  # silence access logging
         pass
 
-    def do_GET(self) -> None:  # noqa: N802 — stdlib BaseHTTPRequestHandler API
+    def do_GET(self) -> None:  # stdlib BaseHTTPRequestHandler API
         with contextlib.suppress(OSError):  # client may have walked away
             self._route()
 

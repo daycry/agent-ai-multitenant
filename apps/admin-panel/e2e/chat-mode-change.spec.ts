@@ -33,7 +33,22 @@ function conversation(mode: string) {
   };
 }
 
-function userMessage(id: string, content: string, mode: string) {
+interface ChatMessage {
+  id: string;
+  tenant_id: string;
+  conversation_id: string;
+  author_kind: string;
+  author_user_id: string | null;
+  author_agent_id: string | null;
+  content: string;
+  mode: string;
+  attachments: never[];
+  related_plan_id: string | null;
+  is_summary: boolean;
+  created_at: string;
+}
+
+function userMessage(id: string, content: string, mode: string): ChatMessage {
   return {
     id,
     tenant_id: "tttt0000-0000-0000-0000-000000000001",
@@ -50,7 +65,7 @@ function userMessage(id: string, content: string, mode: string) {
   };
 }
 
-function systemBanner(id: string, content: string, mode: string) {
+function systemBanner(id: string, content: string, mode: string): ChatMessage {
   return {
     id,
     tenant_id: "tttt0000-0000-0000-0000-000000000001",

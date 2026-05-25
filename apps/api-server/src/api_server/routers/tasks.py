@@ -24,6 +24,10 @@ from api_server.auth.deps import (
     get_redis,
     get_tenant_session,
 )
+from api_server.chat.dag_enforcement import (
+    DependenciesNotDoneError,
+    assert_dependencies_done,
+)
 from api_server.db.domain import Project, Task, TaskDependency
 from api_server.events import publish_task_created, publish_task_status_changed
 from api_server.routers._helpers import (
@@ -235,6 +239,24 @@ async def update_task(
     # PUT actually moved the task across the Kanban (and thus whether
     # the orchestrator needs a `task.status_changed` event).
     old_status = task.status
+
+    # DAG enforcement (task_03_30): a move to a "starts-work" status is
+    # rejected if any upstream dependency is still not `done`. We check
+    # *before* applying the partial update so the row is not mutated.
+    if payload.status is not None and payload.status.value != old_status:
+        try:
+            await assert_dependencies_done(session, task.id, payload.status.value)
+        except DependenciesNotDoneError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": "dependencies_not_done",
+                    "target_status": payload.status.value,
+                    "pending": [
+                        {"task_id": str(p.task_id), "status": p.status} for p in exc.pending
+                    ],
+                },
+            ) from exc
 
     # Dependencies are handled out-of-band; remove them from the scalar
     # update so apply_partial_update doesn't try to setattr a list of

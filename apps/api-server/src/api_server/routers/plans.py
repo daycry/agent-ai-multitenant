@@ -35,8 +35,10 @@ from api_server.chat.plan_state_machine import (
     SameSignerError,
     transition_plan_status,
 )
+from api_server.chat.sync_to_kanban import SyncScopeError, sync_plan_to_kanban
 from api_server.db.conversation import Conversation
 from api_server.db.domain import Plan, PlanStatus, Project
+from api_server.db.models import Organization
 from api_server.db.plan_comment import PlanComment
 from api_server.db.platform_settings import get_double_signature_threshold
 from api_server.routers._helpers import (
@@ -52,6 +54,8 @@ from api_server.schemas.plans import (
     PlanCommentResponse,
     PlanCreateRequest,
     PlanResponse,
+    PlanSyncRequest,
+    PlanSyncResponse,
     PlanUpdateRequest,
     TaskAICostResponse,
     TaskHumanCostResponse,
@@ -502,12 +506,6 @@ async def _resolve_tenant_rate(
     Returns (None, None) when the tenant has not configured a rate;
     callers fall back to the platform default in that case.
     """
-    # Local import: Organization lives in api_server.db.models (Plan 00
-    # foundations); a top-level import would create no real cycle today
-    # but the module is far from this router's neighbourhood, so we keep
-    # the dependency surface narrow.
-    from api_server.db.models import Organization
-
     result = await session.execute(select(Organization).where(Organization.id == tenant_id))
     org = result.scalar_one_or_none()
     if org is None:
@@ -534,6 +532,53 @@ async def _resolve_first_signature_target(session: AsyncSession, plan: Plan) -> 
     if threshold > 0 and ai.cost_max > threshold:
         return PlanStatus.PENDING_SECOND_APPROVAL.value
     return PlanStatus.APPROVED.value
+
+
+# ===========================================================================
+# Sync to Kanban (task_03_27, task_03_28, task_03_29)
+# ===========================================================================
+@plans_router.post("/{plan_id}/sync-to-kanban", response_model=PlanSyncResponse)
+async def sync_plan_kanban(
+    plan_id: UUID,
+    payload: PlanSyncRequest,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> PlanSyncResponse:
+    """Materialise the plan's tasks into the Kanban.
+
+    The scope mirrors the UI dialog: ``total`` syncs every spec task,
+    ``phase`` only those of one ``phases[i]``, ``selection`` only the
+    explicit list of spec task ids.
+
+    Idempotent (task_03_29): tasks already materialised from this plan
+    are reported under ``skipped_task_ids`` and reused as dependency
+    targets for any new siblings. Calling the endpoint twice with the
+    same scope is a no-op the second time.
+    """
+    require_tenant_id(principal)
+    plan = await get_writable_or_404(
+        session, Plan, plan_id, principal, not_found_detail="plan not found"
+    )
+
+    try:
+        result = await sync_plan_to_kanban(
+            session,
+            plan,
+            scope=payload.scope,
+            phase_index=payload.phase_index,
+            task_ids=payload.task_ids,
+        )
+    except SyncScopeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "invalid_sync_scope", "message": str(exc)},
+        ) from exc
+
+    return PlanSyncResponse(
+        created_task_ids=result.created_task_ids,
+        skipped_task_ids=result.skipped_task_ids,
+        dependencies_created=result.dependencies_created,
+    )
 
 
 __all__ = ["plans_router", "project_plans_router"]

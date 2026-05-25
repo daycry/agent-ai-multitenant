@@ -115,7 +115,7 @@ def _dfs_iterative(
                 first = path.index(nxt)
             except ValueError:
                 first = 0
-            raise DAGCycleError(path[first:] + [nxt])
+            raise DAGCycleError([*path[first:], nxt])
         colour[nxt] = _GRAY
         stack.append((nxt, list(nodes.get(nxt, ()))))
 
