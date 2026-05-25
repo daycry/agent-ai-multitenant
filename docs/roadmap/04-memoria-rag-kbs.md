@@ -1,9 +1,9 @@
 ---
 plan_id: 04-memoria-rag-kbs
 title: Memoria, RAG y Bases de Conocimiento
-status: pending_approval
+status: in_progress
 blocking_plan: [02-ejecucion-agentes]
-started_at: null
+started_at: 2026-05-25
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 80-100

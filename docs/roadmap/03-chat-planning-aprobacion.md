@@ -1,10 +1,10 @@
 ---
 plan_id: 03-chat-planning-aprobacion
 title: Chat, Planning Multi-Agente y Aprobación
-status: in_progress
+status: completed
 blocking_plan: [02-ejecucion-agentes]
 started_at: 2026-05-24
-completed_at: null
+completed_at: 2026-05-25
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 80-100
 estimated_cost_human_eur: 32.000 € – 40.000 €
