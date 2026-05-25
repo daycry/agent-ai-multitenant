@@ -138,6 +138,13 @@ ignore_missing_imports = true
 module = ["jose", "jose.*"]
 ignore_missing_imports = true
 
+# `pgvector` (>=0.3) ships .pyi stubs for the asyncpg/numpy adapters
+# but not for `pgvector.sqlalchemy.Vector`; treat the whole module as
+# untyped rather than vendoring our own stubs (Plan 04).
+[[tool.mypy.overrides]]
+module = ["pgvector", "pgvector.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

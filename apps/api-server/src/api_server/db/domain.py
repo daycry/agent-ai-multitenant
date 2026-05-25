@@ -116,6 +116,22 @@ class MemoryScope(enum.StrEnum):
     GLOBAL = "global"
 
 
+class MemoryType(enum.StrEnum):
+    """Episodic vs semantic distinction for agent memory (Plan 04 task_04_01).
+
+    - ``episodic``: a concrete event the agent lived through ("the
+      psycopg3 import failed in project X on 2026-05-25").
+    - ``semantic``: a rule or generalisation distilled from one or
+      more episodes ("project X uses asyncpg, not psycopg3").
+
+    The Memorizer (`task_04_03`) decides which type each entry gets
+    when it distils an `Execution`; the `memory_recall` tool can
+    filter by type."""
+
+    EPISODIC = "episodic"
+    SEMANTIC = "semantic"
+
+
 class SkillCategory(enum.StrEnum):
     """Open-ended skill grouping. Free-form `category` text is also accepted;
     this enum is just for the curated catalog (see task_01_10 seed)."""

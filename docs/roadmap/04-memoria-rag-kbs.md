@@ -92,7 +92,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_01` — Modelo MemoryEntry con scope, type (episódica/semántica), embedding, metadata
 
-- [ ] **Título**: Modelo MemoryEntry con scope, type (episódica/semántica), embedding, metadata
+- [x] **Título**: Modelo MemoryEntry con scope, type (episódica/semántica), embedding, metadata
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -109,7 +109,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_02` — Migración con índice HNSW de pgvector
 
-- [ ] **Título**: Migración con índice HNSW de pgvector
+- [x] **Título**: Migración con índice HNSW de pgvector
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
