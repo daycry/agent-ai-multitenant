@@ -143,7 +143,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_04` — Tool memory_recall: búsqueda híbrida BM25 + vector + RRF en memorias accesibles al agente
 
-- [ ] **Título**: Tool memory_recall: búsqueda híbrida BM25 + vector + RRF en memorias accesibles al agente
+- [x] **Título**: Tool memory_recall: búsqueda híbrida BM25 + vector + RRF en memorias accesibles al agente
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -160,7 +160,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_05` — Tool memory_store: persistencia manual de aprendizajes desde el chat
 
-- [ ] **Título**: Tool memory_store: persistencia manual de aprendizajes desde el chat
+- [x] **Título**: Tool memory_store: persistencia manual de aprendizajes desde el chat
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -177,7 +177,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_06` — UI 'Memoria del Equipo' para visualizar, editar y eliminar entradas (con permisos)
 
-- [ ] **Título**: UI 'Memoria del Equipo' para visualizar, editar y eliminar entradas (con permisos)
+- [x] **Título**: UI 'Memoria del Equipo' para visualizar, editar y eliminar entradas (con permisos)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev

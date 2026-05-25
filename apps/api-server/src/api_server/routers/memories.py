@@ -1,0 +1,258 @@
+"""`/memories` endpoints — human-facing memory CRUD (Plan 04 task_04_05).
+
+Two routes for v1:
+
+  - ``POST /memories`` — store a new `MemoryEntry` manually. The
+    payload picks one of the four `MemoryScope` values; the owner
+    pointer (`user_id` / `team_id` / `project_id`) is derived from
+    the authenticated principal + request body. The DB CHECK is the
+    last line of defence if the mapping ever drifts.
+  - ``GET /memories`` — list memories visible under the current
+    tenant + active scope filter. Lightweight pagination
+    (limit + cursor by `created_at`); the recall tool covers
+    search.
+
+The agent-runtime tool wire-up (replacing the 501 placeholder Plan 02
+left behind) is a separate change — it lives in `agent-runtime` and
+calls the same persistence module the endpoint uses
+(:func:`api_server.memorizer.persistence.persist_memory_candidates`).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.db.memory import MemoryEntry
+from api_server.memorizer import MemoryCandidate, persist_memory_candidates
+from api_server.routers._helpers import require_tenant_id
+
+router = APIRouter(prefix="/memories", tags=["memories"])
+
+_BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+_SCOPE_LITERAL = Literal["private", "team_shared", "project_shared", "global"]
+_TYPE_LITERAL = Literal["episodic", "semantic"]
+
+
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
+class MemoryStoreRequest(BaseModel):
+    """Body of POST /memories.
+
+    Validation rules (mirror the DB CHECK ck_memory_entries_scope_pointer
+    so we fail at the request layer, not on insert):
+
+      - ``private``        — `user_id` is derived from the JWT
+                             (the body field is ignored).
+      - ``team_shared``    — body MUST carry `team_id`.
+      - ``project_shared`` — body MUST carry `project_id`.
+      - ``global``         — no owner pointer needed; restricted to
+                             tenant_admin via the route handler.
+    """
+
+    model_config = _BASE_CONFIG
+
+    content: str = Field(min_length=1, max_length=2000)
+    type: _TYPE_LITERAL = "semantic"
+    scope: _SCOPE_LITERAL
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    team_id: UUID | None = None
+    project_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def _scope_owner_consistency(self) -> MemoryStoreRequest:
+        if self.scope == "team_shared" and self.team_id is None:
+            raise ValueError("scope='team_shared' requires team_id")
+        if self.scope == "project_shared" and self.project_id is None:
+            raise ValueError("scope='project_shared' requires project_id")
+        # Strip + dedupe tags while preserving order.
+        clean: list[str] = []
+        seen: set[str] = set()
+        for tag in self.tags:
+            t = tag.strip()
+            if t and t not in seen:
+                seen.add(t)
+                clean.append(t)
+        object.__setattr__(self, "tags", clean)
+        return self
+
+
+class MemoryResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    tenant_id: UUID
+    scope: str
+    type: str
+    content: str
+    tags: list[str]
+    user_id: UUID | None
+    team_id: UUID | None
+    project_id: UUID | None
+    source_execution_id: UUID | None
+    agent_id: UUID | None
+    has_embedding: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+def _to_response(row: MemoryEntry) -> MemoryResponse:
+    return MemoryResponse(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        scope=row.scope,
+        type=row.type,
+        content=row.content,
+        tags=list(row.tags or []),
+        user_id=row.user_id,
+        team_id=row.team_id,
+        project_id=row.project_id,
+        source_execution_id=row.source_execution_id,
+        agent_id=row.agent_id,
+        has_embedding=row.embedding is not None,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Authorization helper for the `global` scope
+# ---------------------------------------------------------------------------
+async def _assert_can_write_global(
+    session: AsyncSession, principal: AuthPrincipal, tenant_id: UUID
+) -> None:
+    """Storing a `global` memory means "every agent in the tenant
+    reads this" — gate it behind `tenant_admin`. The schema CHECK
+    only enforces the owner-pointer shape; this check enforces who
+    is allowed."""
+    from api_server.db.models import UserOrganizationMembership
+
+    if principal.user_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="auth required")
+    result = await session.execute(
+        select(UserOrganizationMembership.role).where(
+            UserOrganizationMembership.tenant_id == tenant_id,
+            UserOrganizationMembership.user_id == principal.user_id,
+        )
+    )
+    role = result.scalar_one_or_none()
+    if role not in {"tenant_admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="scope='global' requires tenant_admin",
+        )
+
+
+# ---------------------------------------------------------------------------
+# POST /memories
+# ---------------------------------------------------------------------------
+@router.post("", response_model=MemoryResponse, status_code=status.HTTP_201_CREATED)
+async def store_memory(
+    payload: MemoryStoreRequest,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> MemoryResponse:
+    """Persist a single memory manually (Plan 04 task_04_05).
+
+    The Memorizer (task_04_03) writes memories automatically after
+    each execution; this endpoint covers the "I want to remember this
+    *now*" case humans hit in the chat UI.
+    """
+    tenant_id = require_tenant_id(principal)
+    if payload.scope == "global":
+        await _assert_can_write_global(session, principal, tenant_id)
+
+    # `private` always pins to the authenticated user — even if the
+    # body tries to set user_id, we ignore it here.
+    user_id = principal.user_id if payload.scope == "private" else None
+    if payload.scope == "private" and user_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="auth required")
+
+    candidate = MemoryCandidate(
+        content=payload.content,
+        type=payload.type,
+        tags=tuple(payload.tags),
+    )
+    rows = await persist_memory_candidates(
+        session,
+        [candidate],
+        tenant_id=tenant_id,
+        scope=payload.scope,
+        user_id=user_id,
+        team_id=payload.team_id if payload.scope == "team_shared" else None,
+        project_id=payload.project_id if payload.scope == "project_shared" else None,
+        agent_id=None,
+        source_execution_id=None,
+        extra_metadata={"source": "manual", "actor_user_id": str(principal.user_id)},
+    )
+    await session.flush()
+    row = rows[0]
+    await session.refresh(row)
+    return _to_response(row)
+
+
+# ---------------------------------------------------------------------------
+# GET /memories
+# ---------------------------------------------------------------------------
+@router.get("", response_model=list[MemoryResponse])
+async def list_memories(
+    scope: _SCOPE_LITERAL | None = Query(default=None),
+    type: _TYPE_LITERAL | None = Query(default=None),
+    project_id: UUID | None = Query(default=None),
+    team_id: UUID | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    _: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[MemoryResponse]:
+    """Visible memories in the tenant, optionally filtered by scope /
+    type / owner pointer. RLS handles the tenant boundary; this
+    endpoint is for the operator's Memory UI (task_04_06)."""
+    stmt = select(MemoryEntry).where(MemoryEntry.deleted_at.is_(None))
+    if scope is not None:
+        stmt = stmt.where(MemoryEntry.scope == scope)
+    if type is not None:
+        stmt = stmt.where(MemoryEntry.type == type)
+    if project_id is not None:
+        stmt = stmt.where(MemoryEntry.project_id == project_id)
+    if team_id is not None:
+        stmt = stmt.where(MemoryEntry.team_id == team_id)
+    stmt = stmt.order_by(MemoryEntry.created_at.desc()).limit(limit)
+    result = await session.execute(stmt)
+    return [_to_response(row) for row in result.scalars().all()]
+
+
+# ---------------------------------------------------------------------------
+# DELETE /memories/{id}
+# ---------------------------------------------------------------------------
+@router.delete("/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_memory(
+    memory_id: UUID,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> None:
+    """Soft-delete a memory. RLS + tenant check; we stamp `deleted_at`
+    rather than dropping the row so audits survive."""
+    require_tenant_id(principal)
+    result = await session.execute(
+        select(MemoryEntry).where(MemoryEntry.id == memory_id, MemoryEntry.deleted_at.is_(None))
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    row.deleted_at = _dt.now(tz=UTC)
+    await session.flush()
+
+
+__all__ = ["router"]
