@@ -58,7 +58,7 @@ def validate_dag(tasks: Iterable[TaskRef | dict[str, object]]) -> None:
             raise ValueError(f"duplicate task id: {ref.id}")
         nodes[ref.id] = ref.depends_on
 
-    colour: dict[str, int] = {tid: _WHITE for tid in nodes}
+    colour: dict[str, int] = dict.fromkeys(nodes, _WHITE)
 
     for start in nodes:
         if colour[start] != _WHITE:

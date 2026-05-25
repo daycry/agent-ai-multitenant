@@ -51,8 +51,11 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["ARG", "PLR2004", "S101"]
-"packages/*/tests/**/*.py" = ["ARG", "PLR2004", "S101"]
+# Tests often pull deps lazily and use ambiguous unicode in
+# comments (e.g. `×` for multiplication, currency glyphs) — that's
+# fine here.
+"tests/**/*.py" = ["ARG", "PLR2004", "S101", "PLC0415", "RUF002", "RUF003"]
+"packages/*/tests/**/*.py" = ["ARG", "PLR2004", "S101", "PLC0415", "RUF002", "RUF003"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection helpers are the canonical way to declare

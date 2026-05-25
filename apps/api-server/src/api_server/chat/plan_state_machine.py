@@ -1,6 +1,6 @@
-"""Plan lifecycle state machine (Plan 03 task_03_16).
+"""Plan lifecycle state machine (Plan 03 task_03_16 / task_03_25).
 
-A plan's status moves through ten states (`PlanStatus`). Free
+A plan's status moves through eleven states (`PlanStatus`). Free
 transitions would let a caller flip a `completed` plan back to
 `draft` and re-execute it, which is exactly the kind of bug the
 state machine exists to catch.
@@ -8,7 +8,9 @@ state machine exists to catch.
 This module is the single source of truth for what's legal:
 
   draft -> pending_approval | cancelled
-  pending_approval -> approved | rejected | cancelled
+  pending_approval -> approved | pending_second_approval | rejected
+                   |  cancelled
+  pending_second_approval -> approved | rejected | cancelled
   approved -> in_progress | cancelled
   in_progress -> blocked | pending_human_validation | cancelled
   blocked -> in_progress | cancelled
@@ -17,6 +19,12 @@ This module is the single source of truth for what's legal:
   rejected -> draft | archived
   cancelled -> archived
   archived -> (terminal)
+
+`pending_second_approval` is the wrinkle for task_03_25: when the AI
+cost estimate exceeds the platform's double-signature threshold, the
+first signature parks the plan in `pending_second_approval`; a
+**different** signer must confirm to reach `approved`. The state
+machine asserts that the second signer is not the same user.
 
 The router (and the agent loop that drives execution transitions)
 calls `transition_plan_status(plan, target)` rather than assigning
@@ -38,6 +46,14 @@ _TRANSITIONS: dict[str, frozenset[str]] = {
         {PlanStatus.PENDING_APPROVAL.value, PlanStatus.CANCELLED.value}
     ),
     PlanStatus.PENDING_APPROVAL.value: frozenset(
+        {
+            PlanStatus.APPROVED.value,
+            PlanStatus.PENDING_SECOND_APPROVAL.value,
+            PlanStatus.REJECTED.value,
+            PlanStatus.CANCELLED.value,
+        }
+    ),
+    PlanStatus.PENDING_SECOND_APPROVAL.value: frozenset(
         {
             PlanStatus.APPROVED.value,
             PlanStatus.REJECTED.value,
@@ -93,32 +109,70 @@ def is_terminal(status: str) -> bool:
     return not allowed_transitions(status)
 
 
+class SameSignerError(ValueError):
+    """The second signature on a double-firma plan must be a different
+    user than the first signature (task_03_25)."""
+
+    def __init__(self, signer: UUID) -> None:
+        self.signer = signer
+        super().__init__(f"second signer must differ from the first ({signer})")
+
+
 def transition_plan_status(plan: Plan, target: str, *, actor: UUID | None = None) -> None:
     """Mutate ``plan.status`` if and only if the transition is legal.
 
     Side-effects:
-      - When moving INTO ``approved``, stamps ``approved_at`` and
-        ``approved_by`` (if ``actor`` is given).
+      - ``pending_approval -> approved`` (single firma): stamps
+        ``approved_*`` with ``actor``.
+      - ``pending_approval -> pending_second_approval`` (double firma,
+        first signature): stamps ``first_approved_*`` with ``actor``.
+      - ``pending_second_approval -> approved`` (second signature):
+        asserts ``actor`` differs from ``first_approved_by`` and
+        stamps ``approved_*``.
       - Other transitions only touch ``status``.
 
     Raises:
-        PlanTransitionError: when ``target`` is not reachable from the
-            plan's current status.
+        PlanTransitionError: when ``target`` is not reachable.
+        SameSignerError: when closing a double-firma without a
+            distinct second signer.
     """
     current = plan.status
     if current == target:
         return
     if target not in allowed_transitions(current):
         raise PlanTransitionError(current, target)
-    plan.status = target
+
+    now = datetime.now(tz=UTC)
+
+    # Double-firma: first signature parks the plan in pending_second_approval.
+    if (
+        current == PlanStatus.PENDING_APPROVAL.value
+        and target == PlanStatus.PENDING_SECOND_APPROVAL.value
+    ):
+        plan.first_approved_at = now
+        if actor is not None:
+            plan.first_approved_by = actor
+
+    # Final approval — single or double firma.
     if target == PlanStatus.APPROVED.value:
-        plan.approved_at = datetime.now(tz=UTC)
+        # On the second leg of a double-firma, the closing signer must
+        # differ from the first one.
+        if (
+            current == PlanStatus.PENDING_SECOND_APPROVAL.value
+            and actor is not None
+            and plan.first_approved_by == actor
+        ):
+            raise SameSignerError(actor)
+        plan.approved_at = now
         if actor is not None:
             plan.approved_by = actor
+
+    plan.status = target
 
 
 __all__ = [
     "PlanTransitionError",
+    "SameSignerError",
     "allowed_transitions",
     "is_terminal",
     "transition_plan_status",

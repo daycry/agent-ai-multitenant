@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -23,6 +24,7 @@ from sqlalchemy import (
     Boolean,
     ForeignKey,
     Index,
+    Numeric,
     String,
     UniqueConstraint,
     text,
@@ -79,6 +81,14 @@ class Organization(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+
+    # Per-tenant hourly rate for the human cost calculation
+    # (Plan 03 task_03_26). CLAUDE.md §6 mandates "tarifa única tenant".
+    # NULL means "use the platform default" (50 €/h).
+    hourly_rate: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=10, scale=2), nullable=True
+    )
+    hourly_rate_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
 
     # No ORM `memberships` relationship: tenant_id is NOT a formal FK
     # to organizations.id (the migration intentionally omits the

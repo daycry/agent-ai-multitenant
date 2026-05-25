@@ -36,6 +36,7 @@ from api_server.routers.projects import router as projects_router
 from api_server.routers.skills import router as skills_router
 from api_server.routers.tasks import router as tasks_router
 from api_server.routers.teams import router as teams_router
+from api_server.routers.tenant_settings import router as tenant_settings_router
 from api_server.routers.tools import router as tools_router
 from api_server.routers.ws import router as ws_router
 from api_server.telemetry import configure_tracing, instrument_fastapi
@@ -78,6 +79,7 @@ def create_app() -> FastAPI:
     app.include_router(conversations_router)
     app.include_router(project_plans_router)
     app.include_router(plans_router)
+    app.include_router(tenant_settings_router)
     app.include_router(ws_router)
 
     instrument_fastapi(app)

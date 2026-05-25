@@ -457,7 +457,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_22` — Cálculo de coste humano (tarifa única tenant × tiempo estimado por tarea)
 
-- [ ] **Título**: Cálculo de coste humano (tarifa única tenant × tiempo estimado por tarea)
+- [x] **Título**: Cálculo de coste humano (tarifa única tenant × tiempo estimado por tarea)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -474,7 +474,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_23` — Cálculo de coste IA (catálogo de precios placeholder + rango por complejidad)
 
-- [ ] **Título**: Cálculo de coste IA (catálogo de precios placeholder + rango por complejidad)
+- [x] **Título**: Cálculo de coste IA (catálogo de precios placeholder + rango por complejidad)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -491,7 +491,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_24` — Desglose de coste tabular en la UI
 
-- [ ] **Título**: Desglose de coste tabular en la UI
+- [x] **Título**: Desglose de coste tabular en la UI
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -508,7 +508,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_25` — Flujo de aprobación con doble firma opcional sobre umbral configurable
 
-- [ ] **Título**: Flujo de aprobación con doble firma opcional sobre umbral configurable
+- [x] **Título**: Flujo de aprobación con doble firma opcional sobre umbral configurable
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -525,7 +525,7 @@ Hasta ahora las tareas se crean a mano. Con esta fase nacen del chat: el PM agen
 
 #### `task_03_26` — Configuración de tarifa horaria del tenant en panel admin
 
-- [ ] **Título**: Configuración de tarifa horaria del tenant en panel admin
+- [x] **Título**: Configuración de tarifa horaria del tenant en panel admin
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: frontend-dev + backend-dev

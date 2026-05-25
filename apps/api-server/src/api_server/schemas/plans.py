@@ -20,6 +20,7 @@ not by the REST contract. Validators enforce the basics: DAG sanity
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -126,6 +127,10 @@ class PlanResponse(BaseModel):
     created_by: UUID | None
     approved_by: UUID | None
     approved_at: datetime | None
+    # First signature on a double-firma plan (task_03_25). NULL on
+    # single-firma plans; the second/final signer lives in approved_*.
+    first_approved_by: UUID | None
+    first_approved_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -143,21 +148,87 @@ def to_plan_response(p: Plan) -> PlanResponse:
         created_by=p.created_by,
         approved_by=p.approved_by,
         approved_at=p.approved_at,
+        first_approved_by=p.first_approved_by,
+        first_approved_at=p.first_approved_at,
         created_at=p.created_at,
         updated_at=p.updated_at,
     )
 
 
 __all__ = [
+    "AICostBreakdownResponse",
+    "CostBreakdownResponse",
+    "HumanCostBreakdownResponse",
     "PlanCommentCreateRequest",
     "PlanCommentResponse",
     "PlanCreateRequest",
     "PlanResponse",
     "PlanSpecification",
     "PlanUpdateRequest",
+    "TaskAICostResponse",
+    "TaskHumanCostResponse",
     "to_plan_comment_response",
     "to_plan_response",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Cost breakdown (task_03_24) — read-only response over the pure
+# functions in `api_server.chat.cost`. The router recomputes on demand
+# instead of snapshotting because the catalog and hourly rate change.
+# ---------------------------------------------------------------------------
+class TaskHumanCostResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    task_id: str
+    title: str
+    hours: Decimal
+    cost: Decimal
+
+
+class HumanCostBreakdownResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    currency: str
+    hourly_rate: Decimal
+    total_hours: Decimal
+    total_cost: Decimal
+    tasks: list[TaskHumanCostResponse]
+
+
+class TaskAICostResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    task_id: str
+    title: str
+    complexity: str
+    model_id: str
+    tokens_in_min: int
+    tokens_in_max: int
+    tokens_out_min: int
+    tokens_out_max: int
+    cost_min: Decimal
+    cost_max: Decimal
+
+
+class AICostBreakdownResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    currency: str
+    default_model_id: str
+    cost_min: Decimal
+    cost_max: Decimal
+    tasks: list[TaskAICostResponse]
+    missing_models: list[str]
+
+
+class CostBreakdownResponse(BaseModel):
+    """Combined human + AI cost breakdown for the plan detail page."""
+
+    model_config = _BASE_CONFIG
+
+    human: HumanCostBreakdownResponse
+    ai: AICostBreakdownResponse
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ Creation paths:
 
 from __future__ import annotations
 
+from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -23,25 +24,37 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.chat.cost import (
+    DEFAULT_HOURLY_RATE_EUR,
+    compute_ai_cost,
+    compute_human_cost,
+)
 from api_server.chat.dag import DAGCycleError, validate_dag
 from api_server.chat.plan_state_machine import (
     PlanTransitionError,
+    SameSignerError,
     transition_plan_status,
 )
 from api_server.db.conversation import Conversation
-from api_server.db.domain import Plan, Project
+from api_server.db.domain import Plan, PlanStatus, Project
 from api_server.db.plan_comment import PlanComment
+from api_server.db.platform_settings import get_double_signature_threshold
 from api_server.routers._helpers import (
     get_writable_or_404,
     require_tenant_id,
     soft_delete,
 )
 from api_server.schemas.plans import (
+    AICostBreakdownResponse,
+    CostBreakdownResponse,
+    HumanCostBreakdownResponse,
     PlanCommentCreateRequest,
     PlanCommentResponse,
     PlanCreateRequest,
     PlanResponse,
     PlanUpdateRequest,
+    TaskAICostResponse,
+    TaskHumanCostResponse,
     to_plan_comment_response,
     to_plan_response,
 )
@@ -312,6 +325,215 @@ async def list_plan_comments(
         .order_by(PlanComment.created_at)
     )
     return [to_plan_comment_response(c) for c in result.scalars().all()]
+
+
+# ===========================================================================
+# Cost breakdown (task_03_24)
+# ===========================================================================
+@plans_router.get(
+    "/{plan_id}/cost-breakdown",
+    response_model=CostBreakdownResponse,
+)
+async def get_plan_cost_breakdown(
+    plan_id: UUID,
+    model: str | None = Query(
+        default=None,
+        description=(
+            "Default model id to estimate AI cost against. Falls back to"
+            " plan.specification.metadata.default_model_id, then 'gpt-4o'."
+        ),
+    ),
+    hourly_rate: Decimal | None = Query(
+        default=None,
+        description=(
+            "Per-hour rate for the human cost. Overrides the tenant's"
+            " configured rate (task_03_26). Defaults to 50 EUR."
+        ),
+    ),
+    _: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> CostBreakdownResponse:
+    """Recompute the human + AI cost breakdown for a plan.
+
+    Read-only — does NOT persist anything into the plan's specification.
+    The UI calls this every time the operator opens the plan detail or
+    tweaks the model / rate inputs.
+    """
+    plan = await _load_plan(session, plan_id)
+    spec = plan.specification or {}
+
+    # Rate resolution order (task_03_26):
+    #   1. `?hourly_rate=` query override (for what-if simulations).
+    #   2. Tenant's configured `organizations.hourly_rate`.
+    #   3. Platform default (`DEFAULT_HOURLY_RATE_EUR`, 50 EUR).
+    if hourly_rate is not None:
+        rate = hourly_rate
+        currency = "EUR"
+    else:
+        tenant_rate, tenant_currency = await _resolve_tenant_rate(session, plan.tenant_id)
+        rate = tenant_rate if tenant_rate is not None else DEFAULT_HOURLY_RATE_EUR
+        currency = tenant_currency or "EUR"
+
+    human = compute_human_cost(spec, hourly_rate=rate, currency=currency)
+
+    default_model_id = model or (spec.get("metadata") or {}).get("default_model_id") or "gpt-4o"
+    ai = compute_ai_cost(spec, default_model_id=default_model_id)
+
+    return CostBreakdownResponse(
+        human=HumanCostBreakdownResponse(
+            currency=human.currency,
+            hourly_rate=human.hourly_rate,
+            total_hours=human.total_hours,
+            total_cost=human.total_cost,
+            tasks=[
+                TaskHumanCostResponse(
+                    task_id=t.task_id,
+                    title=t.title,
+                    hours=t.hours,
+                    cost=t.cost,
+                )
+                for t in human.tasks
+            ],
+        ),
+        ai=AICostBreakdownResponse(
+            currency=ai.currency,
+            default_model_id=ai.default_model_id,
+            cost_min=ai.cost_min,
+            cost_max=ai.cost_max,
+            tasks=[
+                TaskAICostResponse(
+                    task_id=t.task_id,
+                    title=t.title,
+                    complexity=t.complexity,
+                    model_id=t.model_id,
+                    tokens_in_min=t.tokens_in_min,
+                    tokens_in_max=t.tokens_in_max,
+                    tokens_out_min=t.tokens_out_min,
+                    tokens_out_max=t.tokens_out_max,
+                    cost_min=t.cost_min,
+                    cost_max=t.cost_max,
+                )
+                for t in ai.tasks
+            ],
+            missing_models=list(ai.missing_models),
+        ),
+    )
+
+
+# ===========================================================================
+# Approve endpoint (task_03_25)
+# ===========================================================================
+@plans_router.post("/{plan_id}/approve", response_model=PlanResponse)
+async def approve_plan(
+    plan_id: UUID,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> PlanResponse:
+    """Cast an approval signature on a plan.
+
+    The endpoint decides single vs. double firma based on the AI cost
+    estimate of the plan and the platform-configured threshold
+    (`plan_approval_double_signature_threshold`):
+
+      - ``pending_approval`` + cost <= threshold → ``approved``.
+      - ``pending_approval`` + cost > threshold → ``pending_second_approval``
+        (first signature; a different user must close it).
+      - ``pending_second_approval`` → ``approved`` (asserts the second
+        signer is not the same user as the first).
+
+    Returns 409 with ``same_signer`` when the same user tries to cast
+    both signatures, or with ``invalid_plan_transition`` on any other
+    illegal move.
+    """
+    require_tenant_id(principal)
+    plan = await get_writable_or_404(
+        session, Plan, plan_id, principal, not_found_detail="plan not found"
+    )
+
+    # Decide the target status: single firma, first of two, or second of two.
+    current = plan.status
+    if current == PlanStatus.PENDING_SECOND_APPROVAL.value:
+        target = PlanStatus.APPROVED.value
+    elif current == PlanStatus.PENDING_APPROVAL.value:
+        target = await _resolve_first_signature_target(session, plan)
+    else:
+        # /approve only meaningful from these two states.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "invalid_plan_transition",
+                "from": current,
+                "to": PlanStatus.APPROVED.value,
+                "reason": "POST /approve is only valid from pending_approval"
+                " or pending_second_approval",
+            },
+        )
+
+    try:
+        transition_plan_status(plan, target, actor=principal.user_id)
+    except SameSignerError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "same_signer",
+                "signer": str(exc.signer),
+            },
+        ) from exc
+    except PlanTransitionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "invalid_plan_transition",
+                "from": exc.from_status,
+                "to": exc.to_status,
+            },
+        ) from exc
+
+    await session.flush()
+    await session.refresh(plan)
+    return to_plan_response(plan)
+
+
+async def _resolve_tenant_rate(
+    session: AsyncSession, tenant_id: UUID
+) -> tuple[Decimal | None, str | None]:
+    """Read the per-tenant hourly_rate override (task_03_26).
+
+    Returns (None, None) when the tenant has not configured a rate;
+    callers fall back to the platform default in that case.
+    """
+    # Local import: Organization lives in api_server.db.models (Plan 00
+    # foundations); a top-level import would create no real cycle today
+    # but the module is far from this router's neighbourhood, so we keep
+    # the dependency surface narrow.
+    from api_server.db.models import Organization
+
+    result = await session.execute(select(Organization).where(Organization.id == tenant_id))
+    org = result.scalar_one_or_none()
+    if org is None:
+        return None, None
+    return org.hourly_rate, org.hourly_rate_currency
+
+
+async def _resolve_first_signature_target(session: AsyncSession, plan: Plan) -> str:
+    """Single firma when the AI cost falls under the platform threshold,
+    double firma otherwise. Threshold of 0 (the default) forces single
+    firma for everything; the operator raises it from the admin panel
+    once they want a four-eye review on expensive plans."""
+    threshold_raw = await get_double_signature_threshold(session)
+    try:
+        threshold = Decimal(threshold_raw)
+    except (ArithmeticError, ValueError):
+        threshold = Decimal("0")
+
+    spec = plan.specification or {}
+    default_model_id = (spec.get("metadata") or {}).get("default_model_id") or "gpt-4o"
+    ai = compute_ai_cost(spec, default_model_id=default_model_id)
+    # We compare against `cost_max` (worst case) so the four-eye review
+    # only kicks in when the plan is *potentially* expensive.
+    if threshold > 0 and ai.cost_max > threshold:
+        return PlanStatus.PENDING_SECOND_APPROVAL.value
+    return PlanStatus.APPROVED.value
 
 
 __all__ = ["plans_router", "project_plans_router"]
