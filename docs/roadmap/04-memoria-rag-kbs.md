@@ -126,7 +126,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_03` — Memorizer service: job post-tarea que destila la ejecución en MemoryEntry según política
 
-- [ ] **Título**: Memorizer service: job post-tarea que destila la ejecución en MemoryEntry según política
+- [x] **Título**: Memorizer service: job post-tarea que destila la ejecución en MemoryEntry según política
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer

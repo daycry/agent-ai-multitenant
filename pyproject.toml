@@ -145,6 +145,14 @@ ignore_missing_imports = true
 module = ["pgvector", "pgvector.*"]
 ignore_missing_imports = true
 
+# `shared-llm` is a local path package (packages/shared-llm) installed
+# editable in dev / CI. The pre-commit hook env doesn't install it, so
+# mypy can't resolve the import — treat it as untyped here. The hook
+# already trusts pgvector/jose/etc. the same way (ADR 0021).
+[[tool.mypy.overrides]]
+module = ["shared_llm", "shared_llm.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
