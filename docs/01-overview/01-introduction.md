@@ -30,8 +30,11 @@ Kubernetes) bajo su propio control:
   node-jest, php-phpunit...) intercambiable.
 - Doble Kanban: vista de Planes (gerencial) + vista de Tareas por
   Plan (operativa).
-- LLM agnóstico: **LiteLLM** como gateway, soporte adicional para
-  Claude Agent SDK y GitHub Copilot OAuth Device Flow.
+- LLM agnóstico, **catálogo cerrado** de cuatro proveedores (ADR 0021):
+  Claude Agent SDK (Pro/Max), GitHub Copilot (OAuth Device Flow +
+  JWT minted), Azure AI Foundry vía APIM (gateway empresarial OpenAI-
+  compatible) y Ollama (local + cloud). Capa común en
+  `packages/shared-llm`.
 - Guardrails declarativos por capas (plataforma → tenant → proyecto)
   en cuatro puntos del ciclo: pre/post_llm y pre/post_tool.
 - Validación humana configurable por proyecto con 13 categorías de

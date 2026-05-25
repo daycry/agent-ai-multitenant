@@ -13,6 +13,17 @@ phase: 02-ejecucion-agentes
 > 2026-05-22. La **Fase G** (`task_02_29`..`task_02_34`) queda añadida
 > al roadmap del Plan 02, que vuelve a `in_progress`.
 
+> **Nota (2026-05-25, ADR 0021).** Las menciones a **LiteLLM** como uno
+> de los "tres caminos de proveedor" (especialmente en `task_02_32` y
+> en el listado de Decisiones) están **parcialmente superseded por
+> ADR 0021**: LiteLLM se retira y el catálogo pasa a cuatro proveedores
+> (Claude Agent SDK, GitHub Copilot, **Azure AI Foundry vía APIM**
+> —que ocupa el hueco del gateway empresarial—, y Ollama local +
+> cloud). El cableado end-to-end del Plan 02 sigue vigente; los
+> `ModelClient`s reales son ahora adaptadores delgados sobre la capa
+> `shared-llm`. La columna `task_02_32` del cuadro de Fase G se lee
+> "AzureFoundry / Copilot / Claude SDK / Ollama" en su forma actual.
+
 ## Contexto
 
 Plan 02 ("Ejecución de Agentes") cerró sus **28 tareas** con todos los

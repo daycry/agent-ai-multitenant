@@ -16,7 +16,8 @@ keeps moving.
 
 The Summariser is a Protocol so this module stays free of any LLM SDK
 dependency. The agent loop (and Plan 04 RAG flows) will plug a real
-LiteLLM-backed summariser in; tests use the scripted one below.
+summariser backed by `shared_llm.LLMProvider` (ADR 0021) — any of the
+four catalog providers fits. Tests use the scripted one below.
 """
 
 from __future__ import annotations

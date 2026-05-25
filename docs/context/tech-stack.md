@@ -2,25 +2,28 @@
 
 ## Backend
 
-| Capa                 | Tecnología       | Versión | Notas                             |
-| -------------------- | ---------------- | ------- | --------------------------------- |
-| Lenguaje             | Python           | 3.12+   | Async-first                       |
-| Framework HTTP       | FastAPI          | 0.115+  | OpenAPI auto, validación Pydantic |
-| Servidor ASGI        | Uvicorn          | 0.32+   | Behind nginx en producción        |
-| ORM                  | SQLAlchemy       | 2.x     | async, type hints                 |
-| Migraciones          | Alembic          | 1.13+   | Reversibles obligatorio           |
-| Validación           | Pydantic         | 2.x     | v2 con strict mode                |
-| BD relacional        | PostgreSQL       | 16      | + extensions pgvector y pg_trgm   |
-| BD vectorial         | pgvector         | 0.7+    | HNSW index para embeddings        |
-| Cache + broker       | Redis            | 7       | Streams + Pub/Sub + Cache         |
-| Cola de tareas       | Celery           | 5.4+    | Con acks_late=true                |
-| Orquestación agentes | LangGraph        | latest  | Grafos de estado para agent loop  |
-| LLM abstracción      | LiteLLM          | latest  | Gateway 100+ providers            |
-| LLM (suscripción)    | claude-agent-sdk | latest  | Python SDK oficial                |
-| Object storage       | MinIO            | latest  | S3-compatible                     |
-| Secretos             | HashiCorp Vault  | 1.18+   | KV v2                             |
-| Antivirus            | ClamAV           | latest  | Para uploads a KBs                |
-| Ingestión docs       | Docling          | latest  | IBM, vía docling-serve            |
+| Capa                 | Tecnología           | Versión | Notas                               |
+| -------------------- | -------------------- | ------- | ----------------------------------- |
+| Lenguaje             | Python               | 3.12+   | Async-first                         |
+| Framework HTTP       | FastAPI              | 0.115+  | OpenAPI auto, validación Pydantic   |
+| Servidor ASGI        | Uvicorn              | 0.32+   | Behind nginx en producción          |
+| ORM                  | SQLAlchemy           | 2.x     | async, type hints                   |
+| Migraciones          | Alembic              | 1.13+   | Reversibles obligatorio             |
+| Validación           | Pydantic             | 2.x     | v2 con strict mode                  |
+| BD relacional        | PostgreSQL           | 16      | + extensions pgvector y pg_trgm     |
+| BD vectorial         | pgvector             | 0.7+    | HNSW index para embeddings          |
+| Cache + broker       | Redis                | 7       | Streams + Pub/Sub + Cache           |
+| Cola de tareas       | Celery               | 5.4+    | Con acks_late=true                  |
+| Orquestación agentes | LangGraph            | latest  | Grafos de estado para agent loop    |
+| LLM abstracción      | `shared-llm`         | local   | Capa async propia (ADR 0021)        |
+| LLM (suscripción)    | claude-agent-sdk     | latest  | Python SDK oficial — vía shared-llm |
+| LLM (gateway)        | Azure Foundry APIM   | n/a     | OpenAI-compat — vía shared-llm      |
+| LLM (Copilot)        | OAuth Device Flow    | n/a     | JWT minted — vía shared-llm         |
+| LLM (Ollama)         | Ollama local + cloud | n/a     | Local o ollama.com — vía shared-llm |
+| Object storage       | MinIO                | latest  | S3-compatible                       |
+| Secretos             | HashiCorp Vault      | 1.18+   | KV v2                               |
+| Antivirus            | ClamAV               | latest  | Para uploads a KBs                  |
+| Ingestión docs       | Docling              | latest  | IBM, vía docling-serve              |
 
 ## Frontend
 

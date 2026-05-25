@@ -6,8 +6,20 @@ date: 2026-05-24
 deciders: System Admin
 phase: 03-chat-planning-aprobacion
 supersedes:
+  # ADR 0009 — supersede de la sub-decisión "LiteLLM como gateway
+  # primario". El resto (LangGraph como motor) sigue vigente.
   - "0009"
-  - parcial "0017"
+  # ADR 0017 — supersede parcial: el cuadro de Fase G ya no enumera
+  # LiteLLM como proveedor; el resto del cableado e2e sigue vigente.
+  - "0017"
+  # ADR 0018 — supersede parcial de las menciones a LiteLLM en el
+  # contexto. El "Claude SDK como ModelClient de un turno" sigue
+  # vigente.
+  - "0018"
+  # ADR 0019 — supersede parcial de la allowlist concreta de hosts
+  # (LiteLLM fuera, APIM y Ollama dentro). La estructura del egress
+  # (sandbox internal + tinyproxy FilterDefaultDeny) sigue vigente.
+  - "0019"
 ---
 
 # ADR 0021 — Capa `shared-llm` con catálogo cerrado de proveedores y retirada de LiteLLM

@@ -7,6 +7,16 @@
 > (`app/core/...`), endpoints `/api/providers/...` y nombres NO son de este
 > repo. Es una **idea**, no una receta a copiar literal.
 
+> **Nota (2026-05-25, ADR 0021).** Este documento es **referencia
+> histórica**. La integración Copilot actual vive en
+> `packages/shared-llm/src/shared_llm/providers/copilot.py` —
+> `CopilotProvider` con `start_device_flow()` / `poll_device_flow()` /
+> `authenticate_interactive()` + mint del JWT con margen de 60s. El
+> agent-runtime usa el adaptador `CopilotModelClient` que envuelve ese
+> provider. Las menciones de LiteLLM como "implementación hermana"
+> ya no aplican: el catálogo cerrado de ADR 0021 sustituye al gateway
+> abstracto.
+
 ## Claves a retener para nuestra implementación
 
 - **Device Flow sin secret de app**: se usa el `client_id` público de GitHub

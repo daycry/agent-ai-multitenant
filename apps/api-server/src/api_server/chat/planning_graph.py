@@ -111,8 +111,9 @@ class PlanningModelClient(Protocol):
     """LLM seam used by the planning sub-graph.
 
     Three calls — kept separate so a scripted test client can drive
-    the graph turn-by-turn without an LLM round-trip and the real
-    LiteLLM-backed client (Plan 04) can plug behind the same surface.
+    the graph turn-by-turn without an LLM round-trip. The real
+    implementation (Plan 04 wiring) plugs an adapter over
+    `shared_llm.LLMProvider` (ADR 0021) behind the same surface.
     """
 
     def pm_decide(self, state: PlanningState) -> PMDirective: ...

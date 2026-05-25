@@ -38,7 +38,10 @@ Documento de un solo vistazo. Para detalle profundo de cada capa, consultar el `
 - worker-review: gestiona review-runtimes persistentes
 - worker-privileged: tools privilegiadas (off por defecto)
 
-**Servicios IA**: litellm-proxy, docling-serve, docling-mcp, ollama (opcional).
+**Servicios IA**: docling-serve, docling-mcp, ollama (opcional, local
+y/o cloud). El acceso a LLMs (Claude SDK, GitHub Copilot, Azure AI
+Foundry vía APIM, Ollama) está unificado en `packages/shared-llm` —
+una capa async propia, sin gateway externo tipo LiteLLM (ADR 0021).
 
 **Datos**: postgres (con pgvector + pg_trgm), redis, minio, vault, clamav.
 
