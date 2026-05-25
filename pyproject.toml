@@ -72,6 +72,10 @@ ignore = [
 # it at module import time would force every deployment that doesn't
 # use Claude to carry the SDK + its Node CLI.
 "packages/shared-llm/src/shared_llm/providers/claude_agent.py" = ["PLC0415"]
+# `BGEReranker` lazy-imports `FlagEmbedding` (torch + transformers)
+# so a deployment that doesn't use it pays no import cost — same
+# pattern as claude_agent above.
+"apps/api-server/src/api_server/rag/reranker.py" = ["PLC0415"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection helpers are the canonical way to declare
@@ -159,6 +163,13 @@ ignore_missing_imports = true
 # remove_object, stat_object, bucket_exists, make_bucket).
 [[tool.mypy.overrides]]
 module = ["minio", "minio.*"]
+ignore_missing_imports = true
+
+# `FlagEmbedding` (used by BGEReranker, Plan 04 task_04_19) is heavy
+# (torch + transformers). Optional dep — lazy-imported only when the
+# real reranker is actually wired. Mypy can't see it in the hook env.
+[[tool.mypy.overrides]]
+module = ["FlagEmbedding", "FlagEmbedding.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

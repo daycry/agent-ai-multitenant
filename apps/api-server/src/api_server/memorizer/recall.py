@@ -288,9 +288,9 @@ async def recall(
 
 __all__ = [
     "BM25_K_DEFAULT",
-    "MemoryRecallHit",
     "RRF_K_DEFAULT",
     "VECTOR_K_DEFAULT",
+    "MemoryRecallHit",
     "fuse_rankings",
     "recall",
     "rrf_score",

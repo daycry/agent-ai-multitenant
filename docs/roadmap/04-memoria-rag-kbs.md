@@ -353,7 +353,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_16` — Búsqueda BM25 con pg_trgm sobre texto de chunks
 
-- [ ] **Título**: Búsqueda BM25 con pg_trgm sobre texto de chunks
+- [x] **Título**: Búsqueda BM25 con pg_trgm sobre texto de chunks
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -370,7 +370,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_17` — Búsqueda vectorial con pgvector + HNSW
 
-- [ ] **Título**: Búsqueda vectorial con pgvector + HNSW
+- [x] **Título**: Búsqueda vectorial con pgvector + HNSW
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -387,7 +387,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_18` — RRF (Reciprocal Rank Fusion) para combinar resultados
 
-- [ ] **Título**: RRF (Reciprocal Rank Fusion) para combinar resultados
+- [x] **Título**: RRF (Reciprocal Rank Fusion) para combinar resultados
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: ai-engineer
@@ -404,7 +404,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_19` — Reranker bge-reranker-v2-m3 local (vía ONNX o transformers)
 
-- [ ] **Título**: Reranker bge-reranker-v2-m3 local (vía ONNX o transformers)
+- [x] **Título**: Reranker bge-reranker-v2-m3 local (vía ONNX o transformers)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -421,7 +421,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_20` — Tool rag_search disponible para agentes
 
-- [ ] **Título**: Tool rag_search disponible para agentes
+- [x] **Título**: Tool rag_search disponible para agentes
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
