@@ -71,11 +71,22 @@ export default function DocumentIngestionPage() {
   const [events, setEvents] = useState<ProgressEvent[]>([]);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
 
+  // Reutilizamos el endpoint /citations (existe en task_04_25) para sacar
+  // el Document — devuelve `{ document, chunks }`. Antes este query estaba
+  // disabled "para mantener WS como single source of truth", pero eso
+  // dejaba la página totalmente vacía si abres /ingestion sobre un
+  // documento ya indexado (no hay worker procesando → no hay eventos
+  // → estado "pending" falso). Con el query habilitado, la página pinta
+  // el estado real del documento aunque no haya pipeline corriendo.
   const docQuery = useQuery({
     queryKey: ["document", documentId],
-    queryFn: () => apiFetch<DocumentResponse>(`/documents/${documentId}`),
+    queryFn: async () => {
+      const { document } = await apiFetch<{ document: DocumentResponse }>(
+        `/documents/${documentId}/citations`,
+      );
+      return document;
+    },
     refetchOnWindowFocus: false,
-    enabled: false, // The REST endpoint isn't part of task_04_15's surface — we keep the WS as source of truth.
   });
 
   const url = wsUrl(`/ws/documents/${documentId}`);
@@ -152,7 +163,11 @@ export default function DocumentIngestionPage() {
               className="text-muted-foreground text-sm italic"
               data-testid="ingestion-events-empty"
             >
-              Esperando eventos del worker de ingestión…
+              {status === "indexed"
+                ? "Documento ya indexado. No hay pipeline corriendo, así que no llegarán eventos nuevos por WebSocket."
+                : status === "failed"
+                  ? `Documento en estado fallido${docQuery.data?.error_message ? `: ${docQuery.data.error_message}` : "."}`
+                  : "Esperando eventos del worker de ingestión…"}
             </p>
           ) : (
             <ul className="space-y-2 text-sm" data-testid="ingestion-events-list">

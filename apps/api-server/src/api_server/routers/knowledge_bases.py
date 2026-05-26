@@ -429,6 +429,11 @@ async def get_document_citations(
             "source_mime_type": doc.source_mime_type,
             "page_count": doc.page_count,
             "status": doc.status,
+            # error_message es null en el feliz path; la UI de
+            # /ingestion lo usa para pintar la causa del fallo cuando
+            # status == "failed" sin tener que mantener una segunda
+            # llamada a la API.
+            "error_message": doc.error_message,
         },
         "chunks": chunks,
     }
