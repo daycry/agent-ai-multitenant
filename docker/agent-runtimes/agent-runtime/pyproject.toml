@@ -12,6 +12,11 @@ dependencies = [
   # adapters in `providers.py` are thin wrappers over shared_llm.
   "shared-llm",
 
+  # MCP client layer (Plan 05). The agent-runtime MCPToolRunner in
+  # `mcp_tools.py` bridges the sync ToolRegistry to async MCP
+  # sessions via a background asyncio loop.
+  "shared-mcp",
+
   # Builtin tools lean on these (Fase D)
   "httpx>=0.27,<1.0",
 

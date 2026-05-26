@@ -119,7 +119,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_03` — Adaptador que convierte tool MCP a tool del sistema (mismo schema que builtin)
 
-- [ ] **Título**: Adaptador que convierte tool MCP a tool del sistema (mismo schema que builtin)
+- [x] **Título**: Adaptador que convierte tool MCP a tool del sistema (mismo schema que builtin)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
