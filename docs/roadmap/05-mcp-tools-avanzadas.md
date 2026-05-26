@@ -138,7 +138,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_04` — Campo Project.mcp_servers (JSONB) con validación de schema
 
-- [ ] **Título**: Campo Project.mcp_servers (JSONB) con validación de schema
+- [x] **Título**: Campo Project.mcp_servers (JSONB) con validación de schema
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev

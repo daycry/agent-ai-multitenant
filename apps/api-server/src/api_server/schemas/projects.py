@@ -16,9 +16,10 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from api_server.db.domain import BudgetPeriod, Project, ProjectStatus
+from api_server.mcp.config import validate_mcp_servers_payload
 
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
@@ -73,6 +74,11 @@ class ProjectCreateRequest(BaseModel):
     budget_period_start_day: int | None = Field(default=None, ge=1, le=31)
     budget_period_length_days: int | None = Field(default=None, ge=1, le=366)
 
+    @field_validator("mcp_servers", mode="after")
+    @classmethod
+    def _validate_mcp_servers(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return validate_mcp_servers_payload(value)
+
     @model_validator(mode="after")
     def _budget_invariants(self) -> ProjectCreateRequest:
         return _validate_budget_invariants(self)  # type: ignore[return-value]
@@ -101,6 +107,15 @@ class ProjectUpdateRequest(BaseModel):
     budget_period: BudgetPeriod | None = None
     budget_period_start_day: int | None = Field(default=None, ge=1, le=31)
     budget_period_length_days: int | None = Field(default=None, ge=1, le=366)
+
+    @field_validator("mcp_servers", mode="after")
+    @classmethod
+    def _validate_mcp_servers(
+        cls, value: list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
+        if value is None:
+            return None
+        return validate_mcp_servers_payload(value)
 
     @model_validator(mode="after")
     def _budget_invariants(self) -> ProjectUpdateRequest:
