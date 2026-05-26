@@ -55,7 +55,7 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
         task_default_queue=DEFAULT_QUEUE,
         # Task modules a real worker imports on boot so the tasks are
         # registered (imported lazily — no circular import at config time).
-        imports=("workers.tasks",),
+        imports=("workers.tasks", "workers.memorizer"),
         # Agent runs are long; ack only after completion so a worker
         # crash re-queues the job instead of losing it.
         task_acks_late=True,
