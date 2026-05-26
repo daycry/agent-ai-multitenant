@@ -14,6 +14,23 @@ import { expect, test, type Page } from "@playwright/test";
 const PROJECT_ID = "11111111-0000-0000-0000-000000000001";
 const KB_ID = "aaaa0000-0000-0000-0000-000000000001";
 
+type DocStatus = "pending" | "processing" | "indexed" | "failed";
+
+interface DocFixture {
+  id: string;
+  kb_id: string;
+  title: string;
+  source_filename: string;
+  source_mime_type: string;
+  source_size_bytes: number;
+  status: DocStatus;
+  error_message: string | null;
+  page_count: number;
+  indexed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 const KB_FIXTURE = {
   id: KB_ID,
   tenant_id: "tttttttt-0000-0000-0000-000000000001",
@@ -25,14 +42,14 @@ const KB_FIXTURE = {
   updated_at: "2026-05-25T10:00:00Z",
 };
 
-const DOC_FIXTURE = {
+const DOC_FIXTURE: DocFixture = {
   id: "dddd0000-0000-0000-0000-000000000001",
   kb_id: KB_ID,
   title: "Manual onboarding v3",
   source_filename: "onboarding.pdf",
   source_mime_type: "application/pdf",
   source_size_bytes: 524288,
-  status: "indexed" as const,
+  status: "indexed",
   error_message: null,
   page_count: 24,
   indexed_at: "2026-05-25T10:15:00Z",
@@ -54,7 +71,7 @@ async function setup(page: Page, { withKBs = true } = {}): Promise<Capture> {
     deleteCalls: 0,
     lastDeletedId: null,
   };
-  let documents: (typeof DOC_FIXTURE)[] = withKBs ? [DOC_FIXTURE] : [];
+  let documents: DocFixture[] = withKBs ? [DOC_FIXTURE] : [];
 
   await page.addInitScript(() => {
     window.localStorage.setItem("agentic.token", "e2e-fake-token");
@@ -86,12 +103,12 @@ async function setup(page: Page, { withKBs = true } = {}): Promise<Capture> {
       if (method === "POST") {
         capture.uploadCalls += 1;
         capture.lastUploadName = "uploaded.pdf";
-        const created = {
+        const created: DocFixture = {
           ...DOC_FIXTURE,
           id: `eeee0000-0000-0000-0000-${String(capture.uploadCalls).padStart(12, "0")}`,
           title: "uploaded",
           source_filename: "uploaded.pdf",
-          status: "pending" as const,
+          status: "pending",
           page_count: 0,
           indexed_at: null,
         };

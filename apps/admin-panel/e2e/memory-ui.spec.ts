@@ -10,7 +10,27 @@ import { expect, test, type Page } from "@playwright/test";
  *   - deleting one of the listed memories.
  */
 
-const TEAM_MEMORY = {
+// Shared shape so memories with different owner pointers
+// (user_id vs team_id vs project_id) live in the same list without
+// fighting the type checker.
+interface MemoryFixture {
+  id: string;
+  tenant_id: string;
+  scope: string;
+  type: string;
+  content: string;
+  tags: string[];
+  user_id: string | null;
+  team_id: string | null;
+  project_id: string | null;
+  source_execution_id: string | null;
+  agent_id: string | null;
+  has_embedding: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+const TEAM_MEMORY: MemoryFixture = {
   id: "11111111-1111-1111-1111-111111111111",
   tenant_id: "ttttttt0-0000-0000-0000-000000000001",
   scope: "team_shared",
@@ -27,7 +47,7 @@ const TEAM_MEMORY = {
   updated_at: "2026-05-25T10:00:00Z",
 };
 
-const PRIVATE_MEMORY = {
+const PRIVATE_MEMORY: MemoryFixture = {
   id: "22222222-2222-2222-2222-222222222222",
   tenant_id: "ttttttt0-0000-0000-0000-000000000001",
   scope: "private",
@@ -58,7 +78,7 @@ async function setup(page: Page): Promise<Capture> {
     deleteCalls: 0,
     lastDeletedId: null,
   };
-  const store: Record<string, (typeof TEAM_MEMORY)[]> = {
+  const store: Record<string, MemoryFixture[]> = {
     team_shared: [TEAM_MEMORY],
     private: [PRIVATE_MEMORY],
     project_shared: [],
@@ -85,12 +105,12 @@ async function setup(page: Page): Promise<Capture> {
       capture.postCalls += 1;
       const body = JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>;
       capture.lastPostBody = body;
-      const created = {
+      const created: MemoryFixture = {
         ...PRIVATE_MEMORY,
         id: `33333333-3333-3333-3333-${String(capture.postCalls).padStart(12, "0")}`,
-        scope: body.scope,
-        type: body.type ?? "semantic",
-        content: body.content,
+        scope: String(body.scope ?? "private"),
+        type: String(body.type ?? "semantic"),
+        content: String(body.content ?? ""),
         tags: (body.tags as string[]) ?? [],
         has_embedding: false,
       };
