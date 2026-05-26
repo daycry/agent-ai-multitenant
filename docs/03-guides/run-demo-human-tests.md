@@ -123,8 +123,13 @@ DEMO_OLLAMA_BASE_URL=http://localhost:11434/v1 \
 Tras los demos:
 
 - `http://localhost:3000/admin/projects` → el proyecto del demo.
-- `http://localhost:3000/admin/projects/{id}/board` → las tareas creadas, su columna y el Timeline.
-- `http://localhost:3000/admin/projects/{id}/approvals` → la solicitud que dejó `demo_human_02_04.py`.
+- `http://localhost:3000/admin/board` → el doble Kanban (planes arriba,
+  tareas del plan seleccionado abajo). Aquí ves las tareas que crean
+  los demos recorriendo las columnas.
+- `http://localhost:3000/admin/executions/{exec_id}` → el Timeline
+  step-a-step de una ejecución concreta.
+- `http://localhost:3000/admin/approvals` → la cola de aprobaciones
+  humanas; la solicitud que dejó `demo_human_02_04.py` aparece aquí.
 
 ### Volver a empezar
 
@@ -214,9 +219,14 @@ sirven al agente desde la LangGraph loop sin tocar los demos.
 
 ### Dónde mirar en el admin-panel
 
-- `http://localhost:3000/admin/memories` → las memorias destiladas por el Memorizer + la que graba `memory-store`.
-- `http://localhost:3000/admin/knowledge-bases` → la KB origen y la destino (creada por `demo_human_04_5_02.py`).
-- `http://localhost:3000/admin/knowledge-bases/{kb_id}/documents/{doc_id}` → el documento promovido en la KB destino.
+- `http://localhost:3000/admin/memories` → las memorias destiladas por el
+  Memorizer + la que graba `memory-store` (filtra por scope con el dropdown).
+- `http://localhost:3000/admin/projects/{project_id}/knowledge-bases` →
+  las KBs concedidas al proyecto del demo: la KB origen sembrada por
+  el setup y la KB destino creada por `demo_human_04_5_02.py`.
+- `http://localhost:3000/admin/documents/{doc_id}` → vista del Document
+  con sus chunks. Útil para mirar tanto el doc original como el
+  promovido por `promote_to_kb`.
 
 ### Volver a empezar el escenario Plan 04.5
 
@@ -272,8 +282,10 @@ comunes" para arrancarlo. Comprueba con `curl http://localhost:8001/healthz`.
 ### El JWT minteado en el demo no lo acepta el api-server
 
 Ambos lados deben leer el **mismo** `API_SERVER_JWT_SECRET`. El
-default del api-server es `change-me-please`, el demo no asume
-ninguno — exporta el mismo valor en las dos terminales.
+default del api-server es `dev-only-jwt-secret-change-me` (ver
+`apps/api-server/src/api_server/config.py`); el demo no asume
+ninguno — exporta el mismo valor en las dos terminales o sobrescribe
+ambos con `export API_SERVER_JWT_SECRET=test-secret`.
 
 ### "Agent token validation failed: agent not found or revoked"
 
