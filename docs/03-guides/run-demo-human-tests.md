@@ -141,27 +141,28 @@ mano si te molestan en el board.
 ## Plan 04 — sin scripts demo
 
 Los 5 tests humanos de Plan 04 se ejecutan por la **UI del
-admin-panel**, no con scripts Python. La descripción canónica está
-en `docs/roadmap/04-memoria-rag-kbs.md` (sección Tests humanos).
-Resumen:
+admin-panel** o con los demos del Plan 04.5 (siguiente sección).
+La descripción canónica está en `docs/roadmap/04-memoria-rag-kbs.md`
+(sección Tests humanos). Lo que **realmente está disponible hoy**:
 
-| Test          | Cómo se ejecuta                                                                                                                                                                             |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `human_04_01` | Ejecutar la misma tarea ("escribe un endpoint REST estándar") **dos veces** separadas en el tiempo. Validar que la 2ª referencia memorias de la 1ª.                                         |
-| `human_04_02` | Subir 10 documentos de dominio (PDF, .docx, .md, audio) por `/admin/knowledge-bases/{id}/upload`. Esperar a que se indexen y comprobar los 4 caminos: BM25, vector, RRF, reranker.          |
-| `human_04_03` | En el chat de un proyecto, pegar un PDF como adjunto y pedir un resumen — Docling lo procesa sin indexarlo. (**Bloqueado** por chat-file-upload, que vive en Plan 07.)                      |
-| `human_04_04` | Crear 4 memorias con scopes distintos (private, team_shared, project_shared, global) y validar la visibilidad cruzando equipos / proyectos / agentes.                                       |
-| `human_04_05` | Cambiar el modelo de embeddings desde el admin-panel; el sistema debe detectar el cambio y proponer reindexación asíncrona. (**Bloqueado** por la pieza de reindexación, fuera de Plan 04.) |
+| Test          | Estado hoy                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `human_04_01` | ✅ **Ejecutable** vía `scripts/demo_human_04_5_01.py` (Plan 04.5) — destila memorias de una Execution `done` y comprueba el recall posterior.                                                                                                                                                                                                                                                                                          |
+| `human_04_02` | ⚠️ **Parcialmente.** El upload UI vive en `/admin/projects/{project_id}/knowledge-bases` (botón "Subir documento" por KB del proyecto). API: `POST /knowledge-bases/{kb_id}/documents` (multipart). El pipeline de ingestión (BM25 + vector + reranker) está en sitio; lo que falta es ejercicio "en vivo con 10 docs realistas + audio". `scripts/demo_human_04_5_02.py` cubre el camino simplificado con un Document sembrado en BD. |
+| `human_04_03` | ❌ **Bloqueado** por chat-file-upload (Plan 07). La página de chat (`/admin/projects/{id}/chat`) NO tiene `<input type="file">`; los `attachments` que la API soporta se generan internamente por el planning sub-graph, no se reciben del usuario.                                                                                                                                                                                    |
+| `human_04_04` | ✅ **Ejecutable hoy** desde `/admin/memories`. Crea 4 memorias con scope `private`, `team_shared`, `project_shared`, `global` (todas pasan por `POST /memories`). Filtra por scope con el dropdown de la página. Para la parte cross-team/cross-project, conmuta de tenant con `X-Tenant-Id` (system-admin) o crea 2 usuarios en 2 teams distintos y comprueba visibilidad.                                                            |
+| `human_04_05` | ❌ **Bloqueado.** El admin-panel muestra `embedding_model_id` como texto sin selector (`/admin/projects/{id}/knowledge-bases`). No hay endpoint para cambiarlo ni para disparar reindexación. Fuera del alcance actual (probablemente Plan 12).                                                                                                                                                                                        |
 
-**Importante** — el changelog de Plan 04 dejó constancia honesta de
-que **4 de los 5 tests no eran ejecutables end-to-end** cuando se
-cerró el plan: faltaba el wire-up del agent-runtime con los nuevos
-tools, que es exactamente lo que el Plan 04.5 ha cerrado. Los demos
-en vivo de los puntos que sí se podían cerrar (memoria + RAG vistos
-desde el sandbox) están en el Plan 04.5 (siguiente sección).
+**Por qué el changelog Plan 04 marcó 4/5 como "deferred to Plan 04.5"**:
+en el momento del cierre del Plan 04, el agente-runtime sandbox no
+tenía cableados los tools nuevos (memory_recall, rag_search,
+document_convert, promote_to_kb). Esa pieza llegó en Plan 04.5 y los
+dos demos cubren los caminos críticos (`human_04_01` memoria,
+`human_04_02` RAG con citas — alcance reducido).
 
-`human_04_03` (Docling en el chat) sigue parqueado hasta Plan 07.
-`human_04_05` (reindexación) sigue fuera del alcance actual.
+`human_04_03` (Docling en el chat) y `human_04_05` (cambio de
+modelo de embeddings + reindexación) siguen bloqueados — necesitan
+features de planes posteriores.
 
 ---
 
