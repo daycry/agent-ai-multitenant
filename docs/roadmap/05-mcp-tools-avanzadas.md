@@ -102,7 +102,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_02` — Descubrimiento de tools al conectar (handshake + list_tools)
 
-- [ ] **Título**: Descubrimiento de tools al conectar (handshake + list_tools)
+- [x] **Título**: Descubrimiento de tools al conectar (handshake + list_tools)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer

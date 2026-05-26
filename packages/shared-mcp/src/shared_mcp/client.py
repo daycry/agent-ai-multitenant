@@ -48,10 +48,15 @@ class MCPSession:
     Returned by :meth:`MCPClient.connect`. The two public methods
     (`list_tools`, `call_tool`) cover what task_05_02 / task_05_03
     need — anything else from the SDK is available via `.raw`.
+
+    `init_result` is the `InitializeResult` pydantic model the server
+    returned during the handshake — useful for `discover_tools`
+    (task_05_02) to surface `serverInfo` without re-querying.
     """
 
     config: MCPServerConfig
     raw: ClientSession
+    init_result: Any = None
 
     async def list_tools(self) -> list[MCPTool]:
         """Return the tools the server advertises (`tools/list`).
@@ -139,7 +144,7 @@ class MCPClient:
                 )
             )
             try:
-                await session.initialize()
+                init_result = await session.initialize()
             except Exception as exc:
                 msg = str(exc).lower()
                 if "401" in msg or "403" in msg or "unauthor" in msg or "forbidden" in msg:
@@ -149,7 +154,7 @@ class MCPClient:
                 raise MCPTransportError(
                     f"initialize() against {config.name!r} failed: {exc}"
                 ) from exc
-            yield MCPSession(config=config, raw=session)
+            yield MCPSession(config=config, raw=session, init_result=init_result)
 
 
 async def _open_streams(stack: AsyncExitStack, config: MCPServerConfig) -> tuple[Any, Any]:

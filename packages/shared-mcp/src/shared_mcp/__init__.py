@@ -17,6 +17,7 @@ tools lands in task_05_02 / task_05_03.
 """
 
 from shared_mcp.client import MCPClient, MCPSession
+from shared_mcp.discovery import DiscoveryResult, discover_tools
 from shared_mcp.exceptions import (
     MCPAuthError,
     MCPError,
@@ -31,6 +32,7 @@ from shared_mcp.types import (
 )
 
 __all__ = [
+    "DiscoveryResult",
     "MCPAuthError",
     "MCPClient",
     "MCPError",
@@ -41,4 +43,5 @@ __all__ = [
     "MCPToolResult",
     "MCPTransportError",
     "Transport",
+    "discover_tools",
 ]
