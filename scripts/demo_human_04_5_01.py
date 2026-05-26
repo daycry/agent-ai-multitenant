@@ -405,10 +405,16 @@ async def main() -> int:
         _print_hits(hits2)
 
         print()
-        print("  En el admin-panel:")
-        print(f"    · /admin/memories       — verás las {after} entradas del agente.")
-        print(f"    · /admin/executions/{ids['execution_id']}")
-        print("    · El test humano human_04_5_01 queda demostrado en vivo.")
+        print("  En el admin-panel (haz Ctrl+click si tu terminal lo soporta):")
+        print("    · http://localhost:3000/admin/memories")
+        print(f"        — verás las {after} entradas del agente.")
+        print("        Filtra scope=team_shared para ver las 3 que dejó este demo:")
+        print("          2 del Memorizer (con agent_id + source_execution_id)")
+        print("          1 del memory_store del paso 4")
+        print(f"    · http://localhost:3000/admin/executions/{ids['execution_id']}")
+        print("        — Timeline de la Execution sembrada (5 pasos del agent loop).")
+        print()
+        print("  El test humano human_04_5_01 queda demostrado en vivo.")
         return 0
     finally:
         await engine.dispose()

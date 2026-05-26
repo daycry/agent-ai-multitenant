@@ -126,24 +126,42 @@ Write-Host "  Resumen ejecucion tests humanos"                                -F
 Write-Host "================================================================" -ForegroundColor Cyan
 $Results | Format-Table -AutoSize | Out-Host
 
+# Lee el project_id real del estado compartido para sustituir <id>
+# en las URLs por el valor concreto — Ctrl+click directo.
+$ProjectId = $null
+$DemoState = Join-Path $RepoRoot "scripts\.demo_state.json"
+if (Test-Path $DemoState) {
+    try {
+        $state = Get-Content $DemoState -Raw | ConvertFrom-Json
+        $ProjectId = $state.project_id
+    } catch { }
+}
+$ProjPath = if ($ProjectId) { "/$ProjectId/" } else { "/<project-id>/" }
+
 $failed = $Results | Where-Object { $_.Status -ne "PASS" }
 if ($failed.Count -gt 0) {
     Write-Host "$($failed.Count) demo(s) fallaron. Revisa el output arriba." -ForegroundColor Red
     Write-Host ""
-    Write-Host "Para mirar lo que dejo cada test:" -ForegroundColor Yellow
-    Write-Host "  - /admin/board                              tareas + Kanban"
-    Write-Host "  - /admin/approvals                          aprobaciones pendientes"
-    Write-Host "  - /admin/executions/<id>                    Timeline de una ejecucion"
-    Write-Host "  - /admin/memories                           memorias destiladas"
-    Write-Host "  - /admin/projects/<id>/knowledge-bases      KBs del proyecto"
+    Write-Host "Para mirar lo que dejo cada test (Ctrl+click si tu terminal lo soporta):" -ForegroundColor Yellow
+    Write-Host "  - http://localhost:3000/admin/board                            Kanban con tareas"
+    Write-Host "  - http://localhost:3000/admin/approvals                        aprobaciones pendientes"
+    Write-Host "  - http://localhost:3000/admin/executions/<id>                  Timeline de una ejecucion"
+    Write-Host "  - http://localhost:3000/admin/memories                         memorias destiladas"
+    Write-Host "  - http://localhost:3000/admin/projects$($ProjPath)knowledge-bases  KBs del proyecto"
+    Write-Host ""
+    Write-Host "Nota: los UUID concretos (execution_id, document_id, ...) los imprime cada demo" -ForegroundColor DarkGray
+    Write-Host "en su footer. Re-scrollea arriba para encontrarlos." -ForegroundColor DarkGray
     exit 1
 } else {
     Write-Host "Los $($Results.Count) demo(s) pasaron. [OK]" -ForegroundColor Green
     Write-Host ""
-    Write-Host "Donde verlo en el admin-panel (http://localhost:3000):" -ForegroundColor Cyan
-    Write-Host "  - /admin/board                              tareas + Kanban con las del demo"
-    Write-Host "  - /admin/approvals                          la solicitud que dejo demo_human_02_04"
-    Write-Host "  - /admin/memories                           memorias del Memorizer + memory_store"
-    Write-Host "  - /admin/projects/<id>/knowledge-bases      KB origen + KB destino (Plan 04.5)"
+    Write-Host "Donde verlo en el admin-panel (Ctrl+click si tu terminal lo soporta):" -ForegroundColor Cyan
+    Write-Host "  - http://localhost:3000/admin/board                            Kanban con tareas del demo"
+    Write-Host "  - http://localhost:3000/admin/approvals                        la solicitud de demo_human_02_04"
+    Write-Host "  - http://localhost:3000/admin/memories                         memorias del Memorizer + memory_store"
+    Write-Host "  - http://localhost:3000/admin/projects$($ProjPath)knowledge-bases  KB origen + KB destino (Plan 04.5)"
+    Write-Host ""
+    Write-Host "Cada demo imprime ademas las URLs especificas (execution_id, document_id...) en" -ForegroundColor DarkGray
+    Write-Host "su footer. Re-scrollea arriba para encontrarlas." -ForegroundColor DarkGray
     exit 0
 }
