@@ -61,7 +61,7 @@ async def test_discover_returns_tools_from_toy_server(
     result = await discover_tools(stdio_config)
 
     names = {t.name for t in result.tools}
-    assert names == {"echo", "add"}, names
+    assert {"echo", "add"}.issubset(names), names
 
     # Both tools have descriptions (we set them in the toy server)
     by_name = {t.name: t for t in result.tools}

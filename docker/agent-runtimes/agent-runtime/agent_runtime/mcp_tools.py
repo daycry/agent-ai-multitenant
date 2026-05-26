@@ -53,6 +53,7 @@ from shared_mcp import (
     MCPTool,
     MCPToolError,
     MCPTransportError,
+    VaultResolver,
 )
 
 from agent_runtime.tools import ToolFn, ToolRegistry, ToolResult
@@ -83,7 +84,18 @@ class MCPToolRunner:
     sync registry (typically the agent loop's thread).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, vault_resolver: VaultResolver | None = None) -> None:
+        """
+        Args:
+            vault_resolver: optional secret resolver. When a connected
+                server declares ``auth_ref``, this resolver supplies
+                the secret that gets merged into the runtime config
+                (env for stdio, headers for http). Pass ``None`` (the
+                default) when no connected server uses ``auth_ref`` —
+                connecting one that does will then raise MCPAuthError,
+                surfacing the misconfiguration instead of silently
+                opening an unauthenticated session.
+        """
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._stack: AsyncExitStack | None = None
@@ -91,6 +103,7 @@ class MCPToolRunner:
         self._tools: dict[str, list[MCPTool]] = {}
         self._started = False
         self._lock = threading.Lock()
+        self._vault_resolver = vault_resolver
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -166,7 +179,9 @@ class MCPToolRunner:
 
         async def _do() -> tuple[MCPSession, list[MCPTool]]:
             assert self._stack is not None
-            session = await self._stack.enter_async_context(MCPClient.connect(config))
+            session = await self._stack.enter_async_context(
+                MCPClient.connect(config, vault_resolver=self._vault_resolver)
+            )
             tools = await session.list_tools()
             return session, tools
 

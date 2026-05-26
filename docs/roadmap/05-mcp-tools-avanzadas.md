@@ -155,7 +155,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_05` — Inyección de auth vía Vault al construir el cliente
 
-- [ ] **Título**: Inyección de auth vía Vault al construir el cliente
+- [x] **Título**: Inyección de auth vía Vault al construir el cliente
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security

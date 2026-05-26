@@ -151,7 +151,7 @@ async def test_stdio_list_tools_then_call(stdio_config: MCPServerConfig) -> None
     async with MCPClient.connect(stdio_config) as session:
         tools = await session.list_tools()
         names = {t.name for t in tools}
-        assert names == {"echo", "add"}, names
+        assert {"echo", "add"}.issubset(names), names
 
         # `echo` round-trip
         echoed = await session.call_tool("echo", {"text": "hello"})
@@ -167,7 +167,7 @@ async def test_stdio_list_tools_then_call(stdio_config: MCPServerConfig) -> None
 async def test_sse_list_tools_then_call(sse_server: MCPServerConfig) -> None:
     async with MCPClient.connect(sse_server) as session:
         tools = await session.list_tools()
-        assert {t.name for t in tools} == {"echo", "add"}
+        assert {"echo", "add"}.issubset({t.name for t in tools})
         result = await session.call_tool("add", {"a": 7, "b": 4})
         assert "11" in result.content
 
@@ -178,7 +178,7 @@ async def test_streamable_http_list_tools_then_call(
 ) -> None:
     async with MCPClient.connect(streamable_http_server) as session:
         tools = await session.list_tools()
-        assert {t.name for t in tools} == {"echo", "add"}
+        assert {"echo", "add"}.issubset({t.name for t in tools})
         result = await session.call_tool("echo", {"text": "via http"})
         assert "via http" in result.content
 

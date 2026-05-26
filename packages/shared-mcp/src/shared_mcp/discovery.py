@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from shared_mcp.auth import VaultResolver
 from shared_mcp.client import MCPClient
 from shared_mcp.types import MCPServerConfig, MCPTool
 
@@ -64,12 +65,20 @@ class DiscoveryResult:
     capabilities: dict[str, object] = field(default_factory=dict)
 
 
-async def discover_tools(config: MCPServerConfig) -> DiscoveryResult:
+async def discover_tools(
+    config: MCPServerConfig,
+    *,
+    vault_resolver: VaultResolver | None = None,
+) -> DiscoveryResult:
     """Open a session, run the MCP handshake, list tools, close.
 
     Args:
         config: Where to connect + how. The same `MCPServerConfig`
             the agent runtime would use to keep a long-lived session.
+        vault_resolver: optional Vault resolver — required only when
+            ``config.auth_ref`` is set. The "Probar" button in the
+            admin-panel (task_05_07) wires this with a resolver
+            backed by the api-server's hvac client.
 
     Returns:
         A :class:`DiscoveryResult` with the tools the server
@@ -77,10 +86,11 @@ async def discover_tools(config: MCPServerConfig) -> DiscoveryResult:
 
     Raises:
         MCPTransportError: connection / transport problem.
-        MCPAuthError:      server rejected our credentials.
+        MCPAuthError:      server rejected our credentials OR the
+                           config declares auth_ref without a resolver.
         (Other errors from the SDK bubble up as MCPTransportError.)
     """
-    async with MCPClient.connect(config) as session:
+    async with MCPClient.connect(config, vault_resolver=vault_resolver) as session:
         tools = await session.list_tools()
         info = _extract_server_info(session.init_result)
         return DiscoveryResult(

@@ -15,16 +15,20 @@ plain script invocable with ``python tests/integration/_toy_mcp_server.py
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from mcp.server.fastmcp import FastMCP
 
 
 def build_server() -> FastMCP:
-    """Build a FastMCP with two deterministic tools.
+    """Build a FastMCP with three deterministic tools.
 
-    Tests assert that `list_tools` sees both names and that
-    `call_tool` round-trips the result.
+    Tests assert that `list_tools` sees the names and that
+    `call_tool` round-trips the result. `secret_echo` is used by
+    task_05_05 to verify Vault secrets land in env vars at connect
+    time — when a child stdio process is spawned, its env reflects
+    whatever the MCP client merged into config.env.
     """
     server: FastMCP = FastMCP(name="toy-mcp-server")
 
@@ -35,6 +39,15 @@ def build_server() -> FastMCP:
     @server.tool(description="Add two integers.")
     def add(a: int, b: int) -> int:
         return a + b
+
+    @server.tool(
+        description=(
+            "Read an env var by name and return its value. Used by tests "
+            "to verify that Vault-injected secrets reach the server process."
+        )
+    )
+    def secret_echo(env_var: str) -> str:
+        return os.environ.get(env_var, "")
 
     return server
 

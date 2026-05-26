@@ -59,7 +59,7 @@ def test_runner_as_context_manager() -> None:
     """`with MCPToolRunner() as r` opens + closes cleanly."""
     with MCPToolRunner() as runner:
         runner.connect(_stdio_config("toy-ctx"))
-        assert {t.name for t in runner.tools("toy-ctx")} == {"echo", "add"}
+        assert {"echo", "add"}.issubset({t.name for t in runner.tools("toy-ctx")})
 
 
 def test_connect_returns_tool_list() -> None:
@@ -67,7 +67,7 @@ def test_connect_returns_tool_list() -> None:
     advertises — saves the caller a round-trip to `tools()`."""
     with MCPToolRunner() as runner:
         tools = runner.connect(_stdio_config("toy"))
-        assert {t.name for t in tools} == {"echo", "add"}
+        assert {"echo", "add"}.issubset({t.name for t in tools})
 
 
 def test_connect_twice_with_same_name_raises() -> None:
@@ -95,7 +95,7 @@ def test_register_mcp_server_namespaces_tools_with_separator() -> None:
     with MCPToolRunner() as runner:
         tools = runner.connect(_stdio_config("toy"))
         names = register_mcp_server(registry, runner, "toy", tools)
-        assert set(names) == {"toy.echo", "toy.add"}
+        assert {"toy.echo", "toy.add"}.issubset(names)
         assert set(registry.names()) >= {"toy.echo", "toy.add"}
 
 
@@ -106,7 +106,7 @@ def test_register_uses_runner_cache_when_tools_arg_omitted() -> None:
     with MCPToolRunner() as runner:
         runner.connect(_stdio_config("toy"))
         names = register_mcp_server(registry, runner, "toy")
-        assert set(names) == {"toy.echo", "toy.add"}
+        assert {"toy.echo", "toy.add"}.issubset(names)
 
 
 # ---------------------------------------------------------------------------

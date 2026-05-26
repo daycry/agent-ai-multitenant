@@ -16,6 +16,12 @@ The Vault-backed auth injection lands in task_05_05; the
 tools lands in task_05_02 / task_05_03.
 """
 
+from shared_mcp.auth import (
+    HvacVaultResolver,
+    StaticVaultResolver,
+    VaultResolver,
+    apply_vault_auth,
+)
 from shared_mcp.client import MCPClient, MCPSession
 from shared_mcp.discovery import DiscoveryResult, discover_tools
 from shared_mcp.exceptions import (
@@ -33,6 +39,7 @@ from shared_mcp.types import (
 
 __all__ = [
     "DiscoveryResult",
+    "HvacVaultResolver",
     "MCPAuthError",
     "MCPClient",
     "MCPError",
@@ -42,6 +49,9 @@ __all__ = [
     "MCPToolError",
     "MCPToolResult",
     "MCPTransportError",
+    "StaticVaultResolver",
     "Transport",
+    "VaultResolver",
+    "apply_vault_auth",
     "discover_tools",
 ]

@@ -14,9 +14,10 @@ Errors fold into the :mod:`shared_mcp.exceptions` hierarchy so the
 agent-runtime tool adapter (task_05_03) can map them onto
 ``ToolResult.ok=False`` with sensible messages.
 
-Vault-backed auth injection lands in task_05_05 — for now `auth_ref`
-is read but not resolved (the consumer is expected to pre-fill
-`config.env` / `config.headers` with the resolved secret).
+Vault-backed auth injection (task_05_05): when `config.auth_ref` is
+set, pass a :class:`shared_mcp.auth.VaultResolver` to :meth:`connect`
+and the resolver's key/value pairs get merged into ``env`` (stdio) or
+``headers`` (http transports) before the transport is opened.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 
+from shared_mcp.auth import VaultResolver, apply_vault_auth
 from shared_mcp.exceptions import (
     MCPAuthError,
     MCPError,
@@ -111,7 +113,11 @@ class MCPClient:
 
     @staticmethod
     @asynccontextmanager
-    async def connect(config: MCPServerConfig) -> AsyncIterator[MCPSession]:
+    async def connect(
+        config: MCPServerConfig,
+        *,
+        vault_resolver: VaultResolver | None = None,
+    ) -> AsyncIterator[MCPSession]:
         """Open + initialise a session, yield it, close on exit.
 
         Usage:
@@ -119,11 +125,19 @@ class MCPClient:
             async with MCPClient.connect(cfg) as session:
                 tools = await session.list_tools()
 
+        When ``cfg.auth_ref`` is set, pass a ``vault_resolver`` and
+        the resolved secret is merged into ``env`` (stdio) or
+        ``headers`` (http transports) *before* the transport opens —
+        cleartext credentials never reach the on-disk config or the
+        Project.mcp_servers JSONB blob.
+
         Errors are normalised:
+            * Auth resolution → :class:`MCPAuthError`.
             * Anything in the connect path → :class:`MCPTransportError`
               (or :class:`MCPAuthError` if the SDK reports 401/403).
             * Anything during use propagates per `MCPSession` rules.
         """
+        config = apply_vault_auth(config, vault_resolver)
         async with AsyncExitStack() as stack:
             try:
                 read_stream, write_stream = await _open_streams(stack, config)
