@@ -137,50 +137,85 @@ y `test_kb_migration.py`).
 | ADRs aceptados durante el plan     | 1                                                            |
 | Servicios nuevos en docker-compose | 3 (docling-serve, docling-mcp, ollama implícito vía API_URL) |
 
+## Pendiente para validación humana end-to-end
+
+Las 26 tareas del plan construyeron el **backend completo** (funciones
+Python pure-async + endpoints REST + UI admin) y sus 200+ tests
+automáticos están en verde. Sin embargo, varios humanos del roadmap
+asumen que **el agente** invoca los tools nuevos a través del agent
+runtime, y ese cableado no entró en las 26 tareas. Lo dejamos
+explícito aquí para que el cierre del plan no oculte la deuda:
+
+1. **Memorizer Celery wire-up.** La función `should_memorize` +
+   `distil_execution` + `persist_memory_candidates` existe y
+   está probada (`tests/integration/test_memorizer.py`); la
+   **task Celery `workers.memorize_execution`** y el trigger
+   desde `workers/execution.py` quedaron como follow-up de
+   task_04_03. Mientras tanto las memorias sólo entran al store
+   por `POST /memories` manual.
+2. **Cinco tools del agent-runtime siguen como placeholder 501**:
+   `memory_recall`, `memory_store`, `rag_search`,
+   `document_convert`, `promote_to_kb`. Las funciones backend
+   existen y están probadas; el adapter que el agent loop usa
+   para llamarlas no se re-cableó.
+3. **Chat UI con paste de PDF** (necesario para `human_04_03`)
+   no entró en Plan 03 ni en Plan 04 — `document_convert` está
+   listo para invocarse pero el frontend del chat no tiene el
+   componente de attachment.
+
+Estas tres piezas suman ~4-6h de trabajo de integración y se
+abordarán en un plan separado (probable `Plan 04.5` o como una
+fase inicial de Plan 05). Ver el body del PR para la
+justificación frente a las alternativas (implementarlo ahora vs
+deferir).
+
 ## Tests humanos del plan
 
-Los cinco tests humanos quedan pendientes de validar antes del
-merge. Las descripciones son las que viven en
-`docs/roadmap/04-memoria-rag-kbs.md` — los checklists completos
-con hints viven allí:
+Las descripciones son las del roadmap (`docs/roadmap/04-memoria-rag-kbs.md`).
+Por la deuda anterior, ninguno de los cuatro primeros puede
+validarse end-to-end con un agente en el loop; sólo se puede
+validar el camino backend reducido. El revisor debe marcarlos
+como **"deferred to Plan 04.5"** o validar el alcance reducido
+indicado:
 
 - `human_04_01` — **Memoria mejora la calidad de tareas
-  repetidas.** Ejecutar la misma tarea dos veces con tiempo entre
-  medias y verificar que la segunda ejecución cita aprendizajes
-  de la primera vía `memory_recall`, mantiene estilo coherente y
-  termina antes.
+  repetidas.** ⚠️ Necesita Memorizer Celery wire-up + tool
+  `memory_recall` en el agente. **Deferred**. Alcance reducido:
+  llamar a `POST /memories` manualmente entre ejecuciones y
+  comprobar que un `GET /memories?scope=team_shared` las
+  devuelve.
 
-- `human_04_02` — **RAG funciona con corpus realista.** Subir
-  10 documentos de dominio (PDFs + .docx + .md + una grabación de
-  reunión). Comprobar que Docling procesa cada formato, el audio
-  se transcribe e indexa, la búsqueda léxica y la semántica
-  funcionan, y las citas apuntan a fragmento + página + bounding
-  box.
+- `human_04_02` — **RAG funciona con corpus realista.** ⚠️
+  Necesita tool `rag_search` en el agente para validar las
+  citas en respuestas. **Deferred**. Alcance reducido: subir
+  los 10 documentos vía `POST /knowledge-bases/{id}/documents`,
+  ver progreso en `/admin/documents/{id}/ingestion`, y validar
+  el visor de citas en `/admin/documents/{id}/citations`.
 
 - `human_04_03` — **docling-mcp permite flujo conversacional.**
-  El usuario pega un PDF en el chat. El agente lo procesa con
-  `document_convert` sin indexación previa; el contenido aparece
-  con citas; pedirle "añade esto a la KB del proyecto" invoca
-  `promote_to_kb` y persiste.
+  ⚠️ Necesita chat UI con paste de PDF + tools
+  `document_convert` / `promote_to_kb` en el agente. **Deferred
+  por completo**.
 
-- `human_04_04` — **Scopes de memoria son respetados.** Crear
-  memorias en los cuatro scopes (private / team_shared /
-  project_shared / global) y verificar que otro agente del mismo
-  equipo NO ve la privada, sí ve project_shared, las global son
-  visibles cross-team, y nada se filtra cross-tenant.
+- `human_04_04` — **Scopes de memoria son respetados.** 🟡
+  **Parcial sin agentes en el loop**: crear memorias en los
+  cuatro scopes vía `POST /memories`, consultarlas con distintos
+  JWTs (different users / projects / teams / tenants) y
+  comprobar que el filtro RLS + scope+owner pointer hace su
+  trabajo. Este test sí es ejecutable hoy, sin esperar a las
+  wire-ups.
 
 - `human_04_05` — **Reindexación con cambio de modelo de
-  embeddings.** ⚠️ **Bloqueado**: el ADR 0023 difiere a Plan 12
-  el re-embedding masivo. Plan 04 persiste
-  `knowledge_bases.embedding_model_id` por KB pero no orquesta la
-  reindexación con progreso visible que pide el checklist
-  (detectar cambio, async + progreso, queries durante la
-  migración sin error, switch transparente al modelo nuevo). El
-  revisor humano debe marcar este test como "deferred to Plan 12"
-  o, alternativamente, validar un alcance reducido (cambiar el
-  campo por API y comprobar que persiste).
+  embeddings.** ⚠️ **Deferred a Plan 12** por decisión del ADR 0023. Plan 04 persiste `knowledge_bases.embedding_model_id`
+  por KB pero no orquesta la reindexación con progreso visible.
+  El revisor puede marcar este test como "deferred" o validar
+  un alcance reducido (cambiar el campo por API y comprobar que
+  persiste).
 
 ## Próximo plan
 
 Tras cerrar este plan, el siguiente es **Plan 05** — Multi-Agente
-y Coordinación Avanzada.
+y Coordinación Avanzada. Las tres piezas de wire-up listadas en
+"Pendiente para validación humana end-to-end" se abordarán como
+fase inicial de Plan 05 o como un Plan 04.5 dedicado (decisión a
+tomar al activar Plan 05).
