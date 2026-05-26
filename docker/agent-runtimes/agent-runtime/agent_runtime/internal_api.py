@@ -144,6 +144,19 @@ class InternalAgentAPI:
             body["tags"] = tags
         return self._post("/internal/agent/memory-store", body)
 
+    def rag_search(
+        self,
+        *,
+        query: str,
+        limit: int = 5,
+        recall_k: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Project-scoped RAG over KB chunks. Returns the list of hits."""
+        body: dict[str, Any] = {"query": query, "limit": limit, "recall_k": recall_k}
+        payload = self._post("/internal/agent/rag-search", body)
+        hits: list[dict[str, Any]] = payload.get("hits") or []
+        return hits
+
 
 __all__ = [
     "InternalAPIConfigError",

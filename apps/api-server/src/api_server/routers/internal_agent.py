@@ -11,11 +11,13 @@ Endpoints:
   - ``GET  /_health``       smoke probe (task_04_5_01).
   - ``POST /memory-recall`` hybrid BM25 + vector recall (task_04_5_03).
   - ``POST /memory-store``  persist one MemoryEntry (task_04_5_03).
+  - ``POST /rag-search``    project-scoped RAG over KB chunks
+                            (task_04_5_04).
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -31,6 +33,7 @@ from api_server.auth.internal_agent import (
 from api_server.db.domain import Agent, MemoryScope, Project
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
 from api_server.memorizer.recall import recall
+from api_server.rag.tool import rag_search
 
 router = APIRouter(prefix="/internal/agent", tags=["internal-agent"])
 
@@ -282,6 +285,101 @@ def _default_readable_scopes(agent_scope: str) -> list[str]:
     if agent_scope not in ladder:
         return ["global"]  # an agent opted out of canonical scopes reads only global
     return ladder[ladder.index(agent_scope) :]
+
+
+# ---------------------------------------------------------------------------
+# /rag-search
+# ---------------------------------------------------------------------------
+class RagSearchRequest(BaseModel):
+    """Body of POST /internal/agent/rag-search.
+
+    The agent supplies the natural-language query; the server pins
+    ``project_id`` from the agent itself so an agent can never search
+    a project's KBs it doesn't belong to.
+    """
+
+    model_config = _BASE_CONFIG
+
+    query: str = Field(min_length=1, max_length=2000)
+    limit: int = Field(default=5, ge=1, le=20)
+    recall_k: int = Field(default=20, ge=1, le=100)
+
+
+class RagSearchHitOut(BaseModel):
+    model_config = _BASE_CONFIG
+
+    chunk_id: UUID
+    document_id: UUID
+    kb_id: UUID
+    content: str
+    ordinal: int
+    bbox: dict[str, Any] | None
+    bm25_rank: int | None
+    vector_rank: int | None
+    rrf_score: float
+    rerank_score: float | None
+
+
+class RagSearchResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    hits: list[RagSearchHitOut]
+
+
+@router.post("/rag-search", response_model=RagSearchResponse)
+async def rag_search_endpoint(
+    payload: RagSearchRequest,
+    principal: AgentPrincipal = Depends(get_agent_principal),
+    session: AsyncSession = Depends(get_agent_tenant_session),
+) -> RagSearchResponse:
+    """Project-scoped RAG over KB chunks.
+
+    The endpoint reuses the Plan 04 `rag_search` engine
+    (:func:`api_server.rag.tool.rag_search`) — hybrid BM25 + vector
+    recall + reranker. The embedder + reranker live in api-server
+    (not in the sandbox) so the model weights are never shipped into
+    untrusted containers.
+
+    Returns ``hits=[]`` (200) when the agent isn't bound to a project;
+    a global/builtin agent has nothing to search and ``[]`` is the
+    informative response. We could 400 instead, but returning empty
+    keeps the tool contract uniform — the agent always sees a hits list.
+    """
+    agent, _project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+    if agent.project_id is None:
+        return RagSearchResponse(hits=[])
+
+    # No embedder / reranker injection yet — Plan 04 task_04_14 wires
+    # the embedder, the reranker is configurable per-deployment. For
+    # now we rely on BM25-only recall + NoopReranker, which is what
+    # the integration tests of Plan 04 Fase D already validated.
+    hits = await rag_search(
+        session,
+        query=payload.query,
+        tenant_id=principal.tenant_id,
+        project_id=agent.project_id,
+        limit=payload.limit,
+        recall_k=payload.recall_k,
+        embedder=None,
+        reranker=None,
+    )
+    return RagSearchResponse(
+        hits=[
+            RagSearchHitOut(
+                chunk_id=h.chunk_id,
+                document_id=h.document_id,
+                kb_id=h.kb_id,
+                content=h.content,
+                ordinal=h.ordinal,
+                bbox=h.bbox,
+                bm25_rank=h.bm25_rank,
+                vector_rank=h.vector_rank,
+                rrf_score=h.rrf_score,
+                rerank_score=h.rerank_score,
+            )
+            for h in hits
+        ]
+    )
 
 
 def _resolve_store_owner(
