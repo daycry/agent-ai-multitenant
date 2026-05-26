@@ -1,294 +1,557 @@
-# Cómo ejecutar los demos en vivo de los tests humanos
+# Cómo ejecutar los tests humanos paso a paso
 
-Los planes 02 y 04.5 vienen con **scripts demo** que reproducen los
-tests humanos contra el stack de desarrollo, en estilo "ves cómo
-el sistema lo hace en tu pantalla". El Plan 04 no trae scripts —
-sus tests humanos se ejecutan por la UI del admin-panel. Esta guía
-cubre los tres casos.
+Esta guía es el **protocolo de validación humana** de los planes 02,
+04 y 04.5. Cada test detalla qué prueba, el comando exacto, el
+output esperado, qué mirar en la UI y qué considerar pass / fail.
 
-Si lo que buscas es **el modo Playwright** para ver los E2E de
-frontend, esa es otra guía: [watching-e2e-tests.md](./watching-e2e-tests.md).
+> Si lo que buscas es el modo Playwright para ver los E2E del
+> frontend, esa es otra guía:
+> [watching-e2e-tests.md](./watching-e2e-tests.md).
+
+## TL;DR — la versión automatizada
+
+```powershell
+.\scripts\dev\up.ps1                        # docker + api-server :8001 + admin-panel :3000
+.\scripts\dev\run-human-tests.ps1           # corre los 7 demos en orden y resume
+```
+
+El launcher detecta si el stack está arriba, hace los dos setups
+compartidos (idempotentes) y ejecuta los 7 demos en orden, imprimiendo
+PASS / FAIL al final. Por defecto sin pausas; con `-Pause` deja 5 s
+entre fases.
+
+Opciones:
+
+| Flag         | Para qué                                          |
+| ------------ | ------------------------------------------------- |
+| `-Only 02`   | Solo los 5 demos del Plan 02                      |
+| `-Only 04_5` | Solo los 2 demos del Plan 04.5                    |
+| `-Pause`     | Pausas de 5 s entre fases (para leer en vivo)     |
+| `-SkipStack` | Asume el stack ya arrancado (no relanza `up.ps1`) |
+
+> ⚠️ **Importante**: si arrancaste el api-server **a mano** con un
+> `API_SERVER_JWT_SECRET` distinto del default, los demos del Plan
+> 04.5 darán `401 Unauthorized`. La forma fácil de evitarlo es usar
+> `up.ps1` (deja el default) o no setear la variable en ninguna
+> terminal (ambos lados leen el mismo default del schema pydantic).
+
+El resto de la guía es para cuando quieres **entender** qué hace
+cada test o **ejecutarlo a mano** (no en bloque).
+
+---
 
 ## Pre-requisitos comunes
 
-Todos los demos asumen el stack de desarrollo arriba:
+`scripts/dev/up.ps1` se encarga de:
 
-| Servicio           | Puerto | Cómo                                                                                          |
-| ------------------ | ------ | --------------------------------------------------------------------------------------------- |
-| Postgres           | 15432  | `docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d postgres` |
-| Redis              | 6379   | mismo `compose up`                                                                            |
-| MinIO              | 9000   | sólo para Plan 04 (KB ingestion); puedes saltártelo en los demos                              |
-| `agent-runtime:v1` | —      | `docker build -t agent-runtime:v1 docker/agent-runtimes/agent-runtime/`                       |
-| migraciones        | —      | `cd apps/api-server && DATABASE_URL=postgresql+asyncpg://... alembic upgrade head`            |
+| Servicio      | Puerto | Cómo se levanta                                                                                            |
+| ------------- | ------ | ---------------------------------------------------------------------------------------------------------- |
+| Postgres      | 15432  | `docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d postgres` (vía up.ps1) |
+| Redis         | 6379   | mismo `compose up`                                                                                         |
+| Vault         | 8200   | mismo                                                                                                      |
+| MinIO         | 9000   | mismo                                                                                                      |
+| ClamAV        | 3310   | mismo                                                                                                      |
+| docling-serve | 5001   | mismo (Plan 04.5 expone el puerto al host)                                                                 |
+| egress-proxy  | 8888   | mismo (idem)                                                                                               |
+| Migraciones   | —      | `alembic upgrade head` (vía up.ps1)                                                                        |
+| api-server    | 8001   | uvicorn detached (vía up.ps1), con `API_SERVER_JWT_SECRET=dev-only-jwt-secret-change-me`                   |
+| admin-panel   | 3000   | next dev detached (vía up.ps1)                                                                             |
 
-Para los demos del Plan 04.5 además necesitas el **api-server local**
-sirviendo `/internal/agent/*`:
+Únicas piezas que tienes que tocar tú:
 
-```bash
-cd apps/api-server
-API_SERVER_DATABASE_URL="postgresql+asyncpg://app_user:changeme-app-dev-only@localhost:15432/agentic_platform" \
-API_SERVER_ADMIN_DATABASE_URL="postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform" \
-API_SERVER_REDIS_URL="redis://localhost:6379/0" \
-API_SERVER_JWT_SECRET="test-secret" \
-../../.venv/Scripts/uvicorn api_server.main:app --reload --port 8001
-```
+- `agent-runtime:v1` construida (la primera vez):
+  ```powershell
+  docker build -t agent-runtime:v1 docker/agent-runtimes/agent-runtime/
+  ```
+- Un usuario en el sistema (la primera vez):
+  ```powershell
+  $body = '{"email":"root@example.com","password":"longenoughpw","full_name":"Root"}'
+  Invoke-RestMethod -Method Post -Uri http://localhost:8001/auth/register -Body $body -ContentType "application/json"
+  ```
+  El primer usuario registrado es `system_admin` automáticamente.
+  `up.ps1` te recuerda las credenciales sugeridas al final.
 
-> **Importante:** el `API_SERVER_JWT_SECRET` debe ser el mismo en el
-> api-server y en el shell que ejecuta los demos del Plan 04.5 — los
-> scripts mintean tokens `kind=agent` con esa clave y el api-server
-> los valida con la misma. Cualquier valor consistente vale.
+### Cómo lanzar scripts Python en PowerShell
 
-Sólo necesitas el api-server para Plan 04.5; los demos de Plan 02
-hablan directamente con el contenedor del agente.
-
-## Variables de entorno comunes
-
-| Variable            | Default                    | Para qué                                                            |
-| ------------------- | -------------------------- | ------------------------------------------------------------------- |
-| `DEMO_TENANT`       | `tenant-a`                 | Slug o UUID de un tenant que YA existe (para que aparezca en admin) |
-| `DEMO_NO_PAUSE`     | (no set)                   | Si está, no espera entre fases. Útil para verificar el script       |
-| `DEMO_PAUSE_S`      | `5`                        | Segundos entre fases si la pausa está activa                        |
-| `DEMO_DATABASE_URL` | postgresql+asyncpg://…     | Sobrescribe la URL del Postgres dev                                 |
-| `DEMO_REDIS_URL`    | `redis://localhost:6379/0` | Sobrescribe la URL del Redis dev                                    |
-| `DEMO_API_URL`      | `http://localhost:8001`    | **Sólo Plan 04.5** — endpoint del api-server                        |
-| `DEMO_MODEL_KIND`   | (scripted)                 | **Sólo `demo_human_02_01.py`** — usa un LLM real (ver abajo)        |
-
----
-
-## Plan 02 — los 5 demos del agente ejecutando
-
-Hay un **setup compartido** + cinco demos. El setup crea un proyecto
-y un agente Writer una sola vez; cada demo añade su propia tarea a
-ese proyecto. Si no corres el setup primero, cada demo crea su propio
-proyecto suelto (también funciona, pero no se ven juntos en el board
-del admin-panel).
-
-### Orden recomendado
-
-```bash
-# 1. (Una vez por sesión) Setup del proyecto + agente compartidos
-.venv/Scripts/python scripts/setup_demo_project.py
-
-# 2. Los 5 demos, en el orden que prefieras (son independientes)
-.venv/Scripts/python scripts/demo_human_02_01.py
-.venv/Scripts/python scripts/demo_human_02_02.py
-.venv/Scripts/python scripts/demo_human_02_03.py
-.venv/Scripts/python scripts/demo_human_02_04.py
-.venv/Scripts/python scripts/demo_human_02_05.py
-```
-
-### Qué hace cada uno
-
-| Demo                    | Qué demuestra                                                                              |
-| ----------------------- | ------------------------------------------------------------------------------------------ |
-| `setup_demo_project.py` | Tenant + Project + Agent Writer compartidos. Guarda IDs en `scripts/.demo_state.json`      |
-| `demo_human_02_01.py`   | Una ejecución end-to-end: lanza el contenedor agent-runtime, corre la loop, persiste filas |
-| `demo_human_02_02.py`   | El sandbox **está aislado**: cap-drop, FS read-only, sin socket Docker, sin red de salida  |
-| `demo_human_02_03.py`   | Las salvaguardas frenan al agente: max-iterations, loop-detection, timeout, max-cost       |
-| `demo_human_02_04.py`   | La política de aprobación humana **aparca** la tarea en `awaiting_human_approval`          |
-| `demo_human_02_05.py`   | Eventos de tiempo real: la tarea recorre el Kanban y el board se actualiza sin refrescar   |
-
-### Para usar un LLM real (sólo `demo_human_02_01.py`)
-
-Por defecto los demos usan un `ScriptedModelClient` (sin
-credenciales — el "poema" del mar es texto prefijado). Para que un
-LLM real escriba el poema, define `DEMO_MODEL_KIND` y las
-credenciales del proveedor (catálogo cerrado de ADR 0021):
-
-```bash
-# Azure AI Foundry vía APIM (gateway empresarial)
-DEMO_MODEL_KIND=azure_foundry DEMO_MODEL=gpt-4o \
-DEMO_APIM_BASE_URL=https://miempresa.azure-api.net/foundry \
-DEMO_APIM_DEPLOYMENT=gpt-4o DEMO_APIM_SUBSCRIPTION_KEY=... \
-.venv/Scripts/python scripts/demo_human_02_01.py
-
-# Claude Agent SDK (suscripción Pro/Max — requiere claude-agent-sdk)
-DEMO_MODEL_KIND=claude_sdk DEMO_MODEL=claude-opus-4-7 \
-.venv/Scripts/python scripts/demo_human_02_01.py
-
-# GitHub Copilot (OAuth token con acceso a Copilot)
-DEMO_MODEL_KIND=copilot DEMO_MODEL=gpt-4o DEMO_GITHUB_TOKEN=gho_... \
-.venv/Scripts/python scripts/demo_human_02_01.py
-
-# Ollama local o cloud
-DEMO_MODEL_KIND=ollama DEMO_MODEL=llama3.1 \
-DEMO_OLLAMA_BASE_URL=http://localhost:11434/v1 \
-.venv/Scripts/python scripts/demo_human_02_01.py
-```
-
-`litellm` no se soporta — se eliminó en ADR 0021.
-
-### Dónde mirar en el admin-panel
-
-Tras los demos:
-
-- `http://localhost:3000/admin/projects` → el proyecto del demo.
-- `http://localhost:3000/admin/board` → el doble Kanban (planes arriba,
-  tareas del plan seleccionado abajo). Aquí ves las tareas que crean
-  los demos recorriendo las columnas.
-- `http://localhost:3000/admin/executions/{exec_id}` → el Timeline
-  step-a-step de una ejecución concreta.
-- `http://localhost:3000/admin/approvals` → la cola de aprobaciones
-  humanas; la solicitud que dejó `demo_human_02_04.py` aparece aquí.
-
-### Volver a empezar
-
-```bash
-rm scripts/.demo_state.json
-.venv/Scripts/python scripts/setup_demo_project.py
-```
-
-Crea un proyecto nuevo. Los antiguos quedan en la BD; bórralos a
-mano si te molestan en el board.
+> ⚠️ **Siempre** invoca el Python del venv explícitamente:
+>
+> ```powershell
+> .\.venv\Scripts\python.exe .\scripts\<script>.py
+> ```
+>
+> Si haces `.\scripts\<script>.py` directo, Windows asocia el `.py`
+> al Python del sistema (no al del venv), faltan dependencias, y el
+> script revienta nada más arrancar sin imprimir nada. Causa #1 de
+> "no veo nada".
 
 ---
 
-## Plan 04 — sin scripts demo
+## Plan 02 — los 5 tests humanos
 
-Los 5 tests humanos de Plan 04 se ejecutan por la **UI del
-admin-panel** o con los demos del Plan 04.5 (siguiente sección).
-La descripción canónica está en `docs/roadmap/04-memoria-rag-kbs.md`
-(sección Tests humanos). Lo que **realmente está disponible hoy**:
+Cada uno tiene un script demo bajo `scripts/`. El launcher los corre
+todos; aquí están los protocolos individuales por si quieres
+ejecutar uno suelto.
 
-| Test          | Estado hoy                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `human_04_01` | ✅ **Ejecutable** vía `scripts/demo_human_04_5_01.py` (Plan 04.5) — destila memorias de una Execution `done` y comprueba el recall posterior.                                                                                                                                                                                                                                                                                          |
-| `human_04_02` | ⚠️ **Parcialmente.** El upload UI vive en `/admin/projects/{project_id}/knowledge-bases` (botón "Subir documento" por KB del proyecto). API: `POST /knowledge-bases/{kb_id}/documents` (multipart). El pipeline de ingestión (BM25 + vector + reranker) está en sitio; lo que falta es ejercicio "en vivo con 10 docs realistas + audio". `scripts/demo_human_04_5_02.py` cubre el camino simplificado con un Document sembrado en BD. |
-| `human_04_03` | ❌ **Bloqueado** por chat-file-upload (Plan 07). La página de chat (`/admin/projects/{id}/chat`) NO tiene `<input type="file">`; los `attachments` que la API soporta se generan internamente por el planning sub-graph, no se reciben del usuario.                                                                                                                                                                                    |
-| `human_04_04` | ✅ **Ejecutable hoy** desde `/admin/memories`. Crea 4 memorias con scope `private`, `team_shared`, `project_shared`, `global` (todas pasan por `POST /memories`). Filtra por scope con el dropdown de la página. Para la parte cross-team/cross-project, conmuta de tenant con `X-Tenant-Id` (system-admin) o crea 2 usuarios en 2 teams distintos y comprueba visibilidad.                                                            |
-| `human_04_05` | ❌ **Bloqueado.** El admin-panel muestra `embedding_model_id` como texto sin selector (`/admin/projects/{id}/knowledge-bases`). No hay endpoint para cambiarlo ni para disparar reindexación. Fuera del alcance actual (probablemente Plan 12).                                                                                                                                                                                        |
+### `human_02_01` — Un agente ejecuta una tarea de principio a fin
 
-**Por qué el changelog Plan 04 marcó 4/5 como "deferred to Plan 04.5"**:
-en el momento del cierre del Plan 04, el agente-runtime sandbox no
-tenía cableados los tools nuevos (memory_recall, rag_search,
-document_convert, promote_to_kb). Esa pieza llegó en Plan 04.5 y los
-dos demos cubren los caminos críticos (`human_04_01` memoria,
-`human_04_02` RAG con citas — alcance reducido).
+**Qué prueba**: pipeline completa orchestrator → worker → contenedor
+`agent-runtime` → LangGraph loop → BD funciona end-to-end.
 
-`human_04_03` (Docling en el chat) y `human_04_05` (cambio de
-modelo de embeddings + reindexación) siguen bloqueados — necesitan
-features de planes posteriores.
+**Comando**:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\demo_human_02_01.py
+```
+
+Para LLM real (no scripted), define `DEMO_MODEL_KIND` y credenciales
+del proveedor (catálogo cerrado ADR 0021: `azure_foundry`,
+`claude_sdk`, `copilot`, `ollama`). Sin esa variable, usa el
+`ScriptedModelClient` con un poema prefijado.
+
+**Output esperado** (modo scripted):
+
+```
+==========  Demo human_02_01 — un agente ejecuta una tarea  ==========
+  Modelo del agente: determinista (sin credenciales)
+  Escenario creado:
+    tenant    Tenant A (tenant-a)
+    proyecto  <uuid>
+    agente    <uuid>  «Writer»
+    tarea     <uuid>  «Escribe un poema sobre el mar»
+  Ejecutando — lanzando el contenedor agent-runtime...
+  Ejecución <uuid>  ·  estado: done
+  Lo que hizo el agente, paso a paso:
+    [ 0] node        perceive     Perceived task: ...
+    [ 1] node        recall       Recalled 0 memory item(s) — ...
+    [ 2] model_call  plan         decision: act
+    [ 3] tool_call   act          Tool 'echo' → ok
+    ...
+  Resultado — el poema:
+    | El mar repite su nombre en la orilla, ...
+  Iteraciones: 2  Tokens: 335  Coste: $0.0044
+  Tarea <uuid>  ->  estado: done
+```
+
+**Pass**: imprime `estado: done` y un poema no vacío.
+
+**UI**:
+
+- `http://localhost:3000/admin/board` — la tarea «Escribe un poema sobre el mar» en columna **done**.
+- `http://localhost:3000/admin/executions/<uuid>` — Timeline con los 8 nodos del loop.
+
+**Falla típica**: `docker run agent-runtime:v1` falla → la imagen no
+está construida.
+
+---
+
+### `human_02_02` — El aislamiento del contenedor es real
+
+**Qué prueba**: el perfil endurecido del sandbox (cap-drop ALL, FS
+raíz read-only, sin socket Docker, red interna sin salida, seccomp)
+es contrato, no aspiración.
+
+**Comando**:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\demo_human_02_02.py
+```
+
+**Output esperado**:
+
+```
+==========  human_02_02 — el aislamiento del contenedor  ==========
+  [  OK  ]  /var/run/docker.sock NO montado en el contenedor
+  [  OK  ]  FS raíz read-only — no se puede escribir fuera de /workspace
+  [  OK  ]  /workspace SÍ escribible (tmpfs efímero)
+  [  OK  ]  Red interna: el contenedor NO alcanza 1.1.1.1
+  [  OK  ]  cap_net_admin (y los 38 caps restantes) NO disponibles
+```
+
+**Pass**: los 5 `[OK]`. **Cualquier `[FALLO]`** indica regresión real
+en `apps/workers/src/workers/container.py`.
+
+---
+
+### `human_02_03` — Las salvaguardas frenan al agente
+
+**Qué prueba**: los 4 cinturones del agent loop
+(`max_iterations`, `repetitive_loop`, `max_cost`, `container_timeout`)
+disparan cuando deben.
+
+**Comando**:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\demo_human_02_03.py
+```
+
+**Output esperado**:
+
+```
+==========  human_02_03 — las salvaguardas del agent loop  ==========
+  [  OK  ]  max_iterations dispara aborted (max_iterations_exceeded)
+  [  OK  ]  repetitive_loop dispara aborted (repetitive_loop_detected)
+  [  OK  ]  max_cost dispara aborted (max_cost_exceeded)
+  [  OK  ]  container_timeout mata el contenedor + persiste failed
+```
+
+**Pass**: los 4 `[OK]`.
+
+---
+
+### `human_02_04` — La validación humana pausa la ejecución
+
+**Qué prueba**: la política `human_approval_policy` con
+`code_execution: human_required` aparca la tarea en
+`awaiting_human_approval` cuando el agente intenta `shell_exec`, y
+crea solicitud en `/admin/approvals`.
+
+**Comando**:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\demo_human_02_04.py
+```
+
+**Output esperado**:
+
+```
+==========  human_02_04 — validación humana aparca la ejecución ==========
+  Tarea <uuid> creada en proyecto <uuid> con política
+    code_execution: human_required
+  Ejecutando — el agente intentará `shell_exec`...
+  Resultado:
+    execution.status     awaiting_human_approval
+    tarea.status         awaiting_human_approval
+    approval_request     <approval-uuid>  (pending)
+```
+
+**UI**:
+
+- `http://localhost:3000/admin/approvals` — tarjeta nueva con
+  botones Aprobar / Rechazar y la acción (`shell_exec` con
+  `deploy --prod`).
+- `http://localhost:3000/admin/board` — la tarea en columna
+  **Pendiente de aprobación**.
+
+**Pass**: `awaiting_human_approval` en Execution + Task, tarjeta visible
+en `/admin/approvals`. Al pulsar Aprobar, la tarea vuelve a `backlog`.
+
+---
+
+### `human_02_05` — Tiempo real (WebSocket) sin refresco
+
+**Qué prueba**: el bus de eventos (Redis Streams) + WebSocket → el
+board del admin-panel ve transiciones del Kanban y pasos de ejecución
+**sin refrescar**.
+
+**Comando**:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\demo_human_02_05.py
+```
+
+El script crea la tarea y te pide `Enter`. **Antes** de pulsar:
+
+- Abre `http://localhost:3000/admin/board` (idealmente en VARIAS
+  pestañas).
+- Pulsa Enter y observa cómo las cartas se mueven solas.
+
+Para automatizar (sin Enter): `$env:DEMO_NO_WAIT="1"`.
+
+**Pass**: en cada pestaña del board ves la tarjeta moverse
+`backlog → ready → in_progress → done` sin pulsar F5, y los pasos del
+Timeline aparecen uno a uno mientras el agente corre.
+
+---
+
+## Plan 04 — los 5 tests humanos
+
+Plan 04 no trae scripts. Los caminos críticos los cubren los demos
+del Plan 04.5; el resto se prueba por la UI (o queda bloqueado).
+
+### `human_04_01` — Memoria mejora tareas repetidas
+
+✅ Cubierto por `demo_human_04_5_01.py` (ver siguiente sección). El
+test del roadmap pide ejecutar la misma tarea dos veces y validar
+que la 2ª referencia memorias de la 1ª; el demo lo simplifica
+sembrando una Execution `done` + Memorizer + recall.
+
+### `human_04_02` — RAG funciona con corpus realista
+
+⚠️ **Parcial**. La parte "10 docs (PDF/.docx/.md/audio)" requiere
+ingestión real por la UI; el demo `demo_human_04_5_02.py` cubre el
+camino con un Document sembrado en BD.
+
+**Protocolo manual completo** (10 docs reales):
+
+1. `http://localhost:3000/admin/projects` → elige un proyecto.
+2. Entra en **Knowledge Bases** del proyecto. Crea una KB si no la
+   tienes; pulsa **Subir documento**.
+3. Sube 10 archivos: 3 PDFs, 3 .docx, 3 .md, 1 audio (mp3/wav).
+4. Espera 2-5 min a que pasen `pending → processing → indexed`. En
+   `/admin/documents/<doc_id>/ingestion` ves el progreso por doc;
+   si alguno cae a `failed`, Docling registra el motivo ahí.
+5. Comprueba `/admin/dashboard`: `docling-serve` y `egress-proxy` en
+   `ok`.
+
+**Pass**: 10 docs en `indexed`, al menos una query RAG devuelve hits.
+
+**Falla típica**: docling-serve `unhealthy` → confirma con `curl
+http://localhost:5001/health`; reinicia con `docker compose restart
+docling-serve`.
+
+### `human_04_03` — Docling en el chat (pegar PDF)
+
+❌ **Bloqueado** por chat-file-upload (Plan 07). La página
+`/admin/projects/{id}/chat` no tiene `<input type="file">`. **Saltar**
+hasta Plan 07.
+
+### `human_04_04` — Scopes de memoria respetados
+
+✅ **Ejecutable hoy** desde `/admin/memories`.
+
+**Protocolo manual**:
+
+1. `http://localhost:3000/admin/memories` → **Nueva memoria**.
+2. Crea las 4 con scopes distintos:
+
+   | scope            | content                               |
+   | ---------------- | ------------------------------------- |
+   | `private`        | "Mi nota privada"                     |
+   | `team_shared`    | "Nota del equipo X"                   |
+   | `project_shared` | "Nota del proyecto Y"                 |
+   | `global`         | "Nota global" (requiere tenant_admin) |
+
+3. Con el dropdown de **scope filter** confirma que ves las 4.
+4. (Cross-team) Loguéate como usuario de otro team del mismo tenant.
+   En `/admin/memories` ves `project_shared` y `global` pero NO la
+   `team_shared` ni la `private` del primer usuario.
+
+**Pass**: 4 memorias creadas con scope distinto + usuario de otro
+team no ve las restringidas.
+
+### `human_04_05` — Cambio modelo embeddings + reindexación
+
+❌ **Bloqueado**. `embedding_model_id` se muestra como texto sin
+selector ni endpoint para cambiarlo. **Saltar** hasta que llegue la
+feature (probablemente Plan 12).
 
 ---
 
 ## Plan 04.5 — los 2 demos del agent-runtime integrado
 
-Hay un **setup que extiende** el de Plan 02 (añade KB + Document +
-4 chunks + ajusta el agente a `memory_scope=team_shared`) y dos
-demos que dialogan con el api-server por `/internal/agent/*`.
+Cubren `human_04_5_01` (memoria end-to-end) y `human_04_5_02` (RAG
+con citas). Los setups (`setup_demo_project.py` y `setup_demo_04_5.py`)
+son idempotentes — el launcher los re-ejecuta.
 
-### Pre-requisito extra
+### `human_04_5_01` — Memory replay end-to-end
 
-El api-server local en :8001 (ver "Pre-requisitos comunes" más
-arriba). Comprueba con `curl http://localhost:8001/healthz` antes
-de empezar.
+**Qué prueba**: ciclo completo de la memoria del agente. Memorizer
+destila tras Execution `done` → otra ejecución recupera vía
+`memory_recall` → el agente escribe a mano con `memory_store`.
 
-### Orden recomendado
+**Comando**:
 
-```bash
-# 1. Setup compartido del Plan 02 (si no lo has hecho ya)
-.venv/Scripts/python scripts/setup_demo_project.py
-
-# 2. Extensión Plan 04.5 (KB + Document + team_id + scope)
-.venv/Scripts/python scripts/setup_demo_04_5.py
-
-# 3. (En otra terminal: arranca el api-server — ver arriba)
-
-# 4. Los 2 demos (con el mismo JWT secret que el api-server)
-API_SERVER_JWT_SECRET="test-secret" \
-.venv/Scripts/python scripts/demo_human_04_5_01.py
-API_SERVER_JWT_SECRET="test-secret" \
-.venv/Scripts/python scripts/demo_human_04_5_02.py
+```powershell
+.\.venv\Scripts\python.exe .\scripts\demo_human_04_5_01.py
 ```
 
-### Qué hace cada uno
+Tiempo: ~5 s sin pausas.
 
-| Demo                    | Qué demuestra                                                                                                                                                                                    |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `setup_demo_04_5.py`    | Crea Team del proyecto, ajusta agente a `team_shared`, crea KB + Document + 4 chunks. Idempotente.                                                                                               |
-| `demo_human_04_5_01.py` | **Memory replay**: Execution `done` → Memorizer destila con LLM fake → `memory-recall` HTTP encuentra → `memory-store` HTTP graba → re-recall comprueba la nueva memoria.                        |
-| `demo_human_04_5_02.py` | **RAG con citas**: `rag-search` × 3 keywords (`tenant_id RLS`, `sandbox agent-runtime`, `asyncpg`) → `document-convert` lista los 4 chunks → `promote-to-kb` copia el Document a una KB destino. |
+**Output esperado** (N = memorias del agente al empezar):
 
-Los demos **no** abren un contenedor sandbox — disparan las
-llamadas directamente desde el script con un agent token minteado
-en sitio. La lógica del servidor que se ejerce es exactamente la
-que vería un sandbox real; cambia sólo quién dispara la llamada.
-Cuando se cierre el wire-up worker→sandbox (mint del token +
-register de tools dentro del contenedor), los mismos endpoints
-sirven al agente desde la LangGraph loop sin tocar los demos.
+```
+========================================================================
+  demo human_04_5_01 — Memory replay end-to-end
+========================================================================
+  Tenant   : tenant-a
+  Proyecto : <uuid>
+  Agente   : <uuid>
+  api-server: http://localhost:8001
 
-### Dónde mirar en el admin-panel
+──────────────────────────────────────────────────────────────────
+  Paso 1/4 — Sembrar una Execution `done`
+──────────────────────────────────────────────────────────────────
+  [  OK  ]  Execution + Task creadas  — execution_id=<uuid>
 
-- `http://localhost:3000/admin/memories` → las memorias destiladas por el
-  Memorizer + la que graba `memory-store` (filtra por scope con el dropdown).
-- `http://localhost:3000/admin/projects/{project_id}/knowledge-bases` →
-  las KBs concedidas al proyecto del demo: la KB origen sembrada por
-  el setup y la KB destino creada por `demo_human_04_5_02.py`.
-- `http://localhost:3000/admin/documents/{doc_id}` → vista del Document
-  con sus chunks. Útil para mirar tanto el doc original como el
-  promovido por `promote_to_kb`.
+──────────────────────────────────────────────────────────────────
+  Paso 2/4 — Memorizer destila con LLM fake (2 candidatos)
+──────────────────────────────────────────────────────────────────
+  [  OK  ]  Memorizer persistio 2 entradas  — reason=ok
+  [  OK  ]  memory_entries del agente N → N+2
 
-### Volver a empezar el escenario Plan 04.5
+──────────────────────────────────────────────────────────────────
+  Paso 3/4 — `memory_recall` HTTP (lado lectura del agente)
+──────────────────────────────────────────────────────────────────
+  Token minteado (kind=agent), llamando .../memory-recall
+  [  OK  ]  hits devueltos: >=1
+    · score=0.0164  bm25=1  vec=None  scope=team_shared
+      "El proyecto usa asyncpg como único driver de Postgres."
 
-Las memorias y las KBs se acumulan en cada ejecución (es la
-intención — quieres verlas crecer). Para limpiarlas:
-
-```sql
--- desde psql contra agentic_platform:
-TRUNCATE memory_entries CASCADE;
-TRUNCATE chunks, documents, kb_projects, knowledge_bases RESTART IDENTITY CASCADE;
+──────────────────────────────────────────────────────────────────
+  Paso 4/4 — `memory_store` HTTP (lado escritura del agente)
+──────────────────────────────────────────────────────────────────
+  [  OK  ]  memory_store 201  — memory_id=<uuid>
+  [  OK  ]  recall encuentra la nueva memoria
 ```
 
-Después relanza `setup_demo_04_5.py` y los dos demos.
+**Qué significa cada `[OK]`**:
+
+| `[OK]`                           | Demuestra                                                                                                       |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Paso 1 Execution+Task            | Conexión SQLAlchemy a Postgres funciona                                                                         |
+| Paso 2 Memorizer 2 entradas      | `should_memorize` autoriza + `distil_execution` parsea + `persist_memory_candidates` guarda con `agent_id` + FK |
+| Paso 2 N → N+2                   | Count contra BD coincide (verificación independiente del Memorizer)                                             |
+| Paso 3 hits >=1                  | JWT `kind=agent` valida + endpoint resuelve `team_id` del agente + BM25 encuentra                               |
+| Paso 4 memory_store 201          | El agente puede escribir a mano (no solo destilar)                                                              |
+| Paso 4 recall encuentra la nueva | Read-after-write inmediato (no hay sink que drenar)                                                             |
+
+**UI**: `http://localhost:3000/admin/memories` — verás las 3 entradas
+nuevas (2 con `agent_id` + `source_execution_id`, 1 con `source:
+agent_runtime` en metadata).
+
+**Pass**: los **6 `[OK]`** del demo.
+
+### `human_04_5_02` — RAG con citas end-to-end
+
+**Qué prueba**: el agente busca en una KB granted a su proyecto y
+recibe hits con `chunk_id`/`document_id`/`kb_id` (citas reales) +
+puede abrir el documento + puede copiarlo a otra KB.
+
+**Comando**:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\demo_human_04_5_02.py
+```
+
+Tiempo: ~5 s.
+
+**Output esperado**:
+
+```
+========================================================================
+  demo human_04_5_02 — RAG con citas end-to-end
+========================================================================
+  Paso 1/3 — `rag_search` HTTP x 3 queries
+  Query: «tenant_id RLS»
+    1. rrf=0.0164  bm25=1  vec=None  rerank=1.000
+       "Multi-tenancy desde el día uno: ..."
+       cita → kb_id=<uuid>  document_id=<uuid>  ordinal=0
+  Query: «sandbox agent-runtime»  → 1 hit
+  Query: «asyncpg»                → 1 hit
+  [  OK  ]  Al menos una query devolvió hits
+
+  Paso 2/3 — `document_convert` (vista «open document»)
+  [  OK  ]  Document devuelto: «Notas de arquitectura»  — 4 chunks
+    ord=0  "Multi-tenancy desde el día uno: ..."
+    ord=1  "Los workers nunca ejecutan código del usuario: ..."
+    ord=2  "El acceso a BD desde dev usa asyncpg + SQLAlchemy ..."
+    ord=3  "El sandbox habla con el api-server por /internal/agent/* ..."
+
+  Paso 3/3 — `promote_to_kb` (copiar doc a una KB destino)
+  [  OK  ]  promote_to_kb 201  — new doc <uuid> · chunks=4
+```
+
+**UI**:
+
+- `http://localhost:3000/admin/projects/<project_id>/knowledge-bases` —
+  KB origen ("Arquitectura del sistema") y KB destino ("KB destino del
+  demo (04.5)"), ambas concedidas al proyecto.
+- `http://localhost:3000/admin/documents/<doc_id>` (original) — 4 chunks.
+- `http://localhost:3000/admin/documents/<new_doc_id>` (promovido) — 4
+  chunks idénticos, título "Notas de arquitectura (promoted)".
+
+**Pass**: los **3 `[OK]`** + el Document promovido aparece en la KB
+destino con sus 4 chunks.
+
+---
+
+## Volver a empezar
+
+```powershell
+# Parar todo
+.\scripts\dev\down.ps1 -Docker
+
+# Limpiar el estado del demo (proyecto + agente compartidos)
+Remove-Item scripts\.demo_state.json -ErrorAction SilentlyContinue
+
+# Limpiar memorias / KBs acumuladas (destructivo)
+docker exec agentic-platform-postgres-1 psql -U migrations_user -d agentic_platform -c `
+  "TRUNCATE memory_entries CASCADE; TRUNCATE chunks, documents, kb_projects, knowledge_bases RESTART IDENTITY CASCADE;"
+
+# Re-arrancar
+.\scripts\dev\up.ps1
+.\scripts\dev\run-human-tests.ps1
+```
 
 ---
 
 ## Troubleshooting
 
+### "No veo nada al ejecutar el script"
+
+Causa #1: lanzaste el `.py` directo (`.\scripts\xxx.py`) en PowerShell.
+Windows usa el Python del sistema, faltan dependencias, revienta sin
+imprimir. **Usa siempre** `.\.venv\Scripts\python.exe`.
+
+### `401 Unauthorized` en demos del Plan 04.5
+
+Tu api-server y tu shell del demo leen `API_SERVER_JWT_SECRET`
+distintos. Más fácil de evitar:
+
+- **No setees** `API_SERVER_JWT_SECRET` en NINGUNA terminal — ambos
+  lados leen el default pydantic `dev-only-jwt-secret-change-me`.
+- O usa `.\scripts\dev\up.ps1`, que pinea el default explícitamente.
+
+Si tu shell tiene la variable seteada de antes:
+
+```powershell
+Remove-Item Env:\API_SERVER_JWT_SECRET -ErrorAction SilentlyContinue
+```
+
 ### "password authentication failed for user migrations_user"
 
-El default de `workers.config.Settings.database_url` apunta a
-**:5432** (producción), no a **:15432** (dev). Los demos del Plan
-04.5 fuerzan la URL correcta al construir `Settings`; los del
-Plan 02 leen `DEMO_DATABASE_URL`. Si tocas algo y rompes esto,
-exporta:
+El default de `workers.config.Settings.database_url` apunta a `:5432`
+(producción), no a `:15432` (dev). Los demos del Plan 04.5 lo
+fuerzan al construir `Settings(database_url=DB_URL)`; los del Plan
+02 leen `DEMO_DATABASE_URL`. Si tocas algo y rompes esto:
 
-```bash
-export DEMO_DATABASE_URL="postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform"
+```powershell
+$env:DEMO_DATABASE_URL = "postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform"
 ```
 
 ### "relation knowledge_bases does not exist"
 
-Tu BD dev está por debajo de la migración 0022. Arregla con:
+Tu BD dev está por debajo de la migración 0022. `up.ps1` ya hace
+`alembic upgrade head`; si arrancaste el stack manualmente sin
+migrar:
 
-```bash
-cd apps/api-server
-DATABASE_URL=postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform \
-../../.venv/Scripts/python -m alembic upgrade head
+```powershell
+cd apps\api-server
+$env:DATABASE_URL = "postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform"
+..\..\.venv\Scripts\python -m alembic upgrade head
 ```
 
 ### "Foreign key associated with column ... could not find table 'users'"
 
-Aparece cuando un script abre su propia `AsyncEngine` y SQLAlchemy
-no tiene `User` en el metadata aún. Los demos lo arreglan con
-`import api_server.db.models` antes del primer `session.add`. Si
-escribes un script nuevo, replica ese patrón.
+Sólo si modificas un script demo y abres tu propio `AsyncEngine`.
+Los demos lo arreglan con `import api_server.db.models` antes del
+primer `session.add`. Si añades scripts nuevos, replica ese patrón.
 
 ### "No alcanzo el api-server en http://localhost:8001"
 
-El api-server no está corriendo. Mira la sección "Pre-requisitos
-comunes" para arrancarlo. Comprueba con `curl http://localhost:8001/healthz`.
+El api-server no está corriendo. Lánzalo con `.\scripts\dev\up.ps1`
+y comprueba `curl http://localhost:8001/healthz`.
 
-### El JWT minteado en el demo no lo acepta el api-server
+### `Agent token validation failed: agent not found or revoked`
 
-Ambos lados deben leer el **mismo** `API_SERVER_JWT_SECRET`. El
-default del api-server es `dev-only-jwt-secret-change-me` (ver
-`apps/api-server/src/api_server/config.py`); el demo no asume
-ninguno — exporta el mismo valor en las dos terminales o sobrescribe
-ambos con `export API_SERVER_JWT_SECRET=test-secret`.
+El demo y el api-server no comparten la misma BD: el agente existe
+en una, no en la otra. Verifica con `docker exec agentic-platform-postgres-1
+psql -U migrations_user -d agentic_platform -c "\dt"` que apuntas a
+la misma BD que el api-server.
 
-### "Agent token validation failed: agent not found or revoked"
+### Dashboard `/admin/dashboard` muestra postgres `down`
 
-El demo y el api-server no comparten la misma BD: el agente
-existe en una, no en la otra. Verifica con `\dt` en psql contra el
-puerto al que apunta cada lado.
+Conocido en dev cuando el pool asyncpg está frío. El timeout del
+probe es 5 s; si no responde a tiempo (típicamente sólo en el primer
+request tras arrancar uvicorn), se ve `down`. Re-carga en 30 s
+(el dashboard auto-refresca).

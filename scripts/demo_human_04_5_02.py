@@ -231,7 +231,9 @@ async def main() -> int:
             print()
             await apause(1)
         check("Al menos una query devolvió hits", any_hits)
-        await apause(2, note="Mira /admin/knowledge-bases para ver la KB y el doc")
+        await apause(
+            2, note=f"Mira /admin/projects/{project_id}/knowledge-bases para ver la KB y el doc"
+        )
 
         # ----- Paso 2: document_convert para ver chunks completos -----
         print()
@@ -278,8 +280,13 @@ async def main() -> int:
 
         print()
         print("  En el admin-panel:")
-        print(f"    · /admin/knowledge-bases/{kb_id} — la KB origen.")
-        print(f"    · /admin/knowledge-bases/{target_kb_id} — la KB destino.")
+        print(f"    · /admin/projects/{project_id}/knowledge-bases")
+        print(f"        — KB origen ({kb_id}) y KB destino ({target_kb_id})")
+        print("          ambas concedidas a este proyecto.")
+        print(f"    · /admin/documents/{document_id}")
+        print("        — vista del Document original con sus chunks.")
+        print(f"    · /admin/documents/{promoted['document_id']}")
+        print("        — vista del Document promovido a la KB destino.")
         print("    · Cada hit del paso 1 lleva su cita kb_id + document_id;")
         print("      la UI de revisión usa ese par para abrir el viewer.")
         return 0
