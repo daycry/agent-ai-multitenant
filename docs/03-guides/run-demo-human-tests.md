@@ -456,9 +456,18 @@ Tiempo: ~5 s.
 - `http://localhost:3000/admin/projects/<project_id>/knowledge-bases` —
   KB origen ("Arquitectura del sistema") y KB destino ("KB destino del
   demo (04.5)"), ambas concedidas al proyecto.
-- `http://localhost:3000/admin/documents/<doc_id>` (original) — 4 chunks.
-- `http://localhost:3000/admin/documents/<new_doc_id>` (promovido) — 4
-  chunks idénticos, título "Notas de arquitectura (promoted)".
+- `http://localhost:3000/admin/documents/<doc_id>/citations` (original) —
+  4 chunks con bounding boxes.
+- `http://localhost:3000/admin/documents/<doc_id>/ingestion` (original) —
+  estado del pipeline (debe estar `indexed`).
+- `http://localhost:3000/admin/documents/<new_doc_id>/citations`
+  (promovido) — 4 chunks idénticos, título "Notas de arquitectura
+  (promoted)".
+
+> **Nota**: la ruta `/admin/documents/<id>` (sin sufijo `/citations` o
+> `/ingestion`) devuelve **404** — el admin-panel no tiene una vista
+> raíz del documento, sólo las dos subvistas. Si te llega un enlace sin
+> sufijo, añade `/citations` para ver los chunks.
 
 **Pass**: los **3 `[OK]`** + el Document promovido aparece en la KB
 destino con sus 4 chunks.
