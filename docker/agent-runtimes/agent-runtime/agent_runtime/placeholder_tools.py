@@ -9,9 +9,12 @@ History:
   * Plan 04.5 task_04_5_03 replaced memory_recall + memory_store with
     real adapters that call ``/internal/agent/*`` (see
     :mod:`agent_runtime.memory_tools`).
-  * document_convert moves out next in task_04_5_05.
+  * Plan 04.5 task_04_5_05 replaced document_convert with the real
+    adapter (see :mod:`agent_runtime.docling_tools`).
 
-So this module currently only holds ``document_convert``.
+The module is now empty in production builds; the factory + registry
+glue remains so a future placeholder can be added with a one-line
+edit, and so the original Plan 02 tests still have a target.
 """
 
 from __future__ import annotations
@@ -22,9 +25,8 @@ from agent_runtime.tools import ToolFn, ToolRegistry, ToolResult
 NOT_IMPLEMENTED_CODE = 501
 
 # Placeholder tool name -> the plan that will implement it.
-PLACEHOLDER_TOOLS: dict[str, str] = {
-    "document_convert": "Plan 04.5 task_04_5_05 (Docling ingestion wire-up)",
-}
+# Empty in v1 — every original placeholder has been wired up.
+PLACEHOLDER_TOOLS: dict[str, str] = {}
 
 
 def make_placeholder_tool(name: str) -> ToolFn:

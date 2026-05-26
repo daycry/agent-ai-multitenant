@@ -8,11 +8,15 @@ minted by the worker; tenant-scoped routes additionally use
 
 Endpoints:
 
-  - ``GET  /_health``       smoke probe (task_04_5_01).
-  - ``POST /memory-recall`` hybrid BM25 + vector recall (task_04_5_03).
-  - ``POST /memory-store``  persist one MemoryEntry (task_04_5_03).
-  - ``POST /rag-search``    project-scoped RAG over KB chunks
-                            (task_04_5_04).
+  - ``GET  /_health``         smoke probe (task_04_5_01).
+  - ``POST /memory-recall``   hybrid BM25 + vector recall (task_04_5_03).
+  - ``POST /memory-store``    persist one MemoryEntry (task_04_5_03).
+  - ``POST /rag-search``      project-scoped RAG over KB chunks
+                              (task_04_5_04).
+  - ``POST /document-convert`` structured chunks of an existing
+                              Document (task_04_5_05).
+  - ``POST /promote-to-kb``   copy a Document into a different KB
+                              (task_04_5_05).
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ from api_server.auth.internal_agent import (
     get_agent_tenant_session,
 )
 from api_server.db.domain import Agent, MemoryScope, Project
+from api_server.db.knowledge import Chunk, Document, KnowledgeBase, KnowledgeBaseProject
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
 from api_server.memorizer.recall import recall
 from api_server.rag.tool import rag_search
@@ -379,6 +384,242 @@ async def rag_search_endpoint(
             )
             for h in hits
         ]
+    )
+
+
+# ---------------------------------------------------------------------------
+# /document-convert
+# ---------------------------------------------------------------------------
+class DocumentConvertRequest(BaseModel):
+    """Body of POST /internal/agent/document-convert.
+
+    The agent passes the ``document_id`` of a Document it already
+    knows about (e.g. discovered via rag_search). The endpoint
+    returns the structured chunks the ingestion pipeline produced.
+
+    Unlike the full Docling re-parse this is a fast DB read — chunks
+    are already persisted. A re-parse-from-MinIO mode arrives when
+    chat-file-upload lands in Plan 07.
+    """
+
+    model_config = _BASE_CONFIG
+
+    document_id: UUID
+
+
+class DocumentChunkOut(BaseModel):
+    model_config = _BASE_CONFIG
+
+    chunk_id: UUID
+    ordinal: int
+    content: str
+    bbox: dict[str, Any] | None
+
+
+class DocumentConvertResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    document_id: UUID
+    kb_id: UUID
+    title: str
+    source_filename: str
+    source_mime_type: str
+    page_count: int
+    chunks: list[DocumentChunkOut]
+
+
+async def _assert_doc_visible_to_agent(
+    session: AsyncSession,
+    *,
+    document: Document,
+    agent: Agent,
+) -> None:
+    """The document's KB must be granted to the agent's project.
+
+    Without a project_id the agent can't see KBs at all (mirrors
+    rag_search). With one, kb_projects(kb_id, project_id) must exist.
+    """
+    if agent.project_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="agent has no project — cannot access KB documents",
+        )
+    grant = await session.execute(
+        select(KnowledgeBaseProject.kb_id).where(
+            KnowledgeBaseProject.kb_id == document.kb_id,
+            KnowledgeBaseProject.project_id == agent.project_id,
+        )
+    )
+    if grant.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="agent's project is not granted access to this document's KB",
+        )
+
+
+@router.post("/document-convert", response_model=DocumentConvertResponse)
+async def document_convert(
+    payload: DocumentConvertRequest,
+    principal: AgentPrincipal = Depends(get_agent_principal),
+    session: AsyncSession = Depends(get_agent_tenant_session),
+) -> DocumentConvertResponse:
+    """Return the structured chunks of an existing Document.
+
+    The agent must be in a project that has been granted access to
+    the document's KB; otherwise 403. RLS already pins the tenant,
+    this check enforces the project-level grant on top.
+    """
+    agent, _project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+    doc_row = await session.execute(
+        select(Document).where(
+            Document.id == payload.document_id,
+            Document.deleted_at.is_(None),
+        )
+    )
+    document = doc_row.scalar_one_or_none()
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
+    await _assert_doc_visible_to_agent(session, document=document, agent=agent)
+
+    chunk_rows = await session.execute(
+        select(Chunk).where(Chunk.document_id == document.id).order_by(Chunk.ordinal)
+    )
+    chunks = chunk_rows.scalars().all()
+    return DocumentConvertResponse(
+        document_id=document.id,
+        kb_id=document.kb_id,
+        title=document.title,
+        source_filename=document.source_filename,
+        source_mime_type=document.source_mime_type,
+        page_count=document.page_count,
+        chunks=[
+            DocumentChunkOut(
+                chunk_id=c.id,
+                ordinal=c.ordinal,
+                content=c.content,
+                bbox=c.bbox,
+            )
+            for c in chunks
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# /promote-to-kb
+# ---------------------------------------------------------------------------
+class PromoteToKbRequest(BaseModel):
+    """Body of POST /internal/agent/promote-to-kb.
+
+    Copies an existing Document (and its chunks) into another KB the
+    agent's project also has access to. The source KB grant gates the
+    *read*; the target KB grant gates the *write*. The bytes in MinIO
+    are NOT re-uploaded — the new Document points at the same
+    ``source_storage_key`` (it's still a tenant-scoped path).
+    """
+
+    model_config = _BASE_CONFIG
+
+    document_id: UUID
+    target_kb_id: UUID
+    title: str | None = None
+
+
+class PromoteToKbResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    document_id: UUID
+    chunks_persisted: int
+
+
+@router.post(
+    "/promote-to-kb",
+    response_model=PromoteToKbResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def promote_to_kb_endpoint(
+    payload: PromoteToKbRequest,
+    principal: AgentPrincipal = Depends(get_agent_principal),
+    session: AsyncSession = Depends(get_agent_tenant_session),
+) -> PromoteToKbResponse:
+    """Duplicate a Document + its chunks into another KB."""
+    agent, _project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+
+    source_row = await session.execute(
+        select(Document).where(
+            Document.id == payload.document_id,
+            Document.deleted_at.is_(None),
+        )
+    )
+    source = source_row.scalar_one_or_none()
+    if source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="source document not found"
+        )
+    await _assert_doc_visible_to_agent(session, document=source, agent=agent)
+
+    # Target KB must exist and be granted to the agent's project.
+    target_kb_row = await session.execute(
+        select(KnowledgeBase).where(
+            KnowledgeBase.id == payload.target_kb_id,
+            KnowledgeBase.deleted_at.is_(None),
+        )
+    )
+    target_kb = target_kb_row.scalar_one_or_none()
+    if target_kb is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="target KB not found")
+    target_grant = await session.execute(
+        select(KnowledgeBaseProject.kb_id).where(
+            KnowledgeBaseProject.kb_id == payload.target_kb_id,
+            KnowledgeBaseProject.project_id == agent.project_id,
+        )
+    )
+    if target_grant.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="agent's project is not granted access to the target KB",
+        )
+
+    source_chunks = (
+        (
+            await session.execute(
+                select(Chunk).where(Chunk.document_id == source.id).order_by(Chunk.ordinal)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    new_document = Document(
+        tenant_id=principal.tenant_id,
+        kb_id=payload.target_kb_id,
+        title=payload.title or source.title,
+        source_filename=source.source_filename,
+        source_mime_type=source.source_mime_type,
+        source_storage_key=source.source_storage_key,
+        source_size_bytes=source.source_size_bytes,
+        status="indexed",
+        page_count=source.page_count,
+    )
+    session.add(new_document)
+    await session.flush()
+
+    for spec in source_chunks:
+        session.add(
+            Chunk(
+                tenant_id=principal.tenant_id,
+                document_id=new_document.id,
+                ordinal=spec.ordinal,
+                content=spec.content,
+                embedding=spec.embedding,
+                bbox=spec.bbox,
+                metadata_=spec.metadata_ or {},
+            )
+        )
+    await session.flush()
+
+    return PromoteToKbResponse(
+        document_id=new_document.id,
+        chunks_persisted=len(source_chunks),
     )
 
 

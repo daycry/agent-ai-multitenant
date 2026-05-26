@@ -157,6 +157,25 @@ class InternalAgentAPI:
         hits: list[dict[str, Any]] = payload.get("hits") or []
         return hits
 
+    def document_convert(self, *, document_id: str) -> dict[str, Any]:
+        """Structured chunks of an existing Document. v1 reads them
+        from the chunks table; full re-parse mode lands with chat-
+        file-upload in Plan 07."""
+        return self._post("/internal/agent/document-convert", {"document_id": document_id})
+
+    def promote_to_kb(
+        self,
+        *,
+        document_id: str,
+        target_kb_id: str,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        """Copy a Document + its chunks into a different KB."""
+        body: dict[str, Any] = {"document_id": document_id, "target_kb_id": target_kb_id}
+        if title is not None:
+            body["title"] = title
+        return self._post("/internal/agent/promote-to-kb", body)
+
 
 __all__ = [
     "InternalAPIConfigError",
