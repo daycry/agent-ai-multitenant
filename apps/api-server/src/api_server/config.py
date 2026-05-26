@@ -56,6 +56,29 @@ class Settings(BaseSettings):
         default="http://localhost:9000",
         description="MinIO HTTP API base URL.",
     )
+    minio_access_key: str = Field(
+        default="minioadmin",
+        description="MinIO access key (S3 access_key_id). Matches MINIO_ROOT_USER in dev.",
+    )
+    minio_secret_key: SecretStr = Field(
+        default=SecretStr("changeme-dev-only"),
+        description="MinIO secret key (S3 secret_access_key). Vault-sourced in prod.",
+    )
+    docling_serve_url: str = Field(
+        default="http://localhost:5001",
+        description="docling-serve HTTP base URL (Plan 04 Fase C).",
+    )
+    docling_mcp_url: str = Field(
+        default="http://localhost:3000",
+        description="docling-mcp HTTP base URL (Plan 04 Fase E).",
+    )
+    ollama_url: str = Field(
+        default="http://localhost:11434",
+        description=(
+            "Ollama HTTP base URL — used for local embeddings"
+            " (default nomic-embed-text-v1.5, Plan 04 task_04_14)."
+        ),
+    )
     clamav_host: str = Field(default="localhost", description="ClamAV TCP host.")
     clamav_port: int = Field(default=3310, description="ClamAV TCP port (INSTREAM).")
 

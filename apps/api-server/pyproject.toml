@@ -13,6 +13,13 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.0,<3",
   "asyncpg>=0.29,<1",
   "alembic>=1.13,<2",
+  # pgvector adapter for SQLAlchemy + asyncpg. Plan 04: stores
+  # embeddings on memory_entries and chunks (ADR pending in Fase B).
+  "pgvector>=0.3,<1",
+  # MinIO Python client — used by the KB document upload endpoint
+  # (Plan 04 task_04_09) and the future ingestion worker. Sync; we
+  # wrap it with `asyncio.to_thread` from the async router.
+  "minio>=7.2,<8",
 
   # Validation / config
   "pydantic>=2.5,<3",

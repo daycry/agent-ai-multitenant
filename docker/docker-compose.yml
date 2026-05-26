@@ -158,6 +158,45 @@ services:
     <<: [*default-restart, *default-logging]
 
   # ---------------------------------------------------------------------------
+  # docling-serve — IBM's open-source document parser (Plan 04 task_04_10).
+  # Converts PDF / Office / HTML / Markdown / audio (Whisper-backed)
+  # into structured chunks that the ingestion worker persists into
+  # `chunks`. Self-contained Python service; no DB, no Redis.
+  # ---------------------------------------------------------------------------
+  docling-serve:
+    image: ghcr.io/docling-project/docling-serve:latest
+    environment:
+      # Open API surface: parse + structured chunks. Whisper is
+      # included; audio just routes through the same /v1/convert API
+      # (task_04_12).
+      DOCLING_SERVE_ENABLE_UI: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5001/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
+  # docling-mcp — MCP-protocol surface of Docling (Plan 04 task_04_21).
+  # The agent runtime calls this via the platform's MCP client; humans
+  # never hit it directly. Different image / port than docling-serve
+  # so the two can scale independently.
+  # ---------------------------------------------------------------------------
+  docling-mcp:
+    image: ghcr.io/docling-project/docling-mcp:latest
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
   # egress-proxy — tinyproxy con allowlist (ADR 0019 / task_02_35).
   # Conectado a DOS redes:
   #  - `agentic-net`  → puerta a internet.

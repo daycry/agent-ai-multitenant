@@ -116,6 +116,22 @@ class MemoryScope(enum.StrEnum):
     GLOBAL = "global"
 
 
+class MemoryType(enum.StrEnum):
+    """Episodic vs semantic distinction for agent memory (Plan 04 task_04_01).
+
+    - ``episodic``: a concrete event the agent lived through ("the
+      psycopg3 import failed in project X on 2026-05-25").
+    - ``semantic``: a rule or generalisation distilled from one or
+      more episodes ("project X uses asyncpg, not psycopg3").
+
+    The Memorizer (`task_04_03`) decides which type each entry gets
+    when it distils an `Execution`; the `memory_recall` tool can
+    filter by type."""
+
+    EPISODIC = "episodic"
+    SEMANTIC = "semantic"
+
+
 class SkillCategory(enum.StrEnum):
     """Open-ended skill grouping. Free-form `category` text is also accepted;
     this enum is just for the curated catalog (see task_01_10 seed)."""
@@ -232,6 +248,23 @@ class ExecutionStatus(enum.StrEnum):
     FAILED = "failed"
     # Paused mid-run waiting on a human_approval_policy decision (Fase F).
     AWAITING_HUMAN_APPROVAL = "awaiting_human_approval"
+
+
+class DocumentStatus(enum.StrEnum):
+    """Lifecycle of a `Document` in a Knowledge Base (Plan 04 task_04_07).
+
+    A freshly uploaded document lands in ``pending``. The ingestion
+    worker (Plan 04 Fase C, task_04_11) flips it to ``processing``
+    while Docling parses + chunks + embeds, then to ``indexed`` on
+    success or ``failed`` on error. The transitions are linear and
+    one-way — re-ingestion creates a *new* Document row, never
+    rewinds the existing one.
+    """
+
+    PENDING = "pending"
+    PROCESSING = "processing"
+    INDEXED = "indexed"
+    FAILED = "failed"
 
 
 class ApprovalRequestStatus(enum.StrEnum):

@@ -1,9 +1,9 @@
 ---
 plan_id: 04-memoria-rag-kbs
 title: Memoria, RAG y Bases de Conocimiento
-status: pending_approval
+status: in_progress
 blocking_plan: [02-ejecucion-agentes]
-started_at: null
+started_at: 2026-05-25
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 80-100
@@ -92,7 +92,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_01` — Modelo MemoryEntry con scope, type (episódica/semántica), embedding, metadata
 
-- [ ] **Título**: Modelo MemoryEntry con scope, type (episódica/semántica), embedding, metadata
+- [x] **Título**: Modelo MemoryEntry con scope, type (episódica/semántica), embedding, metadata
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -109,7 +109,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_02` — Migración con índice HNSW de pgvector
 
-- [ ] **Título**: Migración con índice HNSW de pgvector
+- [x] **Título**: Migración con índice HNSW de pgvector
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -126,7 +126,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_03` — Memorizer service: job post-tarea que destila la ejecución en MemoryEntry según política
 
-- [ ] **Título**: Memorizer service: job post-tarea que destila la ejecución en MemoryEntry según política
+- [x] **Título**: Memorizer service: job post-tarea que destila la ejecución en MemoryEntry según política
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -143,7 +143,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_04` — Tool memory_recall: búsqueda híbrida BM25 + vector + RRF en memorias accesibles al agente
 
-- [ ] **Título**: Tool memory_recall: búsqueda híbrida BM25 + vector + RRF en memorias accesibles al agente
+- [x] **Título**: Tool memory_recall: búsqueda híbrida BM25 + vector + RRF en memorias accesibles al agente
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -160,7 +160,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_05` — Tool memory_store: persistencia manual de aprendizajes desde el chat
 
-- [ ] **Título**: Tool memory_store: persistencia manual de aprendizajes desde el chat
+- [x] **Título**: Tool memory_store: persistencia manual de aprendizajes desde el chat
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -177,7 +177,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_06` — UI 'Memoria del Equipo' para visualizar, editar y eliminar entradas (con permisos)
 
-- [ ] **Título**: UI 'Memoria del Equipo' para visualizar, editar y eliminar entradas (con permisos)
+- [x] **Título**: UI 'Memoria del Equipo' para visualizar, editar y eliminar entradas (con permisos)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -196,7 +196,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_07` — Modelos KnowledgeBase, Document, Chunk con relación M:N a Project
 
-- [ ] **Título**: Modelos KnowledgeBase, Document, Chunk con relación M:N a Project
+- [x] **Título**: Modelos KnowledgeBase, Document, Chunk con relación M:N a Project
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -213,7 +213,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_08` — Migración con índice HNSW para chunks
 
-- [ ] **Título**: Migración con índice HNSW para chunks
+- [x] **Título**: Migración con índice HNSW para chunks
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -230,7 +230,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_09` — Endpoints CRUD de KB + upload de documentos a MinIO
 
-- [ ] **Título**: Endpoints CRUD de KB + upload de documentos a MinIO
+- [x] **Título**: Endpoints CRUD de KB + upload de documentos a MinIO
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -249,7 +249,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_10` — Despliegue de docling-serve como contenedor del stack
 
-- [ ] **Título**: Despliegue de docling-serve como contenedor del stack
+- [x] **Título**: Despliegue de docling-serve como contenedor del stack
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -266,7 +266,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_11` — Worker de ingestión que llama a docling-serve y produce chunks estructurales
 
-- [ ] **Título**: Worker de ingestión que llama a docling-serve y produce chunks estructurales
+- [x] **Título**: Worker de ingestión que llama a docling-serve y produce chunks estructurales
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -283,7 +283,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_12` — Soporte para audio (transcripción con Whisper integrada en Docling)
 
-- [ ] **Título**: Soporte para audio (transcripción con Whisper integrada en Docling)
+- [x] **Título**: Soporte para audio (transcripción con Whisper integrada en Docling)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -300,7 +300,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_13` — Antivirus ClamAV antes de ingestión
 
-- [ ] **Título**: Antivirus ClamAV antes de ingestión
+- [x] **Título**: Antivirus ClamAV antes de ingestión
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: security
@@ -317,7 +317,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_14` — Embeddings con modelo configurable (default nomic-embed-text-v1.5 vía Ollama o transformers locales)
 
-- [ ] **Título**: Embeddings con modelo configurable (default nomic-embed-text-v1.5 vía Ollama o transformers locales)
+- [x] **Título**: Embeddings con modelo configurable (default nomic-embed-text-v1.5 vía Ollama o transformers locales)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -334,7 +334,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_15` — Progreso de indexación expuesto vía WebSocket
 
-- [ ] **Título**: Progreso de indexación expuesto vía WebSocket
+- [x] **Título**: Progreso de indexación expuesto vía WebSocket
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + frontend-dev
@@ -353,7 +353,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_16` — Búsqueda BM25 con pg_trgm sobre texto de chunks
 
-- [ ] **Título**: Búsqueda BM25 con pg_trgm sobre texto de chunks
+- [x] **Título**: Búsqueda BM25 con pg_trgm sobre texto de chunks
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -370,7 +370,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_17` — Búsqueda vectorial con pgvector + HNSW
 
-- [ ] **Título**: Búsqueda vectorial con pgvector + HNSW
+- [x] **Título**: Búsqueda vectorial con pgvector + HNSW
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -387,7 +387,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_18` — RRF (Reciprocal Rank Fusion) para combinar resultados
 
-- [ ] **Título**: RRF (Reciprocal Rank Fusion) para combinar resultados
+- [x] **Título**: RRF (Reciprocal Rank Fusion) para combinar resultados
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: ai-engineer
@@ -404,7 +404,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_19` — Reranker bge-reranker-v2-m3 local (vía ONNX o transformers)
 
-- [ ] **Título**: Reranker bge-reranker-v2-m3 local (vía ONNX o transformers)
+- [x] **Título**: Reranker bge-reranker-v2-m3 local (vía ONNX o transformers)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -421,7 +421,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_20` — Tool rag_search disponible para agentes
 
-- [ ] **Título**: Tool rag_search disponible para agentes
+- [x] **Título**: Tool rag_search disponible para agentes
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -440,7 +440,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_21` — Despliegue de docling-mcp como contenedor del stack
 
-- [ ] **Título**: Despliegue de docling-mcp como contenedor del stack
+- [x] **Título**: Despliegue de docling-mcp como contenedor del stack
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -457,7 +457,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_22` — Tool document_convert (que era placeholder) ahora invoca docling-mcp
 
-- [ ] **Título**: Tool document_convert (que era placeholder) ahora invoca docling-mcp
+- [x] **Título**: Tool document_convert (que era placeholder) ahora invoca docling-mcp
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -474,7 +474,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_23` — Función promote_to_kb: convertir un documento procesado in-flight en entry persistente de la KB
 
-- [ ] **Título**: Función promote_to_kb: convertir un documento procesado in-flight en entry persistente de la KB
+- [x] **Título**: Función promote_to_kb: convertir un documento procesado in-flight en entry persistente de la KB
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -493,7 +493,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_24` — UI 'Knowledge Bases' del proyecto con upload, listado, progreso, eliminar
 
-- [ ] **Título**: UI 'Knowledge Bases' del proyecto con upload, listado, progreso, eliminar
+- [x] **Título**: UI 'Knowledge Bases' del proyecto con upload, listado, progreso, eliminar
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -510,7 +510,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_25` — Visualización de citas con bounding boxes en PDFs (PDF.js + overlay)
 
-- [ ] **Título**: Visualización de citas con bounding boxes en PDFs (PDF.js + overlay)
+- [x] **Título**: Visualización de citas con bounding boxes en PDFs (PDF.js + overlay)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -527,7 +527,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_26` — Documentación: guías de ingestión, ADRs sobre Docling y embeddings, changelog
 
-- [ ] **Título**: Documentación: guías de ingestión, ADRs sobre Docling y embeddings, changelog
+- [x] **Título**: Documentación: guías de ingestión, ADRs sobre Docling y embeddings, changelog
 - **Tiempo estimado**: 8 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer

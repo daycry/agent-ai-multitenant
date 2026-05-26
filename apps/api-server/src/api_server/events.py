@@ -155,3 +155,43 @@ async def publish_conversation_event(
         )
     except Exception as exc:  # live stream is best-effort, never fail the caller
         _log.warning("api_server.conversation_event_publish_failed", error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Per-document live stream (Plan 04 task_04_15) — KB ingestion progress.
+#
+# The WebSocket `/ws/documents/{document_id}` tails this. Events are
+# emitted by the ingestion pipeline at each lifecycle transition
+# (pending → processing → chunked → embedded → indexed) so the UI
+# bar fills in real time.
+# ---------------------------------------------------------------------------
+EVENT_DOCUMENT_STATUS = "document.status"
+EVENT_DOCUMENT_PROGRESS = "document.progress"
+
+
+def document_stream_key(document_id: str) -> str:
+    """Redis stream key for one document's ingestion progress."""
+    return f"doc:{document_id}"
+
+
+async def publish_document_event(
+    redis: Redis,
+    document_id: str,
+    *,
+    event_type: str,
+    payload: dict[str, Any],
+) -> None:
+    """Emit one ingestion event (best-effort, never raises)."""
+    try:
+        await redis.xadd(
+            document_stream_key(document_id),
+            {
+                "type": event_type,
+                "occurred_at": datetime.now(UTC).isoformat(),
+                "payload": json.dumps(payload),
+            },
+            maxlen=_MAXLEN,
+            approximate=True,
+        )
+    except Exception as exc:
+        _log.warning("api_server.document_event_publish_failed", error=str(exc))

@@ -72,6 +72,10 @@ ignore = [
 # it at module import time would force every deployment that doesn't
 # use Claude to carry the SDK + its Node CLI.
 "packages/shared-llm/src/shared_llm/providers/claude_agent.py" = ["PLC0415"]
+# `BGEReranker` lazy-imports `FlagEmbedding` (torch + transformers)
+# so a deployment that doesn't use it pays no import cost — same
+# pattern as claude_agent above.
+"apps/api-server/src/api_server/rag/reranker.py" = ["PLC0415"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection helpers are the canonical way to declare
@@ -136,6 +140,36 @@ ignore_missing_imports = true
 # would add weight without buying much.
 [[tool.mypy.overrides]]
 module = ["jose", "jose.*"]
+ignore_missing_imports = true
+
+# `pgvector` (>=0.3) ships .pyi stubs for the asyncpg/numpy adapters
+# but not for `pgvector.sqlalchemy.Vector`; treat the whole module as
+# untyped rather than vendoring our own stubs (Plan 04).
+[[tool.mypy.overrides]]
+module = ["pgvector", "pgvector.*"]
+ignore_missing_imports = true
+
+# `shared-llm` is a local path package (packages/shared-llm) installed
+# editable in dev / CI. The pre-commit hook env doesn't install it, so
+# mypy can't resolve the import — treat it as untyped here. The hook
+# already trusts pgvector/jose/etc. the same way (ADR 0021).
+[[tool.mypy.overrides]]
+module = ["shared_llm", "shared_llm.*"]
+ignore_missing_imports = true
+
+# `minio` Python client ships partial type info: `minio.error` has no
+# stubs in the published wheel. Treat the whole package as untyped —
+# we only touch a handful of methods (put_object, get_object,
+# remove_object, stat_object, bucket_exists, make_bucket).
+[[tool.mypy.overrides]]
+module = ["minio", "minio.*"]
+ignore_missing_imports = true
+
+# `FlagEmbedding` (used by BGEReranker, Plan 04 task_04_19) is heavy
+# (torch + transformers). Optional dep — lazy-imported only when the
+# real reranker is actually wired. Mypy can't see it in the hook env.
+[[tool.mypy.overrides]]
+module = ["FlagEmbedding", "FlagEmbedding.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
