@@ -1,11 +1,17 @@
 """Placeholder builtin tools (task_02_19).
 
-memory_recall, memory_store and document_convert belong in the tool
-catalogue, but their backends do not exist yet — persistent memory and
-RAG arrive in Plan 04, Docling document conversion likewise. Until
-then each returns a failed `ToolResult` carrying HTTP 501 (Not
-Implemented) semantics, so an agent that calls one gets a clear,
-structured "not yet" instead of a crash or a silent no-op.
+Tools whose backend doesn't exist yet answer with a structured 501.
+
+History:
+
+  * task_02_19 introduced this with three placeholders: memory_recall,
+    memory_store and document_convert.
+  * Plan 04.5 task_04_5_03 replaced memory_recall + memory_store with
+    real adapters that call ``/internal/agent/*`` (see
+    :mod:`agent_runtime.memory_tools`).
+  * document_convert moves out next in task_04_5_05.
+
+So this module currently only holds ``document_convert``.
 """
 
 from __future__ import annotations
@@ -17,9 +23,7 @@ NOT_IMPLEMENTED_CODE = 501
 
 # Placeholder tool name -> the plan that will implement it.
 PLACEHOLDER_TOOLS: dict[str, str] = {
-    "memory_recall": "Plan 04 (memory + RAG)",
-    "memory_store": "Plan 04 (memory + RAG)",
-    "document_convert": "Plan 04 (Docling ingestion)",
+    "document_convert": "Plan 04.5 task_04_5_05 (Docling ingestion wire-up)",
 }
 
 

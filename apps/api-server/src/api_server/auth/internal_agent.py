@@ -25,20 +25,21 @@ Tests in `tests/integration/test_internal_agent_auth.py`.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from fastapi import Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from jose import JWTError, jwt
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import _parse_bearer
 from api_server.config import get_settings
 from api_server.db.domain import Agent
-from api_server.db.session import get_admin_sessionmaker
+from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 
 # Token TTL the worker mints with. Sandbox containers live far less
 # than this (minutes), but giving slack avoids edge cases at handoff.
@@ -188,10 +189,35 @@ async def _agent_exists(session: AsyncSession, agent_id: UUID, tenant_id: UUID) 
     return result.scalar_one_or_none() is not None
 
 
+async def get_agent_tenant_session(
+    principal: AgentPrincipal = Depends(get_agent_principal),
+) -> AsyncIterator[AsyncSession]:
+    """Yield a session with ``app.tenant_id`` bound to the agent's
+    tenant.
+
+    Used by `/internal/agent/*` endpoints that read or write
+    tenant-scoped tables (memory_entries, knowledge_bases, ...).
+    RLS does the cross-tenant isolation; we set the GUC so the
+    NOBYPASSRLS app_user role honours it.
+
+    Unlike :func:`api_server.auth.deps.get_tenant_session` we do NOT
+    set ``app.user_id`` — the agent has no human user attached. Only
+    the `sessions` table requires that GUC, and agents never touch it.
+    """
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.tenant_id', :tid, true)"),
+            {"tid": str(principal.tenant_id)},
+        )
+        yield session
+
+
 __all__ = [
     "AgentPrincipal",
     "InvalidAgentTokenError",
     "decode_agent_token",
     "get_agent_principal",
+    "get_agent_tenant_session",
     "mint_agent_token",
 ]
