@@ -46,17 +46,40 @@ _KB_NAME = "Arquitectura del sistema (demo 04.5)"
 # Document + chunks: textos realistas sobre la arquitectura del producto.
 # El demo de RAG (04_5_02) busca palabras como "asyncpg", "tenant_id",
 # "sandbox" y debe encontrar exactamente los chunks correspondientes.
+#
+# El Document se siembra como `application/pdf` con 2 páginas y bboxes
+# normalizados (Docling-style, ver `apps/admin-panel/.../citations`)
+# para que la vista de citas pinte los 4 chunks como rectángulos
+# azules sobre las páginas A4 — igual que haría con un PDF real
+# subido por la UI.
 _DOCUMENT_TITLE = "Notas de arquitectura"
-_DOCUMENT_FILENAME = "arch.md"
-_CHUNK_CONTENTS: list[str] = [
-    "Multi-tenancy desde el día uno: cada tabla lleva un tenant_id"
-    " indexado y PostgreSQL RLS hace cumplir el aislamiento.",
-    "Los workers nunca ejecutan código del usuario: lanzan contenedores"
-    " agent-runtime sandbox con red restringida y sin socket Docker.",
-    "El acceso a BD desde dev usa asyncpg + SQLAlchemy 2.x async; las"
-    " migraciones corren bajo el rol migrations_user con BYPASSRLS.",
-    "El sandbox habla con el api-server por /internal/agent/*, con un"
-    " bearer JWT de vida corta que el worker mintea antes del launch.",
+_DOCUMENT_FILENAME = "arch.pdf"
+_DOCUMENT_MIME = "application/pdf"
+_DOCUMENT_PAGES = 2
+# (content, bbox) por chunk. Coords normalizadas top-left.
+#   page=0 → primera página, page=1 → segunda.
+#   2 chunks por página: top half (y=0.10) + bottom half (y=0.55).
+_CHUNK_SPECS: list[tuple[str, dict[str, Any]]] = [
+    (
+        "Multi-tenancy desde el día uno: cada tabla lleva un tenant_id"
+        " indexado y PostgreSQL RLS hace cumplir el aislamiento.",
+        {"page": 0, "x": 0.10, "y": 0.10, "w": 0.80, "h": 0.35},
+    ),
+    (
+        "Los workers nunca ejecutan código del usuario: lanzan contenedores"
+        " agent-runtime sandbox con red restringida y sin socket Docker.",
+        {"page": 0, "x": 0.10, "y": 0.55, "w": 0.80, "h": 0.35},
+    ),
+    (
+        "El acceso a BD desde dev usa asyncpg + SQLAlchemy 2.x async; las"
+        " migraciones corren bajo el rol migrations_user con BYPASSRLS.",
+        {"page": 1, "x": 0.10, "y": 0.10, "w": 0.80, "h": 0.35},
+    ),
+    (
+        "El sandbox habla con el api-server por /internal/agent/*, con un"
+        " bearer JWT de vida corta que el worker mintea antes del launch.",
+        {"page": 1, "x": 0.10, "y": 0.55, "w": 0.80, "h": 0.35},
+    ),
 ]
 
 
@@ -119,26 +142,32 @@ async def _ensure_kb_and_document(sm: Any, *, tenant_id: UUID, project_id: UUID)
                 kb_id=kb.id,
                 title=_DOCUMENT_TITLE,
                 source_filename=_DOCUMENT_FILENAME,
-                source_mime_type="text/markdown",
+                source_mime_type=_DOCUMENT_MIME,
                 source_storage_key=(f"kb/{tenant_id}/{kb.id}/seed-document/{_DOCUMENT_FILENAME}"),
                 source_size_bytes=512,
                 status="indexed",
-                page_count=0,
+                page_count=_DOCUMENT_PAGES,
             )
             session.add(document)
             await session.flush()
         else:
             # Limpia chunks antiguos antes de resemillar — así el demo
-            # arranca siempre con los textos canónicos.
+            # arranca siempre con los textos canónicos. Re-aplicamos
+            # mime/page_count por si el setup anterior los dejó como
+            # markdown / 0.
+            document.source_mime_type = _DOCUMENT_MIME
+            document.source_filename = _DOCUMENT_FILENAME
+            document.page_count = _DOCUMENT_PAGES
             await session.execute(delete(Chunk).where(Chunk.document_id == document.id))
 
-        for ordinal, content in enumerate(_CHUNK_CONTENTS):
+        for ordinal, (content, bbox) in enumerate(_CHUNK_SPECS):
             session.add(
                 Chunk(
                     tenant_id=tenant_id,
                     document_id=document.id,
                     ordinal=ordinal,
                     content=content,
+                    bbox=bbox,
                 )
             )
 
@@ -146,7 +175,7 @@ async def _ensure_kb_and_document(sm: Any, *, tenant_id: UUID, project_id: UUID)
         "kb_id": kb.id,
         "kb_created": kb_created,
         "document_id": document.id,
-        "chunks": len(_CHUNK_CONTENTS),
+        "chunks": len(_CHUNK_SPECS),
     }
 
 
