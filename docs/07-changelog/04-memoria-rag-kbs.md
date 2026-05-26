@@ -176,7 +176,12 @@ Por la deuda anterior, ninguno de los cuatro primeros puede
 validarse end-to-end con un agente en el loop; sólo se puede
 validar el camino backend reducido. El revisor debe marcarlos
 como **"deferred to Plan 04.5"** o validar el alcance reducido
-indicado:
+indicado.
+
+> **Nota — para ejecutar los demos en vivo del Plan 04.5** (que
+> ya cubren `human_04_01` memoria y `human_04_02` RAG con citas
+> end-to-end), la guía está en
+> [docs/03-guides/run-demo-human-tests.md](../03-guides/run-demo-human-tests.md).
 
 - `human_04_01` — **Memoria mejora la calidad de tareas
   repetidas.** ⚠️ Necesita Memorizer Celery wire-up + tool

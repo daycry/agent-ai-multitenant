@@ -76,6 +76,11 @@ ignore = [
 # so a deployment that doesn't use it pays no import cost — same
 # pattern as claude_agent above.
 "apps/api-server/src/api_server/rag/reranker.py" = ["PLC0415"]
+# Demo scripts: long linear flows with lazy imports + Protocol-shaped
+# fakes whose method signatures must match the LLMProvider Protocol
+# (so `messages`/`kwargs` look "unused" to ruff).
+"scripts/demo_*.py" = ["PLR0915", "PLC0415", "ARG002", "ARG003"]
+"scripts/setup_demo_*.py" = ["PLR0915", "PLC0415"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection helpers are the canonical way to declare

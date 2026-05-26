@@ -56,3 +56,20 @@ services:
   clamav:
     ports:
       - "${CLAMAV_PORT:-3310}:3310"
+
+  # docling-serve sólo se expone al host en dev — útil para probar
+  # /v1/convert con curl y para que el probe del dashboard
+  # (`/admin/system-health`) llegue desde un api-server corriendo
+  # fuera de docker.
+  docling-serve:
+    ports:
+      - "${DOCLING_SERVE_PORT:-5001}:5001"
+
+  # egress-proxy normalmente sólo vive en `agentic-net` /
+  # `agentic-agents` (no se mapea a host en prod — la api-server vive
+  # dentro de docker y resuelve `agentic-egress-proxy:8888`). En dev
+  # exponemos el puerto al host para que el probe del dashboard pueda
+  # alcanzarlo desde un api-server local.
+  egress-proxy:
+    ports:
+      - "${EGRESS_PROXY_PORT:-8888}:8888"

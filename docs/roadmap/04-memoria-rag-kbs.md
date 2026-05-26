@@ -1,10 +1,10 @@
 ---
 plan_id: 04-memoria-rag-kbs
 title: Memoria, RAG y Bases de Conocimiento
-status: in_progress
+status: completed
 blocking_plan: [02-ejecucion-agentes]
 started_at: 2026-05-25
-completed_at: null
+completed_at: 2026-05-26
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 80-100
 estimated_cost_human_eur: 32.000 € – 40.000 €

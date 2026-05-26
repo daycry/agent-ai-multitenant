@@ -158,7 +158,10 @@ contenedor → loop → BD— con el modelo scriptado.
    pausa por validación humana y tiempo real. `human_02_01` requiere
    además que el operador configure **uno** de los tres caminos de
    proveedor LLM (API key de LiteLLM, suscripción Claude Pro/Max, o el
-   OAuth Device Flow de Copilot).
+   OAuth Device Flow de Copilot). Los cinco se ejecutan en vivo con
+   los scripts `scripts/setup_demo_project.py` + `scripts/demo_human_02_0{1..5}.py`;
+   la guía paso a paso vive en
+   [docs/03-guides/run-demo-human-tests.md](../03-guides/run-demo-human-tests.md).
 2. CI en verde sobre la rama del plan.
 3. PR del plan mergeado a `main`.
 

@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     )
     clamav_host: str = Field(default="localhost", description="ClamAV TCP host.")
     clamav_port: int = Field(default=3310, description="ClamAV TCP port (INSTREAM).")
+    # egress-proxy (ADR 0019). En prod la api-server vive en
+    # `agentic-net` y resuelve `agentic-egress-proxy:8888`. En dev la
+    # api-server corre fuera de docker, así que el override expone el
+    # puerto al host (ver docker-compose.dev.yml).
+    egress_proxy_host: str = Field(default="localhost", description="egress-proxy TCP host.")
+    egress_proxy_port: int = Field(default=8888, description="egress-proxy TCP port (tinyproxy).")
 
     # ----- Rate limits -----
     login_rate_limit_count: int = Field(default=5, description="Max login attempts per window.")

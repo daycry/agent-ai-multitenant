@@ -39,7 +39,9 @@ _SENSITIVE_MODEL = {
 _POLICY = {"categories": {"code_execution": "human_required"}}
 
 
-async def main() -> int:  # noqa: PLR0915 - script de demo, lineal por diseño
+# Script de demo, lineal por diseño. PLR0915 (too many statements) lo
+# cubre el per-file-ignores de scripts/demo_*.py en pyproject.toml.
+async def main() -> int:
     from api_server.db.domain import ApprovalRequest, Task
     from api_server.db.execution_repo import list_executions_for_task
     from redis.asyncio import Redis

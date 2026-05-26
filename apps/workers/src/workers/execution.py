@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from workers.config import Settings
 from workers.container import AgentContainerRunner, ContainerSpec
+from workers.memorizer import trigger_memorize
 
 _log = structlog.get_logger("workers.execution")
 
@@ -305,6 +306,13 @@ async def conduct_execution(  # noqa: PLR0915 - tramos lineales (seed/run/finali
     if task_event is not None:
         task_obj, old, new = task_event
         await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
+
+    # Fire-and-forget Memorizer (Plan 04.5 task_04_5_02). The Celery
+    # task does the LLM distillation off the executor's critical path,
+    # so the executor returns immediately even if Ollama is slow.
+    # `trigger_memorize` swallows broker errors — a Memorizer outage
+    # must never break an agent run.
+    trigger_memorize(execution_id, result.status)
 
     _log.info("workers.execution_finished", execution_id=exec_id, status=result.status)
     return ExecutionOutcome(

@@ -44,6 +44,9 @@ el problema ya esté documentado.
   — `-dev` + config.hcl mount → EADDRINUSE 8200.
 - [vault-entrypoint-config-flag.md](./vault-entrypoint-config-flag.md)
   — pasar `-config=` al `command:` choca con el entrypoint.
+- [docling-mcp-no-public-image.md](./docling-mcp-no-public-image.md)
+  — `ghcr.io/docling-project/docling-mcp` no existe; el dev compose
+  lo deja comentado.
 
 ### postgres / asyncpg / sqlalchemy
 
@@ -91,6 +94,18 @@ el problema ya esté documentado.
 - [powershell-invoke-restmethod-localhost-hang.md](./powershell-invoke-restmethod-localhost-hang.md)
   — `Invoke-RestMethod http://localhost:N/...` se cuelga porque
   resuelve `::1` antes de `127.0.0.1`; usa la IP explícita.
+- [powershell-ps1-vs-python-py.md](./powershell-ps1-vs-python-py.md)
+  — `.ps1` se invoca directo, `.py` con `.venv\Scripts\python.exe`;
+  mezclarlos da `SyntaxError` o pantalla en blanco.
+
+### admin-panel / next.js
+
+- [admin-documents-no-root-route.md](./admin-documents-no-root-route.md)
+  — `/admin/documents/<id>` sin sufijo da 404; usa `/citations` o
+  `/ingestion`.
+- [executions-steps-log-shape.md](./executions-steps-log-shape.md)
+  — la Timeline requiere `steps_log` con `index` + shape canónico
+  (`agent_runtime.steps`).
 - [uvicorn-windows-multiprocessing-spawn.md](./uvicorn-windows-multiprocessing-spawn.md)
   — `Stop-Process` no mata workers spawnados por `multiprocessing`;
   usa `taskkill /F /T`.

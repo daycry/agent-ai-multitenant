@@ -102,6 +102,19 @@ class Settings(BaseSettings):
         "docker-default profile where the host kernel supports AppArmor.",
     )
 
+    # ----- Memorizer (Plan 04.5 task_04_5_02) -----
+    memorizer_llm_base_url: str = Field(
+        default="http://localhost:11434/v1",
+        description="OpenAI-compatible base URL the Memorizer distillation "
+        "step calls. Defaults to local Ollama (`ollama serve`). Override in "
+        "envs without a local Ollama by pointing at a managed endpoint.",
+    )
+    memorizer_llm_model: str = Field(
+        default="llama3.1",
+        description="Model id the Memorizer asks for. Distillation is cheap; "
+        "a small local model is the right trade-off (no quota, no egress).",
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."

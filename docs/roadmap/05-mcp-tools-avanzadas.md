@@ -2,7 +2,7 @@
 plan_id: 05-mcp-tools-avanzadas
 title: MCP y Tools Avanzadas
 status: pending_approval
-blocking_plan: [04-memoria-rag-kbs]
+blocking_plan: [04-memoria-rag-kbs, 04.5-agent-runtime-integration]
 started_at: null
 completed_at: null
 estimated_duration_calendar: 2-3 semanas

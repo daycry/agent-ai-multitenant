@@ -181,20 +181,29 @@ services:
 
   # ---------------------------------------------------------------------------
   # docling-mcp — MCP-protocol surface of Docling (Plan 04 task_04_21).
-  # The agent runtime calls this via the platform's MCP client; humans
-  # never hit it directly. Different image / port than docling-serve
-  # so the two can scale independently.
+  #
+  # NO se levanta en el dev compose: el proyecto upstream NO publica una
+  # imagen pública en GHCR (`ghcr.io/docling-project/docling-mcp:latest`
+  # responde con `denied`, que GHCR usa también para paquetes inexistentes).
+  # El proyecto se distribuye como paquete Python ejecutable con uvx:
+  #   uvx --from docling-mcp docling-mcp-server --transport stdio
+  #
+  # Para el flujo dev / demos no hace falta:
+  #   - Plan 04 + 04.5 tests integración usan StaticDoclingMCPClient (fake).
+  #   - Los demos no ejercitan HttpDoclingMCPClient (leen chunks de la BD).
+  # Cuando llegue una imagen oficial (o un Dockerfile artesano del proyecto),
+  # se reactiva aquí. Ver docs/03-guides/gotchas/docling-mcp-no-public-image.md.
   # ---------------------------------------------------------------------------
-  docling-mcp:
-    image: ghcr.io/docling-project/docling-mcp:latest
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/health || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 60s
-    networks: [agentic-net]
-    <<: [*default-restart, *default-logging]
+  # docling-mcp:
+  #   image: ghcr.io/docling-project/docling-mcp:latest
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/health || exit 1"]
+  #     interval: 30s
+  #     timeout: 5s
+  #     retries: 5
+  #     start_period: 60s
+  #   networks: [agentic-net]
+  #   <<: [*default-restart, *default-logging]
 
   # ---------------------------------------------------------------------------
   # egress-proxy — tinyproxy con allowlist (ADR 0019 / task_02_35).
