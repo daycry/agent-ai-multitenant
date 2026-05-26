@@ -44,6 +44,9 @@ el problema ya esté documentado.
   — `-dev` + config.hcl mount → EADDRINUSE 8200.
 - [vault-entrypoint-config-flag.md](./vault-entrypoint-config-flag.md)
   — pasar `-config=` al `command:` choca con el entrypoint.
+- [docling-mcp-no-public-image.md](./docling-mcp-no-public-image.md)
+  — `ghcr.io/docling-project/docling-mcp` no existe; el dev compose
+  lo deja comentado.
 
 ### postgres / asyncpg / sqlalchemy
 
