@@ -1,0 +1,198 @@
+"""Async MCP client (Plan 05 task_05_01).
+
+Thin wrapper over the official `mcp` SDK that hides which transport
+(stdio / sse / streamable_http) a server uses behind one async API:
+
+    cfg = MCPServerConfig(name="github", transport="stdio",
+                          command="github-mcp", args=("--port", "0"))
+    async with MCPClient.connect(cfg) as session:
+        tools = await session.list_tools()
+        result = await session.call_tool("search_repos",
+                                         {"query": "agentic"})
+
+Errors fold into the :mod:`shared_mcp.exceptions` hierarchy so the
+agent-runtime tool adapter (task_05_03) can map them onto
+``ToolResult.ok=False`` with sensible messages.
+
+Vault-backed auth injection lands in task_05_05 — for now `auth_ref`
+is read but not resolved (the consumer is expected to pre-fill
+`config.env` / `config.headers` with the resolved secret).
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import Any
+
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.streamable_http import streamablehttp_client
+
+from shared_mcp.exceptions import (
+    MCPAuthError,
+    MCPError,
+    MCPToolError,
+    MCPTransportError,
+)
+from shared_mcp.types import MCPServerConfig, MCPTool, MCPToolResult, Transport
+
+
+@dataclass
+class MCPSession:
+    """One live, initialised session against an MCP server.
+
+    Returned by :meth:`MCPClient.connect`. The two public methods
+    (`list_tools`, `call_tool`) cover what task_05_02 / task_05_03
+    need — anything else from the SDK is available via `.raw`.
+    """
+
+    config: MCPServerConfig
+    raw: ClientSession
+
+    async def list_tools(self) -> list[MCPTool]:
+        """Return the tools the server advertises (`tools/list`).
+
+        Raises :class:`MCPTransportError` if the SDK call fails. The
+        SDK's `ToolsResult.tools` carries `name`, `description` and
+        `inputSchema`; we project to our :class:`MCPTool`.
+        """
+        try:
+            response = await self.raw.list_tools()
+        except Exception as exc:
+            raise MCPTransportError(f"list_tools failed: {exc}") from exc
+        return [
+            MCPTool(
+                name=t.name,
+                description=t.description,
+                input_schema=t.inputSchema or {},
+            )
+            for t in response.tools
+        ]
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> MCPToolResult:
+        """Invoke one tool by name (`tools/call`).
+
+        Raises:
+            MCPToolError: server returned `isError=True` (tool's
+                business logic refused — bad args, no permission, etc.)
+            MCPTransportError: anything else went wrong at the wire
+                level (SDK exception, timeout, server crash).
+        """
+        try:
+            response = await self.raw.call_tool(name, arguments=arguments or {})
+        except Exception as exc:
+            raise MCPTransportError(f"call_tool({name!r}) failed: {exc}") from exc
+        # Concatenate text blocks; everything else stays in `raw`.
+        text_parts: list[str] = []
+        for block in response.content:
+            if getattr(block, "type", None) == "text":
+                text_parts.append(getattr(block, "text", ""))
+        text = "".join(text_parts)
+        raw_dict = response.model_dump() if hasattr(response, "model_dump") else {}
+        if response.isError:
+            raise MCPToolError(f"tool {name!r} returned isError=True: {text[:200]}")
+        return MCPToolResult(content=text, is_error=False, raw=raw_dict)
+
+
+class MCPClient:
+    """Factory for :class:`MCPSession`. The class itself is a
+    namespace — there's no instance state worth keeping; everything
+    lives inside the `connect` async context manager.
+    """
+
+    @staticmethod
+    @asynccontextmanager
+    async def connect(config: MCPServerConfig) -> AsyncIterator[MCPSession]:
+        """Open + initialise a session, yield it, close on exit.
+
+        Usage:
+
+            async with MCPClient.connect(cfg) as session:
+                tools = await session.list_tools()
+
+        Errors are normalised:
+            * Anything in the connect path → :class:`MCPTransportError`
+              (or :class:`MCPAuthError` if the SDK reports 401/403).
+            * Anything during use propagates per `MCPSession` rules.
+        """
+        async with AsyncExitStack() as stack:
+            try:
+                read_stream, write_stream = await _open_streams(stack, config)
+            except (MCPError, Exception) as exc:
+                # Already wrapped in our hierarchy or needs wrapping.
+                if isinstance(exc, MCPError):
+                    raise
+                raise MCPTransportError(
+                    f"failed to open {config.transport!r} transport "
+                    f"for server {config.name!r}: {exc}"
+                ) from exc
+
+            session = await stack.enter_async_context(
+                ClientSession(
+                    read_stream,
+                    write_stream,
+                    read_timeout_seconds=timedelta(seconds=config.timeout_s),
+                )
+            )
+            try:
+                await session.initialize()
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "401" in msg or "403" in msg or "unauthor" in msg or "forbidden" in msg:
+                    raise MCPAuthError(
+                        f"server {config.name!r} rejected our credentials: {exc}"
+                    ) from exc
+                raise MCPTransportError(
+                    f"initialize() against {config.name!r} failed: {exc}"
+                ) from exc
+            yield MCPSession(config=config, raw=session)
+
+
+async def _open_streams(stack: AsyncExitStack, config: MCPServerConfig) -> tuple[Any, Any]:
+    """Open the right transport for `config.transport` and return its
+    `(read_stream, write_stream)` pair. Registers cleanup on `stack`.
+
+    `streamable_http` actually yields three values (the third is a
+    `get_session_id` callback); we drop it because we don't expose
+    HTTP-session-id resumption yet.
+    """
+    transport: Transport = config.transport
+
+    if transport == "stdio":
+        params = StdioServerParameters(
+            command=config.command or "",
+            args=list(config.args),
+            env=dict(config.env) or None,
+        )
+        read_stream, write_stream = await stack.enter_async_context(stdio_client(params))
+        return read_stream, write_stream
+
+    if transport == "sse":
+        read_stream, write_stream = await stack.enter_async_context(
+            sse_client(
+                url=config.url or "",
+                headers=dict(config.headers) or None,
+                sse_read_timeout=config.timeout_s * 10,  # longer than per-call
+            )
+        )
+        return read_stream, write_stream
+
+    if transport == "streamable_http":
+        read_stream, write_stream, _get_session_id = await stack.enter_async_context(
+            streamablehttp_client(
+                url=config.url or "",
+                headers=dict(config.headers) or None,
+                timeout=config.timeout_s,
+                sse_read_timeout=config.timeout_s * 10,
+            )
+        )
+        return read_stream, write_stream
+
+    raise MCPTransportError(f"unknown transport: {transport!r}")
+
+
+__all__ = ["MCPClient", "MCPSession"]

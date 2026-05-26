@@ -85,7 +85,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_01` — Implementar cliente MCP Python con transports stdio, sse, streamable_http
 
-- [ ] **Título**: Implementar cliente MCP Python con transports stdio, sse, streamable_http
+- [x] **Título**: Implementar cliente MCP Python con transports stdio, sse, streamable_http
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer

@@ -39,6 +39,7 @@ jobs:
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
           python -m pip install -e "packages/shared-llm[dev]"
+          python -m pip install -e "packages/shared-mcp[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
           python -m pip install pre-commit
 
@@ -128,6 +129,7 @@ jobs:
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
           python -m pip install -e "packages/shared-llm[dev]"
+          python -m pip install -e "packages/shared-mcp[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
 
       - name: pytest tests/unit
@@ -181,6 +183,7 @@ jobs:
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
           python -m pip install -e "packages/shared-llm[dev]"
+          python -m pip install -e "packages/shared-mcp[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
 
       - name: pytest tests/integration
