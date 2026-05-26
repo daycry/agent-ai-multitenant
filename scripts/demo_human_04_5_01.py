@@ -115,11 +115,78 @@ async def _seed_done_execution(
     agent_id: UUID,
 ) -> dict[str, UUID]:
     """Inserta una `Execution` done para que el Memorizer tenga algo
-    que destilar. También añade la Task asociada."""
+    que destilar. También añade la Task asociada.
+
+    Los `steps_log` siguen el shape canónico (index + node + status +
+    summary + kind) que la UI de `/admin/executions/<id>` espera para
+    pintar la Timeline. Si los seedeas como dicts sueltos sin `index`,
+    la página queda vacía con "Esta ejecución todavía no tiene pasos
+    registrados"."""
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
     from api_server.db.domain import Execution, Task
 
     task_id = uuid4()
     execution_id = uuid4()
+    now_iso = datetime.now(UTC).isoformat()
+    # Steps simulando un run real de 5 pasos del agent loop. Cada uno
+    # con index ascendente, node, status, summary, started_at, ended_at
+    # — la shape que `agent_runtime.steps` produce y que la UI consume.
+    steps_log: list[dict[str, Any]] = [
+        {
+            "index": 0,
+            "kind": "node",
+            "node": "perceive",
+            "status": "ok",
+            "summary": "Perceived task: Arreglar import de asyncpg",
+            "started_at": now_iso,
+            "ended_at": now_iso,
+        },
+        {
+            "index": 1,
+            "kind": "model_call",
+            "node": "plan",
+            "status": "ok",
+            "summary": "decision: act (shell_exec)",
+            "model": "fake-demo-llm",
+            "tokens_in": 120,
+            "tokens_out": 28,
+            "cost_usd": 0.0015,
+            "started_at": now_iso,
+            "ended_at": now_iso,
+        },
+        {
+            "index": 2,
+            "kind": "tool_call",
+            "node": "act",
+            "status": "ok",
+            "summary": "Tool 'shell_exec' -> ok",
+            "tool": "shell_exec",
+            "args": {"cmd": "pytest tests/unit/test_session.py"},
+            "result": {"ok": True, "output": "tests pass"},
+            "started_at": now_iso,
+            "ended_at": now_iso,
+        },
+        {
+            "index": 3,
+            "kind": "node",
+            "node": "observe",
+            "status": "ok",
+            "summary": "Observed result of 'shell_exec'",
+            "started_at": now_iso,
+            "ended_at": now_iso,
+        },
+        {
+            "index": 4,
+            "kind": "node",
+            "node": "finalize",
+            "status": "ok",
+            "summary": "Finalized output",
+            "started_at": now_iso,
+            "ended_at": now_iso,
+        },
+    ]
     async with sm() as session, session.begin():
         session.add(
             Task(
@@ -142,10 +209,14 @@ async def _seed_done_execution(
                 agent_id=agent_id,
                 status="done",
                 output="Importado asyncpg, los tests pasan.",
-                steps_log=[
-                    {"kind": "tool_call", "note": "shell_exec: pytest"},
-                    {"kind": "observation", "note": "tests pass"},
-                ],
+                steps_log=steps_log,
+                iterations=1,
+                total_tokens=148,
+                total_cost_usd=Decimal("0.0015"),
+                model_call_count=1,
+                tool_call_count=1,
+                started_at=datetime.now(UTC),
+                completed_at=datetime.now(UTC),
             )
         )
     return {"task_id": task_id, "execution_id": execution_id}
