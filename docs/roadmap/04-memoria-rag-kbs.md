@@ -493,7 +493,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_24` — UI 'Knowledge Bases' del proyecto con upload, listado, progreso, eliminar
 
-- [ ] **Título**: UI 'Knowledge Bases' del proyecto con upload, listado, progreso, eliminar
+- [x] **Título**: UI 'Knowledge Bases' del proyecto con upload, listado, progreso, eliminar
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -510,7 +510,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_25` — Visualización de citas con bounding boxes en PDFs (PDF.js + overlay)
 
-- [ ] **Título**: Visualización de citas con bounding boxes en PDFs (PDF.js + overlay)
+- [x] **Título**: Visualización de citas con bounding boxes en PDFs (PDF.js + overlay)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -527,7 +527,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_26` — Documentación: guías de ingestión, ADRs sobre Docling y embeddings, changelog
 
-- [ ] **Título**: Documentación: guías de ingestión, ADRs sobre Docling y embeddings, changelog
+- [x] **Título**: Documentación: guías de ingestión, ADRs sobre Docling y embeddings, changelog
 - **Tiempo estimado**: 8 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer

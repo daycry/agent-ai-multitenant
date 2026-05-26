@@ -32,6 +32,7 @@ from api_server.routers.conversations import (
 )
 from api_server.routers.executions import router as executions_router
 from api_server.routers.knowledge_bases import (
+    documents_router,
     project_kb_router,
 )
 from api_server.routers.knowledge_bases import (
@@ -89,6 +90,7 @@ def create_app() -> FastAPI:
     app.include_router(memories_router)
     app.include_router(knowledge_bases_router)
     app.include_router(project_kb_router)
+    app.include_router(documents_router)
     app.include_router(tenant_settings_router)
     app.include_router(ws_router)
 

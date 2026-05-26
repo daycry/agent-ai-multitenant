@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
 from api_server.db.domain import Project
 from api_server.db.knowledge import (
+    Chunk,
     Document,
     KnowledgeBase,
     KnowledgeBaseProject,
@@ -385,4 +386,52 @@ async def delete_document(
     await soft_delete(session, doc)
 
 
-__all__ = ["project_kb_router", "router"]
+# ===========================================================================
+# Citation viewer support (Plan 04 task_04_25)
+# ===========================================================================
+documents_router = APIRouter(prefix="/documents", tags=["documents"])
+
+
+@documents_router.get("/{document_id}/citations")
+async def get_document_citations(
+    document_id: UUID,
+    _: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, object]:
+    """Return the Document + all its chunks ordered by `ordinal`,
+    suitable for the citation viewer (Plan 04 task_04_25).
+
+    Tenant isolation rides on RLS; cross-tenant access would surface
+    as 404. We deliberately do NOT require knowing the kb_id —
+    document_id is enough, and the viewer is often deep-linked from
+    a citation in chat where only the document_id is on hand.
+    """
+    doc = await _load_document(session, document_id)
+    chunk_rows = await session.execute(
+        select(Chunk).where(Chunk.document_id == document_id).order_by(Chunk.ordinal)
+    )
+    chunks = [
+        {
+            "id": str(c.id),
+            "ordinal": c.ordinal,
+            "content": c.content,
+            "bbox": c.bbox,
+            "metadata": c.metadata_,
+        }
+        for c in chunk_rows.scalars().all()
+    ]
+    return {
+        "document": {
+            "id": str(doc.id),
+            "kb_id": str(doc.kb_id),
+            "title": doc.title,
+            "source_filename": doc.source_filename,
+            "source_mime_type": doc.source_mime_type,
+            "page_count": doc.page_count,
+            "status": doc.status,
+        },
+        "chunks": chunks,
+    }
+
+
+__all__ = ["documents_router", "project_kb_router", "router"]
