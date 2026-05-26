@@ -42,7 +42,17 @@ from api_server.schemas.admin import (
     UserListItem,
 )
 
-_PROBE_TIMEOUT_S = 2.0
+# 5s da margen suficiente para:
+#   - asyncpg lazily abre la primera conexión del pool (~1s en Windows).
+#   - el "session.begin() + SET set_config" de `get_admin_session` antes
+#     de que el probe vea siquiera el yield.
+#   - contención de la lock cuando varias requests llegan a la vez al
+#     dashboard (auto-refresh cada 30s lo evita; un humano machacando F5
+#     puede pisarlas).
+# Era 2s, demasiado ajustado: bajo carga concurrente el postgres probe
+# se cancelaba por timeout, lo que dejaba la sesión en pending-rollback
+# y rompía el siguiente request del mismo handler en la sesión de tests.
+_PROBE_TIMEOUT_S = 5.0
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -223,13 +233,19 @@ async def list_users(
 
 
 # ---------------------------------------------------------------------------
-# /admin/system-health — five-service summary
+# /admin/system-health — stack summary
 #
 # Each probe has a 2 s ceiling so a hung service can't stall the dashboard.
 # Probes run concurrently with asyncio.gather. The aggregate `status` is
 # driven by postgres only (the API can't function without it). Other
 # services degrade individually but don't flip the overall state — letting
 # the operator see them as yellow without the dashboard going "down".
+#
+# Probed services (mantén alineado con `docker/docker-compose.yml`):
+#   postgres, redis, vault, minio, clamav     core (Plan 00)
+#   docling-serve                              Plan 04 task_04_10
+#   ollama                                     Plan 04 task_04_14 (externo)
+#   egress-proxy                               Plan 02 task_02_35 / ADR 0019
 # ---------------------------------------------------------------------------
 def _truncate(detail: str, max_len: int = 200) -> str:
     return detail if len(detail) <= max_len else detail[: max_len - 1] + "…"
@@ -240,6 +256,13 @@ async def _check_postgres(session: AsyncSession) -> ServiceHealth:
         await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=_PROBE_TIMEOUT_S)
         return ServiceHealth(name="postgres", status="ok")
     except Exception as exc:
+        # `asyncio.wait_for` cancels the underlying asyncpg query mid-flight
+        # on timeout, which leaves the session/connection in a "pending
+        # rollback" state. We must rollback explicitly here so the
+        # `get_admin_session` dep can clean up — otherwise the bad state
+        # leaks into the next request through the connection pool.
+        with contextlib.suppress(Exception):
+            await session.rollback()
         return ServiceHealth(name="postgres", status="down", detail=_truncate(str(exc)))
 
 
@@ -290,15 +313,40 @@ async def system_health(
     redis: Redis = Depends(get_redis),
 ) -> SystemHealthResponse:
     settings = get_settings()
-    postgres, redis_h, vault_h, minio_h, clamav_h = await asyncio.gather(
+    (
+        postgres,
+        redis_h,
+        vault_h,
+        minio_h,
+        clamav_h,
+        docling_h,
+        ollama_h,
+        egress_h,
+    ) = await asyncio.gather(
         _check_postgres(session),
         _check_redis(redis),
         _check_http_ok("vault", f"{settings.vault_url}/v1/sys/health"),
         _check_http_ok("minio", f"{settings.minio_url}/minio/health/live"),
         _check_tcp("clamav", settings.clamav_host, settings.clamav_port),
+        # docling-serve expone /health (200 cuando el parser está listo).
+        _check_http_ok("docling-serve", f"{settings.docling_serve_url}/health"),
+        # Ollama responde a /api/version (200 con su build info).
+        _check_http_ok("ollama", f"{settings.ollama_url}/api/version"),
+        # tinyproxy no es un servidor HTTP convencional; basta confirmar
+        # que el daemon acepta conexiones — mismo patrón que clamav.
+        _check_tcp("egress-proxy", settings.egress_proxy_host, settings.egress_proxy_port),
     )
     overall = "ok" if postgres.status == "ok" else "down"
     return SystemHealthResponse(
         status=overall,
-        services=[postgres, redis_h, vault_h, minio_h, clamav_h],
+        services=[
+            postgres,
+            redis_h,
+            vault_h,
+            minio_h,
+            clamav_h,
+            docling_h,
+            ollama_h,
+            egress_h,
+        ],
     )

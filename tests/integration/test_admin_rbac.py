@@ -288,11 +288,20 @@ async def test_system_health(configured_app, migrations_pg_dsn: str) -> None:
     body = resp.json()
     # Overall is driven by postgres only; the other services may be
     # unreachable from the test environment (CI may not start vault /
-    # minio / clamav), so we assert they are *reported*, not their
-    # individual statuses.
+    # minio / clamav / docling-serve / ollama / egress-proxy), so we
+    # assert they are *reported*, not their individual statuses.
     assert body["status"] == "ok"
     names = {s["name"] for s in body["services"]}
-    assert names == {"postgres", "redis", "vault", "minio", "clamav"}
+    assert names == {
+        "postgres",
+        "redis",
+        "vault",
+        "minio",
+        "clamav",
+        "docling-serve",
+        "ollama",
+        "egress-proxy",
+    }
 
 
 # ---------------------------------------------------------------------------
