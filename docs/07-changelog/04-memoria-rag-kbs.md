@@ -140,20 +140,45 @@ y `test_kb_migration.py`).
 ## Tests humanos del plan
 
 Los cinco tests humanos quedan pendientes de validar antes del
-merge:
+merge. Las descripciones son las que viven en
+`docs/roadmap/04-memoria-rag-kbs.md` — los checklists completos
+con hints viven allí:
 
-- `human_04_01` — un agente recupera contexto relevante de la
-  memoria del equipo en una ejecución posterior.
-- `human_04_02` — un humano sube un PDF, ve el progreso de
-  ingestión en vivo y luego encuentra el contenido vía `rag_search`.
-- `human_04_03` — la visualización de citas resalta los bboxes
-  correctos al hacer click en una cita.
-- `human_04_04` — `document_convert` + `promote_to_kb` desde el
-  chat persiste un documento que aparece en la UI igual que un
-  upload async.
-- `human_04_05` — un agente con `memory_scope=private` no ve
-  memorias de otros usuarios (cross-tenant + cross-user
-  isolation).
+- `human_04_01` — **Memoria mejora la calidad de tareas
+  repetidas.** Ejecutar la misma tarea dos veces con tiempo entre
+  medias y verificar que la segunda ejecución cita aprendizajes
+  de la primera vía `memory_recall`, mantiene estilo coherente y
+  termina antes.
+
+- `human_04_02` — **RAG funciona con corpus realista.** Subir
+  10 documentos de dominio (PDFs + .docx + .md + una grabación de
+  reunión). Comprobar que Docling procesa cada formato, el audio
+  se transcribe e indexa, la búsqueda léxica y la semántica
+  funcionan, y las citas apuntan a fragmento + página + bounding
+  box.
+
+- `human_04_03` — **docling-mcp permite flujo conversacional.**
+  El usuario pega un PDF en el chat. El agente lo procesa con
+  `document_convert` sin indexación previa; el contenido aparece
+  con citas; pedirle "añade esto a la KB del proyecto" invoca
+  `promote_to_kb` y persiste.
+
+- `human_04_04` — **Scopes de memoria son respetados.** Crear
+  memorias en los cuatro scopes (private / team_shared /
+  project_shared / global) y verificar que otro agente del mismo
+  equipo NO ve la privada, sí ve project_shared, las global son
+  visibles cross-team, y nada se filtra cross-tenant.
+
+- `human_04_05` — **Reindexación con cambio de modelo de
+  embeddings.** ⚠️ **Bloqueado**: el ADR 0023 difiere a Plan 12
+  el re-embedding masivo. Plan 04 persiste
+  `knowledge_bases.embedding_model_id` por KB pero no orquesta la
+  reindexación con progreso visible que pide el checklist
+  (detectar cambio, async + progreso, queries durante la
+  migración sin error, switch transparente al modelo nuevo). El
+  revisor humano debe marcar este test como "deferred to Plan 12"
+  o, alternativamente, validar un alcance reducido (cambiar el
+  campo por API y comprobar que persiste).
 
 ## Próximo plan
 
