@@ -180,6 +180,23 @@ services:
     <<: [*default-restart, *default-logging]
 
   # ---------------------------------------------------------------------------
+  # docling-mcp — MCP-protocol surface of Docling (Plan 04 task_04_21).
+  # The agent runtime calls this via the platform's MCP client; humans
+  # never hit it directly. Different image / port than docling-serve
+  # so the two can scale independently.
+  # ---------------------------------------------------------------------------
+  docling-mcp:
+    image: ghcr.io/docling-project/docling-mcp:latest
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
   # egress-proxy — tinyproxy con allowlist (ADR 0019 / task_02_35).
   # Conectado a DOS redes:
   #  - `agentic-net`  → puerta a internet.

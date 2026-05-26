@@ -440,7 +440,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_21` — Despliegue de docling-mcp como contenedor del stack
 
-- [ ] **Título**: Despliegue de docling-mcp como contenedor del stack
+- [x] **Título**: Despliegue de docling-mcp como contenedor del stack
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -457,7 +457,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_22` — Tool document_convert (que era placeholder) ahora invoca docling-mcp
 
-- [ ] **Título**: Tool document_convert (que era placeholder) ahora invoca docling-mcp
+- [x] **Título**: Tool document_convert (que era placeholder) ahora invoca docling-mcp
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -474,7 +474,7 @@ Sin memoria, cada ejecución empieza desde cero. Sin RAG, los agentes son genér
 
 #### `task_04_23` — Función promote_to_kb: convertir un documento procesado in-flight en entry persistente de la KB
 
-- [ ] **Título**: Función promote_to_kb: convertir un documento procesado in-flight en entry persistente de la KB
+- [x] **Título**: Función promote_to_kb: convertir un documento procesado in-flight en entry persistente de la KB
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

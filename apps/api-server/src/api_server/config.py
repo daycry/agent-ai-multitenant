@@ -68,6 +68,10 @@ class Settings(BaseSettings):
         default="http://localhost:5001",
         description="docling-serve HTTP base URL (Plan 04 Fase C).",
     )
+    docling_mcp_url: str = Field(
+        default="http://localhost:3000",
+        description="docling-mcp HTTP base URL (Plan 04 Fase E).",
+    )
     ollama_url: str = Field(
         default="http://localhost:11434",
         description=(

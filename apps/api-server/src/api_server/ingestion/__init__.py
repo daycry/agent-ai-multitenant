@@ -32,18 +32,34 @@ from api_server.ingestion.docling import (
     DoclingClient,
     DoclingParseError,
 )
+from api_server.ingestion.docling_mcp import (
+    ConvertResult,
+    DoclingMCPClient,
+    document_convert,
+)
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.ingestion.pipeline import IngestionResult, ingest_document
+from api_server.ingestion.promote import (
+    PromotionError,
+    PromotionResult,
+    promote_to_kb,
+)
 
 __all__ = [
     "AntivirusScanner",
     "AntivirusVerdict",
+    "ConvertResult",
     "DoclingChunk",
     "DoclingClient",
+    "DoclingMCPClient",
     "DoclingParseError",
     "Embedder",
     "EmbeddingError",
     "IngestionResult",
     "NullAntivirus",
+    "PromotionError",
+    "PromotionResult",
+    "document_convert",
     "ingest_document",
+    "promote_to_kb",
 ]
