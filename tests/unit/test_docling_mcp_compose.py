@@ -1,9 +1,31 @@
 """Meta-test for docling-mcp in the compose stack (Plan 04 task_04_21).
 
-Same shape as `test_docling_serve_compose.py`: the roadmap's
-automated check is a curl probe against the live container, which
-unit tests can't run. We verify the compose file declares the
-service on port 3000 with a /health probe on the agentic network.
+History:
+
+  - Plan 04 task_04_21 introduced the docling-mcp service in
+    `docker/docker-compose.yml` pointing at
+    `ghcr.io/docling-project/docling-mcp:latest`. This test file
+    asserted the service was wired correctly.
+  - Plan 04.5 (post-merge session, 2026-05-26) discovered that
+    upstream `docling-project/docling-mcp` does **not** publish a
+    public Docker image to GHCR (verified at
+    `https://github.com/docling-project/docling-mcp/pkgs/container/`
+    returns 404; the project ships as a uvx-runnable Python package).
+    The image pull failed with `error from registry: denied`,
+    blocking `docker compose up -d`.
+  - Decision: comment out the `docling-mcp` block in compose, with a
+    gotcha file explaining when / how to reactivate it. See
+    `docs/03-guides/gotchas/docling-mcp-no-public-image.md`.
+
+So today the contract this file asserts is the OPPOSITE of what it
+asserted before: the `docling-mcp` service must NOT appear in the
+parsed compose, and the gotcha file must exist so anyone tripping on
+this finds the explanation.
+
+When upstream publishes an image (or we wrap one in
+`docker/docling-mcp/Dockerfile`), reactivate the block in compose
+and revert this test to the original shape — both directions are
+documented as a single intentional flip.
 """
 
 from __future__ import annotations
@@ -23,40 +45,56 @@ def _load_compose() -> dict[str, Any]:
     return yaml.safe_load(compose_path.read_text(encoding="utf-8"))
 
 
-def test_docling_mcp_service_exists() -> None:
+def _load_compose_raw() -> str:
+    repo_root = Path(__file__).resolve().parents[2]
+    compose_path = repo_root / "docker" / "docker-compose.yml"
+    return compose_path.read_text(encoding="utf-8")
+
+
+def test_docling_mcp_service_is_not_active() -> None:
+    """docling-mcp must NOT be a live service in compose. Upstream does
+    not publish a public Docker image; pulling fails with `denied`."""
     compose = _load_compose()
-    assert (
-        "docling-mcp" in compose["services"]
-    ), "docling-mcp service missing from docker/docker-compose.yml"
+    assert "docling-mcp" not in compose["services"], (
+        "docling-mcp is back in services — confirm upstream now publishes a "
+        "public image at ghcr.io/docling-project/docling-mcp and revert this "
+        "test to the pre-Plan-04.5 shape (assert service exists with /health "
+        "on :3000)."
+    )
 
 
-def test_docling_mcp_image_is_open_source_docling() -> None:
+def test_docling_mcp_block_kept_commented_with_explanation() -> None:
+    """The compose file keeps the docling-mcp block as comments so
+    nobody re-adds it without reading the gotcha. The block must
+    explicitly point at the gotcha file."""
+    raw = _load_compose_raw()
+    assert "# docling-mcp:" in raw, (
+        "Expected a commented-out `docling-mcp:` block in compose so future "
+        "readers see it was intentional, not forgotten."
+    )
+    assert "docling-mcp-no-public-image.md" in raw, (
+        "The commented-out block must reference the gotcha file so the " "reason is one click away."
+    )
+
+
+def test_gotcha_exists_and_explains_the_decision() -> None:
+    """The gotcha that documents the missing image must exist + cover
+    the four mandatory sections (sintoma / causa / fix / referencias)."""
+    repo_root = Path(__file__).resolve().parents[2]
+    gotcha = repo_root / "docs" / "03-guides" / "gotchas" / "docling-mcp-no-public-image.md"
+    assert gotcha.exists(), f"gotcha file missing: {gotcha}"
+    body = gotcha.read_text(encoding="utf-8")
+    # Sections expected by `docs/03-guides/gotchas/README.md`.
+    for header in ("## Sintoma", "## Causa raiz", "## Fix"):
+        # tolerate accented variants (the actual file uses Spanish chars).
+        marker = header.replace("Sintoma", "Síntoma").replace("Causa raiz", "Causa raíz")
+        assert marker in body, f"missing section '{marker}' in {gotcha}"
+
+
+def test_docling_serve_remains_active() -> None:
+    """docling-serve (the one upstream DOES publish) must stay live in
+    compose — the dev demos and the dashboard probe rely on it."""
     compose = _load_compose()
-    image = compose["services"]["docling-mcp"]["image"]
-    assert "docling-project/docling-mcp" in image, image
-
-
-def test_docling_mcp_has_healthcheck_on_port_3000() -> None:
-    compose = _load_compose()
-    svc = compose["services"]["docling-mcp"]
-    hc = svc.get("healthcheck")
-    assert hc is not None, "no healthcheck on docling-mcp"
-    test_cmd = " ".join(hc["test"]) if isinstance(hc["test"], list) else hc["test"]
-    assert "3000" in test_cmd
-    assert "/health" in test_cmd
-
-
-def test_docling_mcp_joins_agentic_net() -> None:
-    compose = _load_compose()
-    svc = compose["services"]["docling-mcp"]
-    networks = svc.get("networks") or []
-    assert "agentic-net" in networks, networks
-
-
-def test_docling_mcp_and_docling_serve_are_separate_services() -> None:
-    """The two services should NOT share the image — they expose
-    different surfaces (HTTP REST vs MCP-over-HTTP)."""
-    compose = _load_compose()
-    serve_image = compose["services"]["docling-serve"]["image"]
-    mcp_image = compose["services"]["docling-mcp"]["image"]
-    assert serve_image != mcp_image
+    assert "docling-serve" in compose["services"]
+    serve = compose["services"]["docling-serve"]
+    assert "docling-project/docling-serve" in serve["image"], serve["image"]
