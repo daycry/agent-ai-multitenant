@@ -177,6 +177,20 @@ ignore_missing_imports = true
 module = ["FlagEmbedding", "FlagEmbedding.*"]
 ignore_missing_imports = true
 
+# Official `mcp` SDK from Anthropic (Plan 05 task_05_01) — used
+# inside packages/shared-mcp/. Same pattern as shared_llm: the
+# pre-commit mypy venv doesn't have it, but the runtime venv does.
+[[tool.mypy.overrides]]
+module = ["mcp", "mcp.*", "shared_mcp", "shared_mcp.*"]
+ignore_missing_imports = true
+
+# `hvac` is the Vault client used by `routers/mcp.get_vault_resolver`
+# (Plan 05 task_05_17). Same story as the rest of optional deps — the
+# pre-commit mypy hook doesn't install it; the runtime venv does.
+[[tool.mypy.overrides]]
+module = ["hvac", "hvac.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

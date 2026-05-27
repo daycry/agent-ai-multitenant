@@ -1,9 +1,9 @@
 ---
 plan_id: 05-mcp-tools-avanzadas
 title: MCP y Tools Avanzadas
-status: pending_approval
+status: pending_human_validation
 blocking_plan: [04-memoria-rag-kbs, 04.5-agent-runtime-integration]
-started_at: null
+started_at: 2026-05-26
 completed_at: null
 estimated_duration_calendar: 2-3 semanas
 estimated_effort_person_days: 40-55
@@ -85,7 +85,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_01` — Implementar cliente MCP Python con transports stdio, sse, streamable_http
 
-- [ ] **Título**: Implementar cliente MCP Python con transports stdio, sse, streamable_http
+- [x] **Título**: Implementar cliente MCP Python con transports stdio, sse, streamable_http
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -102,7 +102,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_02` — Descubrimiento de tools al conectar (handshake + list_tools)
 
-- [ ] **Título**: Descubrimiento de tools al conectar (handshake + list_tools)
+- [x] **Título**: Descubrimiento de tools al conectar (handshake + list_tools)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -119,7 +119,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_03` — Adaptador que convierte tool MCP a tool del sistema (mismo schema que builtin)
 
-- [ ] **Título**: Adaptador que convierte tool MCP a tool del sistema (mismo schema que builtin)
+- [x] **Título**: Adaptador que convierte tool MCP a tool del sistema (mismo schema que builtin)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -138,7 +138,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_04` — Campo Project.mcp_servers (JSONB) con validación de schema
 
-- [ ] **Título**: Campo Project.mcp_servers (JSONB) con validación de schema
+- [x] **Título**: Campo Project.mcp_servers (JSONB) con validación de schema
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -155,7 +155,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_05` — Inyección de auth vía Vault al construir el cliente
 
-- [ ] **Título**: Inyección de auth vía Vault al construir el cliente
+- [x] **Título**: Inyección de auth vía Vault al construir el cliente
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
@@ -172,7 +172,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_06` — UI de configuración de MCP servers en panel del proyecto
 
-- [ ] **Título**: UI de configuración de MCP servers en panel del proyecto
+- [x] **Título**: UI de configuración de MCP servers en panel del proyecto
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -189,7 +189,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_07` — Test de conexión desde la UI (botón 'Probar') que muestra tools descubiertas
 
-- [ ] **Título**: Test de conexión desde la UI (botón 'Probar') que muestra tools descubiertas
+- [x] **Título**: Test de conexión desde la UI (botón 'Probar') que muestra tools descubiertas
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -208,7 +208,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_08` — Documentar e integrar docling-mcp (ya conectado en Fase 4) en el catálogo
 
-- [ ] **Título**: Documentar e integrar docling-mcp (ya conectado en Fase 4) en el catálogo
+- [x] **Título**: Documentar e integrar docling-mcp (ya conectado en Fase 4) en el catálogo
 - **Tiempo estimado**: 2 h
 - **Complejidad**: xs
 - **Rol sugerido**: technical-writer
@@ -225,7 +225,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_09` — Plantilla de configuración para github-mcp + tests de integración
 
-- [ ] **Título**: Plantilla de configuración para github-mcp + tests de integración
+- [x] **Título**: Plantilla de configuración para github-mcp + tests de integración
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -242,7 +242,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_10` — Plantilla de configuración para postgres-mcp + tests con DB efímera
 
-- [ ] **Título**: Plantilla de configuración para postgres-mcp + tests con DB efímera
+- [x] **Título**: Plantilla de configuración para postgres-mcp + tests con DB efímera
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -259,7 +259,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_11` — Plantillas para filesystem-mcp, gdrive-mcp, gmail-mcp, gcalendar-mcp, slack-mcp, jira-mcp/linear-mcp
 
-- [ ] **Título**: Plantillas para filesystem-mcp, gdrive-mcp, gmail-mcp, gcalendar-mcp, slack-mcp, jira-mcp/linear-mcp
+- [x] **Título**: Plantillas para filesystem-mcp, gdrive-mcp, gmail-mcp, gcalendar-mcp, slack-mcp, jira-mcp/linear-mcp
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -278,7 +278,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_12` — Activar tools de tipo http_endpoint (modeladas en Fase 1, ahora ejecutables con allowlist)
 
-- [ ] **Título**: Activar tools de tipo http_endpoint (modeladas en Fase 1, ahora ejecutables con allowlist)
+- [x] **Título**: Activar tools de tipo http_endpoint (modeladas en Fase 1, ahora ejecutables con allowlist)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -295,7 +295,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_13` — Activar tools de tipo python_function en sandbox seguro (subprocess aislado, no eval)
 
-- [ ] **Título**: Activar tools de tipo python_function en sandbox seguro (subprocess aislado, no eval)
+- [x] **Título**: Activar tools de tipo python_function en sandbox seguro (subprocess aislado, no eval)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
@@ -312,7 +312,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_14` — Activar tools de tipo docker_command (lanza contenedor efímero por tool)
 
-- [ ] **Título**: Activar tools de tipo docker_command (lanza contenedor efímero por tool)
+- [x] **Título**: Activar tools de tipo docker_command (lanza contenedor efímero por tool)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + devops
@@ -329,7 +329,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_15` — Panel diagnóstico de tools disponibles por agente
 
-- [ ] **Título**: Panel diagnóstico de tools disponibles por agente
+- [x] **Título**: Panel diagnóstico de tools disponibles por agente
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -346,7 +346,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_16` — Documentación: ADRs MCP, guías de configuración, changelog
 
-- [ ] **Título**: Documentación: ADRs MCP, guías de configuración, changelog
+- [x] **Título**: Documentación: ADRs MCP, guías de configuración, changelog
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer

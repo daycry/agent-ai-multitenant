@@ -144,3 +144,4 @@ temp/
 # to avoid accidentally committing local-only overrides if the convention changes.
 # (currently tracked — uncomment to ignore again)
 # .claude/settings.local.json
+scripts/.demo_state_05.json
