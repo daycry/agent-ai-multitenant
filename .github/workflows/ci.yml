@@ -40,6 +40,10 @@ jobs:
           # editable wheel instead of asking PyPI.
           python -m pip install -e "packages/shared-llm[dev]"
           python -m pip install -e "packages/shared-mcp[dev]"
+          # shared-test-runtimes lands with Plan 06 task_06_01 — install
+          # editable so the runtime template catalog imports resolve in
+          # both pytest and pre-commit's mypy hook.
+          python -m pip install -e "packages/shared-test-runtimes[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
           python -m pip install pre-commit
 
@@ -130,6 +134,10 @@ jobs:
           # editable wheel instead of asking PyPI.
           python -m pip install -e "packages/shared-llm[dev]"
           python -m pip install -e "packages/shared-mcp[dev]"
+          # shared-test-runtimes lands with Plan 06 task_06_01 — install
+          # editable so the runtime template catalog imports resolve in
+          # both pytest and pre-commit's mypy hook.
+          python -m pip install -e "packages/shared-test-runtimes[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
 
       - name: pytest tests/unit
@@ -184,6 +192,10 @@ jobs:
           # editable wheel instead of asking PyPI.
           python -m pip install -e "packages/shared-llm[dev]"
           python -m pip install -e "packages/shared-mcp[dev]"
+          # shared-test-runtimes lands with Plan 06 task_06_01 — install
+          # editable so the runtime template catalog imports resolve in
+          # both pytest and pre-commit's mypy hook.
+          python -m pip install -e "packages/shared-test-runtimes[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
 
       - name: pytest tests/integration

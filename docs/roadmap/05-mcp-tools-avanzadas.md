@@ -1,10 +1,10 @@
 ---
 plan_id: 05-mcp-tools-avanzadas
 title: MCP y Tools Avanzadas
-status: pending_human_validation
+status: completed
 blocking_plan: [04-memoria-rag-kbs, 04.5-agent-runtime-integration]
 started_at: 2026-05-26
-completed_at: null
+completed_at: 2026-05-27
 estimated_duration_calendar: 2-3 semanas
 estimated_effort_person_days: 40-55
 estimated_cost_human_eur: 16.000 € – 22.000 €

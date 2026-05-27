@@ -103,6 +103,17 @@ class Settings(BaseSettings):
         default=15 * 60, description="Sliding window for login rate limiting."
     )
 
+    # ----- Plan 06: shared data root for worktrees + dep-cache -----
+    data_root: str = Field(
+        default="/data/agent-platform",
+        description=(
+            "Host filesystem root for platform-managed state: bare repos, "
+            "worktrees, dep-cache. The api-server only needs read access "
+            "(to surface state to the UI) and write-via-invalidate-button "
+            "(Plan 06 task_06_12). Workers do the heavy lifting."
+        ),
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."

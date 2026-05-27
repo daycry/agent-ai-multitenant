@@ -184,6 +184,25 @@ ignore_missing_imports = true
 module = ["mcp", "mcp.*", "shared_mcp", "shared_mcp.*"]
 ignore_missing_imports = true
 
+# `shared-test-runtimes` is a local path package (Plan 06 task_06_01).
+# Same pattern as shared_mcp / shared_llm: pre-commit mypy hook doesn't
+# install it; the runtime venv does.
+[[tool.mypy.overrides]]
+module = ["shared_test_runtimes", "shared_test_runtimes.*"]
+ignore_missing_imports = true
+
+# Cross-app imports (Plan 06 task_06_H / orchestrator.plan_runner).
+# The orchestrator imports from api_server.* and workers.* directly to
+# stitch the modules into a sync demo runner. Same story: pre-commit
+# venv lacks them, runtime venv has them but without py.typed marker.
+[[tool.mypy.overrides]]
+module = ["api_server.plan_progress", "api_server.task_lifecycle"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["workers.git_repos", "workers.plan_git", "workers.runtime_pool"]
+ignore_missing_imports = true
+
 # `hvac` is the Vault client used by `routers/mcp.get_vault_resolver`
 # (Plan 05 task_05_17). Same story as the rest of optional deps — the
 # pre-commit mypy hook doesn't install it; the runtime venv does.
