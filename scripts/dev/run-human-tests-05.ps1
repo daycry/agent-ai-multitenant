@@ -50,7 +50,7 @@ if (-not $SkipDocker) {
         if ($LASTEXITCODE -eq 0) { $DockerAvailable = $true }
     } catch { $DockerAvailable = $false }
     if (-not $DockerAvailable) {
-        Write-Host "==> Docker daemon no responde — demo_human_05_02 se saltara." -ForegroundColor Yellow
+        Write-Host "==> Docker daemon no responde - demo_human_05_02 se saltara." -ForegroundColor Yellow
         Write-Host "    Para correrlo: arranca Docker Desktop y reintenta." -ForegroundColor DarkGray
     }
 } else {
@@ -78,15 +78,28 @@ $Results = @()
 foreach ($d in $Demos) {
     if ($d.NeedsDocker -and -not $DockerAvailable) {
         Write-Step "Saltando $($d.Script) (Docker no disponible)"
-        Write-Skip "$($d.Script) requiere Docker — no disponible"
+        Write-Skip "$($d.Script) requiere Docker - no disponible"
         $Results += [PSCustomObject]@{ Demo = $d.Script; Status = "SKIP" }
         continue
     }
 
     Write-Step "Ejecutando $($d.Script)"
     $script = Join-Path $RepoRoot "scripts\$($d.Script)"
-    & $VenvPython $script
-    $code = $LASTEXITCODE
+    # PowerShell 5.1 wraps every native-exe stderr line in an
+    # ErrorRecord; with `$ErrorActionPreference="Stop"` that makes
+    # any stderr output kill the whole script. The mcp SDK and
+    # other deps log to stderr at INFO level even on success, so
+    # we lower the preference around this single call. The actual
+    # PASS/FAIL signal comes from $LASTEXITCODE, not from PowerShell's
+    # error stream interpretation.
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $VenvPython $script
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevErr
+    }
     if ($code -eq 0) {
         Write-Ok "$($d.Script) termino OK"
         $Results += [PSCustomObject]@{ Demo = $d.Script; Status = "PASS" }
@@ -101,7 +114,7 @@ foreach ($d in $Demos) {
 # -----------------------------------------------------------------------------
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host "  Resumen Plan 05 — tests humanos"                                 -ForegroundColor Cyan
+Write-Host "  Resumen Plan 05 - tests humanos"                                 -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 $Results | Format-Table -AutoSize | Out-Host
 
