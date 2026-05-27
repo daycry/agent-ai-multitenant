@@ -329,7 +329,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_15` — Panel diagnóstico de tools disponibles por agente
 
-- [ ] **Título**: Panel diagnóstico de tools disponibles por agente
+- [x] **Título**: Panel diagnóstico de tools disponibles por agente
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev

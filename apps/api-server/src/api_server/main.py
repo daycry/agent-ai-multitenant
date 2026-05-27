@@ -48,6 +48,7 @@ from api_server.routers.tasks import router as tasks_router
 from api_server.routers.teams import router as teams_router
 from api_server.routers.tenant_settings import router as tenant_settings_router
 from api_server.routers.tools import router as tools_router
+from api_server.routers.tools_diagnostic import router as tools_diagnostic_router
 from api_server.routers.ws import router as ws_router
 from api_server.telemetry import configure_tracing, instrument_fastapi
 from api_server.telemetry.setup import add_console_exporter
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_bases_router)
     app.include_router(project_kb_router)
     app.include_router(mcp_router)
+    app.include_router(tools_diagnostic_router)
     app.include_router(documents_router)
     app.include_router(tenant_settings_router)
     app.include_router(ws_router)
