@@ -86,6 +86,42 @@ try {
 El "PASS/FAIL real" sale de `$LASTEXITCODE`, no de la interpretación
 que PowerShell hace del stream de error.
 
+### 3) Stdout de native exe dentro de una función mete basura en el retorno
+
+**Síntoma**: una función que envuelve un native call reporta exit
+"raro" — vacío, array, o lo que sea menos el número entero esperado:
+
+```
+[FAIL] setup_demo_05.py termino con exit
+... (toda la salida del script python aparece aquí) ...
+0
+```
+
+**Causa**: si dentro de una función PowerShell haces
+`& $exe args` sin redirigir, **cada línea de stdout del exe se
+añade al pipeline de retorno de la función**. Cuando el llamador
+hace `$code = Invoke-NativeScript ...`, recibe un array con todas
+esas líneas + el `$LASTEXITCODE`. La condición `$code -ne 0`
+evalúa truthy contra el array y el launcher cree que falló.
+
+**Fix**: pipe a `Out-Host` (o `Out-Default`) para empujar el output
+al terminal sin pasar por el pipeline:
+
+```powershell
+function Invoke-NativeScript {
+    param([string]$Path)
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $VenvPython $Path | Out-Host
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevErr
+    }
+    return $code   # SOLO el int — el output ya fue al host
+}
+```
+
 ## Cómo evitarlo desde el principio
 
 Cuando escribas un `.ps1` nuevo en este repo:
@@ -97,6 +133,9 @@ Cuando escribas un `.ps1` nuevo en este repo:
   cargo) y no quieres que su stderr mate el script, envuelve la
   llamada con el patrón de `$ErrorActionPreference="Continue"` de
   arriba.
+- **Si el native call está dentro de una función** que devuelve un
+  exit code, pipea el output a `Out-Host` para que no contamine el
+  retorno de la función.
 
 ## Referencias
 
