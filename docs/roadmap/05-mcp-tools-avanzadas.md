@@ -312,7 +312,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_14` — Activar tools de tipo docker_command (lanza contenedor efímero por tool)
 
-- [ ] **Título**: Activar tools de tipo docker_command (lanza contenedor efímero por tool)
+- [x] **Título**: Activar tools de tipo docker_command (lanza contenedor efímero por tool)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + devops
