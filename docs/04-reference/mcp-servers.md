@@ -170,6 +170,109 @@ mismo proyecto.
 
 ---
 
+## Plantillas extendidas (stretch)
+
+Añadidas al catálogo como ampliación más allá del mínimo del roadmap
+(task_05_11 stretch). Mismo shape de validación que el set anterior.
+
+### Documentación (`category=docs`) — extendido
+
+#### `confluence-mcp`
+
+Páginas de Confluence: leer, escribir, buscar, comentar. Auth Atlassian
+basic (igual que `jira-mcp`): API token + email + URL de la instancia,
+los tres en Vault.
+
+| Campo            | Valor                                                                 |
+| ---------------- | --------------------------------------------------------------------- |
+| `transport`      | `stdio`                                                               |
+| `command`        | `mcp-confluence`                                                      |
+| Vault keys       | `CONFLUENCE_API_TOKEN`, `CONFLUENCE_EMAIL`, `CONFLUENCE_INSTANCE_URL` |
+| Vault path shape | `vault:secret/data/mcp/confluence/{project_id}`                       |
+
+#### `notion-mcp`
+
+Páginas + bases de datos de Notion. Token único (`NOTION_API_KEY`).
+Alternativa a Confluence para equipos en Notion.
+
+### SCM (`category=scm`) — extendido
+
+#### `bitbucket-mcp`
+
+Repos + PRs + pipelines de Bitbucket Cloud. Auth basic con el email +
+una **app password** (no la contraseña de cuenta — Bitbucket las
+deprecó).
+
+| Campo      | Valor                                          |
+| ---------- | ---------------------------------------------- |
+| Vault keys | `BITBUCKET_USERNAME`, `BITBUCKET_APP_PASSWORD` |
+
+### Comunicación (`category=comms`) — extendido
+
+#### `ms-teams-mcp`
+
+Lee + postea mensajes en canales Teams. OAuth Microsoft Graph: access +
+refresh token + tenant id, los tres en Vault.
+
+#### `discord-mcp`
+
+Mensajes + roles en servidores Discord. Bot token. El bot debe estar
+invitado al guild con los intents correctos.
+
+### Observabilidad (`category=observability`)
+
+#### `sentry-mcp`
+
+Issues, events y releases de Sentry. Útil para agentes de triage de
+errores en producción. Auth token (`sntrys_...`) + org slug.
+
+#### `grafana-mcp`
+
+Dashboards + Loki/Tempo/Prometheus a través de Grafana. Service-account
+API key + URL (self-hosted o Grafana Cloud).
+
+### Search (`category=search`)
+
+#### `brave-search-mcp`
+
+Búsqueda web vía la API de Brave. Útil como tool genérica "ve a buscar
+esto" para el agente. Pin un budget de uso en los guardrails del
+proyecto para evitar sorpresas — Brave es de pago por encima del free
+tier.
+
+#### `tavily-mcp`
+
+Búsqueda web optimizada para IA: devuelve pasajes ranqueados en lugar
+de URLs crudas. Mejor que Brave para "buscar + resumir" estilo RAG. API
+key única.
+
+### Browser (`category=browser`)
+
+#### `puppeteer-browser-mcp`
+
+Chrome headless vía Puppeteer: navegar URLs, click, type, extraer DOM,
+screenshots. _No usa Vault_ — el sandbox del subprocess es la frontera
+de seguridad. Es la tool **más pesada** del catálogo (60s de timeout
+por defecto); restringir a proyectos con allowlist explícito.
+
+### Meta-tools del agente (`category=meta`)
+
+#### `memory-mcp`
+
+Memoria clave/valor que el agente escribe y lee entre sesiones.
+Persiste a un fichero SQLite local dentro del worker. **Distinto** de
+la memoria RAG del Plan 04 — esa es KB estructurada con embeddings;
+ésta son notas cortas que el agente se guarda a sí mismo.
+
+#### `sequential-thinking-mcp`
+
+Meta-tool que expone `think` como una tool: el agente loguea pasos
+intermedios de razonamiento que llamadas posteriores pueden referenciar.
+Mejora planning de horizonte largo en modelos sin chain-of-thought
+nativo. Sin auth, sin API externa.
+
+---
+
 ## Cómo añadir una plantilla nueva
 
 1. Editar `packages/shared-mcp/src/shared_mcp/catalog.py`, añadir un
@@ -199,20 +302,17 @@ mismo proyecto.
   proyecto contra el catálogo y rechazar conexiones cuyo template fue
   removido (security advisory upstream, deprecation).
 
-## Próximas plantillas (extensión post-task_05_11)
+## Próximas plantillas (candidatos no integrados aún)
 
-El catálogo está pensado para crecer. Candidatos que ya se han
-identificado pero no entran todavía:
+El catálogo está pensado para crecer. Candidatos identificados que
+aún no entran:
 
-- **Atlassian Confluence** — wiki + páginas.
-- **Notion** — alternativa a Confluence + project mgmt.
-- **Bitbucket** — completa la familia SCM.
-- **Microsoft Teams / Outlook / OneDrive** — paridad con la suite Google.
-- **Sentry / Grafana / Datadog** — observability.
-- **Brave Search / Tavily / Perplexity / Puppeteer-browser** — web + search.
+- **OneDrive / Outlook / SharePoint** — paridad de Microsoft con la
+  suite Google ya cubierta (Drive/Gmail/Calendar).
+- **Datadog / Loki** — observabilidad alternativa a Sentry/Grafana.
 - **Redis / SQLite** — bases de datos extra.
-- **mcp-memory / sequential-thinking** — meta-tools para el agente.
+- **Perplexity** — alternativa a Tavily / Brave para search.
+- **Stripe / HubSpot / Salesforce** — el dominio de "business systems".
 
-Cada una entra cuando un proyecto real la pida — añadirla son ~10 líneas
-de `McpServerTemplate` + una sección aquí. Ver "Cómo añadir una plantilla
-nueva" arriba.
+Añadir una son ~10 líneas de `McpServerTemplate` + una sección aquí.
+Ver "Cómo añadir una plantilla nueva" arriba.

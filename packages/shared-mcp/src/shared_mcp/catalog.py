@@ -354,11 +354,255 @@ LINEAR_MCP = McpServerTemplate(
 
 
 # ---------------------------------------------------------------------------
+# Catalog extension — bonus templates beyond the roadmap's minimum
+# (Plan 05 task_05_11 stretch: user asked for "catalogo amplio").
+# ---------------------------------------------------------------------------
+
+# ----- docs (extra) -----
+CONFLUENCE_MCP = McpServerTemplate(
+    id="confluence-mcp",
+    display_name="Atlassian Confluence",
+    description=(
+        "Read + write Confluence pages, search spaces, manage comments. "
+        "Same Atlassian basic-auth as jira-mcp (email + API token + "
+        "instance URL) — three Vault fields, no defaults."
+    ),
+    transport="stdio",
+    command="mcp-confluence",
+    secret_keys=("CONFLUENCE_API_TOKEN", "CONFLUENCE_EMAIL", "CONFLUENCE_INSTANCE_URL"),
+    vault_path_template="vault:secret/data/mcp/confluence/{project_id}",
+    maintainer="atlassian (community)",
+    repo_url="https://github.com/sooperset/mcp-atlassian",
+    docs_url="https://github.com/sooperset/mcp-atlassian#readme",
+    category="docs",
+)
+
+NOTION_MCP = McpServerTemplate(
+    id="notion-mcp",
+    display_name="Notion",
+    description=(
+        "Notion pages + databases: search, read, create, update. The "
+        "Notion integration token lives in Vault as `NOTION_API_KEY`. "
+        "Alternative to Confluence when the team is on Notion."
+    ),
+    transport="stdio",
+    command="mcp-notion",
+    secret_keys=("NOTION_API_KEY",),
+    vault_path_template="vault:secret/data/mcp/notion/{project_id}",
+    maintainer="modelcontextprotocol (community)",
+    repo_url="https://github.com/makenotion/notion-mcp-server",
+    docs_url="https://github.com/makenotion/notion-mcp-server#readme",
+    category="docs",
+)
+
+
+# ----- scm (extra) -----
+BITBUCKET_MCP = McpServerTemplate(
+    id="bitbucket-mcp",
+    display_name="Bitbucket",
+    description=(
+        "Repos, pull requests, pipelines on Bitbucket Cloud. Auth is "
+        "basic with the user's email + an app password (NOT account "
+        "password — Bitbucket deprecated those)."
+    ),
+    transport="stdio",
+    command="mcp-bitbucket",
+    secret_keys=("BITBUCKET_USERNAME", "BITBUCKET_APP_PASSWORD"),
+    vault_path_template="vault:secret/data/mcp/bitbucket/{project_id}",
+    maintainer="bitbucket (community)",
+    repo_url="https://github.com/MatanYemini/bitbucket-mcp",
+    docs_url="https://github.com/MatanYemini/bitbucket-mcp#readme",
+    category="scm",
+)
+
+
+# ----- comms (extra) -----
+MSTEAMS_MCP = McpServerTemplate(
+    id="ms-teams-mcp",
+    display_name="Microsoft Teams",
+    description=(
+        "Read + post messages to Teams channels, list chats, manage "
+        "presence. OAuth via Microsoft Graph: access + refresh tokens "
+        "in Vault."
+    ),
+    transport="stdio",
+    command="mcp-ms-teams",
+    secret_keys=("MSTEAMS_ACCESS_TOKEN", "MSTEAMS_REFRESH_TOKEN", "MSTEAMS_TENANT_ID"),
+    vault_path_template="vault:secret/data/mcp/ms-teams/{project_id}",
+    maintainer="ms-graph (community)",
+    repo_url="https://github.com/InditexTech/mcp-teams-server",
+    docs_url="https://github.com/InditexTech/mcp-teams-server#readme",
+    category="comms",
+)
+
+DISCORD_MCP = McpServerTemplate(
+    id="discord-mcp",
+    display_name="Discord",
+    description=(
+        "Post + read channel messages, manage roles. Single bot token "
+        "from the Discord developer portal. The bot must be invited "
+        "into the target guild with the right intents enabled."
+    ),
+    transport="stdio",
+    command="mcp-discord",
+    secret_keys=("DISCORD_BOT_TOKEN",),
+    vault_path_template="vault:secret/data/mcp/discord/{project_id}",
+    maintainer="discord (community)",
+    repo_url="https://github.com/v-3/discordmcp",
+    docs_url="https://github.com/v-3/discordmcp#readme",
+    category="comms",
+)
+
+
+# ----- observability (NEW category) -----
+SENTRY_MCP = McpServerTemplate(
+    id="sentry-mcp",
+    display_name="Sentry",
+    description=(
+        "Read Sentry issues, events, releases. Useful for agents that "
+        "triage errors in production. Auth via an organization-scoped "
+        "auth token (`sntrys_...`)."
+    ),
+    transport="stdio",
+    command="mcp-sentry",
+    secret_keys=("SENTRY_AUTH_TOKEN", "SENTRY_ORG_SLUG"),
+    vault_path_template="vault:secret/data/mcp/sentry/{project_id}",
+    maintainer="sentry (community)",
+    repo_url="https://github.com/getsentry/sentry-mcp",
+    docs_url="https://github.com/getsentry/sentry-mcp#readme",
+    category="observability",
+)
+
+GRAFANA_MCP = McpServerTemplate(
+    id="grafana-mcp",
+    display_name="Grafana",
+    description=(
+        "Query Grafana dashboards + Loki/Tempo/Prometheus through one "
+        "tool surface. Service-account API key + the Grafana URL "
+        "(self-hosted or Grafana Cloud)."
+    ),
+    transport="stdio",
+    command="mcp-grafana",
+    secret_keys=("GRAFANA_API_KEY", "GRAFANA_URL"),
+    vault_path_template="vault:secret/data/mcp/grafana/{project_id}",
+    maintainer="grafana (community)",
+    repo_url="https://github.com/grafana/mcp-grafana",
+    docs_url="https://github.com/grafana/mcp-grafana#readme",
+    category="observability",
+)
+
+
+# ----- search (NEW category) -----
+BRAVE_SEARCH_MCP = McpServerTemplate(
+    id="brave-search-mcp",
+    display_name="Brave Search",
+    description=(
+        "Web search via the Brave Search API. Useful as the "
+        "general-purpose 'go look it up' tool for an agent. Free tier "
+        "exists but rate-limited; pin a usage budget in the project's "
+        "guardrails to avoid surprise spend."
+    ),
+    transport="stdio",
+    command="mcp-brave-search",
+    secret_keys=("BRAVE_API_KEY",),
+    vault_path_template="vault:secret/data/mcp/brave/{project_id}",
+    maintainer="modelcontextprotocol",
+    repo_url="https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search",
+    docs_url="https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search#readme",
+    category="search",
+)
+
+TAVILY_MCP = McpServerTemplate(
+    id="tavily-mcp",
+    display_name="Tavily Search",
+    description=(
+        "AI-optimised web search: returns ranked passages instead of "
+        "raw URLs. Better than Brave for RAG-style 'look it up and "
+        "summarise' tasks. Single API key."
+    ),
+    transport="stdio",
+    command="mcp-tavily",
+    secret_keys=("TAVILY_API_KEY",),
+    vault_path_template="vault:secret/data/mcp/tavily/{project_id}",
+    maintainer="tavily (community)",
+    repo_url="https://github.com/tavily-ai/tavily-mcp",
+    docs_url="https://github.com/tavily-ai/tavily-mcp#readme",
+    category="search",
+)
+
+
+# ----- browser (NEW category) -----
+PUPPETEER_BROWSER_MCP = McpServerTemplate(
+    id="puppeteer-browser-mcp",
+    display_name="Puppeteer browser",
+    description=(
+        "Headless Chrome via Puppeteer: navigate URLs, click, type, "
+        "extract DOM, take screenshots. Runs in a sandboxed subprocess "
+        "(no Vault credentials — the sandbox itself is the security "
+        "boundary). Heaviest tool in the catalog — gate behind project "
+        "allowlist."
+    ),
+    transport="stdio",
+    command="mcp-puppeteer",
+    # No Vault — the threat model is "agent navigates to URL", not
+    # "agent authenticates with our credentials". If a particular site
+    # needs auth, the operator wires headers via static_headers above.
+    default_timeout_s=60.0,
+    maintainer="modelcontextprotocol",
+    repo_url="https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
+    docs_url="https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer#readme",
+    category="browser",
+)
+
+
+# ----- meta (NEW category) — agent-side helpers, no external API -----
+MEMORY_MCP = McpServerTemplate(
+    id="memory-mcp",
+    display_name="Long-term memory (mcp-memory)",
+    description=(
+        "Key/value memory the agent can write to and read from across "
+        "sessions. Persists to a local SQLite file inside the worker. "
+        "Distinct from the platform's RAG memory (Plan 04) — that one "
+        "is structured KB + embeddings; this is short notes the agent "
+        "keeps for itself."
+    ),
+    transport="stdio",
+    command="mcp-memory",
+    default_timeout_s=10.0,
+    maintainer="modelcontextprotocol",
+    repo_url="https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+    docs_url="https://github.com/modelcontextprotocol/servers/tree/main/src/memory#readme",
+    category="meta",
+)
+
+SEQUENTIAL_THINKING_MCP = McpServerTemplate(
+    id="sequential-thinking-mcp",
+    display_name="Sequential thinking",
+    description=(
+        "A meta-tool that exposes 'think' as a tool call: the agent "
+        "logs intermediate reasoning steps that subsequent calls can "
+        "reference. Improves long-horizon planning on models without "
+        "native chain-of-thought streams. No external API, no secret."
+    ),
+    transport="stdio",
+    command="mcp-sequential-thinking",
+    default_timeout_s=10.0,
+    maintainer="modelcontextprotocol",
+    repo_url="https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+    docs_url=(
+        "https://github.com/modelcontextprotocol/servers/tree/main/" "src/sequentialthinking#readme"
+    ),
+    category="meta",
+)
+
+
+# ---------------------------------------------------------------------------
 # Registry — a dict so callers can ``CATALOG[id]`` without scanning.
 # ---------------------------------------------------------------------------
 CATALOG: dict[str, McpServerTemplate] = {
     template.id: template
     for template in (
+        # Roadmap minimum (task_05_08..task_05_11)
         DOCLING_MCP,
         GITHUB_MCP,
         GITLAB_MCP,
@@ -371,6 +615,20 @@ CATALOG: dict[str, McpServerTemplate] = {
         SLACK_MCP,
         JIRA_MCP,
         LINEAR_MCP,
+        # Stretch templates beyond the roadmap (user-requested
+        # "catalogo amplio").
+        CONFLUENCE_MCP,
+        NOTION_MCP,
+        BITBUCKET_MCP,
+        MSTEAMS_MCP,
+        DISCORD_MCP,
+        SENTRY_MCP,
+        GRAFANA_MCP,
+        BRAVE_SEARCH_MCP,
+        TAVILY_MCP,
+        PUPPETEER_BROWSER_MCP,
+        MEMORY_MCP,
+        SEQUENTIAL_THINKING_MCP,
     )
 }
 
@@ -389,7 +647,11 @@ def render_vault_path(template: McpServerTemplate, *, project_id: str) -> str | 
 
 __all__ = [
     "AZURE_DEVOPS_MCP",
+    "BITBUCKET_MCP",
+    "BRAVE_SEARCH_MCP",
     "CATALOG",
+    "CONFLUENCE_MCP",
+    "DISCORD_MCP",
     "DOCLING_MCP",
     "FILESYSTEM_MCP",
     "GCALENDAR_MCP",
@@ -397,11 +659,19 @@ __all__ = [
     "GITHUB_MCP",
     "GITLAB_MCP",
     "GMAIL_MCP",
+    "GRAFANA_MCP",
     "JIRA_MCP",
     "LINEAR_MCP",
+    "MEMORY_MCP",
+    "MSTEAMS_MCP",
     "McpServerTemplate",
+    "NOTION_MCP",
     "POSTGRES_MCP",
+    "PUPPETEER_BROWSER_MCP",
+    "SENTRY_MCP",
+    "SEQUENTIAL_THINKING_MCP",
     "SLACK_MCP",
+    "TAVILY_MCP",
     "Transport",
     "render_vault_path",
 ]

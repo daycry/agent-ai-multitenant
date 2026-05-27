@@ -42,7 +42,7 @@ from shared_mcp.catalog import render_vault_path
 pytestmark = pytest.mark.integration
 
 
-SCM_IDS = ("github-mcp", "gitlab-mcp", "azure-devops-mcp")
+SCM_IDS = ("github-mcp", "gitlab-mcp", "azure-devops-mcp", "bitbucket-mcp")
 
 
 def _render(template: McpServerTemplate, *, project_id: str, name: str) -> dict[str, Any]:
@@ -73,10 +73,11 @@ def test_scm_template_exists_in_catalog(template_id: str) -> None:
     assert CATALOG[template_id].category == "scm"
 
 
-def test_scm_family_has_three_members() -> None:
-    """If we drift the SCM family (drop one, swap one) we want the
+def test_scm_family_matches_declared_set() -> None:
+    """If we drift the SCM family (drop one, rename one) we want the
     test to surface — the family is a load-bearing contract for the
-    UI picker grouping."""
+    UI picker grouping. Adding a new SCM template requires bumping
+    SCM_IDS above so the parametrized tests pick it up too."""
     scm_members = {tid for tid, t in CATALOG.items() if t.category == "scm"}
     assert scm_members == set(SCM_IDS)
 

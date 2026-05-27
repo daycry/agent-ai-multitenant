@@ -53,6 +53,32 @@ REMAINING_IDS = (
     "linear-mcp",
 )
 
+# Stretch templates added beyond the roadmap minimum (user-requested
+# "catálogo amplio"). They're not in REMAINING_IDS to keep the
+# original task_05_11 scope readable; they get their own parametrize
+# blocks below.
+EXTENDED_IDS = (
+    "confluence-mcp",
+    "notion-mcp",
+    "ms-teams-mcp",
+    "discord-mcp",
+    "sentry-mcp",
+    "grafana-mcp",
+    "brave-search-mcp",
+    "tavily-mcp",
+    "puppeteer-browser-mcp",
+    "memory-mcp",
+    "sequential-thinking-mcp",
+)
+
+# Subset of EXTENDED_IDS that talks to a credentialled external API.
+# puppeteer / memory / sequential-thinking are local — no Vault.
+EXTENDED_VAULT_BACKED_IDS = tuple(
+    tid
+    for tid in EXTENDED_IDS
+    if tid not in {"puppeteer-browser-mcp", "memory-mcp", "sequential-thinking-mcp"}
+)
+
 
 def _render(template: McpServerTemplate, *, project_id: str, name: str) -> dict[str, Any]:
     auth_ref = render_vault_path(template, project_id=project_id)
@@ -196,3 +222,105 @@ def test_category_buckets_are_stable() -> None:
     }
     for template_id, category in expected.items():
         assert CATALOG[template_id].category == category
+
+
+# ===========================================================================
+# Stretch coverage — templates added beyond the roadmap minimum.
+# Same shape as the assertions above, but parametrised over EXTENDED_IDS.
+# Adding a new template to the catalog requires extending EXTENDED_IDS
+# (or its vault-backed subset) so it's exercised here.
+# ===========================================================================
+@pytest.mark.parametrize("template_id", EXTENDED_IDS)
+def test_extended_template_exists_in_catalog(template_id: str) -> None:
+    assert template_id in CATALOG
+
+
+@pytest.mark.parametrize("template_id", EXTENDED_IDS)
+def test_extended_template_renders_to_valid_model(template_id: str) -> None:
+    template = CATALOG[template_id]
+    payload = _render(template, project_id="proj-1", name=template_id)
+    model = MCPServerConfigModel.model_validate(payload)
+    # All extended templates are stdio so far. If we add an SSE one,
+    # split the parametrize set.
+    assert model.transport == "stdio"
+    assert model.command
+    assert model.url is None
+
+
+@pytest.mark.parametrize("template_id", EXTENDED_VAULT_BACKED_IDS)
+def test_extended_vault_backed_templates_inject_secrets(template_id: str) -> None:
+    template = CATALOG[template_id]
+    payload = _render(template, project_id="proj-vault", name=template_id)
+    model = MCPServerConfigModel.model_validate(payload)
+    runtime = MCPServerConfig(
+        name=model.name,
+        transport=model.transport,
+        command=model.command,
+        args=tuple(model.args),
+        env=dict(model.env),
+        url=model.url,
+        headers=dict(model.headers),
+        auth_ref=model.auth_ref,
+        timeout_s=model.timeout_s,
+    )
+    fake_secret = {key: f"fake-{key.lower()}" for key in template.secret_keys}
+    resolver = StaticVaultResolver(values={runtime.auth_ref or "": fake_secret})
+    injected = apply_vault_auth(runtime, resolver=resolver)
+    for key in template.secret_keys:
+        assert injected.env[key] == fake_secret[key]
+
+
+def test_extended_local_templates_have_no_vault_auth() -> None:
+    """puppeteer / memory / sequential-thinking are local — they're
+    not credentialled, so `auth_ref` must be None. Adding auth later
+    requires a deliberate edit (and a chat with security)."""
+    for template_id in ("puppeteer-browser-mcp", "memory-mcp", "sequential-thinking-mcp"):
+        template = CATALOG[template_id]
+        assert template.vault_path_template is None, template_id
+        assert template.secret_keys == (), template_id
+
+
+def test_extended_category_buckets() -> None:
+    """Same as `test_category_buckets_are_stable` but for the
+    stretch templates — pins the new categories so they don't drift."""
+    expected = {
+        "confluence-mcp": "docs",
+        "notion-mcp": "docs",
+        "bitbucket-mcp": "scm",
+        "ms-teams-mcp": "comms",
+        "discord-mcp": "comms",
+        "sentry-mcp": "observability",
+        "grafana-mcp": "observability",
+        "brave-search-mcp": "search",
+        "tavily-mcp": "search",
+        "puppeteer-browser-mcp": "browser",
+        "memory-mcp": "meta",
+        "sequential-thinking-mcp": "meta",
+    }
+    for template_id, category in expected.items():
+        assert CATALOG[template_id].category == category
+
+
+def test_extended_catalog_introduces_new_categories() -> None:
+    """The original Fase C ships 5 categories (docs/scm/data/files/
+    comms/issues). The stretch adds 4 more (observability/search/
+    browser/meta). Pin the full set so removal is noticed."""
+    all_categories = {t.category for t in CATALOG.values()}
+    assert all_categories == {
+        "docs",
+        "scm",
+        "data",
+        "files",
+        "comms",
+        "issues",
+        "observability",
+        "search",
+        "browser",
+        "meta",
+    }
+
+
+def test_catalog_size_matches_documented_count() -> None:
+    """The catalog grows by code change + ADR; the docs are the
+    contract. 12 roadmap entries + 12 stretch = 24."""
+    assert len(CATALOG) == 24
