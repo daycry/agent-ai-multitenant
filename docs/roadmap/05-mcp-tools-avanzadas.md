@@ -259,7 +259,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_11` — Plantillas para filesystem-mcp, gdrive-mcp, gmail-mcp, gcalendar-mcp, slack-mcp, jira-mcp/linear-mcp
 
-- [ ] **Título**: Plantillas para filesystem-mcp, gdrive-mcp, gmail-mcp, gcalendar-mcp, slack-mcp, jira-mcp/linear-mcp
+- [x] **Título**: Plantillas para filesystem-mcp, gdrive-mcp, gmail-mcp, gcalendar-mcp, slack-mcp, jira-mcp/linear-mcp
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
