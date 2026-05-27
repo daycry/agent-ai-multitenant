@@ -225,7 +225,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_09` — Plantilla de configuración para github-mcp + tests de integración
 
-- [ ] **Título**: Plantilla de configuración para github-mcp + tests de integración
+- [x] **Título**: Plantilla de configuración para github-mcp + tests de integración
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
