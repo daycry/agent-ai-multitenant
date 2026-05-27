@@ -189,7 +189,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_07` — Test de conexión desde la UI (botón 'Probar') que muestra tools descubiertas
 
-- [ ] **Título**: Test de conexión desde la UI (botón 'Probar') que muestra tools descubiertas
+- [x] **Título**: Test de conexión desde la UI (botón 'Probar') que muestra tools descubiertas
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: frontend-dev + backend-dev
