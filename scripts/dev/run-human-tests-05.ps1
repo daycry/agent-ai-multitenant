@@ -85,17 +85,25 @@ if (-not $SkipDocker) {
 # -----------------------------------------------------------------------------
 function Invoke-NativeScript {
     param([string]$Path)
-    # PowerShell 5.1 wraps every native-exe stderr line in an
-    # ErrorRecord; con ErrorActionPreference=Stop eso mata el script
-    # aunque el exit code sea 0. Bajamos el preference solo aqui.
+    # Dos gotchas en una funcion:
+    # (a) PowerShell 5.1 envuelve cada linea de stderr de un native
+    #     exe en un ErrorRecord; con ErrorActionPreference=Stop eso
+    #     mata el script aunque el exit code sea 0.
+    # (b) Si una funcion no redirige el stdout del exe, ese stdout
+    #     se mete en el pipeline de retorno de la funcion y el
+    #     caller acaba leyendo un array enorme en vez del exit code.
+    #     `| Out-Host` empuja la salida al terminal y deja el
+    #     pipeline limpio para que `return $LASTEXITCODE` sea lo
+    #     unico en el.
     $prevErr = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        & $VenvPython $Path
-        return $LASTEXITCODE
+        & $VenvPython $Path | Out-Host
+        $code = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $prevErr
     }
+    return $code
 }
 
 if (-not $SkipSetup) {
