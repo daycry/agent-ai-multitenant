@@ -141,10 +141,22 @@ class MCPClient:
         async with AsyncExitStack() as stack:
             try:
                 read_stream, write_stream = await _open_streams(stack, config)
-            except (MCPError, Exception) as exc:
-                # Already wrapped in our hierarchy or needs wrapping.
-                if isinstance(exc, MCPError):
-                    raise
+            except MCPError:
+                raise
+            except BaseExceptionGroup as eg:
+                # anyio TaskGroups (used internally by the SDK's
+                # streamable_http_client) wrap connection failures in
+                # a BaseExceptionGroup — which is BaseException, not
+                # Exception, so a bare `except Exception` MISSES it.
+                # Catch it explicitly and wrap the most informative
+                # inner cause as MCPTransportError so callers always
+                # see our hierarchy.
+                inner = _first_inner(eg) or eg
+                raise MCPTransportError(
+                    f"failed to open {config.transport!r} transport "
+                    f"for server {config.name!r}: {inner}"
+                ) from eg
+            except Exception as exc:
                 raise MCPTransportError(
                     f"failed to open {config.transport!r} transport "
                     f"for server {config.name!r}: {exc}"
@@ -159,6 +171,15 @@ class MCPClient:
             )
             try:
                 init_result = await session.initialize()
+            except MCPError:
+                raise
+            except BaseExceptionGroup as eg:
+                # Same trick as in _open_streams — the SDK may surface
+                # initialize() failures via an anyio TaskGroup.
+                inner = _first_inner(eg) or eg
+                raise MCPTransportError(
+                    f"initialize() against {config.name!r} failed: {inner}"
+                ) from eg
             except Exception as exc:
                 msg = str(exc).lower()
                 if "401" in msg or "403" in msg or "unauthor" in msg or "forbidden" in msg:
@@ -212,6 +233,22 @@ async def _open_streams(stack: AsyncExitStack, config: MCPServerConfig) -> tuple
         return read_stream, write_stream
 
     raise MCPTransportError(f"unknown transport: {transport!r}")
+
+
+def _first_inner(eg: BaseExceptionGroup[BaseException]) -> BaseException | None:
+    """Return the first non-group exception inside an `ExceptionGroup`,
+    recursing into nested groups. Used to extract a meaningful error
+    message when the SDK wraps a `ConnectError` (or similar) in an
+    anyio TaskGroup's `BaseExceptionGroup`.
+    """
+    for exc in eg.exceptions:
+        if isinstance(exc, BaseExceptionGroup):
+            inner = _first_inner(exc)
+            if inner is not None:
+                return inner
+        else:
+            return exc  # narrowed: not a group on this branch
+    return None
 
 
 __all__ = ["MCPClient", "MCPSession"]
