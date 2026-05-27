@@ -1,7 +1,7 @@
 ---
 plan_id: 05-mcp-tools-avanzadas
 title: MCP y Tools Avanzadas
-status: in_progress
+status: pending_human_validation
 blocking_plan: [04-memoria-rag-kbs, 04.5-agent-runtime-integration]
 started_at: 2026-05-26
 completed_at: null
@@ -346,7 +346,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_16` — Documentación: ADRs MCP, guías de configuración, changelog
 
-- [ ] **Título**: Documentación: ADRs MCP, guías de configuración, changelog
+- [x] **Título**: Documentación: ADRs MCP, guías de configuración, changelog
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
