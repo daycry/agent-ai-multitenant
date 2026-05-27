@@ -167,7 +167,10 @@ async def main() -> int:
             )
             session.add(agent_a)
 
-            # Agent B: receives the docker_command Tool.
+            # Agent B: receives the docker_command Tool. Uses the
+            # canonical `devops` role (defined in seeds/builtin_agents.py)
+            # since "run scripts in sandboxed containers" fits DevOps
+            # natively. `executor` was not a real role.
             agent_b_id = uuid4()
             agent_b = Agent(
                 id=agent_b_id,
@@ -175,7 +178,7 @@ async def main() -> int:
                 name="Sandbox Runner",
                 description="Agente con una tool docker_command para demos.",
                 agent_type="ai",
-                role="executor",
+                role="devops",
                 system_prompt="Eres un agente que ejecuta scripts en sandbox.",
                 model_config={"provider": "deterministic", "model": "echo"},
                 memory_scope="private",

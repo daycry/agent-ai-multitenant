@@ -153,7 +153,7 @@ def main() -> int:
     print("\n    1) Card 'MCP servers del proyecto' al inicio")
     print("       lista 'toy-mcp' con badge 'stdio'.")
     print("\n    2) Card del agente 'Sandbox Runner'")
-    print("       (badge azul 'executor', badge gris 'project_local').")
+    print("       (badge azul 'devops', badge gris 'project_local').")
     print("       Dentro, fila para el tool 'alpine-probe' con:")
     print("         - badge rojo  'docker_command'    (implementation_type)")
     print("         - badge rojo  'privileged'         (security_level)")
