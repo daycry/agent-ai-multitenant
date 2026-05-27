@@ -22,7 +22,7 @@ and the resolver's key/value pairs get merged into ``env`` (stdio) or
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -147,58 +147,68 @@ class MCPClient:
             * Anything during use propagates per `MCPSession` rules.
         """
         config = apply_vault_auth(config, vault_resolver)
-        async with AsyncExitStack() as stack:
-            try:
-                read_stream, write_stream = await _open_streams(stack, config)
-            except MCPError:
-                raise
-            except BaseExceptionGroup as eg:
-                # anyio TaskGroups (used internally by the SDK's
-                # streamable_http_client) wrap connection failures in
-                # a BaseExceptionGroup — which is BaseException, not
-                # Exception, so a bare `except Exception` MISSES it.
-                # Catch it explicitly and wrap the most informative
-                # inner cause as MCPTransportError so callers always
-                # see our hierarchy.
-                inner = _first_inner(eg) or eg
-                raise MCPTransportError(
-                    f"failed to open {config.transport!r} transport "
-                    f"for server {config.name!r}: {inner}"
-                ) from eg
-            except Exception as exc:
-                raise MCPTransportError(
-                    f"failed to open {config.transport!r} transport "
-                    f"for server {config.name!r}: {exc}"
-                ) from exc
-
-            session = await stack.enter_async_context(
-                ClientSession(
-                    read_stream,
-                    write_stream,
-                    read_timeout_seconds=timedelta(seconds=config.timeout_s),
-                )
-            )
-            try:
-                init_result = await session.initialize()
-            except MCPError:
-                raise
-            except BaseExceptionGroup as eg:
-                # Same trick as in _open_streams — the SDK may surface
-                # initialize() failures via an anyio TaskGroup.
-                inner = _first_inner(eg) or eg
-                raise MCPTransportError(
-                    f"initialize() against {config.name!r} failed: {inner}"
-                ) from eg
-            except Exception as exc:
-                msg = str(exc).lower()
-                if "401" in msg or "403" in msg or "unauthor" in msg or "forbidden" in msg:
-                    raise MCPAuthError(
-                        f"server {config.name!r} rejected our credentials: {exc}"
+        # Outer try/except wraps the ENTIRE async-with-AsyncExitStack
+        # so cleanup errors (when streamablehttp_client's anyio
+        # TaskGroup unwinds AFTER yield) also get normalised.
+        # Without this outer net, the inner try/except blocks only
+        # cover the body — but the SDK frequently surfaces connection
+        # failures from cleanup (the TaskGroup's __aexit__ raises a
+        # BaseExceptionGroup), which propagates past the AsyncExitStack
+        # unchanged and reaches the caller as a raw ConnectError-group.
+        try:
+            async with AsyncExitStack() as stack:
+                try:
+                    read_stream, write_stream = await _open_streams(stack, config)
+                except MCPError:
+                    raise
+                except BaseExceptionGroup as eg:
+                    inner = _first_inner(eg) or eg
+                    raise MCPTransportError(
+                        f"failed to open {config.transport!r} transport "
+                        f"for server {config.name!r}: {inner}"
+                    ) from eg
+                except Exception as exc:
+                    raise MCPTransportError(
+                        f"failed to open {config.transport!r} transport "
+                        f"for server {config.name!r}: {exc}"
                     ) from exc
-                raise MCPTransportError(
-                    f"initialize() against {config.name!r} failed: {exc}"
-                ) from exc
-            yield MCPSession(config=config, raw=session, init_result=init_result)
+
+                session = await stack.enter_async_context(
+                    ClientSession(
+                        read_stream,
+                        write_stream,
+                        read_timeout_seconds=timedelta(seconds=config.timeout_s),
+                    )
+                )
+                try:
+                    init_result = await session.initialize()
+                except MCPError:
+                    raise
+                except BaseExceptionGroup as eg:
+                    inner = _first_inner(eg) or eg
+                    raise MCPTransportError(
+                        f"initialize() against {config.name!r} failed: {inner}"
+                    ) from eg
+                except Exception as exc:
+                    msg = str(exc).lower()
+                    if "401" in msg or "403" in msg or "unauthor" in msg or "forbidden" in msg:
+                        raise MCPAuthError(
+                            f"server {config.name!r} rejected our credentials: {exc}"
+                        ) from exc
+                    raise MCPTransportError(
+                        f"initialize() against {config.name!r} failed: {exc}"
+                    ) from exc
+                yield MCPSession(config=config, raw=session, init_result=init_result)
+        except MCPError:
+            raise
+        except BaseExceptionGroup as eg:
+            # Cleanup-phase failure. The inner blocks may have already
+            # raised an MCPError (which would land in eg.exceptions);
+            # prefer that to keep the original context. Otherwise wrap.
+            inner = _first_inner(eg) or eg
+            if isinstance(inner, MCPError):
+                raise inner from eg
+            raise MCPTransportError(f"MCP session against {config.name!r} failed: {inner}") from eg
 
 
 async def _open_streams(stack: AsyncExitStack, config: MCPServerConfig) -> tuple[Any, Any]:
@@ -245,19 +255,33 @@ async def _open_streams(stack: AsyncExitStack, config: MCPServerConfig) -> tuple
 
 
 def _first_inner(eg: BaseExceptionGroup[BaseException]) -> BaseException | None:
-    """Return the first non-group exception inside an `ExceptionGroup`,
-    recursing into nested groups. Used to extract a meaningful error
-    message when the SDK wraps a `ConnectError` (or similar) in an
-    anyio TaskGroup's `BaseExceptionGroup`.
+    """Return the most informative non-group exception inside an
+    ExceptionGroup, recursing into nested groups.
+
+    Prefers an :class:`MCPError` if present anywhere in the tree —
+    that's the wrapped error our inner try/except blocks already
+    produced, and we want to surface it rather than the raw SDK
+    cause that may also be in the group (e.g. when an
+    AsyncExitStack cleanup combines our MCPTransportError with the
+    SDK's BaseExceptionGroup[ConnectError]).
     """
+    # First pass: look for an MCPError anywhere in the tree.
+    for exc in _walk(eg):
+        if isinstance(exc, MCPError):
+            return exc
+    # Second pass: return the first non-group leaf.
+    for exc in _walk(eg):
+        return exc
+    return None
+
+
+def _walk(eg: BaseExceptionGroup[BaseException]) -> Iterator[BaseException]:
+    """Yield every non-group leaf exception in `eg`, depth-first."""
     for exc in eg.exceptions:
         if isinstance(exc, BaseExceptionGroup):
-            inner = _first_inner(exc)
-            if inner is not None:
-                return inner
+            yield from _walk(exc)
         else:
-            return exc  # narrowed: not a group on this branch
-    return None
+            yield exc
 
 
 __all__ = ["MCPClient", "MCPSession"]
