@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Users } from "lucide-react";
+import { ArrowLeft, Pencil, Plus, Trash2, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -84,6 +85,11 @@ export default function TeamDetailPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // Plan 06.6: edit + delete dialogs.
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const router = useRouter();
+
   function resetDialog() {
     setSelectedAgentId("");
     setMode("linked");
@@ -137,13 +143,60 @@ export default function TeamDetailPage() {
         title={<span data-testid="team-name">{team?.name ?? "Equipo"}</span>}
         description={team?.description ?? "Detalle del equipo."}
         actions={
-          <Button variant="outline" asChild>
-            <Link href="/admin/teams">
-              <ArrowLeft className="mr-1 h-4 w-4" /> Volver a equipos
-            </Link>
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" asChild>
+              <Link href="/admin/teams">
+                <ArrowLeft className="mr-1 h-4 w-4" /> Volver
+              </Link>
+            </Button>
+            {team && !isReadOnly && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditOpen(true)}
+                  data-testid="team-edit-button"
+                >
+                  <Pencil className="mr-1 h-4 w-4" />
+                  Editar
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setDeleteOpen(true)}
+                  data-testid="team-delete-button"
+                >
+                  <Trash2 className="mr-1 h-4 w-4" />
+                  Borrar
+                </Button>
+              </>
+            )}
+          </div>
         }
       />
+      {team && !isReadOnly && (
+        <>
+          <TeamEditDialog
+            team={team}
+            open={editOpen}
+            onOpenChange={setEditOpen}
+            onSaved={() => {
+              void queryClient.invalidateQueries({ queryKey: ["teams", teamId] });
+              void queryClient.invalidateQueries({ queryKey: ["teams", "list"] });
+              setEditOpen(false);
+            }}
+          />
+          <TeamDeleteDialog
+            team={team}
+            open={deleteOpen}
+            onOpenChange={setDeleteOpen}
+            onDeleted={() => {
+              setDeleteOpen(false);
+              router.push("/admin/teams");
+            }}
+          />
+        </>
+      )}
 
       {teamQuery.isLoading && <p className="text-muted-foreground text-sm">Cargando equipo…</p>}
 
@@ -357,5 +410,186 @@ export default function TeamDetailPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Team edit dialog (Plan 06.6 task_06_6_08)
+// ---------------------------------------------------------------------------
+
+interface TeamUpdate {
+  name?: string;
+  description?: string | null;
+}
+
+function TeamEditDialog({
+  team,
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  team: Team;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(team.name);
+  const [description, setDescription] = useState(team.description ?? "");
+
+  useEffect(() => {
+    if (open) {
+      setName(team.name);
+      setDescription(team.description ?? "");
+    }
+  }, [open, team.name, team.description]);
+
+  const mutation = useMutation<Team, ApiError, TeamUpdate>({
+    mutationFn: (payload) =>
+      apiFetch<Team>(`/teams/${team.id}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: onSaved,
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Editar equipo</DialogTitle>
+          <DialogDescription>
+            Cambia el nombre o la descripción. Los miembros se gestionan desde la lista principal.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody className="space-y-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="te-name">Nombre</Label>
+            <Input
+              id="te-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              data-testid="edit-team-name"
+              required
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="te-description">Descripción</Label>
+            <textarea
+              id="te-description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              className="border-input bg-background rounded-md border px-3 py-2 text-sm"
+              data-testid="edit-team-description"
+            />
+          </div>
+          {mutation.isError && (
+            <p
+              className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
+              data-testid="edit-team-error"
+            >
+              {mutation.error?.message ?? "Error al guardar"}
+            </p>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancelar
+          </Button>
+          <Button
+            disabled={!name.trim() || mutation.isPending}
+            onClick={() =>
+              mutation.mutate({
+                name: name.trim(),
+                description: description.trim() || null,
+              })
+            }
+            data-testid="edit-team-save"
+          >
+            {mutation.isPending ? "Guardando…" : "Guardar"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Team delete dialog with confirm-by-name (Plan 06.6 task_06_6_09)
+// ---------------------------------------------------------------------------
+
+function TeamDeleteDialog({
+  team,
+  open,
+  onOpenChange,
+  onDeleted,
+}: {
+  team: Team;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onDeleted: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  const matches = typed === team.name;
+
+  const mutation = useMutation<void, ApiError, void>({
+    mutationFn: async () => {
+      await apiFetch(`/teams/${team.id}`, { method: "DELETE" });
+    },
+    onSuccess: onDeleted,
+  });
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) setTyped("");
+        onOpenChange(v);
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Borrar equipo</DialogTitle>
+          <DialogDescription>
+            Esta acción es <strong>irreversible</strong>. Los agentes miembros NO se borran — solo
+            desaparece su pertenencia a este equipo.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody className="space-y-3">
+          <p className="text-sm">
+            Para confirmar, teclea el nombre del equipo:
+            <br />
+            <code className="bg-muted rounded px-1 py-0.5 text-xs">{team.name}</code>
+          </p>
+          <Input
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={team.name}
+            data-testid="delete-team-confirm-input"
+          />
+          {mutation.isError && (
+            <p
+              className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
+              data-testid="delete-team-error"
+            >
+              {mutation.error?.message ?? "Error al borrar"}
+            </p>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancelar
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={!matches || mutation.isPending}
+            onClick={() => mutation.mutate()}
+            data-testid="delete-team-confirm"
+          >
+            {mutation.isPending ? "Borrando…" : "Borrar definitivamente"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

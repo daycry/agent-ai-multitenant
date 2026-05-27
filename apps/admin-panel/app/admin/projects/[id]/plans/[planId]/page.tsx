@@ -191,6 +191,7 @@ export default function PlanDetailPage() {
         data-testid="plan-detail-header"
       />
 
+      <PlanDeepLinksSection planId={plan.id} status={plan.status} />
       <SummarySection summary={spec.summary} />
       <EstimatesSection estimates={spec.estimates} />
       <CostBreakdownSection planId={plan.id} />
@@ -1004,6 +1005,45 @@ function TasksSection({ tasks }: { tasks: PlanSpecification["tasks"] | undefined
             ))}
           </tbody>
         </table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Deep links to per-plan panels (Plan 06.6 task_06_6_12)
+// --------------------------------------------------------------------------
+
+function PlanDeepLinksSection({ planId, status }: { planId: string; status: string }) {
+  return (
+    <Card className="my-4" data-testid="plan-deep-links">
+      <CardHeader>
+        <CardTitle className="text-base">Paneles del plan</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href={`/admin/plans/${planId}/escalated`}
+            data-testid="plan-link-escalated"
+            className="text-primary hover:text-primary/80 inline-flex items-center gap-1 rounded border px-3 py-1.5 text-sm"
+          >
+            Tareas escaladas →
+          </Link>
+          {status === "pending_human_validation" && (
+            <Link
+              href={`/admin/review/active?plan=${planId}`}
+              data-testid="plan-link-review"
+              className="text-primary hover:text-primary/80 inline-flex items-center gap-1 rounded border px-3 py-1.5 text-sm"
+            >
+              Sesión de review (plan en validación) →
+            </Link>
+          )}
+        </div>
+        <p className="text-muted-foreground mt-2 text-xs">
+          La página de "Tareas escaladas" muestra las tareas del plan que han hecho escalado a
+          humano (estado <code>awaiting_human</code>). La sesión de review se materializa cuando el
+          orchestrator productivo (Plan 06.5) está cableado.
+        </p>
       </CardContent>
     </Card>
   );
