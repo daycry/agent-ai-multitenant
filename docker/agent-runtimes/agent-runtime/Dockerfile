@@ -37,6 +37,14 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY packages/shared-llm/ /src/shared-llm/
 RUN pip install --no-cache-dir /src/shared-llm
 
+# shared-mcp is a path dependency of agent-runtime since Plan 05
+# task_05_03 (MCP tools adapter). Same trick as shared-llm: install
+# from the local wheel before agent-runtime so its name resolves
+# against the already-installed package rather than failing because
+# it doesn't exist on PyPI.
+COPY packages/shared-mcp/ /src/shared-mcp/
+RUN pip install --no-cache-dir /src/shared-mcp
+
 # pyproject.toml is the single source of truth for the dependency set.
 WORKDIR /build
 COPY docker/agent-runtimes/agent-runtime/pyproject.toml ./
