@@ -172,7 +172,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_06` — UI de configuración de MCP servers en panel del proyecto
 
-- [ ] **Título**: UI de configuración de MCP servers en panel del proyecto
+- [x] **Título**: UI de configuración de MCP servers en panel del proyecto
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
