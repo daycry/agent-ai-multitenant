@@ -295,7 +295,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_13` — Activar tools de tipo python_function en sandbox seguro (subprocess aislado, no eval)
 
-- [ ] **Título**: Activar tools de tipo python_function en sandbox seguro (subprocess aislado, no eval)
+- [x] **Título**: Activar tools de tipo python_function en sandbox seguro (subprocess aislado, no eval)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
