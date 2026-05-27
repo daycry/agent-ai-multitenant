@@ -242,7 +242,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_10` — Plantilla de configuración para postgres-mcp + tests con DB efímera
 
-- [ ] **Título**: Plantilla de configuración para postgres-mcp + tests con DB efímera
+- [x] **Título**: Plantilla de configuración para postgres-mcp + tests con DB efímera
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
