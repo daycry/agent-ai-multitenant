@@ -69,6 +69,12 @@ class MCPSession:
         """
         try:
             response = await self.raw.list_tools()
+        except BaseExceptionGroup as eg:
+            # Same reasoning as in MCPClient.connect — the SDK's
+            # anyio TaskGroup can wrap connection errors in a
+            # BaseExceptionGroup (BaseException, not Exception).
+            inner = _first_inner(eg) or eg
+            raise MCPTransportError(f"list_tools failed: {inner}") from eg
         except Exception as exc:
             raise MCPTransportError(f"list_tools failed: {exc}") from exc
         return [
@@ -91,6 +97,9 @@ class MCPSession:
         """
         try:
             response = await self.raw.call_tool(name, arguments=arguments or {})
+        except BaseExceptionGroup as eg:
+            inner = _first_inner(eg) or eg
+            raise MCPTransportError(f"call_tool({name!r}) failed: {inner}") from eg
         except Exception as exc:
             raise MCPTransportError(f"call_tool({name!r}) failed: {exc}") from exc
         # Concatenate text blocks; everything else stays in `raw`.
