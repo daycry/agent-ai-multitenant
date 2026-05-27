@@ -44,18 +44,72 @@ router = APIRouter(prefix="/projects/{project_id}/mcp", tags=["mcp"])
 
 
 # ---------------------------------------------------------------------------
-# Dependency seam — returns None today; a future task wires hvac here.
+# Dependency seam — builds an HvacVaultResolver lazily when configured.
 # ---------------------------------------------------------------------------
-def get_vault_resolver() -> VaultResolver | None:
-    """Hook for production Vault wiring.
+# Sentinel = "cache not built yet"; distinct from a built cache that's None.
+_UNSET: object = object()
 
-    The shape is fixed: callers receive either a working
-    :class:`shared_mcp.VaultResolver` or ``None``. Wiring a real
-    ``HvacVaultResolver`` is a follow-up (api-server has no hvac client
-    yet); until then the endpoint returns a typed AUTH_ERROR when the
-    candidate config requires a resolver this dependency cannot supply.
+
+class _ResolverCache:
+    """Module-level singleton holding the resolver. Class attribute (not
+    a `global` keyword) so ruff PLW0603 stays happy and the test reset
+    hook reads cleanly."""
+
+    value: VaultResolver | None | object = _UNSET
+
+
+def get_vault_resolver() -> VaultResolver | None:
+    """Build (lazily, once) an `HvacVaultResolver` backed by the
+    api-server's Vault config.
+
+    Returns ``None`` when ``API_SERVER_VAULT_TOKEN`` is not set — the
+    api-server starts without a working resolver and any MCP config
+    with ``auth_ref`` falls through to a typed AUTH_ERROR. That keeps
+    dev/test ergonomic (Vault doesn't need to be reachable to boot
+    the api-server) while production deployments set the token and
+    get real Vault resolution.
+
+    Cached on a module-level singleton because hvac.Client is cheap to
+    keep alive — one HTTP client + token. Tests reset via
+    :func:`reset_vault_resolver_cache`.
     """
-    return None
+    if _ResolverCache.value is not _UNSET:
+        cached = _ResolverCache.value
+        assert cached is None or isinstance(cached, VaultResolver)
+        return cached
+
+    from shared_mcp import HvacVaultResolver
+
+    from api_server.config import get_settings
+
+    settings = get_settings()
+    if settings.vault_token is None:
+        _ResolverCache.value = None
+        return None
+
+    try:
+        import hvac
+    except ImportError:
+        # hvac not installed — same as no token. Surface AUTH_ERROR
+        # rather than crash; the operator can either pip-install or
+        # unset the token to acknowledge they don't want Vault.
+        _ResolverCache.value = None
+        return None
+
+    client = hvac.Client(
+        url=settings.vault_url,
+        token=settings.vault_token.get_secret_value(),
+    )
+    resolver: VaultResolver = HvacVaultResolver(client=client)
+    _ResolverCache.value = resolver
+    return resolver
+
+
+def reset_vault_resolver_cache() -> None:
+    """Test hook: forget the cached resolver so the next call rebuilds
+    it from current settings + env. Used by tests that mutate
+    ``API_SERVER_VAULT_TOKEN`` between cases."""
+    _ResolverCache.value = _UNSET
 
 
 # ---------------------------------------------------------------------------

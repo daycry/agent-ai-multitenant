@@ -52,6 +52,15 @@ class Settings(BaseSettings):
         default="http://localhost:8200",
         description="Vault HTTP base URL.",
     )
+    vault_token: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Vault auth token. None means 'no Vault wiring' — the api-server "
+            "starts without a working VaultResolver, and any MCP config with "
+            "`auth_ref` falls back to a typed AUTH_ERROR. In dev compose the "
+            "env var is API_SERVER_VAULT_TOKEN=dev-root-token."
+        ),
+    )
     minio_url: str = Field(
         default="http://localhost:9000",
         description="MinIO HTTP API base URL.",

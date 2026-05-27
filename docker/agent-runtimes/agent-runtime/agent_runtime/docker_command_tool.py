@@ -174,7 +174,15 @@ class DockerCommandTool:
 
 def _build_run_kwargs(tool: DockerCommandTool, _command: list[str]) -> dict[str, Any]:
     """Hardened run kwargs for `containers.run`. Centralised so a code
-    review can audit "what does the agent's container get?" in one place."""
+    review can audit "what does the agent's container get?" in one place.
+
+    Wall-clock timeout note: ``containers.run(detach=False, ...)`` blocks
+    until the container exits and ignores any "max runtime" kwarg —
+    docker-py doesn't expose one. The timeout in `tool.timeout_s` is
+    enforced by the launcher (the agent worker, or the demo script)
+    via a separate watchdog, not here. A future refactor could move
+    to `containers.create + start + wait(timeout=)` for SDK-level
+    enforcement; for Plan 05 we accept the simpler shape."""
     return {
         "remove": True,
         "detach": False,
@@ -190,9 +198,6 @@ def _build_run_kwargs(tool: DockerCommandTool, _command: list[str]) -> dict[str,
         "mem_limit": tool.mem_limit_bytes,
         "pids_limit": tool.pids_limit,
         "environment": dict(tool.static_env),
-        # docker-py honours this as the wall-clock cap on the run.
-        # If the container exceeds it, the SDK raises ReadTimeout.
-        "stop_timeout": int(tool.timeout_s),
         # Disable network DNS by default; matches network_mode='none'.
         "dns": [] if tool.network_mode == "none" else None,
     }

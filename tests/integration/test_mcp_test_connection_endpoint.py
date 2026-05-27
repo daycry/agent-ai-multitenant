@@ -298,6 +298,54 @@ async def test_body_rejects_stdio_without_command_with_422(client: AsyncClient) 
 # ---------------------------------------------------------------------------
 # Vault resolver wiring — when set, the endpoint forwards it to discover
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Vault wiring (task_05_17) — get_vault_resolver builds an HvacVaultResolver
+# when API_SERVER_VAULT_TOKEN is set, returns None otherwise.
+# ---------------------------------------------------------------------------
+def test_get_vault_resolver_returns_none_when_no_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default state — no env var set, resolver is None and the
+    endpoint will surface AUTH_ERROR for configs that need Vault."""
+    monkeypatch.delenv("API_SERVER_VAULT_TOKEN", raising=False)
+    from api_server.config import get_settings
+    from api_server.routers.mcp import get_vault_resolver, reset_vault_resolver_cache
+
+    get_settings.cache_clear()
+    reset_vault_resolver_cache()
+    assert get_vault_resolver() is None
+
+
+def test_get_vault_resolver_builds_hvac_resolver_when_token_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("API_SERVER_VAULT_TOKEN", "dev-root-token")
+    monkeypatch.setenv("API_SERVER_VAULT_URL", "http://vault.example:8200")
+    from api_server.config import get_settings
+    from api_server.routers.mcp import get_vault_resolver, reset_vault_resolver_cache
+
+    get_settings.cache_clear()
+    reset_vault_resolver_cache()
+    resolver = get_vault_resolver()
+    assert resolver is not None
+    # Class name check avoids importing HvacVaultResolver here.
+    assert type(resolver).__name__ == "HvacVaultResolver"
+
+
+def test_get_vault_resolver_is_cached_across_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("API_SERVER_VAULT_TOKEN", "dev-root-token")
+    from api_server.config import get_settings
+    from api_server.routers.mcp import get_vault_resolver, reset_vault_resolver_cache
+
+    get_settings.cache_clear()
+    reset_vault_resolver_cache()
+    a = get_vault_resolver()
+    b = get_vault_resolver()
+    assert a is b
+
+
 @pytest.mark.asyncio
 async def test_resolver_is_forwarded_to_discover_tools(
     app_with_visible_project: FastAPI,
