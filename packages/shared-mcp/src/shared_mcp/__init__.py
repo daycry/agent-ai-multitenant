@@ -22,6 +22,7 @@ from shared_mcp.auth import (
     VaultResolver,
     apply_vault_auth,
 )
+from shared_mcp.catalog import CATALOG, McpServerTemplate, render_vault_path
 from shared_mcp.client import MCPClient, MCPSession
 from shared_mcp.discovery import DiscoveryResult, discover_tools
 from shared_mcp.exceptions import (
@@ -38,6 +39,7 @@ from shared_mcp.types import (
 )
 
 __all__ = [
+    "CATALOG",
     "DiscoveryResult",
     "HvacVaultResolver",
     "MCPAuthError",
@@ -49,9 +51,11 @@ __all__ = [
     "MCPToolError",
     "MCPToolResult",
     "MCPTransportError",
+    "McpServerTemplate",
     "StaticVaultResolver",
     "Transport",
     "VaultResolver",
     "apply_vault_auth",
     "discover_tools",
+    "render_vault_path",
 ]

@@ -208,7 +208,7 @@ Hasta aquí los agentes usan solo tools builtin. Con MCP el sistema se abre a un
 
 #### `task_05_08` — Documentar e integrar docling-mcp (ya conectado en Fase 4) en el catálogo
 
-- [ ] **Título**: Documentar e integrar docling-mcp (ya conectado en Fase 4) en el catálogo
+- [x] **Título**: Documentar e integrar docling-mcp (ya conectado en Fase 4) en el catálogo
 - **Tiempo estimado**: 2 h
 - **Complejidad**: xs
 - **Rol sugerido**: technical-writer
