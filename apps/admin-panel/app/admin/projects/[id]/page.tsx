@@ -305,7 +305,7 @@ function ProjectEditDialog({
     mutationFn: (payload) =>
       apiFetch<Project>(`/projects/${project.id}`, {
         method: "PUT",
-        body: JSON.stringify(payload),
+        body: payload,
       }),
     onSuccess: onSaved,
   });

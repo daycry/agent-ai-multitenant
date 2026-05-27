@@ -38,7 +38,7 @@ const NAV: NavItem[] = [
   { href: "/admin/approval-policy", label: "Validación humana", Icon: ShieldCheck },
   { href: "/admin/memories", label: "Memorias", Icon: Brain },
   { href: "/admin/documents", label: "Documentos", Icon: FileText },
-  { href: "/admin/settings/hourly-rate", label: "Settings", Icon: Settings },
+  { href: "/admin/settings", label: "Settings", Icon: Settings },
 ];
 
 export function AdminShell({ children }: { children: ReactNode }) {

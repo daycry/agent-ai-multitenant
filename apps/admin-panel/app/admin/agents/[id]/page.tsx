@@ -275,7 +275,7 @@ function AgentEditDialog({
     mutationFn: (payload) =>
       apiFetch<Agent>(`/agents/${agent.id}`, {
         method: "PUT",
-        body: JSON.stringify(payload),
+        body: payload,
       }),
     onSuccess: onSaved,
   });

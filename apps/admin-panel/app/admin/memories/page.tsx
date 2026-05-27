@@ -16,12 +16,21 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Brain, Trash2 } from "lucide-react";
+import { Brain, GitMerge, Search, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -184,6 +193,8 @@ function MemoryList({
 }
 
 function MemoryRow({ memory, onDeleted }: { memory: MemoryResponse; onDeleted: () => void }) {
+  const [similarOpen, setSimilarOpen] = useState(false);
+
   const deleteMutation = useMutation({
     mutationFn: () => apiFetch<void>(`/memories/${memory.id}`, { method: "DELETE" }),
     onSuccess: () => onDeleted(),
@@ -207,17 +218,175 @@ function MemoryRow({ memory, onDeleted }: { memory: MemoryResponse; onDeleted: (
         </div>
         <p className="mt-1 whitespace-pre-wrap">{memory.content}</p>
       </div>
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => deleteMutation.mutate()}
-        disabled={deleteMutation.isPending}
-        data-testid={`memory-delete-${memory.id}`}
-        aria-label="Eliminar"
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </Button>
+      <div className="flex gap-1">
+        {memory.has_embedding && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setSimilarOpen(true)}
+            data-testid={`memory-similar-${memory.id}`}
+            aria-label="Ver similares"
+            title="Ver memorias similares"
+          >
+            <Search className="h-3.5 w-3.5" />
+          </Button>
+        )}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => deleteMutation.mutate()}
+          disabled={deleteMutation.isPending}
+          data-testid={`memory-delete-${memory.id}`}
+          aria-label="Eliminar"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+      {similarOpen && (
+        <SimilarMemoriesDialog
+          memory={memory}
+          onOpenChange={setSimilarOpen}
+          onChanged={onDeleted}
+        />
+      )}
     </li>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Similar memories dialog (Plan 06.7 task_06_7_08)
+// --------------------------------------------------------------------------
+
+interface SimilarItem {
+  memory: MemoryResponse;
+  similarity: number;
+}
+
+function SimilarMemoriesDialog({
+  memory,
+  onOpenChange,
+  onChanged,
+}: {
+  memory: MemoryResponse;
+  onOpenChange: (v: boolean) => void;
+  onChanged: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const similarQuery = useQuery<SimilarItem[], ApiError>({
+    queryKey: ["memory-similar", memory.id],
+    queryFn: () => apiFetch<SimilarItem[]>(`/memories/${memory.id}/similar`),
+    refetchOnWindowFocus: false,
+  });
+
+  const refetchAll = () => {
+    void queryClient.invalidateQueries({ queryKey: ["memory-similar", memory.id] });
+    void queryClient.invalidateQueries({ queryKey: ["memories"] });
+    onChanged();
+  };
+
+  const mergeMutation = useMutation<MemoryResponse, ApiError, string>({
+    mutationFn: (sourceId: string) =>
+      apiFetch<MemoryResponse>(`/memories/${sourceId}/merge-into`, {
+        method: "POST",
+        body: { target_id: memory.id },
+      }),
+    onSuccess: () => refetchAll(),
+  });
+
+  const discardMutation = useMutation<void, ApiError, string>({
+    mutationFn: (candidateId: string) =>
+      apiFetch<void>(`/memories/${candidateId}`, { method: "DELETE" }),
+    onSuccess: () => refetchAll(),
+  });
+
+  return (
+    <Dialog open={true} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Memorias similares</DialogTitle>
+          <DialogDescription>
+            Candidatos a duplicado encontrados por similitud coseno del embedding. "Fusionar"
+            combina el contenido del candidato en esta memoria (la actual sobrevive). "Descartar"
+            hace soft-delete del candidato.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody className="space-y-3">
+          <Card className="bg-muted/40 p-3">
+            <p className="text-muted-foreground mb-1 text-[10px] uppercase tracking-wide">
+              Memoria actual (target)
+            </p>
+            <p className="text-sm whitespace-pre-wrap">{memory.content}</p>
+          </Card>
+
+          {similarQuery.isLoading && (
+            <p className="text-muted-foreground text-sm" data-testid="similar-loading">
+              Buscando candidatos…
+            </p>
+          )}
+
+          {similarQuery.isError && (
+            <p
+              className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
+              data-testid="similar-error"
+            >
+              Error: {similarQuery.error?.message ?? "desconocido"}
+            </p>
+          )}
+
+          {similarQuery.data && similarQuery.data.length === 0 && (
+            <p className="text-muted-foreground text-sm" data-testid="similar-empty">
+              No hay candidatos por encima del umbral configurado.
+            </p>
+          )}
+
+          {similarQuery.data && similarQuery.data.length > 0 && (
+            <ul className="space-y-2" data-testid="similar-list">
+              {similarQuery.data.map((item) => (
+                <li
+                  key={item.memory.id}
+                  className="border-muted rounded border p-3"
+                  data-testid={`similar-item-${item.memory.id}`}
+                >
+                  <div className="mb-1 flex items-center justify-between">
+                    <Badge variant="info" data-testid={`similar-pct-${item.memory.id}`}>
+                      {(item.similarity * 100).toFixed(1)}% similitud
+                    </Badge>
+                    <div className="flex gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={mergeMutation.isPending}
+                        onClick={() => mergeMutation.mutate(item.memory.id)}
+                        data-testid={`similar-merge-${item.memory.id}`}
+                      >
+                        <GitMerge className="mr-1 h-3.5 w-3.5" />
+                        Fusionar
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={discardMutation.isPending}
+                        onClick={() => discardMutation.mutate(item.memory.id)}
+                        data-testid={`similar-discard-${item.memory.id}`}
+                      >
+                        <Trash2 className="mr-1 h-3.5 w-3.5" />
+                        Descartar
+                      </Button>
+                    </div>
+                  </div>
+                  <p className="text-sm whitespace-pre-wrap">{item.memory.content}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cerrar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -272,7 +272,7 @@ function NewAgentDialog({
     mutationFn: (payload) =>
       apiFetch<Agent>("/agents", {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: payload,
       }),
     onSuccess: () => {
       // Reset for next opening.

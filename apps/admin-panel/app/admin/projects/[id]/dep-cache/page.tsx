@@ -68,7 +68,7 @@ export default function DepCachePage() {
         `/projects/${projectId}/dep-cache/invalidate`,
         {
           method: "POST",
-          body: JSON.stringify({ runtime }),
+          body: { runtime },
         },
       );
       return res;

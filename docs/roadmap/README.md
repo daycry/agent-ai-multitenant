@@ -34,6 +34,7 @@ Cada archivo contiene:
 | 06   | [06-testing-revision-git.md](./06-testing-revision-git.md)               | 4-5 sem  | 03, 05     |
 | 06.5 | [06.5-orchestrator-wiring.md](./06.5-orchestrator-wiring.md)             | 1-2 sem  | 06         |
 | 06.6 | [06.6-admin-ui-gaps.md](./06.6-admin-ui-gaps.md)                         | 3-5 d    | 06         |
+| 06.7 | [06.7-memory-dedup.md](./06.7-memory-dedup.md)                           | 2 d      | 04         |
 | 07   | [07-documentacion-visor.md](./07-documentacion-visor.md)                 | 3 sem    | 06         |
 | 08   | [08-sso-empresarial.md](./08-sso-empresarial.md)                         | 2-3 sem  | 00         |
 | 09   | [09-marketplace.md](./09-marketplace.md)                                 | 3-4 sem  | 05         |

@@ -447,7 +447,7 @@ function TeamEditDialog({
     mutationFn: (payload) =>
       apiFetch<Team>(`/teams/${team.id}`, {
         method: "PUT",
-        body: JSON.stringify(payload),
+        body: payload,
       }),
     onSuccess: onSaved,
   });

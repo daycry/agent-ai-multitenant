@@ -255,4 +255,173 @@ async def delete_memory(
     await session.flush()
 
 
+# ---------------------------------------------------------------------------
+# Plan 06.7 — Similar memories (pgvector cosine) + merge-into
+# ---------------------------------------------------------------------------
+
+
+class SimilarMemoryItem(BaseModel):
+    """One candidate returned by `GET /memories/{id}/similar`."""
+
+    model_config = _BASE_CONFIG
+    memory: MemoryResponse
+    similarity: float
+    """Cosine similarity in [0, 1]. 1.0 = identical embeddings."""
+
+
+class MergeRequest(BaseModel):
+    """Body of POST /memories/{source_id}/merge-into."""
+
+    model_config = _BASE_CONFIG
+    target_id: UUID
+
+
+@router.get("/{memory_id}/similar", response_model=list[SimilarMemoryItem])
+async def list_similar_memories(
+    memory_id: UUID,
+    threshold: float | None = None,
+    limit: int | None = None,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[SimilarMemoryItem]:
+    """Return up to ``limit`` memories with cosine similarity ≥
+    ``threshold`` to the row's embedding. Defaults come from the
+    tenant-settings registry (Plan 06.7)."""
+    from sqlalchemy import text as _text
+
+    from api_server.settings_registry import get_setting
+
+    tenant_id = require_tenant_id(principal)
+
+    src = (
+        await session.execute(
+            select(MemoryEntry).where(MemoryEntry.id == memory_id, MemoryEntry.deleted_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    if src is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
+    if src.embedding is None:
+        return []
+
+    eff_threshold = (
+        threshold
+        if threshold is not None
+        else float(await get_setting(session, tenant_id, "memories", "similarity.threshold"))
+    )
+    eff_limit = (
+        limit
+        if limit is not None
+        else int(await get_setting(session, tenant_id, "memories", "similarity.limit"))
+    )
+
+    sql = _text(
+        """
+        SELECT
+            id,
+            1 - (embedding <=> CAST(:src_embedding AS vector)) AS similarity
+        FROM memory_entries
+        WHERE id != :src_id
+          AND deleted_at IS NULL
+          AND embedding IS NOT NULL
+          AND scope = :scope
+          AND tenant_id = :tenant_id
+          AND (1 - (embedding <=> CAST(:src_embedding AS vector))) >= :threshold
+        ORDER BY embedding <=> CAST(:src_embedding AS vector)
+        LIMIT :limit
+        """
+    )
+    rows = (
+        await session.execute(
+            sql,
+            {
+                "src_id": src.id,
+                "src_embedding": str(src.embedding),
+                "scope": src.scope,
+                "tenant_id": tenant_id,
+                "threshold": eff_threshold,
+                "limit": eff_limit,
+            },
+        )
+    ).all()
+    if not rows:
+        return []
+
+    candidate_ids = [r.id for r in rows]
+    sim_by_id = {r.id: float(r.similarity) for r in rows}
+    candidates = (
+        (await session.execute(select(MemoryEntry).where(MemoryEntry.id.in_(candidate_ids))))
+        .scalars()
+        .all()
+    )
+    by_id = {c.id: c for c in candidates}
+
+    return [
+        SimilarMemoryItem(
+            memory=_to_response(by_id[cid]),
+            similarity=round(sim_by_id[cid], 4),
+        )
+        for cid in candidate_ids
+        if cid in by_id
+    ]
+
+
+@router.post("/{source_id}/merge-into", response_model=MemoryResponse)
+async def merge_memory_into(
+    source_id: UUID,
+    payload: MergeRequest,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> MemoryResponse:
+    """Fold ``source_id`` INTO ``target_id`` (asymmetric merge).
+
+    Target's content gets the source's appended (separator
+    ``\\n\\n---\\n``); tags become the union; ``metadata.merged_from``
+    accumulates the source's id. The source is soft-deleted.
+    """
+    require_tenant_id(principal)
+
+    if source_id == payload.target_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="cannot merge a memory into itself",
+        )
+
+    src = (
+        await session.execute(
+            select(MemoryEntry).where(MemoryEntry.id == source_id, MemoryEntry.deleted_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    tgt = (
+        await session.execute(
+            select(MemoryEntry).where(
+                MemoryEntry.id == payload.target_id, MemoryEntry.deleted_at.is_(None)
+            )
+        )
+    ).scalar_one_or_none()
+    if src is None or tgt is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
+    if src.scope != tgt.scope:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"cannot merge across scopes ({src.scope!r} -> {tgt.scope!r})",
+        )
+
+    tgt.content = f"{tgt.content}\n\n---\n{src.content}"
+    merged_tags = list(dict.fromkeys([*list(tgt.tags or []), *list(src.tags or [])]))
+    tgt.tags = merged_tags
+    md = dict(tgt.metadata_ or {})
+    history = list(md.get("merged_from") or [])
+    history.append(str(src.id))
+    md["merged_from"] = history
+    tgt.metadata_ = md
+
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    src.deleted_at = _dt.now(tz=UTC)
+    await session.flush()
+    await session.refresh(tgt)
+    return _to_response(tgt)
+
+
 __all__ = ["router"]
