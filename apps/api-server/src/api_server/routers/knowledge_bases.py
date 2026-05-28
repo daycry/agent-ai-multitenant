@@ -26,7 +26,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import (
+    AuthPrincipal,
+    get_tenant_session,
+    require_tenant_admin,
+    require_tenant_member,
+)
 from api_server.db.domain import Project
 from api_server.db.knowledge import (
     Chunk,
@@ -101,7 +106,7 @@ def _storage_key(*, tenant_id: UUID, kb_id: UUID, document_id: UUID, filename: s
 @router.post("", response_model=KnowledgeBaseResponse, status_code=status.HTTP_201_CREATED)
 async def create_kb(
     payload: KnowledgeBaseCreateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> KnowledgeBaseResponse:
     tenant_id = require_tenant_id(principal)
@@ -127,7 +132,7 @@ async def create_kb(
 
 @router.get("", response_model=list[KnowledgeBaseResponse])
 async def list_kbs(
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[KnowledgeBaseResponse]:
     result = await session.execute(
@@ -141,7 +146,7 @@ async def list_kbs(
 @router.get("/{kb_id}", response_model=KnowledgeBaseResponse)
 async def get_kb(
     kb_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> KnowledgeBaseResponse:
     return to_kb_response(await _load_kb(session, kb_id))
@@ -151,7 +156,7 @@ async def get_kb(
 async def update_kb(
     kb_id: UUID,
     payload: KnowledgeBaseUpdateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> KnowledgeBaseResponse:
     require_tenant_id(principal)
@@ -170,7 +175,7 @@ async def update_kb(
 @router.delete("/{kb_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_kb(
     kb_id: UUID,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> None:
     require_tenant_id(principal)
@@ -189,7 +194,7 @@ async def delete_kb(
 async def grant_kb_to_project(
     kb_id: UUID,
     payload: KnowledgeBaseGrantRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> KnowledgeBaseGrantResponse:
     """Make the KB visible to a project. Idempotent: re-granting
@@ -229,7 +234,7 @@ async def grant_kb_to_project(
 async def revoke_kb_from_project(
     kb_id: UUID,
     project_id: UUID,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> None:
     require_tenant_id(principal)
@@ -251,7 +256,7 @@ async def revoke_kb_from_project(
 @project_kb_router.get("", response_model=list[KnowledgeBaseResponse])
 async def list_kbs_for_project(
     project_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[KnowledgeBaseResponse]:
     """List the KBs a project has been granted."""
@@ -281,7 +286,7 @@ async def upload_document(
     kb_id: UUID,
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
     storage: ObjectStorage = Depends(get_object_storage),
 ) -> DocumentResponse:
@@ -339,7 +344,7 @@ async def upload_document(
 @router.get("/{kb_id}/documents", response_model=list[DocumentResponse])
 async def list_documents(
     kb_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[DocumentResponse]:
     await _load_kb(session, kb_id)
@@ -355,7 +360,7 @@ async def list_documents(
 async def get_document(
     kb_id: UUID,
     document_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> DocumentResponse:
     doc = await _load_document(session, document_id)
@@ -368,7 +373,7 @@ async def get_document(
 async def delete_document(
     kb_id: UUID,
     document_id: UUID,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
     storage: ObjectStorage = Depends(get_object_storage),
 ) -> None:
@@ -395,7 +400,7 @@ documents_router = APIRouter(prefix="/documents", tags=["documents"])
 @documents_router.get("/{document_id}/citations")
 async def get_document_citations(
     document_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> dict[str, object]:
     """Return the Document + all its chunks ordered by `ordinal`,

@@ -25,15 +25,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import (
     AuthPrincipal,
-    get_principal,
     get_tenant_session,
+    require_tenant_admin,
+    require_tenant_member,
 )
 from api_server.db.models import (
     Organization,
     TenantSetting,
-    User,
-    UserOrganizationMembership,
-    UserRole,
 )
 from api_server.routers._helpers import require_tenant_id
 from api_server.settings_registry import (
@@ -73,37 +71,9 @@ async def _load_org(session: AsyncSession, tenant_id: Any) -> Organization:
     return org
 
 
-async def _require_tenant_admin(
-    session: AsyncSession, principal: AuthPrincipal, tenant_id: Any
-) -> None:
-    """The JWT user must be a tenant_admin on that tenant — or a
-    platform-level system_admin. Anything else returns 403."""
-    if principal.user_id is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
-    user = await session.get(User, principal.user_id)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
-    if user.is_system_admin:
-        return
-    membership_q = await session.execute(
-        select(UserOrganizationMembership).where(
-            UserOrganizationMembership.user_id == principal.user_id,
-            UserOrganizationMembership.tenant_id == tenant_id,
-            UserOrganizationMembership.is_active.is_(True),
-            UserOrganizationMembership.deleted_at.is_(None),
-        )
-    )
-    membership = membership_q.scalar_one_or_none()
-    if membership is None or membership.role != UserRole.TENANT_ADMIN.value:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="tenant_admin role required",
-        )
-
-
 @router.get("/hourly-rate", response_model=HourlyRateResponse)
 async def get_tenant_hourly_rate(
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> HourlyRateResponse:
     tenant_id = require_tenant_id(principal)
@@ -117,11 +87,10 @@ async def get_tenant_hourly_rate(
 @router.put("/hourly-rate", response_model=HourlyRateResponse)
 async def update_tenant_hourly_rate(
     payload: HourlyRateUpdateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> HourlyRateResponse:
     tenant_id = require_tenant_id(principal)
-    await _require_tenant_admin(session, principal, tenant_id)
     org = await _load_org(session, tenant_id)
 
     # We accept either field independently. Setting both to None is the
@@ -164,7 +133,7 @@ class SettingValueResponse(BaseModel):
 
 @router.get("/_registry")
 async def get_settings_registry(
-    _principal: AuthPrincipal = Depends(get_principal),
+    _principal: AuthPrincipal = Depends(require_tenant_member),
 ) -> dict[str, Any]:
     """Return the in-code registry of known categories + settings.
 
@@ -178,7 +147,7 @@ async def get_settings_registry(
 @router.get("/{category}", response_model=list[SettingValueResponse])
 async def list_category_settings(
     category: str,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[SettingValueResponse]:
     """Return every (key, value) pair of a category for the current
@@ -216,7 +185,7 @@ async def list_category_settings(
 async def get_category_setting(
     category: str,
     key: str,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> SettingValueResponse:
     tenant_id = require_tenant_id(principal)
@@ -246,14 +215,13 @@ async def put_category_setting(
     category: str,
     key: str,
     payload: SettingValueRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> SettingValueResponse:
     """Upsert a single setting. Validates against the registry
     (unknown keys → 404, out-of-range values → 422). Requires
     tenant_admin (same as the hourly-rate endpoint)."""
     tenant_id = require_tenant_id(principal)
-    await _require_tenant_admin(session, principal, tenant_id)
 
     try:
         coerced = validate_setting_value(category, key, payload.value)

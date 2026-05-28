@@ -13,7 +13,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_redis, get_tenant_session
+from api_server.auth.deps import (
+    AuthPrincipal,
+    get_redis,
+    get_tenant_session,
+    require_tenant_member,
+)
 from api_server.db.approval_repo import (
     get_approval_request,
     list_pending_approvals,
@@ -42,7 +47,7 @@ async def list_approvals(
 async def resolve_approval_request(
     request_id: UUID,
     payload: ApprovalResolveRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
     redis: Redis = Depends(get_redis),
 ) -> ApprovalRequestResponse:

@@ -36,7 +36,7 @@ from shared_mcp import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
 from api_server.db.domain import Project
 from api_server.mcp.config import MCPServerConfigModel
 
@@ -174,7 +174,7 @@ class McpTestConnectionError(BaseModel):
 async def test_mcp_connection(
     project_id: UUID,
     payload: MCPServerConfigModel,
-    _principal: AuthPrincipal = Depends(get_principal),
+    _principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
     resolver: VaultResolver | None = Depends(get_vault_resolver),
 ) -> TestConnectionResponse:

@@ -20,9 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import (
     AuthPrincipal,
-    get_principal,
     get_redis,
     get_tenant_session,
+    require_tenant_admin,
+    require_tenant_member,
 )
 from api_server.chat.dag_enforcement import (
     DependenciesNotDoneError,
@@ -112,7 +113,7 @@ async def list_tasks(
     priority: str | None = Query(default=None),
     assigned_agent_id: UUID | None = Query(default=None),
     plan_id: UUID | None = Query(default=None),
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[TaskResponse]:
     await _verify_project_visible(session, project_id)
@@ -153,7 +154,7 @@ async def list_tasks(
 async def get_task(
     project_id: UUID,
     task_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TaskResponse:
     await _verify_project_visible(session, project_id)
@@ -174,7 +175,7 @@ async def get_task(
 async def create_task(
     project_id: UUID,
     payload: TaskCreateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TaskResponse:
     tenant_id = require_tenant_id(principal)
@@ -219,7 +220,7 @@ async def update_task(
     project_id: UUID,
     task_id: UUID,
     payload: TaskUpdateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TaskResponse:
     require_tenant_id(principal)
@@ -293,7 +294,7 @@ async def update_task(
 async def delete_task(
     project_id: UUID,
     task_id: UUID,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> None:
     require_tenant_id(principal)

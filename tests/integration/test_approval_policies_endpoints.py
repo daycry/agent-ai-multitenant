@@ -167,9 +167,14 @@ async def test_lists_builtin_with_tenant_session(configured_app, migrations_pg_d
 
 @pytest.mark.asyncio
 async def test_lists_builtin_with_no_tid_claim(configured_app, migrations_pg_dsn: str) -> None:
-    """A fresh-login token (no tid claim yet) should still see the
-    built-in catalog because the table's RLS policy permits
-    `is_builtin = true` SELECTs unconditionally."""
+    """A fresh-login token (no tid claim) is rejected with 403 after
+    Plan 06.8 — `require_tenant_member` needs a tenant context to
+    evaluate membership. The reviewer must pick a tenant first; the
+    builtin catalog is then visible via the tenant-scoped path.
+
+    Before 06.8 this endpoint was principal-only and the RLS policy
+    `approval_policy_templates_builtin_read` returned the builtins
+    unconditionally; now the gate runs first and rejects no-tid."""
     seed = await _seed_db(migrations_pg_dsn)
     token = await _mint_token(seed["user_a"], None)
 
@@ -182,9 +187,7 @@ async def test_lists_builtin_with_no_tid_claim(configured_app, migrations_pg_dsn
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    assert resp.status_code == 200
-    data = resp.json()
-    assert {row["name"] for row in data} == {"Sandbox"}
+    assert resp.status_code == 403
 
 
 @pytest.mark.asyncio

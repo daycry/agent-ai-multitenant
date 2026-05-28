@@ -26,7 +26,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import (
+    AuthPrincipal,
+    get_tenant_session,
+    require_tenant_admin,
+    require_tenant_member,
+)
 from api_server.db.domain import Agent, Team, TeamMember
 from api_server.routers._helpers import (
     apply_partial_update,
@@ -89,7 +94,7 @@ async def list_teams(
         le=500,
         description="Max teams returned. Small for typeahead, default 100 for the listing page.",
     ),
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[TeamResponse]:
     stmt = select(Team).where(Team.deleted_at.is_(None))
@@ -118,7 +123,7 @@ async def list_teams(
 @router.get("/{team_id}", response_model=TeamResponse)
 async def get_team(
     team_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TeamResponse:
     result = await session.execute(
@@ -134,7 +139,7 @@ async def get_team(
 @router.post("", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
 async def create_team(
     payload: TeamCreateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TeamResponse:
     tenant_id = require_tenant_id(principal)
@@ -155,7 +160,7 @@ async def create_team(
 async def update_team(
     team_id: UUID,
     payload: TeamUpdateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TeamResponse:
     require_tenant_id(principal)
@@ -174,7 +179,7 @@ async def update_team(
 @router.delete("/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_team(
     team_id: UUID,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> None:
     require_tenant_id(principal)
@@ -195,7 +200,7 @@ async def delete_team(
 async def add_member(
     team_id: UUID,
     payload: TeamMemberAddRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TeamResponse:
     require_tenant_id(principal)
@@ -233,7 +238,7 @@ async def update_member(
     team_id: UUID,
     agent_id: UUID,
     payload: TeamMemberUpdateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TeamResponse:
     require_tenant_id(principal)
@@ -263,7 +268,7 @@ async def update_member(
 async def remove_member(
     team_id: UUID,
     agent_id: UUID,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> None:
     require_tenant_id(principal)
