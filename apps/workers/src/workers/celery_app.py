@@ -46,6 +46,12 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
     """Construct the Celery app. `settings` is injectable for tests."""
     cfg = settings or get_settings()
 
+    # Imported here (not at module top) to avoid Celery importing the
+    # maintenance task module before its own celery_app singleton is
+    # ready — `maintenance.py` registers tasks against `app`, so we
+    # need the schedule attached AFTER `app` exists.
+    from workers.beat_schedule import BEAT_SCHEDULE
+
     app = Celery("agentic-workers")
     app.conf.update(
         broker_url=cfg.broker_url,
@@ -55,7 +61,7 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
         task_default_queue=DEFAULT_QUEUE,
         # Task modules a real worker imports on boot so the tasks are
         # registered (imported lazily — no circular import at config time).
-        imports=("workers.tasks", "workers.memorizer"),
+        imports=("workers.tasks", "workers.memorizer", "workers.maintenance"),
         # Agent runs are long; ack only after completion so a worker
         # crash re-queues the job instead of losing it.
         task_acks_late=True,
@@ -72,6 +78,8 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
         accept_content=["json"],
         timezone="UTC",
         enable_utc=True,
+        # Plan 06.5 Fase D — periodic maintenance.
+        beat_schedule=BEAT_SCHEDULE,
     )
     return app
 

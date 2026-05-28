@@ -283,12 +283,79 @@ class TenantSetting(Base):
         return f"TenantSetting(tenant={self.tenant_id} {self.category}.{self.key})"
 
 
+# ---------------------------------------------------------------------------
+# Review sessions — persistence of `workers.review_runtime.ReviewSession`
+# (Plan 06.5 task_06_5_01). The manager was in-memory; this table makes
+# it durable across worker restarts.
+# ---------------------------------------------------------------------------
+class ReviewSession(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
+    __tablename__ = "review_sessions"
+
+    plan_id: Mapped[UUID] = mapped_column(
+        ForeignKey("plans.id", ondelete="CASCADE"), nullable=False
+    )
+    # Serialized `ReviewRuntimeSpec` — full enough to re-hydrate the
+    # session and re-issue signed URLs after a worker restart.
+    spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'running'")
+    )
+    container_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    verdict: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(nullable=True)
+    rerun_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    last_activity_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    suspended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return f"ReviewSession(id={self.id!r}, plan={self.plan_id!r}, status={self.status!r})"
+
+
+# ---------------------------------------------------------------------------
+# Task audit events — append-only history of one task (Plan 06.5
+# task_06_5_02). Mirrors `api_server.task_lifecycle.AuditEvent` 1:1.
+# The append-only invariant is enforced by the repository (no UPDATE /
+# DELETE paths), not by a DB trigger — same trade-off `AuditLog` makes.
+# ---------------------------------------------------------------------------
+class TaskAuditEvent(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
+    __tablename__ = "task_audit_events"
+
+    task_id: Mapped[UUID] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Free-form: "user:<uuid>", "agent:reviewer", "system:plan_runner".
+    actor: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return f"TaskAuditEvent(task={self.task_id!r}, kind={self.kind!r}, at={self.at!r})"
+
+
 __all__ = [
     "AuditAction",
     "AuditLog",
     "Organization",
     "PlatformSetting",
+    "ReviewSession",
     "Session",
+    "TaskAuditEvent",
     "TenantSetting",
     "User",
     "UserOrganizationMembership",

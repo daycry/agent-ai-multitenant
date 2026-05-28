@@ -1,0 +1,162 @@
+"""Parse the reviewer agent's output and apply its verdict (Plan 06.5
+task_06_5_15).
+
+The reviewer's system prompt (seed `builtin_agents.py`) instructs the
+LLM to finish its review with structured tags:
+
+    <verdict>approve</verdict>
+    <verdict>reject</verdict>
+      <rejection>
+        <failed_criterion>...</failed_criterion>
+        <testreport_evidence>...</testreport_evidence>
+        <what_to_fix>...</what_to_fix>
+      </rejection>
+
+The orchestrator (Plan 06.5 Fase F) feeds the agent's stdout through
+`parse_reviewer_output` to extract a typed `ReviewerVerdict`, then
+calls `apply_reviewer_verdict` which:
+
+  * On `approve` → nothing; the task continues to PR / human validation.
+  * On `reject`  → DB-side equivalent of
+                   `TaskLifecycle.reject_review(task_id, ReviewComment)`
+                   — task back to `backlog`, retry_count++, audit event.
+
+Parsing is intentionally forgiving: missing tags → unknown verdict
+(treated as approve by default), missing rejection fields → empty
+strings. The orchestrator can re-prompt the agent if the output is
+unparseable.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Literal
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from api_server.db.domain import Task
+from api_server.db.task_audit_repo import append_audit_event
+
+VerdictLabel = Literal["approve", "reject", "unknown"]
+
+
+@dataclass(frozen=True)
+class ReviewerVerdict:
+    """Structured outcome of one reviewer turn.
+
+    ``label`` is the parsed `<verdict>` tag. The three rejection fields
+    are non-empty only when ``label == 'reject'``.
+    """
+
+    label: VerdictLabel
+    failed_criterion: str = ""
+    testreport_evidence: str = ""
+    what_to_fix: str = ""
+
+
+_VERDICT_RE = re.compile(r"<verdict>\s*(approve|reject)\s*</verdict>", re.IGNORECASE)
+_FAILED_RE = re.compile(r"<failed_criterion>(.*?)</failed_criterion>", re.IGNORECASE | re.DOTALL)
+_EVIDENCE_RE = re.compile(
+    r"<testreport_evidence>(.*?)</testreport_evidence>", re.IGNORECASE | re.DOTALL
+)
+_WHAT_TO_FIX_RE = re.compile(r"<what_to_fix>(.*?)</what_to_fix>", re.IGNORECASE | re.DOTALL)
+
+
+def parse_reviewer_output(text: str) -> ReviewerVerdict:
+    """Extract the verdict tags from the LLM's free-form output.
+
+    Returns ``ReviewerVerdict(label='unknown')`` if no `<verdict>` tag
+    is found. Multiple `<verdict>` tags resolve to the LAST one (the
+    agent may have changed its mind mid-output; we honour the final
+    call).
+    """
+    matches = _VERDICT_RE.findall(text or "")
+    if not matches:
+        return ReviewerVerdict(label="unknown")
+    label = matches[-1].lower()
+    if label != "reject":
+        return ReviewerVerdict(label="approve")
+
+    def _grab(pattern: re.Pattern[str]) -> str:
+        m = pattern.search(text)
+        return m.group(1).strip() if m else ""
+
+    return ReviewerVerdict(
+        label="reject",
+        failed_criterion=_grab(_FAILED_RE),
+        testreport_evidence=_grab(_EVIDENCE_RE),
+        what_to_fix=_grab(_WHAT_TO_FIX_RE),
+    )
+
+
+async def apply_reviewer_verdict(
+    session: AsyncSession,
+    *,
+    task_id: UUID,
+    tenant_id: UUID,
+    verdict: ReviewerVerdict,
+    reviewer_actor: str = "agent:reviewer",
+) -> dict[str, object]:
+    """Apply the verdict to the task — DB-side equivalent of
+    `TaskLifecycle.reject_review` / approve flow.
+
+    Returns ``{action, task_status, retry_count, event_id?}``.
+
+    For ``label='reject'``:
+      * Task moves to ``backlog``.
+      * ``retry_count`` increments.
+      * One audit event ``kind='review_comment'`` is appended with the
+        ``ReviewComment`` shape (`failed_criterion`,
+        `testreport_evidence`, `what_to_fix`) as payload.
+
+    For ``label='approve'`` or ``'unknown'``: no state change, no
+    audit event. The caller decides whether to re-prompt (unknown)
+    or to advance the task to the next phase (approve).
+    """
+    if verdict.label != "reject":
+        return {
+            "action": "noop",
+            "verdict": verdict.label,
+            "task_id": str(task_id),
+        }
+
+    task_row = (await session.execute(select(Task).where(Task.id == task_id))).scalar_one_or_none()
+    if task_row is None:
+        raise ValueError(f"task {task_id!r} not visible to current session")
+
+    task_row.status = "backlog"
+    task_row.retry_count += 1
+    await session.flush()
+
+    event = await append_audit_event(
+        session,
+        tenant_id=tenant_id,
+        task_id=task_id,
+        kind="review_comment",
+        actor=reviewer_actor,
+        payload={
+            "failed_criterion": verdict.failed_criterion,
+            "testreport_evidence": verdict.testreport_evidence,
+            "what_to_fix": verdict.what_to_fix,
+        },
+    )
+
+    return {
+        "action": "rejected",
+        "verdict": "reject",
+        "task_id": str(task_id),
+        "task_status": "backlog",
+        "retry_count": task_row.retry_count,
+        "event_id": str(event.id),
+    }
+
+
+__all__ = [
+    "ReviewerVerdict",
+    "VerdictLabel",
+    "apply_reviewer_verdict",
+    "parse_reviewer_output",
+]

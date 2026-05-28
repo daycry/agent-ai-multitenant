@@ -46,7 +46,9 @@ from api_server.routers.mcp_catalog import router as mcp_catalog_router
 from api_server.routers.memories import router as memories_router
 from api_server.routers.plans import plans_router, project_plans_router
 from api_server.routers.projects import router as projects_router
+from api_server.routers.review import router as review_router
 from api_server.routers.skills import router as skills_router
+from api_server.routers.task_lifecycle import router as task_lifecycle_router
 from api_server.routers.tasks import router as tasks_router
 from api_server.routers.teams import router as teams_router
 from api_server.routers.tenant_settings import router as tenant_settings_router
@@ -91,6 +93,8 @@ def create_app() -> FastAPI:
     app.include_router(teams_router)
     app.include_router(projects_router)
     app.include_router(tasks_router)
+    app.include_router(task_lifecycle_router)
+    app.include_router(review_router)
     app.include_router(approval_policies_router)
     app.include_router(approvals_router)
     app.include_router(executions_router)
