@@ -115,6 +115,17 @@ class Settings(BaseSettings):
         "a small local model is the right trade-off (no quota, no egress).",
     )
 
+    # ----- Plan 06 / 06.5: shared data root for worktrees + dep-cache -----
+    data_root: str = Field(
+        default="/data/agent-platform",
+        description=(
+            "Host filesystem root for platform-managed state: bare repos, "
+            "worktrees, dep-cache. The maintenance beat tasks "
+            "(prune_worktrees, purge_dep_cache) resolve their working "
+            "directories under this root."
+        ),
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."
