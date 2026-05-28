@@ -24,7 +24,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import (
+    AuthPrincipal,
+    get_tenant_session,
+    require_tenant_admin,
+    require_tenant_member,
+)
 from api_server.chat.cost import (
     DEFAULT_HOURLY_RATE_EUR,
     compute_ai_cost,
@@ -108,7 +113,7 @@ async def _verify_conversation_in_project(
 async def create_plan(
     project_id: UUID,
     payload: PlanCreateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanResponse:
     tenant_id = require_tenant_id(principal)
@@ -163,7 +168,7 @@ async def create_plan(
 async def list_plans(
     project_id: UUID,
     status_: str | None = Query(default=None, alias="status"),
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[PlanResponse]:
     await _verify_project_visible(session, project_id)
@@ -191,7 +196,7 @@ async def _load_plan(session: AsyncSession, plan_id: UUID) -> Plan:
 @plans_router.get("/{plan_id}", response_model=PlanResponse)
 async def get_plan(
     plan_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanResponse:
     return to_plan_response(await _load_plan(session, plan_id))
@@ -201,7 +206,7 @@ async def get_plan(
 async def update_plan(
     plan_id: UUID,
     payload: PlanUpdateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanResponse:
     require_tenant_id(principal)
@@ -252,7 +257,7 @@ async def update_plan(
 @plans_router.delete("/{plan_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_plan(
     plan_id: UUID,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> None:
     require_tenant_id(principal)
@@ -273,7 +278,7 @@ async def delete_plan(
 async def post_plan_comment(
     plan_id: UUID,
     payload: PlanCommentCreateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanCommentResponse:
     tenant_id = require_tenant_id(principal)
@@ -319,7 +324,7 @@ async def post_plan_comment(
 @plans_router.get("/{plan_id}/comments", response_model=list[PlanCommentResponse])
 async def list_plan_comments(
     plan_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[PlanCommentResponse]:
     # Ensures the plan is visible under RLS before listing comments.
@@ -355,7 +360,7 @@ async def get_plan_cost_breakdown(
             " configured rate (task_03_26). Defaults to 50 EUR."
         ),
     ),
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> CostBreakdownResponse:
     """Recompute the human + AI cost breakdown for a plan.
@@ -431,7 +436,7 @@ async def get_plan_cost_breakdown(
 @plans_router.post("/{plan_id}/approve", response_model=PlanResponse)
 async def approve_plan(
     plan_id: UUID,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanResponse:
     """Cast an approval signature on a plan.
@@ -542,7 +547,7 @@ async def _resolve_first_signature_target(session: AsyncSession, plan: Plan) -> 
 async def sync_plan_kanban(
     plan_id: UUID,
     payload: PlanSyncRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanSyncResponse:
     """Materialise the plan's tasks into the Kanban.
@@ -603,7 +608,7 @@ class FreeTaskRequest(BaseModel):
 async def create_free_task(
     plan_id: UUID,
     payload: FreeTaskRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> dict[str, object]:
     """Create a plan-scoped task NOT bound to any checkbox of the spec.
@@ -654,7 +659,7 @@ async def create_free_task(
 @plans_router.get("/{plan_id}/escalated-tasks")
 async def list_escalated_tasks(
     plan_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> dict[str, list[dict[str, object]]]:
     """Tasks of the plan currently in `awaiting_human_approval`.

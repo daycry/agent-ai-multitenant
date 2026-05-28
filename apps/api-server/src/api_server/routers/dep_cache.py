@@ -26,7 +26,7 @@ from shared_test_runtimes import CATALOG, DepCacheManager, get
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
 from api_server.config import Settings, get_settings
 from api_server.db.domain import Project
 
@@ -93,7 +93,7 @@ async def invalidate_dep_cache(
     project_id: UUID,
     payload: InvalidateRequest,
     session: AsyncSession = Depends(get_tenant_session),
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     settings: Settings = Depends(get_settings),
 ) -> InvalidateResponse:
     """Invalidate one or all cache entries for a runtime."""

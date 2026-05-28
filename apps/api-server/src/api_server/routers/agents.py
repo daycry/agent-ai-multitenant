@@ -28,7 +28,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import (
+    AuthPrincipal,
+    get_tenant_session,
+    require_tenant_admin,
+    require_tenant_member,
+)
 from api_server.db.domain import Agent, AgentScope, Project
 from api_server.routers._helpers import (
     apply_partial_update,
@@ -76,7 +81,7 @@ async def list_agents(
     project_id: UUID | None = Query(default=None, description="Filter by project_id"),
     role: str | None = Query(default=None, description="Filter by role"),
     agent_type: str | None = Query(default=None, description="Filter by agent_type (ai|human)"),
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[AgentResponse]:
     """List agents visible to the caller.
@@ -106,7 +111,7 @@ async def list_agents(
 @router.get("/{agent_id}", response_model=AgentResponse)
 async def get_agent(
     agent_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> AgentResponse:
     result = await session.execute(
@@ -124,7 +129,7 @@ async def get_agent(
 @router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 async def create_agent(
     payload: AgentCreateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> AgentResponse:
     tenant_id = require_tenant_id(principal)
@@ -168,7 +173,7 @@ async def create_agent(
 async def update_agent(
     agent_id: UUID,
     payload: AgentUpdateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> AgentResponse:
     require_tenant_id(principal)
@@ -194,7 +199,7 @@ async def update_agent(
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent(
     agent_id: UUID,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> None:
     require_tenant_id(principal)
@@ -222,7 +227,7 @@ async def delete_agent(
 async def fork_agent(
     source_id: UUID,
     payload: AgentForkRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> AgentResponse:
     tenant_id = require_tenant_id(principal)
@@ -294,7 +299,7 @@ async def fork_agent(
 @router.get("/{fork_id}/diff", response_model=AgentDiffResponse)
 async def diff_fork_against_source(
     fork_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> AgentDiffResponse:
     # The fork must be visible to the caller (RLS handles cross-tenant).
@@ -361,7 +366,7 @@ async def diff_fork_against_source(
 async def merge_from_source(
     fork_id: UUID,
     payload: AgentMergeRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> AgentResponse:
     require_tenant_id(principal)

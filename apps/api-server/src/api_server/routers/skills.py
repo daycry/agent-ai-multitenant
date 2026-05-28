@@ -15,7 +15,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import (
+    AuthPrincipal,
+    get_tenant_session,
+    require_tenant_admin,
+    require_tenant_member,
+)
 from api_server.db.domain import Skill
 from api_server.routers._helpers import (
     apply_partial_update,
@@ -41,7 +46,7 @@ def _str_uuid_list(values: list[UUID]) -> list[str]:
 async def list_skills(
     category: str | None = Query(default=None),
     is_builtin: bool | None = Query(default=None),
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[SkillResponse]:
     stmt = select(Skill).where(Skill.deleted_at.is_(None))
@@ -57,7 +62,7 @@ async def list_skills(
 @router.get("/{skill_id}", response_model=SkillResponse)
 async def get_skill(
     skill_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> SkillResponse:
     result = await session.execute(
@@ -72,7 +77,7 @@ async def get_skill(
 @router.post("", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
 async def create_skill(
     payload: SkillCreateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> SkillResponse:
     tenant_id = require_tenant_id(principal)
@@ -96,7 +101,7 @@ async def create_skill(
 async def update_skill(
     skill_id: UUID,
     payload: SkillUpdateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> SkillResponse:
     require_tenant_id(principal)
@@ -119,7 +124,7 @@ async def update_skill(
 @router.delete("/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_skill(
     skill_id: UUID,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> None:
     require_tenant_id(principal)

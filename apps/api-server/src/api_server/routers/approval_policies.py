@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_member
 from api_server.db.domain import ApprovalPolicyTemplate
 from api_server.schemas.approval_policies import (
     ApprovalPolicyResponse,
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/approval-policies", tags=["approval-policies"])
 @router.get("", response_model=list[ApprovalPolicyResponse])
 async def list_approval_policies(
     builtin_only: bool = Query(default=False, alias="builtin_only"),
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[ApprovalPolicyResponse]:
     stmt = select(ApprovalPolicyTemplate).where(ApprovalPolicyTemplate.deleted_at.is_(None))

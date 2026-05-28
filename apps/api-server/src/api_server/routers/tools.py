@@ -16,7 +16,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import (
+    AuthPrincipal,
+    get_tenant_session,
+    require_tenant_admin,
+    require_tenant_member,
+)
 from api_server.db.domain import Tool
 from api_server.routers._helpers import (
     apply_partial_update,
@@ -39,7 +44,7 @@ async def list_tools(
     category: str | None = Query(default=None),
     implementation_type: str | None = Query(default=None),
     is_builtin: bool | None = Query(default=None),
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[ToolResponse]:
     stmt = select(Tool).where(Tool.deleted_at.is_(None))
@@ -57,7 +62,7 @@ async def list_tools(
 @router.get("/{tool_id}", response_model=ToolResponse)
 async def get_tool(
     tool_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> ToolResponse:
     result = await session.execute(
@@ -72,7 +77,7 @@ async def get_tool(
 @router.post("", response_model=ToolResponse, status_code=status.HTTP_201_CREATED)
 async def create_tool(
     payload: ToolCreateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> ToolResponse:
     tenant_id = require_tenant_id(principal)
@@ -100,7 +105,7 @@ async def create_tool(
 async def update_tool(
     tool_id: UUID,
     payload: ToolUpdateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> ToolResponse:
     require_tenant_id(principal)
@@ -123,7 +128,7 @@ async def update_tool(
 @router.delete("/{tool_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_tool(
     tool_id: UUID,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> None:
     require_tenant_id(principal)

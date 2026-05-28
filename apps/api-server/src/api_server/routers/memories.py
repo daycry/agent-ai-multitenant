@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_member
 from api_server.db.memory import MemoryEntry
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
 from api_server.routers._helpers import require_tenant_id
@@ -158,7 +158,7 @@ async def _assert_can_write_global(
 @router.post("", response_model=MemoryResponse, status_code=status.HTTP_201_CREATED)
 async def store_memory(
     payload: MemoryStoreRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> MemoryResponse:
     """Persist a single memory manually (Plan 04 task_04_05).
@@ -210,7 +210,7 @@ async def list_memories(
     project_id: UUID | None = Query(default=None),
     team_id: UUID | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[MemoryResponse]:
     """Visible memories in the tenant, optionally filtered by scope /
@@ -236,7 +236,7 @@ async def list_memories(
 @router.delete("/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_memory(
     memory_id: UUID,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> None:
     """Soft-delete a memory. RLS + tenant check; we stamp `deleted_at`
@@ -281,7 +281,7 @@ async def list_similar_memories(
     memory_id: UUID,
     threshold: float | None = None,
     limit: int | None = None,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[SimilarMemoryItem]:
     """Return up to ``limit`` memories with cosine similarity ≥
@@ -373,7 +373,7 @@ async def list_similar_memories(
 async def merge_memory_into(
     source_id: UUID,
     payload: MergeRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> MemoryResponse:
     """Fold ``source_id`` INTO ``target_id`` (asymmetric merge).

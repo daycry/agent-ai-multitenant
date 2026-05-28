@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 from shared_mcp.catalog import CATALOG, McpServerTemplate
 
-from api_server.auth.deps import AuthPrincipal, get_principal
+from api_server.auth.deps import AuthPrincipal, require_tenant_member
 
 router = APIRouter(prefix="/mcp-catalog", tags=["mcp-catalog"])
 
@@ -71,7 +71,7 @@ def _to_dto(template: McpServerTemplate) -> McpTemplateDto:
 
 @router.get("", response_model=list[McpTemplateDto])
 async def list_mcp_catalog(
-    _principal: AuthPrincipal = Depends(get_principal),
+    _principal: AuthPrincipal = Depends(require_tenant_member),
 ) -> list[McpTemplateDto]:
     """Return every MCP template the platform knows about, in stable
     insertion order so the admin-panel can group by category without

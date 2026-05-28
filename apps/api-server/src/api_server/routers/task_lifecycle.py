@@ -21,7 +21,12 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import (
+    AuthPrincipal,
+    get_tenant_session,
+    require_tenant_admin,
+    require_tenant_member,
+)
 from api_server.db.domain import Task
 from api_server.db.task_audit_repo import append_audit_event, list_history, to_dict
 from api_server.routers._helpers import require_tenant_id
@@ -41,7 +46,7 @@ async def _assert_task_visible(session: AsyncSession, task_id: UUID) -> None:
 @router.get("/{task_id}/history")
 async def get_task_history(
     task_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> dict[str, list[dict[str, object]]]:
     """Chronological audit trail of a task.
@@ -107,7 +112,7 @@ _ACTION_TABLE: dict[HumanAction, tuple[str, str, bool]] = {
 async def apply_human_action(
     task_id: UUID,
     payload: HumanActionRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> dict[str, object]:
     """Apply one of the four human actions on a task in

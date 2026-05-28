@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { ProjectCombobox } from "@/components/ui/project-combobox";
+import { RoleGuard } from "@/components/ui/role-guard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useLang, type Lang } from "@/lib/lang-context";
@@ -161,10 +162,12 @@ export default function AgentsCatalogPage() {
         title="Catálogo de agentes"
         description="Built-ins de la plataforma, plantillas de tu tenant y agentes locales de proyecto."
         actions={
-          <Button onClick={() => setNewOpen(true)} data-testid="new-agent-button">
-            <Plus className="mr-1 h-4 w-4" />
-            Nuevo agente
-          </Button>
+          <RoleGuard min="tenant_admin">
+            <Button onClick={() => setNewOpen(true)} data-testid="new-agent-button">
+              <Plus className="mr-1 h-4 w-4" />
+              Nuevo agente
+            </Button>
+          </RoleGuard>
         }
       />
       <NewAgentDialog

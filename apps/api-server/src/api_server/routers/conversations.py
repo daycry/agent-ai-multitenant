@@ -31,9 +31,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import (
     AuthPrincipal,
-    get_principal,
     get_redis,
     get_tenant_session,
+    require_tenant_member,
 )
 from api_server.db.conversation import (
     ChatMode,
@@ -131,7 +131,7 @@ async def _publish_message_event(redis: Redis, message: Message) -> None:
 async def create_conversation(
     project_id: UUID,
     payload: ConversationCreateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> ConversationResponse:
     tenant_id = require_tenant_id(principal)
@@ -158,7 +158,7 @@ async def create_conversation(
 @project_conversations_router.get("", response_model=list[ConversationResponse])
 async def list_conversations(
     project_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[ConversationResponse]:
     await _verify_project_visible(session, project_id)
@@ -176,7 +176,7 @@ async def list_conversations(
 @conversations_router.get("/{conversation_id}", response_model=ConversationResponse)
 async def get_conversation(
     conversation_id: UUID,
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> ConversationResponse:
     conv = await _load_conversation(session, conversation_id)
@@ -187,7 +187,7 @@ async def get_conversation(
 async def update_conversation(
     conversation_id: UUID,
     payload: ConversationUpdateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
     redis: Redis = Depends(get_redis),
 ) -> ConversationResponse:
@@ -240,7 +240,7 @@ async def update_conversation(
 @conversations_router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_conversation(
     conversation_id: UUID,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> None:
     require_tenant_id(principal)
@@ -265,7 +265,7 @@ async def delete_conversation(
 async def post_message(
     conversation_id: UUID,
     payload: MessageCreateRequest,
-    principal: AuthPrincipal = Depends(get_principal),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
     redis: Redis = Depends(get_redis),
 ) -> MessageResponse:
@@ -320,7 +320,7 @@ async def list_messages(
             " chronologically without extra columns."
         ),
     ),
-    _: AuthPrincipal = Depends(get_principal),
+    _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[MessageResponse]:
     # Verify the conversation exists (also enforces RLS): otherwise a

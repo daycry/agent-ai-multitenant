@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
+from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_member
 from api_server.db.domain import Agent, AgentTool, Project, Tool
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["tools-diagnostic"])
@@ -88,7 +88,7 @@ class AgentToolsDiagnosticResponse(BaseModel):
 @router.get("/agent-tools-diagnostic", response_model=AgentToolsDiagnosticResponse)
 async def get_agent_tools_diagnostic(
     project_id: UUID,
-    _principal: AuthPrincipal = Depends(get_principal),
+    _principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> AgentToolsDiagnosticResponse:
     """Build the per-agent tools view for a project.

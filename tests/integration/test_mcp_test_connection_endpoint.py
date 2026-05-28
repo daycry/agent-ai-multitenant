@@ -31,6 +31,7 @@ from api_server.auth.deps import (
     AuthPrincipal,
     get_principal,
     get_tenant_session,
+    require_tenant_admin,
 )
 from api_server.routers import mcp as mcp_router_module
 from api_server.routers.mcp import get_vault_resolver
@@ -101,6 +102,14 @@ def app_with_visible_project() -> Iterator[FastAPI]:
     app = FastAPI()
     app.include_router(mcp_router)
     app.dependency_overrides[get_principal] = _fake_principal
+    # Plan 06.8: the endpoint gates on `require_tenant_admin`. These
+    # tests are about the MCP endpoint behaviour (404, 401/502 mapping,
+    # body validation), not the RBAC layer — that's pinned in
+    # test_rbac_resources.py. So we short-circuit the gate to return the
+    # fake principal directly; otherwise it would issue a real DB
+    # membership lookup through _FakeSession (which returns a UUID,
+    # crashing on `.role`).
+    app.dependency_overrides[require_tenant_admin] = _fake_principal
     app.dependency_overrides[get_tenant_session] = _FakeSessionFactory(project_visible=True)
     app.dependency_overrides[get_vault_resolver] = lambda: None
     yield app
@@ -113,6 +122,7 @@ def app_with_invisible_project() -> Iterator[FastAPI]:
     app = FastAPI()
     app.include_router(mcp_router)
     app.dependency_overrides[get_principal] = _fake_principal
+    app.dependency_overrides[require_tenant_admin] = _fake_principal
     app.dependency_overrides[get_tenant_session] = _FakeSessionFactory(project_visible=False)
     app.dependency_overrides[get_vault_resolver] = lambda: None
     yield app
