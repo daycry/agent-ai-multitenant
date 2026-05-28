@@ -200,7 +200,7 @@ module = ["api_server.plan_progress", "api_server.task_lifecycle"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["workers.git_repos", "workers.plan_git", "workers.runtime_pool"]
+module = ["workers.git_repos", "workers.plan_git", "workers.runtime_pool", "workers.review_runtime"]
 ignore_missing_imports = true
 
 # `hvac` is the Vault client used by `routers/mcp.get_vault_resolver`

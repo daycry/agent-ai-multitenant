@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expiration_minutes: int = 60 * 24  # 24h
 
+    # ----- Review URL signing (Plan 06.5 task_06_5_08/10) -----
+    # HMAC key used by `workers.review_runtime.sign_review_url` to mint
+    # the one-shot URL the human reviewer opens. The api-server verifies
+    # incoming `sig`/`exp` against this same key before serving the SPA
+    # or accepting the `/rerun` POST. Production deployments MUST set
+    # this to a random 32+ byte secret; the default is rejected outside
+    # of `environment=dev`.
+    review_url_signing_secret: SecretStr = Field(
+        default=SecretStr("dev-only-review-url-secret-change-me"),
+        description="HMAC secret for signing reviewer URLs.",
+    )
+
     # ----- Redis (sessions, rate limit) -----
     redis_url: str = Field(
         default="redis://localhost:6379/0",
