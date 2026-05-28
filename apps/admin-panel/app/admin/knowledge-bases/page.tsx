@@ -407,7 +407,6 @@ function KbEditDialog({
 }) {
   const [name, setName] = useState(kb.name);
   const [description, setDescription] = useState(kb.description ?? "");
-  const [embedding, setEmbedding] = useState(kb.embedding_model_id);
 
   const mutation = useMutation<KnowledgeBase, ApiError, Partial<KbForm>>({
     mutationFn: (payload) =>
@@ -447,16 +446,20 @@ function KbEditDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="kb-edit-embedding">Modelo de embedding</Label>
-            <Input
-              id="kb-edit-embedding"
-              value={embedding}
-              onChange={(e) => setEmbedding(e.target.value)}
+            <Label>Modelo de embedding</Label>
+            {/* Read-only por diseño: cambiar el modelo invalida los
+                embeddings de los chunks existentes (las queries no
+                matchean) y rompe el RAG. El re-embedding pipeline
+                llega con Plan 12; hasta entonces el operador del
+                stack lo configura por seed, no por UI. */}
+            <p
+              className="bg-muted/40 text-muted-foreground rounded border px-3 py-2 font-mono text-xs"
               data-testid="kb-edit-embedding"
-            />
+            >
+              {kb.embedding_model_id}
+            </p>
             <p className="text-muted-foreground text-xs">
-              ⚠️ Cambiar el modelo no re-indexa documentos existentes. Los nuevos uploads usarán el
-              modelo actual.
+              El modelo es fijo por KB. Para usar otro, crea una KB nueva y reindexa los documentos.
             </p>
           </div>
 
@@ -479,7 +482,10 @@ function KbEditDialog({
               mutation.mutate({
                 name: name.trim(),
                 description: description.trim() || null,
-                embedding_model_id: embedding.trim(),
+                // embedding_model_id intencionalmente omitido: la API
+                // sólo actualiza campos presentes en el body, así el
+                // valor existente queda intacto (es immutable from UI
+                // hasta Plan 12 — pipeline de re-embedding).
               })
             }
             data-testid="kb-edit-submit"
