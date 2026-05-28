@@ -11,6 +11,7 @@ import {
   FolderKanban,
   LayoutDashboard,
   LayoutGrid,
+  Library,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -37,6 +38,7 @@ const NAV: NavItem[] = [
   { href: "/admin/approvals", label: "Aprobaciones", Icon: BellRing },
   { href: "/admin/approval-policy", label: "Validación humana", Icon: ShieldCheck },
   { href: "/admin/memories", label: "Memorias", Icon: Brain },
+  { href: "/admin/knowledge-bases", label: "Knowledge Bases", Icon: Library },
   { href: "/admin/documents", label: "Documentos", Icon: FileText },
   { href: "/admin/settings", label: "Settings", Icon: Settings },
 ];

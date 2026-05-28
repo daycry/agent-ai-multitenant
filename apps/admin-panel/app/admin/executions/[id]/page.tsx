@@ -59,12 +59,14 @@ interface Execution {
 // --------------------------------------------------------------------------
 // Visual mappings
 // --------------------------------------------------------------------------
+// Orden por workflow: running (activo) → ok/done (terminal success) →
+// aborted (cancelado por humano) → error/failed (fallo).
 const STATUS_VARIANT: Record<string, BadgeVariant> = {
+  running: "info",
   ok: "success",
   done: "success",
-  running: "info",
-  error: "danger",
   aborted: "warning",
+  error: "danger",
   failed: "danger",
 };
 

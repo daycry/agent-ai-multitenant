@@ -27,6 +27,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Bot, Plug, Wrench } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -98,6 +99,7 @@ export default function AgentToolsDiagnosticPage() {
       className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8"
       data-testid="agent-tools-diagnostic-page"
     >
+      <ProjectBreadcrumb projectId={projectId} current="Tools por agente" />
       <PageHeader
         icon={<Wrench className="h-6 w-6 sm:h-7 sm:w-7" />}
         title="Diagnóstico de tools por agente"

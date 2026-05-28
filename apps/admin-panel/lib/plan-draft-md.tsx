@@ -35,15 +35,63 @@ const TABLE_DIVIDER_RE = /^\|[\s:|-]+\|\s*$/;
 const ORDERED_LIST_RE = /^\d+\.\s+/;
 const HEADING_RE = /^(#{2,4})\s+(.*)$/;
 
+// Single regex that captures the five inline patterns in priority
+// order. The order matters: `**bold**` must beat the `*italic*` rule
+// (otherwise `**x**` reads as italic-empty-italic) and inline `code`
+// is matched first so its content escapes the other patterns.
+const INLINE_RE =
+  /(`[^`\n]+`)|(\[[^\]\n]+\]\([^)\n]+\))|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*|_[^_\n]+_)|(~~[^~\n]+~~)/g;
+
 function inline(text: string): React.ReactNode {
-  // Split on **bold** and rebuild as a fragment.
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, idx) => {
-    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
-      return <strong key={idx}>{part.slice(2, -2)}</strong>;
+  const out: React.ReactNode[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  INLINE_RE.lastIndex = 0;
+  let key = 0;
+  while ((match = INLINE_RE.exec(text)) !== null) {
+    if (match.index > cursor) {
+      out.push(<React.Fragment key={key++}>{text.slice(cursor, match.index)}</React.Fragment>);
     }
-    return <React.Fragment key={idx}>{part}</React.Fragment>;
-  });
+    const token = match[0];
+    if (match[1]) {
+      // `inline code`
+      out.push(
+        <code key={key++} className="bg-muted rounded px-1 py-0.5 font-mono text-[0.85em]">
+          {token.slice(1, -1)}
+        </code>,
+      );
+    } else if (match[2]) {
+      // [text](url)
+      const labelEnd = token.indexOf("](");
+      const label = token.slice(1, labelEnd);
+      const href = token.slice(labelEnd + 2, -1);
+      out.push(
+        <a
+          key={key++}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-primary underline-offset-2 hover:underline"
+        >
+          {label}
+        </a>,
+      );
+    } else if (match[3]) {
+      // **bold**
+      out.push(<strong key={key++}>{token.slice(2, -2)}</strong>);
+    } else if (match[4]) {
+      // *italic* or _italic_
+      out.push(<em key={key++}>{token.slice(1, -1)}</em>);
+    } else if (match[5]) {
+      // ~~strikethrough~~
+      out.push(<s key={key++}>{token.slice(2, -2)}</s>);
+    }
+    cursor = match.index + token.length;
+  }
+  if (cursor < text.length) {
+    out.push(<React.Fragment key={key++}>{text.slice(cursor)}</React.Fragment>);
+  }
+  return out;
 }
 
 function renderTable(lines: string[], key: string): RenderedBlock | null {

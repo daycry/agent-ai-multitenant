@@ -24,6 +24,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessagesSquare } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -264,6 +265,7 @@ export default function ProjectChatPage() {
   if (conversationsQuery.isLoading) {
     return (
       <div className="mx-auto w-full max-w-7xl px-4 py-8">
+        <ProjectBreadcrumb projectId={projectId} current="Chat" />
         <p className="text-muted-foreground text-sm">Cargando chat…</p>
       </div>
     );
@@ -273,6 +275,7 @@ export default function ProjectChatPage() {
     const err = conversationsQuery.error;
     return (
       <div className="mx-auto w-full max-w-7xl px-4 py-8">
+        <ProjectBreadcrumb projectId={projectId} current="Chat" />
         <Card>
           <CardHeader>
             <CardTitle>Error cargando conversaciones</CardTitle>
@@ -291,6 +294,7 @@ export default function ProjectChatPage() {
   if (conversations.length === 0) {
     return (
       <div className="mx-auto w-full max-w-7xl px-4 py-8">
+        <ProjectBreadcrumb projectId={projectId} current="Chat" />
         <Card>
           <CardHeader>
             <CardTitle>No hay conversaciones en este proyecto</CardTitle>
@@ -311,6 +315,7 @@ export default function ProjectChatPage() {
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <ProjectBreadcrumb projectId={projectId} current="Chat" />
       <PageHeader
         icon={<MessagesSquare className="h-6 w-6 sm:h-7 sm:w-7" />}
         title="Chat del proyecto"

@@ -6,6 +6,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { Breadcrumb } from "@/components/layout/breadcrumb";
+import { Home } from "lucide-react";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,6 +22,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
+import { ProjectCombobox } from "@/components/ui/project-combobox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useLang, type Lang } from "@/lib/lang-context";
@@ -146,6 +150,12 @@ export default function AgentsCatalogPage() {
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <Breadcrumb
+        items={[
+          { label: "Inicio", href: "/admin", icon: <Home className="h-3.5 w-3.5" /> },
+          { label: "Agentes" },
+        ]}
+      />
       <PageHeader
         icon={<Bot className="h-6 w-6 sm:h-7 sm:w-7" />}
         title="Catálogo de agentes"
@@ -330,25 +340,21 @@ function NewAgentDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="na-description">Descripción</Label>
-            <textarea
-              id="na-description"
+            <Label>Descripción</Label>
+            <MarkdownTextarea
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={2}
-              className="border-input bg-background rounded-md border px-3 py-2 text-sm"
+              onChange={setDescription}
+              rows={3}
               data-testid="new-agent-description"
             />
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="na-prompt">System prompt</Label>
-            <textarea
-              id="na-prompt"
+            <Label>System prompt</Label>
+            <MarkdownTextarea
               value={systemPrompt}
-              onChange={(e) => setSystemPrompt(e.target.value)}
-              rows={5}
-              className="border-input bg-background rounded-md border px-3 py-2 font-mono text-xs"
+              onChange={setSystemPrompt}
+              rows={6}
               data-testid="new-agent-system-prompt"
             />
           </div>
@@ -379,14 +385,15 @@ function NewAgentDialog({
 
           {scope === "project_local" && (
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="na-project">Project ID</Label>
-              <Input
-                id="na-project"
-                value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
-                placeholder="UUID del proyecto"
+              <Label>Proyecto</Label>
+              <ProjectCombobox
+                value={projectId || null}
+                onChange={(id) => setProjectId(id ?? "")}
                 data-testid="new-agent-project-id"
               />
+              <p className="text-muted-foreground text-xs">
+                Sólo tus proyectos del tenant — escribe para buscar entre ellos.
+              </p>
             </div>
           )}
 

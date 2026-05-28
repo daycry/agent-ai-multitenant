@@ -16,10 +16,10 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Brain, GitMerge, Search, Trash2 } from "lucide-react";
+import { Brain, GitMerge, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
-import { Badge } from "@/components/ui/badge";
+import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -33,7 +33,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
+import { ProjectCombobox } from "@/components/ui/project-combobox";
+import { TeamCombobox } from "@/components/ui/team-combobox";
 import { ApiError, apiFetch } from "@/lib/api";
+import { renderPlanDraft } from "@/lib/plan-draft-md";
 
 // --------------------------------------------------------------------------
 // Types
@@ -66,9 +70,27 @@ const SCOPE_LABEL: Record<MemoryScope | "all", string> = {
   global: "Global",
 };
 
+// Colores por scope (de menos a más alcance):
+//   private → muted (uso individual)
+//   team_shared → info (azul, compartido con team)
+//   project_shared → primary (color de marca, contexto del proyecto)
+//   global → warning (naranja, "tocas esto y afecta a TODOS")
+const SCOPE_VARIANT: Record<MemoryScope, BadgeVariant> = {
+  private: "muted",
+  team_shared: "info",
+  project_shared: "primary",
+  global: "warning",
+};
+
 const TYPE_LABEL: Record<MemoryType, string> = {
   episodic: "Episódica",
   semantic: "Semántica",
+};
+
+// Episódica = hecho concreto del pasado · Semántica = conocimiento durable.
+const TYPE_VARIANT: Record<MemoryType, BadgeVariant> = {
+  episodic: "default",
+  semantic: "info",
 };
 
 // --------------------------------------------------------------------------
@@ -76,7 +98,7 @@ const TYPE_LABEL: Record<MemoryType, string> = {
 // --------------------------------------------------------------------------
 export default function MemoriesPage() {
   const queryClient = useQueryClient();
-  const [scopeFilter, setScopeFilter] = useState<MemoryScope | "all">("team_shared");
+  const [scopeFilter, setScopeFilter] = useState<MemoryScope | "all">("all");
 
   const query = useQuery({
     queryKey: ["memories", scopeFilter],
@@ -209,28 +231,23 @@ function MemoryRow({ memory, onDeleted }: { memory: MemoryResponse; onDeleted: (
     >
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1 text-[10px] uppercase tracking-wide">
-          <Badge variant="muted">{SCOPE_LABEL[memory.scope]}</Badge>
-          <Badge variant="muted">{TYPE_LABEL[memory.type]}</Badge>
+          <Badge variant={SCOPE_VARIANT[memory.scope] ?? "muted"}>
+            {SCOPE_LABEL[memory.scope]}
+          </Badge>
+          <Badge variant={TYPE_VARIANT[memory.type] ?? "muted"}>{TYPE_LABEL[memory.type]}</Badge>
           {memory.has_embedding ? <Badge variant="success">embedding</Badge> : null}
+          <SimilarCountBadge
+            memoryId={memory.id}
+            hasEmbedding={memory.has_embedding}
+            onClick={() => setSimilarOpen(true)}
+          />
           {memory.tags.length > 0 ? (
             <span className="text-muted-foreground ml-1 font-mono">{memory.tags.join(" · ")}</span>
           ) : null}
         </div>
-        <p className="mt-1 whitespace-pre-wrap">{memory.content}</p>
+        <div className="mt-1 text-sm">{renderPlanDraft(memory.content)}</div>
       </div>
       <div className="flex gap-1">
-        {memory.has_embedding && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setSimilarOpen(true)}
-            data-testid={`memory-similar-${memory.id}`}
-            aria-label="Ver similares"
-            title="Ver memorias similares"
-          >
-            <Search className="h-3.5 w-3.5" />
-          </Button>
-        )}
         <Button
           variant="outline"
           size="sm"
@@ -250,6 +267,49 @@ function MemoryRow({ memory, onDeleted }: { memory: MemoryResponse; onDeleted: (
         />
       )}
     </li>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Similar count badge — pre-fetches /similar para cada memoria con
+// embedding y muestra "N similar/es" (amarillo, clickable) sólo si
+// N > 0. Si no hay candidatos sobre el umbral, no se renderiza nada.
+//
+// Coste: una query /similar por memoria con embedding. Para tenants
+// con muchas memorias conviene un endpoint batched
+// `/memories/similar-counts` (follow-up); para volúmenes normales el
+// caché de TanStack (staleTime 30s) lo hace barato.
+// --------------------------------------------------------------------------
+
+function SimilarCountBadge({
+  memoryId,
+  hasEmbedding,
+  onClick,
+}: {
+  memoryId: string;
+  hasEmbedding: boolean;
+  onClick: () => void;
+}) {
+  const query = useQuery<SimilarItem[], ApiError>({
+    queryKey: ["memory-similar", memoryId],
+    queryFn: () => apiFetch<SimilarItem[]>(`/memories/${memoryId}/similar`),
+    enabled: hasEmbedding,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+    retry: false,
+  });
+  const count = query.data?.length ?? 0;
+  if (!hasEmbedding || count === 0) return null;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-testid={`memory-similar-badge-${memoryId}`}
+      className="bg-warning-soft text-warning-soft-foreground hover:bg-warning-soft/80 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide transition-colors"
+      aria-label={`Ver ${count} memorias similares`}
+    >
+      {count} similar{count === 1 ? "" : "es"}
+    </button>
   );
 }
 
@@ -315,7 +375,7 @@ function SimilarMemoriesDialog({
             <p className="text-muted-foreground mb-1 text-[10px] uppercase tracking-wide">
               Memoria actual (target)
             </p>
-            <p className="text-sm whitespace-pre-wrap">{memory.content}</p>
+            <div className="text-sm">{renderPlanDraft(memory.content)}</div>
           </Card>
 
           {similarQuery.isLoading && (
@@ -374,7 +434,7 @@ function SimilarMemoriesDialog({
                       </Button>
                     </div>
                   </div>
-                  <p className="text-sm whitespace-pre-wrap">{item.memory.content}</p>
+                  <div className="text-sm">{renderPlanDraft(item.memory.content)}</div>
                 </li>
               ))}
             </ul>
@@ -449,16 +509,13 @@ function CreateMemoryCard({ onCreated }: { onCreated: () => void }) {
             if (canSubmit) mutation.mutate();
           }}
         >
-          <div>
-            <Label htmlFor="memory-content-input">Contenido</Label>
-            <textarea
-              id="memory-content-input"
-              data-testid="memory-content-input"
+          <div className="flex flex-col gap-1.5">
+            <Label>Contenido</Label>
+            <MarkdownTextarea
               value={content}
-              onChange={(e) => setContent(e.target.value)}
-              rows={3}
-              maxLength={2000}
-              className="bg-background border-muted w-full resize-none rounded border px-2 py-1 text-sm"
+              onChange={setContent}
+              rows={5}
+              data-testid="memory-content-input"
             />
           </div>
 
@@ -494,27 +551,23 @@ function CreateMemoryCard({ onCreated }: { onCreated: () => void }) {
           </div>
 
           {scope === "team_shared" ? (
-            <div>
-              <Label htmlFor="memory-team-id-input">Team ID</Label>
-              <Input
-                id="memory-team-id-input"
+            <div className="flex flex-col gap-1.5">
+              <Label>Equipo</Label>
+              <TeamCombobox
+                value={teamId || null}
+                onChange={(id) => setTeamId(id ?? "")}
                 data-testid="memory-team-id-input"
-                value={teamId}
-                onChange={(e) => setTeamId(e.target.value)}
-                placeholder="UUID del equipo"
               />
             </div>
           ) : null}
 
           {scope === "project_shared" ? (
-            <div>
-              <Label htmlFor="memory-project-id-input">Project ID</Label>
-              <Input
-                id="memory-project-id-input"
+            <div className="flex flex-col gap-1.5">
+              <Label>Proyecto</Label>
+              <ProjectCombobox
+                value={projectId || null}
+                onChange={(id) => setProjectId(id ?? "")}
                 data-testid="memory-project-id-input"
-                value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
-                placeholder="UUID del proyecto"
               />
             </div>
           ) : null}

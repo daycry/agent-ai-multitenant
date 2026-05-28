@@ -18,9 +18,10 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Pencil, Trash2 } from "lucide-react";
+import { Bot, Home, Pencil, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { Breadcrumb } from "@/components/layout/breadcrumb";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -122,6 +123,13 @@ export default function AgentHubPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8" data-testid="agent-hub">
+      <Breadcrumb
+        items={[
+          { label: "Inicio", href: "/admin", icon: <Home className="h-3.5 w-3.5" /> },
+          { label: "Agentes", href: "/admin/agents", icon: <Bot className="h-3.5 w-3.5" /> },
+          { label: agent?.name ?? "Agente" },
+        ]}
+      />
       <PageHeader
         icon={<Bot className="h-6 w-6 sm:h-7 sm:w-7" />}
         title={agent?.name ?? "Agente"}

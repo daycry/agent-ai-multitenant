@@ -24,6 +24,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -97,6 +98,7 @@ export default function DepCachePage() {
 
   return (
     <div className="container mx-auto px-4 py-6">
+      <ProjectBreadcrumb projectId={projectId} current="Caché de dependencias" />
       <PageHeader
         title="Caché de dependencias"
         description={

@@ -25,6 +25,7 @@ import {
   FolderKanban,
   GitBranch,
   Layers,
+  ListTodo,
   MessageSquare,
   Pencil,
   Plug,
@@ -47,6 +48,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
 
@@ -80,9 +82,10 @@ const STATUS_OPTIONS: { value: ProjectStatus; label: string }[] = [
   { value: "archived", label: "Archivado" },
 ];
 
-// The 6 sub-sections every project always has (some may be empty,
+// The 7 sub-sections every project always has (some may be empty,
 // like dep-cache for a brand-new project, but they're always
-// reachable).
+// reachable). Tasks lista TODAS las tareas del proyecto (incluye las
+// que están fuera de un plan).
 const SUBSECTIONS = [
   {
     key: "chat",
@@ -95,6 +98,12 @@ const SUBSECTIONS = [
     label: "Planes",
     description: "Planes de construcción + Kanban de sus tareas.",
     Icon: Workflow,
+  },
+  {
+    key: "tasks",
+    label: "Tasks",
+    description: "Todas las tareas del proyecto, incluidas las que no tienen plan.",
+    Icon: ListTodo,
   },
   {
     key: "knowledge-bases",
@@ -332,13 +341,11 @@ function ProjectEditDialog({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="edit-description">Descripción</Label>
-            <textarea
-              id="edit-description"
+            <Label>Descripción</Label>
+            <MarkdownTextarea
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={3}
-              className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2"
+              onChange={setDescription}
+              rows={5}
               data-testid="edit-project-description"
             />
           </div>
