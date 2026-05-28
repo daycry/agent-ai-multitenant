@@ -17,8 +17,12 @@ servidor MCP (Model Context Protocol) a un proyecto:
    que no esté en el catálogo (HTTP custom, comando local, etc.).
 
 > **Prerrequisito.** Estás autenticado en el panel (`/admin`) y
-> tienes un proyecto activo. Necesitas rol `project_owner` o superior
-> en ese proyecto.
+> tienes un proyecto activo. Configurar MCP servers en un proyecto
+> requiere rol **`tenant_admin`** o `system_admin` (Plan 06.8 —
+> ver [Roles y permisos](./roles-y-permisos.md) y la
+> [matriz RBAC](../04-reference/rbac.md)). Si eres `tenant_user`,
+> el botón **+ Añadir MCP** no aparece en la pestaña; pide a un
+> `tenant_admin` que ejecute los pasos siguientes por ti.
 
 ---
 

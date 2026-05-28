@@ -297,3 +297,93 @@ Por ahora `system_operator` no se distingue de `tenant_user` en ningún
 endpoint — el enum lo soporta pero la matriz no introduce diferencia.
 Si en el futuro hace falta (e.g. "puede ver audit_log pero no mutar
 recursos"), se documenta aquí + se añade el helper correspondiente.
+
+## Ejemplos curl
+
+Los siguientes ejemplos asumen que tienes un JWT del usuario activo
+en `$TOKEN`. La cabecera `X-Tenant-Id` sólo la honora el backend
+cuando el usuario es `system_admin`; para usuarios normales el `tid`
+del propio JWT manda y el header se ignora silenciosamente.
+
+### Listar proyectos del tenant (cualquier member)
+
+```bash
+curl -sS http://localhost:8001/projects \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Respuesta esperada:
+
+- `200` + JSON array si el caller es member o admin del tenant.
+- `403 {"detail":"user is not a member of this tenant"}` si la
+  membership no existe / está soft-deleted / `is_active=false`.
+- `403 {"detail":"no active tenant context"}` si el JWT no llevaba
+  `tid` (login fresco sin tenant picker).
+- `401 {"detail":"missing Authorization header"}` sin el header
+  `Bearer`.
+
+### Crear proyecto (sólo `tenant_admin`)
+
+```bash
+curl -sS http://localhost:8001/projects \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Nuevo proyecto","status":"active"}'
+```
+
+- `201` + JSON del proyecto si admin / system_admin.
+- `403 {"detail":"tenant_admin role required"}` si es `tenant_user`.
+
+### Cambiar de tenant siendo system_admin
+
+```bash
+curl -sS http://localhost:8001/projects \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-Id: 00000000-0000-0000-0000-000000000aaa"
+```
+
+El header sobrescribe el `tid` del JWT (sólo si `is_system_admin=true`
+en el token). Útil para que el admin-panel actúe "como" un tenant
+específico desde el picker.
+
+### Saber qué puede hacer el usuario (`/me`)
+
+```bash
+curl -sS http://localhost:8001/me \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Respuesta:
+
+```json
+{
+  "user_id": "5b1...",
+  "email": "alice@acme.test",
+  "full_name": "Alice",
+  "is_system_admin": false,
+  "memberships": [
+    {
+      "tenant_id": "00000000-0000-0000-0000-000000000aaa",
+      "tenant_name": "Acme Corp",
+      "role": "tenant_admin",
+      "is_active": true
+    }
+  ],
+  "active_tenant_id": "00000000-0000-0000-0000-000000000aaa"
+}
+```
+
+La admin-panel consume este endpoint en cada carga para saber qué
+botones renderizar y qué tenants ofrecer en el picker.
+
+### Tests integration que pinean la matriz
+
+```bash
+pytest tests/integration/test_auth_role_helpers.py -v
+pytest tests/integration/test_rbac_resources.py -v
+pytest tests/integration/test_me_endpoint.py -v
+```
+
+Cualquier endpoint añadido tras Plan 06.8 que falle en `test_rbac_
+resources.py` (o que falte una entrada en la matriz de este doc) es
+un PR que NO debería mergearse.
