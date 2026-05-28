@@ -129,6 +129,19 @@ endpoints que devuelven el contexto del propio usuario.
 | `/projects/{id}/knowledge-bases`              | GET    | `tenant_user`  |
 | `/documents/{id}/citations`                   | GET    | `tenant_user`  |
 
+### `kb_categories.py` (Plan 06.10)
+
+Categorías para organizar KBs en la UI. Built-ins (`tenant_id IS NULL`)
+son read-only — PUT/DELETE devuelven 403 explícito incluso para
+`tenant_admin`.
+
+| Endpoint              | Método | Rol mínimo     |
+| --------------------- | ------ | -------------- |
+| `/kb-categories`      | GET    | `tenant_user`  |
+| `/kb-categories`      | POST   | `tenant_admin` |
+| `/kb-categories/{id}` | PUT    | `tenant_admin` |
+| `/kb-categories/{id}` | DELETE | `tenant_admin` |
+
 ### `mcp.py` y `mcp_catalog.py`
 
 | Endpoint                             | Método | Rol mínimo     |

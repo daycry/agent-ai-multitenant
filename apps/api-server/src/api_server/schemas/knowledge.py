@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from api_server.db.knowledge import Document, KnowledgeBase
+from api_server.db.knowledge import Document, KbCategory, KnowledgeBase
 
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
@@ -21,6 +21,9 @@ class KnowledgeBaseCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str | None = None
     embedding_model_id: str | None = Field(default=None, max_length=120)
+    # Plan 06.10: opcional al crear. Si se omite la KB queda sin
+    # categoría hasta que el tenant la asigne en Editar.
+    category_id: UUID | None = None
 
 
 class KnowledgeBaseUpdateRequest(BaseModel):
@@ -29,6 +32,21 @@ class KnowledgeBaseUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = None
     embedding_model_id: str | None = Field(default=None, max_length=120)
+    # Plan 06.10: cambiar a None desasigna la categoría.
+    category_id: UUID | None = None
+
+
+class KbCategorySummary(BaseModel):
+    """Slim embed para `KnowledgeBaseResponse.category` — evita un
+    fetch extra del frontend cuando lista KBs."""
+
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    slug: str
+    name: str
+    color: str | None
+    is_builtin: bool
 
 
 class KnowledgeBaseResponse(BaseModel):
@@ -42,9 +60,12 @@ class KnowledgeBaseResponse(BaseModel):
     created_by: UUID | None
     created_at: datetime
     updated_at: datetime
+    # Plan 06.10: categoría embebida (puede ser null si la KB no
+    # está categorizada o si la categoría fue borrada).
+    category: KbCategorySummary | None = None
 
 
-def to_kb_response(kb: KnowledgeBase) -> KnowledgeBaseResponse:
+def to_kb_response(kb: KnowledgeBase, category: KbCategory | None = None) -> KnowledgeBaseResponse:
     return KnowledgeBaseResponse(
         id=kb.id,
         tenant_id=kb.tenant_id,
@@ -54,6 +75,62 @@ def to_kb_response(kb: KnowledgeBase) -> KnowledgeBaseResponse:
         created_by=kb.created_by,
         created_at=kb.created_at,
         updated_at=kb.updated_at,
+        category=to_kb_category_summary(category) if category is not None else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# KbCategory (Plan 06.10)
+# ---------------------------------------------------------------------------
+class KbCategoryCreateRequest(BaseModel):
+    model_config = _BASE_CONFIG
+
+    slug: str = Field(min_length=1, max_length=60, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    name: str = Field(min_length=1, max_length=120)
+    # Hex color con `#` opcional (`#3b82f6` o `3b82f6`).
+    color: str | None = Field(default=None, max_length=16)
+
+
+class KbCategoryUpdateRequest(BaseModel):
+    model_config = _BASE_CONFIG
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    color: str | None = Field(default=None, max_length=16)
+
+
+class KbCategoryResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    tenant_id: UUID | None
+    slug: str
+    name: str
+    color: str | None
+    is_builtin: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+def to_kb_category_response(cat: KbCategory) -> KbCategoryResponse:
+    return KbCategoryResponse(
+        id=cat.id,
+        tenant_id=cat.tenant_id,
+        slug=cat.slug,
+        name=cat.name,
+        color=cat.color,
+        is_builtin=cat.is_builtin,
+        created_at=cat.created_at,
+        updated_at=cat.updated_at,
+    )
+
+
+def to_kb_category_summary(cat: KbCategory) -> KbCategorySummary:
+    return KbCategorySummary(
+        id=cat.id,
+        slug=cat.slug,
+        name=cat.name,
+        color=cat.color,
+        is_builtin=cat.is_builtin,
     )
 
 
@@ -123,11 +200,17 @@ def to_document_response(d: Document) -> DocumentResponse:
 
 __all__ = [
     "DocumentResponse",
+    "KbCategoryCreateRequest",
+    "KbCategoryResponse",
+    "KbCategorySummary",
+    "KbCategoryUpdateRequest",
     "KnowledgeBaseCreateRequest",
     "KnowledgeBaseGrantRequest",
     "KnowledgeBaseGrantResponse",
     "KnowledgeBaseResponse",
     "KnowledgeBaseUpdateRequest",
     "to_document_response",
+    "to_kb_category_response",
+    "to_kb_category_summary",
     "to_kb_response",
 ]

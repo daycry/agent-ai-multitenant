@@ -36,6 +36,7 @@ from api_server.db.domain import Project
 from api_server.db.knowledge import (
     Chunk,
     Document,
+    KbCategory,
     KnowledgeBase,
     KnowledgeBaseProject,
 )
@@ -116,6 +117,7 @@ async def create_kb(
         description=payload.description,
         embedding_model_id=payload.embedding_model_id or "nomic-embed-text-v1.5",
         created_by=principal.user_id,
+        category_id=payload.category_id,
     )
     session.add(kb)
     try:
@@ -127,12 +129,24 @@ async def create_kb(
             detail=f"kb name already exists in tenant: {exc.orig}",
         ) from exc
     await session.refresh(kb)
-    return to_kb_response(kb)
+    return to_kb_response(kb, await _load_category_for_kb(session, kb))
+
+
+async def _load_category_for_kb(session: AsyncSession, kb: KnowledgeBase) -> KbCategory | None:
+    """Carga la categoría de una KB para embedirla en el response.
+    None si la KB no tiene categoría o la categoría fue borrada."""
+    if kb.category_id is None:
+        return None
+    result = await session.execute(
+        select(KbCategory).where(KbCategory.id == kb.category_id, KbCategory.deleted_at.is_(None))
+    )
+    return result.scalar_one_or_none()
 
 
 @router.get("", response_model=list[KnowledgeBaseResponse])
 async def list_kbs(
     q: str | None = None,
+    category: str | None = None,
     limit: int = 100,
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
@@ -142,15 +156,55 @@ async def list_kbs(
     Plan 06.9: `?q=` enables server-side typeahead so the admin-panel
     `<KbCombobox>` (used in the agent → KB grant dialog) can search
     by KB name without dragging every row through the browser.
+
+    Plan 06.10: `?category=` filtra por categoría — acepta UUID o
+    slug. Combinable con `?q=`.
+
     `limit` caps the response — keep it small for typeahead (20),
     default 100 is fine for the listing page.
     """
+    from api_server.db.knowledge import KbCategory
+
     stmt = select(KnowledgeBase).where(KnowledgeBase.deleted_at.is_(None))
     if q is not None and q.strip():
         stmt = stmt.where(KnowledgeBase.name.ilike(f"%{q.strip()}%"))
+    if category is not None and category.strip():
+        cat_filter = category.strip()
+        try:
+            cat_uuid = UUID(cat_filter)
+        except ValueError:
+            # Trata como slug — resuelve al id (built-in o tenant).
+            cat_row = await session.execute(
+                select(KbCategory.id).where(
+                    KbCategory.slug == cat_filter,
+                    KbCategory.deleted_at.is_(None),
+                )
+            )
+            cat_id = cat_row.scalar_one_or_none()
+            if cat_id is None:
+                # Slug no existe — listado vacío en lugar de 404; mejora UX
+                # del combobox cuando el cliente está fuera de sync.
+                return []
+            stmt = stmt.where(KnowledgeBase.category_id == cat_id)
+        else:
+            stmt = stmt.where(KnowledgeBase.category_id == cat_uuid)
     stmt = stmt.order_by(KnowledgeBase.created_at.desc()).limit(max(1, min(limit, 500)))
     result = await session.execute(stmt)
-    return [to_kb_response(kb) for kb in result.scalars().all()]
+    kbs = list(result.scalars().all())
+
+    # Una query batch para todas las categorías referenciadas (evita N+1).
+    cat_ids = {kb.category_id for kb in kbs if kb.category_id is not None}
+    cats_by_id: dict[UUID, KbCategory] = {}
+    if cat_ids:
+        cat_rows = await session.execute(
+            select(KbCategory).where(KbCategory.id.in_(cat_ids), KbCategory.deleted_at.is_(None))
+        )
+        cats_by_id = {c.id: c for c in cat_rows.scalars().all()}
+
+    return [
+        to_kb_response(kb, cats_by_id.get(kb.category_id) if kb.category_id is not None else None)
+        for kb in kbs
+    ]
 
 
 @router.get("/{kb_id}", response_model=KnowledgeBaseResponse)
@@ -159,7 +213,8 @@ async def get_kb(
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> KnowledgeBaseResponse:
-    return to_kb_response(await _load_kb(session, kb_id))
+    kb = await _load_kb(session, kb_id)
+    return to_kb_response(kb, await _load_category_for_kb(session, kb))
 
 
 @router.put("/{kb_id}", response_model=KnowledgeBaseResponse)
@@ -177,9 +232,13 @@ async def update_kb(
         kb.description = payload.description
     if payload.embedding_model_id is not None:
         kb.embedding_model_id = payload.embedding_model_id
+    # Plan 06.10: model_fields_set para distinguir "category_id no
+    # enviado" (no tocar) de "category_id explícitamente null" (limpiar).
+    if "category_id" in payload.model_fields_set:
+        kb.category_id = payload.category_id
     await session.flush()
     await session.refresh(kb)
-    return to_kb_response(kb)
+    return to_kb_response(kb, await _load_category_for_kb(session, kb))
 
 
 @router.delete("/{kb_id}", status_code=status.HTTP_204_NO_CONTENT)

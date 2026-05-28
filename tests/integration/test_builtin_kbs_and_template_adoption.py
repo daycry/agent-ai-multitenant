@@ -49,6 +49,7 @@ async def _seeded_engine(admin_url: str):
     """Create an async engine and run every dependency seed once.
     Caller must `await engine.dispose()` when done."""
     from api_server.seeds.builtin_agents import seed_builtin_agents
+    from api_server.seeds.builtin_kb_categories import seed_builtin_kb_categories
     from api_server.seeds.builtin_kbs import seed_builtin_kbs
     from api_server.seeds.builtin_project_templates import seed_builtin_project_templates
     from api_server.seeds.builtin_teams import seed_builtin_teams
@@ -60,6 +61,8 @@ async def _seeded_engine(admin_url: str):
         await ensure_platform_tenant(session)
         await seed_builtin_agents(session)
         await seed_builtin_teams(session)
+        # Plan 06.10: categorías antes que KBs (FK).
+        await seed_builtin_kb_categories(session)
         await seed_builtin_kbs(session)
         await seed_builtin_project_templates(session)
     return engine

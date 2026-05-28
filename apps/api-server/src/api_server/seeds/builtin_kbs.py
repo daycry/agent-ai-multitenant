@@ -60,6 +60,9 @@ class BuiltinKB:
     slug: str
     name: str
     description: str
+    # Plan 06.10: slug de la categoría built-in que se aplica al
+    # sembrar. Vacío = sin categoría.
+    category_slug: str = ""
 
     @property
     def id(self) -> UUID:
@@ -77,6 +80,7 @@ BUILTIN_KBS: tuple[BuiltinKB, ...] = (
             "del repo, async/await, manejo de errores, OpenAPI, testing con "
             "pytest + httpx, y patrones de SQLAlchemy 2.x async."
         ),
+        category_slug="stack",
     ),
     BuiltinKB(
         slug="node-express-conventions",
@@ -86,6 +90,7 @@ BUILTIN_KBS: tuple[BuiltinKB, ...] = (
             "carpetas, middleware, validación con zod, testing con vitest, "
             "y patrones de conexión a Postgres con pg/Prisma."
         ),
+        category_slug="stack",
     ),
     BuiltinKB(
         slug="php-symfony-conventions",
@@ -94,6 +99,7 @@ BUILTIN_KBS: tuple[BuiltinKB, ...] = (
             "Convenciones de Symfony 6/7: controladores, autowiring, "
             "Doctrine, tests con phpunit, y migrations con doctrine-migrations."
         ),
+        category_slug="stack",
     ),
     BuiltinKB(
         slug="postgresql-best-practices",
@@ -103,6 +109,7 @@ BUILTIN_KBS: tuple[BuiltinKB, ...] = (
             "JSONB, row-level security, conexiones, vacuum/autovacuum, "
             "y migraciones reversibles."
         ),
+        category_slug="stack",
     ),
     BuiltinKB(
         slug="api-rest-guidelines",
@@ -112,6 +119,7 @@ BUILTIN_KBS: tuple[BuiltinKB, ...] = (
             "códigos de estado, versionado, paginación, filtrado, HATEOAS, "
             "y autenticación con OAuth 2 / JWT. Agnóstico de stack."
         ),
+        category_slug="role",
     ),
     BuiltinKB(
         slug="react-nextjs-conventions",
@@ -121,6 +129,7 @@ BUILTIN_KBS: tuple[BuiltinKB, ...] = (
             "server components, TanStack Query, formularios con react-hook-form, "
             "y testing con vitest + Playwright."
         ),
+        category_slug="stack",
     ),
 )
 
@@ -130,11 +139,14 @@ BUILTIN_KBS: tuple[BuiltinKB, ...] = (
 # ---------------------------------------------------------------------------
 _UPSERT_SQL = text(
     """
-    INSERT INTO knowledge_bases (id, tenant_id, name, description, embedding_model_id)
-    VALUES (:id, :tenant_id, :name, :description, 'nomic-embed-text-v1.5')
+    INSERT INTO knowledge_bases
+        (id, tenant_id, name, description, embedding_model_id, category_id)
+    VALUES
+        (:id, :tenant_id, :name, :description, 'nomic-embed-text-v1.5', :category_id)
     ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name,
         description = EXCLUDED.description,
+        category_id = EXCLUDED.category_id,
         updated_at = now(),
         deleted_at = NULL
     """
@@ -143,7 +155,17 @@ _UPSERT_SQL = text(
 
 async def seed_builtin_kbs(session: AsyncSession) -> int:
     """Upsert the canonical KBs under PLATFORM_TENANT_ID. Returns the
-    count of rows written."""
+    count of rows written.
+
+    Plan 06.10: si el BuiltinKB declara `category_slug`, resuelve el
+    UUID de la categoría built-in via `uuid5` y lo persiste en
+    `knowledge_bases.category_id`. Asume que `seed_builtin_kb_categories`
+    se ejecutó antes (el runner del seed garantiza el orden).
+    """
+    from api_server.seeds.builtin_kb_categories import (
+        kb_category_id_for_slug,
+    )
+
     count = 0
     for kb in BUILTIN_KBS:
         await session.execute(
@@ -153,6 +175,9 @@ async def seed_builtin_kbs(session: AsyncSession) -> int:
                 "tenant_id": str(PLATFORM_TENANT_ID),
                 "name": kb.name,
                 "description": kb.description,
+                "category_id": (
+                    str(kb_category_id_for_slug(kb.category_slug)) if kb.category_slug else None
+                ),
             },
         )
         count += 1

@@ -14,6 +14,7 @@ from api_server.db.session import get_admin_sessionmaker
 from api_server.logging import configure_logging
 from api_server.seeds.builtin_agents import seed_builtin_agents
 from api_server.seeds.builtin_approval_policies import seed_builtin_approval_policies
+from api_server.seeds.builtin_kb_categories import seed_builtin_kb_categories
 from api_server.seeds.builtin_kbs import seed_builtin_kbs
 from api_server.seeds.builtin_project_templates import seed_builtin_project_templates
 from api_server.seeds.builtin_skills import seed_builtin_skills
@@ -34,6 +35,9 @@ async def main() -> None:
         n_tools = await seed_builtin_tools(session)
         # Teams depend on agents being present (FK on team_members.agent_id).
         n_teams = await seed_builtin_teams(session)
+        # Plan 06.10: las categorías deben existir antes que las KBs
+        # built-in (seed_builtin_kbs resuelve category_slug -> FK).
+        n_kb_categories = await seed_builtin_kb_categories(session)
         # Plan 06.9: canonical KBs must exist before project templates
         # reference them via default_kb_grants.
         n_kbs = await seed_builtin_kbs(session)
@@ -47,6 +51,7 @@ async def main() -> None:
         skills=n_skills,
         tools=n_tools,
         teams=n_teams,
+        kb_categories=n_kb_categories,
         knowledge_bases=n_kbs,
         project_templates=n_proj_templates,
         approval_policies=n_policies,
