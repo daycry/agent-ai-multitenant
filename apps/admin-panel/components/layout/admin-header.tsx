@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
 import { clearToken } from "@/lib/auth";
 import { setTenantId as clearStoredTenant } from "@/lib/tenant-storage";
+import { useCurrentUser } from "@/lib/use-current-user";
 
 export function AdminHeader({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
   const { lang, setLang } = useLang();
@@ -87,10 +88,52 @@ export function AdminHeader({ onOpenMobileNav }: { onOpenMobileNav: () => void }
       {/* Right: tenant picker (superadmin only) + lang switcher + user menu */}
       <div className="flex items-center gap-3">
         <TenantPicker />
+        <RoleBadge />
         <LangSwitcher lang={lang} onChange={setLang} />
         <UserMenu open={menuOpen} setOpen={setMenuOpen} onLogout={onLogout} />
       </div>
     </header>
+  );
+}
+
+/**
+ * Badge "system_admin | admin | user" junto al menú de usuario
+ * (Plan 06.8 task_06_8_07). El color es ámbar para system_admin,
+ * azul para admin y gris para user — codifica el nivel de poder
+ * visualmente sin necesidad de leer el texto.
+ */
+function RoleBadge() {
+  const { user, isSystemAdmin, roleInActiveTenant } = useCurrentUser();
+  if (!user) return null;
+
+  let label: string;
+  let className: string;
+  if (isSystemAdmin) {
+    label = "system_admin";
+    className = "bg-amber-500/15 text-amber-700 dark:text-amber-300";
+  } else if (roleInActiveTenant === "tenant_admin") {
+    label = "admin";
+    className = "bg-sky-500/15 text-sky-700 dark:text-sky-300";
+  } else if (roleInActiveTenant === "tenant_user") {
+    label = "user";
+    className = "bg-muted text-muted-foreground";
+  } else {
+    // Logged in pero sin tenant activo — no badge.
+    return null;
+  }
+
+  return (
+    <span
+      data-testid="role-badge"
+      title={user.email ?? undefined}
+      className={cn(
+        "inline-flex items-center rounded-full px-2.5 py-0.5",
+        "text-xs font-semibold uppercase tracking-wide",
+        className,
+      )}
+    >
+      {label}
+    </span>
   );
 }
 

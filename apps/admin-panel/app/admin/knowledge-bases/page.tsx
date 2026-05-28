@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RoleGuard } from "@/components/ui/role-guard";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { ProjectCombobox } from "@/components/ui/project-combobox";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -88,10 +89,12 @@ export default function KnowledgeBasesPage() {
         title="Knowledge Bases"
         description="Bases de conocimiento del tenant. Cada KB agrupa documentos indexados y se asigna (grant) a uno o más proyectos."
         actions={
-          <Button onClick={() => setCreateOpen(true)} data-testid="kbs-create-button">
-            <Plus className="mr-1 h-4 w-4" />
-            Crear KB
-          </Button>
+          <RoleGuard min="tenant_admin">
+            <Button onClick={() => setCreateOpen(true)} data-testid="kbs-create-button">
+              <Plus className="mr-1 h-4 w-4" />
+              Crear KB
+            </Button>
+          </RoleGuard>
         }
       />
 
@@ -199,24 +202,31 @@ function KbRow({
             embedding: {kb.embedding_model_id}
           </p>
         </div>
-        <div className="flex flex-row items-center gap-1">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onGrant}
-            data-testid={`kb-grant-${kb.id}`}
-            title="Dar acceso a un proyecto"
-          >
-            <Share2 className="mr-1 h-3.5 w-3.5" />
-            Grant
-          </Button>
-          <Button variant="outline" size="sm" onClick={onEdit} data-testid={`kb-edit-${kb.id}`}>
-            <Pencil className="h-3.5 w-3.5" />
-          </Button>
-          <Button variant="outline" size="sm" onClick={onDelete} data-testid={`kb-delete-${kb.id}`}>
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
-        </div>
+        <RoleGuard min="tenant_admin">
+          <div className="flex flex-row items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onGrant}
+              data-testid={`kb-grant-${kb.id}`}
+              title="Dar acceso a un proyecto"
+            >
+              <Share2 className="mr-1 h-3.5 w-3.5" />
+              Grant
+            </Button>
+            <Button variant="outline" size="sm" onClick={onEdit} data-testid={`kb-edit-${kb.id}`}>
+              <Pencil className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onDelete}
+              data-testid={`kb-delete-${kb.id}`}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </RoleGuard>
       </CardHeader>
       {kb.description && (
         <CardContent>

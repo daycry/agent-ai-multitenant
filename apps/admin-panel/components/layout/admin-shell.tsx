@@ -22,11 +22,14 @@ import {
 import { AdminHeader } from "@/components/layout/admin-header";
 import { GlobalProgress } from "@/components/layout/global-progress";
 import { cn } from "@/lib/utils";
+import { useCurrentUser } from "@/lib/use-current-user";
 
 interface NavItem {
   href: string;
   label: string;
   Icon: typeof LayoutDashboard;
+  /** Si `adminOnly`, sólo se muestra a tenant_admin / system_admin. */
+  adminOnly?: boolean;
 }
 
 const NAV: NavItem[] = [
@@ -36,11 +39,16 @@ const NAV: NavItem[] = [
   { href: "/admin/projects", label: "Proyectos", Icon: FolderKanban },
   { href: "/admin/board", label: "Tablero", Icon: LayoutGrid },
   { href: "/admin/approvals", label: "Aprobaciones", Icon: BellRing },
-  { href: "/admin/approval-policy", label: "Validación humana", Icon: ShieldCheck },
+  {
+    href: "/admin/approval-policy",
+    label: "Validación humana",
+    Icon: ShieldCheck,
+    adminOnly: true,
+  },
   { href: "/admin/memories", label: "Memorias", Icon: Brain },
   { href: "/admin/knowledge-bases", label: "Knowledge Bases", Icon: Library },
   { href: "/admin/documents", label: "Documentos", Icon: FileText },
-  { href: "/admin/settings", label: "Settings", Icon: Settings },
+  { href: "/admin/settings", label: "Settings", Icon: Settings, adminOnly: true },
 ];
 
 export function AdminShell({ children }: { children: ReactNode }) {
@@ -110,6 +118,11 @@ function SidebarContent({
   showClose?: boolean;
   onClose?: () => void;
 }) {
+  // Plan 06.8 task_06_8_08: ocultar items admin-only para tenant_user.
+  // El check del backend sigue siendo la fuente de verdad — esto es UX.
+  const { isTenantAdmin } = useCurrentUser();
+  const visibleNav = NAV.filter((item) => !item.adminOnly || isTenantAdmin);
+
   return (
     <>
       <div className="border-sidebar-border flex h-20 items-center justify-between border-b px-6">
@@ -145,7 +158,7 @@ function SidebarContent({
           Workspace
         </p>
         <ul className="flex flex-col gap-1">
-          {NAV.map(({ href, label, Icon }) => {
+          {visibleNav.map(({ href, label, Icon }) => {
             const active = isActive(href);
             return (
               <li key={href}>

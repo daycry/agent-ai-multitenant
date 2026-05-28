@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { RoleGuard } from "@/components/ui/role-guard";
 import { ApiError, apiFetch } from "@/lib/api";
 
 interface Project {
@@ -41,11 +42,13 @@ export default function ProjectsListPage() {
         title="Proyectos"
         description="Proyectos activos del tenant. Las plantillas se eligen al crear."
         actions={
-          <Button asChild>
-            <Link href="/admin/projects/new" data-testid="new-project-button">
-              <Plus className="mr-1 h-4 w-4" /> Crear proyecto
-            </Link>
-          </Button>
+          <RoleGuard min="tenant_admin">
+            <Button asChild>
+              <Link href="/admin/projects/new" data-testid="new-project-button">
+                <Plus className="mr-1 h-4 w-4" /> Crear proyecto
+              </Link>
+            </Button>
+          </RoleGuard>
         }
       />
 
@@ -64,9 +67,11 @@ export default function ProjectsListPage() {
           <p className="text-muted-foreground mb-4 text-sm">
             Este tenant aún no tiene proyectos. Empieza desde una plantilla.
           </p>
-          <Button asChild>
-            <Link href="/admin/projects/new">Crear el primero</Link>
-          </Button>
+          <RoleGuard min="tenant_admin">
+            <Button asChild>
+              <Link href="/admin/projects/new">Crear el primero</Link>
+            </Button>
+          </RoleGuard>
         </Card>
       )}
 
