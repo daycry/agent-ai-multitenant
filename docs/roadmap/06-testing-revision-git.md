@@ -1,10 +1,10 @@
 ---
 plan_id: 06-testing-revision-git
 title: Testing Heterogéneo, Revisión y Ciclo Git del Plan
-status: pending_human_validation
+status: completed
 blocking_plan: [03-chat-planning-aprobacion, 05-mcp-tools-avanzadas]
 started_at: 2026-05-27
-completed_at: null
+completed_at: 2026-05-28
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 85-105
 estimated_cost_human_eur: 34.000 € – 42.000 €
