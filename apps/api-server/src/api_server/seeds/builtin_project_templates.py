@@ -41,6 +41,10 @@ class BuiltinProjectTemplate:
     worker_config: dict[str, Any] = field(default_factory=dict)
     repository_config: dict[str, Any] | None = None
     human_approval_policy: dict[str, Any] | None = None
+    # Plan 06.9 task_06_9_07: KBs (por slug del catálogo built-in) que
+    # se grantean automáticamente al adoptar esta plantilla. Vacío =
+    # ningún grant por defecto.
+    default_kb_grants: tuple[str, ...] = ()
 
     @property
     def id(self) -> UUID:
@@ -77,6 +81,11 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
         },
         repository_config={"language": "python", "framework": "fastapi", "license": "MIT"},
         human_approval_policy=_POLICY_DEV_SKELETON,
+        default_kb_grants=(
+            "python-fastapi-conventions",
+            "api-rest-guidelines",
+            "postgresql-best-practices",
+        ),
     ),
     BuiltinProjectTemplate(
         slug="webapp",
@@ -98,6 +107,12 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "backend": "fastapi",
         },
         human_approval_policy=_POLICY_DEV_SKELETON,
+        default_kb_grants=(
+            "python-fastapi-conventions",
+            "react-nextjs-conventions",
+            "api-rest-guidelines",
+            "postgresql-best-practices",
+        ),
     ),
     BuiltinProjectTemplate(
         slug="data-pipeline",
@@ -115,6 +130,7 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
         },
         repository_config={"language": "python", "framework": "prefect"},
         human_approval_policy=_POLICY_DEV_SKELETON,
+        default_kb_grants=("postgresql-best-practices",),
     ),
     BuiltinProjectTemplate(
         slug="legacy-migration",
@@ -140,6 +156,15 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
                 "production_deploy": "human_required",
             },
         },
+        # Stack polyglot: ofrecemos las dos referencias de stack más
+        # comunes en migraciones (Python destino + PHP origen) +
+        # principios generales.
+        default_kb_grants=(
+            "api-rest-guidelines",
+            "python-fastapi-conventions",
+            "php-symfony-conventions",
+            "postgresql-best-practices",
+        ),
     ),
     BuiltinProjectTemplate(
         slug="research-spec",
@@ -189,6 +214,7 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
         worker_config={"min_workers": 1, "max_workers": 3},
         repository_config={"language": "typescript", "framework": "playwright"},
         human_approval_policy=_POLICY_DEV_SKELETON,
+        default_kb_grants=("react-nextjs-conventions", "node-express-conventions"),
     ),
     BuiltinProjectTemplate(
         slug="doc-modernization",
@@ -214,6 +240,7 @@ _UPSERT_SQL = text(
         id, tenant_id, name, description, status, team_id,
         mcp_servers, rag_knowledge_bases, worker_config,
         repository_config, human_approval_policy,
+        default_kb_grants,
         is_template
     )
     VALUES (
@@ -221,6 +248,7 @@ _UPSERT_SQL = text(
         '[]'::jsonb, '[]'::jsonb, CAST(:worker_config AS jsonb),
         CAST(:repository_config AS jsonb),
         CAST(:human_approval_policy AS jsonb),
+        :default_kb_grants,
         true
     )
     ON CONFLICT (id) DO UPDATE SET
@@ -230,6 +258,7 @@ _UPSERT_SQL = text(
         worker_config = EXCLUDED.worker_config,
         repository_config = EXCLUDED.repository_config,
         human_approval_policy = EXCLUDED.human_approval_policy,
+        default_kb_grants = EXCLUDED.default_kb_grants,
         updated_at = now()
     """
 )
@@ -254,6 +283,9 @@ async def seed_builtin_project_templates(session: AsyncSession) -> int:
                     if tpl.human_approval_policy is not None
                     else None
                 ),
+                # PostgreSQL TEXT[] — asyncpg encodes Python list as
+                # the SQL array literal natively.
+                "default_kb_grants": list(tpl.default_kb_grants),
             },
         )
     return len(BUILTIN_PROJECT_TEMPLATES)

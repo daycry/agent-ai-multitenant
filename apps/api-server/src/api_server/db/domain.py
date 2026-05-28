@@ -32,6 +32,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    ARRAY,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -572,6 +573,12 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     )
     rag_knowledge_bases: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    # Plan 06.9 task_06_9_07: KBs (by slug) that the wizard should
+    # auto-grant when a tenant creates a project from this template.
+    # Only meaningful on `is_template=true` rows; ignored otherwise.
+    default_kb_grants: Mapped[list[str]] = mapped_column(
+        ARRAY(String), nullable=False, server_default=text("'{}'::text[]")
     )
     worker_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")

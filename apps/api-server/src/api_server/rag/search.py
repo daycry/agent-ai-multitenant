@@ -63,26 +63,24 @@ class ChunkHit:
 # ---------------------------------------------------------------------------
 # Internal SQL builders
 # ---------------------------------------------------------------------------
-def _kb_visibility_filter() -> str:
-    """`AND` clause restricting chunks to KBs the project can read.
+def _kb_visibility_filter(*, with_agent: bool = False) -> str:
+    """`AND` clause restricting chunks to KBs the caller can read.
 
     Bound parameters:
       - ``:tenant_id`` — current tenant (defence in depth on top of
         RLS).
       - ``:project_id`` — the project asking. The chunk's KB must
-        appear in `kb_projects` for this project, OR be granted to
-        no project (no rows means invisible — see Plan 04 Fase B
-        decision).
+        appear in `kb_projects` for this project.
+      - ``:agent_id`` — only when ``with_agent=True``. KBs granted to
+        the agent template are also visible (Plan 06.9).
+
+    Delegates to :func:`api_server.rag.visibility.visibility_filter_clause`
+    so the rule lives in one place; the resolver
+    :func:`resolve_visible_kbs` and the chunk search use the same SQL.
     """
-    return (
-        " AND chunks.tenant_id = :tenant_id"
-        " AND EXISTS ("
-        "   SELECT 1 FROM kb_projects kp"
-        "   JOIN documents d ON d.id = chunks.document_id"
-        "   WHERE kp.kb_id = d.kb_id"
-        "     AND kp.project_id = :project_id"
-        " )"
-    )
+    from api_server.rag.visibility import visibility_filter_clause
+
+    return visibility_filter_clause(with_agent=with_agent)
 
 
 # ---------------------------------------------------------------------------
@@ -94,10 +92,12 @@ async def bm25_chunks(
     query: str,
     tenant_id: UUID,
     project_id: UUID,
+    agent_id: UUID | None = None,
     limit: int = BM25_K_DEFAULT,
 ) -> list[UUID]:
     """Top-`limit` chunk ids by ts_rank_cd, restricted to KBs the
-    project can read. Empty list if `query` is blank."""
+    project (and optionally agent) can read. Empty list if `query`
+    is blank."""
     if not query.strip():
         return []
     sql = (
@@ -105,21 +105,21 @@ async def bm25_chunks(
         " FROM chunks"
         " WHERE to_tsvector('simple', chunks.content)"
         "        @@ plainto_tsquery('simple', :q)"
-        + _kb_visibility_filter()
+        + _kb_visibility_filter(with_agent=agent_id is not None)
         + " ORDER BY ts_rank_cd("
         "          to_tsvector('simple', chunks.content),"
         "          plainto_tsquery('simple', :q)) DESC"
         "  LIMIT :limit"
     )
-    result = await session.execute(
-        text(sql),
-        {
-            "q": query,
-            "tenant_id": tenant_id,
-            "project_id": project_id,
-            "limit": limit,
-        },
-    )
+    params: dict[str, object] = {
+        "q": query,
+        "tenant_id": tenant_id,
+        "project_id": project_id,
+        "limit": limit,
+    }
+    if agent_id is not None:
+        params["agent_id"] = agent_id
+    result = await session.execute(text(sql), params)
     return [row[0] for row in result.all()]
 
 
@@ -132,6 +132,7 @@ async def vector_chunks(
     query_embedding: Sequence[float] | None,
     tenant_id: UUID,
     project_id: UUID,
+    agent_id: UUID | None = None,
     limit: int = VECTOR_K_DEFAULT,
 ) -> list[UUID]:
     """Top-`limit` chunk ids by cosine similarity. Empty list if no
@@ -142,20 +143,20 @@ async def vector_chunks(
         "SELECT chunks.id"
         " FROM chunks"
         " WHERE chunks.embedding IS NOT NULL"
-        + _kb_visibility_filter()
+        + _kb_visibility_filter(with_agent=agent_id is not None)
         + " ORDER BY chunks.embedding <=> CAST(:qvec AS vector)"
         " LIMIT :limit"
     )
     qvec_str = "[" + ",".join(f"{x:.6f}" for x in query_embedding) + "]"
-    result = await session.execute(
-        text(sql),
-        {
-            "qvec": qvec_str,
-            "tenant_id": tenant_id,
-            "project_id": project_id,
-            "limit": limit,
-        },
-    )
+    params: dict[str, object] = {
+        "qvec": qvec_str,
+        "tenant_id": tenant_id,
+        "project_id": project_id,
+        "limit": limit,
+    }
+    if agent_id is not None:
+        params["agent_id"] = agent_id
+    result = await session.execute(text(sql), params)
     return [row[0] for row in result.all()]
 
 
@@ -168,6 +169,7 @@ async def recall_chunks(
     query: str,
     tenant_id: UUID,
     project_id: UUID,
+    agent_id: UUID | None = None,
     query_embedding: Sequence[float] | None = None,
     limit: int = 8,
     bm25_k: int = BM25_K_DEFAULT,
@@ -177,15 +179,26 @@ async def recall_chunks(
     """Hybrid (BM25 + vector + RRF) chunk search.
 
     Returns up to ``limit`` :class:`ChunkHit` sorted by RRF score
-    descending. The session must already have `app.tenant_id` set."""
+    descending. The session must already have `app.tenant_id` set.
+
+    When ``agent_id`` is given, KBs granted to the agent template
+    (Plan 06.9) are also visible — the chunks query unions them
+    with the project's grants.
+    """
     bm25_ids = await bm25_chunks(
-        session, query=query, tenant_id=tenant_id, project_id=project_id, limit=bm25_k
+        session,
+        query=query,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        agent_id=agent_id,
+        limit=bm25_k,
     )
     vec_ids = await vector_chunks(
         session,
         query_embedding=query_embedding,
         tenant_id=tenant_id,
         project_id=project_id,
+        agent_id=agent_id,
         limit=vector_k,
     )
     fused = fuse_rankings(bm25_ids, vec_ids, k=rrf_k)

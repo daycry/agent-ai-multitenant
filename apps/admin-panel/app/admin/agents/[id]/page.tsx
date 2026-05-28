@@ -39,6 +39,8 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
 
+import { AgentKbsSection } from "./agent-kbs-section";
+
 interface Agent {
   id: string;
   tenant_id: string;
@@ -205,6 +207,13 @@ export default function AgentHubPage() {
             <Field label="Project" value={agent.project_id ? agent.project_id.slice(0, 8) : "—"} />
           </div>
         </Card>
+      )}
+
+      {/* Plan 06.9: knowledge bases granted to this agent template */}
+      {agent && (
+        <div className="mt-4">
+          <AgentKbsSection agentId={agent.id} isReadOnly={isReadOnly} />
+        </div>
       )}
 
       {agent && (
