@@ -23,7 +23,8 @@ mirar en la UI, criterios de pass/fail.
 | Plan 06.5 — Orchestrator wiring       | 0 propios (reusa los del Plan 06) | — (ver nota abajo)                                                           |
 | Plan 06.6 — Admin UI gaps             | 2 (`human_06_6_01..02`)           | [`06.6-admin-ui-gaps.md`](./06.6-admin-ui-gaps.md)                           |
 | Plan 06.7 — Memory dedup              | 2 (`human_06_7_01..02`)           | [`06.7-memory-dedup.md`](./06.7-memory-dedup.md)                             |
-| **Plan 06.8 — RBAC enforcement**      | 4 (`human_06_8_01..04`)           | [`06.8-rbac-enforcement.md`](./06.8-rbac-enforcement.md)                     |
+| Plan 06.8 — RBAC enforcement          | 4 (`human_06_8_01..04`)           | [`06.8-rbac-enforcement.md`](./06.8-rbac-enforcement.md)                     |
+| **Plan 06.9 — Agent-scoped KBs**      | 4 (`human_06_9_01..04`)           | [`06.9-agent-scoped-kbs.md`](./06.9-agent-scoped-kbs.md)                     |
 
 > El `run-demo-human-tests.md` de la raíz de guides acumula los Plans
 > 02 / 04 / 04.5 históricamente en un único documento. La migración a
