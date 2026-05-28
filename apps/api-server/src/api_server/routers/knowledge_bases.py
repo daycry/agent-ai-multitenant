@@ -253,6 +253,93 @@ async def revoke_kb_from_project(
     await session.flush()
 
 
+# ---------------------------------------------------------------------------
+# Plan 06.9 task_06_9_05 — inverse listings (used by the KB detail panel)
+# ---------------------------------------------------------------------------
+@router.get("/{kb_id}/projects", response_model=list[dict[str, object]])
+async def list_projects_for_kb(
+    kb_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[dict[str, object]]:
+    """List the projects that have been granted this KB.
+
+    Used by the `Asignaciones` panel in the admin-panel KB detail
+    page. Mirror of `list_kbs_for_project` but in the other direction.
+    """
+    from api_server.db.domain import Project
+
+    await _load_kb(session, kb_id)
+    rows = await session.execute(
+        select(
+            KnowledgeBaseProject.project_id,
+            KnowledgeBaseProject.granted_at,
+            KnowledgeBaseProject.granted_by,
+            Project.name,
+        )
+        .join(Project, Project.id == KnowledgeBaseProject.project_id)
+        .where(
+            KnowledgeBaseProject.kb_id == kb_id,
+            Project.deleted_at.is_(None),
+        )
+        .order_by(Project.name)
+    )
+    return [
+        {
+            "project_id": str(r.project_id),
+            "name": r.name,
+            "granted_at": r.granted_at.isoformat() if r.granted_at else None,
+            "granted_by": str(r.granted_by) if r.granted_by else None,
+        }
+        for r in rows.all()
+    ]
+
+
+@router.get("/{kb_id}/agents", response_model=list[dict[str, object]])
+async def list_agents_for_kb(
+    kb_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[dict[str, object]]:
+    """List the agents that have been granted this KB.
+
+    Used by the `Asignaciones` panel — the agent half. Joins
+    `agent_knowledge_bases` to `agents` to surface the human-readable
+    name + scope (so the UI can render a "this is a fork" marker).
+    """
+    from api_server.db.domain import Agent
+    from api_server.db.knowledge import AgentKnowledgeBase
+
+    await _load_kb(session, kb_id)
+    rows = await session.execute(
+        select(
+            AgentKnowledgeBase.agent_id,
+            AgentKnowledgeBase.granted_at,
+            AgentKnowledgeBase.granted_by,
+            Agent.name,
+            Agent.scope,
+            Agent.role,
+        )
+        .join(Agent, Agent.id == AgentKnowledgeBase.agent_id)
+        .where(
+            AgentKnowledgeBase.kb_id == kb_id,
+            Agent.deleted_at.is_(None),
+        )
+        .order_by(Agent.name)
+    )
+    return [
+        {
+            "agent_id": str(r.agent_id),
+            "name": r.name,
+            "scope": r.scope,
+            "role": r.role,
+            "granted_at": r.granted_at.isoformat() if r.granted_at else None,
+            "granted_by": str(r.granted_by) if r.granted_by else None,
+        }
+        for r in rows.all()
+    ]
+
+
 @project_kb_router.get("", response_model=list[KnowledgeBaseResponse])
 async def list_kbs_for_project(
     project_id: UUID,

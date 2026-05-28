@@ -58,6 +58,7 @@ async def rag_search(
     query: str,
     tenant_id: UUID,
     project_id: UUID,
+    agent_id: UUID | None = None,
     limit: int = 5,
     recall_k: int = 20,
     embedder: Embedder | None = None,
@@ -97,6 +98,7 @@ async def rag_search(
         query=query,
         tenant_id=tenant_id,
         project_id=project_id,
+        agent_id=agent_id,
         query_embedding=query_embedding,
         limit=recall_k,
     )

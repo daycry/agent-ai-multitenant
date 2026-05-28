@@ -35,6 +35,7 @@ from api_server.auth.deps import (
     require_tenant_member,
 )
 from api_server.db.domain import Agent, AgentScope, Project
+from api_server.db.knowledge import AgentKnowledgeBase, KnowledgeBase
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -415,3 +416,188 @@ async def merge_from_source(
     await session.flush()
     await session.refresh(fork)
     return to_agent_response(fork)
+
+
+# ---------------------------------------------------------------------------
+# Plan 06.9: agent ↔ KB grants
+# ---------------------------------------------------------------------------
+#
+# Three endpoints on top of /agents/{id}/knowledge-bases that mirror
+# the project↔KB junction added in Plan 04. Same gate pattern
+# (tenant_admin for grant/revoke, tenant_member for read) and same
+# explicit-grant rule (a KB only becomes "visible to the agent" when
+# the row exists).
+#
+# Built-in agents (scope=global_builtin) reject grant/revoke with 403.
+# The platform manages those via seeds — tenant admins fork them
+# (creates a global_tenant_template copy) and grant their KBs to the
+# fork instead. Same UX pattern as the agent fork-and-edit flow.
+
+
+async def _load_writable_agent_for_kb(
+    session: AsyncSession,
+    agent_id: UUID,
+    principal: AuthPrincipal,
+) -> Agent:
+    """Load an agent and reject if it's a `global_builtin`.
+
+    `get_writable_or_404` already filters by tenant via RLS + 404s on
+    miss. Here we add the scope check: built-ins are off-limits to
+    tenant admins.
+    """
+    agent = await get_writable_or_404(
+        session, Agent, agent_id, principal, not_found_detail="agent not found"
+    )
+    if agent.scope == AgentScope.GLOBAL_BUILTIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "cannot grant/revoke KBs on a global_builtin agent; "
+                "fork it first and grant on the fork"
+            ),
+        )
+    return agent
+
+
+@router.get(
+    "/{agent_id}/knowledge-bases",
+    response_model=list[dict[str, object]],
+)
+async def list_agent_kbs(
+    agent_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[dict[str, object]]:
+    """List KBs granted to this agent."""
+    # First: make sure the agent is visible to the caller. RLS handles
+    # cross-tenant; here we only need to surface 404 on miss instead of
+    # an empty list (a hidden grant would otherwise look like "no
+    # grants" to the UI).
+    agent_q = await session.execute(
+        select(Agent).where(Agent.id == agent_id, Agent.deleted_at.is_(None))
+    )
+    if agent_q.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent not found")
+
+    rows = await session.execute(
+        select(
+            AgentKnowledgeBase.kb_id,
+            AgentKnowledgeBase.granted_at,
+            AgentKnowledgeBase.granted_by,
+            KnowledgeBase.name,
+            KnowledgeBase.description,
+            KnowledgeBase.embedding_model_id,
+        )
+        .join(KnowledgeBase, KnowledgeBase.id == AgentKnowledgeBase.kb_id)
+        .where(
+            AgentKnowledgeBase.agent_id == agent_id,
+            KnowledgeBase.deleted_at.is_(None),
+        )
+        .order_by(KnowledgeBase.name)
+    )
+    return [
+        {
+            "kb_id": str(r.kb_id),
+            "name": r.name,
+            "description": r.description,
+            "embedding_model_id": r.embedding_model_id,
+            "granted_at": r.granted_at.isoformat() if r.granted_at else None,
+            "granted_by": str(r.granted_by) if r.granted_by else None,
+        }
+        for r in rows.all()
+    ]
+
+
+@router.post(
+    "/{agent_id}/knowledge-bases",
+    response_model=dict[str, object],
+    status_code=status.HTTP_201_CREATED,
+)
+async def grant_kb_to_agent(
+    agent_id: UUID,
+    payload: dict[str, str],
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, object]:
+    """Grant a KB to the agent. Re-granting is a no-op (idempotent)."""
+    tenant_id = require_tenant_id(principal)
+    kb_id_str = payload.get("kb_id")
+    if not kb_id_str:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="body must include 'kb_id'",
+        )
+    try:
+        kb_id = UUID(str(kb_id_str))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="kb_id is not a valid UUID",
+        ) from exc
+
+    agent = await _load_writable_agent_for_kb(session, agent_id, principal)
+
+    # Verify the KB exists and is in the caller's tenant. RLS would
+    # hide cross-tenant rows; this explicit check converts a silent
+    # miss into a clean 404.
+    kb_q = await session.execute(
+        select(KnowledgeBase).where(KnowledgeBase.id == kb_id, KnowledgeBase.deleted_at.is_(None))
+    )
+    if kb_q.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="kb not found")
+
+    # Idempotent: if the grant already exists, return 201 with the
+    # existing row instead of 409. Matches the kb_projects pattern.
+    existing_q = await session.execute(
+        select(AgentKnowledgeBase).where(
+            AgentKnowledgeBase.agent_id == agent_id,
+            AgentKnowledgeBase.kb_id == kb_id,
+        )
+    )
+    existing = existing_q.scalar_one_or_none()
+    if existing is not None:
+        return {
+            "agent_id": str(agent.id),
+            "kb_id": str(kb_id),
+            "granted_at": existing.granted_at.isoformat() if existing.granted_at else None,
+        }
+
+    grant = AgentKnowledgeBase(
+        agent_id=agent_id,
+        kb_id=kb_id,
+        tenant_id=tenant_id,
+        granted_by=principal.user_id,
+    )
+    session.add(grant)
+    await session.flush()
+    return {
+        "agent_id": str(agent.id),
+        "kb_id": str(kb_id),
+        "granted_at": grant.granted_at.isoformat() if grant.granted_at else None,
+    }
+
+
+@router.delete(
+    "/{agent_id}/knowledge-bases/{kb_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def revoke_kb_from_agent(
+    agent_id: UUID,
+    kb_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> None:
+    """Revoke the grant. Idempotent: missing row returns 204 anyway."""
+    require_tenant_id(principal)
+    await _load_writable_agent_for_kb(session, agent_id, principal)
+
+    existing_q = await session.execute(
+        select(AgentKnowledgeBase).where(
+            AgentKnowledgeBase.agent_id == agent_id,
+            AgentKnowledgeBase.kb_id == kb_id,
+        )
+    )
+    existing = existing_q.scalar_one_or_none()
+    if existing is not None:
+        await session.delete(existing)
+        await session.flush()

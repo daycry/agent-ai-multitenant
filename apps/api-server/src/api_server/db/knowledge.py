@@ -251,8 +251,58 @@ class KnowledgeBaseProject(Base):
     )
 
 
+# =============================================================================
+# AgentKnowledgeBase — Plan 06.9 task_06_9_01
+# =============================================================================
+class AgentKnowledgeBase(Base):
+    """Junction granting an **agent template** access to a KB.
+
+    Mirror image of `KnowledgeBaseProject`: same composite PK shape,
+    same denormalised `tenant_id` so RLS isolates the junction without
+    a join. Difference: the foreign side is `agents`, not `projects`.
+
+    Rules (enforced at the endpoint layer):
+      * Only agents with scope `global_tenant_template` or
+        `project_local` can receive grants. `global_builtin` rows
+        are managed by the system via seeds.
+      * The `kb_id` must belong to the same tenant as the agent —
+        RLS guarantees that, but the endpoint surfaces a 404 explicit
+        instead of a silent miss.
+    """
+
+    __tablename__ = "agent_knowledge_bases"
+    __table_args__ = (
+        PrimaryKeyConstraint("agent_id", "kb_id", name="pk_agent_knowledge_bases"),
+        Index("ix_agent_kbs_kb_id", "kb_id"),
+        Index("ix_agent_kbs_tenant_id", "tenant_id"),
+    )
+
+    agent_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    kb_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    granted_at: Mapped[Any] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    granted_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+
 __all__ = [
     "CHUNK_EMBEDDING_DIM",
+    "AgentKnowledgeBase",
     "Chunk",
     "Document",
     "KnowledgeBase",

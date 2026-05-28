@@ -358,11 +358,15 @@ async def rag_search_endpoint(
     # the embedder, the reranker is configurable per-deployment. For
     # now we rely on BM25-only recall + NoopReranker, which is what
     # the integration tests of Plan 04 Fase D already validated.
+    # Plan 06.9: KBs visibles = union de KBs del proyecto y KBs del
+    # agente template. Pasamos `agent_id` para que el resolver una
+    # las dos fuentes en el visibility filter.
     hits = await rag_search(
         session,
         query=payload.query,
         tenant_id=principal.tenant_id,
         project_id=agent.project_id,
+        agent_id=principal.agent_id,
         limit=payload.limit,
         recall_k=payload.recall_k,
         embedder=None,
