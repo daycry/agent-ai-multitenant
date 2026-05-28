@@ -330,12 +330,16 @@ async def list_similar_memories(
         LIMIT :limit
         """
     )
+    # pgvector exige formato `'[a,b,c]'` con comas. `str(numpy_array)`
+    # devuelve `'[a b c]'` con espacios y rompe el CAST. Misma receta
+    # que `memorizer/recall.py` y `rag/search.py`.
+    src_vec_literal = "[" + ",".join(f"{x:.6f}" for x in src.embedding) + "]"
     rows = (
         await session.execute(
             sql,
             {
                 "src_id": src.id,
-                "src_embedding": str(src.embedding),
+                "src_embedding": src_vec_literal,
                 "scope": src.scope,
                 "tenant_id": tenant_id,
                 "threshold": eff_threshold,

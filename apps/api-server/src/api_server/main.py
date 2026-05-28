@@ -10,6 +10,7 @@ Auth and admin routers arrive in tasks 00_10 and 00_11.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import Depends, FastAPI
@@ -41,6 +42,7 @@ from api_server.routers.knowledge_bases import (
     router as knowledge_bases_router,
 )
 from api_server.routers.mcp import router as mcp_router
+from api_server.routers.mcp_catalog import router as mcp_catalog_router
 from api_server.routers.memories import router as memories_router
 from api_server.routers.plans import plans_router, project_plans_router
 from api_server.routers.projects import router as projects_router
@@ -55,7 +57,12 @@ from api_server.telemetry import configure_tracing, instrument_fastapi
 from api_server.telemetry.setup import add_console_exporter
 
 configure_tracing(service_name="api-server")
-add_console_exporter()
+# Console exporter es opt-in vía env var. Spamea stdout con JSON de
+# spans, lo que en Windows + PowerShell rompe el wrapping del proceso
+# (cada línea se trata como NativeCommandError y termina matando
+# uvicorn). En dev queda OFF; en prod / Tempo se sustituirá por OTLP.
+if os.environ.get("API_SERVER_OTEL_CONSOLE") == "1":
+    add_console_exporter()
 configure_logging(service="api-server")
 
 
@@ -96,6 +103,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_bases_router)
     app.include_router(project_kb_router)
     app.include_router(mcp_router)
+    app.include_router(mcp_catalog_router)
     app.include_router(tools_diagnostic_router)
     app.include_router(dep_cache_router)
     app.include_router(documents_router)
