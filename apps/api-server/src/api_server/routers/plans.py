@@ -19,6 +19,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,7 +38,7 @@ from api_server.chat.plan_state_machine import (
 )
 from api_server.chat.sync_to_kanban import SyncScopeError, sync_plan_to_kanban
 from api_server.db.conversation import Conversation
-from api_server.db.domain import Plan, PlanStatus, Project
+from api_server.db.domain import Plan, PlanStatus, Project, Task
 from api_server.db.models import Organization
 from api_server.db.plan_comment import PlanComment
 from api_server.db.platform_settings import get_double_signature_threshold
@@ -579,6 +580,132 @@ async def sync_plan_kanban(
         skipped_task_ids=result.skipped_task_ids,
         dependencies_created=result.dependencies_created,
     )
+
+
+# ---------------------------------------------------------------------------
+# Plan 06.5 task_06_5_06 — free task creation
+# ---------------------------------------------------------------------------
+
+
+class FreeTaskRequest(BaseModel):
+    """Body of `POST /plans/{plan_id}/free-task`."""
+
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = None
+
+
+@plans_router.post(
+    "/{plan_id}/free-task",
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_free_task(
+    plan_id: UUID,
+    payload: FreeTaskRequest,
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, object]:
+    """Create a plan-scoped task NOT bound to any checkbox of the spec.
+
+    Useful when the human, during plan validation, detects work that
+    wasn't in the original plan and wants to add it without going back
+    through the planning chat. The created task lives under the plan
+    (so the Kanban filtered by plan shows it) and starts in `backlog`.
+
+    `inputs.is_free_task=true` marks the row so analytics / dashboards
+    can distinguish manually-added work from agent-driven tasks. The
+    field is not a column — we keep it inside the JSONB to avoid yet
+    another migration for a UI hint.
+    """
+    tenant_id = require_tenant_id(principal)
+    plan = await _load_plan(session, plan_id)
+
+    task = Task(
+        tenant_id=tenant_id,
+        project_id=plan.project_id,
+        plan_id=plan.id,
+        title=payload.title,
+        description=payload.description,
+        status="backlog",
+        priority="medium",
+        inputs={"is_free_task": True},
+    )
+    session.add(task)
+    await session.flush()
+
+    return {
+        "id": str(task.id),
+        "plan_id": str(plan.id),
+        "project_id": str(task.project_id),
+        "title": task.title,
+        "description": task.description,
+        "status": task.status,
+        "priority": task.priority,
+        "is_free_task": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Plan 06.5 task_06_5_07 — escalated tasks listing
+# ---------------------------------------------------------------------------
+
+
+@plans_router.get("/{plan_id}/escalated-tasks")
+async def list_escalated_tasks(
+    plan_id: UUID,
+    _: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, list[dict[str, object]]]:
+    """Tasks of the plan currently in `awaiting_human_approval`.
+
+    Each entry carries its `retry_count` and the latest 20 audit
+    events so the UI can render the timeline of rejections + actions
+    without a second round-trip per task.
+
+    Shape:
+
+        {"tasks": [
+          {"id": "...", "title": "...", "description": "...",
+           "retry_count": 3,
+           "history": [
+             {"id": "...", "at": 1716889200.123,
+              "kind": "review_comment", ...},
+             ...
+           ]}
+        ]}
+    """
+    from api_server.db.task_audit_repo import list_history as _list_history
+    from api_server.db.task_audit_repo import to_dict as _audit_to_dict
+
+    await _load_plan(session, plan_id)  # raises 404 if not visible
+
+    task_rows = (
+        (
+            await session.execute(
+                select(Task).where(
+                    Task.plan_id == plan_id,
+                    Task.status == "awaiting_human_approval",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    out: list[dict[str, object]] = []
+    for task in task_rows:
+        events = await _list_history(session, task.id, limit=20)
+        out.append(
+            {
+                "id": str(task.id),
+                "title": task.title,
+                "description": task.description,
+                "retry_count": task.retry_count,
+                "history": [_audit_to_dict(e) for e in events],
+            }
+        )
+    return {"tasks": out}
 
 
 __all__ = ["plans_router", "project_plans_router"]
