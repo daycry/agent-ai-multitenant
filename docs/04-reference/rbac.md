@@ -1,0 +1,299 @@
+---
+title: RBAC — Matriz de roles por endpoint
+audience: backend-dev, architect, security
+phase: 06.8-rbac-enforcement
+updated: 2026-05-28
+---
+
+# RBAC — Matriz de roles por endpoint
+
+Esta página es **el contrato** entre el código de los endpoints y los
+tests integration cross-rol (`tests/integration/test_rbac_resources.py`):
+
+- Cualquier endpoint nuevo añadido tras Plan 06.8 debe extender esta
+  matriz **y** el test parametrizado correspondiente.
+- El gate del backend es la fuente de verdad. La UI puede ocultar
+  botones para mejor UX, pero el backend valida igual.
+
+## Roles soportados (Plan 06.8 §Decisiones clave)
+
+| Rol               | Descripción                                                                                                                      |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `system_admin`    | Flag global `users.is_system_admin = true`. Pasa todos los gates. Cross-tenant.                                                  |
+| `tenant_admin`    | Miembro activo del tenant con `role='tenant_admin'`. Mutaciones de configuración (proyectos, agentes, teams, MCP, KBs, settings) |
+| `tenant_user`     | Miembro activo del tenant con `role='tenant_user'`. Lectura + operaciones del día a día (tasks, comentarios, conversaciones)     |
+| `system_operator` | Reservado para auditoría/operación a nivel plataforma. Por ahora no se distingue de `tenant_user` en endpoints.                  |
+
+`tenant_member` **no es un rol** — es el predicado "tiene membership
+activa, sea cual sea el rol". Se usa en `require_tenant_member()`
+como mínimo común.
+
+## Helpers que aplican los gates
+
+Definidos en
+[`apps/api-server/src/api_server/auth/deps.py`](../../apps/api-server/src/api_server/auth/deps.py):
+
+```python
+require_tenant_member  # active membership in JWT tenant — or system_admin
+require_tenant_admin   # tenant_admin role in JWT tenant — or system_admin
+require_tenant_role(r) # parametric factory (rarely needed)
+require_system_admin   # platform-level system_admin only
+```
+
+`system_admin` siempre pasa cada gate; no hace falta listar el rol en
+cada celda.
+
+## Matriz por router
+
+Convención de las celdas: el rol **mínimo** requerido. "anon" = sin
+auth (login, register, healthz). "agent" = autenticación interna por
+`X-Agent-Auth` (containers agent-runtime que llaman a
+`/internal/agent/*`, ver
+[`internal_agent.py`](../../apps/api-server/src/api_server/routers/internal_agent.py)).
+
+### `auth.py` y `main.py` — sesión
+
+| Endpoint                                             | Método | Rol mínimo |
+| ---------------------------------------------------- | ------ | ---------- |
+| [`/auth/register`](../03-guides/roles-y-permisos.md) | POST   | anon       |
+| `/auth/login`                                        | POST   | anon       |
+| `/auth/logout`                                       | POST   | principal  |
+| `/auth/me`                                           | GET    | principal  |
+| `/me`                                                | GET    | principal  |
+| `/me/memberships`                                    | GET    | principal  |
+| `/healthz`                                           | GET    | anon       |
+
+"principal" = autenticado, sin chequeo de tenant ni rol. Apropiado para
+endpoints que devuelven el contexto del propio usuario.
+
+### `admin.py` — system_admin
+
+| Endpoint               | Método      | Rol mínimo     |
+| ---------------------- | ----------- | -------------- |
+| `/admin/tenants`       | GET, POST   | `system_admin` |
+| `/admin/tenants/{id}`  | GET,PUT,DEL | `system_admin` |
+| `/admin/users`         | GET         | `system_admin` |
+| `/admin/system-health` | GET         | `system_admin` |
+
+### `projects.py`
+
+| Endpoint         | Método | Rol mínimo     |
+| ---------------- | ------ | -------------- |
+| `/projects`      | GET    | `tenant_user`  |
+| `/projects`      | POST   | `tenant_admin` |
+| `/projects/{id}` | GET    | `tenant_user`  |
+| `/projects/{id}` | PUT    | `tenant_admin` |
+| `/projects/{id}` | DELETE | `tenant_admin` |
+
+### `agents.py`
+
+| Endpoint               | Método | Rol mínimo     |
+| ---------------------- | ------ | -------------- |
+| `/agents`              | GET    | `tenant_user`  |
+| `/agents`              | POST   | `tenant_admin` |
+| `/agents/{id}`         | GET    | `tenant_user`  |
+| `/agents/{id}`         | PUT    | `tenant_admin` |
+| `/agents/{id}`         | DELETE | `tenant_admin` |
+| `/agents/{src}/fork`   | POST   | `tenant_admin` |
+| `/agents/{fork}/diff`  | GET    | `tenant_user`  |
+| `/agents/{fork}/merge` | POST   | `tenant_admin` |
+
+### `teams.py`
+
+| Endpoint                         | Método | Rol mínimo     |
+| -------------------------------- | ------ | -------------- |
+| `/teams`                         | GET    | `tenant_user`  |
+| `/teams`                         | POST   | `tenant_admin` |
+| `/teams/{id}`                    | GET    | `tenant_user`  |
+| `/teams/{id}`                    | PUT    | `tenant_admin` |
+| `/teams/{id}`                    | DELETE | `tenant_admin` |
+| `/teams/{id}/members`            | POST   | `tenant_admin` |
+| `/teams/{id}/members/{agent_id}` | PUT    | `tenant_admin` |
+| `/teams/{id}/members/{agent_id}` | DELETE | `tenant_admin` |
+
+### `knowledge_bases.py`
+
+| Endpoint                                      | Método | Rol mínimo     |
+| --------------------------------------------- | ------ | -------------- |
+| `/knowledge-bases`                            | GET    | `tenant_user`  |
+| `/knowledge-bases`                            | POST   | `tenant_admin` |
+| `/knowledge-bases/{id}`                       | GET    | `tenant_user`  |
+| `/knowledge-bases/{id}`                       | PUT    | `tenant_admin` |
+| `/knowledge-bases/{id}`                       | DELETE | `tenant_admin` |
+| `/knowledge-bases/{id}/documents`             | GET    | `tenant_user`  |
+| `/knowledge-bases/{id}/documents`             | POST   | `tenant_admin` |
+| `/knowledge-bases/{id}/documents/{doc}`       | GET    | `tenant_user`  |
+| `/knowledge-bases/{id}/documents/{doc}`       | DELETE | `tenant_admin` |
+| `/knowledge-bases/{id}/projects`              | POST   | `tenant_admin` |
+| `/knowledge-bases/{id}/projects/{project_id}` | DELETE | `tenant_admin` |
+| `/projects/{id}/knowledge-bases`              | GET    | `tenant_user`  |
+| `/documents/{id}/citations`                   | GET    | `tenant_user`  |
+
+### `mcp.py` y `mcp_catalog.py`
+
+| Endpoint                             | Método | Rol mínimo     |
+| ------------------------------------ | ------ | -------------- |
+| `/mcp-catalog`                       | GET    | `tenant_user`  |
+| `/projects/{id}/mcp/test-connection` | POST   | `tenant_admin` |
+
+(El config CRUD de los MCP servers vive embebido en `projects.py` —
+ver auditoría en `scripts/audit_rbac.py` para confirmar al cambiar.)
+
+### `memories.py`
+
+| Endpoint                     | Método | Rol mínimo                                       |
+| ---------------------------- | ------ | ------------------------------------------------ |
+| `/memories`                  | GET    | `tenant_user`                                    |
+| `/memories`                  | POST   | `tenant_user` (excepto `scope=global` → admin)   |
+| `/memories/{id}`             | DELETE | `tenant_user` (excepto memoria con scope=global) |
+| `/memories/{id}/similar`     | GET    | `tenant_user`                                    |
+| `/memories/{src}/merge-into` | POST   | `tenant_user`                                    |
+
+> El gate dinámico por `scope=global` se aplica dentro del handler,
+> no por dependency. Mantiene el comportamiento existente del Plan 04.5.
+
+### `tasks.py` + `task_lifecycle.py` — operaciones del día a día
+
+| Endpoint                         | Método | Rol mínimo     |
+| -------------------------------- | ------ | -------------- |
+| `/projects/{id}/tasks`           | GET    | `tenant_user`  |
+| `/projects/{id}/tasks`           | POST   | `tenant_user`  |
+| `/projects/{id}/tasks/{task_id}` | GET    | `tenant_user`  |
+| `/projects/{id}/tasks/{task_id}` | PUT    | `tenant_user`  |
+| `/projects/{id}/tasks/{task_id}` | DELETE | `tenant_admin` |
+| `/tasks/{id}/history`            | GET    | `tenant_user`  |
+| `/tasks/{id}/human-action`       | POST   | `tenant_admin` |
+
+> Borrar tareas es operación de admin (escalada); el día a día es
+> mover entre columnas (PUT status).
+
+### `plans.py`
+
+| Endpoint                      | Método | Rol mínimo     |
+| ----------------------------- | ------ | -------------- |
+| `/projects/{id}/plans`        | GET    | `tenant_user`  |
+| `/projects/{id}/plans`        | POST   | `tenant_user`  |
+| `/plans/{id}`                 | GET    | `tenant_user`  |
+| `/plans/{id}`                 | PUT    | `tenant_user`  |
+| `/plans/{id}`                 | DELETE | `tenant_admin` |
+| `/plans/{id}/approve`         | POST   | `tenant_admin` |
+| `/plans/{id}/comments`        | GET    | `tenant_user`  |
+| `/plans/{id}/comments`        | POST   | `tenant_user`  |
+| `/plans/{id}/cost-breakdown`  | GET    | `tenant_user`  |
+| `/plans/{id}/escalated-tasks` | GET    | `tenant_admin` |
+| `/plans/{id}/free-task`       | POST   | `tenant_user`  |
+| `/plans/{id}/sync-to-kanban`  | POST   | `tenant_user`  |
+
+> Aprobar un plan es un compromiso de ejecución → admin. Crear un
+> free-task lo hace cualquier member (operación de día a día).
+
+### `conversations.py`
+
+| Endpoint                       | Método      | Rol mínimo    |
+| ------------------------------ | ----------- | ------------- |
+| `/projects/{id}/conversations` | GET, POST   | `tenant_user` |
+| `/conversations/{id}`          | GET,PUT,DEL | `tenant_user` |
+| `/conversations/{id}/messages` | GET, POST   | `tenant_user` |
+
+### `approvals.py` y `approval_policies.py`
+
+| Endpoint                  | Método | Rol mínimo    |
+| ------------------------- | ------ | ------------- |
+| `/approval-policies`      | GET    | `tenant_user` |
+| `/approvals`              | GET    | `tenant_user` |
+| `/approvals/{id}/resolve` | POST   | `tenant_user` |
+
+> Resolver requests de aprobación es operación que cualquier member
+> puede ejecutar (el sistema le ha pedido confirmar). El admin
+> gestiona las **políticas** que las generan.
+
+### `executions.py`
+
+| Endpoint           | Método | Rol mínimo    |
+| ------------------ | ------ | ------------- |
+| `/executions/{id}` | GET    | `tenant_user` |
+
+### `dep_cache.py`
+
+| Endpoint                              | Método | Rol mínimo     |
+| ------------------------------------- | ------ | -------------- |
+| `/projects/{id}/dep-cache/invalidate` | POST   | `tenant_admin` |
+
+### `skills.py`
+
+| Endpoint       | Método | Rol mínimo     |
+| -------------- | ------ | -------------- |
+| `/skills`      | GET    | `tenant_user`  |
+| `/skills`      | POST   | `tenant_admin` |
+| `/skills/{id}` | GET    | `tenant_user`  |
+| `/skills/{id}` | PUT    | `tenant_admin` |
+| `/skills/{id}` | DELETE | `tenant_admin` |
+
+### `tools.py` y `tools_diagnostic.py`
+
+| Endpoint                                | Método | Rol mínimo     |
+| --------------------------------------- | ------ | -------------- |
+| `/tools`                                | GET    | `tenant_user`  |
+| `/tools`                                | POST   | `tenant_admin` |
+| `/tools/{id}`                           | GET    | `tenant_user`  |
+| `/tools/{id}`                           | PUT    | `tenant_admin` |
+| `/tools/{id}`                           | DELETE | `tenant_admin` |
+| `/projects/{id}/agent-tools-diagnostic` | GET    | `tenant_user`  |
+
+### `tenant_settings.py`
+
+| Endpoint                            | Método | Rol mínimo     |
+| ----------------------------------- | ------ | -------------- |
+| `/tenant-settings/_registry`        | GET    | `tenant_user`  |
+| `/tenant-settings/hourly-rate`      | GET    | `tenant_user`  |
+| `/tenant-settings/hourly-rate`      | PUT    | `tenant_admin` |
+| `/tenant-settings/{category}`       | GET    | `tenant_user`  |
+| `/tenant-settings/{category}/{key}` | GET    | `tenant_user`  |
+| `/tenant-settings/{category}/{key}` | PUT    | `tenant_admin` |
+
+### `review.py` — auth por firma HMAC
+
+Los tres endpoints son **sólo HMAC** (no JWT) — el reviewer humano abre
+la URL desde un email/Slack y no tiene una sesión JWT del tenant. La
+firma incluye `session_id|exp` y se valida con `hmac.compare_digest`.
+
+| Endpoint                       | Método | Auth                                |
+| ------------------------------ | ------ | ----------------------------------- |
+| `/review/{session_id}`         | GET    | HMAC (`?exp=&sig=`)                 |
+| `/review/{session_id}/rerun`   | POST   | HMAC (`?exp=&sig=`)                 |
+| `/ws/review/{session_id}/logs` | WS     | HMAC verificado **antes** de accept |
+
+### `internal_agent.py` — auth por `X-Agent-Auth`
+
+Endpoints invocados desde dentro de un container agent-runtime. La auth
+es por header `X-Agent-Auth: <token-firmado>`, validada con
+`get_agent_principal`. No requieren JWT ni membership — el container
+ya tiene la identidad del tenant en su `--env` al spawn.
+
+| Endpoint                           | Método | Auth           |
+| ---------------------------------- | ------ | -------------- |
+| `/internal/agent/_health`          | GET    | `X-Agent-Auth` |
+| `/internal/agent/document-convert` | POST   | `X-Agent-Auth` |
+| `/internal/agent/memory-recall`    | POST   | `X-Agent-Auth` |
+| `/internal/agent/memory-store`     | POST   | `X-Agent-Auth` |
+| `/internal/agent/promote-to-kb`    | POST   | `X-Agent-Auth` |
+| `/internal/agent/rag-search`       | POST   | `X-Agent-Auth` |
+
+## Cómo regenerar el audit
+
+```bash
+python scripts/audit_rbac.py                  # Markdown a stdout
+python scripts/audit_rbac.py --csv > audit.csv
+```
+
+El script lista todos los endpoints actuales con su dep chain real y
+clasifica cada uno como `no-auth | principal-only | tenant_member |
+tenant_admin | system_admin`. Cualquier desviación entre el audit y
+esta matriz indica un endpoint sin gate o un gate mal puesto.
+
+## Sobre `system_operator`
+
+Por ahora `system_operator` no se distingue de `tenant_user` en ningún
+endpoint — el enum lo soporta pero la matriz no introduce diferencia.
+Si en el futuro hace falta (e.g. "puede ver audit_log pero no mutar
+recursos"), se documenta aquí + se añade el helper correspondiente.
