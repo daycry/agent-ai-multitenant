@@ -19,7 +19,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 # pytest is the floor. Anything richer (pytest-cov, pytest-xdist, plugins)
 # is installed from the project's own requirements at task start.
-RUN pip install --no-cache-dir "pytest>=8,<9" "pytest-junitxml>=1.0"
+# Note: el flag `--junitxml=output.xml` esta built-in en pytest desde la 5.x —
+# no hace falta instalar un paquete aparte (el viejo `pytest-junitxml` ni
+# siquiera existe ya en PyPI, fue lo que rompia el build).
+RUN pip install --no-cache-dir "pytest>=8,<9"
 
 # Worktree mount point. Matches RuntimeTemplate.workspace_mount_path.
 WORKDIR /workspace

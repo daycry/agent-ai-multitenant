@@ -13,7 +13,9 @@ ENV GOFLAGS="-mod=mod" \
 # go test is built in. gotestsum produces structured JSON for the
 # go_test_json parser; we install it eagerly so projects don't have
 # to add it to their go.mod.
-RUN go install gotest.tools/gotestsum@latest
+# Pinned: v1.13+ requires Go 1.24+, incompatible con el base 1.22-bookworm.
+# v1.12.1 es la ultima que builda con Go 1.22.
+RUN go install gotest.tools/gotestsum@v1.12.1
 
 WORKDIR /workspace
 
