@@ -213,6 +213,12 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
+# Need the repo root on sys.path so `from tests.integration._git_helpers
+# import ...` resolves. Pytest invoked as `pytest ...` (the bin script,
+# not `python -m pytest`) doesn't add CWD to sys.path on Python 3.11+,
+# so CI failed with `ModuleNotFoundError: No module named 'tests'`. Local
+# `python -m pytest` worked because -m adds CWD.
+pythonpath = ["."]
 addopts = "-ra --strict-markers --strict-config"
 markers = [
   "unit: unit tests (fast, no I/O)",
