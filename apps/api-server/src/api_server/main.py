@@ -35,6 +35,7 @@ from api_server.routers.conversations import (
 from api_server.routers.dep_cache import router as dep_cache_router
 from api_server.routers.executions import router as executions_router
 from api_server.routers.internal_agent import router as internal_agent_router
+from api_server.routers.kb_categories import router as kb_categories_router
 from api_server.routers.knowledge_bases import (
     documents_router,
     project_kb_router,
@@ -106,6 +107,7 @@ def create_app() -> FastAPI:
     app.include_router(plans_router)
     app.include_router(memories_router)
     app.include_router(knowledge_bases_router)
+    app.include_router(kb_categories_router)
     app.include_router(project_kb_router)
     app.include_router(mcp_router)
     app.include_router(mcp_catalog_router)

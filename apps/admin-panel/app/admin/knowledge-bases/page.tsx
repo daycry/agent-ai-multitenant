@@ -1,27 +1,19 @@
 "use client";
 
 /**
- * Knowledge Bases — admin general del tenant (Plan 06.6 follow-up).
+ * Knowledge Bases — admin general del tenant.
  *
- * Hasta ahora los endpoints backend `POST /knowledge-bases`,
- * `PUT /knowledge-bases/{id}`, `DELETE /knowledge-bases/{id}` y
- * `POST /knowledge-bases/{id}/projects` existían sin UI — los KBs
- * había que crearlos por API. Esta página cubre el gap:
- *
- *   - Listar las KBs del tenant
- *   - Crear nueva KB (nombre, descripción markdown, embedding model)
- *   - Editar / borrar
- *   - "Grant" a un proyecto (con el `<ProjectCombobox>`)
- *
- * El listado de "qué proyectos tienen acceso a esta KB" no es scope
- * de esta iteración — el backend no expone el endpoint inverso, y
- * desde el proyecto se ve el conjunto de KBs disponibles. Añadirlo
- * requiere un GET extra en el router, queda para un follow-up.
+ * Plan 06.10: agrupa el listado por categoría (built-in + custom) y
+ * añade selector de categoría en Crear/Editar. La gestión de
+ * categorías (crear, editar, borrar) vive en
+ * `/admin/knowledge-bases/categories`. Desde Crear/Editar hay un atajo
+ * "+ Nueva" que abre un mini-dialog inline sin salir del flujo.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Home, Library, Pencil, Plus, Share2, Trash2 } from "lucide-react";
+import { Home, Library, Pencil, Plus, Share2, Tag, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
@@ -46,6 +38,18 @@ import { ProjectCombobox } from "@/components/ui/project-combobox";
 import { ApiError, apiFetch } from "@/lib/api";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 
+interface KbCategorySummary {
+  id: string;
+  slug: string;
+  name: string;
+  color: string | null;
+  is_builtin: boolean;
+}
+
+interface KbCategory extends KbCategorySummary {
+  tenant_id: string | null;
+}
+
 interface KnowledgeBase {
   id: string;
   tenant_id: string;
@@ -55,9 +59,11 @@ interface KnowledgeBase {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  category: KbCategorySummary | null;
 }
 
 const DEFAULT_EMBEDDING_MODEL = "nomic-embed-text-v1.5";
+const NO_CATEGORY_KEY = "__none__";
 
 export default function KnowledgeBasesPage() {
   const queryClient = useQueryClient();
@@ -65,8 +71,6 @@ export default function KnowledgeBasesPage() {
   const [editing, setEditing] = useState<KnowledgeBase | null>(null);
   const [deleting, setDeleting] = useState<KnowledgeBase | null>(null);
   const [granting, setGranting] = useState<KnowledgeBase | null>(null);
-  // Plan 06.9 task_06_9_11: "Asignaciones" dialog showing projects +
-  // agents granted to this KB, with revoke per row.
   const [assignmentsFor, setAssignmentsFor] = useState<KnowledgeBase | null>(null);
 
   const kbsQuery = useQuery({
@@ -75,11 +79,23 @@ export default function KnowledgeBasesPage() {
     refetchOnWindowFocus: false,
   });
 
+  const categoriesQuery = useQuery({
+    queryKey: ["kb-categories"],
+    queryFn: () => apiFetch<KbCategory[]>("/kb-categories"),
+    refetchOnWindowFocus: false,
+  });
+
   const kbs = kbsQuery.data ?? [];
+  const categories = categoriesQuery.data ?? [];
 
   function refetch() {
     void queryClient.invalidateQueries({ queryKey: ["knowledge-bases"] });
   }
+  function refetchCategories() {
+    void queryClient.invalidateQueries({ queryKey: ["kb-categories"] });
+  }
+
+  const grouped = useMemo(() => groupByCategory(kbs, categories), [kbs, categories]);
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8" data-testid="kbs-page">
@@ -95,10 +111,18 @@ export default function KnowledgeBasesPage() {
         description="Bases de conocimiento del tenant. Cada KB agrupa documentos indexados y se asigna (grant) a uno o más proyectos."
         actions={
           <RoleGuard min="tenant_admin">
-            <Button onClick={() => setCreateOpen(true)} data-testid="kbs-create-button">
-              <Plus className="mr-1 h-4 w-4" />
-              Crear KB
-            </Button>
+            <div className="flex flex-row items-center gap-2">
+              <Button asChild variant="outline" data-testid="kbs-categories-link">
+                <Link href="/admin/knowledge-bases/categories">
+                  <Tag className="mr-1 h-4 w-4" />
+                  Categorías
+                </Link>
+              </Button>
+              <Button onClick={() => setCreateOpen(true)} data-testid="kbs-create-button">
+                <Plus className="mr-1 h-4 w-4" />
+                Crear KB
+              </Button>
+            </div>
           </RoleGuard>
         }
       />
@@ -126,19 +150,37 @@ export default function KnowledgeBasesPage() {
             </CardContent>
           </Card>
         ) : (
-          <ul className="space-y-3" data-testid="kbs-list">
-            {kbs.map((kb) => (
-              <li key={kb.id}>
-                <KbRow
-                  kb={kb}
-                  onEdit={() => setEditing(kb)}
-                  onDelete={() => setDeleting(kb)}
-                  onGrant={() => setGranting(kb)}
-                  onShowAssignments={() => setAssignmentsFor(kb)}
-                />
-              </li>
+          <div className="space-y-6" data-testid="kbs-list">
+            {grouped.map((group) => (
+              <section key={group.key} data-testid={`kb-group-${group.key}`}>
+                <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                  {group.category && (
+                    <span
+                      className="inline-block h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: group.category.color ?? "#94a3b8" }}
+                    />
+                  )}
+                  {group.label}
+                  <span className="text-muted-foreground/70 text-xs font-normal">
+                    ({group.kbs.length})
+                  </span>
+                </h2>
+                <ul className="space-y-3">
+                  {group.kbs.map((kb) => (
+                    <li key={kb.id}>
+                      <KbRow
+                        kb={kb}
+                        onEdit={() => setEditing(kb)}
+                        onDelete={() => setDeleting(kb)}
+                        onGrant={() => setGranting(kb)}
+                        onShowAssignments={() => setAssignmentsFor(kb)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </section>
             ))}
-          </ul>
+          </div>
         )}
       </div>
 
@@ -154,6 +196,8 @@ export default function KnowledgeBasesPage() {
       <KbCreateDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
+        categories={categories}
+        onCategoriesChanged={refetchCategories}
         onCreated={() => {
           refetch();
           setCreateOpen(false);
@@ -163,6 +207,8 @@ export default function KnowledgeBasesPage() {
       {editing && (
         <KbEditDialog
           kb={editing}
+          categories={categories}
+          onCategoriesChanged={refetchCategories}
           onOpenChange={(v) => !v && setEditing(null)}
           onSaved={() => {
             refetch();
@@ -194,6 +240,57 @@ export default function KnowledgeBasesPage() {
 }
 
 // ---------------------------------------------------------------------------
+// Grouping helper
+// ---------------------------------------------------------------------------
+
+interface KbGroup {
+  key: string;
+  label: string;
+  category: KbCategorySummary | null;
+  kbs: KnowledgeBase[];
+}
+
+function groupByCategory(kbs: KnowledgeBase[], categories: KbCategory[]): KbGroup[] {
+  const byId = new Map<string, KbGroup>();
+  const sinCat: KbGroup = {
+    key: NO_CATEGORY_KEY,
+    label: "Sin categoría",
+    category: null,
+    kbs: [],
+  };
+  // Pre-cargar grupos para todas las categorías visibles, así aparecen
+  // como secciones vacías si el usuario las creó pero aún no asignó
+  // ninguna KB (UX más predecible).
+  for (const c of categories) {
+    byId.set(c.id, { key: c.id, label: c.name, category: c, kbs: [] });
+  }
+  for (const kb of kbs) {
+    if (kb.category) {
+      const g = byId.get(kb.category.id);
+      if (g) g.kbs.push(kb);
+      else
+        // Categoría borrada en otro tab; mostramos KB en "Sin categoría".
+        sinCat.kbs.push(kb);
+    } else {
+      sinCat.kbs.push(kb);
+    }
+  }
+  // Orden: built-ins primero (por nombre), después custom (por nombre),
+  // "Sin categoría" al final.
+  const out: KbGroup[] = [];
+  const groups = Array.from(byId.values()).filter((g) => g.kbs.length > 0);
+  groups.sort((a, b) => {
+    const aBuiltin = a.category?.is_builtin ? 0 : 1;
+    const bBuiltin = b.category?.is_builtin ? 0 : 1;
+    if (aBuiltin !== bBuiltin) return aBuiltin - bBuiltin;
+    return a.label.localeCompare(b.label);
+  });
+  out.push(...groups);
+  if (sinCat.kbs.length > 0) out.push(sinCat);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Row
 // ---------------------------------------------------------------------------
 
@@ -219,9 +316,6 @@ function KbRow({
             embedding: {kb.embedding_model_id}
           </p>
         </div>
-        {/* Plan 06.9: "Asignaciones" abierto a tenant_member — ver
-            grants es informativo; revoke dentro del dialog requiere
-            tenant_admin (el backend rechazará si no). */}
         <Button
           variant="outline"
           size="sm"
@@ -267,6 +361,67 @@ function KbRow({
 }
 
 // ---------------------------------------------------------------------------
+// Category Selector (compartido por Create + Edit)
+// ---------------------------------------------------------------------------
+
+function CategorySelect({
+  value,
+  onChange,
+  categories,
+  onCreateRequested,
+  testId,
+}: {
+  value: string | null;
+  onChange: (id: string | null) => void;
+  categories: KbCategory[];
+  onCreateRequested: () => void;
+  testId?: string;
+}) {
+  return (
+    <div className="flex flex-row items-center gap-2">
+      <select
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value || null)}
+        className="border-input bg-background h-9 flex-1 rounded-md border px-3 text-sm"
+        data-testid={testId}
+      >
+        <option value="">— Sin categoría —</option>
+        <optgroup label="Built-in">
+          {categories
+            .filter((c) => c.is_builtin)
+            .map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+        </optgroup>
+        {categories.some((c) => !c.is_builtin) && (
+          <optgroup label="Tenant">
+            {categories
+              .filter((c) => !c.is_builtin)
+              .map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+          </optgroup>
+        )}
+      </select>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={onCreateRequested}
+        title="Crear categoría nueva"
+        data-testid={`${testId}-create`}
+      >
+        <Plus className="h-3.5 w-3.5" />
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Create
 // ---------------------------------------------------------------------------
 
@@ -274,20 +429,26 @@ interface KbForm {
   name: string;
   description: string | null;
   embedding_model_id: string;
+  category_id: string | null;
 }
 
 function KbCreateDialog({
   open,
   onOpenChange,
+  categories,
+  onCategoriesChanged,
   onCreated,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  categories: KbCategory[];
+  onCategoriesChanged: () => void;
   onCreated: () => void;
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [embedding, setEmbedding] = useState(DEFAULT_EMBEDDING_MODEL);
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [createCatOpen, setCreateCatOpen] = useState(false);
 
   const mutation = useMutation<KnowledgeBase, ApiError, KbForm>({
     mutationFn: (payload) =>
@@ -298,97 +459,111 @@ function KbCreateDialog({
     onSuccess: () => {
       setName("");
       setDescription("");
-      setEmbedding(DEFAULT_EMBEDDING_MODEL);
+      setCategoryId(null);
       onCreated();
     },
   });
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(v) => {
-        if (!v) {
-          setName("");
-          setDescription("");
-          setEmbedding(DEFAULT_EMBEDDING_MODEL);
-        }
-        onOpenChange(v);
-      }}
-    >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Crear Knowledge Base</DialogTitle>
-          <DialogDescription>
-            Una KB es un contenedor de documentos indexados. Tras crearla, dale acceso (grant) a los
-            proyectos que la consumirán y sube documentos desde su sub-sección dentro del proyecto.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogBody className="space-y-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="kb-name">Nombre</Label>
-            <Input
-              id="kb-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              maxLength={120}
-              data-testid="kb-create-name"
-              required
-            />
-          </div>
+    <>
+      <Dialog
+        open={open}
+        onOpenChange={(v) => {
+          if (!v) {
+            setName("");
+            setDescription("");
+            setCategoryId(null);
+          }
+          onOpenChange(v);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Crear Knowledge Base</DialogTitle>
+            <DialogDescription>
+              Una KB es un contenedor de documentos indexados. Tras crearla, dale acceso (grant) a
+              los proyectos que la consumirán y sube documentos desde su sub-sección dentro del
+              proyecto.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody className="space-y-3">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="kb-name">Nombre</Label>
+              <Input
+                id="kb-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                maxLength={120}
+                data-testid="kb-create-name"
+                required
+              />
+            </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label>Descripción</Label>
-            <MarkdownTextarea
-              value={description}
-              onChange={setDescription}
-              rows={4}
-              data-testid="kb-create-description"
-            />
-          </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="kb-create-category">Categoría</Label>
+              <CategorySelect
+                value={categoryId}
+                onChange={setCategoryId}
+                categories={categories}
+                onCreateRequested={() => setCreateCatOpen(true)}
+                testId="kb-create-category"
+              />
+              <p className="text-muted-foreground text-xs">
+                Las categorías ayudan a organizar el listado. Opcional.
+              </p>
+            </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="kb-embedding">Modelo de embedding</Label>
-            <Input
-              id="kb-embedding"
-              value={embedding}
-              onChange={(e) => setEmbedding(e.target.value)}
-              data-testid="kb-create-embedding"
-            />
-            <p className="text-muted-foreground text-xs">
-              Por defecto <code>{DEFAULT_EMBEDDING_MODEL}</code> (local, Ollama, 768d). Cámbialo
-              solo si tu deployment expone otro modelo compatible.
-            </p>
-          </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>Descripción</Label>
+              <MarkdownTextarea
+                value={description}
+                onChange={setDescription}
+                rows={4}
+                data-testid="kb-create-description"
+              />
+            </div>
 
-          {mutation.isError && (
-            <p
-              className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
-              data-testid="kb-create-error"
+            {mutation.isError && (
+              <p
+                className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
+                data-testid="kb-create-error"
+              >
+                {mutation.error?.message ?? "Error al crear"}
+              </p>
+            )}
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              Cancelar
+            </Button>
+            <Button
+              disabled={!name.trim() || mutation.isPending}
+              onClick={() =>
+                mutation.mutate({
+                  name: name.trim(),
+                  description: description.trim() || null,
+                  embedding_model_id: DEFAULT_EMBEDDING_MODEL,
+                  category_id: categoryId,
+                })
+              }
+              data-testid="kb-create-submit"
             >
-              {mutation.error?.message ?? "Error al crear"}
-            </p>
-          )}
-        </DialogBody>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
-          </Button>
-          <Button
-            disabled={!name.trim() || mutation.isPending}
-            onClick={() =>
-              mutation.mutate({
-                name: name.trim(),
-                description: description.trim(),
-                embedding_model_id: embedding.trim() || DEFAULT_EMBEDDING_MODEL,
-              })
-            }
-            data-testid="kb-create-submit"
-          >
-            {mutation.isPending ? "Creando…" : "Crear KB"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+              {mutation.isPending ? "Creando…" : "Crear KB"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <CategoryCreateInlineDialog
+        open={createCatOpen}
+        onOpenChange={setCreateCatOpen}
+        onCreated={(id) => {
+          setCategoryId(id);
+          setCreateCatOpen(false);
+          onCategoriesChanged();
+        }}
+      />
+    </>
   );
 }
 
@@ -398,15 +573,21 @@ function KbCreateDialog({
 
 function KbEditDialog({
   kb,
+  categories,
+  onCategoriesChanged,
   onOpenChange,
   onSaved,
 }: {
   kb: KnowledgeBase;
+  categories: KbCategory[];
+  onCategoriesChanged: () => void;
   onOpenChange: (v: boolean) => void;
   onSaved: () => void;
 }) {
   const [name, setName] = useState(kb.name);
   const [description, setDescription] = useState(kb.description ?? "");
+  const [categoryId, setCategoryId] = useState<string | null>(kb.category?.id ?? null);
+  const [createCatOpen, setCreateCatOpen] = useState(false);
 
   const mutation = useMutation<KnowledgeBase, ApiError, Partial<KbForm>>({
     mutationFn: (payload) =>
@@ -418,57 +599,200 @@ function KbEditDialog({
   });
 
   return (
-    <Dialog open={true} onOpenChange={onOpenChange}>
+    <>
+      <Dialog open={true} onOpenChange={onOpenChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Editar Knowledge Base</DialogTitle>
+          </DialogHeader>
+          <DialogBody className="space-y-3">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="kb-edit-name">Nombre</Label>
+              <Input
+                id="kb-edit-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                maxLength={120}
+                data-testid="kb-edit-name"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="kb-edit-category">Categoría</Label>
+              <CategorySelect
+                value={categoryId}
+                onChange={setCategoryId}
+                categories={categories}
+                onCreateRequested={() => setCreateCatOpen(true)}
+                testId="kb-edit-category"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label>Descripción</Label>
+              <MarkdownTextarea
+                value={description}
+                onChange={setDescription}
+                rows={4}
+                data-testid="kb-edit-description"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label>Modelo de embedding</Label>
+              {/* Read-only por diseño: cambiar el modelo invalida los
+                  embeddings de los chunks existentes (las queries no
+                  matchean) y rompe el RAG. El re-embedding pipeline
+                  llega con Plan 12; hasta entonces el operador del
+                  stack lo configura por seed, no por UI. */}
+              <p
+                className="bg-muted/40 text-muted-foreground rounded border px-3 py-2 font-mono text-xs"
+                data-testid="kb-edit-embedding"
+              >
+                {kb.embedding_model_id}
+              </p>
+              <p className="text-muted-foreground text-xs">
+                El modelo es fijo por KB. Para usar otro, crea una KB nueva y reindexa los
+                documentos.
+              </p>
+            </div>
+
+            {mutation.isError && (
+              <p
+                className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
+                data-testid="kb-edit-error"
+              >
+                {mutation.error?.message ?? "Error al guardar"}
+              </p>
+            )}
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              Cancelar
+            </Button>
+            <Button
+              disabled={!name.trim() || mutation.isPending}
+              onClick={() =>
+                mutation.mutate({
+                  name: name.trim(),
+                  description: description.trim() || null,
+                  category_id: categoryId,
+                })
+              }
+              data-testid="kb-edit-submit"
+            >
+              {mutation.isPending ? "Guardando…" : "Guardar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <CategoryCreateInlineDialog
+        open={createCatOpen}
+        onOpenChange={setCreateCatOpen}
+        onCreated={(id) => {
+          setCategoryId(id);
+          setCreateCatOpen(false);
+          onCategoriesChanged();
+        }}
+      />
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Category — mini dialog inline (POST /kb-categories)
+// ---------------------------------------------------------------------------
+
+function CategoryCreateInlineDialog({
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onCreated: (id: string) => void;
+}) {
+  const [slug, setSlug] = useState("");
+  const [name, setName] = useState("");
+  const [color, setColor] = useState("#64748b");
+
+  const mutation = useMutation<KbCategory, ApiError, { slug: string; name: string; color: string }>(
+    {
+      mutationFn: (payload) =>
+        apiFetch<KbCategory>("/kb-categories", { method: "POST", body: payload }),
+      onSuccess: (cat) => {
+        setSlug("");
+        setName("");
+        setColor("#64748b");
+        onCreated(cat.id);
+      },
+    },
+  );
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) {
+          setSlug("");
+          setName("");
+          setColor("#64748b");
+        }
+        onOpenChange(v);
+      }}
+    >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Editar Knowledge Base</DialogTitle>
+          <DialogTitle>Nueva categoría</DialogTitle>
+          <DialogDescription>
+            Crea una categoría para organizar tus KBs. El slug es el identificador estable que se
+            usa en filtros y URLs.
+          </DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="kb-edit-name">Nombre</Label>
+            <Label htmlFor="cat-slug">Slug</Label>
             <Input
-              id="kb-edit-name"
+              id="cat-slug"
+              value={slug}
+              onChange={(e) => setSlug(e.target.value.toLowerCase())}
+              placeholder="ej. compliance-pci"
+              pattern="[a-z0-9][a-z0-9_-]*"
+              data-testid="cat-inline-slug"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="cat-name">Nombre</Label>
+            <Input
+              id="cat-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              maxLength={120}
-              data-testid="kb-edit-name"
+              placeholder="ej. Compliance PCI-DSS"
+              data-testid="cat-inline-name"
             />
           </div>
-
           <div className="flex flex-col gap-1.5">
-            <Label>Descripción</Label>
-            <MarkdownTextarea
-              value={description}
-              onChange={setDescription}
-              rows={4}
-              data-testid="kb-edit-description"
-            />
+            <Label htmlFor="cat-color">Color</Label>
+            <div className="flex flex-row items-center gap-2">
+              <input
+                id="cat-color"
+                type="color"
+                value={color}
+                onChange={(e) => setColor(e.target.value)}
+                className="h-9 w-12 cursor-pointer rounded border"
+              />
+              <Input
+                value={color}
+                onChange={(e) => setColor(e.target.value)}
+                placeholder="#64748b"
+                className="font-mono"
+              />
+            </div>
           </div>
-
-          <div className="flex flex-col gap-1.5">
-            <Label>Modelo de embedding</Label>
-            {/* Read-only por diseño: cambiar el modelo invalida los
-                embeddings de los chunks existentes (las queries no
-                matchean) y rompe el RAG. El re-embedding pipeline
-                llega con Plan 12; hasta entonces el operador del
-                stack lo configura por seed, no por UI. */}
-            <p
-              className="bg-muted/40 text-muted-foreground rounded border px-3 py-2 font-mono text-xs"
-              data-testid="kb-edit-embedding"
-            >
-              {kb.embedding_model_id}
-            </p>
-            <p className="text-muted-foreground text-xs">
-              El modelo es fijo por KB. Para usar otro, crea una KB nueva y reindexa los documentos.
-            </p>
-          </div>
-
           {mutation.isError && (
-            <p
-              className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
-              data-testid="kb-edit-error"
-            >
-              {mutation.error?.message ?? "Error al guardar"}
+            <p className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs">
+              {mutation.error?.message ?? "Error al crear categoría"}
             </p>
           )}
         </DialogBody>
@@ -477,20 +801,17 @@ function KbEditDialog({
             Cancelar
           </Button>
           <Button
-            disabled={!name.trim() || mutation.isPending}
+            disabled={!slug.trim() || !name.trim() || mutation.isPending}
             onClick={() =>
               mutation.mutate({
+                slug: slug.trim(),
                 name: name.trim(),
-                description: description.trim() || null,
-                // embedding_model_id intencionalmente omitido: la API
-                // sólo actualiza campos presentes en el body, así el
-                // valor existente queda intacto (es immutable from UI
-                // hasta Plan 12 — pipeline de re-embedding).
+                color,
               })
             }
-            data-testid="kb-edit-submit"
+            data-testid="cat-inline-submit"
           >
-            {mutation.isPending ? "Guardando…" : "Guardar"}
+            {mutation.isPending ? "Creando…" : "Crear"}
           </Button>
         </DialogFooter>
       </DialogContent>

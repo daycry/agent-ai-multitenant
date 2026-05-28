@@ -94,6 +94,14 @@ class KnowledgeBase(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Plan 06.10 task_06_10_01: KB categorization. Nullable — borrar
+    # una categoría no borra las KBs (ON DELETE SET NULL); el tenant
+    # las re-categoriza después.
+    category_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("kb_categories.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
 
 # =============================================================================
@@ -305,6 +313,53 @@ __all__ = [
     "AgentKnowledgeBase",
     "Chunk",
     "Document",
+    "KbCategory",
     "KnowledgeBase",
     "KnowledgeBaseProject",
 ]
+
+
+# =============================================================================
+# KbCategory — Plan 06.10 task_06_10_01
+# =============================================================================
+class KbCategory(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
+    """Categoría agrupadora para KBs.
+
+    Dos sabores en la misma tabla:
+      * **Built-in** (`tenant_id IS NULL`) — seedeada por el platform,
+        visible a todos los tenants via la policy `kb_categories_builtin_read`.
+        El tenant API NUNCA puede editarlas ni borrarlas.
+      * **Custom** (`tenant_id IS NOT NULL`) — creada por un
+        `tenant_admin` desde la UI. Aislamiento de tenant estándar.
+
+    El `slug` es único per-scope (built-in scope o per-tenant), usando
+    el índice partial con `COALESCE(tenant_id, '')` definido en la
+    migración 0028.
+
+    Borrar una categoría es **soft-delete** (`deleted_at`); las KBs
+    que la usaban quedan con `category_id = NULL` via el FK
+    `ON DELETE SET NULL` del lado de `knowledge_bases`. Recuperarla
+    es trivial (UPDATE deleted_at = NULL).
+    """
+
+    __tablename__ = "kb_categories"
+
+    # tenant_id NULLABLE para distinguir built-ins (NULL) de custom
+    # (UUID del tenant). NO usamos TenantScopedMixin porque ese mixin
+    # asume `tenant_id NOT NULL`.
+    tenant_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    slug: Mapped[str] = mapped_column(String(60), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    # Hex color opcional para el badge en la UI (`#3b82f6`, etc.).
+    color: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    created_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    @property
+    def is_builtin(self) -> bool:
+        """Conveniencia para el response shape — la UI lo usa para
+        gris-out el botón de edit."""
+        return self.tenant_id is None

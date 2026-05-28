@@ -180,11 +180,59 @@ Las 5 plantillas built-in que llegan con grants no vacíos:
 Las 3 plantillas restantes (research-spec, devops-bootstrap,
 doc-modernization) son agnósticas de stack y no traen grants.
 
+## Categorías (Plan 06.10)
+
+Cuando el catálogo crece (>10 KBs) el listado plano se vuelve difícil de
+manejar. Las **categorías** agrupan KBs en el listado y en el filtro
+`?category=<slug>` del endpoint. No alteran el ranking del retrieval —
+son puramente organizativas.
+
+### Built-in (sembradas por la plataforma)
+
+Visibles a todos los tenants (`tenant_id IS NULL`):
+
+| Slug           | Para qué                                                          |
+| -------------- | ----------------------------------------------------------------- |
+| `stack`        | Convenciones de un stack concreto (Python+FastAPI, React+Next.js) |
+| `role`         | Doctrina del rol (REST design, testing, OWASP)                    |
+| `compliance`   | Normativa que el agente debe respetar (PCI-DSS, GDPR)             |
+| `architecture` | Patrones arquitectónicos (hexagonal, event-sourcing, CQRS)        |
+| `process`      | Procesos de equipo (revisión de PRs, ramificación, releases)      |
+
+Las 6 KBs built-in vienen pre-categorizadas: 5 como `stack`,
+`api-rest-guidelines` como `role`.
+
+### Custom (creadas por el tenant)
+
+Cualquier `tenant_admin` puede añadir las suyas desde
+`/admin/knowledge-bases/categories` o inline desde el dialog "Crear KB"
+(botón `+` junto al selector). Los campos: **slug** (ASCII kebab),
+**nombre** (cómo se ve en la UI) y **color** (chip en el listado).
+
+Un slug no puede chocar con un built-in ni con otra custom del mismo
+tenant — el endpoint POST devuelve 409.
+
+### Built-ins son read-only
+
+PUT y DELETE sobre una categoría built-in devuelven **403**. La
+plataforma las re-seedea con cada arranque del runner; modificarlas
+desde la UI tendría vida útil de minutos. Si una built-in no se ajusta
+a tu uso, créate una custom y deja la built-in.
+
+### Borrar una categoría no borra sus KBs
+
+DELETE sobre una categoría custom hace soft-delete y nullifica
+`category_id` en cada KB que la usaba. Las KBs quedan visibles en el
+grupo "Sin categoría" hasta que se les reasigne otra.
+
 ## Reference técnica
 
-- ADR formal:
+- ADR formal del modelo agente×proyecto:
   [`docs/05-architecture-decisions/0026-agent-scoped-kbs.md`](../05-architecture-decisions/0026-agent-scoped-kbs.md).
 - Matriz RBAC (qué endpoints requieren qué rol):
   [`docs/04-reference/rbac.md`](../04-reference/rbac.md).
-- Plan que materializa todo esto:
-  [`docs/roadmap/06.9-agent-scoped-kbs.md`](../roadmap/06.9-agent-scoped-kbs.md).
+- Planes que materializan todo esto:
+  [`docs/roadmap/06.9-agent-scoped-kbs.md`](../roadmap/06.9-agent-scoped-kbs.md)
+  (rol vs stack) +
+  [`docs/roadmap/06.10-kb-categories.md`](../roadmap/06.10-kb-categories.md)
+  (categorías).
