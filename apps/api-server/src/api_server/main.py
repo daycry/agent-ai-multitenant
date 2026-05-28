@@ -20,7 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
 from api_server.config import get_settings
-from api_server.db.models import UserOrganizationMembership
+from api_server.db.models import Organization, User, UserOrganizationMembership
+from api_server.db.session import get_admin_sessionmaker
 from api_server.logging import configure_logging
 from api_server.routers.admin import router as admin_router
 from api_server.routers.agents import router as agents_router
@@ -121,10 +122,78 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/me", response_model=None)
-    async def me(principal: AuthPrincipal = Depends(get_principal)) -> dict[str, Any]:
+    async def me(
+        principal: AuthPrincipal = Depends(get_principal),
+    ) -> dict[str, Any]:
+        """Return the current user's profile + all memberships across
+        the tenants they belong to (Plan 06.8 task_06_8_04).
+
+        The UI consumes this on load to know which buttons to show
+        (`isTenantAdmin`, `isSystemAdmin`) and which tenants the
+        tenant-picker should offer. `active_tenant_id` comes from the
+        JWT's `tid` claim (or the `X-Tenant-Id` superadmin override).
+
+        Implementation note: uses the BYPASSRLS admin sessionmaker so a
+        user with active tenant A also sees their tenant B membership
+        — the RLS policy on `user_org_memberships` filters by
+        `tenant_id`, which would hide cross-tenant rows. Safety is
+        preserved by constraining the query to `user_id =
+        principal.user_id`.
+        """
+        sessionmaker = get_admin_sessionmaker()
+        async with sessionmaker() as session:
+            user = await session.get(User, principal.user_id)
+            if user is None:
+                # Theoretically impossible: get_principal validated the
+                # JWT against an active Redis session. Treat as a stale
+                # token.
+                return {
+                    "user_id": str(principal.user_id),
+                    "email": None,
+                    "full_name": None,
+                    "is_system_admin": principal.is_system_admin,
+                    "memberships": [],
+                    "active_tenant_id": (
+                        str(principal.tenant_id) if principal.tenant_id is not None else None
+                    ),
+                }
+
+            membership_q = await session.execute(
+                select(
+                    UserOrganizationMembership.tenant_id,
+                    UserOrganizationMembership.role,
+                    UserOrganizationMembership.is_active,
+                    Organization.name.label("tenant_name"),
+                )
+                .join(
+                    Organization,
+                    Organization.id == UserOrganizationMembership.tenant_id,
+                )
+                .where(
+                    UserOrganizationMembership.user_id == principal.user_id,
+                    UserOrganizationMembership.deleted_at.is_(None),
+                )
+                .order_by(Organization.name)
+            )
+            memberships = [
+                {
+                    "tenant_id": str(row.tenant_id),
+                    "tenant_name": row.tenant_name,
+                    "role": row.role,
+                    "is_active": bool(row.is_active),
+                }
+                for row in membership_q.all()
+            ]
+
         return {
             "user_id": str(principal.user_id),
-            "tenant_id": str(principal.tenant_id) if principal.tenant_id else None,
+            "email": user.email,
+            "full_name": user.full_name,
+            "is_system_admin": bool(user.is_system_admin),
+            "memberships": memberships,
+            "active_tenant_id": (
+                str(principal.tenant_id) if principal.tenant_id is not None else None
+            ),
         }
 
     @app.get("/me/memberships", response_model=None)
