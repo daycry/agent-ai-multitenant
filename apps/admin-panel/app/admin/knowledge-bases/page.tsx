@@ -39,6 +39,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
+
+import { KbAssignmentsDialog } from "./kb-assignments-dialog";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { ProjectCombobox } from "@/components/ui/project-combobox";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -63,6 +65,9 @@ export default function KnowledgeBasesPage() {
   const [editing, setEditing] = useState<KnowledgeBase | null>(null);
   const [deleting, setDeleting] = useState<KnowledgeBase | null>(null);
   const [granting, setGranting] = useState<KnowledgeBase | null>(null);
+  // Plan 06.9 task_06_9_11: "Asignaciones" dialog showing projects +
+  // agents granted to this KB, with revoke per row.
+  const [assignmentsFor, setAssignmentsFor] = useState<KnowledgeBase | null>(null);
 
   const kbsQuery = useQuery({
     queryKey: ["knowledge-bases"],
@@ -129,12 +134,22 @@ export default function KnowledgeBasesPage() {
                   onEdit={() => setEditing(kb)}
                   onDelete={() => setDeleting(kb)}
                   onGrant={() => setGranting(kb)}
+                  onShowAssignments={() => setAssignmentsFor(kb)}
                 />
               </li>
             ))}
           </ul>
         )}
       </div>
+
+      {assignmentsFor && (
+        <KbAssignmentsDialog
+          kbId={assignmentsFor.id}
+          kbName={assignmentsFor.name}
+          open={true}
+          onOpenChange={(v) => !v && setAssignmentsFor(null)}
+        />
+      )}
 
       <KbCreateDialog
         open={createOpen}
@@ -187,11 +202,13 @@ function KbRow({
   onEdit,
   onDelete,
   onGrant,
+  onShowAssignments,
 }: {
   kb: KnowledgeBase;
   onEdit: () => void;
   onDelete: () => void;
   onGrant: () => void;
+  onShowAssignments: () => void;
 }) {
   return (
     <Card data-testid={`kb-${kb.id}`}>
@@ -202,6 +219,18 @@ function KbRow({
             embedding: {kb.embedding_model_id}
           </p>
         </div>
+        {/* Plan 06.9: "Asignaciones" abierto a tenant_member — ver
+            grants es informativo; revoke dentro del dialog requiere
+            tenant_admin (el backend rechazará si no). */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onShowAssignments}
+          data-testid={`kb-assignments-${kb.id}`}
+          title="Ver proyectos y agentes con grant"
+        >
+          Asignaciones
+        </Button>
         <RoleGuard min="tenant_admin">
           <div className="flex flex-row items-center gap-1">
             <Button

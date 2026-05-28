@@ -132,14 +132,24 @@ async def create_kb(
 
 @router.get("", response_model=list[KnowledgeBaseResponse])
 async def list_kbs(
+    q: str | None = None,
+    limit: int = 100,
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[KnowledgeBaseResponse]:
-    result = await session.execute(
-        select(KnowledgeBase)
-        .where(KnowledgeBase.deleted_at.is_(None))
-        .order_by(KnowledgeBase.created_at.desc())
-    )
+    """List KBs visible to the tenant.
+
+    Plan 06.9: `?q=` enables server-side typeahead so the admin-panel
+    `<KbCombobox>` (used in the agent → KB grant dialog) can search
+    by KB name without dragging every row through the browser.
+    `limit` caps the response — keep it small for typeahead (20),
+    default 100 is fine for the listing page.
+    """
+    stmt = select(KnowledgeBase).where(KnowledgeBase.deleted_at.is_(None))
+    if q is not None and q.strip():
+        stmt = stmt.where(KnowledgeBase.name.ilike(f"%{q.strip()}%"))
+    stmt = stmt.order_by(KnowledgeBase.created_at.desc()).limit(max(1, min(limit, 500)))
+    result = await session.execute(stmt)
     return [to_kb_response(kb) for kb in result.scalars().all()]
 
 
