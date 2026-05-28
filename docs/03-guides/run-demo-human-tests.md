@@ -194,7 +194,7 @@ migrar:
 ```powershell
 cd apps\api-server
 $env:DATABASE_URL = "postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform"
-..\..\.venv\Scripts\python -m alembic upgrade head
+..\..\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
 ### "Foreign key associated with column ... could not find table 'users'"

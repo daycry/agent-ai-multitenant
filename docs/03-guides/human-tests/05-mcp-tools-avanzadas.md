@@ -82,7 +82,7 @@ los lean en lugar de re-sembrar.
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python scripts\demo_human_05_01.py
+.\.venv\Scripts\python.exe scripts\demo_human_05_01.py
 ```
 
 **Qué tienes que ver en el admin-panel** (lo imprime el demo al final):
@@ -125,7 +125,7 @@ los lean en lugar de re-sembrar.
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python scripts\demo_human_05_02.py
+.\.venv\Scripts\python.exe scripts\demo_human_05_02.py
 ```
 
 **Qué tienes que ver en el admin-panel**:
@@ -164,7 +164,7 @@ allowed: <host>` ANTES de hacer la llamada HTTP.
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python scripts\demo_human_05_03.py
+.\.venv\Scripts\python.exe scripts\demo_human_05_03.py
 ```
 
 **Qué tienes que ver en el admin-panel**:
