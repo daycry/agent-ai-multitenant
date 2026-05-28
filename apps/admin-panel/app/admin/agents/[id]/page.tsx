@@ -295,7 +295,7 @@ function AgentEditDialog({
           <DialogTitle>Editar agente</DialogTitle>
           <DialogDescription>
             Los campos de scope (project_id, forked_from_agent_id) son set-once. Para crear una
-            copia de un agente, usa la acción "Hacer copia" (fork).
+            copia de un agente, usa la acción &quot;Hacer copia&quot; (fork).
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">

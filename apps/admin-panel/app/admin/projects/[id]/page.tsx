@@ -23,7 +23,6 @@ import {
   Bot,
   Database,
   FolderKanban,
-  GitBranch,
   Layers,
   ListTodo,
   MessageSquare,
@@ -36,7 +35,7 @@ import {
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogBody,

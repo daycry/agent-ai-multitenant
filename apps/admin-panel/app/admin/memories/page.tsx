@@ -365,9 +365,9 @@ function SimilarMemoriesDialog({
         <DialogHeader>
           <DialogTitle>Memorias similares</DialogTitle>
           <DialogDescription>
-            Candidatos a duplicado encontrados por similitud coseno del embedding. "Fusionar"
-            combina el contenido del candidato en esta memoria (la actual sobrevive). "Descartar"
-            hace soft-delete del candidato.
+            Candidatos a duplicado encontrados por similitud coseno del embedding.
+            &quot;Fusionar&quot; combina el contenido del candidato en esta memoria (la actual
+            sobrevive). &quot;Descartar&quot; hace soft-delete del candidato.
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">

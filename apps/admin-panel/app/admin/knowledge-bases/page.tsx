@@ -233,7 +233,7 @@ function KbRow({
 
 interface KbForm {
   name: string;
-  description: string;
+  description: string | null;
   embedding_model_id: string;
 }
 
@@ -576,8 +576,9 @@ function KbGrantDialog({
         <DialogHeader>
           <DialogTitle>Dar acceso a un proyecto</DialogTitle>
           <DialogDescription>
-            Después del grant, el proyecto verá esta KB en su sub-sección "Knowledge Bases" y podrá
-            subir documentos. Puedes hacer grant a varios proyectos repitiendo esta acción.
+            Después del grant, el proyecto verá esta KB en su sub-sección &quot;Knowledge
+            Bases&quot; y podrá subir documentos. Puedes hacer grant a varios proyectos repitiendo
+            esta acción.
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">

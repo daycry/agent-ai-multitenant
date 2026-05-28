@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 
 /**
  * E2E for the plans Kanban progress badge (Plan 06 task_06_35).
