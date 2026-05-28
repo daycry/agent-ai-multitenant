@@ -14,20 +14,21 @@ Endpoints that read tenant-scoped data MUST use `get_tenant_session`.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from redis.asyncio import Redis
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.jwt import InvalidTokenError, decode_jwt
 from api_server.auth.rate_limit import RateLimiter
 from api_server.auth.sessions import SessionStore
 from api_server.config import get_settings
+from api_server.db.models import UserOrganizationMembership, UserRole
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 
 
@@ -243,6 +244,136 @@ async def get_admin_session(
             {"uid": str(principal.user_id)},
         )
         yield session
+
+
+# ---------------------------------------------------------------------------
+# Tenant-scoped role helpers (Plan 06.8 task_06_8_01)
+# ---------------------------------------------------------------------------
+#
+# Three FastAPI dependencies to gate endpoints by the JWT user's role in
+# the active tenant. System admins always pass. The original helper
+# lived in routers/tenant_settings.py as `_require_tenant_admin`; it's
+# centralised here so every router uses the same predicate.
+#
+# Usage:
+#
+#     @router.post("/projects")
+#     async def create_project(
+#         principal: AuthPrincipal = Depends(require_tenant_admin),
+#         session: AsyncSession = Depends(get_tenant_session),
+#     ) -> ProjectResponse: ...
+#
+# `get_tenant_session` is still listed separately because FastAPI
+# deduplicates the underlying `get_principal` call — both deps share
+# the same principal in one request.
+
+
+async def _load_active_membership(
+    session: AsyncSession, user_id: UUID, tenant_id: UUID
+) -> UserOrganizationMembership | None:
+    """Return the active, non-deleted membership of `user_id` in
+    `tenant_id`, or None."""
+    result = await session.execute(
+        select(UserOrganizationMembership).where(
+            UserOrganizationMembership.user_id == user_id,
+            UserOrganizationMembership.tenant_id == tenant_id,
+            UserOrganizationMembership.is_active.is_(True),
+            UserOrganizationMembership.deleted_at.is_(None),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def require_tenant_member(
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> AuthPrincipal:
+    """Gate to anyone with an active membership in the JWT's tenant.
+
+    System admins always pass. Otherwise the JWT must carry a `tid`
+    claim AND there must be an active, non-deleted membership row for
+    `(user_id, tenant_id)`. 403 otherwise.
+
+    Use this on **read** endpoints of tenant-scoped resources, and on
+    write endpoints whose action is part of every member's day-to-day
+    work (creating tasks, moving them across the kanban, commenting on
+    plans).
+    """
+    if principal.is_system_admin:
+        return principal
+    if principal.tenant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="no active tenant context",
+        )
+    membership = await _load_active_membership(session, principal.user_id, principal.tenant_id)
+    if membership is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="user is not a member of this tenant",
+        )
+    return principal
+
+
+async def require_tenant_admin(
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> AuthPrincipal:
+    """Gate to `tenant_admin` role on the JWT's tenant. System admins pass.
+
+    Use this on POST/PUT/DELETE of tenant-scoped resources (projects,
+    agents, teams, MCP configs, KBs, tenant settings) so a regular
+    `tenant_user` can't mutate them.
+    """
+    if principal.is_system_admin:
+        return principal
+    if principal.tenant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="no active tenant context",
+        )
+    membership = await _load_active_membership(session, principal.user_id, principal.tenant_id)
+    if membership is None or membership.role != UserRole.TENANT_ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="tenant_admin role required",
+        )
+    return principal
+
+
+def require_tenant_role(
+    role: UserRole,
+) -> Callable[[AuthPrincipal, AsyncSession], Awaitable[AuthPrincipal]]:
+    """Factory: build a FastAPI dependency that gates on a specific role.
+
+    Use this for endpoints that need a role other than `tenant_admin`
+    (e.g. exclusively `tenant_user`, for an action only regular members
+    should perform). System admins always pass.
+
+    For the common cases prefer the prebuilt `require_tenant_member`
+    and `require_tenant_admin`.
+    """
+
+    async def _check(
+        principal: AuthPrincipal = Depends(get_principal),
+        session: AsyncSession = Depends(get_tenant_session),
+    ) -> AuthPrincipal:
+        if principal.is_system_admin:
+            return principal
+        if principal.tenant_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="no active tenant context",
+            )
+        membership = await _load_active_membership(session, principal.user_id, principal.tenant_id)
+        if membership is None or membership.role != role.value:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"{role.value} role required",
+            )
+        return principal
+
+    return _check
 
 
 # ---------------------------------------------------------------------------
