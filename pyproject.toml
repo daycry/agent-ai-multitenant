@@ -80,7 +80,7 @@ ignore = [
 # fakes whose method signatures must match the LLMProvider Protocol
 # (so `messages`/`kwargs` look "unused" to ruff).
 "scripts/demo_*.py" = ["PLR0915", "PLC0415", "ARG002", "ARG003"]
-"scripts/setup_demo_*.py" = ["PLR0915", "PLC0415"]
+"scripts/setup_demo_*.py" = ["PLR0915", "PLC0415", "E501", "RUF003"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection helpers are the canonical way to declare
