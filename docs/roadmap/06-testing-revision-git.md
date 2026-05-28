@@ -1,9 +1,9 @@
 ---
 plan_id: 06-testing-revision-git
 title: Testing Heterogéneo, Revisión y Ciclo Git del Plan
-status: pending_approval
+status: pending_human_validation
 blocking_plan: [03-chat-planning-aprobacion, 05-mcp-tools-avanzadas]
-started_at: null
+started_at: 2026-05-27
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 85-105
@@ -100,7 +100,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_01` — Definición del schema de runtime template (docker_image, workspace_mount_path, dep_cache_mount, default_pre_install, default_resources, output_parsers, network_policy)
 
-- [ ] **Título**: Definición del schema de runtime template (docker_image, workspace_mount_path, dep_cache_mount, default_pre_install, default_resources, output_parsers, network_policy)
+- [x] **Título**: Definición del schema de runtime template (docker_image, workspace_mount_path, dep_cache_mount, default_pre_install, default_resources, output_parsers, network_policy)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: ai-engineer
@@ -117,7 +117,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_02` — Dockerfiles + builds para los 14 runtime templates iniciales
 
-- [ ] **Título**: Dockerfiles + builds para los 14 runtime templates iniciales
+- [x] **Título**: Dockerfiles + builds para los 14 runtime templates iniciales
 - **Tiempo estimado**: 20 h
 - **Complejidad**: l
 - **Rol sugerido**: devops
@@ -134,7 +134,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_03` — Pipeline CI que builda y publica los runtime templates
 
-- [ ] **Título**: Pipeline CI que builda y publica los runtime templates
+- [x] **Título**: Pipeline CI que builda y publica los runtime templates
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -153,7 +153,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_04` — Worker-test que lee tarea + criterios y agrupa por runtime
 
-- [ ] **Título**: Worker-test que lee tarea + criterios y agrupa por runtime
+- [x] **Título**: Worker-test que lee tarea + criterios y agrupa por runtime
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -170,7 +170,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_05` — Lanzamiento de test-runtime con worktree montado y servicios auxiliares en mini-red Docker
 
-- [ ] **Título**: Lanzamiento de test-runtime con worktree montado y servicios auxiliares en mini-red Docker
+- [x] **Título**: Lanzamiento de test-runtime con worktree montado y servicios auxiliares en mini-red Docker
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + devops
@@ -187,7 +187,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_06` — Servicios auxiliares: postgres-test, redis-test, parametrizables por proyecto
 
-- [ ] **Título**: Servicios auxiliares: postgres-test, redis-test, parametrizables por proyecto
+- [x] **Título**: Servicios auxiliares: postgres-test, redis-test, parametrizables por proyecto
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -204,7 +204,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_07` — Testcontainers opt-in con DinD proxy controlado
 
-- [ ] **Título**: Testcontainers opt-in con DinD proxy controlado
+- [x] **Título**: Testcontainers opt-in con DinD proxy controlado
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
@@ -223,7 +223,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_08` — Cálculo de hash de lock files (package-lock.json, requirements.txt, composer.lock, etc.)
 
-- [ ] **Título**: Cálculo de hash de lock files (package-lock.json, requirements.txt, composer.lock, etc.)
+- [x] **Título**: Cálculo de hash de lock files (package-lock.json, requirements.txt, composer.lock, etc.)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -240,7 +240,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_09` — Persistencia de dep-cache en /data/.../dep-cache/{type}-{hash}/
 
-- [ ] **Título**: Persistencia de dep-cache en /data/.../dep-cache/{type}-{hash}/
+- [x] **Título**: Persistencia de dep-cache en /data/.../dep-cache/{type}-{hash}/
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -257,7 +257,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_10` — Montaje del dep-cache en test-runtime si existe (skip pre_install)
 
-- [ ] **Título**: Montaje del dep-cache en test-runtime si existe (skip pre_install)
+- [x] **Título**: Montaje del dep-cache en test-runtime si existe (skip pre_install)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -274,7 +274,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_11` — TTL de 14 días sin uso → purga automática
 
-- [ ] **Título**: TTL de 14 días sin uso → purga automática
+- [x] **Título**: TTL de 14 días sin uso → purga automática
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: devops
@@ -291,7 +291,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_12` — Botón 'Invalidar caché' en UI del proyecto
 
-- [ ] **Título**: Botón 'Invalidar caché' en UI del proyecto
+- [x] **Título**: Botón 'Invalidar caché' en UI del proyecto
 - **Tiempo estimado**: 3 h
 - **Complejidad**: xs
 - **Rol sugerido**: frontend-dev
@@ -310,7 +310,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_13` — Schema TestReport canónico (status, summary, failures, logs_excerpt, artifacts)
 
-- [ ] **Título**: Schema TestReport canónico (status, summary, failures, logs_excerpt, artifacts)
+- [x] **Título**: Schema TestReport canónico (status, summary, failures, logs_excerpt, artifacts)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: ai-engineer
@@ -327,7 +327,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_14` — Parsers para junit_xml, jest_json, playwright_json, surefire_xml, tap, trx
 
-- [ ] **Título**: Parsers para junit_xml, jest_json, playwright_json, surefire_xml, tap, trx
+- [x] **Título**: Parsers para junit_xml, jest_json, playwright_json, surefire_xml, tap, trx
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: backend-dev
@@ -344,7 +344,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_15` — Entrega del TestReport al agente revisor como input estructurado
 
-- [ ] **Título**: Entrega del TestReport al agente revisor como input estructurado
+- [x] **Título**: Entrega del TestReport al agente revisor como input estructurado
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -363,7 +363,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_16` — Estructura /data/agent-platform/projects/{tenant}/{project}/repos/ con bare repos
 
-- [ ] **Título**: Estructura /data/agent-platform/projects/{tenant}/{project}/repos/ con bare repos
+- [x] **Título**: Estructura /data/agent-platform/projects/{tenant}/{project}/repos/ con bare repos
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + devops
@@ -380,7 +380,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_17` — Fetch periódico + webhook Git para detectar push externos
 
-- [ ] **Título**: Fetch periódico + webhook Git para detectar push externos
+- [x] **Título**: Fetch periódico + webhook Git para detectar push externos
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -397,7 +397,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_18` — Creación de worktree por tarea (git worktree add) en arranque
 
-- [ ] **Título**: Creación de worktree por tarea (git worktree add) en arranque
+- [x] **Título**: Creación de worktree por tarea (git worktree add) en arranque
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -414,7 +414,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_19` — Montaje del worktree (no jerarquía) en agent-runtime y test-runtime, con sync `fetch + reset --hard` antes de pasar control al agente
 
-- [ ] **Título**: Montaje del worktree (no jerarquía) en agent-runtime y test-runtime, con sync `fetch + reset --hard` antes de pasar control al agente
+- [x] **Título**: Montaje del worktree (no jerarquía) en agent-runtime y test-runtime, con sync `fetch + reset --hard` antes de pasar control al agente
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
@@ -431,7 +431,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_20` — Cleanup de worktrees a los 30 días sin actividad
 
-- [ ] **Título**: Cleanup de worktrees a los 30 días sin actividad
+- [x] **Título**: Cleanup de worktrees a los 30 días sin actividad
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: devops
@@ -450,7 +450,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_20b1` — Modelo del pool elástico por plan con parámetros `min` / `max` / `idle_ttl_seconds`
 
-- [ ] **Título**: Modelo del pool elástico por plan: estructura de datos en orquestador, parámetros `min` (default 1) / `max` (default 5) / `idle_ttl_seconds` (default 300) heredados desde proyecto, con límite duro de plataforma `max_runtime_pool_size_per_tenant` (default 20)
+- [x] **Título**: Modelo del pool elástico por plan: estructura de datos en orquestador, parámetros `min` (default 1) / `max` (default 5) / `idle_ttl_seconds` (default 300) heredados desde proyecto, con límite duro de plataforma `max_runtime_pool_size_per_tenant` (default 20)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -467,7 +467,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_20b2` — Lógica del orchestrator: asignación de contenedores del pool (libre / nuevo / cola) y barrido de idle
 
-- [ ] **Título**: Lógica del orchestrator para asignar contenedores del pool: si hay libre lo toma, si no y `size < max` crea uno, si el pool está al máximo encola el paso. Barrido de contenedores idle cada 30s y eviction de los que llevan más de `idle_ttl_seconds` por encima de `min`.
+- [x] **Título**: Lógica del orchestrator para asignar contenedores del pool: si hay libre lo toma, si no y `size < max` crea uno, si el pool está al máximo encola el paso. Barrido de contenedores idle cada 30s y eviction de los que llevan más de `idle_ttl_seconds` por encima de `min`.
 - **Tiempo estimado**: 12 h
 - **Complejidad**: l
 - **Rol sugerido**: backend-dev
@@ -496,7 +496,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_20b3` — Cambio de rol dentro de un mismo contenedor del pool sin reiniciar proceso Python
 
-- [ ] **Título**: Cambio de rol dentro de un mismo contenedor del pool: nuevo system_prompt + nuevo set de tools + nuevo contexto sin reiniciar proceso Python, sin reiniciar conexiones HTTP de los proveedores LLM (`shared-llm`, ADR 0021), sin recargar tokenizer. El contenedor pasa de Backend Senior a Reviewer a Memorizer manteniendo caliente proceso, conexiones, cliente MCP y tokenizer.
+- [x] **Título**: Cambio de rol dentro de un mismo contenedor del pool: nuevo system_prompt + nuevo set de tools + nuevo contexto sin reiniciar proceso Python, sin reiniciar conexiones HTTP de los proveedores LLM (`shared-llm`, ADR 0021), sin recargar tokenizer. El contenedor pasa de Backend Senior a Reviewer a Memorizer manteniendo caliente proceso, conexiones, cliente MCP y tokenizer.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: l
 - **Rol sugerido**: ai-engineer + backend-dev
@@ -513,7 +513,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_20b4` — Limpieza entre pasos: desmontar worktree, limpiar /tmp, unset vars, matar hijos huérfanos, reiniciar handlers de señales
 
-- [ ] **Título**: Rutina de limpieza al devolver un contenedor al pool: desmontar worktree del paso anterior (no borrarlo del FS), limpiar `/tmp`, unset de variables TASK_ID/EXECUTION_ID/secrets, matar procesos hijos huérfanos, reiniciar handlers de señales. Mantener caliente proceso Python, conexiones HTTP de los proveedores LLM (`shared-llm`, ADR 0021), cliente MCP, tokenizer, dep-cache.
+- [x] **Título**: Rutina de limpieza al devolver un contenedor al pool: desmontar worktree del paso anterior (no borrarlo del FS), limpiar `/tmp`, unset de variables TASK_ID/EXECUTION_ID/secrets, matar procesos hijos huérfanos, reiniciar handlers de señales. Mantener caliente proceso Python, conexiones HTTP de los proveedores LLM (`shared-llm`, ADR 0021), cliente MCP, tokenizer, dep-cache.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
@@ -530,7 +530,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_20b5` — Métricas Prometheus del pool: size / busy / idle / wait_seconds / evictions_total / role_executions_total
 
-- [ ] **Título**: Exposición de métricas Prometheus por plan: `runtime_pool_size{plan_id, project_id}`, `runtime_pool_busy{plan_id}`, `runtime_pool_idle{plan_id}`, `runtime_pool_wait_seconds{plan_id}`, `runtime_pool_evictions_total{plan_id, reason}`, `runtime_pool_role_executions_total{plan_id, role}`.
+- [x] **Título**: Exposición de métricas Prometheus por plan: `runtime_pool_size{plan_id, project_id}`, `runtime_pool_busy{plan_id}`, `runtime_pool_idle{plan_id}`, `runtime_pool_wait_seconds{plan_id}`, `runtime_pool_evictions_total{plan_id, reason}`, `runtime_pool_role_executions_total{plan_id, role}`.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev + devops
@@ -547,7 +547,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_20b6` — Migración desde el modelo simple de Fase 2 (un contenedor por tarea) al pool elástico por plan
 
-- [ ] **Título**: Sustituir el lanzamiento "un contenedor por tarea" de Fase 2 (`task_02_06`) por la lógica de solicitud al pool. El worker deja de lanzar contenedores directamente; pide al orchestrator un slot del pool del plan.
+- [x] **Título**: Sustituir el lanzamiento "un contenedor por tarea" de Fase 2 (`task_02_06`) por la lógica de solicitud al pool. El worker deja de lanzar contenedores directamente; pide al orchestrator un slot del pool del plan.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -566,7 +566,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_21` — Creación de rama plan/{plan_id_short}-{slug} al sincronizar plan al Kanban
 
-- [ ] **Título**: Creación de rama plan/{plan_id_short}-{slug} al sincronizar plan al Kanban
+- [x] **Título**: Creación de rama plan/{plan_id_short}-{slug} al sincronizar plan al Kanban
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -583,7 +583,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_22` — Commits con trailers Plan-Id, Task-Id, Execution-Id, Generated-By
 
-- [ ] **Título**: Commits con trailers Plan-Id, Task-Id, Execution-Id, Generated-By
+- [x] **Título**: Commits con trailers Plan-Id, Task-Id, Execution-Id, Generated-By
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -600,7 +600,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_23` — Flujo de cuatro transiciones de código con los dos ejes `branch_push_mode` y `plan_validation_mode`
 
-- [ ] **Título**: Flujo de cuatro transiciones de código (worktree → bare repo local → remoto rama del plan → rama default) con los dos ejes `branch_push_mode` (incremental/final_only) y `plan_validation_mode` (human_required/auto_approve), ortogonales a `push_policy` (sección 12.6 del .docx)
+- [x] **Título**: Flujo de cuatro transiciones de código (worktree → bare repo local → remoto rama del plan → rama default) con los dos ejes `branch_push_mode` (incremental/final_only) y `plan_validation_mode` (human_required/auto_approve), ortogonales a `push_policy` (sección 12.6 del .docx)
 - **Tiempo estimado**: 14 h
 - **Complejidad**: l
 - **Rol sugerido**: backend-dev
@@ -635,7 +635,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_24` — Apertura automática de PR al finalizar plan (un PR por repo afectado)
 
-- [ ] **Título**: Apertura automática de PR al finalizar plan (un PR por repo afectado)
+- [x] **Título**: Apertura automática de PR al finalizar plan (un PR por repo afectado)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -652,7 +652,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_25` — Política `push_policy` aplicada al merge, ortogonal a `branch_push_mode` y `plan_validation_mode`
 
-- [ ] **Título**: Política `push_policy` aplicada al merge (forbidden / branch_only_pr_required / direct_to_default_allowed), ortogonal a `branch_push_mode` y `plan_validation_mode` (las tres juntas definen el comportamiento Git completo del proyecto — sección 12.6 del .docx)
+- [x] **Título**: Política `push_policy` aplicada al merge (forbidden / branch_only_pr_required / direct_to_default_allowed), ortogonal a `branch_push_mode` y `plan_validation_mode` (las tres juntas definen el comportamiento Git completo del proyecto — sección 12.6 del .docx)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -677,7 +677,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_26` — Composición del review-runtime: worktree con commits del plan + servicios auxiliares persistentes + servicio principal levantado
 
-- [ ] **Título**: Composición del review-runtime: worktree con commits del plan + servicios auxiliares persistentes + servicio principal levantado
+- [x] **Título**: Composición del review-runtime: worktree con commits del plan + servicios auxiliares persistentes + servicio principal levantado
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: backend-dev + devops
@@ -694,7 +694,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_27` — URL temporal firmada con caducidad = timeout de la revisión
 
-- [ ] **Título**: URL temporal firmada con caducidad = timeout de la revisión
+- [x] **Título**: URL temporal firmada con caducidad = timeout de la revisión
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
@@ -711,7 +711,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_28` — Terminal web embebida (ttyd o xterm.js) scoped a /workspace del contenedor
 
-- [ ] **Título**: Terminal web embebida (ttyd o xterm.js) scoped a /workspace del contenedor
+- [x] **Título**: Terminal web embebida (ttyd o xterm.js) scoped a /workspace del contenedor
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + devops
@@ -728,7 +728,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_29` — Logs en tiempo real vía WebSocket
 
-- [ ] **Título**: Logs en tiempo real vía WebSocket
+- [x] **Título**: Logs en tiempo real vía WebSocket
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -745,7 +745,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_30` — Botón 're-ejecutar tests automáticos' que invoca worker-test sobre todo el plan
 
-- [ ] **Título**: Botón 're-ejecutar tests automáticos' que invoca worker-test sobre todo el plan
+- [x] **Título**: Botón 're-ejecutar tests automáticos' que invoca worker-test sobre todo el plan
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -762,7 +762,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_31` — Vista de checklist con los tests humanos definidos en cabecera del plan
 
-- [ ] **Título**: Vista de checklist con los tests humanos definidos en cabecera del plan
+- [x] **Título**: Vista de checklist con los tests humanos definidos en cabecera del plan
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -779,7 +779,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_32` — Suspensión por inactividad: 4h sin actividad → docker pause
 
-- [ ] **Título**: Suspensión por inactividad: 4h sin actividad → docker pause
+- [x] **Título**: Suspensión por inactividad: 4h sin actividad → docker pause
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -796,7 +796,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_33` — Timeout 48h sin verdict → plan a blocked + notificación
 
-- [ ] **Título**: Timeout 48h sin verdict → plan a blocked + notificación
+- [x] **Título**: Timeout 48h sin verdict → plan a blocked + notificación
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -813,7 +813,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_34` — Cap por tenant configurable + cola cuando se llega al cap
 
-- [ ] **Título**: Cap por tenant configurable + cola cuando se llega al cap
+- [x] **Título**: Cap por tenant configurable + cola cuando se llega al cap
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -832,7 +832,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_34b1` — Rechazo de revisión automática envía la tarea a `backlog` con comentario estructurado del revisor
 
-- [ ] **Título**: Cambiar la transición `in_review → in_progress` por `in_review → backlog` cuando el revisor automático rechaza la tarea. El comentario estructurado del revisor (criterio fallido, evidencia del TestReport, qué arreglar) se adjunta a la tarea como `task_comment` y queda visible en la siguiente recogida. `retry_count++`.
+- [x] **Título**: Cambiar la transición `in_review → in_progress` por `in_review → backlog` cuando el revisor automático rechaza la tarea. El comentario estructurado del revisor (criterio fallido, evidencia del TestReport, qué arreglar) se adjunta a la tarea como `task_comment` y queda visible en la siguiente recogida. `retry_count++`.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -855,7 +855,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_34b2` — Escalado a `awaiting_human` tras `retry_count >= max_review_retries`
 
-- [ ] **Título**: Cuando `retry_count >= max_review_retries` (default 3, límite global de plataforma), la tarea NO vuelve a backlog. Pasa a `awaiting_human`. Se envía notificación al humano por los canales habilitados con histórico completo de intentos y comentarios.
+- [x] **Título**: Cuando `retry_count >= max_review_retries` (default 3, límite global de plataforma), la tarea NO vuelve a backlog. Pasa a `awaiting_human`. Se envía notificación al humano por los canales habilitados con histórico completo de intentos y comentarios.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -872,7 +872,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_34b3` — Panel "Tareas Escaladas" en la UI con las cuatro acciones humanas
 
-- [ ] **Título**: Panel de "Tareas Escaladas" en la UI del plan que muestra todo el histórico de intentos, outputs y comentarios. Cuatro botones de acción: aprobar manualmente (`→ done` con `manual_approval=true`), reasignar con nueva guía (`→ backlog`, `retry_count=0`, instrucciones humanas inyectadas como contexto), bloquear por causa externa (`→ blocked` con razón), cancelar (`→ cancelled`).
+- [x] **Título**: Panel de "Tareas Escaladas" en la UI del plan que muestra todo el histórico de intentos, outputs y comentarios. Cuatro botones de acción: aprobar manualmente (`→ done` con `manual_approval=true`), reasignar con nueva guía (`→ backlog`, `retry_count=0`, instrucciones humanas inyectadas como contexto), bloquear por causa externa (`→ blocked` con razón), cancelar (`→ cancelled`).
 - **Tiempo estimado**: 12 h
 - **Complejidad**: l
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -889,7 +889,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_34b4` — Creación automática de tareas desde checkboxes humanos fallidos en validación del plan
 
-- [ ] **Título**: Cuando el humano marca como fail un checkbox de tests humanos durante la validación del plan, el sistema crea automáticamente una tarea nueva en el plan: `title` = texto del checkbox, `description` = comentario humano, `plan_id` = plan en revisión, estado `backlog`. El plan vuelve a `in_progress`. Se recalcula el DAG y se ajusta el coste estimado del plan.
+- [x] **Título**: Cuando el humano marca como fail un checkbox de tests humanos durante la validación del plan, el sistema crea automáticamente una tarea nueva en el plan: `title` = texto del checkbox, `description` = comentario humano, `plan_id` = plan en revisión, estado `backlog`. El plan vuelve a `in_progress`. Se recalcula el DAG y se ajusta el coste estimado del plan.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -918,7 +918,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_34b5` — Botón "Añadir tarea libre al plan" en review-runtime y panel de validación humana
 
-- [ ] **Título**: Botón opcional en la UI de validación humana que permite al humano crear una tarea no asociada a ningún checkbox (bug colateral, mejora, refactor observado). Misma semántica que las tareas generadas desde checkbox: plan-scoped, estado backlog, suma al coste estimado del plan.
+- [x] **Título**: Botón opcional en la UI de validación humana que permite al humano crear una tarea no asociada a ningún checkbox (bug colateral, mejora, refactor observado). Misma semántica que las tareas generadas desde checkbox: plan-scoped, estado backlog, suma al coste estimado del plan.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -935,7 +935,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_34b6` — Registro auditable completo de la tarea (sección 13.6 del .docx)
 
-- [ ] **Título**: Garantizar que la tarea es el punto de agregación único de su histórico: todas sus Executions, todas sus Reviews, todos los comentarios (agente y humano), todas las transiciones de estado, las decisiones humanas si pasó por awaiting_human, y el outcome final. Endpoint `GET /api/v1/tasks/{task_id}/history` que devuelve todo en JSON cronológico. Validación en el Servicio de Dominio que impide cerrar una tarea sin el registro completo.
+- [x] **Título**: Garantizar que la tarea es el punto de agregación único de su histórico: todas sus Executions, todas sus Reviews, todos los comentarios (agente y humano), todas las transiciones de estado, las decisiones humanas si pasó por awaiting_human, y el outcome final. Endpoint `GET /api/v1/tasks/{task_id}/history` que devuelve todo en JSON cronológico. Validación en el Servicio de Dominio que impide cerrar una tarea sin el registro completo.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -972,7 +972,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_35` — Actualizar Kanban de Planes con progreso real (X/Y tareas done) y coste acumulado
 
-- [ ] **Título**: Actualizar Kanban de Planes con progreso real (X/Y tareas done) y coste acumulado
+- [x] **Título**: Actualizar Kanban de Planes con progreso real (X/Y tareas done) y coste acumulado
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -989,7 +989,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_36` — Transición automática plan → pending_human_validation al completar todas las tareas
 
-- [ ] **Título**: Transición automática plan → pending_human_validation al completar todas las tareas
+- [x] **Título**: Transición automática plan → pending_human_validation al completar todas las tareas
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -1006,7 +1006,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_37` — Transición automática plan → completed tras verdict humano approved + PR mergeado
 
-- [ ] **Título**: Transición automática plan → completed tras verdict humano approved + PR mergeado
+- [x] **Título**: Transición automática plan → completed tras verdict humano approved + PR mergeado
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -1023,7 +1023,7 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 
 #### `task_06_38` — Documentación: ADRs, guías de runtime templates, runbook de review-runtime, changelog
 
-- [ ] **Título**: Documentación: ADRs, guías de runtime templates, runbook de review-runtime, changelog
+- [x] **Título**: Documentación: ADRs, guías de runtime templates, runbook de review-runtime, changelog
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: technical-writer

@@ -1,0 +1,256 @@
+"""Catalog of the fourteen curated test-runtime templates (Plan 06 task_06_02).
+
+Each entry is a :class:`RuntimeTemplate` declaring the runtime's
+contract with the worker. The matching Dockerfile lives at
+``docker/agent-runtimes/<id>/Dockerfile`` and is built by
+``task_06_03``'s CI workflow into ``agent-runtime-<id>:v1``.
+
+The catalog is the single source of truth: when a project lists a
+runtime in ``Project.execution_runtimes`` or a task's
+``acceptance_criteria.runtime`` field, the platform resolves the
+template through :func:`get` and uses the fields to launch the
+test-runtime container.
+
+Adding a new template ⇒
+  1. Add the Dockerfile under ``docker/agent-runtimes/<new-id>/``.
+  2. Register the :class:`RuntimeTemplate` in :data:`CATALOG`.
+  3. Add the build line in CI (task_06_03 workflow).
+
+The image references use the local prefix ``agent-runtime-`` (matching
+the existing ``agent-runtime`` image from Plan 02). A future registry
+push step (task_06_03) will rewrite the prefix to something like
+``ghcr.io/agent-ai/agent-runtime-...``.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+
+from shared_test_runtimes.types import Resources, RuntimeTemplate
+
+_IMAGE_TAG = "v1"
+
+
+def _image(slug: str) -> str:
+    """Build the local image reference for a template id.
+
+    Mirrors the convention introduced by Plan 02's ``agent-runtime:v1``.
+    Local builds and CI builds use the same prefix; the registry push
+    step (task_06_03) reassigns the prefix to ``ghcr.io/...``.
+    """
+    return f"agent-runtime-{slug}:{_IMAGE_TAG}"
+
+
+# --- Python ---------------------------------------------------------
+
+PYTHON_PYTEST = RuntimeTemplate(
+    id="python-pytest",
+    docker_image=_image("python-pytest"),
+    dep_cache_mount="/root/.cache/pip",
+    default_pre_install=(
+        "pip install --upgrade pip",
+        "pip install -r requirements.txt",
+    ),
+    output_parsers=("junit_xml", "raw_text"),
+)
+
+# --- Node -----------------------------------------------------------
+
+NODE_JEST = RuntimeTemplate(
+    id="node-jest",
+    docker_image=_image("node-jest"),
+    dep_cache_mount="/root/.npm",
+    default_pre_install=("npm ci",),
+    output_parsers=("jest_json", "junit_xml", "raw_text"),
+)
+
+NODE_VITEST = RuntimeTemplate(
+    id="node-vitest",
+    docker_image=_image("node-vitest"),
+    dep_cache_mount="/root/.npm",
+    default_pre_install=("npm ci",),
+    output_parsers=("junit_xml", "raw_text"),
+)
+
+NODE_PLAYWRIGHT = RuntimeTemplate(
+    id="node-playwright",
+    docker_image=_image("node-playwright"),
+    dep_cache_mount="/root/.npm",
+    default_pre_install=("npm ci",),
+    # Playwright is browser-heavy — give it more headroom.
+    default_resources=Resources(cpu=2.0, memory_mb=2048),
+    output_parsers=("playwright_json", "junit_xml", "raw_text"),
+)
+
+# --- PHP ------------------------------------------------------------
+
+PHP_PHPUNIT = RuntimeTemplate(
+    id="php-phpunit",
+    docker_image=_image("php-phpunit"),
+    dep_cache_mount="/root/.composer/cache",
+    default_pre_install=("composer install --no-interaction --no-progress",),
+    output_parsers=("junit_xml", "raw_text"),
+)
+
+PHP_PEST = RuntimeTemplate(
+    id="php-pest",
+    docker_image=_image("php-pest"),
+    dep_cache_mount="/root/.composer/cache",
+    default_pre_install=("composer install --no-interaction --no-progress",),
+    output_parsers=("junit_xml", "raw_text"),
+)
+
+# --- Go -------------------------------------------------------------
+
+GO_TEST = RuntimeTemplate(
+    id="go-test",
+    docker_image=_image("go-test"),
+    dep_cache_mount="/root/go/pkg/mod",
+    default_pre_install=("go mod download",),
+    output_parsers=("go_test_json", "raw_text"),
+)
+
+# --- Java -----------------------------------------------------------
+
+JAVA_MAVEN = RuntimeTemplate(
+    id="java-maven",
+    docker_image=_image("java-maven"),
+    dep_cache_mount="/root/.m2/repository",
+    default_pre_install=("mvn -B dependency:go-offline",),
+    default_resources=Resources(cpu=2.0, memory_mb=2048),
+    output_parsers=("surefire_xml", "junit_xml", "raw_text"),
+)
+
+JAVA_GRADLE = RuntimeTemplate(
+    id="java-gradle",
+    docker_image=_image("java-gradle"),
+    dep_cache_mount="/root/.gradle/caches",
+    default_pre_install=("gradle --no-daemon dependencies",),
+    default_resources=Resources(cpu=2.0, memory_mb=2048),
+    output_parsers=("junit_xml", "raw_text"),
+)
+
+# --- Ruby -----------------------------------------------------------
+
+RUBY_RSPEC = RuntimeTemplate(
+    id="ruby-rspec",
+    docker_image=_image("ruby-rspec"),
+    dep_cache_mount="/usr/local/bundle",
+    default_pre_install=("bundle install --jobs=4",),
+    output_parsers=("junit_xml", "raw_text"),
+)
+
+# --- Rust -----------------------------------------------------------
+
+RUST_CARGO = RuntimeTemplate(
+    id="rust-cargo",
+    docker_image=_image("rust-cargo"),
+    dep_cache_mount="/usr/local/cargo/registry",
+    default_pre_install=("cargo fetch",),
+    default_resources=Resources(cpu=2.0, memory_mb=2048),
+    output_parsers=("rust_test_json", "raw_text"),
+)
+
+# --- .NET -----------------------------------------------------------
+
+DOTNET_TEST = RuntimeTemplate(
+    id="dotnet-test",
+    docker_image=_image("dotnet-test"),
+    dep_cache_mount="/root/.nuget/packages",
+    default_pre_install=("dotnet restore",),
+    default_resources=Resources(cpu=2.0, memory_mb=2048),
+    output_parsers=("trx", "junit_xml", "raw_text"),
+)
+
+# --- Generic --------------------------------------------------------
+
+# Bare-bones shell runner: bash + git + curl + jq. No language toolchain.
+# Used for tasks whose "tests" are arbitrary shell scripts (e.g. running
+# a Makefile that wraps multiple stacks).
+GENERIC_SHELL = RuntimeTemplate(
+    id="generic-shell",
+    docker_image=_image("generic-shell"),
+    # No package manager → no dep-cache to mount.
+    dep_cache_mount=None,
+    default_pre_install=(),
+    output_parsers=("tap", "raw_text"),
+)
+
+# HTTP probe runner: curl + jq + httpie. Intended to talk to a running
+# service (the task's compose, or a staging URL when the project opts
+# into ``network_policy="open"``).
+GENERIC_HTTP = RuntimeTemplate(
+    id="generic-http",
+    docker_image=_image("generic-http"),
+    dep_cache_mount=None,
+    default_pre_install=(),
+    output_parsers=("raw_text",),
+    # Default to ``restricted`` so the runner can hit the task's
+    # compose services but not the public internet. A project can
+    # override to ``open`` per task when probing a staging API.
+    network_policy="restricted",
+)
+
+
+# The catalog itself. Insertion order = display order in the UI of
+# task_06_12 (Project.execution_runtimes editor).
+CATALOG: Mapping[str, RuntimeTemplate] = {
+    t.id: t
+    for t in (
+        PYTHON_PYTEST,
+        NODE_JEST,
+        NODE_VITEST,
+        NODE_PLAYWRIGHT,
+        PHP_PHPUNIT,
+        PHP_PEST,
+        GO_TEST,
+        JAVA_MAVEN,
+        JAVA_GRADLE,
+        RUBY_RSPEC,
+        RUST_CARGO,
+        DOTNET_TEST,
+        GENERIC_SHELL,
+        GENERIC_HTTP,
+    )
+}
+
+
+def get(template_id: str) -> RuntimeTemplate:
+    """Resolve a runtime template by id.
+
+    Raises:
+        KeyError: when ``template_id`` is not in the catalog. The
+            caller is expected to surface this as a 422 to the user
+            (the project / task config referenced an unknown runtime).
+    """
+    try:
+        return CATALOG[template_id]
+    except KeyError as exc:
+        known = ", ".join(sorted(CATALOG))
+        raise KeyError(f"unknown runtime template {template_id!r}; known: {known}") from exc
+
+
+def list_ids() -> tuple[str, ...]:
+    """Return the catalog ids in declared order."""
+    return tuple(CATALOG)
+
+
+__all__ = [
+    "CATALOG",
+    "DOTNET_TEST",
+    "GENERIC_HTTP",
+    "GENERIC_SHELL",
+    "GO_TEST",
+    "JAVA_GRADLE",
+    "JAVA_MAVEN",
+    "NODE_JEST",
+    "NODE_PLAYWRIGHT",
+    "NODE_VITEST",
+    "PHP_PEST",
+    "PHP_PHPUNIT",
+    "PYTHON_PYTEST",
+    "RUBY_RSPEC",
+    "RUST_CARGO",
+    "get",
+    "list_ids",
+]

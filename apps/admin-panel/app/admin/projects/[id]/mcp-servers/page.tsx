@@ -23,9 +23,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plug, Plus, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Pencil, Plug, Plus, Trash2, X } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -89,6 +90,77 @@ function emptyServer(): McpServerConfig {
     headers: {},
     auth_ref: null,
     timeout_s: 30,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Catálogo de plantillas — viene del backend (`GET /mcp-catalog`) que
+// proyecta `shared_mcp.catalog.CATALOG` (22 templates verificadas:
+// GitHub, GitLab, Jira, Confluence, Google Drive, Gmail, Calendar,
+// Slack, Teams, Discord, Notion, PostgreSQL, Sentry, Grafana, Brave,
+// Tavily, Puppeteer, Memory, Sequential Thinking, etc.).
+//
+// El backend es la fuente de verdad — añadir/quitar templates es un
+// ADR + cambio en `catalog.py`, no se hardcoded aquí.
+// ---------------------------------------------------------------------------
+interface McpCatalogEntry {
+  id: string;
+  display_name: string;
+  description: string;
+  transport: Transport;
+  command: string | null;
+  args: string[];
+  url: string | null;
+  secret_keys: string[];
+  vault_path_template: string | null;
+  default_timeout_s: number;
+  static_env: Record<string, string>;
+  static_headers: Record<string, string>;
+  maintainer: string;
+  repo_url: string;
+  docs_url: string;
+  category: string;
+  requires_auth: boolean;
+}
+
+const CATEGORY_LABEL: Record<string, string> = {
+  docs: "Documentos",
+  scm: "Control de versiones",
+  data: "Bases de datos",
+  files: "Archivos",
+  comms: "Comunicación",
+  issues: "Issue trackers",
+  observability: "Observabilidad",
+  search: "Búsqueda web",
+  browser: "Navegador",
+  meta: "Meta / Agent helpers",
+  other: "Otros",
+};
+
+/**
+ * Render the template's `vault_path_template` against the project's
+ * UUID. Mirrors `shared_mcp.catalog.render_vault_path` on the backend —
+ * the substitution is just `{project_id} → projectId`. We pre-fill
+ * `auth_ref` with this rendered path when the template declares
+ * secrets, so the operator sees the exact place where their Vault
+ * admin needs to drop the credential (instead of typing it from
+ * scratch and risking a typo against the validator).
+ */
+function templateToConfig(entry: McpCatalogEntry, projectId: string): McpServerConfig {
+  const authRef =
+    entry.vault_path_template !== null
+      ? entry.vault_path_template.replace("{project_id}", projectId)
+      : null;
+  return {
+    name: entry.id,
+    transport: entry.transport,
+    command: entry.command,
+    args: [...entry.args],
+    env: { ...entry.static_env },
+    url: entry.url,
+    headers: { ...entry.static_headers },
+    auth_ref: authRef,
+    timeout_s: Math.round(entry.default_timeout_s),
   };
 }
 
@@ -159,6 +231,7 @@ export default function ProjectMcpServersPage() {
       className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8"
       data-testid="project-mcp-page"
     >
+      <ProjectBreadcrumb projectId={projectId} current="MCP servers" />
       <PageHeader
         icon={<Plug className="h-6 w-6 sm:h-7 sm:w-7" />}
         title="MCP servers del proyecto"
@@ -321,12 +394,40 @@ function McpServerDialog({
 }) {
   const [state, setState] = useState<McpServerConfig>(initial);
   const [argsRaw, setArgsRaw] = useState<string>(initial.args.join("\n"));
+  const [advancedOpen, setAdvancedOpen] = useState<boolean>(
+    Boolean(initial.auth_ref) || initial.timeout_s !== 30,
+  );
+  // Tracks the catalog template the operator just applied (if any).
+  // When set + the template declares secrets, we render a friendly
+  // info card instead of the raw Vault path — the path lives in
+  // `state.auth_ref` (already pre-rendered with the project UUID) and
+  // travels to the backend on submit, but the user doesn't have to
+  // see it. Cleared as soon as the user edits any field manually.
+  const [appliedTemplate, setAppliedTemplate] = useState<McpCatalogEntry | null>(null);
+  // Devops escape hatch — exposes the raw `vault:…` input when the
+  // operator clicks "Detalles técnicos".
+  const [showRawAuth, setShowRawAuth] = useState(false);
+  // True when the dialog is opened for create (no name yet); the
+  // template picker is only meaningful before the user starts typing.
+  const isCreate = !initial.name;
 
   // Reset state when the dialog re-opens with different initial data.
   useEffect(() => {
     setState(initial);
     setArgsRaw(initial.args.join("\n"));
+    setAdvancedOpen(Boolean(initial.auth_ref) || initial.timeout_s !== 30);
+    setAppliedTemplate(null);
+    setShowRawAuth(false);
   }, [initial]);
+
+  // Catalog fetch (only when creating — editing existing skips it).
+  const catalogQuery = useQuery({
+    queryKey: ["mcp-catalog"],
+    queryFn: () => apiFetch<McpCatalogEntry[]>("/mcp-catalog"),
+    enabled: isCreate,
+    refetchOnWindowFocus: false,
+    staleTime: 5 * 60_000,
+  });
 
   // For task_05_07 — the panel shows results below the form.
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
@@ -334,6 +435,28 @@ function McpServerDialog({
   const [testing, setTesting] = useState(false);
 
   const isStdio = state.transport === "stdio";
+
+  function applyTemplate(templateId: string) {
+    if (!templateId) return;
+    const entry = (catalogQuery.data ?? []).find((t) => t.id === templateId);
+    if (!entry) return;
+    const next = templateToConfig(entry, projectId);
+    setState(next);
+    setArgsRaw(next.args.join("\n"));
+    setAppliedTemplate(entry);
+    setShowRawAuth(false);
+    // If the template declares secrets, expand the advanced section so
+    // the operator can see the credential card right away.
+    if (entry.requires_auth) setAdvancedOpen(true);
+  }
+
+  // Any manual edit of auth_ref breaks the "managed by template"
+  // invariant — drop the appliedTemplate marker so the raw input
+  // takes over again.
+  function setAuthRefManual(value: string) {
+    setState({ ...state, auth_ref: value });
+    if (appliedTemplate) setAppliedTemplate(null);
+  }
 
   // Build the canonical server shape used by both Save and Probar.
   const buildPayload = useMemo(
@@ -388,6 +511,52 @@ function McpServerDialog({
         </DialogHeader>
         <DialogBody>
           <div className="space-y-4">
+            {/* Template picker — only when creating */}
+            {isCreate && (
+              <div className="bg-muted/30 -mx-2 rounded-md border p-3">
+                <Label htmlFor="mcp-form-template">Plantilla rápida</Label>
+                <select
+                  id="mcp-form-template"
+                  data-testid="mcp-form-template"
+                  className="border-input bg-background mt-1 h-10 w-full rounded-md border px-3 text-sm"
+                  defaultValue=""
+                  onChange={(e) => applyTemplate(e.target.value)}
+                  disabled={catalogQuery.isLoading}
+                >
+                  <option value="">
+                    {catalogQuery.isLoading
+                      ? "Cargando catálogo…"
+                      : "— Elige una plantilla (opcional) —"}
+                  </option>
+                  {Object.entries(
+                    (catalogQuery.data ?? []).reduce<Record<string, McpCatalogEntry[]>>(
+                      (acc, entry) => {
+                        const cat = entry.category;
+                        if (!acc[cat]) acc[cat] = [];
+                        acc[cat].push(entry);
+                        return acc;
+                      },
+                      {},
+                    ),
+                  ).map(([cat, entries]) => (
+                    <optgroup key={cat} label={CATEGORY_LABEL[cat] ?? cat}>
+                      {entries.map((entry) => (
+                        <option key={entry.id} value={entry.id}>
+                          {entry.display_name}
+                          {entry.requires_auth ? " 🔒" : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <p className="text-muted-foreground mt-1.5 text-xs">
+                  Aplica una configuración verificada (GitHub, Jira, Google Drive, Slack, etc.). El
+                  candado 🔒 indica que la integración necesita credenciales — el campo aparecerá en
+                  Opciones avanzadas.
+                </p>
+              </div>
+            )}
+
             {/* Name */}
             <div>
               <Label htmlFor="mcp-form-name">Nombre</Label>
@@ -474,34 +643,117 @@ function McpServerDialog({
               </>
             )}
 
-            {/* auth_ref */}
-            <div>
-              <Label htmlFor="mcp-form-auth-ref">Auth (Vault pointer)</Label>
-              <Input
-                id="mcp-form-auth-ref"
-                data-testid="mcp-form-auth-ref"
-                value={state.auth_ref ?? ""}
-                onChange={(e) => setState({ ...state, auth_ref: e.target.value })}
-                placeholder="vault:secret/data/mcp/github/proj-42"
-              />
-              <p className="text-muted-foreground mt-1 text-xs">
-                Opcional. Si lo configuras, debe empezar por <code>vault:</code>. El secreto
-                resuelto al conectar se inyecta como env (stdio) o headers (http).
-              </p>
-            </div>
+            {/* Opciones avanzadas — colapsa auth + timeout */}
+            <div className="border-t pt-3">
+              <button
+                type="button"
+                onClick={() => setAdvancedOpen(!advancedOpen)}
+                data-testid="mcp-form-advanced-toggle"
+                aria-expanded={advancedOpen}
+                className="text-muted-foreground hover:text-foreground flex w-full items-center justify-between text-sm font-medium transition-colors"
+              >
+                <span className="flex items-center gap-1.5">
+                  {advancedOpen ? (
+                    <ChevronDown className="h-4 w-4" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4" />
+                  )}
+                  Opciones avanzadas
+                </span>
+                <span className="text-xs opacity-60">
+                  {state.auth_ref ? "credencial • " : ""}timeout {state.timeout_s}s
+                </span>
+              </button>
 
-            {/* Timeout */}
-            <div>
-              <Label htmlFor="mcp-form-timeout">Timeout (segundos)</Label>
-              <Input
-                id="mcp-form-timeout"
-                data-testid="mcp-form-timeout"
-                type="number"
-                min={1}
-                max={300}
-                value={state.timeout_s}
-                onChange={(e) => setState({ ...state, timeout_s: Number(e.target.value) || 30 })}
-              />
+              {advancedOpen && (
+                <div className="mt-3 space-y-4">
+                  {appliedTemplate?.requires_auth && !showRawAuth ? (
+                    <div
+                      className="bg-success-soft text-success-soft-foreground rounded-md border border-success/30 p-3"
+                      data-testid="mcp-form-auth-managed"
+                    >
+                      <p className="text-sm font-medium">🔒 Esta integración requiere credencial</p>
+                      <p className="mt-1 text-xs">
+                        El sistema ya sabe dónde guardar el secreto. Pide al{" "}
+                        <strong>administrador del tenant</strong> que añada{" "}
+                        <code>{appliedTemplate.secret_keys.join(", ") || "la credencial"}</code> en
+                        Vault antes del primer uso. Mientras no esté, las llamadas a este MCP
+                        devolverán un error de autenticación tipado (no se cae el sistema).
+                      </p>
+                      <p className="mt-2 text-xs">
+                        <a
+                          href="https://github.com/daycry/agent-ai-multitenant/blob/master/docs/03-guides/configurar-mcp-server.md"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary underline-offset-2 hover:underline"
+                        >
+                          Ver guía de configuración →
+                        </a>
+                        {"  ·  "}
+                        <button
+                          type="button"
+                          onClick={() => setShowRawAuth(true)}
+                          className="text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                          data-testid="mcp-form-show-raw-auth"
+                        >
+                          Detalles técnicos
+                        </button>
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="mcp-form-auth-ref">
+                          {appliedTemplate?.requires_auth
+                            ? "Ruta del secreto en Vault"
+                            : "Credencial del servidor (opcional)"}
+                        </Label>
+                        {appliedTemplate?.requires_auth && showRawAuth && (
+                          <button
+                            type="button"
+                            onClick={() => setShowRawAuth(false)}
+                            className="text-muted-foreground hover:text-foreground text-xs underline-offset-2 hover:underline"
+                            data-testid="mcp-form-hide-raw-auth"
+                          >
+                            ← Ocultar detalles técnicos
+                          </button>
+                        )}
+                      </div>
+                      <Input
+                        id="mcp-form-auth-ref"
+                        data-testid="mcp-form-auth-ref"
+                        value={state.auth_ref ?? ""}
+                        onChange={(e) => setAuthRefManual(e.target.value)}
+                        placeholder="vault:secret/data/mcp/<servicio>/<proyecto>"
+                      />
+                      <p className="text-muted-foreground mt-1 text-xs">
+                        {appliedTemplate?.requires_auth
+                          ? "El sistema rellena esta ruta automáticamente al aplicar una plantilla. Solo edítala si tu Vault tiene una convención distinta."
+                          : "Solo para MCPs que necesitan API key / token. El admin del tenant guarda el secreto en Vault y aquí solo se referencia con la ruta vault:…"}
+                      </p>
+                    </div>
+                  )}
+
+                  <div>
+                    <Label htmlFor="mcp-form-timeout">Timeout (segundos)</Label>
+                    <Input
+                      id="mcp-form-timeout"
+                      data-testid="mcp-form-timeout"
+                      type="number"
+                      min={1}
+                      max={300}
+                      value={state.timeout_s}
+                      onChange={(e) =>
+                        setState({ ...state, timeout_s: Number(e.target.value) || 30 })
+                      }
+                    />
+                    <p className="text-muted-foreground mt-1 text-xs">
+                      Tiempo máximo por llamada. 30s va bien para la mayoría; sube a 120s para MCPs
+                      lentos como Docling o Puppeteer.
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Probar conexión */}

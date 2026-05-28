@@ -22,9 +22,10 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ClipboardList } from "lucide-react";
+import { AlertTriangle, ClipboardList, ExternalLink } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +40,8 @@ import {
 import { ApiError, apiFetch } from "@/lib/api";
 import { PlanDAG } from "@/lib/plan-dag";
 import { PlanGantt } from "@/lib/plan-gantt";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
+import { renderPlanDraft } from "@/lib/plan-draft-md";
 
 // --------------------------------------------------------------------------
 // Types — mirror the backend's PlanResponse + PlanSpecification shape.
@@ -92,6 +95,9 @@ interface PlanResponse {
   updated_at: string;
 }
 
+// Orden por workflow (ver CLAUDE.md §"Estados Válidos del Frontmatter"):
+// draft → pending_approval → approved → in_progress → [blocked] →
+// pending_human_validation → completed (o rejected / cancelled) → archived.
 const STATUS_VARIANT: Record<string, BadgeVariant> = {
   draft: "muted",
   pending_approval: "warning",
@@ -100,8 +106,8 @@ const STATUS_VARIANT: Record<string, BadgeVariant> = {
   blocked: "danger",
   pending_human_validation: "warning",
   completed: "success",
-  cancelled: "muted",
   rejected: "danger",
+  cancelled: "muted",
   archived: "muted",
 };
 
@@ -113,8 +119,8 @@ const STATUS_LABEL: Record<string, string> = {
   blocked: "Bloqueado",
   pending_human_validation: "Pendiente validación humana",
   completed: "Completado",
-  cancelled: "Cancelado",
   rejected: "Rechazado",
+  cancelled: "Cancelado",
   archived: "Archivado",
 };
 
@@ -170,19 +176,11 @@ export default function PlanDetailPage() {
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8" data-testid="plan-detail">
-      <Link
-        href={`/admin/projects/${projectId}/plans`}
-        className="text-muted-foreground hover:text-foreground mb-3 inline-flex items-center gap-1 text-xs"
-        data-testid="plan-detail-back"
-      >
-        <ChevronLeft className="h-3 w-3" />
-        Volver a planes
-      </Link>
+      <ProjectBreadcrumb projectId={projectId} current={plan.title} />
 
       <PageHeader
         icon={<ClipboardList className="h-6 w-6 sm:h-7 sm:w-7" />}
         title={plan.title}
-        description={plan.description ?? undefined}
         actions={
           <Badge variant={variant} data-testid="plan-detail-status-badge" data-status={plan.status}>
             {STATUS_LABEL[plan.status] ?? plan.status}
@@ -191,6 +189,13 @@ export default function PlanDetailPage() {
         data-testid="plan-detail-header"
       />
 
+      {plan.description && (
+        <Card className="mt-2" data-testid="plan-description">
+          <CardContent className="pt-6 text-sm">{renderPlanDraft(plan.description)}</CardContent>
+        </Card>
+      )}
+
+      <PlanDeepLinksSection planId={plan.id} status={plan.status} />
       <SummarySection summary={spec.summary} />
       <EstimatesSection estimates={spec.estimates} />
       <CostBreakdownSection planId={plan.id} />
@@ -693,7 +698,7 @@ function CommentsSection({ planId, taskIds }: { planId: string; taskIds: string[
                   <>Sobre el plan</>
                 )}
               </p>
-              <p className="whitespace-pre-wrap">{c.content}</p>
+              <div>{renderPlanDraft(c.content)}</div>
             </li>
           ))}
           {(commentsQuery.data ?? []).length === 0 ? (
@@ -744,13 +749,12 @@ function CommentsSection({ planId, taskIds }: { planId: string; taskIds: string[
               </select>
             ) : null}
           </div>
-          <textarea
+          <MarkdownTextarea
             value={content}
-            onChange={(e) => setContent(e.target.value)}
+            onChange={setContent}
             placeholder="Escribe tu comentario…"
-            rows={2}
+            rows={4}
             data-testid="plan-comment-content"
-            className="bg-background border-muted w-full resize-none rounded border px-2 py-1 text-sm"
           />
           <div className="flex justify-end">
             <Button type="submit" disabled={!canSubmit} data-testid="plan-comment-submit">
@@ -825,7 +829,7 @@ function SummarySection({ summary }: { summary: PlanSpecification["summary"] | u
         <CardTitle>Resumen</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        {summary.description ? <p className="whitespace-pre-wrap">{summary.description}</p> : null}
+        {summary.description ? <div>{renderPlanDraft(summary.description)}</div> : null}
         {summary.scope_in && summary.scope_in.length > 0 ? (
           <ScopeList label="En alcance" items={summary.scope_in} testId="plan-scope-in" />
         ) : null}
@@ -1004,6 +1008,71 @@ function TasksSection({ tasks }: { tasks: PlanSpecification["tasks"] | undefined
             ))}
           </tbody>
         </table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Deep links to per-plan panels (Plan 06.6 task_06_6_12)
+// --------------------------------------------------------------------------
+
+function PlanDeepLinksSection({ planId, status }: { planId: string; status: string }) {
+  const inValidation = status === "pending_human_validation";
+  return (
+    <Card className="mt-6" data-testid="plan-deep-links">
+      <CardHeader>
+        <CardTitle>Paneles del plan</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Link
+            href={`/admin/plans/${planId}/escalated`}
+            data-testid="plan-link-escalated"
+            className="hover:border-primary/40 hover:bg-muted/30 flex items-start gap-3 rounded-md border p-3 transition-colors"
+          >
+            <div className="bg-warning-soft text-warning-soft-foreground flex h-10 w-10 shrink-0 items-center justify-center rounded-md">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-1.5 text-sm font-semibold">
+                Tareas escaladas
+                <ExternalLink className="text-muted-foreground h-3.5 w-3.5" />
+              </div>
+              <p className="text-muted-foreground mt-0.5 text-xs">
+                Tareas del plan en <code>awaiting_human</code> tras agotar reintentos del revisor.
+              </p>
+            </div>
+          </Link>
+
+          {inValidation && (
+            <Link
+              href={`/admin/review/active?plan=${planId}`}
+              data-testid="plan-link-review"
+              className="hover:border-primary/40 hover:bg-muted/30 flex items-start gap-3 rounded-md border p-3 transition-colors"
+            >
+              <div className="bg-info-soft text-info-soft-foreground flex h-10 w-10 shrink-0 items-center justify-center rounded-md">
+                <ClipboardList className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-1.5 text-sm font-semibold">
+                  Sesión de review
+                  <ExternalLink className="text-muted-foreground h-3.5 w-3.5" />
+                </div>
+                <p className="text-muted-foreground mt-0.5 text-xs">
+                  El plan está en validación humana — abre la review-runtime con stack + tests.
+                </p>
+              </div>
+            </Link>
+          )}
+        </div>
+
+        {!inValidation && (
+          <p className="text-muted-foreground text-xs italic">
+            La sesión de review aparecerá aquí cuando el plan pase a{" "}
+            <code>pending_human_validation</code>.
+          </p>
+        )}
       </CardContent>
     </Card>
   );

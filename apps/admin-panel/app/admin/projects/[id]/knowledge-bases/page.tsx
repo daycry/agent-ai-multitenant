@@ -19,6 +19,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Library, Trash2, UploadCloud } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -104,6 +105,7 @@ export default function ProjectKnowledgeBasesPage() {
       className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8"
       data-testid="project-kbs-page"
     >
+      <ProjectBreadcrumb projectId={projectId} current="Knowledge Bases" />
       <PageHeader
         icon={<Library className="h-6 w-6 sm:h-7 sm:w-7" />}
         title="Knowledge Bases del proyecto"

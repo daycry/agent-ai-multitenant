@@ -76,19 +76,31 @@ export default function ProjectsListPage() {
           data-testid="projects-grid"
         >
           {data.map((project) => (
-            <Card key={project.id} data-testid={`project-${project.id}`}>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-base">{project.name}</CardTitle>
-                <Badge variant={STATUS_VARIANT[project.status] ?? "muted"}>{project.status}</Badge>
-              </CardHeader>
-              <CardContent>
-                {project.description ? (
-                  <p className="text-muted-foreground text-sm">{project.description}</p>
-                ) : (
-                  <p className="text-muted-foreground text-xs italic">Sin descripción.</p>
-                )}
-              </CardContent>
-            </Card>
+            <Link
+              key={project.id}
+              href={`/admin/projects/${project.id}`}
+              data-testid={`project-link-${project.id}`}
+              className="block"
+            >
+              <Card
+                data-testid={`project-${project.id}`}
+                className="hover:border-primary/40 cursor-pointer transition-colors"
+              >
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-base">{project.name}</CardTitle>
+                  <Badge variant={STATUS_VARIANT[project.status] ?? "muted"}>
+                    {project.status}
+                  </Badge>
+                </CardHeader>
+                <CardContent>
+                  {project.description ? (
+                    <p className="text-muted-foreground text-sm">{project.description}</p>
+                  ) : (
+                    <p className="text-muted-foreground text-xs italic">Sin descripción.</p>
+                  )}
+                </CardContent>
+              </Card>
+            </Link>
           ))}
         </div>
       )}

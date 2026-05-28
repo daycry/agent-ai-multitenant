@@ -60,6 +60,25 @@ async def list_projects(
             "their real projects."
         ),
     ),
+    q: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description=(
+            "Case-insensitive substring match on project name. Used by the "
+            "admin-panel ProjectCombobox for server-side search — pairs with "
+            "`limit` to bound the candidate list as the operator types."
+        ),
+    ),
+    limit: int = Query(
+        default=100,
+        ge=1,
+        le=500,
+        description=(
+            "Max projects returned. Use a small value (e.g. 20) for typeahead "
+            "comboboxes; default 100 is enough for the listing page."
+        ),
+    ),
     _: AuthPrincipal = Depends(get_principal),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[ProjectResponse]:
@@ -70,7 +89,9 @@ async def list_projects(
         stmt = stmt.where(Project.status == status_)
     if team_id is not None:
         stmt = stmt.where(Project.team_id == team_id)
-    stmt = stmt.order_by(Project.created_at)
+    if q is not None:
+        stmt = stmt.where(Project.name.ilike(f"%{q}%"))
+    stmt = stmt.order_by(Project.created_at).limit(limit)
     result = await session.execute(stmt)
     return [to_project_response(p) for p in result.scalars().all()]
 

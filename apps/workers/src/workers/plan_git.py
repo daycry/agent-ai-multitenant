@@ -1,0 +1,364 @@
+"""Git integration tied to the Plan (Plan 06 Fase F).
+
+Plan 06 ties every plan to one git branch per repo, every commit to
+the plan + task + execution it came from, and every plan closure to
+an automatic PR. Five tasks of Fase F live here:
+
+  * :func:`make_plan_branch_name` (06_21) — stable branch naming.
+  * :func:`commit_task` (06_22) — commits with the four mandatory
+    trailers: ``Plan-Id``, ``Task-Id``, ``Execution-Id``,
+    ``Generated-By``.
+  * :class:`PlanGitWorkflow.push_review_to_bare` (06_23) — the
+    worktree → bare-repo step that fires after a successful auto-
+    review.
+  * :class:`PlanGitWorkflow.push_branch_to_remote` (06_23) — the
+    bare → remote step gated by ``branch_push_mode`` (``incremental``
+    pushes per task, ``final_only`` pushes once at plan close).
+  * :class:`PlanGitWorkflow.open_plan_pr` (06_24) — opens a PR per
+    affected repo at plan completion.
+  * :class:`PlanGitWorkflow.apply_push_policy` (06_25) — the merge-
+    time policy: ``forbidden`` rejects, ``branch_only_pr_required``
+    keeps the PR open, ``direct_to_default_allowed`` fast-forwards
+    the default branch on the bare.
+
+The three policies (``branch_push_mode`` x ``plan_validation_mode`` x
+``push_policy``) are orthogonal — every combination yields a
+well-defined behaviour. Section 12.6 of the .docx is the source of
+truth; the matrix tests pin the combinations.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal
+
+import structlog
+
+from workers.git_repos import GitCommandError, _run_git
+
+_log = structlog.get_logger("workers.plan_git")
+
+# Policy axes (Plan 06 section 12.6 of the .docx).
+BranchPushMode = Literal["incremental", "final_only"]
+PlanValidationMode = Literal["human_required", "auto_approve"]
+PushPolicy = Literal["forbidden", "branch_only_pr_required", "direct_to_default_allowed"]
+
+
+# ---------------------------------------------------------------------------
+# task_06_21 — Plan branch naming
+# ---------------------------------------------------------------------------
+
+# Short id width — 8 hex chars matches the convention we use across
+# the codebase (project.id.hex[:8] is the most common pattern).
+_PLAN_ID_SHORT_LEN = 8
+
+# Slug normaliser: lowercase, kebab-case, alnum + dashes only.
+_SLUG_RE = re.compile(r"[^a-z0-9-]+")
+
+
+def make_plan_branch_name(plan_id: str, slug: str) -> str:
+    """Return ``plan/{id_short}-{slug}`` for a plan id + human slug.
+
+    ``plan_id`` may be a UUID-string (with or without dashes) or any
+    other string; we take the first 8 hex characters of its
+    non-dashed lowercase form. ``slug`` is normalised to kebab-case.
+
+    Examples::
+
+        >>> make_plan_branch_name("11111111-2222-3333-4444-555555555555", "Fix Auth")
+        'plan/11111111-fix-auth'
+        >>> make_plan_branch_name("abc123", "")
+        'plan/abc123'
+    """
+    short = plan_id.replace("-", "").lower()[:_PLAN_ID_SHORT_LEN] or plan_id
+    norm = _SLUG_RE.sub("-", (slug or "").lower()).strip("-")
+    if not norm:
+        return f"plan/{short}"
+    return f"plan/{short}-{norm}"
+
+
+# ---------------------------------------------------------------------------
+# task_06_22 — Commit with trailers
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CommitTrailers:
+    """The four mandatory trailers every plan-generated commit carries.
+
+    Mirrors the format ``git commit --trailer`` emits — one trailer
+    per output line, ``Key: Value``. Section 12.6 of the .docx
+    pins these names + their order.
+    """
+
+    plan_id: str
+    task_id: str
+    execution_id: str
+    generated_by: str = "agentic-platform"
+
+    def as_args(self) -> list[str]:
+        """Return ``--trailer Key=Value`` args for ``git commit``."""
+        return [
+            f"--trailer=Plan-Id={self.plan_id}",
+            f"--trailer=Task-Id={self.task_id}",
+            f"--trailer=Execution-Id={self.execution_id}",
+            f"--trailer=Generated-By={self.generated_by}",
+        ]
+
+
+def commit_task(
+    worktree_path: Path,
+    *,
+    message: str,
+    trailers: CommitTrailers,
+    author_name: str = "Agentic Platform",
+    author_email: str = "noreply@agentic.local",
+) -> str:
+    """Stage everything, commit with trailers, return the new sha.
+
+    Pre-conditions: the agent has already written its changes into
+    the worktree. We always ``git add -A`` first because the agent's
+    file-tools don't guarantee a clean staging area.
+
+    Returns the new commit sha. Raises :class:`GitCommandError` if
+    the working tree was clean (nothing to commit) — the caller
+    treats that as "the task produced no code change" and skips the
+    push.
+    """
+    env_extra = {
+        "GIT_AUTHOR_NAME": author_name,
+        "GIT_AUTHOR_EMAIL": author_email,
+        "GIT_COMMITTER_NAME": author_name,
+        "GIT_COMMITTER_EMAIL": author_email,
+    }
+    _run_git("add", "-A", cwd=worktree_path, env_extra=env_extra)
+    try:
+        _run_git(
+            "commit",
+            "-m",
+            message,
+            *trailers.as_args(),
+            cwd=worktree_path,
+            env_extra=env_extra,
+        )
+    except GitCommandError as exc:
+        if "nothing to commit" in str(exc).lower():
+            raise GitCommandError("commit_task: worktree is clean") from exc
+        raise
+    return _run_git("rev-parse", "HEAD", cwd=worktree_path).strip()
+
+
+# ---------------------------------------------------------------------------
+# task_06_23..06_25 — Workflow class
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PlanGitPolicies:
+    """The three orthogonal policies that drive the Git side of a plan.
+
+    Defaults are the Plan 06 section 12.6.8 "razonables" combination:
+    incremental + human_required + branch_only_pr_required — the rama
+    is visible on the remote from the first task, the human validates
+    at end-of-plan, and the system opens a PR for the human to merge.
+    """
+
+    branch_push_mode: BranchPushMode = "incremental"
+    plan_validation_mode: PlanValidationMode = "human_required"
+    push_policy: PushPolicy = "branch_only_pr_required"
+
+
+# Type alias for the PR-opener seam. The worker injects a real
+# ``gh pr create`` runner or a GitHub/AzureDevOps API client; tests
+# inject a fake that records calls.
+PrOpener = Any  # Callable[[str, str], str] returning the PR URL
+
+
+@dataclass(frozen=True)
+class PrInfo:
+    """Result of :meth:`PlanGitWorkflow.open_plan_pr` per repo."""
+
+    repo_name: str
+    branch: str
+    url: str | None
+    skipped_reason: str | None = None
+
+
+class PlanGitWorkflow:
+    """The git side of a plan's life cycle.
+
+    The orchestrator instantiates one per plan and calls these
+    methods at the right moments. The class doesn't own state across
+    method calls — it's a thin coordinator around
+    :func:`workers.git_repos._run_git` + the injected PR opener.
+    """
+
+    def __init__(
+        self,
+        *,
+        bare_repo_path: Path,
+        plan_branch: str,
+        policies: PlanGitPolicies,
+        pr_opener: PrOpener | None = None,
+    ) -> None:
+        self._bare_path = bare_repo_path
+        self._plan_branch = plan_branch
+        self._policies = policies
+        self._pr_opener = pr_opener
+
+    @property
+    def plan_branch(self) -> str:
+        return self._plan_branch
+
+    # ----- task_06_23 — transitions ------------------------------------
+
+    def push_review_to_bare(self, worktree_path: Path) -> str:
+        """worktree → bare. Always runs after a passing review.
+
+        Pushes the worktree's HEAD to the plan branch on the bare
+        repo. The worker calls this after the auto-review step says
+        the task is ``done``.
+
+        Returns the sha now on the bare's branch tip.
+        """
+        _run_git(
+            "push",
+            str(self._bare_path),
+            f"HEAD:refs/heads/{self._plan_branch}",
+            cwd=worktree_path,
+        )
+        return _run_git("rev-parse", f"refs/heads/{self._plan_branch}", cwd=self._bare_path).strip()
+
+    def push_branch_to_remote(self, *, force: bool = False) -> bool:
+        """bare → remote. Gated by ``branch_push_mode``.
+
+        ``incremental`` pushes every time the bare's branch advances
+        (one push per accepted task). ``final_only`` skips here and
+        is invoked once at plan close. Returns True iff a push
+        actually happened.
+        """
+        if self._policies.branch_push_mode == "final_only" and not force:
+            return False
+        # If the bare has no ``origin``, treat that as "local-only
+        # project" — the user gets the rama in the bare and no
+        # remote step.
+        if not self._has_origin():
+            return False
+        _run_git(
+            "push",
+            "origin",
+            f"refs/heads/{self._plan_branch}:refs/heads/{self._plan_branch}",
+            cwd=self._bare_path,
+        )
+        return True
+
+    def _has_origin(self) -> bool:
+        try:
+            _run_git("remote", "get-url", "origin", cwd=self._bare_path)
+        except GitCommandError:
+            return False
+        return True
+
+    # ----- task_06_24 — PR creation ------------------------------------
+
+    def open_plan_pr(self, *, title: str, body: str) -> PrInfo:
+        """Open one PR for this repo at plan close.
+
+        Skipped (with a reason) when:
+          * ``push_policy='forbidden'`` — the project never pushes.
+          * No ``origin`` remote — local-only project.
+          * No ``pr_opener`` injected — dev/test without GitHub creds.
+
+        Otherwise calls the injected opener and returns the URL it
+        produced. The actual ``gh pr create`` machinery lives in the
+        platform's wiring; here we just dispatch.
+        """
+        # Force the final push when in final_only mode.
+        if self._policies.branch_push_mode == "final_only":
+            self.push_branch_to_remote(force=True)
+
+        if self._policies.push_policy == "forbidden":
+            return PrInfo(
+                repo_name=self._bare_path.stem,
+                branch=self._plan_branch,
+                url=None,
+                skipped_reason="push_policy=forbidden",
+            )
+        if not self._has_origin():
+            return PrInfo(
+                repo_name=self._bare_path.stem,
+                branch=self._plan_branch,
+                url=None,
+                skipped_reason="no remote origin configured",
+            )
+        if self._pr_opener is None:
+            return PrInfo(
+                repo_name=self._bare_path.stem,
+                branch=self._plan_branch,
+                url=None,
+                skipped_reason="no pr_opener wired",
+            )
+
+        url = self._pr_opener(title, body)
+        _log.info(
+            "plan_pr.opened",
+            repo=self._bare_path.stem,
+            branch=self._plan_branch,
+            url=url,
+        )
+        return PrInfo(
+            repo_name=self._bare_path.stem,
+            branch=self._plan_branch,
+            url=url,
+        )
+
+    # ----- task_06_25 — push policy at merge time ----------------------
+
+    def apply_push_policy(self, *, default_branch: str = "main") -> str:
+        """Apply ``push_policy`` to the merge step. Returns the action
+        actually taken: ``"forbidden"``, ``"pr_required"``, or
+        ``"merged_to_default"``.
+
+        * ``forbidden`` — does nothing, returns ``"forbidden"``. The
+          plan branch lives on the bare (and possibly the remote)
+          forever.
+        * ``branch_only_pr_required`` — leaves the PR open for the
+          human; returns ``"pr_required"``.
+        * ``direct_to_default_allowed`` — fast-forwards the bare's
+          default branch to the plan branch's tip. Returns
+          ``"merged_to_default"``. The remote push of the new default
+          tip is a separate concern (whoever owns CI handles it).
+        """
+        if self._policies.push_policy == "forbidden":
+            return "forbidden"
+        if self._policies.push_policy == "branch_only_pr_required":
+            return "pr_required"
+        # direct_to_default_allowed → fast-forward the bare's default.
+        _run_git(
+            "update-ref",
+            f"refs/heads/{default_branch}",
+            f"refs/heads/{self._plan_branch}",
+            cwd=self._bare_path,
+        )
+        _log.info(
+            "plan_git.merged_to_default",
+            default=default_branch,
+            plan_branch=self._plan_branch,
+        )
+        return "merged_to_default"
+
+
+__all__ = [
+    "BranchPushMode",
+    "CommitTrailers",
+    "PlanGitPolicies",
+    "PlanGitWorkflow",
+    "PlanValidationMode",
+    "PrInfo",
+    "PrOpener",
+    "PushPolicy",
+    "commit_task",
+    "make_plan_branch_name",
+]

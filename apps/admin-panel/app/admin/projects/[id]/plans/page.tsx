@@ -16,9 +16,11 @@ import { useQuery } from "@tanstack/react-query";
 import { ClipboardList, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ViewToggle, type ViewMode } from "@/components/ui/view-toggle";
 import { ApiError, apiFetch } from "@/lib/api";
 
 // --------------------------------------------------------------------------
@@ -36,16 +38,19 @@ interface Plan {
   created_at: string;
 }
 
+// Orden por workflow (ver CLAUDE.md §"Estados Válidos del Frontmatter"):
+// draft → pending_approval → approved → in_progress → [blocked] →
+// pending_human_validation → completed (o rejected / cancelled) → archived.
 const ALL_STATUSES = [
-  "pending_approval",
   "draft",
+  "pending_approval",
   "approved",
   "in_progress",
   "blocked",
   "pending_human_validation",
   "completed",
-  "cancelled",
   "rejected",
+  "cancelled",
   "archived",
 ] as const;
 
@@ -82,6 +87,7 @@ export default function ProjectPlansPage() {
   const params = useParams<{ id: string }>();
   const projectId = params.id;
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [view, setView] = useState<ViewMode>("list");
 
   const plansQuery = useQuery({
     queryKey: ["plans", projectId],
@@ -107,17 +113,21 @@ export default function ProjectPlansPage() {
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <ProjectBreadcrumb projectId={projectId} current="Planes" />
       <PageHeader
         icon={<ClipboardList className="h-6 w-6 sm:h-7 sm:w-7" />}
         title="Planes del proyecto"
         description="Cada plan agrupa fases, tareas y dependencias listas para sincronizar al Kanban."
         actions={
-          <Link href={`/admin/projects/${projectId}/chat`}>
-            <Button variant="outline" data-testid="open-chat-cta">
-              <Plus className="mr-2 h-4 w-4" />
-              Generar desde chat
-            </Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <ViewToggle value={view} onChange={setView} />
+            <Link href={`/admin/projects/${projectId}/chat`}>
+              <Button variant="outline" data-testid="open-chat-cta">
+                <Plus className="mr-2 h-4 w-4" />
+                Generar desde chat
+              </Button>
+            </Link>
+          </div>
         }
         data-testid="plans-tab-header"
       />
@@ -179,6 +189,22 @@ export default function ProjectPlansPage() {
               </p>
             </CardContent>
           </Card>
+        ) : view === "kanban" ? (
+          <div
+            className="grid grid-cols-2 gap-3 overflow-x-auto pb-2 sm:grid-cols-3 lg:grid-cols-5"
+            data-testid="plans-kanban-columns"
+          >
+            {ALL_STATUSES.map((s) => (
+              <PlanKanbanColumn
+                key={s}
+                status={s}
+                label={STATUS_LABEL[s]}
+                variant={STATUS_VARIANT[s] ?? "muted"}
+                plans={visible.filter((p) => p.status === s)}
+                projectId={projectId}
+              />
+            ))}
+          </div>
         ) : (
           <ul className="space-y-3" data-testid="plans-list">
             {visible.map((plan) => (
@@ -224,6 +250,60 @@ function FilterChip({ label, value, count, active, onClick }: FilterChipProps) {
         ({count})
       </span>
     </button>
+  );
+}
+
+function PlanKanbanColumn({
+  status,
+  label,
+  variant,
+  plans,
+  projectId,
+}: {
+  status: string;
+  label: string;
+  variant: BadgeVariant;
+  plans: Plan[];
+  projectId: string;
+}) {
+  return (
+    <div
+      data-testid={`plans-col-${status}`}
+      data-status={status}
+      className="bg-muted/40 flex min-h-[10rem] flex-col gap-2 rounded-lg p-2"
+    >
+      <div className="flex items-center justify-between px-1">
+        <Badge variant={variant}>{label}</Badge>
+        <span
+          className="text-muted-foreground text-xs tabular-nums"
+          data-testid={`plans-col-count-${status}`}
+        >
+          {plans.length}
+        </span>
+      </div>
+      {plans.length === 0 ? (
+        <p
+          className="text-muted-foreground p-2 text-xs italic"
+          data-testid={`plans-col-empty-${status}`}
+        >
+          —
+        </p>
+      ) : (
+        plans.map((p) => (
+          <Link
+            key={p.id}
+            href={`/admin/projects/${projectId}/plans/${p.id}`}
+            data-testid={`plans-card-${p.id}`}
+            className="bg-card hover:border-primary/40 rounded-md border p-2 text-sm shadow-sm transition hover:shadow-md"
+          >
+            <p className="line-clamp-2 font-medium leading-tight">{p.title}</p>
+            {p.description && (
+              <p className="text-muted-foreground mt-1 line-clamp-2 text-xs">{p.description}</p>
+            )}
+          </Link>
+        ))
+      )}
+    </div>
   );
 }
 

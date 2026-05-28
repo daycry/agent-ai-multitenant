@@ -1,0 +1,95 @@
+name: Build runtime templates
+
+# Plan 06 task_06_03 — build the fourteen curated test-runtime images
+# in a matrix on every change to their Dockerfiles or to the catalog
+# package. Push to a registry is deferred (we tag locally only) — the
+# CI signal here is "does the Dockerfile build at all on a fresh
+# Ubuntu runner". When the platform later picks a registry, replace
+# the docker/build-push-action step's ``push: false`` and add a login
+# step; nothing else needs to change.
+
+on:
+  push:
+    branches: [main, "plan/**"]
+    paths:
+      - "docker/agent-runtimes/**"
+      - "packages/shared-test-runtimes/**"
+      - ".github/workflows/build-runtime-templates.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docker/agent-runtimes/**"
+      - "packages/shared-test-runtimes/**"
+      - ".github/workflows/build-runtime-templates.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.template }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't stop the other thirteen if one fails — we want the full
+      # signal of which templates are broken, not the first one.
+      fail-fast: false
+      matrix:
+        # Keep this list in sync with shared_test_runtimes.catalog and
+        # the EXPECTED_TEMPLATES set in tests/unit/test_runtime_catalog.py.
+        template:
+          - python-pytest
+          - node-jest
+          - node-vitest
+          - node-playwright
+          - php-phpunit
+          - php-pest
+          - go-test
+          - java-maven
+          - java-gradle
+          - ruby-rspec
+          - rust-cargo
+          - dotnet-test
+          - generic-shell
+          - generic-http
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/agent-runtimes/${{ matrix.template }}
+          file: docker/agent-runtimes/${{ matrix.template }}/Dockerfile
+          push: false
+          load: true
+          tags: agent-runtime-${{ matrix.template }}:v1
+          # GitHub Actions cache backend: each template caches its own
+          # layers under a key derived from the matrix value.
+          cache-from: type=gha,scope=runtime-${{ matrix.template }}
+          cache-to: type=gha,mode=max,scope=runtime-${{ matrix.template }}
+
+      - name: Image smoke (the catalog claims WORKDIR=/workspace)
+        run: |
+          docker run --rm --entrypoint pwd agent-runtime-${{ matrix.template }}:v1 \
+            | tee /tmp/pwd.txt
+          test "$(cat /tmp/pwd.txt)" = "/workspace"
+
+  # Final aggregator job so branch protection can require a single
+  # check ("Build runtime templates / summary") instead of fourteen.
+  summary:
+    name: summary
+    runs-on: ubuntu-latest
+    needs: build
+    if: always()
+    steps:
+      - name: Aggregate
+        run: |
+          if [ "${{ needs.build.result }}" = "success" ]; then
+            echo "All 14 runtime templates built successfully."
+          else
+            echo "At least one runtime template build failed: ${{ needs.build.result }}"
+            exit 1
+          fi

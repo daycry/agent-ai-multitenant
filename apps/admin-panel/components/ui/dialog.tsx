@@ -14,13 +14,24 @@ import { cn } from "@/lib/utils";
  * via aria-modal. If we hit accessibility issues we'll swap in Radix.
  */
 
+export type DialogSize = "sm" | "md" | "lg" | "xl" | "2xl";
+
 interface DialogProps {
   open: boolean;
   onOpenChange: (next: boolean) => void;
+  size?: DialogSize;
   children: React.ReactNode;
 }
 
-export function Dialog({ open, onOpenChange, children }: DialogProps) {
+const SIZE_CLASS: Record<DialogSize, string> = {
+  sm: "max-w-md",
+  md: "max-w-xl",
+  lg: "max-w-2xl",
+  xl: "max-w-3xl",
+  "2xl": "max-w-4xl",
+};
+
+export function Dialog({ open, onOpenChange, size = "lg", children }: DialogProps) {
   React.useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -41,7 +52,7 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
       }}
     >
       <div className="bg-foreground/40 absolute inset-0" aria-hidden="true" />
-      <div className="relative z-10 w-full max-w-md">{children}</div>
+      <div className={cn("relative z-10 w-full", SIZE_CLASS[size])}>{children}</div>
     </div>
   );
 }
@@ -63,7 +74,11 @@ DialogContent.displayName = "DialogContent";
 
 export const DialogHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
-    <div ref={ref} className={cn("flex flex-col gap-1 border-b p-4", className)} {...props} />
+    <div
+      ref={ref}
+      className={cn("flex flex-col gap-1.5 border-b px-6 py-5", className)}
+      {...props}
+    />
   ),
 );
 DialogHeader.displayName = "DialogHeader";
@@ -88,7 +103,7 @@ export const DialogBody = React.forwardRef<HTMLDivElement, React.HTMLAttributes<
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn("flex flex-col gap-3 overflow-y-auto p-4", className)}
+      className={cn("flex flex-col gap-4 overflow-y-auto px-6 py-5", className)}
       {...props}
     />
   ),
@@ -99,7 +114,7 @@ export const DialogFooter = React.forwardRef<HTMLDivElement, React.HTMLAttribute
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn("flex flex-row items-center justify-end gap-2 border-t p-4", className)}
+      className={cn("flex flex-row items-center justify-end gap-2 border-t px-6 py-4", className)}
       {...props}
     />
   ),

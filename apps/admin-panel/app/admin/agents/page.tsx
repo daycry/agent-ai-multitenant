@@ -1,11 +1,29 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { Bot } from "lucide-react";
+import { useState } from "react";
+import Link from "next/link";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Bot, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { Breadcrumb } from "@/components/layout/breadcrumb";
+import { Home } from "lucide-react";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
+import { ProjectCombobox } from "@/components/ui/project-combobox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useLang, type Lang } from "@/lib/lang-context";
@@ -67,38 +85,48 @@ function AgentList({
       {agents.map((agent) => {
         const snippet = promptIn(agent, lang);
         return (
-          <Card key={agent.id} data-testid={`agent-${agent.id}`}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-base">{agent.name}</CardTitle>
-              <Badge variant={SCOPE_BADGE[agent.scope] ?? "muted"}>
-                {SCOPE_LABEL[agent.scope] ?? agent.scope}
-              </Badge>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-2">
-              <p className="text-muted-foreground text-xs">
-                <span className="font-medium">Role:</span> {agent.role}
-                {agent.agent_type !== "ai" && (
-                  <span className="ml-2 italic">({agent.agent_type})</span>
+          <Link
+            key={agent.id}
+            href={`/admin/agents/${agent.id}`}
+            data-testid={`agent-link-${agent.id}`}
+            className="block"
+          >
+            <Card
+              data-testid={`agent-${agent.id}`}
+              className="hover:border-primary/40 h-full cursor-pointer transition-colors"
+            >
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-base">{agent.name}</CardTitle>
+                <Badge variant={SCOPE_BADGE[agent.scope] ?? "muted"}>
+                  {SCOPE_LABEL[agent.scope] ?? agent.scope}
+                </Badge>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-2">
+                <p className="text-muted-foreground text-xs">
+                  <span className="font-medium">Role:</span> {agent.role}
+                  {agent.agent_type !== "ai" && (
+                    <span className="ml-2 italic">({agent.agent_type})</span>
+                  )}
+                </p>
+                {agent.description && <p className="text-sm">{agent.description}</p>}
+                {snippet && (
+                  <div
+                    className="bg-muted/40 rounded-md border p-2 text-xs"
+                    data-testid={`prompt-${agent.id}`}
+                    data-lang={lang}
+                  >
+                    <p className="text-muted-foreground mb-1 text-[10px] font-semibold uppercase tracking-wide">
+                      System prompt · {lang}
+                    </p>
+                    <p className="text-foreground/90 leading-snug">{snippet}</p>
+                  </div>
                 )}
-              </p>
-              {agent.description && <p className="text-sm">{agent.description}</p>}
-              {snippet && (
-                <div
-                  className="bg-muted/40 rounded-md border p-2 text-xs"
-                  data-testid={`prompt-${agent.id}`}
-                  data-lang={lang}
-                >
-                  <p className="text-muted-foreground mb-1 text-[10px] font-semibold uppercase tracking-wide">
-                    System prompt · {lang}
-                  </p>
-                  <p className="text-foreground/90 leading-snug">{snippet}</p>
-                </div>
-              )}
-              {agent.forked_from_agent_id && (
-                <p className="text-muted-foreground text-xs italic">Forked from another agent</p>
-              )}
-            </CardContent>
-          </Card>
+                {agent.forked_from_agent_id && (
+                  <p className="text-muted-foreground text-xs italic">Forked from another agent</p>
+                )}
+              </CardContent>
+            </Card>
+          </Link>
         );
       })}
     </div>
@@ -107,6 +135,9 @@ function AgentList({
 
 export default function AgentsCatalogPage() {
   const { lang } = useLang();
+  const queryClient = useQueryClient();
+  const [newOpen, setNewOpen] = useState(false);
+
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["agents", "list"],
     queryFn: () => apiFetch<Agent[]>("/agents"),
@@ -119,10 +150,30 @@ export default function AgentsCatalogPage() {
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <Breadcrumb
+        items={[
+          { label: "Inicio", href: "/admin", icon: <Home className="h-3.5 w-3.5" /> },
+          { label: "Agentes" },
+        ]}
+      />
       <PageHeader
         icon={<Bot className="h-6 w-6 sm:h-7 sm:w-7" />}
         title="Catálogo de agentes"
         description="Built-ins de la plataforma, plantillas de tu tenant y agentes locales de proyecto."
+        actions={
+          <Button onClick={() => setNewOpen(true)} data-testid="new-agent-button">
+            <Plus className="mr-1 h-4 w-4" />
+            Nuevo agente
+          </Button>
+        }
+      />
+      <NewAgentDialog
+        open={newOpen}
+        onOpenChange={setNewOpen}
+        onCreated={() => {
+          void queryClient.invalidateQueries({ queryKey: ["agents", "list"] });
+          setNewOpen(false);
+        }}
       />
 
       {isLoading && (
@@ -177,5 +228,206 @@ export default function AgentsCatalogPage() {
         </Tabs>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// New Agent dialog (Plan 06.6 task_06_6_06)
+// ---------------------------------------------------------------------------
+
+const ROLE_OPTIONS = [
+  "project_manager",
+  "architect",
+  "backend_dev",
+  "frontend_dev",
+  "qa",
+  "reviewer",
+  "leader",
+  "worker",
+  "specialist",
+  "researcher",
+  "devops",
+  "security",
+  "technical_writer",
+];
+
+interface NewAgentRequest {
+  name: string;
+  description: string | null;
+  role: string;
+  system_prompt: string;
+  scope: "global_tenant_template" | "project_local";
+  project_id: string | null;
+}
+
+function NewAgentDialog({
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [role, setRole] = useState("backend_dev");
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [scope, setScope] = useState<"global_tenant_template" | "project_local">(
+    "global_tenant_template",
+  );
+  const [projectId, setProjectId] = useState("");
+
+  const mutation = useMutation<Agent, ApiError, NewAgentRequest>({
+    mutationFn: (payload) =>
+      apiFetch<Agent>("/agents", {
+        method: "POST",
+        body: payload,
+      }),
+    onSuccess: () => {
+      // Reset for next opening.
+      setName("");
+      setDescription("");
+      setSystemPrompt("");
+      setProjectId("");
+      onCreated();
+    },
+  });
+
+  const submitDisabled =
+    !name.trim() ||
+    !systemPrompt.trim() ||
+    (scope === "project_local" && !projectId.trim()) ||
+    mutation.isPending;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Nuevo agente</DialogTitle>
+          <DialogDescription>
+            Crea una plantilla del tenant (reutilizable en todos los proyectos) o un agente local de
+            un proyecto específico.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="na-name">Nombre</Label>
+              <Input
+                id="na-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                data-testid="new-agent-name"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="na-role">Role</Label>
+              <select
+                id="na-role"
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+                className="border-input bg-background rounded-md border px-3 py-2 text-sm"
+                data-testid="new-agent-role"
+              >
+                {ROLE_OPTIONS.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Descripción</Label>
+            <MarkdownTextarea
+              value={description}
+              onChange={setDescription}
+              rows={3}
+              data-testid="new-agent-description"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>System prompt</Label>
+            <MarkdownTextarea
+              value={systemPrompt}
+              onChange={setSystemPrompt}
+              rows={6}
+              data-testid="new-agent-system-prompt"
+            />
+          </div>
+
+          <fieldset className="flex flex-col gap-2">
+            <legend className="text-sm font-medium">Scope</legend>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="radio"
+                name="scope"
+                checked={scope === "global_tenant_template"}
+                onChange={() => setScope("global_tenant_template")}
+                data-testid="new-agent-scope-template"
+              />
+              Plantilla del tenant (reutilizable)
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="radio"
+                name="scope"
+                checked={scope === "project_local"}
+                onChange={() => setScope("project_local")}
+                data-testid="new-agent-scope-local"
+              />
+              Local de un proyecto (requiere project_id)
+            </label>
+          </fieldset>
+
+          {scope === "project_local" && (
+            <div className="flex flex-col gap-1.5">
+              <Label>Proyecto</Label>
+              <ProjectCombobox
+                value={projectId || null}
+                onChange={(id) => setProjectId(id ?? "")}
+                data-testid="new-agent-project-id"
+              />
+              <p className="text-muted-foreground text-xs">
+                Sólo tus proyectos del tenant — escribe para buscar entre ellos.
+              </p>
+            </div>
+          )}
+
+          {mutation.isError && (
+            <p
+              className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
+              data-testid="new-agent-error"
+            >
+              {mutation.error?.message ?? "Error al crear"}
+            </p>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancelar
+          </Button>
+          <Button
+            disabled={submitDisabled}
+            onClick={() =>
+              mutation.mutate({
+                name: name.trim(),
+                description: description.trim() || null,
+                role,
+                system_prompt: systemPrompt,
+                scope,
+                project_id: scope === "project_local" ? projectId.trim() : null,
+              })
+            }
+            data-testid="new-agent-submit"
+          >
+            {mutation.isPending ? "Creando…" : "Crear"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

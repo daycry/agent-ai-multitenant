@@ -246,12 +246,50 @@ class PlatformSetting(Base, TimestampMixin):
         return f"PlatformSetting(key={self.key!r})"
 
 
+# ---------------------------------------------------------------------------
+# Tenant-level settings (Plan 06.7 task_06_7_01)
+# ---------------------------------------------------------------------------
+class TenantSetting(Base):
+    """Generic per-tenant key/value config table with category dimension.
+
+    Replaces the "one column on organizations per feature" pattern.
+    The registry of *known* (category, key) pairs lives in code
+    (``api_server.settings_registry``); the DB stores only values
+    the tenant has actually configured. Reads fall back to the
+    registry's default when the row is missing.
+
+    PK is ``(tenant_id, category, key)`` so two tenants can hold the
+    same setting independently and a single tenant can hold many
+    settings across categories.
+    """
+
+    __tablename__ = "tenant_settings"
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    category: Mapped[str] = mapped_column(String(64), primary_key=True)
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return f"TenantSetting(tenant={self.tenant_id} {self.category}.{self.key})"
+
+
 __all__ = [
     "AuditAction",
     "AuditLog",
     "Organization",
     "PlatformSetting",
     "Session",
+    "TenantSetting",
     "User",
     "UserOrganizationMembership",
     "UserRole",

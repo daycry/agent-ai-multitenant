@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,12 +77,26 @@ async def _verify_agent_visible(session: AsyncSession, agent_id: UUID) -> Agent:
 # ---------------------------------------------------------------------------
 @router.get("", response_model=list[TeamResponse])
 async def list_teams(
+    q: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Case-insensitive substring match on team name (used by the TeamCombobox).",
+    ),
+    limit: int = Query(
+        default=100,
+        ge=1,
+        le=500,
+        description="Max teams returned. Small for typeahead, default 100 for the listing page.",
+    ),
     _: AuthPrincipal = Depends(get_principal),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[TeamResponse]:
-    teams_res = await session.execute(
-        select(Team).where(Team.deleted_at.is_(None)).order_by(Team.created_at)
-    )
+    stmt = select(Team).where(Team.deleted_at.is_(None))
+    if q is not None:
+        stmt = stmt.where(Team.name.ilike(f"%{q}%"))
+    stmt = stmt.order_by(Team.created_at).limit(limit)
+    teams_res = await session.execute(stmt)
     teams = list(teams_res.scalars().all())
 
     if not teams:

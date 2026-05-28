@@ -13,12 +13,13 @@ mirar en la UI, criterios de pass/fail.
 
 ## Índice
 
-| Plan                                  | Tests humanos         | Guía                                                                         |
-| ------------------------------------- | --------------------- | ---------------------------------------------------------------------------- |
-| Plan 02 — Ejecución de agentes        | 5 (`human_02_01..05`) | [`../run-demo-human-tests.md`](../run-demo-human-tests.md) (pendiente split) |
-| Plan 04 — Memoria, RAG, KBs           | 5 (`human_04_01..05`) | [`../run-demo-human-tests.md`](../run-demo-human-tests.md) (pendiente split) |
-| Plan 04.5 — Agent-runtime integration | 2 demos               | [`../run-demo-human-tests.md`](../run-demo-human-tests.md) (pendiente split) |
-| **Plan 05 — MCP y Tools avanzadas**   | 3 (`human_05_01..03`) | [`05-mcp-tools-avanzadas.md`](./05-mcp-tools-avanzadas.md)                   |
+| Plan                                  | Tests humanos          | Guía                                                                         |
+| ------------------------------------- | ---------------------- | ---------------------------------------------------------------------------- |
+| Plan 02 — Ejecución de agentes        | 5 (`human_02_01..05`)  | [`../run-demo-human-tests.md`](../run-demo-human-tests.md) (pendiente split) |
+| Plan 04 — Memoria, RAG, KBs           | 5 (`human_04_01..05`)  | [`../run-demo-human-tests.md`](../run-demo-human-tests.md) (pendiente split) |
+| Plan 04.5 — Agent-runtime integration | 2 demos                | [`../run-demo-human-tests.md`](../run-demo-human-tests.md) (pendiente split) |
+| Plan 05 — MCP y Tools avanzadas       | 3 (`human_05_01..03`)  | [`05-mcp-tools-avanzadas.md`](./05-mcp-tools-avanzadas.md)                   |
+| **Plan 06 — Testing + Git ciclo**     | 12 (`human_06_01..12`) | [`06-testing-revision-git.md`](./06-testing-revision-git.md)                 |
 
 > El `run-demo-human-tests.md` de la raíz de guides acumula los Plans
 > 02 / 04 / 04.5 históricamente en un único documento. La migración a
