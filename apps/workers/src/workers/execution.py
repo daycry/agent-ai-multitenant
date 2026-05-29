@@ -88,6 +88,13 @@ class ExecutionRequest:
     task: dict[str, Any]
     model: dict[str, Any]
     budgets: dict[str, Any] | None = None
+    # The active chat mode's tool whitelist (`ChatModeConfig.allowed_tools`,
+    # task_06_14_07). ``None`` = no restriction (every registered tool
+    # callable). A list — including an empty one — installs the allowlist;
+    # the agent-runtime's ToolRegistry then rejects any tool outside it at
+    # call time. We keep ``None`` distinct from ``[]`` so the "block every
+    # tool" discussion mode is expressible.
+    allowed_tools: list[str] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict — the Celery payload the orchestrator sends."""
@@ -98,6 +105,7 @@ class ExecutionRequest:
             "task": self.task,
             "model": self.model,
             "budgets": self.budgets,
+            "allowed_tools": self.allowed_tools,
         }
 
     @classmethod
@@ -110,6 +118,7 @@ class ExecutionRequest:
             task=raw["task"],
             model=raw["model"],
             budgets=raw.get("budgets"),
+            allowed_tools=raw.get("allowed_tools"),
         )
 
 
@@ -153,6 +162,11 @@ def _agent_spec(
     # With a policy the loop gates sensitive tool calls (task_02_33).
     if approval_policy:
         spec["approval_policy"] = approval_policy
+    # Forward the chat mode's tool allowlist (task_06_14_07). Only emit the
+    # key when set — `None` means "no key", which the runtime reads as "no
+    # restriction". An empty list IS emitted (block every tool).
+    if request.allowed_tools is not None:
+        spec["allowed_tools"] = request.allowed_tools
     return spec
 
 

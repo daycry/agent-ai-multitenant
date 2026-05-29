@@ -67,8 +67,11 @@ class CustomChatMode(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixi
     label_en: Mapped[str] = mapped_column(String(120), nullable=False)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
 
-    # JSONB array of tool names; defaults to []. The agent loop's
-    # pre_tool guardrail enforces this whitelist.
+    # JSONB array of tool names; defaults to []. The worker forwards this
+    # whitelist to the agent-runtime task spec; the runtime's ToolRegistry
+    # enforces it at tool-call time — a tool outside the set is rejected
+    # before it runs (task_06_14_07). The full layered guardrail engine
+    # (pre_llm / post_llm / pre_tool / post_tool) lands in Plan 11.
     allowed_tools: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
