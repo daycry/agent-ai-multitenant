@@ -55,6 +55,7 @@ from api_server.schemas.agents import (
     AgentMergeRequest,
     AgentResponse,
     AgentUpdateRequest,
+    GrantKBRequest,
     to_agent_response,
 )
 
@@ -532,25 +533,13 @@ async def list_agent_kbs(
 )
 async def grant_kb_to_agent(
     agent_id: UUID,
-    payload: dict[str, str],
+    payload: GrantKBRequest,
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> dict[str, object]:
     """Grant a KB to the agent. Re-granting is a no-op (idempotent)."""
     tenant_id = require_tenant_id(principal)
-    kb_id_str = payload.get("kb_id")
-    if not kb_id_str:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="body must include 'kb_id'",
-        )
-    try:
-        kb_id = UUID(str(kb_id_str))
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="kb_id is not a valid UUID",
-        ) from exc
+    kb_id = payload.kb_id
 
     agent = await _load_writable_agent_for_kb(session, agent_id, principal)
 

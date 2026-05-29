@@ -111,18 +111,25 @@ class MCPTool:
 
 @dataclass(frozen=True)
 class MCPToolResult:
-    """One tool's response. Mirrors the shape of MCP's `CallToolResult`."""
+    """One tool's response. Mirrors the shape of MCP's `CallToolResult`.
+
+    Deliberately does NOT keep the untrusted raw JSON-RPC payload
+    (mcp-tools-3): the old `raw` field carried the server's full
+    `model_dump()` — multimedia content blocks and internal server
+    metadata — yet nothing in the codebase ever read it. Persisting or
+    logging a ToolResult would have leaked that untrusted blob, so it is
+    dropped. If a future caller genuinely needs the raw payload, add it
+    back behind an explicit, filtered accessor rather than a default
+    field that silently rides along.
+    """
 
     # Concatenated text content from all `content` blocks of type text.
-    # Multimedia (image, resource) blocks land in `raw` for now.
+    # Multimedia (image, resource) blocks are intentionally dropped.
     content: str
     # True when the server flipped `isError=True` in the response.
     # `MCPClient.call_tool` raises MCPToolError when this is True,
-    # so callers don't normally see this field — but the raw result
-    # is here for debugging.
+    # so callers don't normally see this field.
     is_error: bool = False
-    # Untouched JSON-RPC payload — for callers that need media etc.
-    raw: dict[str, Any] = field(default_factory=dict)
 
 
 __all__ = [

@@ -33,6 +33,7 @@ from api_server.auth.deps import (
 )
 from api_server.config import get_settings
 from api_server.db.models import AuditAction, Organization, User
+from api_server.logging import get_logger
 from api_server.schemas.admin import (
     ServiceHealth,
     SystemHealthResponse,
@@ -53,6 +54,8 @@ from api_server.schemas.admin import (
 # se cancelaba por timeout, lo que dejaba la sesión en pending-rollback
 # y rompía el siguiente request del mismo handler en la sesión de tests.
 _PROBE_TIMEOUT_S = 5.0
+
+_logger = get_logger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -247,8 +250,29 @@ async def list_users(
 #   ollama                                     Plan 04 task_04_14 (externo)
 #   egress-proxy                               Plan 02 task_02_35 / ADR 0019
 # ---------------------------------------------------------------------------
-def _truncate(detail: str, max_len: int = 200) -> str:
-    return detail if len(detail) <= max_len else detail[: max_len - 1] + "…"
+def _safe_detail(name: str, exc: BaseException) -> str:
+    """Map a probe failure to a generic, client-safe `detail` while
+    logging the full exception server-side (error-obs-logging-6).
+
+    The /admin/system-health response is consumed by dashboards and
+    monitoring; the raw exception text can leak internal topology (the
+    Postgres schema/role in a permission error, the Vault URL structure,
+    a clamav socket path). We surface only the failure *class* and keep
+    the diagnostics in the logs, which stay behind the server boundary.
+    """
+    _logger.warning(
+        "system_health.probe_failed",
+        service=name,
+        error_type=type(exc).__name__,
+        error=str(exc),
+    )
+    # NB: in Python 3.11+ `asyncio.TimeoutError is TimeoutError`, and
+    # `ConnectionError` subclasses `OSError` — the bases below cover both.
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, OSError):
+        return "connection failed"
+    return "probe failed"
 
 
 async def _check_postgres(session: AsyncSession) -> ServiceHealth:
@@ -263,7 +287,7 @@ async def _check_postgres(session: AsyncSession) -> ServiceHealth:
         # leaks into the next request through the connection pool.
         with contextlib.suppress(Exception):
             await session.rollback()
-        return ServiceHealth(name="postgres", status="down", detail=_truncate(str(exc)))
+        return ServiceHealth(name="postgres", status="down", detail=_safe_detail("postgres", exc))
 
 
 async def _check_redis(redis: Redis) -> ServiceHealth:
@@ -271,7 +295,7 @@ async def _check_redis(redis: Redis) -> ServiceHealth:
         await asyncio.wait_for(redis.ping(), timeout=_PROBE_TIMEOUT_S)
         return ServiceHealth(name="redis", status="ok")
     except Exception as exc:
-        return ServiceHealth(name="redis", status="down", detail=_truncate(str(exc)))
+        return ServiceHealth(name="redis", status="down", detail=_safe_detail("redis", exc))
 
 
 async def _check_http_ok(name: str, url: str) -> ServiceHealth:
@@ -283,9 +307,11 @@ async def _check_http_ok(name: str, url: str) -> ServiceHealth:
             r = await client.get(url)
         if r.status_code == 200:
             return ServiceHealth(name=name, status="ok")
+        # HTTP status codes are not sensitive — they're a coarse, public
+        # signal of upstream health, unlike raw exception text.
         return ServiceHealth(name=name, status="degraded", detail=f"HTTP {r.status_code}")
     except Exception as exc:
-        return ServiceHealth(name=name, status="down", detail=_truncate(str(exc)))
+        return ServiceHealth(name=name, status="down", detail=_safe_detail(name, exc))
 
 
 async def _check_tcp(name: str, host: str, port: int) -> ServiceHealth:
@@ -298,7 +324,7 @@ async def _check_tcp(name: str, host: str, port: int) -> ServiceHealth:
         )
         return ServiceHealth(name=name, status="ok")
     except Exception as exc:
-        return ServiceHealth(name=name, status="down", detail=_truncate(str(exc)))
+        return ServiceHealth(name=name, status="down", detail=_safe_detail(name, exc))
     finally:
         if writer is not None:
             writer.close()

@@ -157,6 +157,9 @@ async def test_stdio_list_tools_then_call(stdio_config: MCPServerConfig) -> None
         echoed = await session.call_tool("echo", {"text": "hello"})
         assert "hello" in echoed.content
         assert echoed.is_error is False
+        # mcp-tools-3: the untrusted raw JSON-RPC payload is no longer
+        # retained on the result.
+        assert not hasattr(echoed, "raw")
 
         # `add` round-trip — server returns the sum as text
         summed = await session.call_tool("add", {"a": 2, "b": 3})

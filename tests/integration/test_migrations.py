@@ -79,6 +79,16 @@ def _policies(dsn: str) -> set[tuple[str, str]]:
     return {(r[0], r[1]) for r in rows}
 
 
+def _indexes(dsn: str) -> set[str]:
+    rows = asyncio.run(
+        _fetch_all(
+            dsn,
+            "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'",
+        )
+    )
+    return {r[0] for r in rows}
+
+
 EXPECTED_TABLES = {
     "organizations",
     "users",
@@ -157,3 +167,37 @@ def test_upgrade_downgrade_upgrade_is_idempotent(alembic_config, admin_pg_dsn: s
 
     enabled = _rls_enabled_tables(admin_pg_dsn)
     assert enabled >= EXPECTED_RLS_TABLES, "RLS state not restored after round-trip"
+
+
+# ---------------------------------------------------------------------------
+# task_06_14_15 — FK index cleanup migration (0031, db-models-migrations-3/4)
+# ---------------------------------------------------------------------------
+_FK_CLEANUP_INDEXES = {"ix_projects_team_id", "ix_review_sessions_plan_status"}
+
+
+def test_fk_cleanup_indexes_created_at_head(alembic_config, admin_pg_dsn: str) -> None:
+    command.upgrade(alembic_config, "head")
+    indexes = _indexes(admin_pg_dsn)
+    missing = _FK_CLEANUP_INDEXES - indexes
+    assert not missing, f"head is missing the FK cleanup indexes: {missing}"
+    # The pre-existing simple index on review_sessions.plan_id stays.
+    assert "ix_review_sessions_plan_id" in indexes
+
+
+def test_fk_cleanup_migration_is_reversible(alembic_config, admin_pg_dsn: str) -> None:
+    """`upgrade head` then `downgrade -1` drops exactly the two new
+    indexes and nothing else — the migration is cleanly reversible."""
+    command.upgrade(alembic_config, "head")
+    assert _indexes(admin_pg_dsn) >= _FK_CLEANUP_INDEXES
+
+    command.downgrade(alembic_config, "-1")
+    after = _indexes(admin_pg_dsn)
+    leaked = _FK_CLEANUP_INDEXES & after
+    assert not leaked, f"downgrade -1 left the new indexes behind: {leaked}"
+    # The sibling indexes from earlier migrations survive the downgrade.
+    assert "ix_projects_tenant_id" in after
+    assert "ix_review_sessions_plan_id" in after
+
+    # Re-upgrading restores them (idempotent round-trip).
+    command.upgrade(alembic_config, "head")
+    assert _indexes(admin_pg_dsn) >= _FK_CLEANUP_INDEXES

@@ -59,7 +59,11 @@ _COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
 _COPILOT_API = "https://api.githubcopilot.com"
 
 # Re-mint the JWT once it has under this many seconds of life left.
-_JWT_REFRESH_MARGIN_S = 60.0
+# 120s (was 60s) buys headroom on high-latency / proxied networks where
+# the mint round-trip itself can take 10-30s: with the old 60s margin a
+# token that had exactly 60s left when the call started could expire
+# in-flight (llm-providers-7). Override per-instance via the constructor.
+_JWT_REFRESH_MARGIN_S = 120.0
 
 
 @dataclass
@@ -82,14 +86,20 @@ class CopilotProvider:
         github_token: str | None = None,
         timeout: float = 60.0,
         http_client: httpx.AsyncClient | None = None,
+        jwt_refresh_margin_s: float = _JWT_REFRESH_MARGIN_S,
     ) -> None:
         """Initialise the provider.
 
         `github_token` is the long-lived OAuth token (`gho_*` / `ghu_*`)
         the device flow returns. If you don't have one yet, leave it
         None and call `authenticate_interactive()` first.
+
+        `jwt_refresh_margin_s` is how early (seconds before expiry) the
+        minted Copilot JWT is pre-emptively re-minted. Defaults to 120s;
+        raise it further on very high-latency links.
         """
         self._github_token = github_token
+        self._jwt_refresh_margin_s = jwt_refresh_margin_s
         self._jwt: str | None = None
         self._jwt_expires_at = 0.0
         if http_client is not None:
@@ -167,7 +177,7 @@ class CopilotProvider:
     # ------------------------------------------------------------------
     async def _ensure_jwt(self) -> str:
         now = time.time()
-        if self._jwt is not None and now < self._jwt_expires_at - _JWT_REFRESH_MARGIN_S:
+        if self._jwt is not None and now < self._jwt_expires_at - self._jwt_refresh_margin_s:
             return self._jwt
         if not self._github_token:
             raise AuthError("no GitHub token — run authenticate_interactive() first")

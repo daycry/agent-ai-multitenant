@@ -95,10 +95,12 @@ function ApprovalCard({ request }: { request: ApprovalRequest }) {
         method: "POST",
         body: { approved, reason: reason.trim() || null },
       }),
-    onSuccess: () => {
+    onSuccess: async () => {
       setError(null);
-      // The resolved request drops off the pending feed.
-      return queryClient.invalidateQueries({ queryKey: ["approvals"] });
+      // The resolved request drops off the pending feed. Await the
+      // invalidation so a refetch failure surfaces here rather than as
+      // an unhandled rejection (frontend-admin-panel-7).
+      await queryClient.invalidateQueries({ queryKey: ["approvals"] });
     },
     onError: (err) => setError(err instanceof ApiError ? err.body : String(err)),
   });

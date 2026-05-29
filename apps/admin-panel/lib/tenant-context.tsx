@@ -81,9 +81,18 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     (id: string | null) => {
       setTenantIdState(id);
       persistTenantId(id);
-      // Drop every tenant-scoped query so the next read goes out
-      // with the new X-Tenant-Id header.
-      queryClient.invalidateQueries();
+      // Drop tenant-scoped queries so the next read goes out with the new
+      // X-Tenant-Id header — but NOT the queries that don't depend on the
+      // tenant (frontend-admin-panel-2). `auth` is the user identity,
+      // `admin`/`system-health` are platform-wide (BYPASSRLS) reads;
+      // wiping them on every tenant switch forces needless refetches.
+      const TENANT_INDEPENDENT_KEYS = new Set(["auth", "admin", "system-health"]);
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          !query.queryKey.some(
+            (key) => typeof key === "string" && TENANT_INDEPENDENT_KEYS.has(key),
+          ),
+      });
     },
     [queryClient],
   );

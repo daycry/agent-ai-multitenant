@@ -547,10 +547,14 @@ function ChatComposer({ disabled, onSubmit }: ChatComposerProps) {
     ? PLANNING_ROLES.filter((r) => r.startsWith(mention.query.toLowerCase()))
     : [];
 
-  const pickMention = (role: string) => {
-    if (!mention) return;
-    const before = value.slice(0, mention.start);
-    const after = value.slice(mention.start + mention.length);
+  // Take the text+mention to operate on as explicit args rather than
+  // relying on the enclosing closure (frontend-admin-panel-4): the click
+  // handler then always splices into exactly the text that produced the
+  // visible suggestion list, with no chance of reading a stale `value`.
+  const pickMention = (role: string, currentValue: string, target = mention) => {
+    if (!target) return;
+    const before = currentValue.slice(0, target.start);
+    const after = currentValue.slice(target.start + target.length);
     setValue(`${before}@${role} ${after}`);
   };
 
@@ -589,7 +593,7 @@ function ChatComposer({ disabled, onSubmit }: ChatComposerProps) {
               <button
                 type="button"
                 data-testid={`mention-suggestion-${role}`}
-                onClick={() => pickMention(role)}
+                onClick={() => pickMention(role, value, mention)}
                 className="hover:bg-muted w-full px-3 py-1 text-left text-sm"
               >
                 @{role}

@@ -22,7 +22,7 @@ from api_server.auth.deps import (
     require_tenant_admin,
     require_tenant_member,
 )
-from api_server.db.domain import Project, Team
+from api_server.db.domain import Project, ProjectStatus, Team
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -55,7 +55,14 @@ async def _verify_team_visible(session: AsyncSession, team_id: UUID) -> None:
 # ---------------------------------------------------------------------------
 @router.get("", response_model=list[ProjectResponse])
 async def list_projects(
-    status_: str | None = Query(default=None, alias="status"),
+    status_: ProjectStatus | None = Query(
+        default=None,
+        alias="status",
+        description=(
+            "Filter by project status. Validated against the ProjectStatus "
+            "enum (422 on an unknown value), matching the POST/PUT contract."
+        ),
+    ),
     team_id: UUID | None = Query(default=None),
     include_templates: bool = Query(
         default=False,

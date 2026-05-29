@@ -168,7 +168,10 @@ services:
   # `chunks`. Self-contained Python service; no DB, no Redis.
   # ---------------------------------------------------------------------------
   docling-serve:
-    image: ghcr.io/docling-project/docling-serve:latest
+    # Pinned (no :latest) for reproducible builds + supply-chain hygiene
+    # (container-isolation-4). Bump deliberately after verifying the
+    # /v1/convert contract still matches the ingestion worker.
+    image: ghcr.io/docling-project/docling-serve:v1.20.0
     environment:
       # Open API surface: parse + structured chunks. Whisper is
       # included; audio just routes through the same /v1/convert API

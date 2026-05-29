@@ -130,7 +130,7 @@ async def test_jwt_is_cached_until_close_to_expiry() -> None:
             mint_calls += 1
             return httpx.Response(
                 200,
-                # 30 min TTL; refresh margin is 60s, so we have ~29 min.
+                # 30 min TTL; refresh margin is 120s, so we have ~28 min.
                 json={"token": "jwt-xyz", "expires_at": time.time() + 1800},
             )
         return httpx.Response(
@@ -150,7 +150,8 @@ async def test_jwt_is_cached_until_close_to_expiry() -> None:
 
 @pytest.mark.asyncio
 async def test_jwt_is_remined_when_inside_refresh_margin() -> None:
-    """When the JWT has under 60s of life left, the next call mints again."""
+    """When the JWT has under the refresh margin of life left, the next
+    call mints again."""
     mint_calls = 0
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -160,7 +161,7 @@ async def test_jwt_is_remined_when_inside_refresh_margin() -> None:
             mint_calls += 1
             return httpx.Response(
                 200,
-                # Expires in 30s — strictly within the 60s refresh margin.
+                # Expires in 30s — strictly within the 120s refresh margin.
                 json={"token": f"jwt-{mint_calls}", "expires_at": time.time() + 30},
             )
         return httpx.Response(
@@ -176,6 +177,42 @@ async def test_jwt_is_remined_when_inside_refresh_margin() -> None:
     await p.complete([Message(role="user", content="hi")])
     await p.complete([Message(role="user", content="hi again")])
     assert mint_calls == 2, "JWT inside the refresh margin should be re-minted"
+
+
+@pytest.mark.asyncio
+async def test_jwt_refresh_margin_is_configurable() -> None:
+    """A custom (wide) margin re-mints a token that the default 120s would
+    still have cached (llm-providers-7)."""
+    mint_calls = 0
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        nonlocal mint_calls
+        url = str(req.url)
+        if url.endswith("/copilot_internal/v2/token"):
+            mint_calls += 1
+            return httpx.Response(
+                200,
+                # 200s TTL: outside the default 120s margin (would cache)
+                # but inside the 300s margin set below (forces re-mint).
+                json={"token": f"jwt-{mint_calls}", "expires_at": time.time() + 200},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "model": "gpt-4o",
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {},
+            },
+        )
+
+    p = CopilotProvider(
+        github_token="gho_test",
+        http_client=_mock_client(handler),
+        jwt_refresh_margin_s=300.0,
+    )
+    await p.complete([Message(role="user", content="hi")])
+    await p.complete([Message(role="user", content="hi again")])
+    assert mint_calls == 2, "a wide refresh margin should force a re-mint"
 
 
 # ---------------------------------------------------------------------------
