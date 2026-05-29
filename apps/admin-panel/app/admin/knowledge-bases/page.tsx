@@ -13,7 +13,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Home, Library, Pencil, Plus, Share2, Tag, Trash2 } from "lucide-react";
+import { ChevronRight, Home, Library, Pencil, Plus, Share2, Tag, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
@@ -33,6 +33,7 @@ import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 
 import { KbAssignmentsDialog } from "./kb-assignments-dialog";
+import { KbDocumentsPanel } from "./kb-documents-panel";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { ProjectCombobox } from "@/components/ui/project-combobox";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -307,15 +308,28 @@ function KbRow({
   onGrant: () => void;
   onShowAssignments: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+
   return (
     <Card data-testid={`kb-${kb.id}`}>
       <CardHeader className="flex flex-row items-start justify-between gap-3 pb-2">
-        <div className="min-w-0 flex-1">
-          <CardTitle className="text-base">{kb.name}</CardTitle>
-          <p className="text-muted-foreground mt-1 font-mono text-xs">
-            embedding: {kb.embedding_model_id}
-          </p>
-        </div>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="flex min-w-0 flex-1 items-start gap-2 text-left"
+          data-testid={`kb-toggle-docs-${kb.id}`}
+          aria-expanded={expanded}
+        >
+          <ChevronRight
+            className={`mt-1 h-4 w-4 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
+          />
+          <span className="min-w-0">
+            <CardTitle className="text-base">{kb.name}</CardTitle>
+            <span className="text-muted-foreground mt-1 block font-mono text-xs">
+              embedding: {kb.embedding_model_id}
+            </span>
+          </span>
+        </button>
         <Button
           variant="outline"
           size="sm"
@@ -352,8 +366,13 @@ function KbRow({
         </RoleGuard>
       </CardHeader>
       {kb.description && (
-        <CardContent>
+        <CardContent className="pb-2">
           <div className="text-sm">{renderPlanDraft(kb.description)}</div>
+        </CardContent>
+      )}
+      {expanded && (
+        <CardContent className="pt-0">
+          <KbDocumentsPanel kbId={kb.id} />
         </CardContent>
       )}
     </Card>
@@ -481,9 +500,9 @@ function KbCreateDialog({
           <DialogHeader>
             <DialogTitle>Crear Knowledge Base</DialogTitle>
             <DialogDescription>
-              Una KB es un contenedor de documentos indexados. Tras crearla, dale acceso (grant) a
-              los proyectos que la consumirán y sube documentos desde su sub-sección dentro del
-              proyecto.
+              Una KB es un contenedor de documentos indexados. Tras crearla, despliégala en esta
+              misma lista para subir documentos, y dale acceso (grant) a los proyectos o agentes que
+              la consumirán.
             </DialogDescription>
           </DialogHeader>
           <DialogBody className="space-y-3">

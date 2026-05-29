@@ -123,8 +123,9 @@ export function KbAssignmentsDialog({
 
           {isEmpty && (
             <p className="text-muted-foreground text-sm" data-testid="kb-assignments-empty">
-              Esta KB no está granteada a ningún proyecto ni agente todavía. Hazlo desde el detalle
-              del proyecto / agente y vuelve.
+              Esta KB no está granteada a ningún proyecto ni agente todavía. Concédela a un proyecto
+              con el botón <strong>Grant</strong> de esta misma lista; a un agente, desde su detalle
+              (pestaña Knowledge Bases → Grant KB).
             </p>
           )}
 

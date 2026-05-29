@@ -16,7 +16,7 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Library, Trash2, UploadCloud } from "lucide-react";
+import { Library, RefreshCw, Trash2, UploadCloud } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
@@ -123,8 +123,12 @@ export default function ProjectKnowledgeBasesPage() {
         <Card className="mt-6">
           <CardContent className="py-10 text-center">
             <p className="text-muted-foreground text-sm italic" data-testid="project-kbs-empty">
-              Ninguna KB está granted a este proyecto todavía. Pide a un <code>tenant_admin</code>{" "}
-              que la grante desde el panel general.
+              Ninguna KB está granted a este proyecto todavía. Concede una desde el{" "}
+              <Link href="/admin/knowledge-bases" className="text-foreground underline not-italic">
+                panel de Knowledge Bases
+              </Link>{" "}
+              (botón <span className="not-italic">Grant</span>) — o súbele documentos directamente
+              allí desplegando la KB.
             </p>
           </CardContent>
         </Card>
@@ -234,7 +238,14 @@ function DocumentRow({
     onSuccess: onChanged,
   });
 
+  const reindexMutation = useMutation({
+    mutationFn: () =>
+      apiFetch(`/knowledge-bases/${kbId}/documents/${doc.id}/reindex`, { method: "POST" }),
+    onSuccess: onChanged,
+  });
+
   const variant = STATUS_VARIANT[doc.status];
+  const canReindex = doc.status === "failed" || doc.status === "indexed";
 
   return (
     <li
@@ -265,6 +276,18 @@ function DocumentRow({
         >
           Progreso
         </Link>
+        {canReindex ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => reindexMutation.mutate()}
+            disabled={reindexMutation.isPending}
+            data-testid={`kb-doc-reindex-${doc.id}`}
+            title="Reindexar (vuelve a procesar el documento)"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+        ) : null}
         <Button
           variant="outline"
           size="sm"
