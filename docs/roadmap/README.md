@@ -40,6 +40,7 @@ Cada archivo contiene:
 | 06.10 | [06.10-kb-categories.md](./06.10-kb-categories.md)                           | 1-2 d    | 06.9       |
 | 06.11 | [06.11-kb-ingestion-fixes.md](./06.11-kb-ingestion-fixes.md)                 | 3-4 d    | 06.10      |
 | 06.12 | [06.12-global-catalog-consistency.md](./06.12-global-catalog-consistency.md) | 2-3 d    | 06.11      |
+| 06.13 | [06.13-kb-catalog-content.md](./06.13-kb-catalog-content.md)                 | 3-5 d    | 06.12      |
 | 07    | [07-documentacion-visor.md](./07-documentacion-visor.md)                     | 3 sem    | 06         |
 | 08    | [08-sso-empresarial.md](./08-sso-empresarial.md)                             | 2-3 sem  | 00         |
 | 09    | [09-marketplace.md](./09-marketplace.md)                                     | 3-4 sem  | 05         |
