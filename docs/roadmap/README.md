@@ -22,33 +22,34 @@ Cada archivo contiene:
 
 ## Orden de Ejecución
 
-| #     | Plan                                                                     | Duración | Depende de |
-| ----- | ------------------------------------------------------------------------ | -------- | ---------- |
-| 00    | [00-fundaciones.md](./00-fundaciones.md)                                 | 3-4 sem  | —          |
-| 01    | [01-dominio-minimo.md](./01-dominio-minimo.md)                           | 4-5 sem  | 00         |
-| 02    | [02-ejecucion-agentes.md](./02-ejecucion-agentes.md)                     | 4-5 sem  | 01         |
-| 03    | [03-chat-planning-aprobacion.md](./03-chat-planning-aprobacion.md)       | 4-5 sem  | 02         |
-| 04    | [04-memoria-rag-kbs.md](./04-memoria-rag-kbs.md)                         | 4-5 sem  | 02         |
-| 04.5  | [04.5-agent-runtime-integration.md](./04.5-agent-runtime-integration.md) | 3-5 d    | 04         |
-| 05    | [05-mcp-tools-avanzadas.md](./05-mcp-tools-avanzadas.md)                 | 2-3 sem  | 04, 04.5   |
-| 06    | [06-testing-revision-git.md](./06-testing-revision-git.md)               | 4-5 sem  | 03, 05     |
-| 06.5  | [06.5-orchestrator-wiring.md](./06.5-orchestrator-wiring.md)             | 1-2 sem  | 06         |
-| 06.6  | [06.6-admin-ui-gaps.md](./06.6-admin-ui-gaps.md)                         | 3-5 d    | 06         |
-| 06.7  | [06.7-memory-dedup.md](./06.7-memory-dedup.md)                           | 2 d      | 04         |
-| 06.8  | [06.8-rbac-enforcement.md](./06.8-rbac-enforcement.md)                   | 3-5 d    | 00         |
-| 06.9  | [06.9-agent-scoped-kbs.md](./06.9-agent-scoped-kbs.md)                   | 3-4 d    | 04         |
-| 06.10 | [06.10-kb-categories.md](./06.10-kb-categories.md)                       | 1-2 d    | 06.9       |
-| 06.11 | [06.11-kb-ingestion-fixes.md](./06.11-kb-ingestion-fixes.md)             | 3-4 d    | 06.10      |
-| 07    | [07-documentacion-visor.md](./07-documentacion-visor.md)                 | 3 sem    | 06         |
-| 08    | [08-sso-empresarial.md](./08-sso-empresarial.md)                         | 2-3 sem  | 00         |
-| 09    | [09-marketplace.md](./09-marketplace.md)                                 | 3-4 sem  | 05         |
-| 10    | [10-asistente-personal.md](./10-asistente-personal.md)                   | 3-4 sem  | 06         |
-| 11    | [11-guardrails-precios.md](./11-guardrails-precios.md)                   | 3-4 sem  | 02         |
-| 12    | [12-backup-restore.md](./12-backup-restore.md)                           | 2-3 sem  | 00         |
-| 13    | [13-api-publica-webhooks.md](./13-api-publica-webhooks.md)               | 3-4 sem  | 01         |
-| 14    | [14-evals-estadisticas.md](./14-evals-estadisticas.md)                   | 3-4 sem  | 06         |
-| 15    | [15-instalador-produccion.md](./15-instalador-produccion.md)             | 4-5 sem  | todos      |
-| 16    | [16-human-agents.md](./16-human-agents.md)                               | 4-5 sem  | 06, 10, 11 |
+| #     | Plan                                                                         | Duración | Depende de |
+| ----- | ---------------------------------------------------------------------------- | -------- | ---------- |
+| 00    | [00-fundaciones.md](./00-fundaciones.md)                                     | 3-4 sem  | —          |
+| 01    | [01-dominio-minimo.md](./01-dominio-minimo.md)                               | 4-5 sem  | 00         |
+| 02    | [02-ejecucion-agentes.md](./02-ejecucion-agentes.md)                         | 4-5 sem  | 01         |
+| 03    | [03-chat-planning-aprobacion.md](./03-chat-planning-aprobacion.md)           | 4-5 sem  | 02         |
+| 04    | [04-memoria-rag-kbs.md](./04-memoria-rag-kbs.md)                             | 4-5 sem  | 02         |
+| 04.5  | [04.5-agent-runtime-integration.md](./04.5-agent-runtime-integration.md)     | 3-5 d    | 04         |
+| 05    | [05-mcp-tools-avanzadas.md](./05-mcp-tools-avanzadas.md)                     | 2-3 sem  | 04, 04.5   |
+| 06    | [06-testing-revision-git.md](./06-testing-revision-git.md)                   | 4-5 sem  | 03, 05     |
+| 06.5  | [06.5-orchestrator-wiring.md](./06.5-orchestrator-wiring.md)                 | 1-2 sem  | 06         |
+| 06.6  | [06.6-admin-ui-gaps.md](./06.6-admin-ui-gaps.md)                             | 3-5 d    | 06         |
+| 06.7  | [06.7-memory-dedup.md](./06.7-memory-dedup.md)                               | 2 d      | 04         |
+| 06.8  | [06.8-rbac-enforcement.md](./06.8-rbac-enforcement.md)                       | 3-5 d    | 00         |
+| 06.9  | [06.9-agent-scoped-kbs.md](./06.9-agent-scoped-kbs.md)                       | 3-4 d    | 04         |
+| 06.10 | [06.10-kb-categories.md](./06.10-kb-categories.md)                           | 1-2 d    | 06.9       |
+| 06.11 | [06.11-kb-ingestion-fixes.md](./06.11-kb-ingestion-fixes.md)                 | 3-4 d    | 06.10      |
+| 06.12 | [06.12-global-catalog-consistency.md](./06.12-global-catalog-consistency.md) | 2-3 d    | 06.11      |
+| 07    | [07-documentacion-visor.md](./07-documentacion-visor.md)                     | 3 sem    | 06         |
+| 08    | [08-sso-empresarial.md](./08-sso-empresarial.md)                             | 2-3 sem  | 00         |
+| 09    | [09-marketplace.md](./09-marketplace.md)                                     | 3-4 sem  | 05         |
+| 10    | [10-asistente-personal.md](./10-asistente-personal.md)                       | 3-4 sem  | 06         |
+| 11    | [11-guardrails-precios.md](./11-guardrails-precios.md)                       | 3-4 sem  | 02         |
+| 12    | [12-backup-restore.md](./12-backup-restore.md)                               | 2-3 sem  | 00         |
+| 13    | [13-api-publica-webhooks.md](./13-api-publica-webhooks.md)                   | 3-4 sem  | 01         |
+| 14    | [14-evals-estadisticas.md](./14-evals-estadisticas.md)                       | 3-4 sem  | 06         |
+| 15    | [15-instalador-produccion.md](./15-instalador-produccion.md)                 | 4-5 sem  | todos      |
+| 16    | [16-human-agents.md](./16-human-agents.md)                                   | 4-5 sem  | 06, 10, 11 |
 
 ## MVP Funcional
 
