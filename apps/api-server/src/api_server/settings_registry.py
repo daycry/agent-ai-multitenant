@@ -110,6 +110,20 @@ KNOWN_SETTINGS: dict[str, CategoryDef] = {
         external_page="/admin/settings/hourly-rate",
         settings={},
     ),
+    "sso": CategoryDef(
+        label_es="SSO empresarial",
+        icon="Shield",
+        description_es=(
+            "Inicio de sesión único (OIDC) por tenant: Azure AD, Google "
+            "Workspace, Okta, Auth0 y más. Configúralo sin tocar el login "
+            "local."
+        ),
+        # The SSO config is a bespoke CRUD form (provider templates +
+        # secret handling), not a flat key/value list — it has its own
+        # dedicated page (Plan 08 task_08_03).
+        external_page="/admin/settings/sso",
+        settings={},
+    ),
 }
 
 

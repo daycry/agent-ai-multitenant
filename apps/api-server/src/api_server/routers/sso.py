@@ -27,6 +27,7 @@ for tenant B even if an attacker forges identifiers.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 import httpx
@@ -34,14 +35,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
 
-from api_server.auth.deps import get_session_store
+from api_server.auth.deps import (
+    AuthPrincipal,
+    get_session_store,
+    get_tenant_session,
+    require_tenant_admin,
+    require_tenant_member,
+)
 from api_server.auth.jwt import encode_jwt
 from api_server.auth.sessions import SessionStore
 from api_server.auth.sso.oidc import OIDCError, OIDCFlow, OIDCUserInfo, ResolvedOIDCConfig
-from api_server.auth.sso.secrets import SSOSecretError, resolve_client_secret
+from api_server.auth.sso.secrets import SSOSecretError, encrypt_client_secret, resolve_client_secret
 from api_server.auth.sso.state_store import LoginState, OIDCStateStore, new_token
+from api_server.auth.sso.templates import list_templates
 from api_server.config import get_settings
 from api_server.db.models import (
     SSOConfiguration,
@@ -51,10 +60,22 @@ from api_server.db.models import (
     UserRole,
 )
 from api_server.db.session import get_sessionmaker
+from api_server.routers._helpers import require_tenant_id
 from api_server.routers.mcp import get_vault_resolver
 from api_server.schemas.auth import LoginResponse
+from api_server.schemas.sso import (
+    CallbackUrlResponse,
+    OIDCTemplateResponse,
+    SSOConfigResponse,
+    SSOConfigUpsertRequest,
+)
 
 router = APIRouter(prefix="/auth/sso", tags=["sso"])
+
+# `client_secret_source` discriminator values for SSOConfigResponse — the
+# UI shows "secret set" without ever seeing the value.
+_SECRET_SOURCE_VAULT = "vault"
+_SECRET_SOURCE_ENCRYPTED = "encrypted"
 
 # JIT-provisioned users have no usable password — they authenticate only
 # through the IdP. A sentinel hash that no plaintext can produce keeps
@@ -329,3 +350,238 @@ async def _jit_provision_user(tenant_uuid: UUID, userinfo: OIDCUserInfo) -> UUID
                 )
             )
         return user.id
+
+
+# ===========================================================================
+# Per-tenant OIDC config CRUD (Plan 08 task_08_03) — the Tenant-Admin UI.
+#
+# RBAC: reads need an active tenant membership (`require_tenant_member`),
+# writes need `tenant_admin` (`require_tenant_admin`). RLS: every query
+# runs on the tenant-scoped session, so tenant A's config is invisible to
+# B at the database level — a forged config id from another tenant simply
+# 404s. Secrets are NEVER echoed back: the response carries only
+# `has_client_secret` + `client_secret_source`.
+# ===========================================================================
+def _to_response(row: SSOConfiguration) -> SSOConfigResponse:
+    """Project a DB row to the UI shape WITHOUT the secret value.
+
+    The secret value (Vault ref or Fernet ciphertext) never crosses this
+    boundary — the UI only learns whether one is set and where it lives.
+    """
+    source: str | None = None
+    if row.client_secret_ref:
+        source = _SECRET_SOURCE_VAULT
+    elif row.client_secret_encrypted:
+        source = _SECRET_SOURCE_ENCRYPTED
+    return SSOConfigResponse(
+        id=row.id,
+        provider=row.provider,
+        display_name=row.display_name,
+        enabled=row.enabled,
+        issuer=row.issuer,
+        client_id=row.client_id,
+        scopes=list(row.scopes),
+        claim_mappings={str(k): str(v) for k, v in (row.claim_mappings or {}).items()},
+        has_client_secret=source is not None,
+        client_secret_source=source,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _apply_secret(
+    row: SSOConfiguration, payload: SSOConfigUpsertRequest, *, is_create: bool
+) -> None:
+    """Set the secret on `row` from `payload`, encrypting plaintext at rest.
+
+    Rules (the request validator already rejected "both" forms):
+      * ``client_secret`` (plaintext) -> Fernet-encrypt, store in
+        ``client_secret_encrypted``, clear the Vault ref.
+      * ``client_secret_ref`` (Vault pointer) -> store as-is, clear the
+        ciphertext column.
+      * neither, on CREATE -> error (a confidential OIDC client needs a
+        secret to do the code exchange).
+      * neither, on EDIT -> leave the existing stored secret untouched.
+    """
+    if payload.client_secret is not None:
+        row.client_secret_encrypted = encrypt_client_secret(payload.client_secret)
+        row.client_secret_ref = None
+    elif payload.client_secret_ref is not None:
+        row.client_secret_ref = payload.client_secret_ref
+        row.client_secret_encrypted = None
+    elif is_create:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "a client secret is required: send client_secret (plaintext) "
+                "or client_secret_ref (a Vault pointer)"
+            ),
+        )
+    # else (edit, no secret in payload): keep what's already stored.
+
+
+@router.get("/oidc/templates", response_model=list[OIDCTemplateResponse])
+async def list_oidc_templates(
+    _principal: AuthPrincipal = Depends(require_tenant_member),
+) -> list[OIDCTemplateResponse]:
+    """The per-IdP OIDC templates the UI offers in its provider picker.
+
+    Read-only and not tenant-specific (the registry is platform data),
+    but gated to tenant members so anonymous callers can't enumerate it.
+    """
+    return [
+        OIDCTemplateResponse(
+            template_id=t.template_id.value,
+            display_name=t.display_name,
+            issuer_template=t.issuer_template,
+            default_scopes=t.scopes_with_openid(),
+            claim_mappings=dict(t.claim_mappings),
+            required_params=list(t.required_params),
+            notes=t.notes,
+        )
+        for t in list_templates()
+    ]
+
+
+@router.get("/oidc/callback-url", response_model=CallbackUrlResponse)
+async def get_oidc_callback_url(
+    _principal: AuthPrincipal = Depends(require_tenant_member),
+) -> CallbackUrlResponse:
+    """The redirect/callback URL the operator must register at the IdP."""
+    return CallbackUrlResponse(callback_url=_callback_redirect_uri())
+
+
+@router.get("/config", response_model=list[SSOConfigResponse])
+async def list_sso_configs(
+    _principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[SSOConfigResponse]:
+    """List this tenant's (non-deleted) SSO configs — never the secret.
+
+    RLS scopes the read to the active tenant, so this only ever returns
+    the caller's own rows (0 or 1 OIDC config, per the unique constraint).
+    """
+    result = await session.execute(
+        select(SSOConfiguration)
+        .where(SSOConfiguration.deleted_at.is_(None))
+        .order_by(SSOConfiguration.created_at)
+    )
+    return [_to_response(row) for row in result.scalars().all()]
+
+
+@router.post("/config", response_model=SSOConfigResponse, status_code=status.HTTP_201_CREATED)
+async def create_sso_config(
+    payload: SSOConfigUpsertRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> SSOConfigResponse:
+    """Create the tenant's OIDC config. tenant_admin only.
+
+    There is one OIDC config per tenant (DB unique constraint on
+    ``tenant_id, provider``); a second create returns 409.
+    """
+    tenant_id = require_tenant_id(principal)
+
+    # Block a duplicate before the DB raises, so the client gets a clean
+    # 409 instead of a 500 from the IntegrityError. A soft-deleted row
+    # still occupies the unique slot, so this also covers "re-create after
+    # delete" — the operator must hard-distinguish, which we keep simple
+    # by surfacing the conflict.
+    existing = await session.execute(
+        select(SSOConfiguration).where(
+            SSOConfiguration.provider == SSOProvider.OIDC.value,
+            SSOConfiguration.deleted_at.is_(None),
+        )
+    )
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="this tenant already has an OIDC configuration; edit it instead",
+        )
+
+    row = SSOConfiguration(
+        id=uuid7(),
+        tenant_id=tenant_id,
+        provider=SSOProvider.OIDC.value,
+        display_name=payload.display_name,
+        enabled=payload.enabled,
+        issuer=payload.issuer,
+        client_id=payload.client_id,
+        scopes=payload.scopes,
+        claim_mappings=payload.claim_mappings,
+    )
+    _apply_secret(row, payload, is_create=True)
+    session.add(row)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        # Race with a concurrent create, or a lingering soft-deleted row
+        # against the unique constraint.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="this tenant already has an OIDC configuration",
+        ) from exc
+    await session.refresh(row)
+    return _to_response(row)
+
+
+@router.put("/config/{config_id}", response_model=SSOConfigResponse)
+async def update_sso_config(
+    config_id: UUID,
+    payload: SSOConfigUpsertRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> SSOConfigResponse:
+    """Edit the tenant's OIDC config. tenant_admin only.
+
+    Omitting both secret fields keeps the previously stored secret. A
+    config id from another tenant 404s (RLS + tenant filter).
+    """
+    require_tenant_id(principal)
+    result = await session.execute(
+        select(SSOConfiguration).where(
+            SSOConfiguration.id == config_id,
+            SSOConfiguration.deleted_at.is_(None),
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SSO configuration not found",
+        )
+
+    row.display_name = payload.display_name
+    row.enabled = payload.enabled
+    row.issuer = payload.issuer
+    row.client_id = payload.client_id
+    row.scopes = payload.scopes
+    row.claim_mappings = payload.claim_mappings
+    _apply_secret(row, payload, is_create=False)
+    await session.flush()
+    await session.refresh(row)
+    return _to_response(row)
+
+
+@router.delete("/config/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_sso_config(
+    config_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> None:
+    """Soft-delete the tenant's OIDC config. tenant_admin only."""
+    require_tenant_id(principal)
+    result = await session.execute(
+        select(SSOConfiguration).where(
+            SSOConfiguration.id == config_id,
+            SSOConfiguration.deleted_at.is_(None),
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SSO configuration not found",
+        )
+    row.deleted_at = datetime.now(tz=UTC)
+    await session.flush()

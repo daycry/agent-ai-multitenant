@@ -119,7 +119,10 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_03` — UI configuración OIDC por tenant
 
-- [ ] **Título**: UI configuración OIDC por tenant
+- [x] **Título**: UI configuración OIDC por tenant
+<!-- e2e (e2e/sso-oidc-config.spec.ts) escrito pero NO ejecutado: PENDING HUMAN VERIFICATION.
+     Verde: typecheck + lint + build del admin-panel, CRUD backend (15 tests integración OIDC config). -->
+
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
