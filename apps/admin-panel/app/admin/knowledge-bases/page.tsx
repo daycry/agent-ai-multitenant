@@ -17,6 +17,7 @@ import { ChevronRight, Home, Library, Pencil, Plus, Share2, Tag, Trash2 } from "
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -60,6 +61,7 @@ interface KnowledgeBase {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  is_builtin: boolean;
   category: KbCategorySummary | null;
 }
 
@@ -324,7 +326,14 @@ function KbRow({
             className={`mt-1 h-4 w-4 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
           />
           <span className="min-w-0">
-            <CardTitle className="text-base">{kb.name}</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-base">
+              {kb.name}
+              {kb.is_builtin && (
+                <Badge variant="muted" data-testid={`kb-builtin-badge-${kb.id}`}>
+                  Built-in
+                </Badge>
+              )}
+            </CardTitle>
             <span className="text-muted-foreground mt-1 block font-mono text-xs">
               embedding: {kb.embedding_model_id}
             </span>
@@ -351,17 +360,28 @@ function KbRow({
               <Share2 className="mr-1 h-3.5 w-3.5" />
               Grant
             </Button>
-            <Button variant="outline" size="sm" onClick={onEdit} data-testid={`kb-edit-${kb.id}`}>
-              <Pencil className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onDelete}
-              data-testid={`kb-delete-${kb.id}`}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
+            {/* Plan 06.12: las KB built-in son read-only para el tenant
+                (el backend rechaza PUT/DELETE). Solo Grant + Asignaciones. */}
+            {!kb.is_builtin && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onEdit}
+                  data-testid={`kb-edit-${kb.id}`}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onDelete}
+                  data-testid={`kb-delete-${kb.id}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </>
+            )}
           </div>
         </RoleGuard>
       </CardHeader>

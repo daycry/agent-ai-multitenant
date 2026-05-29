@@ -48,10 +48,16 @@ async def resolve_visible_kbs(
     Order: KB id ascending (deterministic — the caller sorts by other
     criteria if it cares about presentation).
     """
+    # `kb.tenant_id = :tenant_id OR kb.is_builtin`: el tenant ve sus
+    # propias KB y las built-in del catálogo global (Plan 06.12 / ADR
+    # 0029). Las built-in NO son auto-visibles: la cláusula de grant de
+    # abajo sigue siendo obligatoria, así que una built-in solo aparece
+    # si el tenant la concedió a este proyecto/agente. Cross-tenant
+    # sigue aislado: una KB de otro tenant no es ni propia ni built-in.
     sql = (
         "SELECT DISTINCT kb.id"
         " FROM knowledge_bases kb"
-        " WHERE kb.tenant_id = :tenant_id"
+        " WHERE (kb.tenant_id = :tenant_id OR kb.is_builtin)"
         "   AND kb.deleted_at IS NULL"
         "   AND ("
         "        EXISTS ("
@@ -105,8 +111,22 @@ def visibility_filter_clause(*, with_agent: bool) -> str:
         "      AND d.deleted_at IS NULL AND kb.deleted_at IS NULL"
         ")"
     )
+    # Tenant guard (defence in depth on top of RLS): the chunk is the
+    # tenant's OR belongs to a built-in KB of the global catalog (whose
+    # chunks live under the platform tenant). Built-in chunks still only
+    # surface through the grant branches below, so cross-tenant isolation
+    # holds — a built-in granted to tenant A is invisible to tenant B
+    # because B has no grant row (Plan 06.12 / ADR 0029).
+    builtin_chunk = (
+        "EXISTS ("
+        "    SELECT 1 FROM documents db"
+        "    JOIN knowledge_bases kbb ON kbb.id = db.kb_id"
+        "    WHERE db.id = chunks.document_id AND kbb.is_builtin"
+        ")"
+    )
+    tenant_guard = f"(chunks.tenant_id = :tenant_id OR {builtin_chunk})"
     if not with_agent:
-        return f" AND chunks.tenant_id = :tenant_id AND {project_branch}"
+        return f" AND {tenant_guard} AND {project_branch}"
 
     agent_branch = (
         "EXISTS ("
@@ -117,7 +137,7 @@ def visibility_filter_clause(*, with_agent: bool) -> str:
         "      AND d2.deleted_at IS NULL AND kb2.deleted_at IS NULL"
         ")"
     )
-    return f" AND chunks.tenant_id = :tenant_id AND ({project_branch} OR {agent_branch})"
+    return f" AND {tenant_guard} AND ({project_branch} OR {agent_branch})"
 
 
 __all__ = ["resolve_visible_kbs", "visibility_filter_clause"]

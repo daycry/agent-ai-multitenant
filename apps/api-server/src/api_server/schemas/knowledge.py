@@ -60,6 +60,9 @@ class KnowledgeBaseResponse(BaseModel):
     created_by: UUID | None
     created_at: datetime
     updated_at: datetime
+    # Plan 06.12 (ADR 0029): true = KB built-in del catálogo global
+    # (read-only para el tenant; la UI oculta editar/borrar).
+    is_builtin: bool = False
     # Plan 06.10: categoría embebida (puede ser null si la KB no
     # está categorizada o si la categoría fue borrada).
     category: KbCategorySummary | None = None
@@ -75,6 +78,7 @@ def to_kb_response(kb: KnowledgeBase, category: KbCategory | None = None) -> Kno
         created_by=kb.created_by,
         created_at=kb.created_at,
         updated_at=kb.updated_at,
+        is_builtin=kb.is_builtin,
         category=to_kb_category_summary(category) if category is not None else None,
     )
 

@@ -32,6 +32,7 @@ from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -94,6 +95,10 @@ class KnowledgeBase(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Plan 06.12 (ADR 0029): catálogo global. true = KB built-in
+    # sembrada bajo PLATFORM_TENANT_ID, visible a todos los tenants via
+    # la policy knowledge_bases_builtin_read y read-only para ellos.
+    is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     # Plan 06.10 task_06_10_01: KB categorization. Nullable — borrar
     # una categoría no borra las KBs (ON DELETE SET NULL); el tenant
     # las re-categoriza después.
@@ -344,22 +349,21 @@ class KbCategory(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
 
     __tablename__ = "kb_categories"
 
-    # tenant_id NULLABLE para distinguir built-ins (NULL) de custom
-    # (UUID del tenant). NO usamos TenantScopedMixin porque ese mixin
-    # asume `tenant_id NOT NULL`.
+    # Plan 06.12 (ADR 0029): patrón (A). Built-ins viven bajo
+    # PLATFORM_TENANT_ID con is_builtin=true; custom bajo el tenant con
+    # is_builtin=false. tenant_id sigue NULLABLE solo por compat con la
+    # 0028 (ya no hay filas NULL tras la 0030). NO usamos TenantScopedMixin
+    # porque históricamente esta columna fue nullable.
     tenant_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     slug: Mapped[str] = mapped_column(String(60), nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     # Hex color opcional para el badge en la UI (`#3b82f6`, etc.).
     color: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # true = categoría de catálogo (read-only para el tenant), visible a
+    # todos via la policy kb_categories_builtin_read.
+    is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_by: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
-
-    @property
-    def is_builtin(self) -> bool:
-        """Conveniencia para el response shape — la UI lo usa para
-        gris-out el botón de edit."""
-        return self.tenant_id is None

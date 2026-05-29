@@ -76,13 +76,17 @@ BUILTIN_KB_CATEGORIES: tuple[BuiltinKbCategory, ...] = (
 # ---------------------------------------------------------------------------
 # Upsert
 # ---------------------------------------------------------------------------
+# Plan 06.12 (ADR 0029): patrón (A) — built-ins bajo el platform tenant
+# con is_builtin=true (antes patrón B: tenant_id NULL).
 _UPSERT_SQL = text(
     """
-    INSERT INTO kb_categories (id, tenant_id, slug, name, color)
-    VALUES (:id, NULL, :slug, :name, :color)
+    INSERT INTO kb_categories (id, tenant_id, slug, name, color, is_builtin)
+    VALUES (:id, :platform_tenant_id, :slug, :name, :color, true)
     ON CONFLICT (id) DO UPDATE SET
+        tenant_id = EXCLUDED.tenant_id,
         name = EXCLUDED.name,
         color = EXCLUDED.color,
+        is_builtin = true,
         updated_at = now(),
         deleted_at = NULL
     """
@@ -91,12 +95,15 @@ _UPSERT_SQL = text(
 
 async def seed_builtin_kb_categories(session: AsyncSession) -> int:
     """Upsert las 5 built-in. Idempotente. Returns count."""
+    from api_server.seeds import PLATFORM_TENANT_ID
+
     count = 0
     for cat in BUILTIN_KB_CATEGORIES:
         await session.execute(
             _UPSERT_SQL,
             {
                 "id": str(cat.id),
+                "platform_tenant_id": str(PLATFORM_TENANT_ID),
                 "slug": cat.slug,
                 "name": cat.name,
                 "color": cat.color,
