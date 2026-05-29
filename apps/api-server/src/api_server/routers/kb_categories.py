@@ -84,9 +84,8 @@ async def list_kb_categories(
         select(KbCategory)
         .where(KbCategory.deleted_at.is_(None))
         .order_by(
-            # Built-ins primero (tenant_id IS NULL ordena al final por
-            # defecto; usamos un CASE).
-            KbCategory.tenant_id.is_not(None),
+            # Built-ins primero (is_builtin true ordena antes con desc).
+            KbCategory.is_builtin.desc(),
             KbCategory.name,
         )
     )
@@ -109,14 +108,15 @@ async def create_kb_category(
 ) -> KbCategoryResponse:
     tenant_id = require_tenant_id(principal)
 
-    # Verificar que el slug no choca con uno built-in. El índice partial
-    # con COALESCE ya lo previene a nivel SQL, pero queremos 409 con
-    # mensaje claro en lugar de un IntegrityError genérico.
+    # Verificar que el slug no choca con uno built-in ni con otro custom
+    # del tenant. Queremos 409 con mensaje claro en lugar de un
+    # IntegrityError genérico. (Built-ins viven bajo el platform tenant
+    # con is_builtin=true — Plan 06.12 / ADR 0029.)
     existing = await session.execute(
         select(KbCategory).where(
             KbCategory.slug == payload.slug,
             KbCategory.deleted_at.is_(None),
-            or_(KbCategory.tenant_id == tenant_id, KbCategory.tenant_id.is_(None)),
+            or_(KbCategory.tenant_id == tenant_id, KbCategory.is_builtin),
         )
     )
     if existing.scalar_one_or_none() is not None:

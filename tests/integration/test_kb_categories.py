@@ -69,17 +69,19 @@ async def _seed(dsn: str) -> dict[str, UUID]:
 
 async def _seed_builtin_categories(dsn: str) -> None:
     """Inserta las 5 built-in directamente via asyncpg (sin pasar por la
-    sesión RLS) — la migration crea la tabla vacía."""
+    sesión RLS). Plan 06.12: patrón (A) — bajo el platform tenant con
+    is_builtin=true (antes patrón B: tenant_id NULL)."""
     from api_server.seeds.builtin_kb_categories import BUILTIN_KB_CATEGORIES
 
     conn = await asyncpg.connect(dsn)
     try:
         for cat in BUILTIN_KB_CATEGORIES:
             await conn.execute(
-                "INSERT INTO kb_categories (id, tenant_id, slug, name, color)"
-                " VALUES ($1, NULL, $2, $3, $4)"
+                "INSERT INTO kb_categories (id, tenant_id, slug, name, color, is_builtin)"
+                " VALUES ($1, $2, $3, $4, $5, true)"
                 " ON CONFLICT (id) DO NOTHING",
                 cat.id,
+                _PLATFORM_TENANT_ID,
                 cat.slug,
                 cat.name,
                 cat.color,
@@ -170,9 +172,10 @@ async def test_list_categories_returns_builtins_and_custom(
         assert len(rows) == 6
         slugs = {r["slug"] for r in rows}
         assert "stack" in slugs and "role" in slugs and "fintech" in slugs
-        # Built-ins: tenant_id is null + is_builtin True
+        # Built-ins: bajo el platform tenant + is_builtin True (patrón A,
+        # Plan 06.12 / ADR 0029).
         builtin_row = next(r for r in rows if r["slug"] == "stack")
-        assert builtin_row["tenant_id"] is None
+        assert builtin_row["tenant_id"] == str(_PLATFORM_TENANT_ID)
         assert builtin_row["is_builtin"] is True
         # Custom: tenant_id propio + is_builtin False
         custom_row = next(r for r in rows if r["slug"] == "fintech")
