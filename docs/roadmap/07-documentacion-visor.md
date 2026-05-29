@@ -157,7 +157,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_05` — Agente Technical Writer con system_prompt curado y skills específicas
 
-- [ ] **Título**: Agente Technical Writer con system_prompt curado y skills específicas
+- [x] **Título**: Agente Technical Writer con system_prompt curado y skills específicas
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer

@@ -12,7 +12,7 @@ import structlog
 
 from api_server.db.session import get_admin_sessionmaker
 from api_server.logging import configure_logging
-from api_server.seeds.builtin_agents import seed_builtin_agents
+from api_server.seeds.builtin_agents import seed_builtin_agent_skills, seed_builtin_agents
 from api_server.seeds.builtin_approval_policies import seed_builtin_approval_policies
 from api_server.seeds.builtin_kb_categories import seed_builtin_kb_categories
 from api_server.seeds.builtin_kbs import seed_builtin_kbs
@@ -33,6 +33,9 @@ async def main() -> None:
         await ensure_platform_tenant(session)
         n_agents = await seed_builtin_agents(session)
         n_skills = await seed_builtin_skills(session)
+        # Agent<->skill links need both agents AND skills to exist first
+        # (FKs on agent_skills). Wire them once both seeds have run.
+        n_agent_skills = await seed_builtin_agent_skills(session)
         n_tools = await seed_builtin_tools(session)
         # Teams depend on agents being present (FK on team_members.agent_id).
         n_teams = await seed_builtin_teams(session)
@@ -55,6 +58,7 @@ async def main() -> None:
         "seed.completed",
         agents=n_agents,
         skills=n_skills,
+        agent_skills=n_agent_skills,
         tools=n_tools,
         teams=n_teams,
         kb_categories=n_kb_categories,

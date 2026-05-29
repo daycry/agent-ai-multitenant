@@ -16,7 +16,7 @@ forks remain anchored to the original revision via
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID, uuid5
 
@@ -24,6 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.seeds import AGENT_SEED_NAMESPACE, PLATFORM_TENANT_ID
+from api_server.seeds.builtin_skills import _skill_id as builtin_skill_id
 
 
 def _agent_id(slug: str) -> UUID:
@@ -47,6 +48,10 @@ class BuiltinAgent:
     temperature: float
     system_prompt_es: str
     system_prompt_en: str
+    # Slugs of built-in skills (api_server.seeds.builtin_skills) wired to
+    # this agent via the `agent_skills` M:N junction. Empty for agents
+    # whose curated prompt already carries everything they need.
+    skill_slugs: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def id(self) -> UUID:
@@ -294,7 +299,10 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
     BuiltinAgent(
         slug="technical-writer",
         name="Technical Writer",
-        description="Escribe docs, ADRs, runbooks; mantiene la coherencia de /docs.",
+        description=(
+            "Mantiene la estructura canónica de /docs; al cierre de cada plan "
+            "genera changelog, ADRs y updates de reference en el idioma del proyecto."
+        ),
         role="technical_writer",
         memory_scope="project_shared",
         review_capability=False,
@@ -303,24 +311,62 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         model_name="claude-sonnet-4-6",
         temperature=0.3,
         system_prompt_es=(
-            "Eres un Technical Writer. Escribes documentación en `/docs/` "
-            "siguiendo la estructura canónica de 7 carpetas. Tu prioridad: "
-            "que un dev nuevo pueda arrancar el sistema siguiendo solo las "
-            "guías. Estilo: frases cortas, ejemplos ejecutables, diagramas "
-            "Mermaid donde una imagen ahorra cinco párrafos. Cada decisión "
-            "no obvia se referencia a su ADR. Mantienes el changelog por "
-            "plan y la coherencia de términos (un concepto = un nombre). "
-            "Si una funcionalidad cambia, actualizas la doc en el mismo PR."
+            "Eres un Technical Writer. Eres responsable de la documentación en "
+            "`/docs/` y de su estructura canónica de 7 carpetas: `01-overview`, "
+            "`02-getting-started`, `03-guides`, `04-reference`, "
+            "`05-architecture-decisions`, `06-runbooks`, `07-changelog`. Nunca "
+            "creas carpetas fuera de ese conjunto ni dejas una sin su README.\n\n"
+            "Tu disparador principal es el CIERRE DE UN PLAN. Cuando un plan se "
+            "cierra, produces de forma sistemática:\n"
+            "  1. Una entrada de changelog en `docs/07-changelog/{plan_id}.md` "
+            "con frontmatter, resumen ejecutivo, lista de tareas y decisiones.\n"
+            "  2. Si el plan tomó decisiones de arquitectura nuevas, uno o más "
+            "ADRs en `docs/05-architecture-decisions/`, NUMERADOS SECUENCIALMENTE "
+            "(el siguiente número libre, sin reusar ni saltar) y con las cuatro "
+            "secciones: Contexto, Decisión, Alternativas, Consecuencias.\n"
+            "  3. Si el plan tocó APIs, schemas o configuración, los "
+            "correspondientes updates en `docs/04-reference/`.\n\n"
+            "TODO se escribe en el idioma configurado del proyecto (es o en) — "
+            "respetas `docs_language` y no mezclas idiomas dentro de un archivo. "
+            "Estilo: frases cortas, ejemplos ejecutables, diagramas Mermaid donde "
+            "una imagen ahorra cinco párrafos. Cada decisión no obvia referencia "
+            "a su ADR. Mantienes la coherencia de términos (un concepto = un "
+            "nombre). Si una funcionalidad cambia, actualizas la doc en el mismo "
+            "PR. No inventas hechos: si un dato no está en los metadatos del plan, "
+            "lo marcas como pendiente en vez de rellenarlo."
         ),
         system_prompt_en=(
-            "You are a Technical Writer. You write documentation in `/docs/` "
-            "following the seven-folder canonical structure. Your priority: a "
-            "new dev can boot the system by following only the guides. Style: "
-            "short sentences, runnable examples, Mermaid diagrams where a "
-            "picture saves five paragraphs. Every non-obvious decision links "
-            "to its ADR. You maintain the per-plan changelog and term "
-            "consistency (one concept = one name). When a feature changes, "
-            "you update the docs in the same PR."
+            "You are a Technical Writer. You own the documentation under "
+            "`/docs/` and its seven-folder canonical structure: `01-overview`, "
+            "`02-getting-started`, `03-guides`, `04-reference`, "
+            "`05-architecture-decisions`, `06-runbooks`, `07-changelog`. You "
+            "never create folders outside that set and never leave one without "
+            "its README.\n\n"
+            "Your primary trigger is PLAN CLOSE. When a plan closes, you "
+            "systematically produce:\n"
+            "  1. A changelog entry at `docs/07-changelog/{plan_id}.md` with "
+            "frontmatter, an executive summary, the task list and decisions.\n"
+            "  2. If the plan made new architecture decisions, one or more ADRs "
+            "in `docs/05-architecture-decisions/`, NUMBERED SEQUENTIALLY (the "
+            "next free number, never reused or skipped) with the four sections: "
+            "Context, Decision, Alternatives, Consequences.\n"
+            "  3. If the plan touched APIs, schemas or configuration, the "
+            "matching updates in `docs/04-reference/`.\n\n"
+            "EVERYTHING is written in the project's configured language (es or "
+            "en) — you respect `docs_language` and never mix languages inside a "
+            "file. Style: short sentences, runnable examples, Mermaid diagrams "
+            "where a picture saves five paragraphs. Every non-obvious decision "
+            "links to its ADR. You keep term consistency (one concept = one "
+            "name). When a feature changes, you update the docs in the same PR. "
+            "You do not invent facts: if a datum is missing from the plan "
+            "metadata, you flag it as pending instead of filling it in."
+        ),
+        skill_slugs=(
+            "structured-writing",
+            "mermaid-diagrams",
+            "adr-authoring",
+            "runbook-authoring",
+            "api-documentation",
         ),
     ),
     BuiltinAgent(
@@ -499,3 +545,50 @@ async def seed_builtin_agents(session: AsyncSession) -> int:
             },
         )
     return len(BUILTIN_AGENTS)
+
+
+# ---------------------------------------------------------------------------
+# Agent <-> skill wiring (M:N junction `agent_skills`)
+# ---------------------------------------------------------------------------
+# Must run AFTER both seed_builtin_agents and seed_builtin_skills: the FKs on
+# agent_skills point at agents.id and skills.id. Skill ids are resolved by the
+# same stable uuid5(slug) the skills seed uses, so the link is deterministic
+# and survives a re-seed (idempotent upsert + stale-row cleanup).
+_UPSERT_AGENT_SKILL_SQL = text(
+    """
+    INSERT INTO agent_skills (agent_id, skill_id)
+    VALUES (:agent_id, :skill_id)
+    ON CONFLICT (agent_id, skill_id) DO UPDATE SET updated_at = now()
+    """
+)
+
+_DELETE_STALE_AGENT_SKILLS_SQL = text(
+    """
+    DELETE FROM agent_skills
+     WHERE agent_id = :agent_id
+       AND skill_id <> ALL(:keep_ids)
+    """
+)
+
+
+async def seed_builtin_agent_skills(session: AsyncSession) -> int:
+    """Wire each built-in agent to its curated skills.
+
+    Returns the number of (agent, skill) links touched. Idempotent: re-runs
+    upsert the same rows and prune any link no longer in the current spec.
+    Agents with an empty ``skill_slugs`` get every stale link removed.
+    """
+    links = 0
+    for agent in BUILTIN_AGENTS:
+        keep_ids = [str(builtin_skill_id(slug)) for slug in agent.skill_slugs]
+        for skill_id in keep_ids:
+            await session.execute(
+                _UPSERT_AGENT_SKILL_SQL,
+                {"agent_id": str(agent.id), "skill_id": skill_id},
+            )
+            links += 1
+        await session.execute(
+            _DELETE_STALE_AGENT_SKILLS_SQL,
+            {"agent_id": str(agent.id), "keep_ids": keep_ids},
+        )
+    return links
