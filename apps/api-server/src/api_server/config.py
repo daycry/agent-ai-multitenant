@@ -58,6 +58,34 @@ class Settings(BaseSettings):
         description="HMAC secret for signing reviewer URLs.",
     )
 
+    # ----- SSO / OIDC (Plan 08 task_08_01) -----
+    # Fernet-derived key used to encrypt OIDC client secrets at rest when
+    # Vault is NOT wired (no API_SERVER_VAULT_TOKEN). When Vault IS wired,
+    # the secret lives there and this key is unused. The raw value is run
+    # through SHA-256 + urlsafe-base64 to produce a valid 32-byte Fernet
+    # key, so any non-empty string works. Production MUST override the
+    # dev default; the dev-secret guard below rejects it outside dev.
+    sso_encryption_key: SecretStr = Field(
+        default=SecretStr("dev-only-sso-encryption-key-change-me"),
+        description="Secret used to derive the Fernet key for OIDC client secrets at rest.",
+    )
+    # Public base URL the IdP redirects back to after authentication.
+    # The OIDC callback path (`/auth/sso/oidc/callback`) is appended to
+    # this. In dev the api-server is reachable at localhost:8000; in prod
+    # this is the external gateway URL the IdP's redirect-URI allowlist
+    # is configured with.
+    sso_redirect_base_url: str = Field(
+        default="http://localhost:8000",
+        description="Public base URL used to build the OIDC redirect_uri.",
+    )
+    # TTL of the short-lived state/nonce record stored in Redis between
+    # the /login redirect and the /callback. Bounds how long a login can
+    # legitimately take before the anti-CSRF state expires.
+    sso_login_state_ttl_seconds: int = Field(
+        default=600,
+        description="Seconds an OIDC login state/nonce stays valid in Redis.",
+    )
+
     # ----- Redis (sessions, rate limit) -----
     redis_url: str = Field(
         default="redis://localhost:6379/0",
@@ -164,6 +192,7 @@ class Settings(BaseSettings):
             "API_SERVER_REVIEW_URL_SIGNING_SECRET": (
                 self.review_url_signing_secret.get_secret_value()
             ),
+            "API_SERVER_SSO_ENCRYPTION_KEY": self.sso_encryption_key.get_secret_value(),
             "API_SERVER_MINIO_SECRET_KEY": self.minio_secret_key.get_secret_value(),
             "API_SERVER_MINIO_ACCESS_KEY": self.minio_access_key,
             "API_SERVER_DATABASE_URL": self.database_url,

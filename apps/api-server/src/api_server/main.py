@@ -53,6 +53,7 @@ from api_server.routers.plans import plans_router, project_plans_router
 from api_server.routers.projects import router as projects_router
 from api_server.routers.review import router as review_router
 from api_server.routers.skills import router as skills_router
+from api_server.routers.sso import router as sso_router
 from api_server.routers.task_lifecycle import router as task_lifecycle_router
 from api_server.routers.tasks import router as tasks_router
 from api_server.routers.teams import router as teams_router
@@ -157,6 +158,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, _unhandled_exception_handler)
 
     app.include_router(auth_router)
+    app.include_router(sso_router)
     app.include_router(admin_router)
     app.include_router(agents_router)
     app.include_router(skills_router)

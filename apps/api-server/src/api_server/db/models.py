@@ -26,6 +26,7 @@ from sqlalchemy import (
     Index,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     text,
 )
@@ -70,6 +71,22 @@ class AuditAction(enum.StrEnum):
     TENANT_DELETED = "tenant.deleted"
     MEMBERSHIP_GRANTED = "membership.granted"
     MEMBERSHIP_REVOKED = "membership.revoked"
+    # SSO (Plan 08 task_08_01)
+    SSO_LOGIN = "sso.login"
+    SSO_USER_PROVISIONED = "sso.user_provisioned"
+
+
+class SSOProvider(enum.StrEnum):
+    """Identity-provider families a tenant can configure (Plan 08).
+
+    Phase A ships the generic ``oidc`` flow; the per-IdP templates of
+    task_08_02 (Azure AD, Google, Okta, ...) are presets that all
+    persist as ``provider='oidc'`` plus a stored issuer/scope set, so
+    the column stays a small closed set. SAML lands in Phase B.
+    """
+
+    OIDC = "oidc"
+    SAML = "saml"
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +301,78 @@ class TenantSetting(Base):
 
 
 # ---------------------------------------------------------------------------
+# SSOConfiguration — per-tenant enterprise SSO config (Plan 08 task_08_01)
+# ---------------------------------------------------------------------------
+class SSOConfiguration(
+    Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDeleteMixin
+):
+    """Per-tenant OIDC (and, later, SAML) provider configuration.
+
+    Multi-tenancy: tenant-scoped via :class:`TenantScopedMixin` + RLS
+    (`tenant_isolation` policy in the migration). Tenant A's row is
+    invisible to a session bound to tenant B — the database refuses to
+    return it, so an OIDC login can never resolve another tenant's IdP.
+
+    Secret handling (CLAUDE.md principle: no plaintext secrets in the
+    DB). The OIDC ``client_secret`` is stored in EXACTLY ONE of two
+    forms, never both, never in clear text:
+
+      * ``client_secret_ref``: a Vault pointer (``vault:<mount>/data/...``)
+        resolved at login time through the same VaultResolver the MCP
+        layer uses (`api_server.auth.sso.secrets`). Preferred when Vault
+        is wired (``API_SERVER_VAULT_TOKEN`` set).
+      * ``client_secret_encrypted``: Fernet ciphertext (encrypted at
+        rest with ``API_SERVER_SSO_ENCRYPTION_KEY``) for deployments
+        without Vault. The plaintext only ever lives in memory during
+        the token exchange.
+
+    ``claim_mappings`` maps OIDC userinfo/ID-token claims onto local
+    user fields, e.g. ``{"email": "email", "full_name": "name"}``. A
+    missing key falls back to the OIDC standard claim of the same name.
+    """
+
+    __tablename__ = "sso_configurations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "provider", name="uq_sso_config_tenant_provider"),
+        Index(
+            "ix_sso_configurations_tenant_enabled",
+            "tenant_id",
+            "enabled",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
+
+    provider: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'oidc'"))
+    # Human-friendly label shown in the tenant's login picker.
+    display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+
+    # --- OIDC discovery + client identity ---
+    # The IdP issuer URL; discovery hits `<issuer>/.well-known/openid-configuration`.
+    issuer: Mapped[str] = mapped_column(String(512), nullable=False)
+    client_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Exactly one of these holds the secret; the other is NULL. A CHECK
+    # constraint in the migration enforces "never both, never plaintext".
+    client_secret_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    client_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Space-free list of OIDC scopes; `openid` is always implied.
+    scopes: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("""'["openid", "email", "profile"]'::jsonb""")
+    )
+    # claim -> local user field mapping (see class docstring).
+    claim_mappings: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"SSOConfiguration(id={self.id!r}, tenant={self.tenant_id!r}, "
+            f"provider={self.provider!r}, enabled={self.enabled!r})"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Review sessions — persistence of `workers.review_runtime.ReviewSession`
 # (Plan 06.5 task_06_5_01). The manager was in-memory; this table makes
 # it durable across worker restarts.
@@ -354,6 +443,8 @@ __all__ = [
     "Organization",
     "PlatformSetting",
     "ReviewSession",
+    "SSOConfiguration",
+    "SSOProvider",
     "Session",
     "TaskAuditEvent",
     "TenantSetting",

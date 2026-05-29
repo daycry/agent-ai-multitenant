@@ -223,6 +223,15 @@ ignore_missing_imports = true
 module = ["yaml", "yaml.*"]
 ignore_missing_imports = true
 
+# Enterprise SSO / OIDC (Plan 08 task_08_01). `authlib` and the
+# `joserfc` it ships sign/verify ID tokens against the IdP JWKS;
+# `cryptography.fernet` encrypts the OIDC client secret at rest. The
+# pre-commit mypy hook doesn't install these; the runtime venv does.
+# Same pattern as the other optional-dep overrides above.
+[[tool.mypy.overrides]]
+module = ["authlib", "authlib.*", "joserfc", "joserfc.*", "cryptography.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

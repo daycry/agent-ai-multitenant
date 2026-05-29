@@ -29,6 +29,12 @@ dependencies = [
   # Auth
   "argon2-cffi>=23.1,<24",
   "python-jose[cryptography]>=3.3,<4",
+  # Enterprise SSO / OIDC (Plan 08 task_08_01). Authlib drives the
+  # OIDC authorization-code flow; it also ships `joserfc`, which we use
+  # to verify the ID-token signature against the IdP's JWKS. Client
+  # secrets are Fernet-encrypted at rest (cryptography, already present
+  # via python-jose[cryptography]) or Vault-resolved.
+  "authlib>=1.3,<2",
 
   # Cache / session store / rate limit
   "redis[hiredis]>=5.0,<6",

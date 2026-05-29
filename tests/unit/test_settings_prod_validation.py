@@ -25,6 +25,8 @@ pytestmark = pytest.mark.unit
 _API_REAL = {
     "jwt_secret": "x" * 48,
     "review_url_signing_secret": "y" * 48,
+    # SSO client-secret encryption key (Plan 08 task_08_01) — also guarded.
+    "sso_encryption_key": "w" * 48,
     "minio_secret_key": "z" * 48,
     "minio_access_key": "prod-access-key",
     "database_url": "postgresql+asyncpg://app_user:S3cr3tP@db/agentic",
@@ -56,6 +58,17 @@ def test_api_rejects_dev_minio_and_db(env: str) -> None:
                 "minio_secret_key": "changeme-dev-only",
                 "database_url": "postgresql+asyncpg://app_user:changeme-app-dev-only@h/db",
             },
+        )
+
+
+@pytest.mark.parametrize("env", ["prod", "staging"])
+def test_api_rejects_dev_sso_encryption_key(env: str) -> None:
+    # Plan 08 task_08_01: the OIDC client-secret encryption key is guarded
+    # like every other secret — a dev default must not reach prod/staging.
+    with pytest.raises(ValidationError):
+        ApiSettings(
+            environment=env,
+            **{**_API_REAL, "sso_encryption_key": "dev-only-sso-encryption-key-change-me"},
         )
 
 

@@ -85,7 +85,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_01` — Integración OIDC con authlib
 
-- [ ] **Título**: Integración OIDC con authlib
+- [x] **Título**: Integración OIDC con authlib
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
