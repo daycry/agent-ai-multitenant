@@ -59,6 +59,7 @@ from api_server.auth.sso.saml import (
     saml_available,
     validate_saml_security,
 )
+from api_server.auth.sso.saml_metadata import IdPMetadataError, parse_idp_metadata
 from api_server.auth.sso.secrets import (
     SSOSecretError,
     encrypt_client_secret,
@@ -87,7 +88,12 @@ from api_server.routers.mcp import get_vault_resolver
 from api_server.schemas.auth import LoginResponse
 from api_server.schemas.sso import (
     CallbackUrlResponse,
+    IdPMetadataParseRequest,
+    IdPMetadataParseResponse,
     OIDCTemplateResponse,
+    SAMLConfigResponse,
+    SAMLConfigUpsertRequest,
+    SPMetadataResponse,
     SSOConfigResponse,
     SSOConfigUpsertRequest,
 )
@@ -775,7 +781,10 @@ async def list_sso_configs(
     """
     result = await session.execute(
         select(SSOConfiguration)
-        .where(SSOConfiguration.deleted_at.is_(None))
+        .where(
+            SSOConfiguration.provider == SSOProvider.OIDC.value,
+            SSOConfiguration.deleted_at.is_(None),
+        )
         .order_by(SSOConfiguration.created_at)
     )
     return [_to_response(row) for row in result.scalars().all()]
@@ -894,6 +903,316 @@ async def delete_sso_config(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="SSO configuration not found",
+        )
+    row.deleted_at = datetime.now(tz=UTC)
+    await session.flush()
+
+
+# ===========================================================================
+# Per-tenant SAML config CRUD (Plan 08 task_08_06) — the Tenant-Admin UI.
+#
+# Mirrors the OIDC CRUD above for the SAML provider, with the SAME RBAC
+# (read = tenant member, write = tenant_admin), the SAME RLS scoping
+# (a forged config id from another tenant 404s at the DB), and the SAME
+# never-echo-the-secret rule (the SP PRIVATE key never crosses the wire;
+# the response only reports whether one is set + which store holds it).
+#
+# Helper endpoints:
+#   GET  /auth/sso/{tenant_id}/saml/metadata-url — the SP EntityID + ACS
+#        URL the operator registers at the IdP.
+#   POST /auth/sso/saml/parse-metadata           — parse pasted IdP
+#        metadata XML to pre-fill the form (no xmlsec needed).
+# ===========================================================================
+def _to_saml_response(row: SSOConfiguration) -> SAMLConfigResponse:
+    """Project a SAML DB row to the UI shape WITHOUT the SP private key.
+
+    The SP private key (Vault ref or Fernet ciphertext) never crosses
+    this boundary — the UI only learns whether one is set and where it
+    lives. The IdP cert and SP public cert are not secret and round-trip.
+    """
+    key_source: str | None = None
+    if row.sp_private_key_ref:
+        key_source = _SECRET_SOURCE_VAULT
+    elif row.sp_private_key_encrypted:
+        key_source = _SECRET_SOURCE_ENCRYPTED
+    # This projection only serves SAML rows (the CRUD filters provider ==
+    # 'saml'), so the IdP triple is always populated; coerce None -> ""
+    # defensively to keep the str-typed response.
+    return SAMLConfigResponse(
+        id=row.id,
+        provider=row.provider,
+        display_name=row.display_name,
+        enabled=row.enabled,
+        idp_entity_id=row.idp_entity_id or "",
+        idp_sso_url=row.idp_sso_url or "",
+        idp_x509_cert=row.idp_x509_cert or "",
+        name_id_format=row.name_id_format,
+        attribute_mappings={str(k): str(v) for k, v in (row.attribute_mappings or {}).items()},
+        sp_x509_cert=row.sp_x509_cert,
+        has_sp_private_key=key_source is not None,
+        sp_private_key_source=key_source,
+        authn_requests_signed=row.authn_requests_signed,
+        want_assertions_signed=row.want_assertions_signed,
+        want_assertions_encrypted=row.want_assertions_encrypted,
+        want_name_id_encrypted=row.want_name_id_encrypted,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _apply_sp_private_key(row: SSOConfiguration, payload: SAMLConfigUpsertRequest) -> None:
+    """Set the SP private key on `row` from `payload`, encrypting at rest.
+
+    Unlike the OIDC client secret, the SP private key is OPTIONAL (a
+    tenant that neither signs its AuthnRequest nor encrypts assertions
+    needs none). Rules (the request validator already rejected "both"):
+
+      * ``sp_private_key`` (plaintext PEM) -> Fernet-encrypt, store in
+        ``sp_private_key_encrypted``, clear the Vault ref.
+      * ``sp_private_key_ref`` (Vault pointer) -> store as-is, clear the
+        ciphertext column.
+      * neither -> leave the existing stored key untouched (so an edit
+        that omits it keeps the key, mirroring the OIDC secret behavior).
+    """
+    if payload.sp_private_key is not None:
+        row.sp_private_key_encrypted = encrypt_client_secret(payload.sp_private_key)
+        row.sp_private_key_ref = None
+    elif payload.sp_private_key_ref is not None:
+        row.sp_private_key_ref = payload.sp_private_key_ref
+        row.sp_private_key_encrypted = None
+    # else: keep whatever is already stored.
+
+
+def _validate_saml_crypto_invariant(row: SSOConfiguration) -> None:
+    """Reject a config that enables a key-requiring feature without a key.
+
+    Mirrors :func:`api_server.auth.sso.saml.validate_saml_security` and
+    the DB CHECK constraint, but evaluated against the *resulting* row
+    (after the key was applied) so we can return a clean 422 to the
+    operator instead of surfacing a 500 from the DB constraint. Needs no
+    native crypto.
+    """
+    needs_key = (
+        row.authn_requests_signed or row.want_assertions_encrypted or row.want_name_id_encrypted
+    )
+    if not needs_key:
+        return
+    has_key = bool(row.sp_private_key_ref or row.sp_private_key_encrypted)
+    if not row.sp_x509_cert or not has_key:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "AuthnRequest signing and assertion/NameID encryption require "
+                "both an SP certificate and an SP private key"
+            ),
+        )
+
+
+@router.get("/saml/sp-metadata", response_model=SPMetadataResponse)
+async def get_saml_sp_metadata(
+    principal: AuthPrincipal = Depends(require_tenant_member),
+) -> SPMetadataResponse:
+    """The SP EntityID + the CALLER's per-tenant ACS URL to register at the IdP.
+
+    Tenant-implicit: the tenant is taken from the authenticated principal
+    (so the UI never needs to know its own tenant UUID). Derived purely
+    from the configured public base URL + that tenant id; needs no native
+    crypto. Gated to tenant members so anonymous callers can't enumerate it.
+    """
+    tenant_id = require_tenant_id(principal)
+    return SPMetadataResponse(sp_entity_id=_sp_entity_id(), acs_url=_saml_acs_url(str(tenant_id)))
+
+
+@router.get("/{tenant_id}/saml/metadata-url", response_model=SPMetadataResponse)
+async def get_saml_sp_metadata_url(
+    tenant_id: str,
+    _principal: AuthPrincipal = Depends(require_tenant_member),
+) -> SPMetadataResponse:
+    """The SP EntityID + per-tenant ACS URL for an explicit tenant id.
+
+    The explicit-tenant variant (used by superadmins acting on a specific
+    tenant). Read-only and derived purely from the configured public base
+    URL + the tenant id; gated to tenant members. Needs no native crypto.
+    """
+    try:
+        UUID(tenant_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid tenant id",
+        ) from exc
+    return SPMetadataResponse(sp_entity_id=_sp_entity_id(), acs_url=_saml_acs_url(tenant_id))
+
+
+@router.post("/saml/parse-metadata", response_model=IdPMetadataParseResponse)
+async def parse_saml_idp_metadata(
+    payload: IdPMetadataParseRequest,
+    _principal: AuthPrincipal = Depends(require_tenant_member),
+) -> IdPMetadataParseResponse:
+    """Parse pasted/uploaded IdP metadata XML to pre-fill the SAML form.
+
+    Pure XML parsing (hardened against XXE) — needs NO native ``xmlsec``,
+    so it works on every node. A malformed or non-IdP document yields a
+    422 with a generic message. Gated to tenant members.
+    """
+    try:
+        parsed = parse_idp_metadata(payload.metadata_xml)
+    except IdPMetadataError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return IdPMetadataParseResponse(
+        entity_id=parsed.entity_id,
+        sso_url=parsed.sso_url,
+        x509_cert=parsed.x509_cert,
+        name_id_format=parsed.name_id_format,
+    )
+
+
+@router.get("/saml/config", response_model=list[SAMLConfigResponse])
+async def list_saml_configs(
+    _principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[SAMLConfigResponse]:
+    """List this tenant's (non-deleted) SAML configs — never the SP key.
+
+    RLS scopes the read to the active tenant (0 or 1 SAML config, per the
+    unique constraint on ``tenant_id, provider``).
+    """
+    result = await session.execute(
+        select(SSOConfiguration)
+        .where(
+            SSOConfiguration.provider == SSOProvider.SAML.value,
+            SSOConfiguration.deleted_at.is_(None),
+        )
+        .order_by(SSOConfiguration.created_at)
+    )
+    return [_to_saml_response(row) for row in result.scalars().all()]
+
+
+@router.post("/saml/config", response_model=SAMLConfigResponse, status_code=status.HTTP_201_CREATED)
+async def create_saml_config(
+    payload: SAMLConfigUpsertRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> SAMLConfigResponse:
+    """Create the tenant's SAML config. tenant_admin only.
+
+    One SAML config per tenant (DB unique constraint on
+    ``tenant_id, provider``); a second create returns 409.
+    """
+    tenant_id = require_tenant_id(principal)
+
+    existing = await session.execute(
+        select(SSOConfiguration).where(
+            SSOConfiguration.provider == SSOProvider.SAML.value,
+            SSOConfiguration.deleted_at.is_(None),
+        )
+    )
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="this tenant already has a SAML configuration; edit it instead",
+        )
+
+    row = SSOConfiguration(
+        id=uuid7(),
+        tenant_id=tenant_id,
+        provider=SSOProvider.SAML.value,
+        display_name=payload.display_name,
+        enabled=payload.enabled,
+        idp_entity_id=payload.idp_entity_id,
+        idp_sso_url=payload.idp_sso_url,
+        idp_x509_cert=payload.idp_x509_cert,
+        name_id_format=payload.name_id_format,
+        attribute_mappings=payload.attribute_mappings,
+        sp_x509_cert=payload.sp_x509_cert,
+        authn_requests_signed=payload.authn_requests_signed,
+        want_assertions_signed=payload.want_assertions_signed,
+        want_assertions_encrypted=payload.want_assertions_encrypted,
+        want_name_id_encrypted=payload.want_name_id_encrypted,
+    )
+    _apply_sp_private_key(row, payload)
+    _validate_saml_crypto_invariant(row)
+    session.add(row)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="this tenant already has a SAML configuration",
+        ) from exc
+    await session.refresh(row)
+    return _to_saml_response(row)
+
+
+@router.put("/saml/config/{config_id}", response_model=SAMLConfigResponse)
+async def update_saml_config(
+    config_id: UUID,
+    payload: SAMLConfigUpsertRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> SAMLConfigResponse:
+    """Edit the tenant's SAML config. tenant_admin only.
+
+    Omitting both SP-key fields keeps the previously stored key. A config
+    id from another tenant 404s (RLS + provider filter).
+    """
+    require_tenant_id(principal)
+    result = await session.execute(
+        select(SSOConfiguration).where(
+            SSOConfiguration.id == config_id,
+            SSOConfiguration.provider == SSOProvider.SAML.value,
+            SSOConfiguration.deleted_at.is_(None),
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SAML configuration not found",
+        )
+
+    row.display_name = payload.display_name
+    row.enabled = payload.enabled
+    row.idp_entity_id = payload.idp_entity_id
+    row.idp_sso_url = payload.idp_sso_url
+    row.idp_x509_cert = payload.idp_x509_cert
+    row.name_id_format = payload.name_id_format
+    row.attribute_mappings = payload.attribute_mappings
+    row.sp_x509_cert = payload.sp_x509_cert
+    row.authn_requests_signed = payload.authn_requests_signed
+    row.want_assertions_signed = payload.want_assertions_signed
+    row.want_assertions_encrypted = payload.want_assertions_encrypted
+    row.want_name_id_encrypted = payload.want_name_id_encrypted
+    _apply_sp_private_key(row, payload)
+    _validate_saml_crypto_invariant(row)
+    await session.flush()
+    await session.refresh(row)
+    return _to_saml_response(row)
+
+
+@router.delete("/saml/config/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_saml_config(
+    config_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> None:
+    """Soft-delete the tenant's SAML config. tenant_admin only."""
+    require_tenant_id(principal)
+    result = await session.execute(
+        select(SSOConfiguration).where(
+            SSOConfiguration.id == config_id,
+            SSOConfiguration.provider == SSOProvider.SAML.value,
+            SSOConfiguration.deleted_at.is_(None),
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SAML configuration not found",
         )
     row.deleted_at = datetime.now(tz=UTC)
     await session.flush()

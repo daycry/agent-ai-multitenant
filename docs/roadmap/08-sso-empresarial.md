@@ -210,11 +210,21 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_06` — UI de configuración SAML por tenant con upload de metadata IdP
 
-- [ ] **Título**: UI de configuración SAML por tenant con upload de metadata IdP
+- [x] **Título**: UI de configuración SAML por tenant con upload de metadata IdP
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
 - **Dependencias**: `task_08_05`
+- **Estado**: completado. Página `/admin/settings/sso/saml` (consume el CRUD
+  SAML añadido en `routers/sso.py`: GET/POST/PUT/DELETE `/auth/sso/saml/config`,
+  GET `/auth/sso/saml/sp-metadata`, POST `/auth/sso/saml/parse-metadata`). Parseo
+  de metadata IdP server-side con lxml endurecido (sin xmlsec, anti-XXE). Backend
+  CRUD + parse cubierto por `tests/integration/test_saml_config_crud.py` (19 tests
+  verdes: RBAC, RLS cross-tenant, clave SP cifrada y nunca devuelta, invariante de
+  firma/cifrado, coexistencia OIDC+SAML, parseo de metadata). Frontend verde:
+  `npm run typecheck && lint && build`. El e2e `e2e/sso-saml-config.spec.ts` está
+  ESCRITO pero NO ejecutado — pendiente de verificación humana (requiere navegador
+  - dev server).
 - **Tests automáticos**:
   ```yaml
   - id: auto_08_06_a

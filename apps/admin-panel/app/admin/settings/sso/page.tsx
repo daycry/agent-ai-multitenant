@@ -32,6 +32,7 @@
  * mutación en <RoleGuard min="tenant_admin">.
  */
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, KeyRound, Pencil, Plus, Shield, Trash2 } from "lucide-react";
@@ -202,6 +203,14 @@ export default function SsoConfigPage() {
           ) : null
         }
       />
+
+      <p className="text-muted-foreground mt-2 text-sm" data-testid="sso-saml-link">
+        ¿Tu IdP habla SAML 2.0 en lugar de OIDC?{" "}
+        <Link href="/admin/settings/sso/saml" className="text-primary underline">
+          Configura SAML aquí
+        </Link>
+        .
+      </p>
 
       <CallbackUrlCard
         url={callbackQuery.data?.callback_url ?? null}
