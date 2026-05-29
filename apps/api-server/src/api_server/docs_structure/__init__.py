@@ -24,6 +24,11 @@ Sub-modules:
     validator: :func:`detect_doc_language` classifies a body as es/en via
     a stopword heuristic and :func:`validate_doc_language` flags confident
     mismatches against the frontmatter ``docs_language``.
+  * :mod:`api_server.docs_structure.kb_sync` — task_07_09's
+    :func:`sync_project_docs`, which mirrors a project's ``/docs`` tree into
+    a deterministic per-project internal-docs KB (reusing the KB schema +
+    the Plan 06.13 markdown chunker). It is the callable a future
+    git-webhook / PR-merge hook (Plan 13) invokes.
 """
 
 from __future__ import annotations
@@ -36,6 +41,12 @@ from api_server.docs_structure.constants import (
     KEEP_FILENAME,
     README_FILENAME,
     CanonicalDocFolder,
+)
+from api_server.docs_structure.kb_sync import (
+    DocSyncResult,
+    internal_doc_id,
+    internal_docs_kb_id,
+    sync_project_docs,
 )
 from api_server.docs_structure.language import (
     SUPPORTED_LANGUAGES,
@@ -65,6 +76,7 @@ __all__ = [
     "README_FILENAME",
     "SUPPORTED_LANGUAGES",
     "CanonicalDocFolder",
+    "DocSyncResult",
     "Language",
     "LanguageCheckResult",
     "LanguageDetection",
@@ -76,8 +88,11 @@ __all__ = [
     "check_doc_file",
     "check_docs_structure",
     "detect_doc_language",
+    "internal_doc_id",
+    "internal_docs_kb_id",
     "parse_declared_language",
     "split_frontmatter",
+    "sync_project_docs",
     "validate_doc_language",
     "validate_docs_structure",
 ]

@@ -227,7 +227,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_09` — Sincronización /docs ↔ kb_internal_docs al mergear PR (webhook Git)
 
-- [ ] **Título**: Sincronización /docs ↔ kb_internal_docs al mergear PR (webhook Git)
+- [x] **Título**: Sincronización /docs ↔ kb_internal_docs al mergear PR (webhook Git)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
