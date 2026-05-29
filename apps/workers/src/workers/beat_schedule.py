@@ -47,4 +47,12 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": crontab(hour="3", minute="30"),
         "options": {"queue": "default"},
     },
+    # Plan 06.11 — safety net: re-enqueue documents stuck in `pending`
+    # (a missed enqueue, a worker crash mid-flight, or an upload while
+    # the broker was down). Cheap query; runs every 2 minutes.
+    "sweep-pending-documents-every-2m": {
+        "task": "workers.sweep_pending_documents",
+        "schedule": schedule(run_every=120.0),
+        "options": {"queue": "ingestion"},
+    },
 }

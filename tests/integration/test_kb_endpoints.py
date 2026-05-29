@@ -308,6 +308,41 @@ async def test_upload_document_writes_to_storage_and_persists_row(
 
 
 @pytest.mark.asyncio
+async def test_upload_enqueues_ingestion(
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan 06.11: a successful upload must hand the document to the
+    ingestion worker (best-effort send_task by Celery name)."""
+    app, _ = configured_app
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    enqueued: list[str] = []
+
+    async def _fake_enqueue(document_id: object) -> bool:
+        enqueued.append(str(document_id))
+        return True
+
+    import api_server.routers.knowledge_bases as kb_router
+
+    monkeypatch.setattr(kb_router, "enqueue_ingestion", _fake_enqueue)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        kb = await client.post("/knowledge-bases", json={"name": "KB Enq"}, headers=headers)
+        kb_id = kb.json()["id"]
+        upload = await client.post(
+            f"/knowledge-bases/{kb_id}/documents",
+            files={"file": ("a.txt", b"hi", "text/plain")},
+            headers=headers,
+        )
+        assert upload.status_code == 201, upload.text
+        doc_id = upload.json()["id"]
+
+    assert enqueued == [doc_id]
+
+
+@pytest.mark.asyncio
 async def test_empty_upload_is_rejected(configured_app, migrations_pg_dsn: str) -> None:
     app, _ = configured_app
     seeded = await _seed(migrations_pg_dsn)
@@ -354,6 +389,99 @@ async def test_list_and_get_documents(configured_app, migrations_pg_dsn: str) ->
         single = await client.get(f"/knowledge-bases/{kb_id}/documents/{doc_id}", headers=headers)
         assert single.status_code == 200
         assert single.json()["id"] == doc_id
+
+
+@pytest.mark.asyncio
+async def test_reindex_resets_document_and_reenqueues(
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan 06.11: re-index resets an indexed/failed doc to `pending`,
+    drops its stale chunks, clears the error, and re-enqueues."""
+    app, _ = configured_app
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    enqueued: list[str] = []
+
+    async def _fake_enqueue(document_id: object) -> bool:
+        enqueued.append(str(document_id))
+        return True
+
+    import api_server.routers.knowledge_bases as kb_router
+
+    monkeypatch.setattr(kb_router, "enqueue_ingestion", _fake_enqueue)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        kb_id = (
+            await client.post("/knowledge-bases", json={"name": "KB Reindex"}, headers=headers)
+        ).json()["id"]
+        doc_id = (
+            await client.post(
+                f"/knowledge-bases/{kb_id}/documents",
+                files={"file": ("r.txt", b"reindex me", "text/plain")},
+                headers=headers,
+            )
+        ).json()["id"]
+
+    # Simulate a finished (failed) ingestion with stale chunks.
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "UPDATE documents SET status = 'failed', error_message = 'boom',"
+            " indexed_at = now() WHERE id = $1",
+            UUID(doc_id),
+        )
+        await conn.execute(
+            "INSERT INTO chunks (id, tenant_id, document_id, ordinal, content)"
+            " VALUES ($1, $2, $3, 0, 'stale chunk')",
+            uuid4(),
+            seeded["tenant_id"],
+            UUID(doc_id),
+        )
+    finally:
+        await conn.close()
+
+    enqueued.clear()  # drop the enqueue the upload itself fired
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            f"/knowledge-bases/{kb_id}/documents/{doc_id}/reindex", headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "pending"
+
+    assert enqueued == [doc_id]
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        row = await conn.fetchrow(
+            "SELECT status, error_message FROM documents WHERE id = $1", UUID(doc_id)
+        )
+        n_chunks = await conn.fetchval(
+            "SELECT count(*) FROM chunks WHERE document_id = $1", UUID(doc_id)
+        )
+    finally:
+        await conn.close()
+    assert row["status"] == "pending"
+    assert row["error_message"] is None
+    assert n_chunks == 0
+
+
+@pytest.mark.asyncio
+async def test_reindex_missing_document_404(configured_app, migrations_pg_dsn: str) -> None:
+    app, _ = configured_app
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        kb_id = (
+            await client.post("/knowledge-bases", json={"name": "KB R404"}, headers=headers)
+        ).json()["id"]
+        resp = await client.post(
+            f"/knowledge-bases/{kb_id}/documents/{uuid4()}/reindex", headers=headers
+        )
+        assert resp.status_code == 404
 
 
 @pytest.mark.asyncio

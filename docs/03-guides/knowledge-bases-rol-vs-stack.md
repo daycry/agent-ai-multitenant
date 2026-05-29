@@ -87,6 +87,33 @@ Cuando el doc crece y se separa naturalmente, **partelo en dos KBs**.
 Es barato — son sólo metadata + chunks; los chunks no se duplican
 entre KBs.
 
+## Los equipos (teams) NO tienen KB
+
+Es una pregunta recurrente: "¿puedo asignar una KB a un equipo entero?".
+**No, y es intencionado.** Sólo hay dos ejes de grant — **agente** (rol)
+y **proyecto** (stack) — más el catálogo built-in. No existe
+`team_knowledge_bases`.
+
+Por qué la arquitectura lo descarta (ver [ADR 0026](../05-architecture-decisions/0026-agent-scoped-kbs.md),
+alternativa "KBs por team", rechazada):
+
+- En cuanto necesitas "el reviewer ve X pero el backend_dev del mismo
+  equipo ve Y", ya necesitas el grant **por agente** — que es el eje que
+  ya existe. El eje de equipo se vuelve redundante.
+- Un agente no siempre pertenece a un único equipo, y el catálogo
+  built-in es global, no ligado a equipo. Un eje de equipo dejaría
+  built-ins y agentes sueltos sin cubrir.
+
+> ⚠️ No confundas con la **memoria** `team_shared`. La memoria de equipo
+> es conocimiento que los agentes **acumulan en runtime** y se comparte
+> dentro del equipo. Una **KB** es un corpus **curado** por rol/stack.
+> Que exista memoria `team_shared` NO implica que falten KBs de equipo —
+> son conceptos distintos.
+
+Si de verdad necesitas anclar conocimiento "del equipo", grántaselo al
+**agente** que lo usa (si es doctrina de su rol) o al **proyecto** del
+equipo (si es del stack). Cubre el 100 % de los casos sin un tercer eje.
+
 ## Anti-patrones
 
 ### ❌ Crear `backend_dev_python`, `backend_dev_php`, `backend_dev_js`

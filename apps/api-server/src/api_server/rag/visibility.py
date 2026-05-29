@@ -92,11 +92,17 @@ def visibility_filter_clause(*, with_agent: bool) -> str:
     The clause assumes the outer query has `chunks` aliased as
     ``chunks`` and `documents` joinable via ``document_id``.
     """
+    # Both branches join knowledge_bases and check `deleted_at IS NULL`
+    # on the KB AND the document so a soft-deleted KB (or document)
+    # stops feeding the RAG — mirroring the `resolve_visible_kbs`
+    # filter so the two surfaces cannot drift (Plan 06.11 task_06_11_02).
     project_branch = (
         "EXISTS ("
         "    SELECT 1 FROM kb_projects kp"
         "    JOIN documents d ON d.id = chunks.document_id"
+        "    JOIN knowledge_bases kb ON kb.id = d.kb_id"
         "    WHERE kp.kb_id = d.kb_id AND kp.project_id = :project_id"
+        "      AND d.deleted_at IS NULL AND kb.deleted_at IS NULL"
         ")"
     )
     if not with_agent:
@@ -106,7 +112,9 @@ def visibility_filter_clause(*, with_agent: bool) -> str:
         "EXISTS ("
         "    SELECT 1 FROM agent_knowledge_bases ak"
         "    JOIN documents d2 ON d2.id = chunks.document_id"
+        "    JOIN knowledge_bases kb2 ON kb2.id = d2.kb_id"
         "    WHERE ak.kb_id = d2.kb_id AND ak.agent_id = :agent_id"
+        "      AND d2.deleted_at IS NULL AND kb2.deleted_at IS NULL"
         ")"
     )
     return f" AND chunks.tenant_id = :tenant_id AND ({project_branch} OR {agent_branch})"

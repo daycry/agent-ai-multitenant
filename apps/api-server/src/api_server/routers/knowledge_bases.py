@@ -22,7 +22,7 @@ import contextlib
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,7 @@ from api_server.auth.deps import (
     require_tenant_admin,
     require_tenant_member,
 )
+from api_server.celery_client import enqueue_ingestion
 from api_server.db.domain import Project
 from api_server.db.knowledge import (
     Chunk,
@@ -494,6 +495,12 @@ async def upload_document(
     session.add(doc)
     await session.flush()
     await session.refresh(doc)
+
+    # Plan 06.11: hand the document to the ingestion worker. Best-effort
+    # — a broker hiccup must not fail the upload (the row is persisted as
+    # `pending` and the beat sweep re-enqueues it).
+    await enqueue_ingestion(doc.id)
+
     return to_document_response(doc)
 
 
@@ -545,6 +552,39 @@ async def delete_document(
     with contextlib.suppress(ObjectStorageError):
         await storage.delete_object(key=doc.source_storage_key)
     await soft_delete(session, doc)
+
+
+@router.post("/{kb_id}/documents/{document_id}/reindex", response_model=DocumentResponse)
+async def reindex_document(
+    kb_id: UUID,
+    document_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> DocumentResponse:
+    """Re-run ingestion for a document (Plan 06.11 task_06_11_03).
+
+    The recovery path for a `failed` document — or to re-parse after an
+    upstream service was fixed. Resets the row to `pending`, clears the
+    error, drops the document's stale chunks (so the re-run doesn't
+    duplicate them) and re-enqueues. The source blob in MinIO is reused.
+    """
+    require_tenant_id(principal)
+    doc = await _load_document(session, document_id)
+    if doc.kb_id != kb_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not in this kb")
+
+    # Drop stale chunks so the re-run is idempotent (the pipeline only
+    # inserts; it does not clear prior chunks).
+    await session.execute(delete(Chunk).where(Chunk.document_id == doc.id))
+    doc.status = "pending"
+    doc.error_message = None
+    doc.indexed_at = None
+    doc.page_count = 0
+    await session.flush()
+    await session.refresh(doc)
+
+    await enqueue_ingestion(doc.id)
+    return to_document_response(doc)
 
 
 # ===========================================================================

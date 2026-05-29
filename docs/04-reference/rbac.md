@@ -113,21 +113,22 @@ endpoints que devuelven el contexto del propio usuario.
 
 ### `knowledge_bases.py`
 
-| Endpoint                                      | Método | Rol mínimo     |
-| --------------------------------------------- | ------ | -------------- |
-| `/knowledge-bases`                            | GET    | `tenant_user`  |
-| `/knowledge-bases`                            | POST   | `tenant_admin` |
-| `/knowledge-bases/{id}`                       | GET    | `tenant_user`  |
-| `/knowledge-bases/{id}`                       | PUT    | `tenant_admin` |
-| `/knowledge-bases/{id}`                       | DELETE | `tenant_admin` |
-| `/knowledge-bases/{id}/documents`             | GET    | `tenant_user`  |
-| `/knowledge-bases/{id}/documents`             | POST   | `tenant_admin` |
-| `/knowledge-bases/{id}/documents/{doc}`       | GET    | `tenant_user`  |
-| `/knowledge-bases/{id}/documents/{doc}`       | DELETE | `tenant_admin` |
-| `/knowledge-bases/{id}/projects`              | POST   | `tenant_admin` |
-| `/knowledge-bases/{id}/projects/{project_id}` | DELETE | `tenant_admin` |
-| `/projects/{id}/knowledge-bases`              | GET    | `tenant_user`  |
-| `/documents/{id}/citations`                   | GET    | `tenant_user`  |
+| Endpoint                                        | Método | Rol mínimo     |
+| ----------------------------------------------- | ------ | -------------- |
+| `/knowledge-bases`                              | GET    | `tenant_user`  |
+| `/knowledge-bases`                              | POST   | `tenant_admin` |
+| `/knowledge-bases/{id}`                         | GET    | `tenant_user`  |
+| `/knowledge-bases/{id}`                         | PUT    | `tenant_admin` |
+| `/knowledge-bases/{id}`                         | DELETE | `tenant_admin` |
+| `/knowledge-bases/{id}/documents`               | GET    | `tenant_user`  |
+| `/knowledge-bases/{id}/documents`               | POST   | `tenant_admin` |
+| `/knowledge-bases/{id}/documents/{doc}`         | GET    | `tenant_user`  |
+| `/knowledge-bases/{id}/documents/{doc}`         | DELETE | `tenant_admin` |
+| `/knowledge-bases/{id}/documents/{doc}/reindex` | POST   | `tenant_admin` |
+| `/knowledge-bases/{id}/projects`                | POST   | `tenant_admin` |
+| `/knowledge-bases/{id}/projects/{project_id}`   | DELETE | `tenant_admin` |
+| `/projects/{id}/knowledge-bases`                | GET    | `tenant_user`  |
+| `/documents/{id}/citations`                     | GET    | `tenant_user`  |
 
 ### `kb_categories.py` (Plan 06.10)
 
