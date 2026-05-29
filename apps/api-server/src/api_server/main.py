@@ -73,6 +73,18 @@ configure_logging(service="api-server")
 
 _logger = get_logger(__name__)
 
+# CORS allow-lists (secrets-config-4). The pre-Plan-06.14 config used the
+# wildcard `["*"]` for both methods and headers together with
+# `allow_credentials=True`. That combination is footgun-adjacent: with
+# credentials the browser refuses the literal `*` and Starlette has to
+# reflect the request's Access-Control-Request-* values back, which
+# effectively turns the allow-list off. We pin the methods this API
+# actually serves and the headers the admin-panel actually sends so the
+# preflight response is an explicit, auditable contract rather than a
+# reflect-everything wildcard.
+_CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+_CORS_ALLOW_HEADERS = ["Authorization", "Content-Type", "X-Tenant-Id", "X-Request-ID"]
+
 
 async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all for unhandled route exceptions (error-obs-logging-5).
@@ -134,8 +146,8 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=_CORS_ALLOW_METHODS,
+        allow_headers=_CORS_ALLOW_HEADERS,
     )
 
     # Global catch-all so an unhandled error never leaks the stack to the

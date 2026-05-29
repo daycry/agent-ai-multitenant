@@ -1,8 +1,10 @@
 "use client";
 
+import { QueryErrorResetBoundary } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { AdminErrorBoundary } from "@/components/layout/error-boundary";
 import { AdminShell } from "@/components/layout/admin-shell";
 import { LanguageProvider } from "@/lib/lang-context";
 import { TenantProvider } from "@/lib/tenant-context";
@@ -35,10 +37,16 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <TenantProvider>
-      <LanguageProvider>
-        <AdminShell>{children}</AdminShell>
-      </LanguageProvider>
-    </TenantProvider>
+    <QueryErrorResetBoundary>
+      {({ reset }) => (
+        <AdminErrorBoundary onReset={reset}>
+          <TenantProvider>
+            <LanguageProvider>
+              <AdminShell>{children}</AdminShell>
+            </LanguageProvider>
+          </TenantProvider>
+        </AdminErrorBoundary>
+      )}
+    </QueryErrorResetBoundary>
   );
 }
