@@ -198,6 +198,21 @@ jobs:
           python -m pip install -e "packages/shared-test-runtimes[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
 
+      # Cross-tenant isolation gate (Plan 06.14 task_06_14_16, tests-quality-6).
+      # CLAUDE.md makes cross-tenant denial tests mandatory; under pytest 8.x a
+      # *skipped* test does not fail the run, so a plain `pytest -v` would not
+      # catch the suite being accidentally disabled. This explicit, required
+      # step runs ONLY the @pytest.mark.cross_tenant tests and additionally
+      # fails if pytest collected zero of them (`--strict-markers` is on, and
+      # an empty selection would exit 5 = "no tests collected", which we treat
+      # as a regression of the safety net rather than a pass).
+      - name: pytest cross-tenant isolation gate
+        if: steps.detect.outputs.has_compose == 'true'
+        env:
+          TEST_PG_PORT: "15432"
+          TEST_REDIS_URL: redis://localhost:6379/15
+        run: pytest tests/integration -m cross_tenant -v
+
       - name: pytest tests/integration
         if: steps.detect.outputs.has_compose == 'true'
         env:
