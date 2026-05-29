@@ -314,7 +314,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_14` — Búsqueda semántica sobre kb_internal_docs
 
-- [ ] **Título**: Búsqueda semántica sobre kb_internal_docs
+- [x] **Título**: Búsqueda semántica sobre kb_internal_docs
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

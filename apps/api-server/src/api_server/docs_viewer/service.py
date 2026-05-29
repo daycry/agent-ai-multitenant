@@ -27,11 +27,15 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from uuid import UUID
 
+import structlog
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.docs_structure.constants import CANONICAL_DOC_FOLDER_NAMES, DOCS_DIRNAME
-from api_server.rag.search import bm25_chunks
+from api_server.ingestion.embeddings import Embedder, EmbeddingError
+from api_server.rag.search import bm25_chunks, vector_chunks
+
+logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Named constants (no magic numbers — project config principle)
@@ -116,6 +120,25 @@ class DocSearchHit:
     relpath: str | None
     ordinal: int
     rank: int
+    snippet: str
+
+
+@dataclass(frozen=True)
+class DocSemanticHit:
+    """One ranked semantic (vector) search hit.
+
+    Mirrors :class:`DocSearchHit` but carries a cosine ``score`` in
+    ``[0.0, 1.0]`` (higher = more similar) instead of a BM25 ``rank``-only
+    ordering. ``rank`` is still surfaced (1-based vector order) so the viewer
+    can show position; ``score`` is the cosine similarity for relevance bars.
+    """
+
+    chunk_id: UUID
+    document_id: UUID
+    relpath: str | None
+    ordinal: int
+    rank: int
+    score: float
     snippet: str
 
 
@@ -372,6 +395,158 @@ async def search_docs(
     return hits
 
 
+# ---------------------------------------------------------------------------
+# Semantic (vector) search
+# ---------------------------------------------------------------------------
+def _relpath_from_meta(meta: dict[str, object] | None, fallback_title: str | None) -> str | None:
+    """The source doc's repo-relative path for a chunk.
+
+    Fase C stamps ``relpath`` on the chunk metadata; fall back to the
+    document's title (which the sync also sets to the relpath) for any chunk
+    that predates the metadata convention. Shared by full-text and semantic
+    hydration so both surfaces agree on the same path.
+    """
+    relpath = (meta or {}).get("relpath")
+    if isinstance(relpath, str):
+        return relpath
+    return fallback_title
+
+
+async def semantic_search_docs(
+    session: AsyncSession,
+    *,
+    query: str,
+    tenant_id: UUID,
+    project_id: UUID,
+    embedder: Embedder,
+    limit: int = DEFAULT_SEARCH_LIMIT,
+) -> list[DocSemanticHit]:
+    """Semantic (pgvector cosine) search over the project's internal-docs KB.
+
+    Embeds ``query`` with the injectable ``embedder`` (production: the real
+    :class:`~api_server.ingestion.embeddings.OllamaEmbedder`; tests: the
+    deterministic :class:`~api_server.ingestion.embeddings.HashEmbedder` — no
+    network), then reuses :func:`api_server.rag.search.vector_chunks` for the
+    ranked, KB-visibility-filtered chunk ids. Because ``vector_chunks`` carries
+    the same KB-visibility filter as the full-text path, a member of one tenant
+    can never get a hit from another tenant's docs.
+
+    Each hit is hydrated into a :class:`DocSemanticHit` carrying a snippet, the
+    source doc's ``relpath``, and a cosine ``score`` in ``[0.0, 1.0]`` (computed
+    from the same query vector). Hits preserve the vector-distance order;
+    ``rank`` is the 1-based position.
+
+    Returns ``[]`` when:
+      * ``query`` is blank,
+      * the embedder yields no vector (an embedding failure is non-fatal —
+        semantic search simply has nothing to rank by, same recipe as the
+        Plan-04 RAG tool), or
+      * no chunk has an embedding to compare against (``vector_chunks`` skips
+        NULL-embedding rows).
+    """
+    if not query.strip():
+        return []
+
+    query_embedding = await _embed_query(embedder, query)
+    if query_embedding is None:
+        return []
+
+    bounded = max(1, min(limit, MAX_SEARCH_LIMIT))
+    chunk_ids = await vector_chunks(
+        session,
+        query_embedding=query_embedding,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        limit=bounded,
+    )
+    if not chunk_ids:
+        return []
+
+    # Hydrate the ranked ids: content + metadata for the snippet/relpath, plus
+    # the cosine similarity against the same query vector. ``1 - cosine
+    # distance`` gives a [0, 1]-ish similarity (clamped) for a relevance score.
+    qvec_str = "[" + ",".join(f"{x:.6f}" for x in query_embedding) + "]"
+    rows = await session.execute(
+        text(
+            "SELECT chunks.id, chunks.document_id, chunks.ordinal,"
+            "       chunks.content, chunks.metadata AS meta,"
+            "       1 - (chunks.embedding <=> CAST(:qvec AS vector)) AS similarity"
+            " FROM chunks"
+            " WHERE chunks.id = ANY(:ids)"
+        ),
+        {"ids": chunk_ids, "qvec": qvec_str},
+    )
+    by_id = {row[0]: row for row in rows.all()}
+
+    missing_relpath_doc_ids = {
+        row[1] for row in by_id.values() if not isinstance((row[4] or {}).get("relpath"), str)
+    }
+    title_by_doc: dict[UUID, str] = {}
+    if missing_relpath_doc_ids:
+        from api_server.db.knowledge import Document
+
+        doc_rows = await session.execute(
+            select(Document.id, Document.title).where(Document.id.in_(missing_relpath_doc_ids))
+        )
+        title_by_doc = dict(doc_rows.tuples().all())
+
+    hits: list[DocSemanticHit] = []
+    for rank, chunk_id in enumerate(chunk_ids, start=1):
+        row = by_id.get(chunk_id)
+        if row is None:
+            continue
+        document_id, ordinal, content, meta, similarity = (
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            row[5],
+        )
+        hits.append(
+            DocSemanticHit(
+                chunk_id=chunk_id,
+                document_id=document_id,
+                relpath=_relpath_from_meta(meta, title_by_doc.get(document_id)),
+                ordinal=ordinal,
+                rank=rank,
+                score=_clamp_unit(float(similarity)),
+                snippet=_snippet(content),
+            )
+        )
+    return hits
+
+
+def _clamp_unit(value: float) -> float:
+    """Clamp a cosine similarity to ``[0.0, 1.0]``.
+
+    Cosine similarity is mathematically in ``[-1, 1]``; for the viewer's
+    relevance bar we clamp to ``[0, 1]`` (a negative similarity means
+    'unrelated', which we surface as ``0.0``).
+    """
+    if value < 0.0:
+        return 0.0
+    if value > 1.0:
+        return 1.0
+    return value
+
+
+async def _embed_query(embedder: Embedder, query: str) -> list[float] | None:
+    """Embed the query for the vector path; ``None`` if the embedder fails.
+
+    An embedding failure is non-fatal — semantic search simply has nothing to
+    rank by (the same non-blocking recipe the Plan-04 RAG tool uses), so the
+    caller returns an empty hit list rather than a 5xx.
+    """
+    try:
+        vectors = await embedder.embed([query])
+    except EmbeddingError as exc:
+        logger.warning("docs_viewer.semantic_search.embedder_failed", error=str(exc))
+        return None
+    if not vectors:
+        return None
+    return list(vectors[0])
+
+
 __all__ = [
     "DEFAULT_SEARCH_LIMIT",
     "MARKDOWN_SUFFIX",
@@ -380,6 +555,7 @@ __all__ = [
     "DocContent",
     "DocNotFoundError",
     "DocSearchHit",
+    "DocSemanticHit",
     "DocTree",
     "DocTreeFile",
     "DocTreeFolder",
@@ -389,4 +565,5 @@ __all__ = [
     "read_doc_content",
     "read_doc_tree",
     "search_docs",
+    "semantic_search_docs",
 ]

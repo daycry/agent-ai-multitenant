@@ -29,7 +29,7 @@ derives it from ``settings.data_root`` via
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from uuid import UUID
 
@@ -54,7 +54,9 @@ from api_server.docs_viewer.service import (
     read_doc_content,
     read_doc_tree,
     search_docs,
+    semantic_search_docs,
 )
+from api_server.ingestion.embeddings import Embedder, OllamaEmbedder
 from api_server.routers._helpers import require_tenant_id
 
 router = APIRouter(prefix="/projects/{project_id}/docs", tags=["docs-viewer"])
@@ -78,6 +80,22 @@ def get_docs_root_resolver() -> DocsRootResolver:
         return project_docs_root(data_root, tenant_id=tenant_id, project_id=project_id)
 
     return _resolve
+
+
+async def get_query_embedder() -> AsyncIterator[Embedder]:
+    """Provide the query embedder for semantic search (overridable in tests).
+
+    Production yields the real :class:`OllamaEmbedder` (owns an httpx client we
+    close after the request). Tests register an override via
+    ``app.dependency_overrides[get_query_embedder]`` returning the deterministic
+    :class:`~api_server.ingestion.embeddings.HashEmbedder` so no network /
+    running Ollama is required (it is down in CI).
+    """
+    embedder = OllamaEmbedder()
+    try:
+        yield embedder
+    finally:
+        await embedder.aclose()
 
 
 async def _require_visible_project(session: AsyncSession, project_id: UUID) -> None:
@@ -218,4 +236,57 @@ async def search_project_docs(
     }
 
 
-__all__ = ["get_docs_root_resolver", "router"]
+# ===========================================================================
+# Semantic (vector) search
+# ===========================================================================
+@router.get("/semantic-search")
+async def semantic_search_project_docs(
+    project_id: UUID,
+    q: str = Query(..., min_length=1, description="Semantic query"),
+    limit: int = Query(
+        default=DEFAULT_SEARCH_LIMIT,
+        ge=1,
+        le=MAX_SEARCH_LIMIT,
+        description=f"Max ranked hits (1..{MAX_SEARCH_LIMIT}).",
+    ),
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+    embedder: Embedder = Depends(get_query_embedder),
+) -> dict[str, object]:
+    """Semantic search the project's internal-docs KB, ranked + snippeted.
+
+    Embeds ``q`` and ranks the project's internal-docs chunks by pgvector
+    cosine similarity. Returns ``hits: []`` when the query embeds to nothing,
+    no chunk has an embedding, or nothing matches — never a 5xx for an
+    embedder hiccup (semantic search degrades to "no results").
+    """
+    tenant_id = require_tenant_id(principal)
+    await _require_visible_project(session, project_id)
+
+    hits = await semantic_search_docs(
+        session,
+        query=q,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        embedder=embedder,
+        limit=limit,
+    )
+    return {
+        "project_id": str(project_id),
+        "query": q,
+        "hits": [
+            {
+                "chunk_id": str(hit.chunk_id),
+                "document_id": str(hit.document_id),
+                "relpath": hit.relpath,
+                "ordinal": hit.ordinal,
+                "rank": hit.rank,
+                "score": hit.score,
+                "snippet": hit.snippet,
+            }
+            for hit in hits
+        ],
+    }
+
+
+__all__ = ["get_docs_root_resolver", "get_query_embedder", "router"]
