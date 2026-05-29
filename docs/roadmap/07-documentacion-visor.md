@@ -138,7 +138,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_04` — Validador de idioma: detecta si un .md está en idioma distinto al declarado
 
-- [ ] **Título**: Validador de idioma: detecta si un .md está en idioma distinto al declarado
+- [x] **Título**: Validador de idioma: detecta si un .md está en idioma distinto al declarado
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer

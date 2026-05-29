@@ -215,6 +215,14 @@ ignore_missing_imports = true
 module = ["hvac", "hvac.*"]
 ignore_missing_imports = true
 
+# `yaml` (PyYAML) parses doc frontmatter in the docs language validator
+# (Plan 07 task_07_04). The pre-commit mypy hook doesn't install the
+# `types-PyYAML` stubs; the runtime venv has PyYAML. Same pattern as the
+# other optional-dep overrides above.
+[[tool.mypy.overrides]]
+module = ["yaml", "yaml.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

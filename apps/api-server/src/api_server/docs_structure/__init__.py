@@ -20,6 +20,10 @@ Sub-modules:
     canonical tree and :func:`check_docs_structure` wraps it as a
     pre-merge / CI gate. The package ``__main__`` exposes the gate as a
     CLI with a 0/1 exit-code contract.
+  * :mod:`api_server.docs_structure.language` — task_07_04's language
+    validator: :func:`detect_doc_language` classifies a body as es/en via
+    a stopword heuristic and :func:`validate_doc_language` flags confident
+    mismatches against the frontmatter ``docs_language``.
 """
 
 from __future__ import annotations
@@ -32,6 +36,18 @@ from api_server.docs_structure.constants import (
     KEEP_FILENAME,
     README_FILENAME,
     CanonicalDocFolder,
+)
+from api_server.docs_structure.language import (
+    SUPPORTED_LANGUAGES,
+    Language,
+    LanguageCheckResult,
+    LanguageDetection,
+    LanguageMismatch,
+    check_doc_file,
+    detect_doc_language,
+    parse_declared_language,
+    split_frontmatter,
+    validate_doc_language,
 )
 from api_server.docs_structure.validator import (
     ValidationResult,
@@ -47,11 +63,21 @@ __all__ = [
     "DOCS_DIRNAME",
     "KEEP_FILENAME",
     "README_FILENAME",
+    "SUPPORTED_LANGUAGES",
     "CanonicalDocFolder",
+    "Language",
+    "LanguageCheckResult",
+    "LanguageDetection",
+    "LanguageMismatch",
     "ValidationResult",
     "Violation",
     "ViolationKind",
     "bootstrap_docs_structure",
+    "check_doc_file",
     "check_docs_structure",
+    "detect_doc_language",
+    "parse_declared_language",
+    "split_frontmatter",
+    "validate_doc_language",
     "validate_docs_structure",
 ]
