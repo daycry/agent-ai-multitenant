@@ -121,7 +121,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_03` — Lint de Markdown (frontmatter, headers, enlaces, language tags) como check de CI
 
-- [ ] **Título**: Lint de Markdown (frontmatter, headers, enlaces, language tags) como check de CI
+- [x] **Título**: Lint de Markdown (frontmatter, headers, enlaces, language tags) como check de CI
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -132,7 +132,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
     description: "Lint de Markdown (frontmatter, headers, enlaces, language tags) como check de CI"
     check_type: automated
     runtime: generic-shell
-    command: "npx markdownlint --config .markdownlint.json docs/**/*.md"
+    command: 'npx markdownlint-cli --config .markdownlint.jsonc "docs/**/*.md"'
     expected_signal: "exit_code == 0"
   ```
 

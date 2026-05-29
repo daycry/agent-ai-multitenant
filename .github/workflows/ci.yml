@@ -51,6 +51,26 @@ jobs:
         run: pre-commit run --all-files --show-diff-on-failure
 
   # ---------------------------------------------------------------------------
+  # Markdown lint (Plan 07 task_07_03): structural / hygiene linting of the
+  # /docs corpus via markdownlint-cli. Rule set lives in .markdownlint.jsonc
+  # at the repo root (line-length and other stylistic rules the existing docs
+  # legitimately break are disabled there on purpose). The gate is the
+  # markdownlint command exiting 0 over docs/**/*.md.
+  # ---------------------------------------------------------------------------
+  lint-markdown:
+    name: Lint Markdown
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: markdownlint docs
+        run: npx --yes markdownlint-cli@0.48.0 --config .markdownlint.jsonc "docs/**/*.md"
+
+  # ---------------------------------------------------------------------------
   # TypeScript lint: prettier + eslint via the admin-panel package itself.
   # ---------------------------------------------------------------------------
   lint-typescript:
