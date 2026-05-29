@@ -130,6 +130,14 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
         Boolean, nullable=False, server_default=text("false")
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    # True when the row was materialised by an SSO (OIDC/SAML) first login
+    # via JIT provisioning (Plan 08 task_08_07). Such a user has NO usable
+    # local password — `password_hash` holds a sentinel that no plaintext
+    # can produce — and `POST /auth/login` rejects it with the generic 401
+    # *before* it ever feeds the sentinel to the argon2 verifier.
+    is_sso_provisioned: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     last_login_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     # Memberships are reached via explicit queries (see endpoints in

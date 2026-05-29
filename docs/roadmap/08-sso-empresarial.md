@@ -239,7 +239,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_07` — JIT provisioning al primer login SSO
 
-- [ ] **Título**: JIT provisioning al primer login SSO
+- [x] **Título**: JIT provisioning al primer login SSO
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

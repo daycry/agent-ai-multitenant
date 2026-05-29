@@ -605,48 +605,82 @@ async def _issue_session(
     return LoginResponse(access_token=token, token_type="bearer", expires_in=ttl_seconds)
 
 
-async def _jit_provision_user(tenant_uuid: UUID, *, email: str, full_name: str | None) -> UUID:
-    """Look the user up by email; create them (role ``tenant_user``) on first
-    SSO login, and ensure they have an active membership in the tenant.
+async def _bind_tenant(session: AsyncSession, tenant_uuid: UUID) -> None:
+    """Bind ``app.tenant_id`` for the current transaction so RLS scopes
+    every tenant-scoped read/write to ``tenant_uuid``.
 
-    Returns the user's id. Shared by the OIDC and SAML flows. Designed so
-    the dedicated JIT task (task_08_07) can extend the policy without
-    reshaping this call site.
+    Idempotent and cheap; called again after a rollback because the
+    ``set_config(..., is_local=true)`` binding is scoped to the
+    transaction that a rollback tears down.
     """
+    await session.execute(
+        text("SELECT set_config('app.tenant_id', :tid, true)"),
+        {"tid": str(tenant_uuid)},
+    )
+
+
+async def _jit_provision_user(tenant_uuid: UUID, *, email: str, full_name: str | None) -> UUID:
+    """Just-In-Time provisioning at first SSO login (Plan 08 task_08_07).
+
+    Policy (shared by the OIDC callback and the SAML ACS):
+
+      * **Link by verified email, never duplicate.** The IdP asserts the
+        email; we normalise it to lower-case (matching local
+        register/login) and look the user up. An existing local OR
+        SSO user with that email is REUSED — we never create a second
+        row for the same identity.
+      * **First SSO login creates the user** with no usable local
+        password (the ``_SSO_PASSWORD_SENTINEL`` hash that no plaintext
+        can produce) and ``is_sso_provisioned = true`` so local login
+        rejects it cleanly (see ``routers/auth.py``).
+      * **Active membership in the SSO config's tenant**, role
+        ``tenant_user`` (the Tenant Admin promotes later — Plan 08
+        "Decisiones Clave"). The membership is created under
+        ``app.tenant_id`` bound to ``tenant_uuid``, so it can only ever
+        land in THIS tenant.
+      * **Idempotent under concurrency.** Two simultaneous first-logins
+        race on the ``users.email`` unique index and on the
+        ``uq_membership_user_tenant`` unique index; both races are caught
+        and resolved by re-reading the winning row, so neither the user
+        nor the membership is ever duplicated.
+
+    Returns the (existing or freshly created) user's id.
+    """
+    normalized_email = email.strip().lower()
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session, session.begin():
         # `users` is NOT tenant-scoped (no RLS), so the lookup needs no
-        # app.user_id binding. Membership IS tenant-scoped, so bind
+        # app.tenant_id binding. Membership IS tenant-scoped, so bind
         # app.tenant_id before touching it.
-        await session.execute(
-            text("SELECT set_config('app.tenant_id', :tid, true)"),
-            {"tid": str(tenant_uuid)},
-        )
-        existing = await session.execute(select(User).where(User.email == email))
+        await _bind_tenant(session, tenant_uuid)
+
+        existing = await session.execute(select(User).where(User.email == normalized_email))
         user = existing.scalar_one_or_none()
         if user is None:
             user = User(
                 id=uuid7(),
-                email=email,
+                email=normalized_email,
                 password_hash=_SSO_PASSWORD_SENTINEL,
                 full_name=full_name,
                 is_system_admin=False,
+                is_sso_provisioned=True,
             )
             session.add(user)
             try:
                 await session.flush()
             except IntegrityError:
                 # Race: another concurrent SSO login created the same
-                # user. Re-read and proceed.
+                # user between our SELECT and INSERT. Re-read the winner
+                # (the unique email index guarantees exactly one) and
+                # proceed — no duplicate user row.
                 await session.rollback()
-                await session.execute(
-                    text("SELECT set_config('app.tenant_id', :tid, true)"),
-                    {"tid": str(tenant_uuid)},
-                )
-                existing = await session.execute(select(User).where(User.email == email))
+                await _bind_tenant(session, tenant_uuid)
+                existing = await session.execute(select(User).where(User.email == normalized_email))
                 user = existing.scalar_one()
 
         # Ensure an active membership in this tenant (role tenant_user).
+        # The query runs under app.tenant_id == tenant_uuid, so it only
+        # ever sees / writes a membership for THIS tenant.
         membership_q = await session.execute(
             select(UserOrganizationMembership).where(
                 UserOrganizationMembership.user_id == user.id,
@@ -664,6 +698,14 @@ async def _jit_provision_user(tenant_uuid: UUID, *, email: str, full_name: str |
                     is_active=True,
                 )
             )
+            try:
+                await session.flush()
+            except IntegrityError:
+                # Race: a concurrent first-login created the membership
+                # (uq_membership_user_tenant). The user already exists, so
+                # the work is done — swallow and return the same user id.
+                await session.rollback()
+                return user.id
         return user.id
 
 

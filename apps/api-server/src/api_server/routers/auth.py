@@ -149,8 +149,14 @@ async def login(
     async with sessionmaker() as db, db.begin():
         user = await _fetch_user_by_email(db, email)
 
-        # Generic 401 — never leak whether the email exists.
-        if not user or not user.is_active:
+        # Generic 401 — never leak whether the email exists, whether it's
+        # inactive, or whether it is an SSO-only identity. An
+        # SSO-provisioned user (Plan 08 task_08_07) has no usable local
+        # password: its `password_hash` is a sentinel that is not a valid
+        # argon2 encoding, so we MUST short-circuit here rather than feed
+        # it to verify_password (which would raise on the bad hash). The
+        # user logs in through their IdP instead.
+        if not user or not user.is_active or user.is_sso_provisioned:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="invalid email or password",
