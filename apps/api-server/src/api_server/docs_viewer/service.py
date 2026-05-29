@@ -23,6 +23,8 @@ Nothing here touches the network or a real git worktree.
 
 from __future__ import annotations
 
+import io
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from uuid import UUID
@@ -70,6 +72,24 @@ GIT_REF_MAX_CHARS = 256
 # this constant documents the contract for readers of this module.
 GIT_DIFF_TIMEOUT_S = 120
 
+# --- Export (task_07_17) ---------------------------------------------------
+# Filename of the ZIP a docs export produces, parameterised by project id so a
+# downloaded bundle is self-describing.
+ZIP_EXPORT_FILENAME_TEMPLATE = "docs-{project_id}.zip"
+
+# MIME type of the ZIP bundle (the router stamps it on the streamed response).
+ZIP_MEDIA_TYPE = "application/zip"
+
+# Deterministic timestamp written into every ZIP entry's header. A real mtime
+# would make the same docs tree produce byte-different archives on every run
+# (breaking reproducible builds + content-hash caching), so we pin it. The
+# epoch DOS-time floor is 1980-01-01; we use it as the stable zero point.
+_ZIP_DETERMINISTIC_DATE_TIME = (1980, 1, 1, 0, 0, 0)
+
+# Path prefix every file gets inside the archive, so unzipping yields a single
+# tidy ``docs/`` folder rather than scattering files into the cwd.
+ZIP_ARCHIVE_ROOT = "docs"
+
 
 class DocsViewerError(Exception):
     """Base class for docs-viewer service errors (translated to HTTP by the
@@ -93,6 +113,18 @@ class InvalidGitRefError(DocsViewerError):
 class DocDiffError(DocsViewerError):
     """Raised when ``git diff`` itself fails (e.g. an unknown ref) — surfaced
     to the client as a 400, never the raw git stderr."""
+
+
+class PdfExportNotConfiguredError(DocsViewerError):
+    """Raised when a PDF export is requested but no offline PDF renderer is
+    available in the runtime (translated to a 501 by the router).
+
+    PDF rendering needs a markdown→HTML→PDF toolchain (e.g. ``markdown`` +
+    ``weasyprint``); none is installed in the api-server image today and we
+    deliberately do **not** pull a heavy / native dependency just for this
+    endpoint. The ZIP export (stdlib only) is the supported path; PDF stays a
+    documented, explicit 501 until a renderer is added (see the docstring on
+    :func:`export_doc_pdf`)."""
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +166,23 @@ class DocContent:
     relpath: str
     content: str
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class DocsZipExport:
+    """A built ZIP bundle of a project's docs (task_07_17).
+
+    ``content`` is the complete archive bytes (small enough to hold in memory —
+    the canonical ``/docs`` tree is a handful of markdown files, not gigabytes).
+    ``entries`` is the sorted list of in-archive paths (e.g.
+    ``docs/03-guides/setup.md``) for assertion + logging. ``filename`` is the
+    suggested download name the router puts in ``Content-Disposition``.
+    """
+
+    project_id: UUID
+    filename: str
+    content: bytes
+    entries: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -413,6 +462,114 @@ def read_doc_content(docs_root: Path, *, project_id: UUID, relpath: str) -> DocC
         relpath=posix.as_posix(),
         content=content,
         size_bytes=len(content.encode("utf-8")),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Export — ZIP bundle (task_07_17)
+# ---------------------------------------------------------------------------
+def _collect_markdown_relpaths(docs_root: Path) -> list[str]:
+    """Every ``.md`` relpath under ``docs_root``, sorted, traversal-safe.
+
+    Reuses the same canonical tree walk the viewer's ``/tree`` endpoint uses
+    (:func:`read_doc_tree`) so the export bundles **exactly** the files the
+    viewer surfaces — top-level ``.md`` plus the contents of the canonical
+    numbered folders, and nothing else (stray dirs / non-markdown are dropped).
+    A missing root yields ``[]`` (empty bundle), matching the "worktree not
+    materialised yet" tree behaviour.
+    """
+    # A throwaway project id is fine — the tree walk does not use it for the
+    # relpaths, only to stamp the returned DocTree.
+    tree = read_doc_tree(docs_root, project_id=UUID(int=0))
+
+    relpaths: list[str] = [f.relpath for f in tree.files]
+
+    def _walk(folder: DocTreeFolder) -> None:
+        relpaths.extend(f.relpath for f in folder.files)
+        for sub in folder.folders:
+            _walk(sub)
+
+    for folder in tree.folders:
+        _walk(folder)
+    return sorted(relpaths)
+
+
+def export_docs_zip(docs_root: Path, *, project_id: UUID) -> DocsZipExport:
+    """Bundle a project's ``/docs`` markdown into a deterministic ZIP archive.
+
+    Path-safe + RBAC-scoped: the file set comes from :func:`read_doc_tree`
+    (canonical tree only), and every entry is re-validated through
+    :func:`_safe_relpath` + :func:`_resolve_within` before it is read, so a
+    symlink or odd filesystem entry can never smuggle a file from outside the
+    docs root into the archive. The caller (router) has already gated the
+    project on tenant membership + RLS visibility.
+
+    **Deterministic**: entries are sorted and every file's ZIP header carries a
+    fixed timestamp (:data:`_ZIP_DETERMINISTIC_DATE_TIME`), so the same docs
+    tree always produces byte-identical archive content — reproducible and
+    safe to content-hash / cache. Files are stored under a single
+    :data:`ZIP_ARCHIVE_ROOT` (``docs/``) prefix so unzipping yields one tidy
+    folder.
+
+    Returns a :class:`DocsZipExport`. An empty / missing docs root produces a
+    valid (empty) ZIP, not an error.
+    """
+    relpaths = _collect_markdown_relpaths(docs_root)
+
+    buffer = io.BytesIO()
+    entries: list[str] = []
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for relpath in relpaths:
+            # Re-validate every path against traversal before reading it: the
+            # tree walk produces clean relpaths, but this is defence in depth so
+            # the read can never escape the root.
+            posix = _safe_relpath(relpath)
+            target = _resolve_within(docs_root, posix)
+            if not target.is_file():
+                continue
+            arcname = f"{ZIP_ARCHIVE_ROOT}/{posix.as_posix()}"
+            info = zipfile.ZipInfo(filename=arcname, date_time=_ZIP_DETERMINISTIC_DATE_TIME)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, target.read_bytes())
+            entries.append(arcname)
+
+    return DocsZipExport(
+        project_id=project_id,
+        filename=ZIP_EXPORT_FILENAME_TEMPLATE.format(project_id=project_id),
+        content=buffer.getvalue(),
+        entries=entries,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Export — PDF (task_07_17, deferred renderer)
+# ---------------------------------------------------------------------------
+def export_doc_pdf(
+    docs_root: Path,  # noqa: ARG001 — unused until a renderer lands; signature is the contract
+    *,
+    project_id: UUID,  # noqa: ARG001 — unused until a renderer lands; signature is the contract
+    relpath: str,
+) -> bytes:
+    """Render one doc (or the whole tree) to PDF — **not configured offline**.
+
+    PDF rendering needs a markdown→HTML→PDF toolchain (e.g. ``markdown`` +
+    ``weasyprint`` / ``reportlab``); none of those is installed in the
+    api-server runtime, and per the task brief we deliberately do **not** add a
+    heavy / native dependency just for this endpoint. So PDF export is a
+    documented, explicit deferral: this function validates its inputs the same
+    way the content reader does (so a traversal attempt still fails fast) and
+    then raises :class:`PdfExportNotConfiguredError`, which the router maps to a
+    ``501 Not Implemented`` with a clear "not configured" message.
+
+    When a renderer is later added (its own task/ADR), this is the single
+    function to fill in: resolve ``relpath`` → markdown (reusing
+    :func:`read_doc_content`), convert to PDF, and return the bytes.
+    """
+    # Validate the path first so a hostile ``relpath`` is a 400 (PathTraversal)
+    # rather than a 501 — the same fail-fast contract as the content endpoint.
+    _safe_relpath(relpath)
+    raise PdfExportNotConfiguredError(
+        "PDF export is not configured in this runtime; use the ZIP export instead"
     )
 
 
@@ -786,6 +943,9 @@ __all__ = [
     "MARKDOWN_SUFFIX",
     "MAX_SEARCH_LIMIT",
     "SNIPPET_MAX_CHARS",
+    "ZIP_ARCHIVE_ROOT",
+    "ZIP_EXPORT_FILENAME_TEMPLATE",
+    "ZIP_MEDIA_TYPE",
     "DocContent",
     "DocDiff",
     "DocDiffError",
@@ -797,9 +957,13 @@ __all__ = [
     "DocTreeFile",
     "DocTreeFolder",
     "DocsViewerError",
+    "DocsZipExport",
     "InvalidGitRefError",
     "PathTraversalError",
+    "PdfExportNotConfiguredError",
     "diff_doc",
+    "export_doc_pdf",
+    "export_docs_zip",
     "project_docs_root",
     "project_repo_root",
     "read_doc_content",

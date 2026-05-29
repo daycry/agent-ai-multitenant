@@ -14,6 +14,12 @@ project's tenant:
   * ``GET /projects/{project_id}/docs/search``  — full-text search over the
     project's internal-docs KB chunks (Fase C), ranked, with snippets +
     source doc paths.
+  * ``GET /projects/{project_id}/docs/export/zip`` — download the whole ``docs/``
+    tree as a deterministic, path-safe ZIP bundle (task_07_17).
+  * ``GET /projects/{project_id}/docs/export/pdf`` — render one doc to PDF
+    (task_07_17). No offline renderer ships in the runtime, so this is a
+    documented ``501 Not Implemented`` deferral pointing callers at the ZIP
+    export; we do not add a heavy / native dependency just for it.
 
 RBAC (task_07_18): the caller must be a member of the active tenant
 (:func:`require_tenant_member`) AND the project must be visible under the
@@ -36,7 +42,7 @@ from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,12 +56,16 @@ from api_server.db.domain import Project
 from api_server.docs_viewer.service import (
     DEFAULT_SEARCH_LIMIT,
     MAX_SEARCH_LIMIT,
+    ZIP_MEDIA_TYPE,
     DocDiffError,
     DocNotFoundError,
     DocsViewerError,
     InvalidGitRefError,
     PathTraversalError,
+    PdfExportNotConfiguredError,
     diff_doc,
+    export_doc_pdf,
+    export_docs_zip,
     project_docs_root,
     project_repo_root,
     read_doc_content,
@@ -220,6 +230,80 @@ async def get_doc_content(
         "content": doc.content,
         "size_bytes": doc.size_bytes,
     }
+
+
+# ===========================================================================
+# Export — ZIP bundle (task_07_17)
+# ===========================================================================
+@router.get("/export/zip")
+async def export_project_docs_zip(
+    project_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+    resolver: DocsRootResolver = Depends(get_docs_root_resolver),
+) -> Response:
+    """Download a project's ``/docs`` markdown as a deterministic ZIP bundle.
+
+    RBAC-scoped (active tenant member + RLS-visible project) and path-safe: the
+    bundle contains exactly the canonical tree's ``.md`` files, each re-validated
+    against traversal before it is read. Returns ``application/zip`` with a
+    ``Content-Disposition: attachment`` header so the browser downloads it.
+    """
+    tenant_id = require_tenant_id(principal)
+    await _require_visible_project(session, project_id)
+
+    docs_root = resolver(tenant_id, project_id)
+    bundle = export_docs_zip(docs_root, project_id=project_id)
+    return Response(
+        content=bundle.content,
+        media_type=ZIP_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{bundle.filename}"'},
+    )
+
+
+# ===========================================================================
+# Export — PDF (task_07_17, renderer deferred → 501)
+# ===========================================================================
+@router.get("/export/pdf")
+async def export_project_doc_pdf(
+    project_id: UUID,
+    path: str = Query(..., description="Repo-relative path of the .md to render"),
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+    resolver: DocsRootResolver = Depends(get_docs_root_resolver),
+) -> Response:
+    """Render one doc to PDF — currently **not configured** in this runtime.
+
+    No offline markdown→PDF renderer ships in the api-server image (we do not
+    pull a heavy / native dependency just for this), so this endpoint returns a
+    clear ``501 Not Implemented`` directing callers to the ZIP export. A
+    traversal attempt in ``path`` is still a ``400`` (validated before the 501),
+    so the deferral never weakens path safety. RBAC-scoped like every other
+    docs-viewer surface.
+    """
+    tenant_id = require_tenant_id(principal)
+    await _require_visible_project(session, project_id)
+
+    docs_root = resolver(tenant_id, project_id)
+    try:
+        pdf_bytes = export_doc_pdf(docs_root, project_id=project_id, relpath=path)
+    except PathTraversalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="invalid doc path"
+        ) from exc
+    except DocNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="doc not found") from exc
+    except PdfExportNotConfiguredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="PDF export is not configured; use /export/zip instead",
+        ) from exc
+    except DocsViewerError as exc:  # defensive — unexpected subtype
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="invalid export request"
+        ) from exc
+
+    return Response(content=pdf_bytes, media_type="application/pdf")
 
 
 # ===========================================================================

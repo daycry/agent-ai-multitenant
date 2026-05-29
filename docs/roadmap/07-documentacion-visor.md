@@ -365,7 +365,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_17` — Exportación PDF / ZIP
 
-- [ ] **Título**: Exportación PDF / ZIP
+- [x] **Título**: Exportación PDF / ZIP
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
