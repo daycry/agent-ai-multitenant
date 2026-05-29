@@ -40,10 +40,21 @@ Idempotency:
     its chunks (chunks are derived data — hard-deleted, per the model
     contract).
 
+**Two entry points:**
+
+  * :func:`sync_project_docs` — full sync: walk the whole ``/docs`` tree,
+    ingest every ``.md``, soft-delete any document whose source vanished.
+  * :func:`reindex_changed_docs` (Plan 07 task_07_10) — incremental: take a
+    caller-supplied change set (a ``git diff --name-only``) and touch ONLY
+    those paths. Cheap for projects with thousands of docs. Reuses the same
+    content-hash idempotency, so an unchanged-but-listed file is still a
+    no-op.
+
 **Trigger is deferred (Plan 13).** The git-webhook / PR-merge hook that
-should call this after a merge depends on the webhook-dispatcher app
-(empty until Plan 13). :func:`sync_project_docs` is the callable that hook
-will invoke; here we expose and test it directly.
+should call either function after a merge depends on the webhook-dispatcher
+app (empty until Plan 13). Both functions are the callables that hook will
+invoke; here we expose and test them directly. :func:`changed_markdown_relpaths`
+is an optional thin helper that derives the change set from two refs.
 
 The caller owns the transaction and must hold an ``AsyncSession`` scoped to
 the project's tenant (RLS sets ``app.tenant_id``) or a BYPASSRLS admin
@@ -101,6 +112,11 @@ _INTERNAL_DOCS_STORAGE_KEY_TEMPLATE = "internal-docs/{project_id}/{relpath}"
 # Glob for the markdown files to ingest, relative to ``docs_root``.
 _MARKDOWN_GLOB = "**/*.md"
 
+# Suffix (lower-cased) of the files we ingest. Incremental reindex filters
+# the caller-supplied changed set down to markdown only — a changed
+# ``.png`` or ``.py`` is irrelevant to the docs KB.
+_MARKDOWN_SUFFIX = ".md"
+
 
 @dataclass
 class DocSyncResult:
@@ -121,6 +137,31 @@ class DocSyncResult:
     ingested: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
+    chunks_persisted: int = 0
+
+
+@dataclass
+class IncrementalReindexResult:
+    """Outcome of one :func:`reindex_changed_docs` run.
+
+    Mirrors :class:`DocSyncResult` but scoped to the caller-supplied change
+    set: only the listed paths are ever touched. Counts are mutually
+    exclusive per relpath — a path is either *ingested* (present on disk &
+    content changed → chunks rewritten), *skipped* (present but content hash
+    unchanged → no-op), or *removed* (no longer on disk → Document
+    soft-deleted). ``ignored`` lists caller-supplied paths that were neither
+    markdown nor under the docs root (silently dropped, surfaced for
+    observability).
+    """
+
+    kb_id: UUID
+    project_id: UUID
+    tenant_id: UUID
+    kb_created: bool
+    ingested: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+    ignored: list[str] = field(default_factory=list)
     chunks_persisted: int = 0
 
 
@@ -240,6 +281,157 @@ async def sync_project_docs(
         chunks=result.chunks_persisted,
     )
     return result
+
+
+async def reindex_changed_docs(
+    session: AsyncSession,
+    *,
+    project_id: UUID,
+    tenant_id: UUID,
+    docs_root: Path,
+    changed_paths: list[str],
+    embedder: Embedder | None = None,
+) -> IncrementalReindexResult:
+    """Re-ingest ONLY the given changed markdown paths (incremental sync).
+
+    Where :func:`sync_project_docs` walks the entire ``/docs`` tree, this
+    touches **only** the files the caller names in ``changed_paths`` — the
+    "changed since the last commit" set a git-webhook / PR-merge hook
+    (Plan 13) computes from a ``git diff --name-only`` between two refs. For
+    a project with thousands of docs that turns a full re-embed into a
+    handful of file ingests.
+
+    The function is **pure with respect to git**: it never shells out. The
+    caller supplies the change set (see :func:`changed_markdown_relpaths`
+    for an optional, separately-tested helper that derives it from two
+    refs). This keeps the core logic deterministic and offline-testable.
+
+    Each changed path is resolved against ``docs_root`` and:
+
+      * **still on disk** → ingested via the same content-hash idempotent
+        path as the full sync, so an *unchanged-but-listed* file (its hash
+        already matches the stored chunks) is a no-op (``skipped``);
+      * **gone from disk** → its Document is soft-deleted and its chunks
+        dropped (``removed``).
+
+    Caller-supplied paths that are not markdown or fall outside the docs
+    root are dropped into ``ignored`` (e.g. a changed ``src/*.py`` in the
+    same diff). Paths may be repo-relative (``docs/03-guides/x.md``) or
+    docs-root-relative (``03-guides/x.md``); both normalise to the same
+    relpath, so the same Document id is reached either way.
+
+    Args:
+        session: session scoped to ``tenant_id`` (RLS) or a BYPASSRLS admin
+            session. The caller owns the transaction.
+        project_id: the project whose ``/docs`` we mirror.
+        tenant_id: the project's tenant — every row we write is scoped to it.
+        docs_root: the repo working tree or its ``docs/`` directory.
+        changed_paths: the changed file paths (markdown + anything else; we
+            filter). Repo-relative or docs-root-relative.
+        embedder: injectable embedder. Defaults to the real
+            :class:`OllamaEmbedder`; tests pass a deterministic fake.
+
+    Returns an :class:`IncrementalReindexResult` summarising what changed.
+    """
+    own_embedder = embedder is None
+    active_embedder: Embedder = embedder or OllamaEmbedder()
+    base_dir = _normalise_docs_root(docs_root)
+
+    try:
+        kb_created = await _ensure_internal_docs_kb(
+            session, project_id=project_id, tenant_id=tenant_id
+        )
+        kb_id = internal_docs_kb_id(project_id)
+
+        result = IncrementalReindexResult(
+            kb_id=kb_id,
+            project_id=project_id,
+            tenant_id=tenant_id,
+            kb_created=kb_created,
+        )
+
+        # De-duplicate while preserving order: a diff can list the same path
+        # twice (rename A→B reports both sides) and processing it once is
+        # enough — the file is either there or not.
+        for relpath in _normalise_changed_relpaths(changed_paths, result):
+            abs_path = base_dir / relpath
+            if abs_path.is_file():
+                corpus = abs_path.read_text(encoding="utf-8")
+                chunks_written, skipped = await _ingest_one(
+                    session,
+                    project_id=project_id,
+                    tenant_id=tenant_id,
+                    kb_id=kb_id,
+                    relpath=relpath,
+                    corpus=corpus,
+                    embedder=active_embedder,
+                )
+                if skipped:
+                    result.skipped.append(relpath)
+                else:
+                    result.ingested.append(relpath)
+                    result.chunks_persisted += chunks_written
+            else:
+                # Listed but absent on disk → the file was deleted in this
+                # change set. Soft-delete its document (no-op if it was never
+                # ingested or already removed).
+                removed = await _soft_delete_document(
+                    session, document_id=internal_doc_id(project_id, relpath)
+                )
+                if removed:
+                    result.removed.append(relpath)
+
+        await session.flush()
+    finally:
+        if own_embedder:
+            await active_embedder.aclose()
+
+    logger.info(
+        "docs_kb_sync.reindex_incremental.completed",
+        project_id=str(project_id),
+        tenant_id=str(tenant_id),
+        kb_created=result.kb_created,
+        ingested=len(result.ingested),
+        skipped=len(result.skipped),
+        removed=len(result.removed),
+        ignored=len(result.ignored),
+        chunks=result.chunks_persisted,
+    )
+    return result
+
+
+def _normalise_changed_relpaths(
+    changed_paths: list[str], result: IncrementalReindexResult
+) -> list[str]:
+    """Turn the caller's raw change set into docs-root-relative markdown
+    relpaths, de-duplicated and order-preserving.
+
+    Rules:
+
+      * Non-markdown paths are dropped into ``result.ignored``.
+      * A leading ``docs/`` (the repo-relative form a git diff emits) is
+        stripped so the path is relative to the docs root — matching what
+        :func:`_walk_markdown` produces and therefore reaching the same
+        deterministic Document id.
+      * Backslashes are normalised to forward slashes (a Windows caller may
+        hand us ``docs\\x.md``).
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in changed_paths:
+        posix = raw.replace("\\", "/").strip().lstrip("/")
+        if not posix.lower().endswith(_MARKDOWN_SUFFIX):
+            result.ignored.append(raw)
+            continue
+        relpath = posix
+        prefix = f"{DOCS_DIRNAME}/"
+        if relpath.startswith(prefix):
+            relpath = relpath[len(prefix) :]
+        if not relpath or relpath in seen:
+            continue
+        seen.add(relpath)
+        out.append(relpath)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -485,17 +677,68 @@ async def _remove_absent_documents(
     ).all()
 
     removed: list[str] = []
-    now = datetime.now(tz=UTC)
     for doc_id, title in live_docs:
         if doc_id in present_ids:
             continue
-        # Source gone: hard-drop chunks (derived data), soft-delete the doc.
-        await session.execute(delete(Chunk).where(Chunk.document_id == doc_id))
-        doc = (await session.execute(select(Document).where(Document.id == doc_id))).scalar_one()
-        doc.deleted_at = now
-        doc.status = "pending"
+        await _soft_delete_document(session, document_id=doc_id)
         removed.append(title)
     return removed
+
+
+async def _soft_delete_document(session: AsyncSession, *, document_id: UUID) -> bool:
+    """Drop a document's chunks and soft-delete the document row.
+
+    Chunks are derived data (model contract → hard-deleted); the Document
+    keeps a ``deleted_at`` tombstone so the viewer can hide it without
+    losing the audit trail. Returns True when a *live* document was found
+    and removed, False when there was nothing live to remove (already
+    deleted or never existed) — so an incremental caller can distinguish a
+    real removal from a no-op.
+    """
+    doc = (
+        await session.execute(select(Document).where(Document.id == document_id))
+    ).scalar_one_or_none()
+    if doc is None or doc.deleted_at is not None:
+        return False
+    # Source gone: hard-drop chunks (derived data), soft-delete the doc.
+    await session.execute(delete(Chunk).where(Chunk.document_id == document_id))
+    doc.deleted_at = datetime.now(tz=UTC)
+    doc.status = "pending"
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Optional thin helper: derive the change set from two git refs
+# ---------------------------------------------------------------------------
+def changed_markdown_relpaths(repo_path: Path, *, base_ref: str, head_ref: str) -> list[str]:
+    """Return the markdown paths that changed between two refs.
+
+    A thin, *optional* convenience for the future webhook/merge hook: it
+    shells out to ``git diff --name-only <base>..<head>`` (via the workers'
+    audited ``git`` runner) and filters the result to markdown. The core
+    :func:`reindex_changed_docs` deliberately does NOT call this — it takes
+    the change set as data so it stays pure and offline-testable. This
+    helper lives apart precisely so it can be tested separately against a
+    real throwaway repo.
+
+    Paths are returned exactly as git emits them (repo-relative POSIX, e.g.
+    ``docs/03-guides/x.md``); :func:`reindex_changed_docs` normalises them.
+    Deletions are included (``--diff-filter`` is intentionally NOT set) so a
+    removed ``.md`` reaches the soft-delete branch.
+
+    Args:
+        repo_path: working tree (or bare repo) the diff runs in.
+        base_ref: the older ref (e.g. the PR base / previous HEAD).
+        head_ref: the newer ref (e.g. the merge commit / new HEAD).
+    """
+    # Lazy import: keeps the api-server module graph free of the workers
+    # package until a caller actually wants the git-backed helper.
+    from workers.git_repos import _run_git
+
+    out = _run_git("diff", "--name-only", f"{base_ref}..{head_ref}", cwd=repo_path)
+    return [
+        line.strip() for line in out.splitlines() if line.strip().lower().endswith(_MARKDOWN_SUFFIX)
+    ]
 
 
 __all__ = [
@@ -504,7 +747,10 @@ __all__ = [
     "INTERNAL_DOCS_KB_NAMESPACE",
     "INTERNAL_DOC_NAMESPACE",
     "DocSyncResult",
+    "IncrementalReindexResult",
+    "changed_markdown_relpaths",
     "internal_doc_id",
     "internal_docs_kb_id",
+    "reindex_changed_docs",
     "sync_project_docs",
 ]

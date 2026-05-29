@@ -244,7 +244,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_10` — Reindexación incremental (solo los .md cambiados desde el último commit)
 
-- [ ] **Título**: Reindexación incremental (solo los .md cambiados desde el último commit)
+- [x] **Título**: Reindexación incremental (solo los .md cambiados desde el último commit)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + ai-engineer
