@@ -418,7 +418,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_20` — Changelog del plan
 
-- [ ] **Título**: Changelog del plan
+- [x] **Título**: Changelog del plan
 - **Tiempo estimado**: 2 h
 - **Complejidad**: xs
 - **Rol sugerido**: technical-writer
