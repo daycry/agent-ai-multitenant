@@ -401,7 +401,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_19` — Documentación interna del propio sistema usando su propia estructura (eat your own dog food)
 
-- [ ] **Título**: Documentación interna del propio sistema usando su propia estructura (eat your own dog food)
+- [x] **Título**: Documentación interna del propio sistema usando su propia estructura (eat your own dog food)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: technical-writer
