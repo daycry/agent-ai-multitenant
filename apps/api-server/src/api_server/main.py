@@ -13,8 +13,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +23,8 @@ from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_sessio
 from api_server.config import get_settings
 from api_server.db.models import Organization, User, UserOrganizationMembership
 from api_server.db.session import get_admin_sessionmaker
-from api_server.logging import configure_logging
+from api_server.logging import configure_logging, get_logger
+from api_server.logging.context import REQUEST_ID_HEADER, RequestContextMiddleware
 from api_server.routers.admin import router as admin_router
 from api_server.routers.agents import router as agents_router
 from api_server.routers.approval_policies import router as approval_policies_router
@@ -69,6 +71,49 @@ if os.environ.get("API_SERVER_OTEL_CONSOLE") == "1":
     add_console_exporter()
 configure_logging(service="api-server")
 
+_logger = get_logger(__name__)
+
+
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all for unhandled route exceptions (error-obs-logging-5).
+
+    Logs the full traceback server-side under the request's correlation
+    context and returns a generic 500 — the exception type, message and
+    stack never reach the client.
+
+    The contextvars bound by `RequestContextMiddleware` have already been
+    cleared by the time this handler runs (the exception unwinds through
+    that middleware's `finally` before Starlette's outer
+    ServerErrorMiddleware dispatches here), so we re-read the correlation
+    ids stashed on `request.state` and pass them explicitly to keep the
+    log line traceable.
+
+    Note: FastAPI/Starlette dispatch HTTPException and
+    RequestValidationError to their own handlers, so this only fires on
+    genuinely unexpected errors (programming bugs, driver faults).
+    """
+    state = request.state
+    request_id = getattr(state, "request_id", None)
+    _logger.error(
+        "api.unhandled_exception",
+        method=request.method,
+        path=request.url.path,
+        request_id=request_id,
+        user_id=(str(uid) if (uid := getattr(state, "log_user_id", None)) else None),
+        tenant_id=(str(tid) if (tid := getattr(state, "log_tenant_id", None)) else None),
+        exc_info=exc,
+    )
+    # Echo the correlation id on the error response too. The
+    # RequestContextMiddleware's send-wrapper never ran (the route raised
+    # before emitting a response), so the header is set here directly so
+    # the client can quote it in a bug report.
+    headers = {REQUEST_ID_HEADER: request_id} if request_id else None
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "internal server error"},
+        headers=headers,
+    )
+
 
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -79,6 +124,12 @@ def create_app() -> FastAPI:
     )
 
     settings = get_settings()
+    # Request-context middleware binds request_id (+ user_id/tenant_id) to
+    # every log line via structlog contextvars and echoes X-Request-ID back
+    # (error-obs-logging-1). Added BEFORE CORS so CORS ends up the outermost
+    # layer — its headers wrap even the generic 500 emitted by the global
+    # exception handler below.
+    app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allowed_origins,
@@ -86,6 +137,11 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Global catch-all so an unhandled error never leaks the stack to the
+    # client (error-obs-logging-5). Defined at module scope and registered
+    # here.
+    app.add_exception_handler(Exception, _unhandled_exception_handler)
 
     app.include_router(auth_router)
     app.include_router(admin_router)

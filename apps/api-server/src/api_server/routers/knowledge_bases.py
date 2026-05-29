@@ -41,6 +41,7 @@ from api_server.db.knowledge import (
     KnowledgeBase,
     KnowledgeBaseProject,
 )
+from api_server.logging import get_logger
 from api_server.routers._helpers import require_tenant_id, soft_delete
 from api_server.schemas.knowledge import (
     DocumentResponse,
@@ -53,6 +54,8 @@ from api_server.schemas.knowledge import (
     to_kb_response,
 )
 from api_server.storage import ObjectStorage, ObjectStorageError, get_object_storage
+
+_logger = get_logger(__name__)
 
 router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"])
 project_kb_router = APIRouter(
@@ -112,6 +115,25 @@ async def create_kb(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> KnowledgeBaseResponse:
     tenant_id = require_tenant_id(principal)
+
+    # Pre-check the (tenant_id, name) uniqueness so the happy 409 carries a
+    # clean message instead of leaking the SQLAlchemy `exc.orig` to the
+    # client (error-obs-logging-3). The unique index is partial on
+    # `deleted_at IS NULL`, so a soft-deleted homonym does NOT collide.
+    # Mirrors the proactive pattern in routers/kb_categories.py.
+    existing = await session.execute(
+        select(KnowledgeBase.id).where(
+            KnowledgeBase.tenant_id == tenant_id,
+            KnowledgeBase.name == payload.name,
+            KnowledgeBase.deleted_at.is_(None),
+        )
+    )
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="kb name already exists in tenant",
+        )
+
     kb = KnowledgeBase(
         tenant_id=tenant_id,
         name=payload.name,
@@ -124,10 +146,19 @@ async def create_kb(
     try:
         await session.flush()
     except IntegrityError as exc:
+        # Race fallback: a concurrent request inserted the same name between
+        # the pre-check and the flush. Log the full driver error server-side
+        # for diagnostics but return a generic message (never `exc.orig`).
         await session.rollback()
+        _logger.warning(
+            "kb.create_integrity_error",
+            tenant_id=str(tenant_id),
+            kb_name=payload.name,
+            error=str(exc.orig),
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"kb name already exists in tenant: {exc.orig}",
+            detail="kb name already exists in tenant",
         ) from exc
     await session.refresh(kb)
     return to_kb_response(kb, await _load_category_for_kb(session, kb))
