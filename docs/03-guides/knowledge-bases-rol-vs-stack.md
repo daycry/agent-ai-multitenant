@@ -216,7 +216,10 @@ son puramente organizativas.
 
 ### Built-in (sembradas por la plataforma)
 
-Visibles a todos los tenants (`tenant_id IS NULL`):
+Visibles a todos los tenants. Viven bajo el **platform tenant** con la
+bandera `is_builtin=true` y se exponen vía la policy
+`kb_categories_builtin_read` — el patrón canónico del catálogo global
+([ADR 0029](../05-architecture-decisions/0029-platform-tenant-y-catalogo-global.md)).
 
 | Slug           | Para qué                                                          |
 | -------------- | ----------------------------------------------------------------- |
