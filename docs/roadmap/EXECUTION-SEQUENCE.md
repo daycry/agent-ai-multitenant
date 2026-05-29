@@ -46,15 +46,15 @@ tests verdes + validación humana + changelog. Derivado del workflow de evaluaci
 
 ## Orden de implementación (olas)
 
-| Ola | Planes | Tipo | Notas |
-| --- | ------ | ---- | ----- |
-| **1** | `06.8`, `06.9` | Cierre | Código hecho; changelog + frontmatter + sign-off humano. ~1–2 días. |
-| **2** | `06.10` → `06.11` → `06.12` | Cierre serializado | Resuelve la violación de 3×`in_progress`. Cerrar 06.10 primero. |
-| **3** | `06.13`, `06.14` | Nuevo código | 06.13 = corpus + ingesta de KBs builtin; **06.14 = seguridad P0** (ver nota). |
-| **4** | `07`, `08` | Feature | Portal de docs; SSO empresarial. |
-| **5** | `09`, `10` | Feature | Marketplace; asistente personal (10 desbloquea 16). |
-| **6** | `11`, `12`, `13`, `14` | Feature | Guardrails+precios (desbloquea 16); backup; API pública; evals. |
-| **7** | `15`, `16` | Producción | Instalador (depende de casi todo); human-agents (depende de 10+11). |
+| Ola   | Planes                      | Tipo               | Notas                                                                         |
+| ----- | --------------------------- | ------------------ | ----------------------------------------------------------------------------- |
+| **1** | `06.8`, `06.9`              | Cierre             | Código hecho; changelog + frontmatter + sign-off humano. ~1–2 días.           |
+| **2** | `06.10` → `06.11` → `06.12` | Cierre serializado | Resuelve la violación de 3×`in_progress`. Cerrar 06.10 primero.               |
+| **3** | `06.13`, `06.14`            | Nuevo código       | 06.13 = corpus + ingesta de KBs builtin; **06.14 = seguridad P0** (ver nota). |
+| **4** | `07`, `08`                  | Feature            | Portal de docs; SSO empresarial.                                              |
+| **5** | `09`, `10`                  | Feature            | Marketplace; asistente personal (10 desbloquea 16).                           |
+| **6** | `11`, `12`, `13`, `14`      | Feature            | Guardrails+precios (desbloquea 16); backup; API pública; evals.               |
+| **7** | `15`, `16`                  | Producción         | Instalador (depende de casi todo); human-agents (depende de 10+11).           |
 
 **Cadena de dependencias (crítica):**
 `06.8 ← 06.9 ← 06.10 ← 06.11 ← 06.12 ← 06.13 ← 06.14 ← 07 ← 08 ← (09‖10) ← (11‖12‖13‖14) ← 15 ← 16`
@@ -62,6 +62,7 @@ tests verdes + validación humana + changelog. Derivado del workflow de evaluaci
 Esfuerzo total estimado: **~16–18 semanas** (todo 07–16 son features grandes/xlarge).
 
 ### 🔴 Nota de prioridad sobre 06.14 (seguridad)
+
 El orden por dependencias coloca 06.14 al final de la fase 06, PERO contiene **vulnerabilidades
 activas P0** (fuga cross-tenant en WebSocket, workers sin frontera de tenant, secretos sin validar).
 **Recomendación**: adelantar al menos los 3 P0 de 06.14 (`task_06_14_01/02/03`) en cuanto se cierre

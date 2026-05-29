@@ -58,6 +58,19 @@ _EMPTY_USAGE: dict[str, Any] = {
 }
 
 
+class CrossTenantExecutionError(RuntimeError):
+    """An ExecutionRequest's `task_id` does not belong to its declared
+    `tenant_id`.
+
+    The worker connects with the BYPASSRLS `migrations_user` role
+    (workers/config.py) because it legitimately writes `executions` rows
+    for many tenants — so RLS cannot catch a tampered or buggy Celery
+    payload that pairs one tenant with another tenant's task. We validate
+    the task↔tenant ownership explicitly at the worker boundary instead
+    (Plan 06.14 task_06_14_02 / multi-tenancy-rls-1, multi-tenancy-rls-5).
+    """
+
+
 @dataclass(frozen=True)
 class ExecutionRequest:
     """Everything the worker needs to conduct one execution.
@@ -215,15 +228,29 @@ async def conduct_execution(  # noqa: PLR0915 - tramos lineales (seed/run/finali
 ) -> ExecutionOutcome:
     """Run one task end to end: container → Redis stream → `executions` row."""
     task_id = UUID(request.task_id)
+    tenant_id = UUID(request.tenant_id)
     async with sessionmaker() as session, session.begin():
+        # The worker is BYPASSRLS, so RLS cannot stop a Celery payload that
+        # pairs a tenant with another tenant's task. Validate task↔tenant
+        # ownership explicitly before attributing the task's data to the
+        # claimed tenant (Plan 06.14 task_06_14_02 / multi-tenancy-rls-1/5).
+        task = await session.get(Task, task_id)
+        if task is None or task.tenant_id != tenant_id:
+            _log.error(
+                "workers.cross_tenant_execution_rejected",
+                requested_tenant_id=str(tenant_id),
+                task_id=str(task_id),
+                actual_tenant_id=(str(task.tenant_id) if task is not None else None),
+            )
+            raise CrossTenantExecutionError(f"task {task_id} does not belong to tenant {tenant_id}")
         execution = await create_running_execution(
             session,
-            tenant_id=UUID(request.tenant_id),
+            tenant_id=tenant_id,
             task_id=task_id,
             agent_id=UUID(request.agent_id) if request.agent_id else None,
         )
         execution_id = execution.id
-        project = await _load_project(session, task_id)
+        project = await session.get(Project, task.project_id)
         approval_policy = project.human_approval_policy if project is not None else None
     exec_id = str(execution_id)
     _log.info("workers.execution_started", execution_id=exec_id, task_id=request.task_id)
