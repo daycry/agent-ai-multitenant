@@ -208,7 +208,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_08` — Plantilla canónica de ADR numerado secuencialmente
 
-- [ ] **Título**: Plantilla canónica de ADR numerado secuencialmente
+- [x] **Título**: Plantilla canónica de ADR numerado secuencialmente
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: ai-engineer
