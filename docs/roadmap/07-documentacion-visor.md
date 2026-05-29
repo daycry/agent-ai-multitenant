@@ -104,7 +104,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_02` — Guardrail estructural: valida estructura al hacer push y bloquea PR si faltan carpetas
 
-- [ ] **Título**: Guardrail estructural: valida estructura al hacer push y bloquea PR si faltan carpetas
+- [x] **Título**: Guardrail estructural: valida estructura al hacer push y bloquea PR si faltan carpetas
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
