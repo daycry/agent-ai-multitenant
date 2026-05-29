@@ -69,6 +69,15 @@ class MCPServerConfig:
     # configurables".
     timeout_s: float = 30.0
 
+    # Hard ceiling (bytes, UTF-8) on a single tool's text output before
+    # it is handed back to the agent loop (task_06_14_12, mcp-tools-2).
+    # A chatty or malicious server can otherwise return megabytes that
+    # get folded into the LLM context verbatim and exhaust the window.
+    # The agent-runtime adapter truncates with a visible marker beyond
+    # this. Default 64 KiB; tune per server when a tool legitimately
+    # returns large payloads.
+    max_output_bytes: int = 65536
+
     def __post_init__(self) -> None:
         if self.transport == "stdio":
             if not self.command:
