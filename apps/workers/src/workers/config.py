@@ -7,8 +7,12 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Substrings flagging a known dev-only default — forbidden in staging/prod
+# (Plan 06.14 task_06_14_03 / secrets-config-5).
+_DEV_SECRET_MARKERS = ("changeme", "dev-only")
 
 
 class Settings(BaseSettings):
@@ -130,6 +134,19 @@ class Settings(BaseSettings):
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."
     )
+
+    @model_validator(mode="after")
+    def _forbid_dev_secrets_outside_dev(self) -> Settings:
+        """Reject the dev-default `database_url` (BYPASSRLS credentials) in
+        staging/prod (secrets-config-5)."""
+        if self.environment not in {"staging", "prod"}:
+            return self
+        if any(marker in self.database_url.lower() for marker in _DEV_SECRET_MARKERS):
+            raise ValueError(
+                f"environment={self.environment!r} but WORKERS_DATABASE_URL still uses "
+                "dev-default credentials. Set it to a real secret (Vault-backed in production)."
+            )
+        return self
 
     model_config = SettingsConfigDict(
         env_file=".env",

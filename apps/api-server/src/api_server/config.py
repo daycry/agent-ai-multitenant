@@ -10,8 +10,13 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Substrings that flag a value as a known dev-only default. A staging/prod
+# deployment that still carries any of these is misconfigured (Plan 06.14
+# task_06_14_03 / secrets-config-1/2/3/5/7).
+_DEV_SECRET_MARKERS = ("changeme", "dev-only", "minioadmin")
 
 
 class Settings(BaseSettings):
@@ -145,6 +150,37 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000"],
         description="Origins allowed by CORS (frontend admin-panel, etc.).",
     )
+
+    @model_validator(mode="after")
+    def _forbid_dev_secrets_outside_dev(self) -> Settings:
+        """Fail fast when a staging/prod deployment still carries a dev-only
+        default for any secret. Phase 15 moves these to Vault; until then
+        this guard stops a publicly-known JWT secret, MinIO password or DB
+        credential from silently reaching production (secrets-config-*)."""
+        if self.environment not in {"staging", "prod"}:
+            return self
+        candidates = {
+            "API_SERVER_JWT_SECRET": self.jwt_secret.get_secret_value(),
+            "API_SERVER_REVIEW_URL_SIGNING_SECRET": (
+                self.review_url_signing_secret.get_secret_value()
+            ),
+            "API_SERVER_MINIO_SECRET_KEY": self.minio_secret_key.get_secret_value(),
+            "API_SERVER_MINIO_ACCESS_KEY": self.minio_access_key,
+            "API_SERVER_DATABASE_URL": self.database_url,
+            "API_SERVER_ADMIN_DATABASE_URL": self.admin_database_url,
+        }
+        offending = sorted(
+            name
+            for name, value in candidates.items()
+            if any(marker in value.lower() for marker in _DEV_SECRET_MARKERS)
+        )
+        if offending:
+            raise ValueError(
+                f"environment={self.environment!r} but these settings still use dev "
+                f"defaults: {', '.join(offending)}. Set them to real secrets "
+                "(Vault-backed in production)."
+            )
+        return self
 
     model_config = SettingsConfigDict(
         env_file=".env",
