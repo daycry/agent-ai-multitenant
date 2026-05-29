@@ -86,6 +86,12 @@ class ProjectCreateRequest(BaseModel):
     status: ProjectStatus = ProjectStatus.ACTIVE
     team_id: UUID | None = None
 
+    # Plan 06.13 task_06_13_03: optional project template to adopt. When
+    # set, the new project is pre-granted the template's
+    # `default_kb_grants` (built-in KB slugs → kb_projects rows). Absent
+    # = a plain project with no auto-grants (backward-compatible).
+    template_id: UUID | None = None
+
     mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
     rag_knowledge_bases: list[dict[str, Any]] = Field(default_factory=list)
     worker_config: dict[str, Any] = Field(default_factory=dict)
