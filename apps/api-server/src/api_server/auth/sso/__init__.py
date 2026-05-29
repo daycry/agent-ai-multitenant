@@ -33,16 +33,34 @@ from api_server.auth.sso.secrets import (
     resolve_client_secret,
 )
 from api_server.auth.sso.state_store import LoginState, OIDCStateStore
+from api_server.auth.sso.templates import (
+    OIDC_TEMPLATES,
+    ExtractedClaims,
+    OIDCTemplate,
+    OIDCTemplateError,
+    OIDCTemplateId,
+    extract_claims,
+    get_template,
+    list_templates,
+)
 
 __all__ = [
+    "OIDC_TEMPLATES",
+    "ExtractedClaims",
     "LoginState",
     "OIDCError",
     "OIDCFlow",
     "OIDCStateStore",
+    "OIDCTemplate",
+    "OIDCTemplateError",
+    "OIDCTemplateId",
     "OIDCUserInfo",
     "ResolvedOIDCConfig",
     "SSOSecretError",
     "decrypt_client_secret",
     "encrypt_client_secret",
+    "extract_claims",
+    "get_template",
+    "list_templates",
     "resolve_client_secret",
 ]

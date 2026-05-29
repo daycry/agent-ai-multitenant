@@ -102,7 +102,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_02` — Plantillas por IdP: Azure AD, Google Workspace, Okta, Auth0, GitHub, GitLab, Apple, Facebook
 
-- [ ] **Título**: Plantillas por IdP: Azure AD, Google Workspace, Okta, Auth0, GitHub, GitLab, Apple, Facebook
+- [x] **Título**: Plantillas por IdP: Azure AD, Google Workspace, Okta, Auth0, GitHub, GitLab, Apple, Facebook
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
