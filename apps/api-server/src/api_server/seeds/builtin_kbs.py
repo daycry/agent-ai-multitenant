@@ -140,13 +140,14 @@ BUILTIN_KBS: tuple[BuiltinKB, ...] = (
 _UPSERT_SQL = text(
     """
     INSERT INTO knowledge_bases
-        (id, tenant_id, name, description, embedding_model_id, category_id)
+        (id, tenant_id, name, description, embedding_model_id, category_id, is_builtin)
     VALUES
-        (:id, :tenant_id, :name, :description, 'nomic-embed-text-v1.5', :category_id)
+        (:id, :tenant_id, :name, :description, 'nomic-embed-text-v1.5', :category_id, true)
     ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name,
         description = EXCLUDED.description,
         category_id = EXCLUDED.category_id,
+        is_builtin = true,
         updated_at = now(),
         deleted_at = NULL
     """

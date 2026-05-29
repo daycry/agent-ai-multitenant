@@ -32,6 +32,7 @@ from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -94,6 +95,10 @@ class KnowledgeBase(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Plan 06.12 (ADR 0029): catálogo global. true = KB built-in
+    # sembrada bajo PLATFORM_TENANT_ID, visible a todos los tenants via
+    # la policy knowledge_bases_builtin_read y read-only para ellos.
+    is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     # Plan 06.10 task_06_10_01: KB categorization. Nullable — borrar
     # una categoría no borra las KBs (ON DELETE SET NULL); el tenant
     # las re-categoriza después.
