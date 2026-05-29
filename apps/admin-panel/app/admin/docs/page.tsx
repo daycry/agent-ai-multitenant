@@ -11,7 +11,9 @@
  * task_07_11 shipped the route + navigable tree; task_07_12 adds the main
  * reading pane ({@link DocViewerPane}): it fetches `/content` for the selected
  * `?project`/`?path` and renders the markdown (GFM + syntax highlight +
- * Mermaid) with an auto-generated table of contents.
+ * Mermaid) with an auto-generated table of contents. task_07_13 adds the
+ * instant {@link DocsSearchPanel} above the tree: a debounced search box with a
+ * full-text / semantic tab; clicking a hit opens that doc in the render pane.
  */
 
 import { Suspense, useCallback } from "react";
@@ -22,6 +24,7 @@ import { Breadcrumb } from "@/components/layout/breadcrumb";
 import { PageHeader } from "@/components/layout/page-header";
 
 import { DocsSidebar } from "./docs-sidebar";
+import { DocsSearchPanel } from "./docs-search-panel";
 import { DocViewerPane } from "./doc-viewer-pane";
 
 function DocsVisor() {
@@ -51,14 +54,26 @@ function DocsVisor() {
       />
 
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-[18rem_1fr]">
-        {/* Sidebar tree */}
-        <aside className="bg-sidebar text-sidebar-foreground border-sidebar-border h-[70vh] rounded-xl border">
-          <DocsSidebar
-            selectedProjectId={selectedProjectId}
-            selectedPath={selectedPath}
-            onSelect={handleSelect}
-          />
-        </aside>
+        {/* Left column: search + tree */}
+        <div className="flex flex-col gap-4">
+          <div
+            className="bg-card text-card-foreground rounded-xl border p-3"
+            data-testid="docs-search"
+          >
+            <DocsSearchPanel
+              projectId={selectedProjectId}
+              selectedPath={selectedPath}
+              onOpenDoc={handleSelect}
+            />
+          </div>
+          <aside className="bg-sidebar text-sidebar-foreground border-sidebar-border h-[60vh] rounded-xl border">
+            <DocsSidebar
+              selectedProjectId={selectedProjectId}
+              selectedPath={selectedPath}
+              onSelect={handleSelect}
+            />
+          </aside>
+        </div>
 
         {/* Content pane */}
         <section

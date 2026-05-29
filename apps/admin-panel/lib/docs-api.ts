@@ -64,6 +64,68 @@ export function fetchDocContent(projectId: string, path: string): Promise<DocCon
 }
 
 // ---------------------------------------------------------------------------
+// Full-text search (GET /projects/{id}/docs/search?q=)
+// ---------------------------------------------------------------------------
+
+/** One ranked full-text hit: the source doc + a highlightable snippet. */
+export interface DocSearchHit {
+  chunk_id: string;
+  document_id: string;
+  /** Repo-relative path of the source `.md` — used to open the doc. */
+  relpath: string;
+  ordinal: number;
+  /** 1-based rank position (lower = more relevant). */
+  rank: number;
+  /** Plain-text preview of the source chunk (whitespace-collapsed, capped). */
+  snippet: string;
+}
+
+export interface DocSearchResponse {
+  project_id: string;
+  query: string;
+  hits: DocSearchHit[];
+}
+
+export function fetchDocSearch(
+  projectId: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<DocSearchResponse> {
+  const qs = new URLSearchParams({ q: query });
+  return apiFetch<DocSearchResponse>(`/projects/${projectId}/docs/search?${qs.toString()}`, {
+    signal,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Semantic search (GET /projects/{id}/docs/semantic-search?q=)
+// ---------------------------------------------------------------------------
+
+/** One semantic hit: like {@link DocSearchHit} plus a cosine-similarity score. */
+export interface DocSemanticHit extends DocSearchHit {
+  /** Cosine similarity in [0, 1] (higher = closer). */
+  score: number;
+}
+
+export interface DocSemanticSearchResponse {
+  project_id: string;
+  query: string;
+  hits: DocSemanticHit[];
+}
+
+export function fetchDocSemanticSearch(
+  projectId: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<DocSemanticSearchResponse> {
+  const qs = new URLSearchParams({ q: query });
+  return apiFetch<DocSemanticSearchResponse>(
+    `/projects/${projectId}/docs/semantic-search?${qs.toString()}`,
+    { signal },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Table of contents (derived client-side from the rendered headings)
 // ---------------------------------------------------------------------------
 

@@ -297,7 +297,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_13` — Búsqueda full-text instantánea con resultados rankeados y snippets
 
-- [ ] **Título**: Búsqueda full-text instantánea con resultados rankeados y snippets
+- [x] **Título**: Búsqueda full-text instantánea con resultados rankeados y snippets (implementado + builds; e2e `docs-viewer-search.spec.ts` escrito, pendiente verificación humana)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
