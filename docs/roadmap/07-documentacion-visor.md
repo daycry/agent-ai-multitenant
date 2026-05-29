@@ -87,7 +87,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_01` — Script de bootstrap que crea las 7 carpetas obligatorias en un repo nuevo
 
-- [ ] **Título**: Script de bootstrap que crea las 7 carpetas obligatorias en un repo nuevo
+- [x] **Título**: Script de bootstrap que crea las 7 carpetas obligatorias en un repo nuevo
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
