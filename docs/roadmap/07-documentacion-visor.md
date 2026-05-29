@@ -280,7 +280,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_12` — Renderizado Markdown con react-markdown + remark-mermaid + rehype-highlight + tabla de contenidos autogenerada
 
-- [ ] **Título**: Renderizado Markdown con react-markdown + remark-mermaid + rehype-highlight + tabla de contenidos autogenerada
+- [x] **Título**: Renderizado Markdown con react-markdown + remark-mermaid + rehype-highlight + tabla de contenidos autogenerada (e2e pending human verify)
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev

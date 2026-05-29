@@ -187,3 +187,67 @@
 .animate-progress-stripe {
   animation: progress-stripe 1.1s ease-in-out infinite;
 }
+
+/*
+ * Syntax-highlighting tokens for the docs visor (Plan 07 task_07_12).
+ *
+ * `rehype-highlight` annotates code with `hljs-*` classes; we ship a small,
+ * theme-aware token palette here instead of importing one of highlight.js's
+ * global stylesheets (Next.js forbids importing package-level global CSS
+ * outside the root layout). Colors derive from the design tokens so the
+ * palette tracks light/dark automatically. The container styling (background,
+ * padding, scroll) is applied by the renderer's `<pre>`/`<code>` Tailwind
+ * classes, so this only needs to color the spans.
+ */
+.hljs {
+  color: hsl(var(--foreground));
+  background: transparent;
+}
+.hljs-comment,
+.hljs-quote {
+  color: hsl(var(--muted-foreground));
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-doctag,
+.hljs-name,
+.hljs-strong {
+  color: hsl(263 70% 70%);
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-class .hljs-title,
+.hljs-type {
+  color: hsl(199 80% 62%);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-meta-string {
+  color: hsl(142 55% 55%);
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: hsl(32 90% 62%);
+}
+.hljs-title,
+.hljs-built_in,
+.hljs-builtin-name {
+  color: hsl(48 90% 62%);
+}
+.hljs-deletion {
+  color: hsl(var(--danger));
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
