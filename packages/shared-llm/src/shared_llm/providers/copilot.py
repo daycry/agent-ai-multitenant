@@ -34,8 +34,8 @@ import httpx
 from shared_llm.exceptions import AuthError, ProviderError
 from shared_llm.providers._openai_compat import (
     check_status,
+    iter_sse_chunks,
     parse_chat_completion,
-    parse_sse_delta,
     to_openai_messages,
 )
 from shared_llm.types import CompletionResponse, Message, StreamChunk
@@ -263,20 +263,33 @@ class CopilotProvider:
         }
         if tools:
             body["tools"] = tools
+        # Same 401 handling as complete(): a 401 on the first attempt
+        # means the JWT expired between mint and call. Drop the cached
+        # JWT, re-mint, and retry the stream exactly once. We must close
+        # the first response body before re-opening, so the retry happens
+        # outside the first `async with` block.
         async with self._client.stream(
             "POST",
             f"{_COPILOT_API}/chat/completions",
             headers=await self._chat_headers(),
             json=body,
         ) as resp:
-            check_status(resp, provider=self.name)
-            async for line in resp.aiter_lines():
-                delta, done = parse_sse_delta(line)
-                if done:
-                    yield StreamChunk(delta="", done=True)
-                    return
-                if delta:
-                    yield StreamChunk(delta=delta)
+            if resp.status_code != 401:
+                check_status(resp, provider=self.name)
+                async for chunk in iter_sse_chunks(resp, provider=self.name):
+                    yield chunk
+                return
+            self._jwt = None
+        # Retry once with a freshly minted JWT.
+        async with self._client.stream(
+            "POST",
+            f"{_COPILOT_API}/chat/completions",
+            headers=await self._chat_headers(),
+            json=body,
+        ) as retry_resp:
+            check_status(retry_resp, provider=self.name)
+            async for chunk in iter_sse_chunks(retry_resp, provider=self.name):
+                yield chunk
 
     async def aclose(self) -> None:
         if self._owns_client:

@@ -2,10 +2,29 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import httpx
 import pytest
+from shared_llm.exceptions import AuthError, ProviderError
 from shared_llm.providers import AzureFoundryAPIMProvider
 from shared_llm.types import Message
+
+
+class _RaisingStream(httpx.AsyncByteStream):
+    """SSE body that yields good lines then raises mid-stream."""
+
+    def __init__(self, *, good: list[bytes], exc: BaseException) -> None:
+        self._good = good
+        self._exc = exc
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._good:
+            yield chunk
+        raise self._exc
+
+    async def aclose(self) -> None:
+        return None
 
 
 def _mock_client(handler) -> httpx.AsyncClient:  # type: ignore[no-untyped-def]
@@ -13,6 +32,15 @@ def _mock_client(handler) -> httpx.AsyncClient:  # type: ignore[no-untyped-def]
         transport=httpx.MockTransport(handler),
         headers={"Content-Type": "application/json"},
         timeout=5.0,
+    )
+
+
+def _azure(handler) -> AzureFoundryAPIMProvider:  # type: ignore[no-untyped-def]
+    return AzureFoundryAPIMProvider(
+        apim_base_url="https://x.azure-api.net/foundry",
+        deployment="gpt-4o",
+        subscription_key="sub-123",
+        http_client=_mock_client(handler),
     )
 
 
@@ -96,3 +124,63 @@ async def test_apim_cost_is_propagated_to_usage() -> None:
     )
     resp = await p.complete([Message(role="user", content="hi")])
     assert resp.usage.cost_usd == 0.0123
+
+
+@pytest.mark.asyncio
+async def test_stream_concatenates_deltas_until_done() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = b"".join(
+            [
+                b'data: {"choices":[{"delta":{"content":"he"}}]}\n\n',
+                b'data: {"choices":[{"delta":{"content":"llo"}}]}\n\n',
+                b"data: [DONE]\n\n",
+            ]
+        )
+        return httpx.Response(200, content=body, headers={"Content-Type": "text/event-stream"})
+
+    p = _azure(handler)
+    chunks = [c async for c in p.stream([Message(role="user", content="hi")])]
+    assert "".join(c.delta for c in chunks if not c.done) == "hello"
+    assert chunks[-1].done is True
+
+
+@pytest.mark.asyncio
+async def test_stream_midstream_error_becomes_provider_error() -> None:
+    """A connection drop mid-body is converted to a typed ProviderError
+    instead of leaking a raw httpx error to the caller."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=_RaisingStream(
+                good=[b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'],
+                exc=httpx.ReadTimeout("timed out"),
+            ),
+        )
+
+    p = _azure(handler)
+    with pytest.raises(ProviderError, match="stream interrupted"):
+        async for _c in p.stream([Message(role="user", content="hi")]):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_stream_401_is_auth_error_403_is_provider_error() -> None:
+    """401 → AuthError (re-auth), 403 → ProviderError (no permission)."""
+
+    def handler_401(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="bad token")
+
+    with pytest.raises(AuthError):
+        async for _c in _azure(handler_401).stream([Message(role="user", content="hi")]):
+            pass
+
+    def handler_403(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="forbidden")
+
+    with pytest.raises(ProviderError) as info:
+        async for _c in _azure(handler_403).stream([Message(role="user", content="hi")]):
+            pass
+    assert not isinstance(info.value, AuthError)
+    assert info.value.status_code == 403
