@@ -169,7 +169,31 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_05` — Configuración de firma y cifrado XML
 
-- [ ] **Título**: Configuración de firma y cifrado XML
+- [x] **Título**: Configuración de firma y cifrado XML
+<!-- xmlsec 1.3.17 + python3-saml instalados OK en este host (wheel Windows):
+     la firma/cifrado XML (la parte nativa) NO está bloqueada-por-xmlsec aquí y
+     el camino completo corre verde. Implementado: migración 0034 reversible
+     (up/down/up) añadiendo a sso_configurations las columnas SP de firma/cifrado
+     — sp_x509_cert (PEM público, no secreto), sp_private_key_ref /
+     sp_private_key_encrypted (clave privada SP, exactamente-una-fuente, cifrada
+     en reposo con Fernet — mismo mecanismo que el client_secret OIDC, NUNCA en
+     claro) y los flags de política authn_requests_signed, want_assertions_signed
+     (antes hard-coded en 08_04, ahora columna, default true),
+     want_assertions_encrypted, want_name_id_encrypted; dos CHECK (una sola fuente
+     de clave + clave/cert presentes si cualquier feature de cripto está activa).
+     ResolvedSAMLConfig.to_settings() cablea el par SP + bloque security
+     (authnRequestsSigned / wantAssertionsEncrypted / wantNameIdEncrypted /
+     signature+digest SHA-256). validate_saml_security() valida invariantes sin
+     necesitar xmlsec (camino degradado seguro). resolve_sp_private_key() en
+     secrets.py refleja resolve_client_secret (Vault-first, Fernet fallback,
+     None si no hay clave). El router resuelve la clave SP y valida en
+     _resolve_saml_config. 13 tests en tests/integration/test_saml_crypto.py:
+     superficie de config (validación + Fernet round-trip, corren sin xmlsec) +
+     superficie cripto (BLOQUEADO-POR-XMLSEC, verde aquí): AuthnRequest firmada
+     lleva Signature+SigAlg sha256; assertion correctamente firmada ACEPTADA;
+     assertion manipulada/sin firma RECHAZADA (400); aislamiento cross-tenant
+     (la clave SP de A no se filtra en la request de B). OIDC + login local +
+     SAML 08_04 intactos (37 tests verdes). -->
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security

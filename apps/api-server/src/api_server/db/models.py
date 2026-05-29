@@ -389,6 +389,37 @@ class SSOConfiguration(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
 
+    # --- SAML SP signing / encryption (Plan 08 task_08_05, migration
+    # 0034). The SP public cert is not secret (the IdP needs it) ->
+    # plaintext PEM/base64. The SP private key follows the SAME never-
+    # plaintext, exactly-one-source rule as the OIDC client secret:
+    # a Vault pointer OR Fernet ciphertext, never both. CHECK constraints
+    # enforce "at most one key source" and "a key+cert exist whenever any
+    # signing/encryption feature is enabled".
+    sp_x509_cert: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sp_private_key_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    sp_private_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Per-config security policy flags (map 1:1 onto python3-saml settings).
+    # Sign the outbound AuthnRequest with the SP key.
+    authn_requests_signed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    # Require the IdP to sign the assertion (defaults true — turning it
+    # off is a deliberate, audited choice). task_08_04 hard-coded this;
+    # it is now an operator-controllable column.
+    want_assertions_signed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    # Require the IdP to encrypt the assertion / the NameID to the SP cert
+    # (the SP decrypts with its private key).
+    want_assertions_encrypted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    want_name_id_encrypted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
             f"SSOConfiguration(id={self.id!r}, tenant={self.tenant_id!r}, "

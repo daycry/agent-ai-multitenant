@@ -42,6 +42,13 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
 # tenant config does not pin one explicitly.
 DEFAULT_NAME_ID_FORMAT = "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
 
+# XML-DSig / XML-Enc algorithm URIs used for SP request signing. SHA-256
+# is the modern baseline (SHA-1 is broken); these are the same URIs the
+# IdP-side signer uses in the tests. python3-saml reads them verbatim
+# from the `security` settings block.
+SIGNATURE_ALGORITHM = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"
+DIGEST_ALGORITHM = "http://www.w3.org/2001/04/xmlenc#sha256"
+
 
 class SAMLError(Exception):
     """Any failure processing the SAML flow (bad config, invalid response).
@@ -59,6 +66,17 @@ class SAMLUnavailableError(SAMLError):
     Implemented`` so a node without the native crypto stack reports SAML
     as unavailable instead of crashing — local login and OIDC keep
     working regardless.
+    """
+
+
+class SAMLConfigError(SAMLError):
+    """A SAML config violates a signing/encryption invariant (task_08_05).
+
+    Raised by :func:`validate_saml_security` BEFORE any native crypto
+    runs (it needs no ``xmlsec``), so an operator misconfiguration — e.g.
+    request signing enabled but no SP private key — surfaces as a clean
+    server error instead of an opaque python3-saml failure deep in the
+    flow. The router maps it to a 500 (operator problem, not the user's).
     """
 
 
@@ -106,6 +124,19 @@ class ResolvedSAMLConfig:
     fields, e.g. ``{"email": "...", "full_name": "..."}``. An empty
     mapping falls back to the NameID for the email and a small set of
     common attribute names for the full name.
+
+    SP signing/encryption (task_08_05):
+
+      * ``sp_x509_cert`` / ``sp_private_key`` — the SP key pair. The cert
+        is the (already-resolved) PEM/base64 body; the private key is the
+        (already-decrypted/resolved) PEM, or ``None`` when no SP-key
+        feature is enabled. The router resolves these from the encrypted/
+        Vault columns — this dataclass only ever holds the plaintext.
+      * ``authn_requests_signed`` — sign the outbound AuthnRequest.
+      * ``want_assertions_signed`` — require the IdP to sign the assertion
+        (defaults true; the security-critical inbound guarantee).
+      * ``want_assertions_encrypted`` / ``want_name_id_encrypted`` —
+        require the IdP to encrypt the assertion / NameID to the SP cert.
     """
 
     idp_entity_id: str
@@ -115,26 +146,43 @@ class ResolvedSAMLConfig:
     sp_acs_url: str
     name_id_format: str = DEFAULT_NAME_ID_FORMAT
     attribute_mappings: dict[str, str] = field(default_factory=dict)
+    # --- SP signing / encryption (task_08_05) ---
+    sp_x509_cert: str | None = None
+    sp_private_key: str | None = None
+    authn_requests_signed: bool = False
+    want_assertions_signed: bool = True
+    want_assertions_encrypted: bool = False
+    want_name_id_encrypted: bool = False
 
     def to_settings(self) -> dict[str, Any]:
         """The ``python3-saml`` settings dict for this config.
 
-        SP signing/encryption keys are out of scope for task_08_04 (they
-        land in task_08_05 — XML signing/encryption); here the SP is
-        unsigned and only *verifies* the IdP's signature, which is the
-        security-critical direction for a login flow.
+        Wires the SP key pair (when present) plus the security policy
+        flags. The inbound ``wantAssertionsSigned`` guarantee remains the
+        default; request signing + assertion/NameID encryption are opt-in
+        per the tenant's columns. :func:`validate_saml_security` is
+        expected to have already rejected a config that enables a
+        key-requiring feature without an SP key.
         """
+        sp: dict[str, Any] = {
+            "entityId": self.sp_entity_id,
+            "assertionConsumerService": {
+                "url": self.sp_acs_url,
+                "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST",
+            },
+            "NameIDFormat": self.name_id_format,
+        }
+        # python3-saml reads the SP key pair from these keys; supplying an
+        # empty string is treated as "no key", so only set them when we
+        # actually resolved material.
+        if self.sp_x509_cert:
+            sp["x509cert"] = self.sp_x509_cert
+        if self.sp_private_key:
+            sp["privateKey"] = self.sp_private_key
         return {
             "strict": True,
             "debug": False,
-            "sp": {
-                "entityId": self.sp_entity_id,
-                "assertionConsumerService": {
-                    "url": self.sp_acs_url,
-                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST",
-                },
-                "NameIDFormat": self.name_id_format,
-            },
+            "sp": sp,
             "idp": {
                 "entityId": self.idp_entity_id,
                 "singleSignOnService": {
@@ -146,10 +194,17 @@ class ResolvedSAMLConfig:
             "security": {
                 # Require the IdP to sign the assertion (or the response).
                 # This is the property that makes the login trustworthy.
-                "wantAssertionsSigned": True,
+                "wantAssertionsSigned": self.want_assertions_signed,
                 "wantMessagesSigned": False,
                 "wantNameId": True,
                 "requestedAuthnContext": False,
+                # Sign the outbound AuthnRequest with the SP key.
+                "authnRequestsSigned": self.authn_requests_signed,
+                # Require the IdP to encrypt the assertion / NameID.
+                "wantAssertionsEncrypted": self.want_assertions_encrypted,
+                "wantNameIdEncrypted": self.want_name_id_encrypted,
+                "signatureAlgorithm": SIGNATURE_ALGORITHM,
+                "digestAlgorithm": DIGEST_ALGORITHM,
                 # Accept single-label hosts (e.g. an internal hostname, or
                 # `testserver` in tests). python3-saml rejects them by
                 # default; the SP/ACS URLs here are operator-configured,
@@ -334,13 +389,57 @@ def _resolve_full_name(config: ResolvedSAMLConfig, attributes: dict[str, list[st
     return None
 
 
+def validate_saml_security(config: ResolvedSAMLConfig) -> None:
+    """Assert a config's signing/encryption invariants (task_08_05).
+
+    Pure Python — needs NO native ``xmlsec`` — so it runs everywhere and
+    can guard the flow before any crypto is attempted. The invariant: any
+    feature that requires the SP private key (request signing, assertion
+    encryption, NameID encryption) demands BOTH the SP cert and the SP
+    private key be present. This mirrors the DB CHECK constraint
+    (``ck_sso_config_sp_key_when_crypto``) so a misconfiguration is caught
+    even if a row somehow bypassed it.
+
+    Raises:
+        SAMLConfigError: a key-requiring feature is on but the SP cert or
+            private key is missing.
+    """
+    needs_sp_key = (
+        config.authn_requests_signed
+        or config.want_assertions_encrypted
+        or config.want_name_id_encrypted
+    )
+    if not needs_sp_key:
+        return
+    missing: list[str] = []
+    if not config.sp_x509_cert:
+        missing.append("SP certificate")
+    if not config.sp_private_key:
+        missing.append("SP private key")
+    if missing:
+        features: list[str] = []
+        if config.authn_requests_signed:
+            features.append("AuthnRequest signing")
+        if config.want_assertions_encrypted:
+            features.append("assertion encryption")
+        if config.want_name_id_encrypted:
+            features.append("NameID encryption")
+        raise SAMLConfigError(
+            f"SAML config enables {', '.join(features)} but is missing " f"{' and '.join(missing)}"
+        )
+
+
 __all__ = [
     "DEFAULT_NAME_ID_FORMAT",
+    "DIGEST_ALGORITHM",
+    "SIGNATURE_ALGORITHM",
     "ResolvedSAMLConfig",
+    "SAMLConfigError",
     "SAMLError",
     "SAMLUnavailableError",
     "SAMLUserInfo",
     "build_login_url",
     "process_acs_response",
     "saml_available",
+    "validate_saml_security",
 ]

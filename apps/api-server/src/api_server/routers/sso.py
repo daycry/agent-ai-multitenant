@@ -51,13 +51,20 @@ from api_server.auth.sso.oidc import OIDCError, OIDCFlow, ResolvedOIDCConfig
 from api_server.auth.sso.saml import (
     DEFAULT_NAME_ID_FORMAT,
     ResolvedSAMLConfig,
+    SAMLConfigError,
     SAMLError,
     SAMLUnavailableError,
     build_login_url,
     process_acs_response,
     saml_available,
+    validate_saml_security,
 )
-from api_server.auth.sso.secrets import SSOSecretError, encrypt_client_secret, resolve_client_secret
+from api_server.auth.sso.secrets import (
+    SSOSecretError,
+    encrypt_client_secret,
+    resolve_client_secret,
+    resolve_sp_private_key,
+)
 from api_server.auth.sso.state_store import (
     LoginState,
     OIDCStateStore,
@@ -246,13 +253,29 @@ def _resolve_saml_config(row: SSOConfiguration, *, tenant_id: str) -> ResolvedSA
     The per-provider CHECK constraint guarantees a `saml` row has
     entity_id + sso_url + x509_cert; narrow for mypy and fail loud (500)
     if a row somehow slipped through without them.
+
+    Resolves the SP private key (task_08_05) from its Vault ref / Fernet
+    ciphertext to plaintext PEM in memory — never stored or logged in
+    clear. A secret-resolution fault or a security-invariant violation is
+    operator-attributable → 500 (the cause is never echoed to the client).
     """
     if row.idp_entity_id is None or row.idp_sso_url is None or row.idp_x509_cert is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="SSO is misconfigured for this tenant",
         )
-    return ResolvedSAMLConfig(
+    try:
+        sp_private_key = resolve_sp_private_key(
+            sp_private_key_ref=row.sp_private_key_ref,
+            sp_private_key_encrypted=row.sp_private_key_encrypted,
+            vault_resolver=get_vault_resolver(),
+        )
+    except SSOSecretError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SSO is misconfigured for this tenant",
+        ) from exc
+    config = ResolvedSAMLConfig(
         idp_entity_id=row.idp_entity_id,
         idp_sso_url=row.idp_sso_url,
         idp_x509_cert=row.idp_x509_cert,
@@ -260,7 +283,21 @@ def _resolve_saml_config(row: SSOConfiguration, *, tenant_id: str) -> ResolvedSA
         sp_acs_url=_saml_acs_url(tenant_id),
         name_id_format=row.name_id_format or DEFAULT_NAME_ID_FORMAT,
         attribute_mappings={str(k): str(v) for k, v in (row.attribute_mappings or {}).items()},
+        sp_x509_cert=row.sp_x509_cert,
+        sp_private_key=sp_private_key,
+        authn_requests_signed=row.authn_requests_signed,
+        want_assertions_signed=row.want_assertions_signed,
+        want_assertions_encrypted=row.want_assertions_encrypted,
+        want_name_id_encrypted=row.want_name_id_encrypted,
     )
+    try:
+        validate_saml_security(config)
+    except SAMLConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SSO is misconfigured for this tenant",
+        ) from exc
+    return config
 
 
 # ---------------------------------------------------------------------------

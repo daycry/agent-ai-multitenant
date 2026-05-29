@@ -33,6 +33,11 @@ from api_server.config import get_settings
 # Mirrors how the MCP layer keys its secrets (one well-known field).
 VAULT_SECRET_FIELD = "client_secret"
 
+# The key inside a Vault KV entry that holds the SAML SP private key
+# (task_08_05). A distinct well-known field so an OIDC secret and a SAML
+# SP key can live in the same Vault mount without colliding.
+VAULT_SP_PRIVATE_KEY_FIELD = "sp_private_key"
+
 
 class SSOSecretError(Exception):
     """Raised when the OIDC client secret cannot be resolved/decrypted.
@@ -124,10 +129,64 @@ def resolve_client_secret(
     raise SSOSecretError("OIDC configuration has no client secret configured")
 
 
+def resolve_sp_private_key(
+    *,
+    sp_private_key_ref: str | None,
+    sp_private_key_encrypted: str | None,
+    vault_resolver: object | None,
+) -> str | None:
+    """Return the plaintext SAML SP private key (PEM), or ``None``.
+
+    The SP private key is OPTIONAL: a tenant that does not sign its
+    AuthnRequest and does not enable assertion/NameID encryption needs no
+    key at all. So unlike :func:`resolve_client_secret`, "neither source
+    set" is a valid state that returns ``None`` (the caller decides
+    whether the absence is actually an error for the enabled features).
+
+    Resolution order, identical otherwise to the OIDC secret:
+
+      1. ``sp_private_key_ref`` set      → resolve via the VaultResolver.
+      2. ``sp_private_key_encrypted`` set → Fernet-decrypt in place.
+      3. neither set                     → ``None``.
+
+    Raises:
+        SSOSecretError: a Vault ref is set but Vault is unwired / failed /
+            the entry lacks the well-known field, or the ciphertext is
+            corrupt.
+    """
+    if sp_private_key_ref:
+        if vault_resolver is None:
+            raise SSOSecretError(
+                "SAML config references a Vault SP private key but no "
+                "VaultResolver is configured (set API_SERVER_VAULT_TOKEN)"
+            )
+        resolve = getattr(vault_resolver, "resolve", None)
+        if resolve is None:  # pragma: no cover - defensive
+            raise SSOSecretError("supplied vault_resolver has no resolve() method")
+        try:
+            entry = resolve(sp_private_key_ref)
+        except Exception as exc:  # Vault libraries raise a zoo of types.
+            raise SSOSecretError(f"Vault resolution failed for {sp_private_key_ref!r}") from exc
+        key = entry.get(VAULT_SP_PRIVATE_KEY_FIELD) if isinstance(entry, dict) else None
+        if not key:
+            raise SSOSecretError(
+                f"Vault entry {sp_private_key_ref!r} has no "
+                f"{VAULT_SP_PRIVATE_KEY_FIELD!r} field"
+            )
+        return str(key)
+
+    if sp_private_key_encrypted:
+        return decrypt_client_secret(sp_private_key_encrypted)
+
+    return None
+
+
 __all__ = [
     "SSOSecretError",
     "VAULT_SECRET_FIELD",
+    "VAULT_SP_PRIVATE_KEY_FIELD",
     "decrypt_client_secret",
     "encrypt_client_secret",
     "resolve_client_secret",
+    "resolve_sp_private_key",
 ]
