@@ -174,7 +174,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_06` — Workflow automático al cierre del plan: el Technical Writer genera changelog + ADRs si aplica + updates a reference
 
-- [ ] **Título**: Workflow automático al cierre del plan: el Technical Writer genera changelog + ADRs si aplica + updates a reference
+- [x] **Título**: Workflow automático al cierre del plan: el Technical Writer genera changelog + ADRs si aplica + updates a reference
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
