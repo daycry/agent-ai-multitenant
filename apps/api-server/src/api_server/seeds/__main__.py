@@ -20,6 +20,7 @@ from api_server.seeds.builtin_project_templates import seed_builtin_project_temp
 from api_server.seeds.builtin_skills import seed_builtin_skills
 from api_server.seeds.builtin_teams import seed_builtin_teams
 from api_server.seeds.builtin_tools import seed_builtin_tools
+from api_server.seeds.catalog_ingestion import seed_catalog_ingestion
 from api_server.seeds.platform import ensure_platform_tenant
 
 
@@ -41,6 +42,11 @@ async def main() -> None:
         # Plan 06.9: canonical KBs must exist before project templates
         # reference them via default_kb_grants.
         n_kbs = await seed_builtin_kbs(session)
+        # Plan 06.13: ingest the curated corpus into the (now-existing)
+        # built-in KBs so granting one actually feeds the RAG. Idempotent;
+        # uses the real Ollama embedder in production. MUST run after
+        # seed_builtin_kbs (the KB rows must exist first).
+        catalog = await seed_catalog_ingestion(session)
         # Project templates depend on teams (FK on projects.team_id).
         n_proj_templates = await seed_builtin_project_templates(session)
         n_policies = await seed_builtin_approval_policies(session)
@@ -53,6 +59,8 @@ async def main() -> None:
         teams=n_teams,
         kb_categories=n_kb_categories,
         knowledge_bases=n_kbs,
+        catalog_documents=len(catalog),
+        catalog_chunks=sum(r.chunks_persisted for r in catalog),
         project_templates=n_proj_templates,
         approval_policies=n_policies,
     )
