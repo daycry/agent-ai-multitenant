@@ -347,10 +347,12 @@ class SSOConfiguration(
     display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
-    # --- OIDC discovery + client identity ---
+    # --- OIDC discovery + client identity (NULL on a `saml` row) ---
     # The IdP issuer URL; discovery hits `<issuer>/.well-known/openid-configuration`.
-    issuer: Mapped[str] = mapped_column(String(512), nullable=False)
-    client_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Nullable since Phase B (migration 0033): a SAML row has no OIDC issuer.
+    # The per-provider CHECK constraint requires them for `oidc` rows only.
+    issuer: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Exactly one of these holds the secret; the other is NULL. A CHECK
     # constraint in the migration enforces "never both, never plaintext".
     client_secret_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -362,6 +364,28 @@ class SSOConfiguration(
     )
     # claim -> local user field mapping (see class docstring).
     claim_mappings: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+    # --- SAML 2.0 identity provider (NULL on an `oidc` row; Plan 08
+    # task_08_04, migration 0033). The per-provider CHECK constraint
+    # requires entity_id + sso_url + x509_cert for `saml` rows.
+    # The IdP's SAML EntityID — the `Issuer` it stamps on assertions.
+    idp_entity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # The IdP Single-Sign-On endpoint the SP AuthnRequest redirects to.
+    idp_sso_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # The IdP signing certificate (PEM/base64) — verifies the assertion.
+    idp_x509_cert: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The requested NameID format (defaults to emailAddress).
+    name_id_format: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        server_default=text("'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress'"),
+    )
+    # SAML attribute name -> local user field mapping (mirrors
+    # `claim_mappings` for OIDC). Empty dict falls back to the NameID for
+    # email and a best-effort common attribute set for the full name.
+    attribute_mappings: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
 

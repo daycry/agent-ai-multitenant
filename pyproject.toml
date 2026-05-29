@@ -232,6 +232,16 @@ ignore_missing_imports = true
 module = ["authlib", "authlib.*", "joserfc", "joserfc.*", "cryptography.*"]
 ignore_missing_imports = true
 
+# SAML 2.0 (Plan 08 task_08_04). `python3-saml` (imported as the
+# `onelogin.saml2.*` package) ships no type stubs and binds the native
+# xmlsec backend. The api-server imports it LAZILY inside the SAML flow
+# so the app stays importable without the native libs; mypy still needs
+# the missing-import suppressed. Same pattern as the other optional-dep
+# overrides above.
+[[tool.mypy.overrides]]
+module = ["onelogin", "onelogin.*", "xmlsec", "xmlsec.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

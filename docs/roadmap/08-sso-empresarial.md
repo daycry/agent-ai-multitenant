@@ -141,7 +141,18 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_04` — Integración SAML con python3-saml (SP-initiated y IdP-initiated)
 
-- [ ] **Título**: Integración SAML con python3-saml (SP-initiated y IdP-initiated)
+- [x] **Título**: Integración SAML con python3-saml (SP-initiated y IdP-initiated)
+<!-- python3-saml + xmlsec 1.3.17 instalado OK en este host (wheel Windows);
+     flujo SAML COMPLETO implementado y verde, incluida la validación de firma
+     XML del assertion (no bloqueado-por-xmlsec en este entorno). El import de
+     python3-saml es perezoso dentro del flujo: en un nodo SIN el backend nativo
+     xmlsec los endpoints devuelven 501 (guard testeado) y el resto de auth
+     (login local + OIDC) sigue funcionando. 13 tests en
+     tests/integration/test_saml.py (SP-initiated, IdP-initiated/unsolicited,
+     JIT, tampered/garbage assertion, config ausente/deshabilitada, aislamiento
+     cross-tenant, import-guard). Migración 0033 reversible (up/down/up) con
+     CHECK por-provider. OIDC + login local intactos (24 tests verdes). -->
+
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

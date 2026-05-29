@@ -26,13 +26,28 @@ from api_server.auth.sso.oidc import (
     OIDCUserInfo,
     ResolvedOIDCConfig,
 )
+from api_server.auth.sso.saml import (
+    DEFAULT_NAME_ID_FORMAT,
+    ResolvedSAMLConfig,
+    SAMLError,
+    SAMLUnavailableError,
+    SAMLUserInfo,
+    build_login_url,
+    process_acs_response,
+    saml_available,
+)
 from api_server.auth.sso.secrets import (
     SSOSecretError,
     decrypt_client_secret,
     encrypt_client_secret,
     resolve_client_secret,
 )
-from api_server.auth.sso.state_store import LoginState, OIDCStateStore
+from api_server.auth.sso.state_store import (
+    LoginState,
+    OIDCStateStore,
+    SAMLLoginState,
+    SAMLRelayStateStore,
+)
 from api_server.auth.sso.templates import (
     OIDC_TEMPLATES,
     ExtractedClaims,
@@ -45,6 +60,7 @@ from api_server.auth.sso.templates import (
 )
 
 __all__ = [
+    "DEFAULT_NAME_ID_FORMAT",
     "OIDC_TEMPLATES",
     "ExtractedClaims",
     "LoginState",
@@ -56,11 +72,20 @@ __all__ = [
     "OIDCTemplateId",
     "OIDCUserInfo",
     "ResolvedOIDCConfig",
+    "ResolvedSAMLConfig",
+    "SAMLError",
+    "SAMLLoginState",
+    "SAMLRelayStateStore",
+    "SAMLUnavailableError",
+    "SAMLUserInfo",
     "SSOSecretError",
+    "build_login_url",
     "decrypt_client_secret",
     "encrypt_client_secret",
     "extract_claims",
     "get_template",
     "list_templates",
+    "process_acs_response",
     "resolve_client_secret",
+    "saml_available",
 ]

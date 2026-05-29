@@ -35,6 +35,12 @@ dependencies = [
   # secrets are Fernet-encrypted at rest (cryptography, already present
   # via python-jose[cryptography]) or Vault-resolved.
   "authlib>=1.3,<2",
+  # SAML 2.0 (Plan 08 task_08_04). python3-saml drives the SP-initiated
+  # AuthnRequest + the ACS assertion validation. It binds the NATIVE
+  # xmlsec/libxml2 libraries, which can fail to install on some hosts;
+  # the api-server imports it LAZILY inside the SAML flow so a node
+  # without the native backend still boots (SAML reports 501 there).
+  "python3-saml>=1.16,<2",
 
   # Cache / session store / rate limit
   "redis[hiredis]>=5.0,<6",
