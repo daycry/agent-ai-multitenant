@@ -191,7 +191,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_07` — Plantilla canónica de changelog por plan (frontmatter + resumen + tareas + decisiones + PR link)
 
-- [ ] **Título**: Plantilla canónica de changelog por plan (frontmatter + resumen + tareas + decisiones + PR link)
+- [x] **Título**: Plantilla canónica de changelog por plan (frontmatter + resumen + tareas + decisiones + PR link)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: ai-engineer
