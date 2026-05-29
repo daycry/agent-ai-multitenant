@@ -263,7 +263,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_11` — UI Next.js en /docs del tenant con sidebar árbol de proyectos → carpetas → archivos
 
-- [ ] **Título**: UI Next.js en /docs del tenant con sidebar árbol de proyectos → carpetas → archivos
+- [x] **Título**: UI Next.js en /docs del tenant con sidebar árbol de proyectos → carpetas → archivos (e2e pending human verify)
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
