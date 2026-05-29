@@ -38,7 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import _parse_bearer
 from api_server.config import get_settings
-from api_server.db.domain import Agent
+from api_server.db.domain import Agent, Project
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 
 # Token TTL the worker mints with. Sandbox containers live far less
@@ -145,12 +145,16 @@ async def get_agent_principal(
     Two layers:
       1. JWT validation (signature + expiry + `kind=agent` claim).
       2. DB lookup of the `Agent` row to confirm it still exists and
-         hasn't been soft-deleted between token mint and use. Goes
-         through the *admin* (BYPASSRLS) sessionmaker because the
-         agent token isn't bound to a human session — we need to
-         look up agents across tenants by id alone, while still
-         pinning the tenant_id from the token for the rest of the
-         request.
+         hasn't been soft-deleted between token mint and use, AND —
+         when the agent is bound to a project (`project_id IS NOT
+         NULL`) — that the parent `Project` row still exists and is
+         not soft-deleted. Soft-deleting a project must immediately
+         revoke its agents' tokens even though the 24h TTL is far
+         from over (audit gid auth-rbac-casbin-5). Goes through the
+         *admin* (BYPASSRLS) sessionmaker because the agent token
+         isn't bound to a human session — we need to look up agents
+         across tenants by id alone, while still pinning the
+         tenant_id from the token for the rest of the request.
 
     Returns the principal. Endpoints downstream pull `tenant_id`
     from it to set `app.tenant_id` on the RLS session.
@@ -165,8 +169,9 @@ async def get_agent_principal(
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
-    # Defence in depth — a deleted agent shouldn't keep working until
-    # the token expires.
+    # Defence in depth — a deleted agent (or an agent whose project
+    # has been soft-deleted) shouldn't keep working until the token
+    # expires.
     sessionmaker = get_admin_sessionmaker()
     async with sessionmaker() as session:
         if not await _agent_exists(session, principal.agent_id, principal.tenant_id):
@@ -179,11 +184,31 @@ async def get_agent_principal(
 
 
 async def _agent_exists(session: AsyncSession, agent_id: UUID, tenant_id: UUID) -> bool:
+    """True iff the agent is live AND its project (if any) is live.
+
+    The base check is unchanged: the agent row must exist, belong to
+    the token's tenant, and not be soft-deleted. On top of that, a
+    `project_local` agent carries a `project_id`; we LEFT JOIN the
+    parent `Project` and require it to be present and not soft-deleted.
+    Global agents (`project_id IS NULL`) have no project to validate,
+    so the outer join leaves the project columns NULL and the OR below
+    accepts them. This makes soft-deleting a project revoke its agents'
+    tokens at once (audit gid auth-rbac-casbin-5).
+    """
     result = await session.execute(
-        select(Agent.id).where(
+        select(Agent.id)
+        .outerjoin(
+            Project,
+            (Project.id == Agent.project_id) & (Project.tenant_id == Agent.tenant_id),
+        )
+        .where(
             Agent.id == agent_id,
             Agent.tenant_id == tenant_id,
             Agent.deleted_at.is_(None),
+            # No project bound -> nothing to validate. Project bound ->
+            # it must resolve to a live (non-soft-deleted) row.
+            (Agent.project_id.is_(None))
+            | ((Project.id.isnot(None)) & (Project.deleted_at.is_(None))),
         )
     )
     return result.scalar_one_or_none() is not None
