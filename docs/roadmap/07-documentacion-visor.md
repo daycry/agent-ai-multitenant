@@ -382,7 +382,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_18` — Permisos RBAC respetados (filtro por proyecto accesible al usuario)
 
-- [ ] **Título**: Permisos RBAC respetados (filtro por proyecto accesible al usuario)
+- [x] **Título**: Permisos RBAC respetados (filtro por proyecto accesible al usuario)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
