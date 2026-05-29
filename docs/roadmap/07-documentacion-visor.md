@@ -348,7 +348,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_16` — Vista de diff entre versiones (basado en commits Git)
 
-- [ ] **Título**: Vista de diff entre versiones (basado en commits Git)
+- [x] **Título**: Vista de diff entre versiones (basado en commits Git) <!-- e2e pendiente de verificación humana (sin app+navegador en este entorno) -->
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev

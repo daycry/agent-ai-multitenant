@@ -64,6 +64,54 @@ export function fetchDocContent(projectId: string, path: string): Promise<DocCon
 }
 
 // ---------------------------------------------------------------------------
+// Diff between two git refs (GET /projects/{id}/docs/diff?path=&base=&head=)
+// ---------------------------------------------------------------------------
+
+/**
+ * Classification of one unified-diff line, mirroring the backend
+ * `DocDiffLine.kind`:
+ *   - `context` — unchanged line (present in both refs),
+ *   - `added`   — present only in `head`,
+ *   - `removed` — present only in `base`,
+ *   - `hunk`    — a hunk header (`@@ -a,b +c,d @@`).
+ */
+export type DocDiffLineKind = "context" | "added" | "removed" | "hunk";
+
+/** One classified line of the diff; `content` has its leading marker stripped. */
+export interface DocDiffLine {
+  kind: DocDiffLineKind;
+  content: string;
+}
+
+export interface DocDiff {
+  project_id: string;
+  relpath: string;
+  base_ref: string;
+  head_ref: string;
+  /** True when the file is byte-identical across the two refs (empty diff). */
+  unchanged: boolean;
+  /** Count of added lines (present only in `head`). */
+  added: number;
+  /** Count of removed lines (present only in `base`). */
+  removed: number;
+  /** Verbatim `git diff` output. */
+  raw: string;
+  /** The diff parsed into classified lines for the line renderer. */
+  lines: DocDiffLine[];
+}
+
+export function fetchDocDiff(
+  projectId: string,
+  path: string,
+  base: string,
+  head: string,
+  signal?: AbortSignal,
+): Promise<DocDiff> {
+  const qs = new URLSearchParams({ path, base, head });
+  return apiFetch<DocDiff>(`/projects/${projectId}/docs/diff?${qs.toString()}`, { signal });
+}
+
+// ---------------------------------------------------------------------------
 // Full-text search (GET /projects/{id}/docs/search?q=)
 // ---------------------------------------------------------------------------
 

@@ -12,19 +12,28 @@
  * States handled: nothing selected (empty), loading, error (with the API
  * message), and rendered. The TOC rail only shows once there's content with
  * at least one heading.
+ *
+ * task_07_16 adds a per-pane mode toggle (Documento / Comparar): "Comparar"
+ * swaps the markdown render for {@link DocDiffView}, which compares two git
+ * refs of the same `.md`. The toggle resets to "Documento" whenever the open
+ * doc changes.
  */
 
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { BookOpen, FileText } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { BookOpen, FileText, GitCompare } from "lucide-react";
 
 import { Spinner } from "@/components/ui/spinner";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError } from "@/lib/api";
-import { extractToc, fetchDocContent, type DocContent } from "@/lib/docs-api";
+import { extractToc, fetchDocContent, type DocContent, type TocEntry } from "@/lib/docs-api";
 
 import { BookmarkStar } from "./docs-bookmarks-view";
+import { DocDiffView } from "./doc-diff-view";
 import { DocToc } from "./doc-toc";
 import { MarkdownRenderer } from "./markdown-renderer";
+
+type ViewerMode = "read" | "diff";
 
 interface DocViewerPaneProps {
   projectId: string | null;
@@ -42,6 +51,13 @@ export function DocViewerPane({
   onToggleBookmark,
 }: DocViewerPaneProps) {
   const enabled = Boolean(projectId && path);
+  const [mode, setMode] = useState<ViewerMode>("read");
+
+  // A new doc selection always returns to reading mode — a comparison set up
+  // for the previous file would be meaningless for a different one.
+  useEffect(() => {
+    setMode("read");
+  }, [projectId, path]);
 
   const contentQuery = useQuery<DocContent>({
     // projectId/path are non-null whenever `enabled`; assert for the key.
@@ -78,16 +94,51 @@ export function DocViewerPane({
         <span className="break-all font-mono text-xs" data-testid="docs-selected-path">
           {path}
         </span>
-        {onToggleBookmark && (
-          <BookmarkStar
-            bookmarked={bookmarked}
-            onToggle={onToggleBookmark}
-            className="ml-auto"
-            testid="docs-viewer-star"
-          />
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          <Tabs
+            defaultValue="read"
+            value={mode}
+            onValueChange={(value) => setMode(value as ViewerMode)}
+          >
+            <TabsList data-testid="docs-viewer-mode-tabs">
+              <TabsTrigger value="read" data-testid="docs-viewer-mode-read">
+                <FileText className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
+                Documento
+              </TabsTrigger>
+              <TabsTrigger value="diff" data-testid="docs-viewer-mode-diff">
+                <GitCompare className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
+                Comparar
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {onToggleBookmark && (
+            <BookmarkStar
+              bookmarked={bookmarked}
+              onToggle={onToggleBookmark}
+              testid="docs-viewer-star"
+            />
+          )}
+        </div>
       </div>
 
+      {mode === "diff" ? (
+        <DocDiffView projectId={projectId} path={path} />
+      ) : (
+        <ReadMode contentQuery={contentQuery} toc={toc} />
+      )}
+    </div>
+  );
+}
+
+function ReadMode({
+  contentQuery,
+  toc,
+}: {
+  contentQuery: UseQueryResult<DocContent>;
+  toc: TocEntry[];
+}) {
+  return (
+    <>
       {contentQuery.isLoading && (
         <div
           className="text-muted-foreground flex items-center gap-2 py-8 text-sm"
@@ -125,6 +176,6 @@ export function DocViewerPane({
           )}
         </div>
       )}
-    </div>
+    </>
   );
 }
