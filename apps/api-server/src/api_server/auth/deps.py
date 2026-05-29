@@ -15,6 +15,7 @@ Endpoints that read tenant-scoped data MUST use `get_tenant_session`.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from uuid import UUID
@@ -182,12 +183,12 @@ def require_system_admin(
 # ---------------------------------------------------------------------------
 # Tenant-scoped session dependency
 # ---------------------------------------------------------------------------
-async def get_tenant_session(
-    principal: AuthPrincipal = Depends(get_principal),
+@asynccontextmanager
+async def open_tenant_session(
+    principal: AuthPrincipal,
 ) -> AsyncIterator[AsyncSession]:
-    """Yield an AsyncSession with `app.user_id` (and `app.tenant_id` if
-    the JWT carried one) bound for the lifetime of the request, so
-    PostgreSQL RLS policies can scope every query.
+    """Open an AsyncSession with `app.user_id` (and `app.tenant_id` when
+    present) bound for its lifetime, so PostgreSQL RLS scopes every query.
 
     Two flavours of session, selected from the principal:
 
@@ -203,6 +204,10 @@ async def get_tenant_session(
         scoped to the picked tenant. The admin "acts as" that tenant
         for both reads and writes, which is what the per-tenant
         view in the admin-panel needs.
+
+    Shared by the `get_tenant_session` FastAPI dependency and the
+    WebSocket handlers in `routers/ws.py`, which cannot use FastAPI's
+    dependency injection to obtain a tenant-scoped session.
     """
     # NOTE: PostgreSQL `SET LOCAL` is a utility command and does NOT
     # accept bound parameters via asyncpg's prepared-statement protocol
@@ -224,6 +229,18 @@ async def get_tenant_session(
                 text("SELECT set_config('app.tenant_id', :tid, true)"),
                 {"tid": str(principal.tenant_id)},
             )
+        yield session
+
+
+async def get_tenant_session(
+    principal: AuthPrincipal = Depends(get_principal),
+) -> AsyncIterator[AsyncSession]:
+    """Yield a tenant-scoped AsyncSession for the request (RLS bound).
+
+    Thin FastAPI-dependency wrapper over `open_tenant_session`; see that
+    context manager for the engine-selection rules.
+    """
+    async with open_tenant_session(principal) as session:
         yield session
 
 

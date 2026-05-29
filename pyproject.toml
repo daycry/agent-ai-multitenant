@@ -229,4 +229,5 @@ markers = [
   "unit: unit tests (fast, no I/O)",
   "integration: integration tests (DB, Redis, Docker)",
   "e2e: end-to-end tests (full stack)",
+  "cross_tenant: multi-tenant isolation tests — assert cross-tenant denial (CI-gated, Plan 06.14)",
 ]
