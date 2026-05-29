@@ -31,7 +31,10 @@ import structlog
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.docs_structure.constants import CANONICAL_DOC_FOLDER_NAMES, DOCS_DIRNAME
+from api_server.docs_structure.constants import (
+    CANONICAL_DOC_FOLDER_NAMES,
+    DOCS_DIRNAME,
+)
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.rag.search import bm25_chunks, vector_chunks
 
@@ -55,6 +58,18 @@ MAX_SEARCH_LIMIT = 100
 # for the full text.
 SNIPPET_MAX_CHARS = 280
 
+# Max characters a git ref / commit-ish a caller may supply for a doc diff.
+# A sha is 40 hex chars; a long branch/tag name fits comfortably. The cap
+# keeps a hostile caller from shipping a multi-KB string into the git
+# argument vector. (Bounded for safety even though ``_run_git`` never uses a
+# shell — see ``_safe_git_ref``.)
+GIT_REF_MAX_CHARS = 256
+
+# Wall-clock bound for the single ``git diff`` the diff endpoint shells out
+# to. ``workers.git_repos._run_git`` already sets ``timeout=120`` internally;
+# this constant documents the contract for readers of this module.
+GIT_DIFF_TIMEOUT_S = 120
+
 
 class DocsViewerError(Exception):
     """Base class for docs-viewer service errors (translated to HTTP by the
@@ -68,6 +83,16 @@ class PathTraversalError(DocsViewerError):
 
 class DocNotFoundError(DocsViewerError):
     """Raised when a requested ``.md`` does not exist under the docs root."""
+
+
+class InvalidGitRefError(DocsViewerError):
+    """Raised when a caller-supplied git ref is malformed or option-like
+    (would be mis-parsed as a ``git`` flag, e.g. ``--upload-pack=...``)."""
+
+
+class DocDiffError(DocsViewerError):
+    """Raised when ``git diff`` itself fails (e.g. an unknown ref) — surfaced
+    to the client as a 400, never the raw git stderr."""
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +134,46 @@ class DocContent:
     relpath: str
     content: str
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class DocDiffLine:
+    """One line of a unified diff, classified for the frontend renderer.
+
+    ``kind`` is one of:
+      * ``"context"`` — unchanged line (leading space in the unified diff),
+      * ``"added"``   — present only in ``head`` (leading ``+``),
+      * ``"removed"`` — present only in ``base`` (leading ``-``),
+      * ``"hunk"``    — a hunk header (``@@ -a,b +c,d @@``).
+
+    ``content`` is the line with its leading marker stripped (the renderer
+    re-applies styling from ``kind``); hunk headers keep their full text.
+    """
+
+    kind: str
+    content: str
+
+
+@dataclass(frozen=True)
+class DocDiff:
+    """A structured + raw unified diff of one ``.md`` between two git refs.
+
+    ``raw`` is the verbatim ``git diff`` output (what a frontend can hand to a
+    diff component directly). ``lines`` is the same diff parsed into
+    classified :class:`DocDiffLine` rows, and ``added`` / ``removed`` are the
+    line counts — a cheap summary for the viewer's header. ``unchanged`` is
+    True when the file is byte-identical across the two refs (empty diff).
+    """
+
+    project_id: UUID
+    relpath: str
+    base_ref: str
+    head_ref: str
+    raw: str
+    lines: list[DocDiffLine] = field(default_factory=list)
+    added: int = 0
+    removed: int = 0
+    unchanged: bool = True
 
 
 @dataclass(frozen=True)
@@ -167,6 +232,23 @@ def project_docs_root(data_root: Path | str, *, tenant_id: UUID, project_id: UUI
     )
 
 
+def project_repo_root(data_root: Path | str, *, tenant_id: UUID, project_id: UUID) -> Path:
+    """Resolve the on-disk git working tree backing one project's docs.
+
+    The diff endpoint shells out to ``git`` here, so it needs the *repo root*
+    (the directory holding the ``.git`` metadata and the ``docs/`` subtree),
+    not the ``docs/`` directory itself like :func:`project_docs_root`.
+    Production keeps it as a sibling ``docs-mirror`` checkout under
+    ``settings.data_root`` (same parent as :func:`project_docs_root`, one
+    level up from ``docs/``); the worktree-tree convention proper lives in
+    :mod:`workers.git_repos`.
+
+    Tests bypass this entirely by passing their own throwaway git repo to
+    :func:`diff_doc`.
+    """
+    return Path(data_root) / "projects" / str(tenant_id) / str(project_id) / "docs-mirror"
+
+
 # ---------------------------------------------------------------------------
 # Path safety
 # ---------------------------------------------------------------------------
@@ -222,6 +304,35 @@ def _resolve_within(docs_root: Path, posix: PurePosixPath) -> Path:
     if root != target and root not in target.parents:
         raise PathTraversalError("doc path escapes the docs root")
     return target
+
+
+def _safe_git_ref(ref: str) -> str:
+    """Validate a caller-supplied git ref/commit-ish for the diff endpoint.
+
+    ``workers.git_repos._run_git`` runs git with an explicit argv (no shell),
+    so shell-injection is already impossible. The remaining risk is *argument
+    injection*: a ref like ``--output=/etc/cron.d/x`` would be parsed by git
+    as an option, not a ref. We defend against that and other malformed input:
+
+      * reject empty / whitespace-only,
+      * reject a NUL byte or any ASCII whitespace,
+      * reject anything starting with ``-`` (an option, not a ref),
+      * cap the length at :data:`GIT_REF_MAX_CHARS`.
+
+    The diff itself always uses the ``base..head -- <path>`` form with a ``--``
+    separator, so even a ref that survives this check can never be reinterpreted
+    as the pathspec. Returns the trimmed ref; raises :class:`InvalidGitRefError`.
+    """
+    candidate = ref.strip()
+    if not candidate:
+        raise InvalidGitRefError("empty git ref")
+    if len(candidate) > GIT_REF_MAX_CHARS:
+        raise InvalidGitRefError("git ref too long")
+    if "\x00" in candidate or any(ch.isspace() for ch in candidate):
+        raise InvalidGitRefError("git ref contains whitespace or NUL")
+    if candidate.startswith("-"):
+        raise InvalidGitRefError("git ref may not start with '-'")
+    return candidate
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +413,127 @@ def read_doc_content(docs_root: Path, *, project_id: UUID, relpath: str) -> DocC
         relpath=posix.as_posix(),
         content=content,
         size_bytes=len(content.encode("utf-8")),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Diff between two git refs (task_07_16, backend half)
+# ---------------------------------------------------------------------------
+def _classify_diff_line(line: str) -> DocDiffLine | None:
+    """Classify one ``git diff`` body line into a :class:`DocDiffLine`.
+
+    Skips the diff *header* lines (``diff --git``, ``index``, ``---``,
+    ``+++``, ``new file mode`` …) — the viewer wants the hunk bodies, not
+    the file-pair preamble. Returns ``None`` for a header/empty marker line.
+    """
+    if line.startswith("@@"):
+        return DocDiffLine(kind="hunk", content=line)
+    # ``+++`` / ``---`` file headers precede the first ``@@`` hunk; drop them.
+    if line.startswith(("+++", "---", "diff --git", "index ", "new file", "deleted file")):
+        return None
+    if line.startswith("+"):
+        return DocDiffLine(kind="added", content=line[1:])
+    if line.startswith("-"):
+        return DocDiffLine(kind="removed", content=line[1:])
+    if line.startswith(" "):
+        return DocDiffLine(kind="context", content=line[1:])
+    # ``\ No newline at end of file`` and other meta lines: keep as context so
+    # nothing is silently dropped, but they carry no +/- weight.
+    return DocDiffLine(kind="context", content=line)
+
+
+def _parse_unified_diff(raw: str) -> tuple[list[DocDiffLine], int, int]:
+    """Parse ``git diff`` output into classified lines + (added, removed)."""
+    lines: list[DocDiffLine] = []
+    added = removed = 0
+    in_hunk = False
+    for line in raw.splitlines():
+        classified = _classify_diff_line(line)
+        if classified is None:
+            continue
+        if classified.kind == "hunk":
+            in_hunk = True
+            lines.append(classified)
+            continue
+        if not in_hunk:
+            # Before the first ``@@`` there is no real body — skip stray lines.
+            continue
+        lines.append(classified)
+        if classified.kind == "added":
+            added += 1
+        elif classified.kind == "removed":
+            removed += 1
+    return lines, added, removed
+
+
+def diff_doc(
+    repo_root: Path,
+    *,
+    project_id: UUID,
+    relpath: str,
+    base_ref: str,
+    head_ref: str,
+) -> DocDiff:
+    """Diff one ``.md`` between two git refs of the project's repo.
+
+    Reuses :func:`workers.git_repos._run_git` (the audited, no-shell git
+    runner) to run::
+
+        git diff <base>..<head> -- docs/<relpath>
+
+    inside ``repo_root``. Both the path (:func:`_safe_relpath`) and the refs
+    (:func:`_safe_git_ref`) are validated first, and the ``--`` pathspec
+    separator means a ref can never be reinterpreted as a path. The result is
+    returned both raw (verbatim ``git diff``) and parsed into classified lines
+    the frontend diff viewer can render.
+
+    Raises:
+        PathTraversalError: the ``relpath`` tries to escape the docs root.
+        DocNotFoundError: the ``relpath`` is not a ``.md``.
+        InvalidGitRefError: a ref is empty / option-like / has whitespace.
+        DocDiffError: ``git diff`` itself failed (bad ref, not a repo, …).
+    """
+    # Lazy import: keeps the api-server module graph free of the workers
+    # package until a diff is actually requested (mirrors kb_sync.py).
+    from workers.git_repos import GitCommandError, _run_git
+
+    posix = _safe_relpath(relpath)
+    safe_base = _safe_git_ref(base_ref)
+    safe_head = _safe_git_ref(head_ref)
+
+    # The doc lives under ``docs/`` inside the repo working tree; build the
+    # repo-relative pathspec from the validated (``..``-free) POSIX relpath.
+    pathspec = f"{DOCS_DIRNAME}/{posix.as_posix()}"
+
+    try:
+        raw = _run_git(
+            "diff",
+            f"{safe_base}..{safe_head}",
+            "--",
+            pathspec,
+            cwd=repo_root,
+        )
+    except GitCommandError as exc:
+        # Never leak raw git stderr (it can echo internal paths/refs).
+        logger.info(
+            "docs_viewer.diff.git_failed",
+            project_id=str(project_id),
+            relpath=posix.as_posix(),
+            error=str(exc),
+        )
+        raise DocDiffError("git diff failed for the given refs") from exc
+
+    parsed, added, removed = _parse_unified_diff(raw)
+    return DocDiff(
+        project_id=project_id,
+        relpath=posix.as_posix(),
+        base_ref=safe_base,
+        head_ref=safe_head,
+        raw=raw,
+        lines=parsed,
+        added=added,
+        removed=removed,
+        unchanged=not raw.strip(),
     )
 
 
@@ -549,10 +781,15 @@ async def _embed_query(embedder: Embedder, query: str) -> list[float] | None:
 
 __all__ = [
     "DEFAULT_SEARCH_LIMIT",
+    "GIT_DIFF_TIMEOUT_S",
+    "GIT_REF_MAX_CHARS",
     "MARKDOWN_SUFFIX",
     "MAX_SEARCH_LIMIT",
     "SNIPPET_MAX_CHARS",
     "DocContent",
+    "DocDiff",
+    "DocDiffError",
+    "DocDiffLine",
     "DocNotFoundError",
     "DocSearchHit",
     "DocSemanticHit",
@@ -560,8 +797,11 @@ __all__ = [
     "DocTreeFile",
     "DocTreeFolder",
     "DocsViewerError",
+    "InvalidGitRefError",
     "PathTraversalError",
+    "diff_doc",
     "project_docs_root",
+    "project_repo_root",
     "read_doc_content",
     "read_doc_tree",
     "search_docs",

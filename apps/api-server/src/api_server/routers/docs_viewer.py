@@ -8,6 +8,9 @@ project's tenant:
     the persistent filesystem under ``settings.data_root``.
   * ``GET /projects/{project_id}/docs/content`` — one doc's RAW markdown by
     repo-relative ``?path=``, path-traversal-safe.
+  * ``GET /projects/{project_id}/docs/diff``    — the unified diff of one doc
+    ``.md`` between two git ``?base=``/``?head=`` refs of the project repo
+    (task_07_16 backend half), path-traversal-safe + git-ref-injection-safe.
   * ``GET /projects/{project_id}/docs/search``  — full-text search over the
     project's internal-docs KB chunks (Fase C), ranked, with snippets +
     source doc paths.
@@ -47,10 +50,14 @@ from api_server.db.domain import Project
 from api_server.docs_viewer.service import (
     DEFAULT_SEARCH_LIMIT,
     MAX_SEARCH_LIMIT,
+    DocDiffError,
     DocNotFoundError,
     DocsViewerError,
+    InvalidGitRefError,
     PathTraversalError,
+    diff_doc,
     project_docs_root,
+    project_repo_root,
     read_doc_content,
     read_doc_tree,
     search_docs,
@@ -66,6 +73,12 @@ router = APIRouter(prefix="/projects/{project_id}/docs", tags=["docs-viewer"])
 # ``settings.data_root``; tests override the dependency to point at a tmp dir.
 DocsRootResolver = Callable[[UUID, UUID], Path]
 
+# Same shape, but resolving the project's git *repo root* (the working tree
+# holding ``.git`` + the ``docs/`` subtree) — what the diff endpoint shells
+# ``git`` in. Distinct from the docs-root resolver because git runs at the
+# repo, not inside ``docs/``.
+DocsRepoResolver = Callable[[UUID, UUID], Path]
+
 
 def get_docs_root_resolver() -> DocsRootResolver:
     """Provide the production docs-root resolver (overridable in tests).
@@ -78,6 +91,23 @@ def get_docs_root_resolver() -> DocsRootResolver:
 
     def _resolve(tenant_id: UUID, project_id: UUID) -> Path:
         return project_docs_root(data_root, tenant_id=tenant_id, project_id=project_id)
+
+    return _resolve
+
+
+def get_docs_repo_resolver() -> DocsRepoResolver:
+    """Provide the production docs *repo-root* resolver (overridable in tests).
+
+    The diff endpoint needs the git working tree (where ``.git`` lives), not
+    the ``docs/`` directory. Bound once per request from ``settings.data_root``
+    via :func:`api_server.docs_viewer.service.project_repo_root`. Tests
+    register an override via ``app.dependency_overrides[get_docs_repo_resolver]``
+    pointing at a throwaway git repo so no real worktree is needed.
+    """
+    data_root = get_settings().data_root
+
+    def _resolve(tenant_id: UUID, project_id: UUID) -> Path:
+        return project_repo_root(data_root, tenant_id=tenant_id, project_id=project_id)
 
     return _resolve
 
@@ -193,6 +223,75 @@ async def get_doc_content(
 
 
 # ===========================================================================
+# Diff between two git refs (task_07_16, backend half)
+# ===========================================================================
+@router.get("/diff")
+async def get_doc_diff(
+    project_id: UUID,
+    path: str = Query(..., description="Repo-relative path of the .md to diff"),
+    base: str = Query(..., min_length=1, description="Base git ref / commit-ish"),
+    head: str = Query(..., min_length=1, description="Head git ref / commit-ish"),
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+    repo_resolver: DocsRepoResolver = Depends(get_docs_repo_resolver),
+) -> dict[str, object]:
+    """Return the diff of one doc ``.md`` between two git refs of the project.
+
+    Path-traversal-safe (``..``/absolute rejected) and ref-injection-safe
+    (option-like / whitespace refs rejected). The body is returned both raw
+    (verbatim ``git diff``) and parsed into classified lines + add/remove
+    counts the frontend diff viewer can render.
+    """
+    tenant_id = require_tenant_id(principal)
+    await _require_visible_project(session, project_id)
+
+    repo_root = repo_resolver(tenant_id, project_id)
+    try:
+        diff = diff_doc(
+            repo_root,
+            project_id=project_id,
+            relpath=path,
+            base_ref=base,
+            head_ref=head,
+        )
+    except PathTraversalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="invalid doc path"
+        ) from exc
+    except DocNotFoundError as exc:
+        # A non-``.md`` path is the only DocNotFoundError diff_doc raises.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="only .md documents are diffable"
+        ) from exc
+    except InvalidGitRefError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="invalid git ref"
+        ) from exc
+    except DocDiffError as exc:
+        # Bad ref / not-a-repo: a client error (the refs they asked for don't
+        # resolve), never the raw git stderr.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="could not diff the given refs"
+        ) from exc
+    except DocsViewerError as exc:  # defensive — unexpected subtype
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="invalid diff request"
+        ) from exc
+
+    return {
+        "project_id": str(project_id),
+        "relpath": diff.relpath,
+        "base_ref": diff.base_ref,
+        "head_ref": diff.head_ref,
+        "unchanged": diff.unchanged,
+        "added": diff.added,
+        "removed": diff.removed,
+        "raw": diff.raw,
+        "lines": [{"kind": line.kind, "content": line.content} for line in diff.lines],
+    }
+
+
+# ===========================================================================
 # Full-text search
 # ===========================================================================
 @router.get("/search")
@@ -289,4 +388,9 @@ async def semantic_search_project_docs(
     }
 
 
-__all__ = ["get_docs_root_resolver", "get_query_embedder", "router"]
+__all__ = [
+    "get_docs_repo_resolver",
+    "get_docs_root_resolver",
+    "get_query_embedder",
+    "router",
+]
