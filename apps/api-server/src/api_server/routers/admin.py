@@ -50,10 +50,14 @@ from api_server.schemas.admin import (
 #   - contención de la lock cuando varias requests llegan a la vez al
 #     dashboard (auto-refresh cada 30s lo evita; un humano machacando F5
 #     puede pisarlas).
-# Era 2s, demasiado ajustado: bajo carga concurrente el postgres probe
-# se cancelaba por timeout, lo que dejaba la sesión en pending-rollback
-# y rompía el siguiente request del mismo handler en la sesión de tests.
-_PROBE_TIMEOUT_S = 5.0
+# Empezó en 2s y subió a 5s; aún así el probe de postgres se cancelaba por
+# timeout en el ARRANQUE en frío de la suite completa (pool sin calentar +
+# alembic recién corrido + conexiones del test anterior), dejando la sesión
+# en pending-rollback y volviendo flaky test_system_health. 10s es un techo
+# holgado para un SELECT 1 / ping (los probes corren en paralelo vía gather,
+# así que la latencia peor-caso del dashboard sigue siendo ~10s): un probe
+# que tarda más de 10s es un servicio realmente caído, no una contención.
+_PROBE_TIMEOUT_S = 10.0
 
 _logger = get_logger(__name__)
 
