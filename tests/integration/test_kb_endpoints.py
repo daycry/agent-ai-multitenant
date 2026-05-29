@@ -308,6 +308,41 @@ async def test_upload_document_writes_to_storage_and_persists_row(
 
 
 @pytest.mark.asyncio
+async def test_upload_enqueues_ingestion(
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan 06.11: a successful upload must hand the document to the
+    ingestion worker (best-effort send_task by Celery name)."""
+    app, _ = configured_app
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    enqueued: list[str] = []
+
+    async def _fake_enqueue(document_id: object) -> bool:
+        enqueued.append(str(document_id))
+        return True
+
+    import api_server.routers.knowledge_bases as kb_router
+
+    monkeypatch.setattr(kb_router, "enqueue_ingestion", _fake_enqueue)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        kb = await client.post("/knowledge-bases", json={"name": "KB Enq"}, headers=headers)
+        kb_id = kb.json()["id"]
+        upload = await client.post(
+            f"/knowledge-bases/{kb_id}/documents",
+            files={"file": ("a.txt", b"hi", "text/plain")},
+            headers=headers,
+        )
+        assert upload.status_code == 201, upload.text
+        doc_id = upload.json()["id"]
+
+    assert enqueued == [doc_id]
+
+
+@pytest.mark.asyncio
 async def test_empty_upload_is_rejected(configured_app, migrations_pg_dsn: str) -> None:
     app, _ = configured_app
     seeded = await _seed(migrations_pg_dsn)

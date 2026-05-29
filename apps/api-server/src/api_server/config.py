@@ -59,6 +59,17 @@ class Settings(BaseSettings):
         description="Redis connection URL.",
     )
 
+    # ----- Celery broker (enqueue-only; api-server runs no tasks) -----
+    broker_url: str = Field(
+        default="redis://localhost:6379/1",
+        description=(
+            "Celery broker URL the api-server enqueues onto (e.g. the "
+            "document ingestion task `workers.ingest_document`, Plan 06.11). "
+            "Redis DB 1 — same broker the workers consume; kept off DB 0 "
+            "(sessions / events). api-server only produces, never consumes."
+        ),
+    )
+
     # ----- External services (probed by /admin/system-health) -----
     vault_url: str = Field(
         default="http://localhost:8200",

@@ -32,6 +32,7 @@ from api_server.auth.deps import (
     require_tenant_admin,
     require_tenant_member,
 )
+from api_server.celery_client import enqueue_ingestion
 from api_server.db.domain import Project
 from api_server.db.knowledge import (
     Chunk,
@@ -494,6 +495,12 @@ async def upload_document(
     session.add(doc)
     await session.flush()
     await session.refresh(doc)
+
+    # Plan 06.11: hand the document to the ingestion worker. Best-effort
+    # — a broker hiccup must not fail the upload (the row is persisted as
+    # `pending` and the beat sweep re-enqueues it).
+    await enqueue_ingestion(doc.id)
+
     return to_document_response(doc)
 
 
