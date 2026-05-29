@@ -36,12 +36,21 @@ import {
   type DocSearchHit,
   type DocSemanticHit,
 } from "@/lib/docs-api";
+import { matchesFilter, type DocsFilter } from "@/lib/docs-filters";
+
+import { BookmarkStar } from "./docs-bookmarks-view";
 
 const DEBOUNCE_MS = 300;
 /** Min query length before we hit the API — single chars are noise. */
 const MIN_QUERY_LEN = 2;
 
 type SearchMode = "fulltext" | "semantic";
+
+/** Bookmark wiring for a search hit (project name bound by the parent). */
+export interface SearchBookmarkControls {
+  isBookmarked: (projectId: string, relpath: string) => boolean;
+  onToggleBookmark: (projectId: string, relpath: string) => void;
+}
 
 interface DocsSearchPanelProps {
   /** The project to search within, or null when none is selected. */
@@ -50,9 +59,18 @@ interface DocsSearchPanelProps {
   selectedPath: string | null;
   /** Open a hit's doc in the render pane (parent reflects it in the URL). */
   onOpenDoc: (projectId: string, relpath: string) => void;
+  /** Active facet filter, applied client-side to the returned hits. */
+  filter: DocsFilter;
+  bookmarks: SearchBookmarkControls;
 }
 
-export function DocsSearchPanel({ projectId, selectedPath, onOpenDoc }: DocsSearchPanelProps) {
+export function DocsSearchPanel({
+  projectId,
+  selectedPath,
+  onOpenDoc,
+  filter,
+  bookmarks,
+}: DocsSearchPanelProps) {
   const [mode, setMode] = useState<SearchMode>("fulltext");
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -82,7 +100,12 @@ export function DocsSearchPanel({ projectId, selectedPath, onOpenDoc }: DocsSear
   });
 
   const terms = useMemo(() => splitTerms(debounced), [debounced]);
-  const hits = searchQuery.data ?? [];
+  // Hits come back already RBAC-scoped; the facet filter narrows them
+  // client-side so search obeys the same constraint as the tree.
+  const hits = useMemo(
+    () => (searchQuery.data ?? []).filter((hit) => matchesFilter(hit.relpath, filter)),
+    [searchQuery.data, filter],
+  );
 
   return (
     <div className="flex flex-col gap-3" data-testid="docs-search-panel">
@@ -132,6 +155,7 @@ export function DocsSearchPanel({ projectId, selectedPath, onOpenDoc }: DocsSear
         error={searchQuery.error}
         selectedPath={selectedPath}
         onOpenDoc={onOpenDoc}
+        bookmarks={bookmarks}
       />
     </div>
   );
@@ -149,6 +173,7 @@ function SearchResults({
   error,
   selectedPath,
   onOpenDoc,
+  bookmarks,
 }: {
   projectId: string | null;
   enabled: boolean;
@@ -161,6 +186,7 @@ function SearchResults({
   error: unknown;
   selectedPath: string | null;
   onOpenDoc: (projectId: string, relpath: string) => void;
+  bookmarks: SearchBookmarkControls;
 }) {
   if (!projectId) {
     return (
@@ -216,6 +242,8 @@ function SearchResults({
             terms={terms}
             active={hit.relpath === selectedPath}
             onOpen={() => onOpenDoc(projectId, hit.relpath)}
+            bookmarked={bookmarks.isBookmarked(projectId, hit.relpath)}
+            onToggleBookmark={() => bookmarks.onToggleBookmark(projectId, hit.relpath)}
           />
         </li>
       ))}
@@ -229,51 +257,69 @@ function SearchHitRow({
   terms,
   active,
   onOpen,
+  bookmarked,
+  onToggleBookmark,
 }: {
   hit: DocSearchHit | DocSemanticHit;
   mode: SearchMode;
   terms: string[];
   active: boolean;
   onOpen: () => void;
+  bookmarked: boolean;
+  onToggleBookmark: () => void;
 }) {
   const score = mode === "semantic" && "score" in hit ? hit.score : null;
 
   return (
-    <button
-      type="button"
-      onClick={onOpen}
+    <div
       className={cn(
-        "w-full rounded-lg border px-3 py-2 text-left transition-colors",
+        "group relative rounded-lg border transition-colors",
         active
           ? "border-primary/50 bg-primary/5"
           : "border-border hover:border-primary/40 hover:bg-muted/50",
       )}
-      data-testid={`docs-search-hit-${hit.chunk_id}`}
+      data-testid={`docs-search-hit-row-${hit.chunk_id}`}
     >
-      <div className="mb-1 flex items-center justify-between gap-2">
-        <span className="flex min-w-0 items-center gap-1.5">
-          <FileText className="text-muted-foreground h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          <span
-            className="text-foreground truncate font-mono text-xs"
-            data-testid="docs-search-hit-path"
-          >
-            {hit.relpath}
+      <button
+        type="button"
+        onClick={onOpen}
+        className="w-full px-3 py-2 pr-9 text-left"
+        data-testid={`docs-search-hit-${hit.chunk_id}`}
+      >
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <FileText className="text-muted-foreground h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span
+              className="text-foreground truncate font-mono text-xs"
+              data-testid="docs-search-hit-path"
+            >
+              {hit.relpath}
+            </span>
           </span>
-        </span>
-        {score !== null && (
-          <span
-            className="bg-muted text-muted-foreground shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums"
-            data-testid="docs-search-hit-score"
-            title="Similitud coseno"
-          >
-            {(score * 100).toFixed(0)}%
-          </span>
+          {score !== null && (
+            <span
+              className="bg-muted text-muted-foreground shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums"
+              data-testid="docs-search-hit-score"
+              title="Similitud coseno"
+            >
+              {(score * 100).toFixed(0)}%
+            </span>
+          )}
+        </div>
+        <p className="text-muted-foreground line-clamp-3 text-xs leading-relaxed">
+          {highlightSnippet(hit.snippet, terms)}
+        </p>
+      </button>
+      <BookmarkStar
+        bookmarked={bookmarked}
+        onToggle={onToggleBookmark}
+        className={cn(
+          "absolute right-1.5 top-1.5",
+          !bookmarked && "opacity-0 focus-within:opacity-100 group-hover:opacity-100",
         )}
-      </div>
-      <p className="text-muted-foreground line-clamp-3 text-xs leading-relaxed">
-        {highlightSnippet(hit.snippet, terms)}
-      </p>
-    </button>
+        testid={`docs-search-hit-star-${hit.chunk_id}`}
+      />
+    </div>
   );
 }
 

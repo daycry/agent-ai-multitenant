@@ -22,15 +22,25 @@ import { Spinner } from "@/components/ui/spinner";
 import { ApiError } from "@/lib/api";
 import { extractToc, fetchDocContent, type DocContent } from "@/lib/docs-api";
 
+import { BookmarkStar } from "./docs-bookmarks-view";
 import { DocToc } from "./doc-toc";
 import { MarkdownRenderer } from "./markdown-renderer";
 
 interface DocViewerPaneProps {
   projectId: string | null;
   path: string | null;
+  /** Whether the open doc is starred (controlled by the page). */
+  bookmarked?: boolean;
+  /** Toggle the open doc's bookmark; absent → no star is shown. */
+  onToggleBookmark?: () => void;
 }
 
-export function DocViewerPane({ projectId, path }: DocViewerPaneProps) {
+export function DocViewerPane({
+  projectId,
+  path,
+  bookmarked = false,
+  onToggleBookmark,
+}: DocViewerPaneProps) {
   const enabled = Boolean(projectId && path);
 
   const contentQuery = useQuery<DocContent>({
@@ -68,6 +78,14 @@ export function DocViewerPane({ projectId, path }: DocViewerPaneProps) {
         <span className="break-all font-mono text-xs" data-testid="docs-selected-path">
           {path}
         </span>
+        {onToggleBookmark && (
+          <BookmarkStar
+            bookmarked={bookmarked}
+            onToggle={onToggleBookmark}
+            className="ml-auto"
+            testid="docs-viewer-star"
+          />
+        )}
       </div>
 
       {contentQuery.isLoading && (

@@ -22,6 +22,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { fetchDocsTree } from "@/lib/docs-api";
+import { filterTree, isFilterActive, type DocsFilter } from "@/lib/docs-filters";
 
 import { DocsTree } from "./docs-tree";
 
@@ -31,13 +32,33 @@ interface ProjectSummary {
   status: string;
 }
 
+/**
+ * Bookmark wiring the sidebar threads down to each file row. `onToggleBookmark`
+ * here doesn't yet know the project *name* (only its id) — each
+ * {@link ProjectSection} closes over its own name before calling up, so the
+ * page records a human label with the star.
+ */
+export interface SidebarBookmarkControls {
+  isBookmarked: (projectId: string, relpath: string) => boolean;
+  onToggleBookmark: (projectId: string, projectName: string, relpath: string) => void;
+}
+
 interface DocsSidebarProps {
   selectedProjectId: string | null;
   selectedPath: string | null;
   onSelect: (projectId: string, relpath: string) => void;
+  /** Active facet filter pruning each project's tree. */
+  filter: DocsFilter;
+  bookmarks: SidebarBookmarkControls;
 }
 
-export function DocsSidebar({ selectedProjectId, selectedPath, onSelect }: DocsSidebarProps) {
+export function DocsSidebar({
+  selectedProjectId,
+  selectedPath,
+  onSelect,
+  filter,
+  bookmarks,
+}: DocsSidebarProps) {
   const projectsQuery = useQuery({
     queryKey: ["projects", "for-docs"],
     queryFn: () => apiFetch<ProjectSummary[]>("/projects"),
@@ -91,6 +112,8 @@ export function DocsSidebar({ selectedProjectId, selectedPath, onSelect }: DocsS
                 selectedProjectId={selectedProjectId}
                 selectedPath={selectedPath}
                 onSelect={onSelect}
+                filter={filter}
+                bookmarks={bookmarks}
               />
             </li>
           ))}
@@ -106,12 +129,16 @@ function ProjectSection({
   selectedProjectId,
   selectedPath,
   onSelect,
+  filter,
+  bookmarks,
 }: {
   project: ProjectSummary;
   forceOpen: boolean;
   selectedProjectId: string | null;
   selectedPath: string | null;
   onSelect: (projectId: string, relpath: string) => void;
+  filter: DocsFilter;
+  bookmarks: SidebarBookmarkControls;
 }) {
   // A project section opens lazily; once opened we fetch its tree. A deep-link
   // (selectedProjectId === this) starts open so the file is reachable.
@@ -124,6 +151,24 @@ function ProjectSection({
     refetchOnWindowFocus: false,
     staleTime: 60_000,
   });
+
+  // The full tree had docs but the active filter pruned them all → show a hint
+  // rather than a blank section (distinct from a genuinely empty project).
+  const filtered = treeQuery.data ? filterTree(treeQuery.data, filter) : null;
+  const prunedToEmpty =
+    filtered !== null &&
+    isFilterActive(filter) &&
+    filtered.folders.length === 0 &&
+    filtered.files.length === 0 &&
+    treeQuery.data !== undefined &&
+    (treeQuery.data.folders.length > 0 || treeQuery.data.files.length > 0);
+
+  // Bind this project's name into the toggle so the page records a label.
+  const treeBookmarks = {
+    isBookmarked: bookmarks.isBookmarked,
+    onToggleBookmark: (projectId: string, relpath: string) =>
+      bookmarks.onToggleBookmark(projectId, project.name, relpath),
+  };
 
   return (
     <div data-testid={`docs-project-${project.id}`}>
@@ -166,13 +211,22 @@ function ProjectSection({
                 : "No se pudo cargar el árbol."}
             </p>
           )}
-          {treeQuery.data && (
+          {prunedToEmpty && (
+            <p
+              className="text-sidebar-muted-foreground px-2 py-1 text-xs italic"
+              data-testid={`docs-tree-filtered-empty-${project.id}`}
+            >
+              Ningún documento coincide con los filtros.
+            </p>
+          )}
+          {filtered && !prunedToEmpty && (
             <DocsTree
               projectId={project.id}
-              tree={treeQuery.data}
+              tree={filtered}
               selectedProjectId={selectedProjectId}
               selectedPath={selectedPath}
               onSelect={onSelect}
+              bookmarks={treeBookmarks}
             />
           )}
         </div>

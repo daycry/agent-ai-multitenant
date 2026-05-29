@@ -331,7 +331,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_15` — Filtros (por proyecto, tipo de doc, fecha, autor) y bookmarks
 
-- [ ] **Título**: Filtros (por proyecto, tipo de doc, fecha, autor) y bookmarks
+- [x] **Título**: Filtros (por proyecto, tipo de doc, fecha, autor) y bookmarks <!-- implementado + typecheck/lint/build verdes; e2e docs-viewer-filters.spec.ts escrito, pendiente verificación humana -->
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev

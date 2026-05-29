@@ -17,12 +17,21 @@ import { ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DocTree, DocTreeFile, DocTreeFolder } from "@/lib/docs-api";
 
+import { BookmarkStar } from "./docs-bookmarks-view";
+
+/** Bookmark wiring threaded down so each file row can star itself. */
+interface BookmarkControls {
+  isBookmarked: (projectId: string, relpath: string) => boolean;
+  onToggleBookmark: (projectId: string, relpath: string) => void;
+}
+
 interface DocsTreeProps {
   projectId: string;
   tree: DocTree;
   selectedProjectId: string | null;
   selectedPath: string | null;
   onSelect: (projectId: string, relpath: string) => void;
+  bookmarks: BookmarkControls;
 }
 
 export function DocsTree({
@@ -31,6 +40,7 @@ export function DocsTree({
   selectedProjectId,
   selectedPath,
   onSelect,
+  bookmarks,
 }: DocsTreeProps) {
   const isEmpty = tree.folders.length === 0 && tree.files.length === 0;
   if (isEmpty) {
@@ -52,6 +62,7 @@ export function DocsTree({
             selectedProjectId={selectedProjectId}
             selectedPath={selectedPath}
             onSelect={onSelect}
+            bookmarks={bookmarks}
           />
         </li>
       ))}
@@ -63,6 +74,7 @@ export function DocsTree({
             depth={0}
             active={selectedProjectId === projectId && selectedPath === file.relpath}
             onSelect={onSelect}
+            bookmarks={bookmarks}
           />
         </li>
       ))}
@@ -80,6 +92,7 @@ function FolderNode({
   selectedProjectId,
   selectedPath,
   onSelect,
+  bookmarks,
 }: {
   projectId: string;
   folder: DocTreeFolder;
@@ -87,6 +100,7 @@ function FolderNode({
   selectedProjectId: string | null;
   selectedPath: string | null;
   onSelect: (projectId: string, relpath: string) => void;
+  bookmarks: BookmarkControls;
 }) {
   // Open the folder by default when it (transitively) contains the selected
   // file, so deep-links land with the path already revealed.
@@ -132,6 +146,7 @@ function FolderNode({
                 selectedProjectId={selectedProjectId}
                 selectedPath={selectedPath}
                 onSelect={onSelect}
+                bookmarks={bookmarks}
               />
             </li>
           ))}
@@ -143,6 +158,7 @@ function FolderNode({
                 depth={depth + 1}
                 active={selectedProjectId === projectId && selectedPath === file.relpath}
                 onSelect={onSelect}
+                bookmarks={bookmarks}
               />
             </li>
           ))}
@@ -158,30 +174,47 @@ function FileNode({
   depth,
   active,
   onSelect,
+  bookmarks,
 }: {
   projectId: string;
   file: DocTreeFile;
   depth: number;
   active: boolean;
   onSelect: (projectId: string, relpath: string) => void;
+  bookmarks: BookmarkControls;
 }) {
+  const starred = bookmarks.isBookmarked(projectId, file.relpath);
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(projectId, file.relpath)}
+    <div
       className={cn(
-        "flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-sm transition-colors",
-        active
-          ? "bg-[hsl(var(--sidebar-active-bg))] text-sidebar-active font-medium"
-          : "text-sidebar-muted-foreground hover:bg-sidebar-border hover:text-sidebar-foreground",
+        "group flex w-full items-center gap-1 rounded pr-1 transition-colors",
+        active ? "bg-[hsl(var(--sidebar-active-bg))]" : "hover:bg-sidebar-border",
       )}
-      // +1.25rem aligns the file label with the folder label (past the chevron).
-      style={{ paddingLeft: `${0.5 + depth * INDENT_REM + 1.25}rem` }}
-      aria-current={active ? "true" : undefined}
-      data-testid={`docs-file-${projectId}-${file.relpath}`}
+      data-testid={`docs-file-row-${projectId}-${file.relpath}`}
     >
-      <FileText className="h-4 w-4 shrink-0" aria-hidden="true" />
-      <span className="truncate">{file.name}</span>
-    </button>
+      <button
+        type="button"
+        onClick={() => onSelect(projectId, file.relpath)}
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-1.5 rounded px-2 py-1 text-left text-sm transition-colors",
+          active
+            ? "text-sidebar-active font-medium"
+            : "text-sidebar-muted-foreground group-hover:text-sidebar-foreground",
+        )}
+        // +1.25rem aligns the file label with the folder label (past the chevron).
+        style={{ paddingLeft: `${0.5 + depth * INDENT_REM + 1.25}rem` }}
+        aria-current={active ? "true" : undefined}
+        data-testid={`docs-file-${projectId}-${file.relpath}`}
+      >
+        <FileText className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className="truncate">{file.name}</span>
+      </button>
+      <BookmarkStar
+        bookmarked={starred}
+        onToggle={() => bookmarks.onToggleBookmark(projectId, file.relpath)}
+        className={cn(!starred && "opacity-0 focus-within:opacity-100 group-hover:opacity-100")}
+        testid={`docs-tree-star-${projectId}-${file.relpath}`}
+      />
+    </div>
   );
 }
