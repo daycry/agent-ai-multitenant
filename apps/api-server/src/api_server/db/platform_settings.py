@@ -82,6 +82,41 @@ PLAN_DOUBLE_SIGNATURE_THRESHOLD_KEY = "plan_approval_double_signature_threshold"
 DEFAULT_DOUBLE_SIGNATURE_THRESHOLD = "0"
 
 
+# ---------------------------------------------------------------------------
+# Execution time-limit backstop (Plan 06.14 task_06_14_04 / workers-orchestrator-10)
+# ---------------------------------------------------------------------------
+# Operator-tunable backstop applied per `run_execution` at enqueue time, so a
+# change takes effect for new runs without restarting the workers. Generous on
+# purpose — the agent-runtime enforces its own, tighter container_run_timeout_s;
+# these only catch a truly wedged task. Soft → SoftTimeLimitExceeded the task
+# can catch and finalise; hard → SIGKILL of the worker child.
+EXECUTION_SOFT_TIME_LIMIT_KEY = "execution_soft_time_limit_s"
+EXECUTION_HARD_TIME_LIMIT_KEY = "execution_hard_time_limit_s"
+DEFAULT_EXECUTION_SOFT_TIME_LIMIT_S = 1800
+DEFAULT_EXECUTION_HARD_TIME_LIMIT_S = 2100
+
+
+async def get_execution_time_limits(session: AsyncSession) -> tuple[int, int]:
+    """Return ``(soft_s, hard_s)`` for a dispatched ``run_execution``.
+
+    Reads the operator overrides from platform settings, falling back to the
+    defaults. Guarantees ``soft < hard`` (bumps hard if misconfigured) so
+    Celery never rejects the limits."""
+    soft = int(
+        await get_platform_setting(
+            session, EXECUTION_SOFT_TIME_LIMIT_KEY, default=DEFAULT_EXECUTION_SOFT_TIME_LIMIT_S
+        )
+    )
+    hard = int(
+        await get_platform_setting(
+            session, EXECUTION_HARD_TIME_LIMIT_KEY, default=DEFAULT_EXECUTION_HARD_TIME_LIMIT_S
+        )
+    )
+    if hard <= soft:
+        hard = soft + 300
+    return soft, hard
+
+
 async def get_double_signature_threshold(session: AsyncSession) -> str:
     """Threshold (string-decimal) above which an AI cost estimate
     triggers the double-signature path. Returned as a string so the

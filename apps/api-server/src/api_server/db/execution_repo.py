@@ -97,6 +97,40 @@ async def create_running_execution(
     return execution
 
 
+async def supersede_running_executions(
+    session: AsyncSession, *, tenant_id: UUID, task_id: UUID
+) -> int:
+    """Close out any still-`running` execution of `task_id` as failed/superseded.
+
+    Idempotency guard for the worker (Plan 06.14 task_06_14_04 /
+    workers-orchestrator-1): with `task_acks_late`, a worker crash
+    re-delivers `run_execution`, and a fresh run would otherwise leave the
+    crashed attempt as an orphan `running` row forever AND add a duplicate
+    live row. Calling this before starting a new run guarantees at most one
+    live execution per task. Returns the number of rows superseded; the
+    caller owns the transaction. Scoped by `tenant_id` too — the worker is
+    BYPASSRLS, so we never rely on RLS for the filter.
+    """
+    result = await session.execute(
+        select(Execution).where(
+            Execution.tenant_id == tenant_id,
+            Execution.task_id == task_id,
+            Execution.status == ExecutionStatus.RUNNING,
+        )
+    )
+    stale = list(result.scalars().all())
+    if not stale:
+        return 0
+    now = datetime.now(UTC)
+    for execution in stale:
+        execution.status = ExecutionStatus.FAILED
+        execution.abort_code = "superseded"
+        execution.output = "superseded by a re-delivered execution (worker retry)"
+        execution.completed_at = now
+    await session.flush()
+    return len(stale)
+
+
 async def finalize_execution(
     session: AsyncSession,
     execution_id: UUID,

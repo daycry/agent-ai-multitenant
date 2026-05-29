@@ -82,17 +82,43 @@ class TaskDispatcher:
         request = await self._dispatch(UUID(event.task_id))
         if request is None:
             return
+        # Operator-tunable backstop limits, read fresh per dispatch so a
+        # platform-settings change takes effect without restarting the
+        # workers (Plan 06.14 task_06_14_04 / workers-orchestrator-10).
+        soft_limit, hard_limit = await self._execution_time_limits()
         # send_task does blocking broker I/O — keep it off the loop.
         await asyncio.to_thread(
-            self._celery.send_task,
-            _RUN_EXECUTION_TASK,
-            kwargs={"request": request},
-            queue=self._settings.dispatch_queue,
+            self._send_run_execution,
+            request,
+            soft_limit,
+            hard_limit,
         )
         _log.info(
             "orchestrator.task_dispatched",
             task_id=event.task_id,
             agent_id=request["agent_id"],
+        )
+
+    async def _execution_time_limits(self) -> tuple[int, int]:
+        """Read the operator-tunable (soft, hard) run_execution time limits
+        from platform settings — fresh per dispatch so a UI change applies
+        to new runs immediately."""
+        from api_server.db.platform_settings import get_execution_time_limits
+
+        async with self._sessionmaker() as session:
+            return await get_execution_time_limits(session)
+
+    def _send_run_execution(
+        self, request: dict[str, Any], soft_limit: int, hard_limit: int
+    ) -> None:
+        """Blocking broker enqueue (runs in a thread). Per-task time limits
+        are passed as Celery execution options."""
+        self._celery.send_task(
+            _RUN_EXECUTION_TASK,
+            kwargs={"request": request},
+            queue=self._settings.dispatch_queue,
+            soft_time_limit=soft_limit,
+            time_limit=hard_limit,
         )
 
     async def _dispatch(self, task_id: UUID) -> dict[str, Any] | None:

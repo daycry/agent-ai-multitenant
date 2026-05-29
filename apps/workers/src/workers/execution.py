@@ -31,6 +31,7 @@ from api_server.db.execution_repo import (
     create_running_execution,
     finalize_execution,
     get_execution,
+    supersede_running_executions,
 )
 from api_server.events import publish_execution_event, publish_task_status_changed
 from redis.asyncio import Redis
@@ -243,6 +244,18 @@ async def conduct_execution(  # noqa: PLR0915 - tramos lineales (seed/run/finali
                 actual_tenant_id=(str(task.tenant_id) if task is not None else None),
             )
             raise CrossTenantExecutionError(f"task {task_id} does not belong to tenant {tenant_id}")
+        # Idempotency: if this task is re-delivered (acks_late + a worker
+        # crash), close out the crashed run's orphan `running` row so we
+        # never accumulate duplicate live executions (task_06_14_04).
+        superseded = await supersede_running_executions(
+            session, tenant_id=tenant_id, task_id=task_id
+        )
+        if superseded:
+            _log.warning(
+                "workers.superseded_stale_executions",
+                task_id=str(task_id),
+                count=superseded,
+            )
         execution = await create_running_execution(
             session,
             tenant_id=tenant_id,

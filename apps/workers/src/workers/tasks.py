@@ -16,6 +16,7 @@ import time
 from typing import Any
 from uuid import UUID
 
+import structlog
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -23,6 +24,13 @@ from workers.celery_app import app
 from workers.config import Settings, get_settings
 from workers.container import AgentContainerRunner, ContainerSpec
 from workers.execution import ExecutionRequest, conduct_execution
+
+_log = structlog.get_logger("workers.tasks")
+
+# Failed `run_execution` jobs land here for operator visibility / manual
+# reprocessing — we deliberately do NOT auto-retry agent runs (each retry
+# is a full, costly LLM run with side effects). Plan 06.14 task_06_14_04.
+_DEAD_LETTER_STREAM = "dlq:executions"
 
 
 @app.task(name="workers.run_agent_container")  # type: ignore[misc]
@@ -55,9 +63,55 @@ def run_execution(request: dict[str, Any]) -> dict[str, Any]:
     The orchestrator (task_02_31) enqueues this with the execution
     request as a plain dict. The DB and Redis handles are built from
     `Settings`; the result is the JSON-safe `ExecutionOutcome` dict.
+
+    On an unhandled failure (e.g. a tampered cross-tenant payload, or a
+    DB/broker outage) the job is recorded to a dead-letter stream and the
+    exception re-raised so Celery marks it failed. Agent runs are NOT
+    auto-retried — re-running is expensive and side-effecting; an operator
+    reprocesses from the dead-letter stream (task_06_14_04).
     """
     settings = get_settings()
-    return asyncio.run(_run_execution(ExecutionRequest.from_dict(request), settings))
+    try:
+        return asyncio.run(_run_execution(ExecutionRequest.from_dict(request), settings))
+    except Exception as exc:
+        _record_execution_dead_letter(settings, request, exc)
+        raise
+
+
+def _record_execution_dead_letter(
+    settings: Settings, request: dict[str, Any], exc: Exception
+) -> None:
+    """Best-effort: push a failed run_execution onto the dead-letter stream.
+    Never masks the original error (a DLQ outage just logs a warning)."""
+    try:
+        asyncio.run(_push_execution_dead_letter(settings, request, exc))
+    except Exception as dlq_exc:  # pragma: no cover - DLQ is best-effort
+        _log.warning(
+            "workers.dead_letter_record_failed",
+            task_id=str(request.get("task_id", "")),
+            error=str(dlq_exc),
+        )
+
+
+async def _push_execution_dead_letter(
+    settings: Settings, request: dict[str, Any], exc: Exception
+) -> None:
+    redis: Redis = Redis.from_url(settings.events_redis_url, decode_responses=True)
+    try:
+        await redis.xadd(
+            _DEAD_LETTER_STREAM,
+            {
+                "task": "workers.run_execution",
+                "tenant_id": str(request.get("tenant_id", "")),
+                "task_id": str(request.get("task_id", "")),
+                "error": f"{type(exc).__name__}: {exc}",
+                "failed_at_unix": str(time.time()),
+            },
+            maxlen=10_000,
+            approximate=True,
+        )
+    finally:
+        await redis.aclose()
 
 
 async def _run_execution(request: ExecutionRequest, settings: Settings) -> dict[str, Any]:

@@ -74,6 +74,11 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
         # cheap, prefetching would stall the queue behind a slow job.
         worker_prefetch_multiplier=1,
         task_track_started=True,
+        # NOTE: the run_execution backstop time limit (workers-orchestrator-10)
+        # is NOT hardcoded here. It is an operator-tunable platform setting
+        # (`execution_soft/hard_time_limit_s`) applied per-task by the
+        # orchestrator at enqueue time, so a UI change takes effect for new
+        # runs without restarting the workers (Plan 06.14 task_06_14_04).
         # Redis broker can drop the connection; retry on boot rather
         # than crash if Redis isn't up yet.
         broker_connection_retry_on_startup=True,
