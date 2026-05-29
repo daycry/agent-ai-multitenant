@@ -106,6 +106,33 @@ class Settings(BaseSettings):
         "docker-default profile where the host kernel supports AppArmor.",
     )
 
+    # ----- Test-runtime aux services + DinD proxy hardening (Plan 06.14
+    # task_06_14_11 / container-isolation-1/2). These sidecars are transient
+    # and live only on the task's private bridge, but they still get the
+    # cap-drop + no-new-privileges + mem/pids envelope so a runaway or
+    # malicious test cannot exhaust the host. Tunable by the operator; the
+    # per-service AuxServiceSpec may still override the limits per service. -----
+    aux_postgres_mem_limit: str = Field(
+        default="256m",
+        description="Hard memory cap for the postgres-test aux sidecar.",
+    )
+    aux_redis_mem_limit: str = Field(
+        default="128m",
+        description="Hard memory cap for the redis-test aux sidecar.",
+    )
+    aux_default_pids_limit: int = Field(
+        default=128,
+        description="Max process count inside an aux-service container — caps fork bombs.",
+    )
+    dind_proxy_mem_limit: str = Field(
+        default="128m",
+        description="Hard memory cap for the testcontainers DinD socket-proxy sidecar.",
+    )
+    dind_proxy_pids_limit: int = Field(
+        default=64,
+        description="Max process count inside the DinD socket-proxy sidecar.",
+    )
+
     # ----- Memorizer (Plan 04.5 task_04_5_02) -----
     memorizer_llm_base_url: str = Field(
         default="http://localhost:11434/v1",
