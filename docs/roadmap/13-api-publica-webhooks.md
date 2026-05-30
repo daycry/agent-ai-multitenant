@@ -244,7 +244,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_10` — Mapeo webhook → acción del sistema (crear tarea, comentar tarea, escalar)
 
-- [ ] **Título**: Mapeo webhook → acción del sistema (crear tarea, comentar tarea, escalar)
+- [x] **Título**: Mapeo webhook → acción del sistema (crear tarea, comentar tarea, escalar)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

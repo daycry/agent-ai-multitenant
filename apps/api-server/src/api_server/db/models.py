@@ -919,6 +919,13 @@ class IncomingWebhookConfig(
     signing_secret_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     # A disabled config rejects every event (404) without touching the secret.
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    # Webhook -> system action map (Plan 13 task_13_10): a list of rules keyed by
+    # normalised event_type, each declaring the SYSTEM action (create_task /
+    # comment / escalate) + title/body templates. Interpreted in THIS row's own
+    # tenant/project — see `api_server.webhooks.mapping`. Default [] = no action.
+    action_mappings: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     # Bumped on each successfully VERIFIED event (observability; not hot-path).
     last_event_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 

@@ -15,6 +15,18 @@ tenant B.
 
 from __future__ import annotations
 
+from api_server.webhooks.actions import (
+    ActionResult,
+    MissingTargetTaskError,
+    execute_action,
+)
+from api_server.webhooks.mapping import (
+    InvalidMappingError,
+    ResolvedAction,
+    WebhookActionKind,
+    render_template,
+    resolve_action,
+)
 from api_server.webhooks.signatures import (
     IncomingWebhookOrigin,
     SignatureVerificationResult,
@@ -32,15 +44,23 @@ from api_server.webhooks.templates import (
 )
 
 __all__ = [
+    "ActionResult",
     "IncomingWebhookOrigin",
+    "InvalidMappingError",
     "MalformedPayloadError",
+    "MissingTargetTaskError",
     "NormalizedEvent",
+    "ResolvedAction",
     "SignatureVerificationResult",
     "UnknownOriginError",
+    "WebhookActionKind",
     "WebhookEventType",
     "WebhookTemplate",
     "WebhookTemplateError",
+    "execute_action",
     "get_template",
     "parse_incoming_event",
+    "render_template",
+    "resolve_action",
     "verify_incoming_signature",
 ]

@@ -21,9 +21,15 @@ authentication — so the order of checks is the security contract:
      in constant time. A bad / missing / tampered signature is 401 and NO
      action is taken. The secret is decrypted in memory (Fernet at rest) and
      NEVER logged / echoed.
-  5. **Persist** — record the verified event (raw body + headers) for replay
+  5. **Map + act** — parse the verified payload into a normalised event
+     (task_13_09), resolve the config's ``action_mappings`` to a system action
+     (task_13_10: create a task, comment on a task, or escalate) and EXECUTE it
+     in the SAME transaction that records the event — so the action commits
+     atomically with the event and runs exactly once per delivery.
+  6. **Persist** — record the verified event (raw body + headers) for replay
      (task_13_12). Idempotent: a sender's redelivery (same ``delivery_id``)
-     collides on the partial UNIQUE and is accepted as a no-op.
+     collides on the partial UNIQUE, so neither the event NOR its action is
+     re-applied — a redelivered webhook never creates a duplicate task.
 
 Multi-tenancy (CLAUDE.md principle 1): the config carries ``tenant_id`` +
 ``project_id``; the resolved secret only ever validates a signature for THIS
@@ -36,9 +42,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
 
 from api_server.auth.deps import get_rate_limiter
@@ -46,6 +54,15 @@ from api_server.auth.rate_limit import RateLimiter
 from api_server.config import get_settings
 from api_server.db.models import IncomingWebhookConfig, IncomingWebhookEvent
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
+from api_server.webhooks.actions import (
+    ActionResult,
+    MissingTargetTaskError,
+    execute_action,
+)
+from api_server.webhooks.mapping import (
+    ResolvedAction,
+    resolve_action,
+)
 from api_server.webhooks.secrets import (
     IncomingWebhookSecretError,
     decrypt_signing_secret,
@@ -55,6 +72,12 @@ from api_server.webhooks.signatures import (
     signature_header_for,
     verify_incoming_signature,
 )
+from api_server.webhooks.templates import (
+    WebhookTemplateError,
+    parse_incoming_event,
+)
+
+_log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/webhooks/incoming", tags=["incoming-webhooks"])
 
@@ -189,12 +212,28 @@ async def receive_incoming_webhook(
             detail="invalid webhook signature",
         )
 
-    # 5. Persist the verified event for replay (task_13_12), under the resolved
-    #    tenant's RLS scope. Idempotent on (config_id, delivery_id).
+    # 5. Map the verified payload to a system action (pure; never touches the
+    #    DB / network). A malformed or generic-origin payload that can't be
+    #    normalised is recorded with NO action (best-effort: a verified-but-odd
+    #    payload is not an error). A genuinely misconfigured mapping rule
+    #    (InvalidMappingError) IS surfaced — see _resolve_event_action.
+    event_type_header = _first_header(request, _EVENT_TYPE_HEADERS)
+    resolved = _resolve_event_action(
+        origin=origin,
+        raw_body=raw_body,
+        event_type_header=event_type_header,
+        action_mappings=config.action_mappings,
+        config_id=config.id,
+    )
+
+    # 6. Persist the verified event (task_13_12) AND execute the resolved action
+    #    in ONE transaction, under the resolved tenant's RLS scope. The event's
+    #    partial UNIQUE on (config_id, delivery_id) makes a redelivery collide,
+    #    so the action only ever runs once per delivery (idempotent: no dup task).
     delivery_id = _first_header(request, _DELIVERY_HEADERS)
-    event_type = _first_header(request, _EVENT_TYPE_HEADERS)
     event_id = uuid7()
     sessionmaker = get_sessionmaker()
+    action_result = None
     try:
         async with sessionmaker() as session, session.begin():
             await session.execute(
@@ -209,13 +248,22 @@ async def receive_incoming_webhook(
                     project_id=config.project_id,
                     origin=origin.value,
                     delivery_id=delivery_id,
-                    event_type=event_type,
+                    event_type=event_type_header,
                     signature=signature_value,
                     raw_body=raw_body.decode("utf-8", errors="replace"),
                     verified=True,
                 )
             )
+            # Flush the event FIRST so a redelivery's UNIQUE collision aborts
+            # BEFORE we do any action work (and rolls the whole txn back).
             await session.flush()
+            if resolved is not None:
+                action_result = await _run_action(
+                    session,
+                    action=resolved,
+                    tenant_id=config.tenant_id,
+                    project_id=config.project_id,
+                )
             # Best-effort observability bump on the config (same RLS scope).
             await session.execute(
                 text("UPDATE incoming_webhook_configs SET last_event_at = :now WHERE id = :cid"),
@@ -224,14 +272,77 @@ async def receive_incoming_webhook(
     except IntegrityError:
         # A redelivery (same delivery_id) collides on the partial UNIQUE. The
         # transaction above is rolled back by the context manager on the raised
-        # error; resolve the existing event id in a FRESH transaction and report
+        # error — so the action it would have run is rolled back too (no dup
+        # task). Resolve the existing event id in a FRESH transaction and report
         # the redelivery as an idempotent no-op.
         existing_id = await _existing_event_id(
             tenant_id=config.tenant_id, config_id=config.id, delivery_id=delivery_id
         )
         return {"status": "duplicate", "event_id": str(existing_id)}
 
-    return {"status": "accepted", "event_id": str(event_id)}
+    response: dict[str, str] = {"status": "accepted", "event_id": str(event_id)}
+    if action_result is not None:
+        response["action"] = action_result.kind.value
+        response["task_id"] = str(action_result.task_id)
+    return response
+
+
+def _resolve_event_action(
+    *,
+    origin: IncomingWebhookOrigin,
+    raw_body: bytes,
+    event_type_header: str | None,
+    action_mappings: list[object],
+    config_id: UUID,
+) -> ResolvedAction | None:
+    """Parse + map a verified payload to an action (pure; never the DB/network).
+
+    Returns the :class:`ResolvedAction` to run, or None when there is nothing to
+    do. Robustness contract (a verified payload is trusted, but may still be
+    odd): a payload we cannot NORMALISE (malformed / a generic origin with no
+    template) is logged and treated as "no action" — it is still RECORDED — so a
+    weird-but-verified event never 500s the endpoint. Only a genuinely
+    misconfigured mapping RULE (:class:`InvalidMappingError`, e.g. an unknown
+    action) is re-raised, so an operator error is visible.
+    """
+    try:
+        event = parse_incoming_event(
+            origin=origin, raw_body=raw_body, event_type_header=event_type_header
+        )
+    except WebhookTemplateError:
+        # Verified but unnormalisable (malformed body / generic origin). Record
+        # the event, take no action — do not fail the inbound delivery.
+        _log.info(
+            "incoming_webhook.unmapped_payload", config_id=str(config_id), origin=origin.value
+        )
+        return None
+    return resolve_action(event, list(action_mappings))
+
+
+async def _run_action(
+    session: AsyncSession,
+    *,
+    action: ResolvedAction,
+    tenant_id: UUID,
+    project_id: UUID,
+) -> ActionResult | None:
+    """Execute the resolved action on the (tenant-scoped) event transaction.
+
+    A ``comment`` / ``escalate`` whose target task is not visible in this tenant
+    (:class:`MissingTargetTaskError`) is logged and treated as a no-op: the
+    event is still recorded, but no cross-tenant or dangling task is touched.
+    """
+    try:
+        return await execute_action(
+            session, action=action, tenant_id=tenant_id, project_id=project_id
+        )
+    except MissingTargetTaskError as exc:
+        _log.warning(
+            "incoming_webhook.missing_target_task",
+            tenant_id=str(tenant_id),
+            target_task_id=exc.target_task_id,
+        )
+        return None
 
 
 async def _existing_event_id(*, tenant_id: UUID, config_id: UUID, delivery_id: str | None) -> UUID:
