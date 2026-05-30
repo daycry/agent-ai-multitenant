@@ -238,6 +238,13 @@ class Settings(BaseSettings):
     login_rate_limit_window_seconds: int = Field(
         default=15 * 60, description="Sliding window for login rate limiting."
     )
+    # Public-API per-token rate limit (Plan 13). Default budget a freshly
+    # minted ApiToken gets when the Tenant Admin does not override it; the
+    # per-token `rate_limit` column wins when set. Enforced by the
+    # sliding-window limiter in task_13_04.
+    api_token_default_rate_limit: int = Field(
+        default=100, description="Default per-minute request budget for a public-API token."
+    )
 
     # ----- Plan 06: shared data root for worktrees + dep-cache -----
     data_root: str = Field(

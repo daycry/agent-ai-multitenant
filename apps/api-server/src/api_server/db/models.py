@@ -91,6 +91,25 @@ class SSOProvider(enum.StrEnum):
     SAML = "saml"
 
 
+class ApiTokenScope(enum.StrEnum):
+    """What a public-API token (``X-API-Token``) is allowed to do (Plan 13).
+
+    Coarse-grained, tenant-scoped capabilities — every scope is implicitly
+    bounded to the token's own ``tenant_id`` (Plan 13 Decisiones Clave:
+    the token grants access SCOPED to its own tenant only). A token carries
+    a list of these (``ApiToken.scopes``); at minimum ``read``.
+
+      * ``read``  — list/get the tenant's resources via ``/api/v1/...``.
+      * ``write`` — create/update/delete the tenant's resources.
+
+    Extend by adding members; never rename existing ones — persisted token
+    rows still reference the old string value.
+    """
+
+    READ = "read"
+    WRITE = "write"
+
+
 # ---------------------------------------------------------------------------
 # Organization (= tenant). The platform is multi-tenant at the org level.
 # ---------------------------------------------------------------------------
@@ -530,6 +549,111 @@ class ScimToken(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"ScimToken(id={self.id!r}, tenant={self.tenant_id!r}, prefix={self.token_prefix!r})"
+
+
+# ---------------------------------------------------------------------------
+# ApiToken — per-tenant credential for the public REST API (Plan 13
+# task_13_01). Authenticates the ``X-API-Token`` header on ``/api/v1/...``.
+# ---------------------------------------------------------------------------
+class ApiToken(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """A per-tenant credential for the public REST API (``X-API-Token``).
+
+    Multi-tenancy: tenant-scoped via :class:`TenantScopedMixin` + RLS (the
+    ``tenant_isolation`` policy in the migration). The token IS the tenant
+    context — the public ``/api/v1`` endpoints are not behind the
+    JWT/session auth, so a presented ``X-API-Token`` is resolved once on
+    the BYPASSRLS role to map ``token_hash`` -> ``tenant_id``; every
+    subsequent v1 query then runs under ``app.tenant_id`` bound to that
+    tenant (Plan 13 Decisiones Clave: the token grants access SCOPED to
+    its own tenant only), so a token issued for tenant A can never read or
+    write tenant B's data.
+
+    Secret handling (CLAUDE.md: no plaintext secrets in the DB). The raw
+    token is a long, high-entropy random value shown to the Tenant Admin
+    EXACTLY ONCE at creation and never stored in clear: only its SHA-256
+    ``token_hash`` is persisted. SHA-256 (not a salted argon2 hash) is used
+    deliberately — the token is high-entropy, so a single deterministic
+    digest is both safe against brute force and supports the equality
+    lookup the unauthenticated request needs. ``prefix`` keeps the leading
+    clear ``<marker>_<id>`` segment so listings can disambiguate tokens
+    without revealing them. See :mod:`api_server.auth.api_tokens` for the
+    mint/hash/verify helpers.
+
+    Lifecycle controls:
+
+      * ``scopes``       — coarse tenant-scoped capabilities
+        (:class:`ApiTokenScope`); at minimum ``read``.
+      * ``expires_at``   — optional vigencia; a token past it authenticates
+        nothing. NULL = never expires.
+      * ``revoked_at``   — soft-revoke; a revoked token authenticates
+        nothing and stays for audit.
+      * ``rate_limit``   — per-minute request budget (default
+        ``DEFAULT_API_TOKEN_RATE_LIMIT``), enforced by the sliding-window
+        limiter (task_13_04).
+      * ``ip_allowlist`` — optional list of CIDRs; when non-empty, requests
+        from a source IP outside every CIDR are rejected.
+      * ``created_by``   — the user (Tenant Admin) who minted it.
+      * ``last_used_at`` — bumped on use (observability; not on the hot
+        path).
+    """
+
+    __tablename__ = "api_tokens"
+    __table_args__ = (
+        # The SHA-256 digest is globally unique (it identifies a tenant on
+        # an unauthenticated request); a UNIQUE index also makes the
+        # by-hash lookup an index probe.
+        UniqueConstraint("token_hash", name="uq_api_token_hash"),
+        Index(
+            "ix_api_tokens_tenant_active",
+            "tenant_id",
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+    )
+
+    # SHA-256 hex digest (64 chars) of the raw token. Never the token.
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Leading clear ``<marker>_<id>`` segment, kept for UI listings.
+    prefix: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Operator-supplied label ("CI pipeline", "Grafana export", ...).
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Coarse tenant-scoped capabilities (values of :class:`ApiTokenScope`).
+    # Always at least ``["read"]``.
+    scopes: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("""'["read"]'::jsonb""")
+    )
+    # Optional vigencia. NULL = never expires; past this instant the token
+    # authenticates nothing.
+    expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # Per-minute request budget enforced by the sliding-window limiter.
+    rate_limit: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("100"))
+    # Optional CIDR allowlist. Empty = any source IP. When non-empty, a
+    # request from an IP outside every CIDR is rejected.
+    ip_allowlist: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    # Tenant Admin who minted the token (kept for audit even if the user is
+    # later removed from the tenant, hence ondelete=SET NULL + nullable).
+    created_by: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # Bumped on each successful API call (observability; not on the hot path).
+    last_used_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # Set when the token is revoked — a revoked token authenticates nothing.
+    revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    def is_active(self, *, now: datetime) -> bool:
+        """True iff the token can authenticate at instant ``now``.
+
+        A token is active when it is neither revoked nor past its
+        ``expires_at`` (a NULL ``expires_at`` never expires). ``now`` must
+        be timezone-aware to compare against the TZ-aware columns.
+        """
+        if self.revoked_at is not None:
+            return False
+        return not (self.expires_at is not None and self.expires_at <= now)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return f"ApiToken(id={self.id!r}, tenant={self.tenant_id!r}, prefix={self.prefix!r})"
 
 
 # ---------------------------------------------------------------------------

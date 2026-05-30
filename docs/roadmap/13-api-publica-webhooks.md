@@ -87,7 +87,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_01` — Modelo ApiToken con scope, vigencia, rate_limit, IP allowlist
 
-- [ ] **Título**: Modelo ApiToken con scope, vigencia, rate_limit, IP allowlist
+- [x] **Título**: Modelo ApiToken con scope, vigencia, rate_limit, IP allowlist
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
