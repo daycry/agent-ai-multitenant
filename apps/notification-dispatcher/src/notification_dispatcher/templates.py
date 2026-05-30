@@ -317,6 +317,31 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "Dataset {{ dataset_id | default('(unknown)') }}."
         ),
     ),
+    # --- agent_outlier_alert (Plan 14 task_14_13) --------------------------
+    ("agent_outlier_alert", "es"): TemplateSource(
+        subject="Alerta de outlier de agente: {{ rule_name | default('(sin nombre)') }}",
+        body=(
+            "La regla «{{ rule_name | default('(sin nombre)') }}» ha detectado "
+            "{{ flagged_count | default('?') }} agente(s) outlier por "
+            "{{ metric | default('métrica') }} en los últimos "
+            "{{ window_days | default('?') }} día(s). El más destacado: "
+            "«{{ agent_name | default('(sin nombre)') }}» "
+            "({{ agent_role | default('?') }}) con valor "
+            "{{ value | default('?') }} frente al umbral {{ bound | default('?') }}."
+        ),
+    ),
+    ("agent_outlier_alert", "en"): TemplateSource(
+        subject="Agent outlier alert: {{ rule_name | default('(unnamed)') }}",
+        body=(
+            "Rule \"{{ rule_name | default('(unnamed)') }}\" flagged "
+            "{{ flagged_count | default('?') }} outlier agent(s) on "
+            "{{ metric | default('a metric') }} over the last "
+            "{{ window_days | default('?') }} day(s). Worst: "
+            "\"{{ agent_name | default('(unnamed)') }}\" "
+            "({{ agent_role | default('?') }}) at {{ value | default('?') }} "
+            "vs bound {{ bound | default('?') }}."
+        ),
+    ),
 }
 
 # Public, read-only view of the builtin catalogue keyed by

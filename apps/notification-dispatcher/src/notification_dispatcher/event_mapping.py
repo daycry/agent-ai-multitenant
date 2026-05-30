@@ -179,6 +179,15 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.PRIORITY,
         default_channel_types=("in_app", "email"),
     ),
+    # Plan 14 task_14_13 — a tenant outlier alert rule tripped (an agent's
+    # success rate / cost / latency deviated significantly from the tenant
+    # norm over the window). A quality/cost signal the Tenant Admins act on;
+    # rides the priority lane, fanning out to in-app + email by default.
+    "agent_outlier_alert": EventSpec(
+        "agent_outlier_alert",
+        lane=NotificationLane.PRIORITY,
+        default_channel_types=("in_app", "email"),
+    ),
 }
 
 

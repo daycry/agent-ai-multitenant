@@ -301,7 +301,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_13` — Identificación de outliers + alertas configurables
 
-- [ ] **Título**: Identificación de outliers + alertas configurables
+- [x] **Título**: Identificación de outliers + alertas configurables
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
