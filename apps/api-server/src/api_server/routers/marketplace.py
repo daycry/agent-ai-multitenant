@@ -63,6 +63,8 @@ from api_server.db.marketplace import (
     MarketplaceInstallation,
     MarketplaceListing,
     MarketplaceListingKind,
+    MarketplaceSource,
+    MarketplaceSourceType,
     MarketplaceTrustLevel,
 )
 from api_server.marketplace.consent import (
@@ -73,6 +75,10 @@ from api_server.marketplace.consent import (
 )
 from api_server.marketplace.install import InstallError, InstallOrchestrator, LocalArtifactFetcher
 from api_server.marketplace.install import default_artifact_root as _default_artifact_root
+from api_server.marketplace.private_listing import (
+    PrivateListingFormatError,
+    parse_private_listing,
+)
 from api_server.marketplace.versioning import (
     VersioningError,
     is_major_bump,
@@ -94,6 +100,8 @@ from api_server.schemas.marketplace import (
     InstallationUpdateResponse,
     MarketplaceInstallationResponse,
     MarketplaceListingResponse,
+    PrivateListingPublishRequest,
+    PrivateListingUpdateRequest,
     to_installation_response,
     to_listing_response,
     to_permissions_response,
@@ -253,6 +261,76 @@ async def _revoke_installation(
     await session.flush()
 
 
+# The well-known name of a tenant's private catalog source. The
+# ``marketplace_sources.name`` column is globally unique, so the private
+# source name carries the tenant id to keep one private source per tenant
+# without colliding with another tenant's (or the official) source.
+_PRIVATE_SOURCE_PREFIX = "private-catalog"
+
+
+def _private_source_name(tenant_id: UUID) -> str:
+    """The deterministic, globally-unique name of a tenant's private source."""
+    return f"{_PRIVATE_SOURCE_PREFIX}:{tenant_id}"
+
+
+async def _ensure_private_source(session: AsyncSession, tenant_id: UUID) -> MarketplaceSource:
+    """Get-or-create the caller tenant's PRIVATE catalog source.
+
+    A private listing belongs to a ``source_type=private`` source whose
+    ``owner_tenant_id`` is the caller tenant — the source layer's record of
+    "this catalog is internal to tenant X". The source table is tenant-
+    agnostic (no RLS), so the row is keyed by the deterministic, globally-
+    unique :func:`_private_source_name` to keep exactly one private source
+    per tenant. A private source publishes ``community`` listings by default
+    and is NOT trusted / does NOT require a signature (a tenant's own
+    internal skill is not platform-verified). Idempotent.
+    """
+    name = _private_source_name(tenant_id)
+    result = await session.execute(select(MarketplaceSource).where(MarketplaceSource.name == name))
+    source = result.scalar_one_or_none()
+    if source is not None:
+        return source
+    source = MarketplaceSource(
+        name=name,
+        description="Private internal catalog for this tenant.",
+        source_type=MarketplaceSourceType.PRIVATE.value,
+        is_trusted=False,
+        requires_signature=False,
+        default_trust_level=MarketplaceTrustLevel.COMMUNITY.value,
+        owner_tenant_id=tenant_id,
+    )
+    session.add(source)
+    await session.flush()
+    return source
+
+
+async def _load_private_listing(
+    session: AsyncSession, listing_id: UUID, tenant_id: UUID
+) -> MarketplaceListing:
+    """Load the caller tenant's OWN live private listing, or 404.
+
+    RLS already restricts visible private rows to the caller tenant, but we
+    additionally require ``tenant_id`` to be non-NULL (the caller's tenant)
+    so the private-listing write endpoints can NEVER touch a global catalog
+    row — those are platform-published and immutable from a tenant session.
+    Another tenant's private listing (RLS-hidden) and a global listing both
+    surface as a clean 404.
+    """
+    result = await session.execute(
+        select(MarketplaceListing).where(
+            MarketplaceListing.id == listing_id,
+            MarketplaceListing.tenant_id == tenant_id,
+            MarketplaceListing.deleted_at.is_(None),
+        )
+    )
+    listing = result.scalar_one_or_none()
+    if listing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="private listing not found"
+        )
+    return listing
+
+
 # ===========================================================================
 # GET /marketplace/listings — browse the catalog
 # ===========================================================================
@@ -316,6 +394,210 @@ async def get_listing(
     if listing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="listing not found")
     return to_listing_response(listing)
+
+
+# ===========================================================================
+# POST /marketplace/private/listings — publish an own PRIVATE listing
+# ===========================================================================
+@router.post(
+    "/private/listings",
+    response_model=MarketplaceListingResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def publish_private_listing(
+    payload: PrivateListingPublishRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> MarketplaceListingResponse:
+    """Publish the caller tenant's OWN internal skill/tool as a PRIVATE listing.
+
+    The submitted manifest is validated by the Phase C parsers (SKILL.md for
+    a ``skill``, the YAML tool manifest for a ``tool`` / ``mcp_server``); a
+    malformed manifest is a 422 and NO row is written. On success a
+    ``marketplace_listings`` row is created stamped with ``tenant_id`` = the
+    caller tenant — a PRIVATE listing. RLS WITH CHECK enforces that the row
+    carries the caller's tenant_id, so a tenant can ONLY ever publish into
+    its own private scope (never a global/another-tenant row). The listing's
+    trust level is the private source's default (``community``), never taken
+    from the wire.
+
+    ``name`` / ``version`` come from the parsed manifest; re-publishing the
+    same (kind, name, version) is a 409 (the
+    ``uq_marketplace_listings_source_tenant_name_version`` constraint) — bump
+    the version or use the update endpoint.
+
+    RBAC: ``tenant_admin`` (this repo's tenant-publisher role). RLS scopes the
+    write to the caller's tenant.
+    """
+    tenant_id = require_tenant_id(principal)
+
+    try:
+        parsed = parse_private_listing(kind=payload.kind, manifest_text=payload.manifest)
+    except PrivateListingFormatError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    source = await _ensure_private_source(session, tenant_id)
+
+    listing = MarketplaceListing(
+        source_id=source.id,
+        # Stamp the caller tenant -> a PRIVATE listing. RLS WITH CHECK
+        # rejects any other tenant_id, so this can never become a global row.
+        tenant_id=tenant_id,
+        kind=parsed.kind.value,
+        name=parsed.name,
+        version=parsed.version,
+        description=parsed.description,
+        author=payload.author,
+        # A tenant's own internal listing is community-trust (not
+        # platform-verified); never honour a wire-supplied trust level.
+        trust_level=MarketplaceTrustLevel.COMMUNITY.value,
+        manifest=parsed.manifest,
+        requested_permissions=parsed.requested_permissions,
+        # Private listings are unsigned — signing is the platform team's
+        # prerogative for verified global listings.
+        signature=None,
+    )
+    session.add(listing)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"a private listing {parsed.name!r} version {parsed.version!r} "
+                "already exists; bump the version or update it"
+            ),
+        ) from exc
+
+    # Append-only audit: who published which private listing.
+    session.add(
+        MarketplaceAuditEntry(
+            tenant_id=tenant_id,
+            actor=_actor(principal),
+            action=MarketplaceAuditAction.SHARE.value,
+            listing_id=listing.id,
+            installation_id=None,
+            detail={
+                "event": "private_publish",
+                "kind": parsed.kind.value,
+                "name": parsed.name,
+                "version": parsed.version,
+            },
+        )
+    )
+    await session.flush()
+    await session.refresh(listing)
+    return to_listing_response(listing)
+
+
+# ===========================================================================
+# PUT /marketplace/private/listings/{id} — update an own PRIVATE listing
+# ===========================================================================
+@router.put(
+    "/private/listings/{listing_id}",
+    response_model=MarketplaceListingResponse,
+)
+async def update_private_listing(
+    listing_id: UUID,
+    payload: PrivateListingUpdateRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> MarketplaceListingResponse:
+    """Re-publish (update) the caller tenant's OWN private listing.
+
+    Re-parses the submitted manifest (same validation as publish; a bad
+    manifest is a 422) and refreshes the row's ``name`` / ``version`` /
+    ``description`` / ``manifest`` / ``requested_permissions``. The listing's
+    ``kind`` is immutable — a manifest whose kind disagrees with the existing
+    listing's kind is a 422. RLS + the explicit own-tenant filter scope this
+    to the caller tenant's private listing; another tenant's listing (or a
+    global one) is a clean 404.
+    """
+    tenant_id = require_tenant_id(principal)
+    listing = await _load_private_listing(session, listing_id, tenant_id)
+
+    existing_kind = MarketplaceListingKind(listing.kind)
+    try:
+        parsed = parse_private_listing(kind=existing_kind, manifest_text=payload.manifest)
+    except PrivateListingFormatError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    listing.name = parsed.name
+    listing.version = parsed.version
+    listing.description = parsed.description
+    listing.author = payload.author
+    listing.manifest = parsed.manifest
+    listing.requested_permissions = parsed.requested_permissions
+
+    session.add(
+        MarketplaceAuditEntry(
+            tenant_id=tenant_id,
+            actor=_actor(principal),
+            action=MarketplaceAuditAction.SHARE.value,
+            listing_id=listing.id,
+            installation_id=None,
+            detail={
+                "event": "private_update",
+                "kind": parsed.kind.value,
+                "name": parsed.name,
+                "version": parsed.version,
+            },
+        )
+    )
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(f"a private listing {parsed.name!r} version {parsed.version!r} already exists"),
+        ) from exc
+    await session.refresh(listing)
+    return to_listing_response(listing)
+
+
+# ===========================================================================
+# DELETE /marketplace/private/listings/{id} — unpublish an own PRIVATE listing
+# ===========================================================================
+@router.delete("/private/listings/{listing_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def unpublish_private_listing(
+    listing_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> None:
+    """Unpublish (soft-delete) the caller tenant's OWN private listing.
+
+    Soft-deletes the row (``deleted_at`` set) so it drops out of browse /
+    detail while the immutable audit trail and any installations' FK survive.
+    RLS + the own-tenant filter scope this to the caller tenant's private
+    listing; another tenant's listing (or a global one) is a 404.
+    """
+    tenant_id = require_tenant_id(principal)
+    listing = await _load_private_listing(session, listing_id, tenant_id)
+
+    listing.deleted_at = datetime.now(tz=UTC)
+    session.add(
+        MarketplaceAuditEntry(
+            tenant_id=tenant_id,
+            actor=_actor(principal),
+            action=MarketplaceAuditAction.SHARE.value,
+            listing_id=listing.id,
+            installation_id=None,
+            detail={
+                "event": "private_unpublish",
+                "name": listing.name,
+                "version": listing.version,
+            },
+        )
+    )
+    await session.flush()
 
 
 # ===========================================================================

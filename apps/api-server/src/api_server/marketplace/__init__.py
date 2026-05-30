@@ -29,6 +29,11 @@ from api_server.marketplace.playwright import (
     playwright_tool_manifest,
     seed_playwright_listing,
 )
+from api_server.marketplace.private_listing import (
+    ParsedPrivateListing,
+    PrivateListingFormatError,
+    parse_private_listing,
+)
 from api_server.marketplace.sandbox import (
     DockerSocketLeakError,
     MarketplaceSandbox,
@@ -75,9 +80,11 @@ __all__ = [
     "Finding",
     "MarketplaceSandbox",
     "NetworkPolicy",
+    "ParsedPrivateListing",
     "PlaywrightBrowser",
     "PlaywrightConfigError",
     "PlaywrightToolConfig",
+    "PrivateListingFormatError",
     "SandboxError",
     "SandboxResult",
     "SandboxSpec",
@@ -101,6 +108,7 @@ __all__ = [
     "get_e2e_template",
     "is_valid_semver",
     "load_e2e_templates",
+    "parse_private_listing",
     "parse_skill_md",
     "parse_tool_manifest",
     "playwright_tool_manifest",

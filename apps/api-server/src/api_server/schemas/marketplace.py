@@ -238,6 +238,45 @@ def to_permissions_response(
 
 
 # =============================================================================
+# Private tenant marketplace (task_09_16)
+# =============================================================================
+class PrivateListingPublishRequest(BaseModel):
+    """Publish a tenant's OWN internal skill/tool as a PRIVATE listing.
+
+    The manifest is the raw SKILL.md (``kind=skill``) or YAML tool-manifest
+    (``kind=tool`` / ``mcp_server``) text — validated server-side by the
+    Phase C parsers (a malformed manifest is a 422 and NO row is written).
+    ``tenant_id`` (= the caller tenant), the private source, and the trust
+    level are ALL server-derived: a publisher never sets the tenancy scope
+    or the trust tier from the wire, so a private listing can never be
+    forged as a global/verified one. ``name`` / ``version`` / ``description``
+    come from the parsed manifest, not the request.
+    """
+
+    model_config = _BASE_CONFIG
+
+    kind: MarketplaceListingKind
+    manifest: str = Field(min_length=1)
+    author: str | None = None
+
+
+class PrivateListingUpdateRequest(BaseModel):
+    """Re-publish (update) an existing PRIVATE listing from a new manifest.
+
+    Same validation as publish: the manifest is re-parsed and the row's
+    ``name`` / ``version`` / ``description`` / ``manifest`` /
+    ``requested_permissions`` are refreshed. The ``kind`` and the tenancy
+    scope are immutable — the update is RLS-scoped to the caller tenant's own
+    private listing, so another tenant's listing is a clean 404.
+    """
+
+    model_config = _BASE_CONFIG
+
+    manifest: str = Field(min_length=1)
+    author: str | None = None
+
+
+# =============================================================================
 # Versioning + updates (task_09_12)
 # =============================================================================
 class InstallationUpdateCheckResponse(BaseModel):
@@ -330,6 +369,8 @@ __all__ = [
     "PermissionDecision",
     "PermissionDecisionItem",
     "PermissionStateItem",
+    "PrivateListingPublishRequest",
+    "PrivateListingUpdateRequest",
     "to_installation_response",
     "to_listing_response",
     "to_permissions_response",
