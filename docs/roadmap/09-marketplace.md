@@ -1,7 +1,7 @@
 ---
 plan_id: 09-marketplace
 title: Marketplace de Skills y Tools
-status: in_progress
+status: pending_human_validation
 blocking_plan: [05-mcp-tools-avanzadas]
 started_at: 2026-05-30
 completed_at: null
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `09-marketplace`                          |
-| **Estado**                         | `in_progress`                             |
+| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `05-mcp-tools-avanzadas`                  |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                               |
 | **Tiempo estimado (persona-días)** | 60-80                                     |
@@ -404,7 +404,7 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
 
 #### `task_09_19` — Documentación + ADRs + changelog
 
-- [ ] **Título**: Documentación + ADRs + changelog
+- [x] **Título**: Documentación + ADRs + changelog <!-- task_09_19: TECHNICAL WRITER (docs-only, sin product code). (1) docs/07-changelog/09-marketplace.md creado (estilo de 08-sso-empresarial.md): Resumen + Cambios por tarea 09_01..09_19 + tablas de Endpoints/Migraciones 0041..0044/variables-dependencias (bandit dev-dep; semgrep + docker opcionales/lazy) + Decisiones + Pendiente (e2e Playwright sin ejecutar; sandbox real-container; semgrep opcional; aborto install/update vs runtime de catálogo; persistir config guiada + bootstrap de seeds) + tests humanos pendientes + Verificacion (suite marketplace completa verde) + PR pendiente. (2) ADR 0032 (siguiente libre tras 0031) — tres decisiones no registradas: nivel de confianza gobierna guardrails no disponibilidad; catálogo híbrido global/privado + compartir por grant explícito y auditado (nunca bypass RLS); pipeline de instalación gated fail-closed (firma/análisis/sandbox/consent por permiso) + auditoría append-only. (3) docs/04-reference/marketplace.md creado (estilo rbac.md/auth-sso.md): tablas de endpoints con RBAC, niveles de confianza, garantías de seguridad (RLS, firma, análisis estático, sandbox, consent), formatos SKILL.md + manifest de tool, cross-link a ADR 0032/0001/0031. (4) roadmap: 09_19 [x], 09_01..09_18 verificados [x], frontmatter status: pending_human_validation + celda Estado de la Cabecera. pre-commit (prettier/markdown) VERDE; docs/07-changelog/09-marketplace.md existe (auto_09_19_a). -->
 - **Tiempo estimado**: 8 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
