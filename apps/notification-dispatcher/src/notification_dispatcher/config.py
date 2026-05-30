@@ -222,6 +222,48 @@ class Settings(BaseSettings):
         "number.",
     )
 
+    # ----- SMS / Twilio channel (task_10_11) -----
+    twilio_api_base_url: str = Field(
+        default="https://api.twilio.com",
+        description="Base URL of the Twilio REST API the SMS adapter POSTs a "
+        "Message to (``{base}/2010-04-01/Accounts/{AccountSid}/Messages.json``). "
+        "We drive the documented HTTP API with httpx (HTTP Basic auth "
+        "AccountSid:AuthToken) rather than the heavy ``twilio`` SDK — uniform "
+        "with the other HTTP channels. Tunable so a deployment can pin a region "
+        "host / proxy and so tests point it at an httpx.MockTransport — never "
+        "hardcoded.",
+    )
+    twilio_api_version: str = Field(
+        default="2010-04-01",
+        description="Twilio REST API version segment in the Messages URL. "
+        "Twilio's stable API version is dated (2010-04-01); pin it here so an "
+        "API change never silently shifts the contract. Tunable, never a magic "
+        "string in the adapter.",
+    )
+    sms_default_from: str = Field(
+        default="",
+        description="Fallback ``From`` sender (an E.164 number or a Twilio "
+        "Messaging Service SID) when the SMS channel config doesn't carry one. "
+        "Empty by default — a real deployment sets a verified sender per channel "
+        "(config.from / config.messaging_service_sid) or overrides this "
+        "globally; never a magic string buried in the adapter.",
+    )
+    sms_max_body_len: int = Field(
+        default=1600,
+        description="Upper bound on the SMS body length (characters) the adapter "
+        "will send. Twilio accepts up to 1600 chars (it auto-segments a long "
+        "body into multiple GSM-7/UCS-2 parts); past that it 400s. We truncate "
+        "defensively so an over-long rendered body becomes a delivered, trimmed "
+        "message instead of a hard error. Tunable, never inline.",
+    )
+    twilio_request_timeout_s: float = Field(
+        default=10.0,
+        description="Per-request HTTP timeout the SMS adapter applies to the "
+        "Twilio Messages call. Bounded under channel_send_timeout_s so the "
+        "dispatcher's overall send budget still wraps it. Tunable, not a magic "
+        "number.",
+    )
+
     # ----- Event → notification mapping tunables (task_10_04) -----
     default_locale: str = Field(
         default="en",

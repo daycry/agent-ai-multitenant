@@ -261,7 +261,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_11` — Canal SMS con Twilio
 
-- [ ] **Título**: Canal SMS con Twilio
+- [x] **Título**: Canal SMS con Twilio
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
