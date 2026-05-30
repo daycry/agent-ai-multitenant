@@ -9,6 +9,15 @@ over those rows (task_14_05 / task_14_06).
 
 from __future__ import annotations
 
+from api_server.evals.diff import (
+    DatasetMismatchError,
+    DiffVerdict,
+    ItemChange,
+    MetricDelta,
+    RunDiff,
+    diff_metrics,
+    diff_runs,
+)
 from api_server.evals.judge import (
     CriterionScore,
     JudgedItem,
@@ -35,9 +44,14 @@ from api_server.evals.metrics import (
 
 __all__ = [
     "CriterionScore",
+    "DatasetMismatchError",
+    "DiffVerdict",
+    "ItemChange",
     "JudgeModel",
     "JudgeResponseError",
     "JudgedItem",
+    "MetricDelta",
+    "RunDiff",
     "RunMetrics",
     "SameModelJudgeError",
     "ScriptedJudgeModel",
@@ -47,6 +61,8 @@ __all__ = [
     "apply_to_run",
     "build_judge_prompt",
     "compute_run_metrics",
+    "diff_metrics",
+    "diff_runs",
     "judge_item",
     "mean",
     "parse_judge_response",

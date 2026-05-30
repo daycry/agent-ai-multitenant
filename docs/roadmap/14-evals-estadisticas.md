@@ -178,7 +178,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_06` — Comparativa entre dos eval runs (diff)
 
-- [ ] **Título**: Comparativa entre dos eval runs (diff)
+- [x] **Título**: Comparativa entre dos eval runs (diff)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

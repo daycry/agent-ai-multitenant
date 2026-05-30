@@ -47,6 +47,7 @@ opt-in.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -56,7 +57,8 @@ from uuid6 import uuid7
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
 from api_server.db.domain import Execution, ExecutionStatus, Task, TaskStatus
-from api_server.db.evals import EvalCriterion, EvalDataset, EvalDatasetItem, EvalRun
+from api_server.db.evals import EvalCriterion, EvalDataset, EvalDatasetItem, EvalResult, EvalRun
+from api_server.evals.diff import DatasetMismatchError, RunDiff, diff_runs
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -74,7 +76,10 @@ from api_server.schemas.evals import (
     EvalDatasetItemUpdateRequest,
     EvalDatasetResponse,
     EvalDatasetUpdateRequest,
+    EvalRunDiffResponse,
     EvalRunResponse,
+    ItemChangeResponse,
+    MetricDeltaResponse,
     PromoteToDatasetRequest,
     PromoteToDatasetResponse,
 )
@@ -449,6 +454,75 @@ async def delete_eval_dataset_item(
 
 
 # ---------------------------------------------------------------------------
+# Eval-run diff — compare two runs of the same dataset (task_14_06)
+#
+# Declared BEFORE the ``/eval-runs/{run_id}`` route so the static ``/diff``
+# path is matched first (otherwise "diff" would be parsed as a run_id and 422).
+# ---------------------------------------------------------------------------
+@router.get("/eval-runs/diff", response_model=EvalRunDiffResponse)
+async def diff_eval_runs(
+    base: UUID,
+    candidate: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> EvalRunDiffResponse:
+    """Diff two eval runs of the SAME dataset (base vs candidate). tenant_admin.
+
+    The canonical use is an OLD prompt version (``base``) vs a NEW one
+    (``candidate``) over the same golden dataset: per-metric deltas
+    (pass_rate / latency / cost / tokens), the items that regressed
+    (pass->fail) or improved (fail->pass), and an overall
+    ``regressed`` / ``improved`` / ``unchanged`` verdict that feeds the
+    Phase C merge-gate.
+
+    Multi-tenancy: BOTH runs are resolved under the caller's tenant RLS scope
+    (404 for another tenant's run), so a diff only ever spans the caller's own
+    runs. A run of a different dataset is rejected (422) — a cross-dataset diff
+    is meaningless. The comparison itself is a pure function (no provider, no
+    cross-tenant read).
+    """
+    require_tenant_id(principal)
+    base_run = await get_writable_or_404(
+        session,
+        EvalRun,
+        base,
+        principal,
+        not_found_detail="run not found",
+        soft_delete_aware=False,
+    )
+    candidate_run = await get_writable_or_404(
+        session,
+        EvalRun,
+        candidate,
+        principal,
+        not_found_detail="run not found",
+        soft_delete_aware=False,
+    )
+    base_results = await _load_run_results(session, base_run.id)
+    candidate_results = await _load_run_results(session, candidate_run.id)
+
+    try:
+        diff = diff_runs(
+            base_run,
+            candidate_run,
+            base_results,
+            candidate_results,
+            pass_rate_regression_threshold=Decimal("0"),
+        )
+    except DatasetMismatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    return _diff_to_response(
+        diff,
+        base_run_id=base_run.id,
+        candidate_run_id=candidate_run.id,
+        dataset_id=base_run.dataset_id,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Eval runs — read view exposing the standard metrics (task_14_05)
 # ---------------------------------------------------------------------------
 @router.get("/eval-runs/{run_id}", response_model=EvalRunResponse)
@@ -580,6 +654,46 @@ async def promote_task_to_dataset(
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+async def _load_run_results(session: AsyncSession, run_id: UUID) -> list[EvalResult]:
+    """All result rows of a run under the caller's RLS scope (ordered by item).
+
+    Tenant-scoped by the session RLS + the run already resolved under the
+    caller's tenant; deterministic order so the diff is reproducible.
+    """
+    result = await session.execute(
+        select(EvalResult)
+        .where(EvalResult.run_id == run_id)
+        .order_by(EvalResult.created_at, EvalResult.id)
+    )
+    return list(result.scalars().all())
+
+
+def _delta_to_response(d: object) -> MetricDeltaResponse:
+    return MetricDeltaResponse.model_validate(d)
+
+
+def _diff_to_response(
+    diff: RunDiff,
+    *,
+    base_run_id: UUID,
+    candidate_run_id: UUID,
+    dataset_id: UUID,
+) -> EvalRunDiffResponse:
+    return EvalRunDiffResponse(
+        base_run_id=base_run_id,
+        candidate_run_id=candidate_run_id,
+        dataset_id=dataset_id,
+        verdict=diff.verdict.value,
+        pass_rate=_delta_to_response(diff.pass_rate),
+        mean_latency_ms=_delta_to_response(diff.mean_latency_ms),
+        mean_cost_usd=_delta_to_response(diff.mean_cost_usd),
+        mean_tokens=_delta_to_response(diff.mean_tokens),
+        regressions=[ItemChangeResponse.model_validate(c) for c in diff.regressions],
+        improvements=[ItemChangeResponse.model_validate(c) for c in diff.improvements],
+        pass_rate_regression_threshold=diff.pass_rate_regression_threshold,
+    )
+
+
 async def _item_counts(session: AsyncSession, dataset_ids: list[UUID]) -> dict[UUID, int]:
     """Live item counts per dataset (one grouped query). Empty for no ids."""
     if not dataset_ids:

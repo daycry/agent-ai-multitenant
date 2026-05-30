@@ -256,6 +256,55 @@ class EvalRunResponse(BaseModel):
     updated_at: datetime
 
 
+# ---------------------------------------------------------------------------
+# Eval-run diff — compare two runs of the same dataset (task_14_06)
+# ---------------------------------------------------------------------------
+class MetricDeltaResponse(BaseModel):
+    """One metric's ``base`` / ``candidate`` values and their delta.
+
+    ``delta`` is ``candidate - base``; ``None`` when either side is undefined
+    (an empty run / a run that reported nothing for that metric).
+    """
+
+    base: Decimal | None
+    candidate: Decimal | None
+    delta: Decimal | None
+
+
+class ItemChangeResponse(BaseModel):
+    """One golden item whose verdict flipped between the two runs."""
+
+    item_id: UUID | None
+    base_verdict: str
+    candidate_verdict: str
+
+
+class EvalRunDiffResponse(BaseModel):
+    """The comparison of a ``base`` eval run vs a ``candidate`` (task_14_06).
+
+    A diff is only meaningful between runs of the SAME golden dataset (old vs
+    new prompt version). Carries the per-metric deltas, the items that flipped
+    (``regressions`` pass->fail / ``improvements`` fail->pass), and the overall
+    ``verdict`` (``regressed`` / ``improved`` / ``unchanged``) that feeds the
+    Phase C merge-gate. Tenant-scoped: both runs are resolved under the caller's
+    RLS scope, so a diff only ever spans the caller's own runs.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    base_run_id: UUID
+    candidate_run_id: UUID
+    dataset_id: UUID
+    verdict: str
+    pass_rate: MetricDeltaResponse
+    mean_latency_ms: MetricDeltaResponse
+    mean_cost_usd: MetricDeltaResponse
+    mean_tokens: MetricDeltaResponse
+    regressions: list[ItemChangeResponse]
+    improvements: list[ItemChangeResponse]
+    pass_rate_regression_threshold: Decimal
+
+
 __all__ = [
     "EvalCriterionCreateRequest",
     "EvalCriterionResponse",
@@ -266,7 +315,10 @@ __all__ = [
     "EvalDatasetItemUpdateRequest",
     "EvalDatasetResponse",
     "EvalDatasetUpdateRequest",
+    "EvalRunDiffResponse",
     "EvalRunResponse",
+    "ItemChangeResponse",
+    "MetricDeltaResponse",
     "PromoteToDatasetRequest",
     "PromoteToDatasetResponse",
 ]
