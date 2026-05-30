@@ -76,6 +76,10 @@ repos:
           # Sandboxed Jinja2 template rendering (notification-dispatcher,
           # Plan 10 task_10_03). Ships py.typed, so mypy needs it installed.
           - "jinja2>=3.1,<4"
+          # Email channel SMTP transport (notification-dispatcher, Plan 10
+          # task_10_06). Ships py.typed, so mypy needs it installed to resolve
+          # the aiosmtplib import in the Email adapter.
+          - "aiosmtplib>=3.0,<4"
         args: [--config-file=pyproject.toml]
         files: ^(apps|packages)/.*\.py$
         # Skip files that import sibling local packages — the hook

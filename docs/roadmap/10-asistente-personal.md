@@ -174,7 +174,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_06` — Canal Email con aiosmtplib (SMTP) o sendgrid (opcional)
 
-- [ ] **Título**: Canal Email con aiosmtplib (SMTP) o sendgrid (opcional)
+- [x] **Título**: Canal Email con aiosmtplib (SMTP) o sendgrid (opcional)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

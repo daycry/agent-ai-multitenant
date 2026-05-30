@@ -111,6 +111,35 @@ class Settings(BaseSettings):
         "magic number.",
     )
 
+    # ----- Email channel (task_10_06) -----
+    email_default_from: str = Field(
+        default="notifications@localhost",
+        description="Fallback ``From:`` address when the email channel config "
+        "doesn't carry one. A real deployment sets a verified sender per "
+        "channel (config.from / config.from_email) or overrides this globally; "
+        "never a magic string buried in the adapter.",
+    )
+    email_request_timeout_s: float = Field(
+        default=10.0,
+        description="Per-send SMTP wall-clock timeout the Email adapter applies "
+        "to the connect+send. Bounded under channel_send_timeout_s so the "
+        "dispatcher's overall send budget still wraps it. Tunable, not a magic "
+        "number.",
+    )
+    email_default_smtp_port: int = Field(
+        default=587,
+        description="Default SMTP port when the email channel config doesn't "
+        "set one. 587 = submission (STARTTLS); a channel may set config.port "
+        "(e.g. 465 for implicit TLS, 25 for relay). Tunable, never hardcoded.",
+    )
+    sendgrid_api_base_url: str = Field(
+        default="https://api.sendgrid.com",
+        description="Base URL of the SendGrid v3 API the OPTIONAL SendGrid send "
+        "path POSTs to (``{base}/v3/mail/send``). Only used when a channel opts "
+        "into the SendGrid provider (config.provider='sendgrid'); the SMTP path "
+        "is the primary one. Tunable so tests point it at an httpx.MockTransport.",
+    )
+
     # ----- Event → notification mapping tunables (task_10_04) -----
     default_locale: str = Field(
         default="en",

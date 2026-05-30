@@ -16,6 +16,6 @@ startup; tests import the specific channel module they exercise.
 
 from __future__ import annotations
 
-from notification_dispatcher.channels import telegram
+from notification_dispatcher.channels import email, telegram
 
-__all__ = ["telegram"]
+__all__ = ["email", "telegram"]

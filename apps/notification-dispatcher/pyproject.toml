@@ -31,6 +31,14 @@ dependencies = [
   # httpx.MockTransport so no adapter ever touches the real network.
   "httpx>=0.27,<1",
 
+  # Email channel SMTP transport (Plan 10 task_10_06). aiosmtplib drives the
+  # async SMTP send (STARTTLS / implicit-SSL) the Email adapter's PRIMARY path
+  # uses; the MIME message itself is built with the stdlib ``email`` package.
+  # The OPTIONAL SendGrid path is driven over the documented v3 HTTP API with
+  # httpx (above) rather than the heavy ``sendgrid`` SDK, so it needs no extra
+  # dependency and its absence never breaks import / CI.
+  "aiosmtplib>=3.0,<4",
+
   # Observability
   "structlog>=24.1,<25",
 ]
