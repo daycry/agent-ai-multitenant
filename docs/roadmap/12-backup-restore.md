@@ -1,9 +1,9 @@
 ---
 plan_id: 12-backup-restore
 title: Backup, Restore y Continuidad
-status: pending_approval
+status: in_progress
 blocking_plan: [00-fundaciones]
-started_at: null
+started_at: 2026-05-30
 completed_at: null
 estimated_duration_calendar: 2-3 semanas
 estimated_effort_person_days: 40-55
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `12-backup-restore`                       |
-| **Estado**                         | `pending_approval`                        |
+| **Estado**                         | `in_progress`                             |
 | **Bloqueado por**                  | `00-fundaciones`                          |
 | **Tiempo estimado (calendario)**   | 2-3 semanas                               |
 | **Tiempo estimado (persona-días)** | 40-55                                     |
