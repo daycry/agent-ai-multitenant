@@ -1,0 +1,609 @@
+"use client";
+
+/**
+ * task_09_18 — UI de gestión del marketplace por Tenant Admin.
+ *
+ * Área cohesiva del admin-panel donde un Tenant Admin gestiona el
+ * marketplace de su tenant. Reúne, sin duplicar, las superficies de las
+ * tareas anteriores de Plan 09 en cuatro pestañas:
+ *
+ *   - Catálogo   — explora el catálogo (global público + privados propios);
+ *                  enlaza a la config guiada de Playwright (09_13) y a la
+ *                  pantalla de consentimiento de una instalación (09_07).
+ *   - Instaladas — lista lo instalado por el tenant, enlaza al
+ *                  consentimiento granular (09_07), revoca y desinstala.
+ *   - Privadas   — enlaza al marketplace privado del tenant (09_16).
+ *   - Compartir  — gestiona los shares cross-tenant del tenant OWNER
+ *                  (09_17): crea (opt-in, explícito y auditado por el
+ *                  System Admin) y revoca. NUNCA un bypass implícito de RLS:
+ *                  el tenant TARGET ve el listing SOLO mediante el grant, y
+ *                  el System Admin audita cada share.
+ *
+ * Frontera multi-tenant (la FEATURE de esta fase):
+ *   - Los listings privados están aislados por RLS (tenant_id non-NULL);
+ *     otro tenant NUNCA los ve.
+ *   - Compartir entre tenants es opt-in explícito + auditado por el System
+ *     Admin; el target solo accede mediante el grant vivo.
+ *   - Ni firmas ni secretos cruzan el wire (el listing expone is_signed, no
+ *     la firma; un share NOMBRA el listing, no lo embebe).
+ *
+ * Endpoints backend (routers/marketplace.py, RLS + RBAC):
+ *   GET    /marketplace/listings                       — browse
+ *   GET    /marketplace/installations                  — list_installed
+ *   POST   /marketplace/installations/{id}/revoke      — revoke (tenant_admin)
+ *   DELETE /marketplace/installations/{id}             — uninstall (tenant_admin)
+ *   GET    /marketplace/shares                          — owner's grants
+ *   POST   /marketplace/shares                          — share (tenant_admin)
+ *   DELETE /marketplace/shares/{id}                     — revoke share (tenant_admin)
+ *
+ * Permisos: LEER cualquier miembro; las mutaciones (revoke / uninstall /
+ * share / revoke-share) van envueltas en <RoleGuard min="tenant_admin"> y el
+ * backend las gatea igualmente.
+ */
+
+import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Ban, ExternalLink, Share2, ShieldCheck, Store, Trash2 } from "lucide-react";
+
+import { PageHeader } from "@/components/layout/page-header";
+import { Badge, type BadgeVariant } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { RoleGuard } from "@/components/ui/role-guard";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ApiError, apiFetch } from "@/lib/api";
+
+// ---------------------------------------------------------------------------
+// Types — mirror api_server.schemas.marketplace
+// ---------------------------------------------------------------------------
+interface MarketplaceListing {
+  id: string;
+  source_id: string;
+  tenant_id: string | null;
+  kind: string;
+  name: string;
+  version: string;
+  description: string | null;
+  author: string | null;
+  trust_level: string;
+  requested_permissions: { type: string; value: unknown }[];
+  is_signed: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface MarketplaceInstallation {
+  id: string;
+  tenant_id: string;
+  listing_id: string;
+  project_id: string | null;
+  version: string;
+  status: string;
+  granted_permissions: unknown[];
+  denied_permissions: unknown[];
+  installed_by: string | null;
+  installed_at: string;
+  revoked_at: string | null;
+  revoked_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface MarketplaceShare {
+  id: string;
+  listing_id: string;
+  owner_tenant_id: string;
+  target_tenant_id: string;
+  granted_by: string | null;
+  revoked_at: string | null;
+  revoked_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const TRUST_BADGE: Record<string, BadgeVariant> = {
+  verified: "success",
+  community: "info",
+  experimental: "warning",
+};
+
+const STATUS_BADGE: Record<string, { variant: BadgeVariant; label: string }> = {
+  enabled: { variant: "success", label: "Habilitada" },
+  disabled: { variant: "warning", label: "Deshabilitada" },
+  revoked: { variant: "muted", label: "Revocada" },
+};
+
+/** Listings carrying a non-null tenant_id are the caller tenant's PRIVATE rows. */
+function isPrivate(listing: MarketplaceListing): boolean {
+  return listing.tenant_id !== null;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof ApiError ? err.body : String(err);
+}
+
+// ===========================================================================
+// Page
+// ===========================================================================
+export default function MarketplaceAdminPage() {
+  return (
+    <div
+      className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8"
+      data-testid="marketplace-admin-page"
+    >
+      <PageHeader
+        icon={<Store className="h-6 w-6 sm:h-7 sm:w-7" />}
+        title="Marketplace"
+        description="Explora el catálogo, gestiona lo instalado, tus listings privados y los recursos compartidos entre tenants."
+        data-testid="marketplace-admin-header"
+        actions={
+          <Button asChild variant="outline" size="sm" data-testid="marketplace-private-link">
+            <Link href="/admin/marketplace/private">
+              <Store className="mr-1 h-3.5 w-3.5" />
+              Privadas
+            </Link>
+          </Button>
+        }
+      />
+
+      <Tabs defaultValue="catalog" className="mt-6" data-testid="marketplace-tabs">
+        <TabsList data-testid="marketplace-tablist">
+          <TabsTrigger value="catalog" data-testid="marketplace-tab-catalog">
+            Catálogo
+          </TabsTrigger>
+          <TabsTrigger value="installed" data-testid="marketplace-tab-installed">
+            Instaladas
+          </TabsTrigger>
+          <TabsTrigger value="shares" data-testid="marketplace-tab-shares">
+            Compartir
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="catalog" data-testid="marketplace-panel-catalog">
+          <CatalogTab />
+        </TabsContent>
+        <TabsContent value="installed" data-testid="marketplace-panel-installed">
+          <InstalledTab />
+        </TabsContent>
+        <TabsContent value="shares" data-testid="marketplace-panel-shares">
+          <SharesTab />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// ===========================================================================
+// Catalog — browse global + own private listings
+// ===========================================================================
+function CatalogTab() {
+  const listingsQuery = useQuery({
+    queryKey: ["marketplace-listings"],
+    queryFn: () => apiFetch<MarketplaceListing[]>("/marketplace/listings?limit=100"),
+    refetchOnWindowFocus: false,
+  });
+
+  if (listingsQuery.isLoading) {
+    return (
+      <p className="text-muted-foreground text-sm" data-testid="catalog-loading">
+        Cargando…
+      </p>
+    );
+  }
+  if (listingsQuery.isError) {
+    return (
+      <p className="text-destructive text-sm" data-testid="catalog-error">
+        {errorText(listingsQuery.error)}
+      </p>
+    );
+  }
+
+  const listings = listingsQuery.data ?? [];
+  if (listings.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-10 text-center">
+          <p className="text-muted-foreground text-sm italic" data-testid="catalog-empty">
+            El catálogo está vacío.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <ul className="space-y-3" data-testid="catalog-list">
+      {listings.map((listing) => {
+        const isPlaywright = listing.name === "playwright" && listing.kind === "tool";
+        return (
+          <li key={listing.id}>
+            <Card data-testid={`catalog-listing-${listing.id}`}>
+              <CardHeader className="flex flex-row items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                    <span className="truncate">{listing.name}</span>
+                    <Badge variant="info" data-testid={`catalog-kind-${listing.id}`}>
+                      {listing.kind}
+                    </Badge>
+                    <Badge variant="muted">{listing.version}</Badge>
+                    <Badge
+                      variant={TRUST_BADGE[listing.trust_level] ?? "muted"}
+                      data-testid={`catalog-trust-${listing.id}`}
+                    >
+                      {listing.trust_level}
+                    </Badge>
+                    {isPrivate(listing) ? (
+                      <Badge variant="warning" data-testid={`catalog-private-${listing.id}`}>
+                        privado
+                      </Badge>
+                    ) : (
+                      <Badge variant="default" data-testid={`catalog-global-${listing.id}`}>
+                        global
+                      </Badge>
+                    )}
+                  </CardTitle>
+                  {listing.description ? (
+                    <p className="text-muted-foreground mt-1 break-words text-xs">
+                      {listing.description}
+                    </p>
+                  ) : null}
+                </div>
+                {isPlaywright ? (
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="sm"
+                    data-testid={`catalog-playwright-config-${listing.id}`}
+                  >
+                    <Link href={`/admin/marketplace/listings/${listing.id}/playwright-config`}>
+                      <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                      Configurar
+                    </Link>
+                  </Button>
+                ) : null}
+              </CardHeader>
+            </Card>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+// ===========================================================================
+// Installed — consent / revoke / uninstall
+// ===========================================================================
+function InstalledTab() {
+  const queryClient = useQueryClient();
+
+  const installedQuery = useQuery({
+    queryKey: ["marketplace-installations"],
+    queryFn: () => apiFetch<MarketplaceInstallation[]>("/marketplace/installations?limit=100"),
+    refetchOnWindowFocus: false,
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: (installationId: string) =>
+      apiFetch<MarketplaceInstallation>(`/marketplace/installations/${installationId}/revoke`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["marketplace-installations"] });
+    },
+  });
+
+  const uninstallMutation = useMutation({
+    mutationFn: (installationId: string) =>
+      apiFetch<void>(`/marketplace/installations/${installationId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["marketplace-installations"] });
+    },
+  });
+
+  if (installedQuery.isLoading) {
+    return (
+      <p className="text-muted-foreground text-sm" data-testid="installed-loading">
+        Cargando…
+      </p>
+    );
+  }
+  if (installedQuery.isError) {
+    return (
+      <p className="text-destructive text-sm" data-testid="installed-error">
+        {errorText(installedQuery.error)}
+      </p>
+    );
+  }
+
+  const installations = installedQuery.data ?? [];
+  if (installations.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-10 text-center">
+          <p className="text-muted-foreground text-sm italic" data-testid="installed-empty">
+            Este tenant no tiene nada instalado todavía.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-3" data-testid="installed-list">
+      {installations.map((install) => {
+        const statusBadge = STATUS_BADGE[install.status] ?? {
+          variant: "muted" as BadgeVariant,
+          label: install.status,
+        };
+        const isRevoked = install.status === "revoked";
+        return (
+          <Card key={install.id} data-testid={`installed-${install.id}`}>
+            <CardHeader className="flex flex-row items-start justify-between gap-4">
+              <div className="min-w-0">
+                <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                  <span className="truncate font-mono text-sm">{install.listing_id}</span>
+                  <Badge variant="muted">{install.version}</Badge>
+                  <Badge
+                    variant={statusBadge.variant}
+                    data-testid={`installed-status-${install.id}`}
+                  >
+                    {statusBadge.label}
+                  </Badge>
+                </CardTitle>
+              </div>
+              <div className="flex shrink-0 flex-wrap items-center gap-1">
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  data-testid={`installed-consent-${install.id}`}
+                >
+                  <Link href={`/admin/marketplace/installations/${install.id}/permissions`}>
+                    <ShieldCheck className="mr-1 h-3.5 w-3.5" />
+                    Permisos
+                  </Link>
+                </Button>
+                <RoleGuard min="tenant_admin">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => revokeMutation.mutate(install.id)}
+                    disabled={isRevoked || revokeMutation.isPending}
+                    data-testid={`installed-revoke-${install.id}`}
+                    aria-label="Revocar"
+                  >
+                    <Ban className="mr-1 h-3.5 w-3.5" />
+                    Revocar
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => uninstallMutation.mutate(install.id)}
+                    disabled={uninstallMutation.isPending}
+                    data-testid={`installed-uninstall-${install.id}`}
+                    aria-label="Desinstalar"
+                  >
+                    <Trash2 className="mr-1 h-3.5 w-3.5" />
+                    Desinstalar
+                  </Button>
+                </RoleGuard>
+              </div>
+            </CardHeader>
+          </Card>
+        );
+      })}
+
+      {revokeMutation.isError ? (
+        <p className="text-destructive text-xs" data-testid="installed-revoke-error">
+          {errorText(revokeMutation.error)}
+        </p>
+      ) : null}
+      {uninstallMutation.isError ? (
+        <p className="text-destructive text-xs" data-testid="installed-uninstall-error">
+          {errorText(uninstallMutation.error)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+// ===========================================================================
+// Shares — cross-tenant sharing (opt-in, explicit grant, System-Admin audited)
+// ===========================================================================
+function SharesTab() {
+  const queryClient = useQueryClient();
+
+  const listingsQuery = useQuery({
+    queryKey: ["marketplace-listings"],
+    queryFn: () => apiFetch<MarketplaceListing[]>("/marketplace/listings?limit=100"),
+    refetchOnWindowFocus: false,
+  });
+
+  const sharesQuery = useQuery({
+    queryKey: ["marketplace-shares"],
+    queryFn: () => apiFetch<MarketplaceShare[]>("/marketplace/shares"),
+    refetchOnWindowFocus: false,
+  });
+
+  // Only the tenant's OWN private listings can be shared — a global catalog
+  // listing is already visible to everyone (nothing to share). The backend
+  // enforces this; we only offer shareable rows in the picker.
+  const privateListings = useMemo(
+    () => (listingsQuery.data ?? []).filter(isPrivate),
+    [listingsQuery.data],
+  );
+
+  const [listingId, setListingId] = useState<string>("");
+  const [targetTenantId, setTargetTenantId] = useState<string>("");
+
+  const shareMutation = useMutation({
+    mutationFn: (payload: { listing_id: string; target_tenant_id: string }) =>
+      apiFetch<MarketplaceShare>("/marketplace/shares", { method: "POST", body: payload }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["marketplace-shares"] });
+      setTargetTenantId("");
+    },
+  });
+
+  const revokeShareMutation = useMutation({
+    mutationFn: (shareId: string) =>
+      apiFetch<void>(`/marketplace/shares/${shareId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["marketplace-shares"] });
+    },
+  });
+
+  function submitShare() {
+    if (listingId === "" || targetTenantId.trim() === "") return;
+    shareMutation.mutate({ listing_id: listingId, target_tenant_id: targetTenantId.trim() });
+  }
+
+  const shares = sharesQuery.data ?? [];
+
+  return (
+    <div className="space-y-6">
+      {/* Create a share (tenant_admin only) */}
+      <RoleGuard min="tenant_admin">
+        <Card data-testid="share-create-card">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Share2 className="h-4 w-4" />
+              Compartir un listing privado con otro tenant
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-muted-foreground text-xs" data-testid="share-explainer">
+              Compartir es opt-in y explícito: el tenant destino ve e instala el listing solo
+              mediante este grant, y el System Admin audita cada acción. Revocar retira la
+              visibilidad de inmediato.
+            </p>
+
+            <div className="space-y-1">
+              <Label htmlFor="share-listing">Listing privado</Label>
+              <select
+                id="share-listing"
+                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm"
+                value={listingId}
+                onChange={(e) => setListingId(e.target.value)}
+                data-testid="share-listing-select"
+              >
+                <option value="">Selecciona un listing…</option>
+                {privateListings.map((listing) => (
+                  <option key={listing.id} value={listing.id}>
+                    {listing.name} {listing.version}
+                  </option>
+                ))}
+              </select>
+              {privateListings.length === 0 ? (
+                <p className="text-muted-foreground text-xs" data-testid="share-no-private">
+                  No tienes listings privados que compartir. Publica uno en{" "}
+                  <Link href="/admin/marketplace/private" className="underline">
+                    Marketplace privado
+                  </Link>
+                  .
+                </p>
+              ) : null}
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="share-target">Tenant destino (UUID)</Label>
+              <Input
+                id="share-target"
+                placeholder="00000000-0000-0000-0000-000000000000"
+                value={targetTenantId}
+                onChange={(e) => setTargetTenantId(e.target.value)}
+                data-testid="share-target-input"
+              />
+            </div>
+
+            <div className="flex items-center justify-end">
+              <Button
+                onClick={submitShare}
+                disabled={
+                  listingId === "" || targetTenantId.trim() === "" || shareMutation.isPending
+                }
+                data-testid="share-submit"
+              >
+                {shareMutation.isPending ? "Compartiendo…" : "Compartir"}
+              </Button>
+            </div>
+
+            {shareMutation.isError ? (
+              <p className="text-destructive text-xs" data-testid="share-error">
+                {errorText(shareMutation.error)}
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+      </RoleGuard>
+
+      {/* The tenant's outgoing share grants */}
+      <div>
+        <h2 className="mb-3 text-sm font-semibold" data-testid="shares-title">
+          Grants activos creados por tu tenant
+        </h2>
+
+        {sharesQuery.isLoading ? (
+          <p className="text-muted-foreground text-sm" data-testid="shares-loading">
+            Cargando…
+          </p>
+        ) : sharesQuery.isError ? (
+          <p className="text-destructive text-sm" data-testid="shares-error">
+            {errorText(sharesQuery.error)}
+          </p>
+        ) : shares.length === 0 ? (
+          <Card>
+            <CardContent className="py-10 text-center">
+              <p className="text-muted-foreground text-sm italic" data-testid="shares-empty">
+                Por defecto no compartes nada. Crea un grant arriba para compartir un listing
+                privado.
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <ul className="space-y-3" data-testid="shares-list">
+            {shares.map((share) => (
+              <li key={share.id}>
+                <Card data-testid={`share-${share.id}`}>
+                  <CardHeader className="flex flex-row items-start justify-between gap-4">
+                    <div className="min-w-0 space-y-1">
+                      <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                        <span className="text-muted-foreground text-xs">listing</span>
+                        <span className="truncate font-mono text-sm">{share.listing_id}</span>
+                      </CardTitle>
+                      <p className="text-muted-foreground break-all font-mono text-xs">
+                        → tenant {share.target_tenant_id}
+                      </p>
+                    </div>
+                    <RoleGuard min="tenant_admin">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => revokeShareMutation.mutate(share.id)}
+                        disabled={revokeShareMutation.isPending}
+                        data-testid={`share-revoke-${share.id}`}
+                        aria-label="Revocar share"
+                      >
+                        <Ban className="mr-1 h-3.5 w-3.5" />
+                        Revocar
+                      </Button>
+                    </RoleGuard>
+                  </CardHeader>
+                </Card>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {revokeShareMutation.isError ? (
+          <p className="text-destructive mt-3 text-xs" data-testid="share-revoke-error">
+            {errorText(revokeShareMutation.error)}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}

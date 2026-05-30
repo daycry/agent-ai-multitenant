@@ -16,6 +16,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Store,
   Users,
   X,
 } from "lucide-react";
@@ -48,6 +49,7 @@ const NAV: NavItem[] = [
   },
   { href: "/admin/memories", label: "Memorias", Icon: Brain },
   { href: "/admin/knowledge-bases", label: "Knowledge Bases", Icon: Library },
+  { href: "/admin/marketplace", label: "Marketplace", Icon: Store, adminOnly: true },
   { href: "/admin/documents", label: "Documentos", Icon: FileText },
   { href: "/admin/docs", label: "Documentación", Icon: BookOpen },
   { href: "/admin/settings", label: "Settings", Icon: Settings, adminOnly: true },
