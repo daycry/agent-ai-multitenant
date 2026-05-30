@@ -1,7 +1,7 @@
 ---
 plan_id: 13-api-publica-webhooks
 title: API Pública, Webhooks Entrantes y Eventos Externos
-status: in_progress
+status: pending_human_validation
 blocking_plan: [01-dominio-minimo]
 started_at: 2026-05-30
 completed_at: null
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `13-api-publica-webhooks`                 |
-| **Estado**                         | `in_progress`                             |
+| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `01-dominio-minimo`                       |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                               |
 | **Tiempo estimado (persona-días)** | 60-80                                     |
@@ -331,7 +331,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_15` — Documentación + ejemplos de uso + ADRs + changelog
 
-- [ ] **Título**: Documentación + ejemplos de uso + ADRs + changelog
+- [x] **Título**: Documentación + ejemplos de uso + ADRs + changelog — changelog `docs/07-changelog/13-api-publica-webhooks.md`, ADR 0037 (X-API-Token scoped por tenant + versionado en path + webhook HMAC con config-id-en-URL + SDKs generados desde OpenAPI), guía `docs/03-guides/api-publica-y-webhooks.md` (token + SDK Python/TS + curl + registro de webhook por proveedor) y referencia `docs/04-reference/public-api.md`. Plan a `pending_human_validation` (faltan tests humanos `human_13_*` + PR, human-owned).
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: technical-writer
