@@ -1,7 +1,7 @@
 ---
 plan_id: 11-guardrails-precios
 title: Guardrails Declarativos y Catálogo de Precios
-status: in_progress
+status: pending_human_validation
 blocking_plan: [02-ejecucion-agentes]
 started_at: 2026-05-30
 completed_at: null
@@ -18,31 +18,34 @@ docs_language: es
 
 ## Cabecera
 
-| Campo                              | Valor                                                                                         |
-| ---------------------------------- | --------------------------------------------------------------------------------------------- |
-| **ID del Plan**                    | `11-guardrails-precios`                                                                       |
-| **Estado**                         | `in_progress` (NO pasa a `pending_human_validation`: 11_20 sin commit, 11_21 sin implementar) |
-| **Bloqueado por**                  | `02-ejecucion-agentes`                                                                        |
-| **Tiempo estimado (calendario)**   | 3-4 semanas                                                                                   |
-| **Tiempo estimado (persona-días)** | 60-80                                                                                         |
-| **Previsión de coste — humano**    | 24.000 € – 32.000 € (tarifa media 50 €/h)                                                     |
-| **Previsión de coste — IA**        | 150 € – 240 €                                                                                 |
-| **Aprobador propuesto**            | System Admin                                                                                  |
-| **Rama git**                       | `plan/11-guardrails-precios`                                                                  |
-| **Secciones del .docx**            | [19.5, 30.8]                                                                                  |
+| Campo                              | Valor                                     |
+| ---------------------------------- | ----------------------------------------- |
+| **ID del Plan**                    | `11-guardrails-precios`                   |
+| **Estado**                         | `pending_human_validation`                |
+| **Bloqueado por**                  | `02-ejecucion-agentes`                    |
+| **Tiempo estimado (calendario)**   | 3-4 semanas                               |
+| **Tiempo estimado (persona-días)** | 60-80                                     |
+| **Previsión de coste — humano**    | 24.000 € – 32.000 € (tarifa media 50 €/h) |
+| **Previsión de coste — IA**        | 150 € – 240 €                             |
+| **Aprobador propuesto**            | System Admin                              |
+| **Rama git**                       | `plan/11-guardrails-precios`              |
+| **Secciones del .docx**            | [19.5, 30.8]                              |
 
-> **Nota de cierre (task_11_23).** La documentación del plan (changelog, ADR
-> 0035, referencias) está completa, pero el plan **NO** se mueve a
-> `pending_human_validation` porque no todas sus tareas están `done`:
+> **Nota de cierre.** Las 23 tareas (`task_11_01`..`task_11_23`) están
+> implementadas, commiteadas y con su test automático en verde; el plan pasa a
+> `pending_human_validation` (faltan los tests humanos `human_11_*` + el merge
+> del PR, ambos a cargo de un humano). `task_11_20` y `task_11_21` se
+> completaron en una pasada de reconciliación posterior (el agente de la Fase E
+> terminó el trabajo de 11_20 sin commitear y omitió 11_21; el orquestador los
+> verificó y cerró).
 >
-> - `task_11_20` (guardrail_events + dashboard) está implementado en el working
->   tree pero **sin commitear** y su checkbox sigue `[ ]`.
-> - `task_11_21` (alertas configurables) **no está implementada** (sin modelo de
->   config, endpoint, evaluador de umbral ni `test_guardrail_alerts.py`).
->
-> Además, el **sistema de Budgets / `exchange_rates` / `display_currency`** que
-> el Resumen/Alcance describen **no tiene tarea numerada y no se implementó**.
-> Ver `docs/07-changelog/11-guardrails-precios.md` (sección Pendiente).
+> **Hueco de alcance pendiente de decisión humana:** el Resumen/Alcance
+> describen un **sistema de Budgets / `exchange_rates` / `display_currency`**
+> que **no tiene tarea numerada** (no está entre `task_11_01`..`task_11_23`) y
+> por tanto **no se implementó** en este plan. Requiere un plan/tarea de
+> seguimiento. Ver `docs/07-changelog/11-guardrails-precios.md` (sección
+> Pendiente). Knock-on: el `tenant_budget_status` del asistente (Plan 10) sigue
+> siendo un stub tipado.
 
 ---
 
