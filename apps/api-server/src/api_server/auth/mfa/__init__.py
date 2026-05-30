@@ -5,6 +5,7 @@ A user WITHOUT a confirmed enrollment logs in EXACTLY as before; only a
 user with a confirmed factor gets an extra challenge step after the
 password/SSO step succeeds.
 
-task_08_09 ships TOTP (:mod:`api_server.auth.mfa.totp`); WebAuthn lands
-in task_08_10 next to it.
+task_08_09 ships TOTP (:mod:`api_server.auth.mfa.totp`); task_08_10 adds
+WebAuthn / FIDO2 (:mod:`api_server.auth.mfa.webauthn`) as a SECOND
+alternative second factor in the SAME challenge flow.
 """

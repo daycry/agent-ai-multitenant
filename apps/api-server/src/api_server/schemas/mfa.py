@@ -1,6 +1,8 @@
-"""Pydantic schemas for the MFA TOTP endpoints (Plan 08 task_08_09)."""
+"""Pydantic schemas for the MFA endpoints (Plan 08 task_08_09 + task_08_10)."""
 
 from __future__ import annotations
+
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -69,10 +71,85 @@ class MfaRequiredResponse(BaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# WebAuthn (Plan 08 task_08_10)
+# ---------------------------------------------------------------------------
+class WebauthnRegisterBeginResponse(BaseModel):
+    """The registration options the browser passes to ``navigator.credentials.create``.
+
+    ``options`` is the py_webauthn-generated PublicKeyCredentialCreationOptions
+    serialized as JSON (challenge + RP + user + exclude list). The challenge
+    inside is single-use and also stashed server-side for the verify call.
+    """
+
+    options: dict[str, Any] = Field(description="WebAuthn creation options for the browser.")
+
+
+class WebauthnRegisterFinishRequest(BaseModel):
+    """The attestation the browser returns from a registration ceremony."""
+
+    model_config = ConfigDict(str_strip_whitespace=False)
+
+    credential: dict[str, Any] = Field(
+        description="The PublicKeyCredential JSON from navigator.credentials.create."
+    )
+    label: str | None = Field(
+        default=None,
+        max_length=255,
+        description="Optional human label for the authenticator ('YubiKey 5').",
+    )
+
+
+class WebauthnCredentialSummary(BaseModel):
+    """A registered WebAuthn credential, for the management list."""
+
+    id: str = Field(description="The stored row id (for delete).")
+    label: str | None = Field(default=None)
+    sign_count: int = Field(description="Last accepted signature counter.")
+
+
+class WebauthnCredentialsResponse(BaseModel):
+    """The caller's registered WebAuthn credentials in the active tenant."""
+
+    credentials: list[WebauthnCredentialSummary] = Field(default_factory=list)
+
+
+class WebauthnLoginBeginRequest(BaseModel):
+    """Start the WebAuthn login second factor from an interim challenge token."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    mfa_token: str = Field(min_length=1, description="The interim challenge token from login.")
+
+
+class WebauthnLoginBeginResponse(BaseModel):
+    """The authentication options the browser passes to ``navigator.credentials.get``."""
+
+    options: dict[str, Any] = Field(description="WebAuthn request options for the browser.")
+
+
+class WebauthnLoginFinishRequest(BaseModel):
+    """Complete the WebAuthn login second factor: challenge token + assertion."""
+
+    model_config = ConfigDict(str_strip_whitespace=False)
+
+    mfa_token: str = Field(description="The interim challenge token from login.")
+    credential: dict[str, Any] = Field(
+        description="The PublicKeyCredential JSON from navigator.credentials.get."
+    )
+
+
 __all__ = [
     "MfaConfirmRequest",
     "MfaEnrollResponse",
     "MfaRequiredResponse",
     "MfaStatusResponse",
     "MfaTotpVerifyRequest",
+    "WebauthnCredentialSummary",
+    "WebauthnCredentialsResponse",
+    "WebauthnLoginBeginRequest",
+    "WebauthnLoginBeginResponse",
+    "WebauthnLoginFinishRequest",
+    "WebauthnRegisterBeginResponse",
+    "WebauthnRegisterFinishRequest",
 ]

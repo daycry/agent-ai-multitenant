@@ -48,6 +48,16 @@ dependencies = [
   # OIDC client secret) and recovery codes are stored only as SHA-256
   # digests, so nothing TOTP-related is ever persisted in clear.
   "pyotp>=2.9,<3",
+  # MFA WebAuthn / FIDO2 (Plan 08 task_08_10). py_webauthn implements the
+  # W3C WebAuthn server ceremony: it builds the registration / authentication
+  # options the browser passes to navigator.credentials, and verifies the
+  # attestation / assertion the authenticator returns. Pure-Python (it binds
+  # `cryptography`, already present via python-jose[cryptography]), so it is
+  # fully testable offline with crafted fixtures — no real authenticator. We
+  # store only the credential id + COSE public key + signature counter; the
+  # public key is not a secret, and the counter is what defeats cloned-token
+  # replay (a stale counter is rejected).
+  "webauthn>=2.2,<3",
 
   # Cache / session store / rate limit
   "redis[hiredis]>=5.0,<6",

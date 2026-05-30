@@ -97,6 +97,37 @@ class Settings(BaseSettings):
         description="Seconds an interim MFA challenge token stays valid in Redis.",
     )
 
+    # ----- MFA WebAuthn / FIDO2 (Plan 08 task_08_10) -----
+    # The Relying Party id MUST be a registrable suffix of the origin the
+    # browser runs the ceremony from (typically the bare host, e.g.
+    # "example.com" for https://app.example.com). The browser binds a
+    # credential to this RP id, so it must stay stable across deploys; a
+    # mismatch makes every authenticator refuse to sign. Defaults to
+    # localhost for dev.
+    webauthn_rp_id: str = Field(
+        default="localhost",
+        description="WebAuthn Relying Party id (a registrable suffix of the origin host).",
+    )
+    # Human-readable RP name shown by the authenticator UI at registration.
+    webauthn_rp_name: str = Field(
+        default="Agentic Platform",
+        description="WebAuthn Relying Party display name shown in the authenticator prompt.",
+    )
+    # The exact origin(s) the ceremony is expected to come from, verified
+    # against the signed clientDataJSON. Must include scheme + host (+ port),
+    # e.g. "http://localhost:3000". Defaults to the dev frontend origin.
+    webauthn_origin: str = Field(
+        default="http://localhost:3000",
+        description="Expected WebAuthn origin (scheme://host[:port]) verified in clientDataJSON.",
+    )
+    # TTL of the WebAuthn challenge stashed in Redis between the
+    # options call and the verify call. Same tight bound as the OIDC state:
+    # a challenge is single-use and expires quickly so it cannot be replayed.
+    webauthn_challenge_ttl_seconds: int = Field(
+        default=300,
+        description="Seconds a WebAuthn registration/authentication challenge stays valid.",
+    )
+
     # ----- Redis (sessions, rate limit) -----
     redis_url: str = Field(
         default="redis://localhost:6379/0",

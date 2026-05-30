@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.jwt import InvalidTokenError, decode_jwt
 from api_server.auth.mfa.challenge_store import MfaChallengeStore
+from api_server.auth.mfa.webauthn_challenge_store import WebauthnChallengeStore
 from api_server.auth.rate_limit import RateLimiter
 from api_server.auth.sessions import SessionStore
 from api_server.config import get_settings
@@ -97,6 +98,15 @@ def get_mfa_challenge_store(redis: Redis = Depends(get_redis)) -> MfaChallengeSt
     lives under its own key namespace and grants NO access on its own.
     """
     return MfaChallengeStore(redis)
+
+
+def get_webauthn_challenge_store(redis: Redis = Depends(get_redis)) -> WebauthnChallengeStore:
+    """The Redis-backed store for single-use WebAuthn ceremony challenges (task_08_10).
+
+    Rides the same Redis client; the challenge bytes live under their own
+    key namespaces (registration vs authentication) and are single-use.
+    """
+    return WebauthnChallengeStore(redis)
 
 
 # ---------------------------------------------------------------------------

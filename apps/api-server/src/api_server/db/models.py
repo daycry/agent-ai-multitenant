@@ -21,9 +21,11 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     ForeignKey,
     Index,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -553,6 +555,82 @@ class UserMfaTotp(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
         return (
             f"UserMfaTotp(id={self.id!r}, tenant={self.tenant_id!r}, "
             f"user={self.user_id!r}, confirmed={self.confirmed_at is not None})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# WebauthnCredential — per-user, per-tenant WebAuthn/FIDO2 second factor
+# (Plan 08 task_08_10)
+# ---------------------------------------------------------------------------
+class WebauthnCredential(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """A registered WebAuthn (FIDO2 / passkey) authenticator for a user.
+
+    A SECOND alternative to TOTP in the SAME opt-in MFA challenge flow: a
+    user with no row here logs in EXACTLY as before; a user with at least
+    one credential is challenged after the password/SSO step and completes
+    login by signing a WebAuthn assertion instead of typing a TOTP code.
+
+    Tenant-scoped via :class:`TenantScopedMixin` + RLS (the
+    ``tenant_isolation`` policy in the migration): registration and
+    authentication run under ``app.tenant_id`` bound to the active tenant,
+    so one tenant's credentials are invisible to another. A user may
+    register several authenticators within a tenant, so the row is NOT
+    unique per ``(tenant_id, user_id)`` — only the credential id is unique
+    (a WebAuthn credential id is globally unique by construction).
+
+    Nothing stored here is a secret (CLAUDE.md): a WebAuthn credential
+    persists only the PUBLIC key (the private key never leaves the
+    authenticator), the public credential id, and the signature counter.
+    The counter is the anti-cloning control: each successful assertion must
+    present a counter strictly greater than the stored one, so a captured
+    (replayed) assertion with a stale counter is rejected and the credential
+    is treated as compromised.
+    """
+
+    __tablename__ = "webauthn_credentials"
+    __table_args__ = (
+        # The WebAuthn credential id is globally unique by construction; a
+        # UNIQUE index also makes the by-credential-id lookup an index probe
+        # and prevents the same authenticator registering twice.
+        UniqueConstraint("credential_id", name="uq_webauthn_credential_id"),
+        Index("ix_webauthn_tenant_user", "tenant_id", "user_id"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Raw WebAuthn credential id (the authenticator's public handle). Stored
+    # as bytes; surfaced to the browser base64url-encoded.
+    credential_id: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # COSE-encoded PUBLIC key used to verify assertion signatures. NOT a
+    # secret — the matching private key never leaves the authenticator.
+    public_key: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # Signature counter from the last accepted assertion. A new assertion
+    # must present a strictly greater counter (unless the authenticator does
+    # not implement counters, i.e. both are 0) — this defeats cloned-token
+    # replay.
+    sign_count: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    # Optional operator/user label ("YubiKey 5", "MacBook Touch ID", ...).
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Transports advertised by the authenticator (usb, nfc, ble, internal),
+    # echoed back in allowCredentials so the browser prompts the right way.
+    transports: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    # Set when the registration ceremony completes. A registration is only
+    # ever persisted on a verified attestation, so this is non-NULL for every
+    # stored row; it exists for symmetry with the TOTP factor and to gate
+    # login uniformly ("a confirmed factor exists").
+    confirmed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # Bumped on each successful assertion (observability; not on the hot path).
+    last_used_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"WebauthnCredential(id={self.id!r}, tenant={self.tenant_id!r}, "
+            f"user={self.user_id!r}, sign_count={self.sign_count!r})"
         )
 
 

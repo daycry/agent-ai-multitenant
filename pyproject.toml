@@ -249,6 +249,14 @@ ignore_missing_imports = true
 module = ["pyotp", "pyotp.*"]
 ignore_missing_imports = true
 
+# MFA WebAuthn / FIDO2 (Plan 08 task_08_10). `webauthn` (py_webauthn) and
+# `cbor2` (used by the offline software-authenticator test fixture) ship no
+# type stubs; the pre-commit mypy hook doesn't install them (the runtime
+# venv does). Same pattern as the other optional-dep overrides above.
+[[tool.mypy.overrides]]
+module = ["webauthn", "webauthn.*", "cbor2", "cbor2.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

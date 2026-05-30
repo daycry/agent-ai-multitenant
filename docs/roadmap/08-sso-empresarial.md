@@ -339,7 +339,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_10` — MFA WebAuthn con py_webauthn (registro, autenticación)
 
-- [ ] **Título**: MFA WebAuthn con py_webauthn (registro, autenticación)
+- [x] **Título**: MFA WebAuthn con py_webauthn (registro, autenticación)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security

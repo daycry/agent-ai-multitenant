@@ -29,7 +29,7 @@ from api_server.auth.deps import (
 )
 from api_server.auth.jwt import encode_jwt
 from api_server.auth.mfa.challenge_store import MfaChallenge, MfaChallengeStore, new_challenge_token
-from api_server.auth.mfa.store import user_has_confirmed_totp
+from api_server.auth.mfa.store import user_mfa_methods
 from api_server.auth.passwords import hash_password, verify_password
 from api_server.auth.rate_limit import RateLimiter
 from api_server.auth.sessions import SessionStore
@@ -183,19 +183,21 @@ async def login(
         user_id = user.id
         is_system_admin = user.is_system_admin
 
-    # First factor passed. If the user has a confirmed TOTP second factor,
-    # do NOT mint a session here — return an interim challenge instead. A
-    # user without MFA falls straight through to a session, exactly as
-    # before. The check runs outside the login txn (it is a narrow,
+    # First factor passed. If the user has ANY confirmed second factor
+    # (TOTP or WebAuthn), do NOT mint a session here — return an interim
+    # challenge instead, advertising the methods the user can complete it
+    # with. A user without MFA falls straight through to a session, exactly
+    # as before. The check runs outside the login txn (it is a narrow,
     # tenant-agnostic existence probe on the admin role).
-    if await user_has_confirmed_totp(user_id):
+    methods = await user_mfa_methods(user_id)
+    if methods:
         mfa_token = new_challenge_token()
         await challenges.create(
             mfa_token,
             MfaChallenge(user_id=user_id, tenant_id=None, is_system_admin=is_system_admin),
             ttl_seconds=settings.mfa_challenge_ttl_seconds,
         )
-        return MfaRequiredResponse(mfa_token=mfa_token)
+        return MfaRequiredResponse(mfa_token=mfa_token, mfa_methods=methods)
 
     # Issue a session id and persist it in Redis with the same
     # TTL as the JWT — both expire together.

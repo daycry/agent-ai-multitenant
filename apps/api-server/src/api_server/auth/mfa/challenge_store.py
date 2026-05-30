@@ -81,6 +81,22 @@ class MfaChallengeStore:
         so a captured token cannot be replayed.
         """
         raw = await self._redis.getdel(_key(token))
+        return self._decode(raw)
+
+    async def peek(self, token: str) -> MfaChallenge | None:
+        """Read the challenge WITHOUT consuming it.
+
+        Used by a two-step second factor (WebAuthn: the begin call needs the
+        user/tenant to build the assertion options, while the finish call is
+        the one that actually consumes the token and mints the session).
+        Returns ``None`` for an unknown / expired token. Peeking grants NO
+        access on its own — only the finish call's GETDEL does.
+        """
+        raw = await self._redis.get(_key(token))
+        return self._decode(raw)
+
+    @staticmethod
+    def _decode(raw: str | bytes | None) -> MfaChallenge | None:
         if raw is None:
             return None
         data = json.loads(raw)
