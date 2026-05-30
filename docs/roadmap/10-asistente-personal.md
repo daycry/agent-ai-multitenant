@@ -225,7 +225,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_09` — Canal Discord con embeds via webhook
 
-- [ ] **Título**: Canal Discord con embeds via webhook
+- [x] **Título**: Canal Discord con embeds via webhook
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

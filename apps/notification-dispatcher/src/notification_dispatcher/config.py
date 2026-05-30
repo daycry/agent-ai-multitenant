@@ -173,6 +173,23 @@ class Settings(BaseSettings):
         "a magic string buried in the adapter.",
     )
 
+    # ----- Discord channel (task_10_09) -----
+    discord_request_timeout_s: float = Field(
+        default=10.0,
+        description="Per-request HTTP timeout the Discord adapter applies to "
+        "the webhook POST. Bounded under channel_send_timeout_s so the "
+        "dispatcher's overall send budget still wraps it. Tunable, not a magic "
+        "number.",
+    )
+    discord_default_embed_color: int = Field(
+        default=0x5865F2,
+        description="Fallback Discord embed colour (decimal RGB int) used when "
+        "an event carries no severity (or an unknown one). 0x5865F2 is the "
+        "Discord blurple. A channel may override it via config.embed_color; "
+        "severity-mapped colours take precedence when a severity is present. "
+        "Tunable, never a magic number buried in the adapter.",
+    )
+
     # ----- Event → notification mapping tunables (task_10_04) -----
     default_locale: str = Field(
         default="en",
