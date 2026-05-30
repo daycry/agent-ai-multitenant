@@ -194,6 +194,17 @@ class EvalDatasetItem(
         Index("ix_eval_dataset_items_dataset", "dataset_id"),
         Index("ix_eval_dataset_items_tenant", "tenant_id"),
         Index("ix_eval_dataset_items_source_task", "source_task_id"),
+        # Idempotent promotion (task_14_02): a second promote of the SAME real
+        # task into the SAME dataset collides on this partial UNIQUE instead of
+        # duplicating. Partial so hand-authored items (source_task_id NULL) and
+        # soft-deleted rows never collide.
+        Index(
+            "uq_eval_dataset_items_source_task",
+            "dataset_id",
+            "source_task_id",
+            unique=True,
+            postgresql_where=text("source_task_id IS NOT NULL AND deleted_at IS NULL"),
+        ),
     )
 
     dataset_id: Mapped[UUID] = mapped_column(

@@ -18,6 +18,7 @@ import { Activity, ChevronDown, ChevronRight } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { PromoteToDataset } from "@/components/evals/promote-to-dataset";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useWebSocket, wsUrl } from "@/lib/ws";
@@ -150,6 +151,9 @@ export default function ExecutionTimelinePage() {
 
       {execution && (
         <>
+          <div className="mb-4 flex justify-end" data-testid="execution-actions">
+            <PromoteToDataset taskId={execution.task_id} executionId={execution.id} />
+          </div>
           <ExecutionSummary execution={execution} liveCount={liveSteps.length} />
 
           <ol className="mt-6 space-y-2" data-testid="execution-timeline">

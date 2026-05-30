@@ -108,7 +108,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_02` — Promoción de tarea real a golden con UI 'Promote to dataset'
 
-- [ ] **Título**: Promoción de tarea real a golden con UI 'Promote to dataset'
+- [x] **Título**: Promoción de tarea real a golden con UI 'Promote to dataset'
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
