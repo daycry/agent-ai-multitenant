@@ -18,6 +18,7 @@ from __future__ import annotations
 
 # Importing each module for its import-time registration side effect.
 from shared_guardrails.checks import pii as _pii  # noqa: F401
+from shared_guardrails.checks import prompt_injection as _prompt_injection  # noqa: F401
 from shared_guardrails.checks import secret_leakage as _secret_leakage  # noqa: F401
 
 __all__: list[str] = []

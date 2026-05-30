@@ -180,7 +180,8 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 
 #### `task_11_06` — Prompt injection detector
 
-- [ ] **Título**: Prompt injection detector
+- [x] **Título**: Prompt injection detector
+  - Guardrail `prompt_injection` registrado (hooks principales `pre_llm` + `pre_tool`, funciona en cualquiera) en `packages/shared-guardrails/src/shared_guardrails/checks/prompt_injection.py`. Detección heurística + por patrones (pura Python, sin dependencia pesada): 6 categorías — `instruction_override` ("ignore previous instructions", "disregard the system prompt", "forget everything above"), `role_switch` (jailbreak/DAN/developer mode), `system_prompt_exfiltration`, `delimiter_smuggling` (marcadores de rol inyectados `<|im_start|>system`, `[system]`), `encoding_smuggling` (decode base64 + execute) y `tool_credential_coercion`. Multilingüe (es + en). En `pre_tool` también escanea los `tool_args` (inyección en argumentos). El detector vive tras un Protocol `InjectionDetector` (inyectable vía `detector`) para enchufar más tarde un clasificador basado en modelo bajo extra opcional, pero el backend por defecto es la heurística. Acción sugerida `block` por defecto, `warn` en `learning_mode` (override explícito gana). Test `tests/integration/test_prompt_injection.py`: strings clásicos marcados, prompts benignos pasan, frasing multilingüe detectado, la acción aflora; placeholder de backend de modelo skip-guardado.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer + security
