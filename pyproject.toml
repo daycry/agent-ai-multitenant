@@ -221,7 +221,21 @@ module = [
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["workers.git_repos", "workers.plan_git", "workers.runtime_pool", "workers.review_runtime"]
+module = [
+    "workers.git_repos",
+    "workers.plan_git",
+    "workers.runtime_pool",
+    "workers.review_runtime",
+    # backup.py / backup_restore.py (Plan 12) lazily import the backup
+    # destination + encryption adapters and the per-tenant restore worker
+    # from the sibling `workers` package. The pre-commit mypy venv only sees
+    # PyPI deps, not the editable apps/<x>, so following these imports (e.g.
+    # when main.py mounts backup_router) raised import-not-found. Same
+    # cross-app lazy-import story as the modules above.
+    "workers.backup_destinations",
+    "workers.backup_encryption",
+    "workers.restore_per_tenant",
+]
 ignore_missing_imports = true
 
 # `hvac` is the Vault client used by `routers/mcp.get_vault_resolver`

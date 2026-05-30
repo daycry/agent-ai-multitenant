@@ -157,7 +157,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_05` — Endpoints REST públicos: /api/v1/projects, /plans, /tasks, /conversations, /kbs
 
-- [ ] **Título**: Endpoints REST públicos: /api/v1/projects, /plans, /tasks, /conversations, /kbs
+- [x] **Título**: Endpoints REST públicos: /api/v1/projects, /plans, /tasks, /conversations, /kbs
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: backend-dev
