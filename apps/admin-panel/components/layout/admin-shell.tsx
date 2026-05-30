@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Bell,
   BellRing,
   BookOpen,
   Bot,
@@ -50,6 +51,12 @@ const NAV: NavItem[] = [
   { href: "/admin/memories", label: "Memorias", Icon: Brain },
   { href: "/admin/knowledge-bases", label: "Knowledge Bases", Icon: Library },
   { href: "/admin/marketplace", label: "Marketplace", Icon: Store, adminOnly: true },
+  {
+    href: "/admin/notifications",
+    label: "Notificaciones",
+    Icon: Bell,
+    adminOnly: true,
+  },
   { href: "/admin/documents", label: "Documentos", Icon: FileText },
   { href: "/admin/docs", label: "Documentación", Icon: BookOpen },
   { href: "/admin/settings", label: "Settings", Icon: Settings, adminOnly: true },

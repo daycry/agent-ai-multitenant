@@ -1,35 +1,53 @@
-"""`/notifications` endpoints — manual retry of a dead-lettered send (task_10_13).
+"""`/notifications` endpoints — 3-layer config + manual DLQ retry (task_10_13/15).
 
-The notification-dispatcher (``apps/notification-dispatcher``) auto-retries a
-transient send with exponential backoff and, once the retries are exhausted,
-parks it as a ``dead_letter`` ``NotificationLog`` row (+ a Redis DLQ stream
-entry). This router exposes the **operator escape hatch**: a Tenant Admin can
-re-drive a dead-lettered send back through the dispatcher's normal path.
+Two surfaces live here:
+
+**Config (task_10_15)** — the 3-layer (platform → tenant → user) channel +
+preference config the admin-panel drives:
+
+  - GET  /notifications/platform/channel-types   enabled transports (read: any member)
+  - PUT  /notifications/platform/channel-types   set them (System Admin only)
+  - GET  /notifications/channels                  list channels (tenant + user scope)
+  - POST /notifications/channels                  create a channel
+  - PUT  /notifications/channels/{id}             update a channel (rotate secret)
+  - DELETE /notifications/channels/{id}           soft-delete a channel
+  - GET  /notifications/preferences               list routing rules
+  - PUT  /notifications/preferences               upsert one routing rule
+  - DELETE /notifications/preferences/{id}        soft-delete a routing rule
+
+Config invariants:
+  * **RBAC by scope**: a tenant write is ``tenant_admin`` only (a plain
+    ``tenant_user`` is 403); the platform channel-types write is System-Admin
+    only. A ``user``-scoped row is owned by the requesting admin.
+  * **RLS-scoped**: channel/preference rows run on the RLS-bound tenant
+    session — tenant B never sees or mutates tenant A's rows (clean 404).
+  * **Secret never echoed**: a channel secret is encrypted at rest
+    (``secret_encrypted``) by the api-server write path so the dispatcher can
+    decrypt it at send time; the API returns only ``has_secret`` +
+    ``secret_source`` — the clear value never leaves the server, never lands
+    in ``config``, and is never logged.
+
+**Manual DLQ retry (task_10_13)** — the operator escape hatch: a Tenant Admin
+re-drives a dead-lettered send back through the dispatcher's normal path.
 
   - POST /notifications/logs/{log_id}/retry   re-enqueue a dead-lettered log
 
-Security + correctness invariants (all tested in
-``tests/integration/test_retries_dlq.py``):
-
+Retry invariants (all tested in ``tests/integration/test_retries_dlq.py``):
   * **RBAC**: ``tenant_admin`` only — a plain ``tenant_user`` is 403.
-  * **RLS-scoped**: the lookup runs on the RLS-bound tenant session, so tenant
-    B asking to retry tenant A's log gets a clean 404 (no cross-tenant leak),
-    not a 403 that would confirm the id exists.
-  * **Only dead-lettered logs are retryable**: retrying a ``sent`` / ``queued``
-    / ``retrying`` log is a 409 (nothing to retry) — the endpoint is not a
-    generic "send arbitrary notification" surface.
+  * **RLS-scoped**: tenant B asking to retry tenant A's log gets a clean 404.
+  * **Only dead-lettered logs are retryable**: a non-dead-letter log is 409.
   * **Idempotent**: the re-enqueue flips the source row OUT of ``dead_letter``
-    (to ``retrying``) in the SAME transaction as the new ``queued`` row + the
-    broker publish, so a double-click finds a non-dead-letter row and 409s —
-    no duplicate live send.
+    in the same transaction as the new ``queued`` row + the broker publish.
   * **Audited**: an append-only ``audit_log`` row (``notification.retry``) is
-    written in the same transaction; it can never commit without its audit
-    record.
+    written in the same transaction.
 
-The api-server never imports the dispatcher package — it re-enqueues the send
-by task name onto the shared broker via
+The api-server never imports the dispatcher package — it re-enqueues a send by
+task name onto the shared broker via
 :func:`api_server.celery_client.enqueue_notification_send` (the dispatcher owns
-the implementation + the retry/backoff/DLQ policy).
+the retry/backoff/DLQ policy). It DOES share the channel-secret cipher key with
+the dispatcher (``API_SERVER_NOTIFICATION_ENCRYPTION_KEY`` ==
+``NOTIFY_NOTIFICATION_ENCRYPTION_KEY``) so what it encrypts the dispatcher can
+decrypt.
 """
 
 from __future__ import annotations
@@ -40,19 +58,410 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.audit import write_audit_log
 from api_server.auth.deps import (
     AuthPrincipal,
+    get_admin_session,
     get_tenant_session,
+    require_system_admin,
     require_tenant_admin,
+    require_tenant_member,
 )
 from api_server.celery_client import enqueue_notification_send
-from api_server.db.notification import NotificationLog, NotificationStatus
-from api_server.routers._helpers import require_tenant_id
+from api_server.db.notification import (
+    NotificationChannel,
+    NotificationChannelType,
+    NotificationLog,
+    NotificationPreference,
+    NotificationScope,
+    NotificationStatus,
+)
+from api_server.db.platform_settings import get_platform_setting, set_platform_setting
+from api_server.notifications.secrets import encrypt_channel_secret
+from api_server.routers._helpers import require_tenant_id, soft_delete
+from api_server.schemas.notifications import (
+    NotificationChannelCreate,
+    NotificationChannelResponse,
+    NotificationChannelUpdate,
+    NotificationPreferenceResponse,
+    NotificationPreferenceUpsert,
+    PlatformChannelTypesResponse,
+    PlatformChannelTypesUpdate,
+)
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
+
+# platform_settings key holding the System-Admin-curated list of globally
+# enabled channel transports. A tenant may only configure a channel whose
+# transport is in this list.
+PLATFORM_ENABLED_CHANNEL_TYPES_KEY = "notification_enabled_channel_types"
+
+# Audit actions for config writes (greppable across the audit trail).
+_AUDIT_PLATFORM_CHANNEL_TYPES = "notification.platform_channel_types.set"
+_AUDIT_CHANNEL_CREATE = "notification.channel.create"
+_AUDIT_CHANNEL_UPDATE = "notification.channel.update"
+_AUDIT_CHANNEL_DELETE = "notification.channel.delete"
+
+
+def _channel_to_response(channel: NotificationChannel) -> NotificationChannelResponse:
+    """Project a channel ORM row to the secret-free response shape.
+
+    The secret value is NEVER included; the UI only learns whether one is
+    set and in which form (Vault ref vs Fernet-at-rest)."""
+    if channel.secret_ref:
+        secret_source: str | None = "vault"
+    elif channel.secret_encrypted:
+        secret_source = "encrypted"
+    else:
+        secret_source = None
+    return NotificationChannelResponse(
+        id=channel.id,
+        scope=channel.scope,
+        channel_type=channel.channel_type,
+        name=channel.name,
+        enabled=channel.enabled,
+        config=channel.config,
+        owner_user_id=channel.owner_user_id,
+        has_secret=secret_source is not None,
+        secret_source=secret_source,  # type: ignore[arg-type]
+        created_at=channel.created_at,
+        updated_at=channel.updated_at,
+    )
+
+
+def _preference_to_response(pref: NotificationPreference) -> NotificationPreferenceResponse:
+    return NotificationPreferenceResponse(
+        id=pref.id,
+        scope=pref.scope,
+        event_type=pref.event_type,
+        channel_type=pref.channel_type,
+        enabled=pref.enabled,
+        owner_user_id=pref.owner_user_id,
+        quiet_hours_start=pref.quiet_hours_start,
+        quiet_hours_end=pref.quiet_hours_end,
+        quiet_hours_tz=pref.quiet_hours_tz,
+        created_at=pref.created_at,
+        updated_at=pref.updated_at,
+    )
+
+
+# ===========================================================================
+# Platform layer — System Admin enables channel transports globally
+# ===========================================================================
+@router.get("/platform/channel-types", response_model=PlatformChannelTypesResponse)
+async def get_platform_channel_types(
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> PlatformChannelTypesResponse:
+    """The channel transports the System Admin enabled platform-wide.
+
+    Readable by any tenant member so the config UI can show which transports
+    a Tenant Admin is allowed to configure. ``platform_settings`` carries no
+    RLS, so this is a plain global read. When unset, every transport in the
+    catalogue is considered enabled (a permissive default — the System Admin
+    narrows it).
+    """
+    catalogue = [t.value for t in NotificationChannelType]
+    stored = await get_platform_setting(session, PLATFORM_ENABLED_CHANNEL_TYPES_KEY, default=None)
+    if not isinstance(stored, list):
+        enabled = list(catalogue)
+    else:
+        wanted = {str(t) for t in stored}
+        enabled = [t for t in catalogue if t in wanted]
+    return PlatformChannelTypesResponse(enabled=enabled, available=catalogue)
+
+
+@router.put("/platform/channel-types", response_model=PlatformChannelTypesResponse)
+async def set_platform_channel_types(
+    payload: PlatformChannelTypesUpdate,
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> PlatformChannelTypesResponse:
+    """Set the globally enabled channel transports (System Admin only).
+
+    Uses the BYPASSRLS admin session (``get_admin_session`` is itself gated
+    to System Admin). ``set_platform_setting`` re-checks the actor is a
+    System Admin, so a Tenant Admin can never reach this write."""
+    from api_server.db.models import User
+
+    actor = await session.get(User, principal.user_id)
+    if actor is None:  # pragma: no cover - a valid session always has a user
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="actor not found")
+
+    await set_platform_setting(
+        session,
+        PLATFORM_ENABLED_CHANNEL_TYPES_KEY,
+        payload.enabled,
+        actor=actor,
+    )
+    await write_audit_log(
+        session,
+        action=_AUDIT_PLATFORM_CHANNEL_TYPES,
+        actor_user_id=principal.user_id,
+        tenant_id=None,
+        resource_type="platform_setting",
+        resource_id=None,
+        changes={"enabled": payload.enabled},
+    )
+    catalogue = [t.value for t in NotificationChannelType]
+    return PlatformChannelTypesResponse(enabled=list(payload.enabled), available=catalogue)
+
+
+async def _platform_enabled_types(session: AsyncSession) -> set[str]:
+    """The set of globally enabled transports (all, if unset)."""
+    catalogue = {t.value for t in NotificationChannelType}
+    stored = await get_platform_setting(session, PLATFORM_ENABLED_CHANNEL_TYPES_KEY, default=None)
+    if not isinstance(stored, list):
+        return catalogue
+    return {str(t) for t in stored if str(t) in catalogue}
+
+
+# ===========================================================================
+# Channels — tenant / user scoped CRUD (secret never echoed)
+# ===========================================================================
+@router.get("/channels", response_model=list[NotificationChannelResponse])
+async def list_channels(
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[NotificationChannelResponse]:
+    """List the tenant's channels (tenant + user scope), newest first.
+
+    RLS scopes this to the caller's tenant, so another tenant's channels are
+    invisible. The secret is never included."""
+    result = await session.execute(
+        select(NotificationChannel)
+        .where(NotificationChannel.deleted_at.is_(None))
+        .order_by(NotificationChannel.created_at.desc())
+    )
+    return [_channel_to_response(c) for c in result.scalars().all()]
+
+
+@router.post(
+    "/channels",
+    response_model=NotificationChannelResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_channel(
+    payload: NotificationChannelCreate,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> NotificationChannelResponse:
+    """Create a tenant- or user-scoped channel (tenant_admin only).
+
+    The transport must be enabled platform-wide (System Admin gate). The
+    plaintext ``secret`` is encrypted at rest before it touches the DB and
+    never echoed back. A ``user``-scoped channel is owned by the requesting
+    admin (``owner_user_id`` = the caller)."""
+    tenant_id = require_tenant_id(principal)
+
+    if payload.channel_type not in await _platform_enabled_types(session):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"channel type '{payload.channel_type}' is not enabled platform-wide",
+        )
+
+    owner_user_id = principal.user_id if payload.scope == NotificationScope.USER.value else None
+    secret_encrypted = encrypt_channel_secret(payload.secret) if payload.secret else None
+
+    channel = NotificationChannel(
+        scope=payload.scope,
+        channel_type=payload.channel_type,
+        tenant_id=tenant_id,
+        owner_user_id=owner_user_id,
+        name=payload.name,
+        enabled=payload.enabled,
+        config=payload.config,
+        secret_encrypted=secret_encrypted,
+    )
+    session.add(channel)
+    await session.flush()
+    await write_audit_log(
+        session,
+        action=_AUDIT_CHANNEL_CREATE,
+        actor_user_id=principal.user_id,
+        tenant_id=tenant_id,
+        resource_type="notification_channel",
+        resource_id=channel.id,
+        changes={"scope": payload.scope, "channel_type": payload.channel_type},
+    )
+    return _channel_to_response(channel)
+
+
+async def _get_writable_channel(
+    session: AsyncSession, channel_id: UUID, tenant_id: UUID
+) -> NotificationChannel:
+    """Load a live, tenant-owned channel for write, or 404.
+
+    RLS already scopes the query to the caller's tenant; the explicit
+    ``tenant_id`` filter is belt-and-braces. A user-scoped channel owned by
+    a different admin is still visible to a tenant_admin (tenant-level
+    administration), matching how a Tenant Admin administers tenant resources."""
+    result = await session.execute(
+        select(NotificationChannel).where(
+            NotificationChannel.id == channel_id,
+            NotificationChannel.tenant_id == tenant_id,
+            NotificationChannel.deleted_at.is_(None),
+        )
+    )
+    channel = result.scalar_one_or_none()
+    if channel is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="notification channel not found"
+        )
+    return channel
+
+
+@router.put("/channels/{channel_id}", response_model=NotificationChannelResponse)
+async def update_channel(
+    channel_id: UUID,
+    payload: NotificationChannelUpdate,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> NotificationChannelResponse:
+    """Patch a channel (tenant_admin only). An omitted ``secret`` keeps the
+    stored one; a non-empty ``secret`` rotates it (re-encrypted at rest)."""
+    tenant_id = require_tenant_id(principal)
+    channel = await _get_writable_channel(session, channel_id, tenant_id)
+
+    if payload.name is not None:
+        channel.name = payload.name
+    if payload.enabled is not None:
+        channel.enabled = payload.enabled
+    if payload.config is not None:
+        channel.config = payload.config
+    if payload.secret:
+        channel.secret_encrypted = encrypt_channel_secret(payload.secret)
+        channel.secret_ref = None
+
+    await session.flush()
+    # The server-side ``updated_at = now()`` (onupdate) expires the attribute
+    # after flush; refresh it inside the async context so building the
+    # response below doesn't trigger a lazy load in a sync greenlet.
+    await session.refresh(channel)
+    await write_audit_log(
+        session,
+        action=_AUDIT_CHANNEL_UPDATE,
+        actor_user_id=principal.user_id,
+        tenant_id=tenant_id,
+        resource_type="notification_channel",
+        resource_id=channel.id,
+        changes={"secret_rotated": bool(payload.secret)},
+    )
+    return _channel_to_response(channel)
+
+
+@router.delete("/channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_channel(
+    channel_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> None:
+    """Soft-delete a channel (tenant_admin only)."""
+    tenant_id = require_tenant_id(principal)
+    channel = await _get_writable_channel(session, channel_id, tenant_id)
+    await soft_delete(session, channel)
+    await write_audit_log(
+        session,
+        action=_AUDIT_CHANNEL_DELETE,
+        actor_user_id=principal.user_id,
+        tenant_id=tenant_id,
+        resource_type="notification_channel",
+        resource_id=channel.id,
+        changes={"name": channel.name},
+    )
+
+
+# ===========================================================================
+# Preferences — tenant / user scoped routing rules
+# ===========================================================================
+@router.get("/preferences", response_model=list[NotificationPreferenceResponse])
+async def list_preferences(
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[NotificationPreferenceResponse]:
+    """List the tenant's routing rules (tenant + user scope)."""
+    result = await session.execute(
+        select(NotificationPreference)
+        .where(NotificationPreference.deleted_at.is_(None))
+        .order_by(NotificationPreference.event_type, NotificationPreference.channel_type)
+    )
+    return [_preference_to_response(p) for p in result.scalars().all()]
+
+
+@router.put("/preferences", response_model=NotificationPreferenceResponse)
+async def upsert_preference(
+    payload: NotificationPreferenceUpsert,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> NotificationPreferenceResponse:
+    """Create or update a routing rule (tenant_admin only).
+
+    Upsert keyed on ``(tenant, owner, event_type, channel_type)`` — the
+    table's natural key. A ``user``-scoped rule is owned by the requesting
+    admin. This is the primitive behind the human_10_02 "mute budget_alert on
+    Slack but keep it on email" preference."""
+    tenant_id = require_tenant_id(principal)
+    owner_user_id = principal.user_id if payload.scope == NotificationScope.USER.value else None
+
+    values = {
+        "scope": payload.scope,
+        "tenant_id": tenant_id,
+        "owner_user_id": owner_user_id,
+        "event_type": payload.event_type,
+        "channel_type": payload.channel_type,
+        "enabled": payload.enabled,
+        "quiet_hours_start": payload.quiet_hours_start,
+        "quiet_hours_end": payload.quiet_hours_end,
+        "quiet_hours_tz": payload.quiet_hours_tz,
+        "deleted_at": None,
+    }
+    update_cols = {
+        "enabled": payload.enabled,
+        "quiet_hours_start": payload.quiet_hours_start,
+        "quiet_hours_end": payload.quiet_hours_end,
+        "quiet_hours_tz": payload.quiet_hours_tz,
+        "scope": payload.scope,
+        "deleted_at": None,
+    }
+    stmt = (
+        pg_insert(NotificationPreference)
+        .values(**values)
+        .on_conflict_do_update(
+            constraint="uq_notification_preferences_scope_event_channel",
+            set_=update_cols,
+        )
+        .returning(NotificationPreference)
+    )
+    result = await session.execute(stmt)
+    pref = result.scalar_one()
+    return _preference_to_response(pref)
+
+
+@router.delete("/preferences/{preference_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_preference(
+    preference_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> None:
+    """Soft-delete a routing rule (tenant_admin only)."""
+    tenant_id = require_tenant_id(principal)
+    result = await session.execute(
+        select(NotificationPreference).where(
+            NotificationPreference.id == preference_id,
+            NotificationPreference.tenant_id == tenant_id,
+            NotificationPreference.deleted_at.is_(None),
+        )
+    )
+    pref = result.scalar_one_or_none()
+    if pref is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="notification preference not found"
+        )
+    await soft_delete(session, pref)
+
 
 # Audit action recorded when an operator manually re-enqueues a dead-lettered
 # send. Greppable across the audit trail.

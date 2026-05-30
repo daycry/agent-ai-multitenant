@@ -331,7 +331,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_15` — UI de configuración de canales en 3 capas (plataforma/tenant/usuario)
 
-- [ ] **Título**: UI de configuración de canales en 3 capas (plataforma/tenant/usuario)
+- [x] **Título**: UI de configuración de canales en 3 capas (plataforma/tenant/usuario)
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev

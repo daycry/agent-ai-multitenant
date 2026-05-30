@@ -69,6 +69,20 @@ class Settings(BaseSettings):
         default=SecretStr("dev-only-sso-encryption-key-change-me"),
         description="Secret used to derive the Fernet key for OIDC client secrets at rest.",
     )
+    # ----- Notifications (Plan 10 task_10_15) -----
+    # Fernet-derived key used to encrypt a notification CHANNEL secret (bot
+    # token, SMTP password, webhook signing key, …) at rest when Vault is
+    # NOT wired. MUST equal the dispatcher's NOTIFY_NOTIFICATION_ENCRYPTION_KEY
+    # so the dispatcher (read path) can decrypt what the api-server (write
+    # path) encrypts — the two services derive the SAME Fernet key from the
+    # SAME raw string (SHA-256 → urlsafe-base64). The dev default matches the
+    # dispatcher's dev default so dev works out of the box; the guard below
+    # rejects it in staging/prod. Mirrors `sso_encryption_key`.
+    notification_encryption_key: SecretStr = Field(
+        default=SecretStr("dev-only-notification-encryption-key-change-me"),
+        description="Secret used to derive the Fernet key for notification "
+        "channel secrets at rest. MUST match NOTIFY_NOTIFICATION_ENCRYPTION_KEY.",
+    )
     # Public base URL the IdP redirects back to after authentication.
     # The OIDC callback path (`/auth/sso/oidc/callback`) is appended to
     # this. In dev the api-server is reachable at localhost:8000; in prod
@@ -235,6 +249,9 @@ class Settings(BaseSettings):
                 self.review_url_signing_secret.get_secret_value()
             ),
             "API_SERVER_SSO_ENCRYPTION_KEY": self.sso_encryption_key.get_secret_value(),
+            "API_SERVER_NOTIFICATION_ENCRYPTION_KEY": (
+                self.notification_encryption_key.get_secret_value()
+            ),
             "API_SERVER_MINIO_SECRET_KEY": self.minio_secret_key.get_secret_value(),
             "API_SERVER_MINIO_ACCESS_KEY": self.minio_access_key,
             "API_SERVER_DATABASE_URL": self.database_url,
