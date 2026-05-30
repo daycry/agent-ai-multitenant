@@ -106,7 +106,7 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
 
 #### `task_09_02` — Migración + RLS
 
-- [ ] **Título**: Migración + RLS
+- [x] **Título**: Migración + RLS
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
