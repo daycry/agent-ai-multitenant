@@ -73,6 +73,9 @@ repos:
           - "opentelemetry-instrumentation-httpx>=0.48b0,<1"
           - "httpx>=0.27,<1"
           - "docker>=7.1,<8"
+          # Sandboxed Jinja2 template rendering (notification-dispatcher,
+          # Plan 10 task_10_03). Ships py.typed, so mypy needs it installed.
+          - "jinja2>=3.1,<4"
         args: [--config-file=pyproject.toml]
         files: ^(apps|packages)/.*\.py$
         # Skip files that import sibling local packages — the hook

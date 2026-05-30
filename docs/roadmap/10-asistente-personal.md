@@ -121,7 +121,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_03` — Sistema de plantillas con Jinja2 + plantillas pre-cargadas
 
-- [ ] **Título**: Sistema de plantillas con Jinja2 + plantillas pre-cargadas
+- [x] **Título**: Sistema de plantillas con Jinja2 + plantillas pre-cargadas
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

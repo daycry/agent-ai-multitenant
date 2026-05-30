@@ -93,6 +93,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from api_server.db.base import (
     Base,
     SoftDeleteMixin,
+    TenantScopedMixin,
     TimestampMixin,
     UUIDPrimaryKeyMixin,
 )
@@ -135,6 +136,19 @@ class NotificationScope(enum.StrEnum):
     PLATFORM = "platform"
     TENANT = "tenant"
     USER = "user"
+
+
+class NotificationLocale(enum.StrEnum):
+    """The two supported template locales (CLAUDE.md §12: ES + EN only).
+
+    A template is keyed by ``(event_type, channel_type, locale)``. We do
+    NOT invest in more locales in this version, so the catalogue is closed
+    to these two members — adding a third would mean translating every
+    builtin template, an explicit product decision.
+    """
+
+    ES = "es"
+    EN = "en"
 
 
 class NotificationStatus(enum.StrEnum):
@@ -396,11 +410,88 @@ class NotificationLog(Base, UUIDPrimaryKeyMixin):
         )
 
 
+# =============================================================================
+# notification_templates (tenant-owned override of a builtin template)
+# =============================================================================
+class NotificationTemplate(
+    Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDeleteMixin
+):
+    """A tenant's override of a builtin notification template (task_10_03).
+
+    Tenancy decision: **tenant-owned** (``tenant_id NOT NULL`` via
+    :class:`TenantScopedMixin` + RLS). This is the deliberate counterpart
+    to the channel/preference HYBRID model: the *platform* layer of the
+    three-layer model is not a NULL-tenant row here — it is the set of
+    **builtin templates shipped in code** (the dispatcher's
+    ``notification_dispatcher.templates`` registry). A row in this table is
+    therefore always a tenant override of a builtin, never a platform
+    default, so it needs no ``scope`` discriminator and no NULL-tenant
+    branch — it is a plain tenant-isolated table like
+    ``marketplace_installations``. The dispatcher resolves a template
+    most-specific-wins: a live tenant override beats the builtin fallback;
+    an unknown ``(event_type, channel_type, locale)`` with no builtin is a
+    clear error.
+
+    A template is keyed by ``(event_type, channel_type, locale)`` and
+    carries the Jinja2 source for the body and (optionally) the subject —
+    rendered in a SANDBOXED environment (``jinja2.sandbox``) so a tenant's
+    template can never execute arbitrary code or reach attributes/builtins.
+    The sources are plain template text, NOT secrets, so they are stored in
+    the clear (unlike channel secrets).
+    """
+
+    __tablename__ = "notification_templates"
+    __table_args__ = (
+        # At most one LIVE override per (tenant, event, channel, locale).
+        # A soft-deleted row keeps its key free for a fresh override via the
+        # partial unique index below rather than this constraint, so we scope
+        # the hard uniqueness to the natural key and let deleted_at IS NULL
+        # drive the live-row dedupe at the index level.
+        UniqueConstraint(
+            "tenant_id",
+            "event_type",
+            "channel_type",
+            "locale",
+            name="uq_notification_templates_key",
+        ),
+        Index(
+            "ix_notification_templates_tenant_lookup",
+            "tenant_id",
+            "event_type",
+            "channel_type",
+            "locale",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
+
+    # The system event this template renders (``plan_approved``,
+    # ``task_failed``, ``execution_finished``, ``review_requested``, …).
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    # The transport the rendered body targets.
+    channel_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Template locale — ES + EN only (CLAUDE.md §12).
+    locale: Mapped[str] = mapped_column(String(8), nullable=False)
+
+    # Jinja2 source for the message body (rendered sandboxed). NOT a secret.
+    body_template: Mapped[str] = mapped_column(Text, nullable=False)
+    # Optional Jinja2 source for a subject/title (email subject, push title).
+    subject_template: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"NotificationTemplate(id={self.id!r}, tenant={self.tenant_id!r}, "
+            f"event={self.event_type!r}, channel={self.channel_type!r}, "
+            f"locale={self.locale!r})"
+        )
+
+
 __all__ = [
     "NotificationChannel",
     "NotificationChannelType",
+    "NotificationLocale",
     "NotificationLog",
     "NotificationPreference",
     "NotificationScope",
     "NotificationStatus",
+    "NotificationTemplate",
 ]

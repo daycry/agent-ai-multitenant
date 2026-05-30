@@ -15,6 +15,11 @@ dependencies = [
   # Secrets at rest — Fernet decrypt of channel secrets (never plaintext).
   "cryptography>=42,<49",
 
+  # Notification template rendering — SANDBOXED Jinja2 (task_10_03). Never
+  # the default Environment: a tenant override must not execute arbitrary
+  # code, so the renderer uses jinja2.sandbox.SandboxedEnvironment.
+  "jinja2>=3.1,<4",
+
   # Validation / config
   "pydantic>=2.5,<3",
   "pydantic-settings>=2.2,<3",
