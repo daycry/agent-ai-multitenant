@@ -1,23 +1,39 @@
-"""Eval datasets + promote-to-golden (Plan 14 Fase A, task_14_02).
+"""Eval datasets + criteria + items CRUD and promote-to-golden (Plan 14 Fase A).
 
-Two surfaces back the "Promote to dataset" flow:
+The eval data-foundation REST surface:
 
-  * ``GET/POST /eval-datasets`` — the minimal pick/create surface the Promote
-    dialog needs to choose or mint the target golden dataset. The full
-    dataset/criteria CRUD is task_14_03.
+  * ``GET/POST/GET{id}/PUT/DELETE /eval-datasets`` — full CRUD of a tenant's
+    per-tenant golden datasets (task_14_03; the pick/create subset also backs
+    the Promote dialog).
+  * ``GET/POST /eval-datasets/{id}/criteria`` + ``GET/PUT/DELETE
+    /eval-criteria/{id}`` — the judging criteria of a dataset. Each criterion
+    carries its judge rubric + weight + pass threshold, consumed by the
+    LLM-as-judge in Fase B.
+  * ``GET/POST /eval-datasets/{id}/items`` + ``GET/PUT/DELETE
+    /eval-dataset-items/{id}`` — the golden items (input + reference output) a
+    run is graded against. Promotion (below) is the usual source; a
+    tenant_admin can also author one directly.
   * ``POST /tasks/{task_id}/promote-to-dataset`` — promote a real, APPROVED
     task into a tenant golden dataset as a dataset item: copy the task's input
-    and the approved execution's output as the reference, idempotently.
+    and the approved execution's output as the reference, idempotently
+    (task_14_02).
 
 RBAC + multi-tenancy (CLAUDE.md principle 1): every endpoint is
 JWT-authenticated and gated on ``tenant_admin`` (the project-management gate
 used across the codebase — the plan's "tenant_admin / project_owner" maps to
 it, there is no distinct project_owner role) and runs on a tenant-scoped RLS
 session, so an operator only ever sees / mutates eval data of their OWN tenant.
-The golden dataset is PER-TENANT (Plan 14 Decisiones Clave): tenant A's task
-can never be promoted into tenant B's dataset — the dataset is loaded under
-A's RLS scope and 404s otherwise. The ``@pytest.mark.cross_tenant`` test pins
-this.
+The golden dataset (its data AND its criteria) is PER-TENANT (Plan 14
+Decisiones Clave): a dataset / criterion / item of another tenant is invisible
+(404) — both the listing (RLS-scoped) and every by-id lookup
+(``get_writable_or_404`` filters on ``tenant_id``) enforce it. The
+``@pytest.mark.cross_tenant`` test pins this.
+
+List endpoints are paginated (``limit``/``offset``) like the rest of the
+codebase. Deletes are soft (``deleted_at``); a dataset delete cascades to its
+criteria/items at the DB level (FK ON DELETE CASCADE) only on a hard delete, so
+the soft-deleted dataset simply stops listing — its children are filtered out
+by the dataset scope.
 
 Idempotency: a dataset item carries provenance (``source_task_id``); a partial
 UNIQUE on ``(dataset_id, source_task_id)`` makes a second promote of the same
@@ -40,11 +56,24 @@ from uuid6 import uuid7
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
 from api_server.db.domain import Execution, ExecutionStatus, Task, TaskStatus
-from api_server.db.evals import EvalDataset, EvalDatasetItem
-from api_server.routers._helpers import get_writable_or_404, require_tenant_id
+from api_server.db.evals import EvalCriterion, EvalDataset, EvalDatasetItem
+from api_server.routers._helpers import (
+    apply_partial_update,
+    get_writable_or_404,
+    require_tenant_id,
+    soft_delete,
+)
+from api_server.routers._pagination import apply_pagination, limit_query, offset_query
 from api_server.schemas.evals import (
+    EvalCriterionCreateRequest,
+    EvalCriterionResponse,
+    EvalCriterionUpdateRequest,
     EvalDatasetCreateRequest,
+    EvalDatasetItemCreateRequest,
+    EvalDatasetItemResponse,
+    EvalDatasetItemUpdateRequest,
     EvalDatasetResponse,
+    EvalDatasetUpdateRequest,
     PromoteToDatasetRequest,
     PromoteToDatasetResponse,
 )
@@ -66,26 +95,43 @@ def _dataset_to_response(dataset: EvalDataset, *, item_count: int = 0) -> EvalDa
     )
 
 
+async def _get_dataset_or_404(
+    session: AsyncSession, dataset_id: UUID, principal: AuthPrincipal
+) -> EvalDataset:
+    """Load a live, tenant-owned dataset for read or write (404 otherwise).
+
+    The ``tenant_id`` filter inside :func:`get_writable_or_404` is the
+    per-tenant guard: another tenant's dataset never resolves.
+    """
+    return await get_writable_or_404(
+        session, EvalDataset, dataset_id, principal, not_found_detail="dataset not found"
+    )
+
+
 # ---------------------------------------------------------------------------
-# Datasets — minimal pick/create surface for the Promote UI
+# Datasets — full CRUD (the GET/POST subset also backs the Promote UI)
 # ---------------------------------------------------------------------------
 @router.get("/eval-datasets", response_model=list[EvalDatasetResponse])
 async def list_eval_datasets(
+    limit: int = limit_query(),
+    offset: int = offset_query(),
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[EvalDatasetResponse]:
-    """List the tenant's golden datasets (newest first). tenant_admin.
+    """List the tenant's golden datasets (newest first), paginated. tenant_admin.
 
     RLS scopes the listing to the caller's tenant — another tenant's datasets
     are invisible (the golden dataset is per-tenant). Soft-deleted datasets are
     excluded.
     """
     require_tenant_id(principal)
-    result = await session.execute(
+    stmt = (
         select(EvalDataset)
         .where(EvalDataset.deleted_at.is_(None))
-        .order_by(EvalDataset.created_at.desc())
+        .order_by(EvalDataset.created_at.desc(), EvalDataset.id)
     )
+    stmt = apply_pagination(stmt, limit=limit, offset=offset)
+    result = await session.execute(stmt)
     datasets = list(result.scalars().all())
     counts = await _item_counts(session, [d.id for d in datasets])
     return [_dataset_to_response(d, item_count=counts.get(d.id, 0)) for d in datasets]
@@ -121,6 +167,284 @@ async def create_eval_dataset(
     await session.flush()
     await session.refresh(dataset)
     return _dataset_to_response(dataset, item_count=0)
+
+
+@router.get("/eval-datasets/{dataset_id}", response_model=EvalDatasetResponse)
+async def get_eval_dataset(
+    dataset_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> EvalDatasetResponse:
+    """Get one golden dataset by id. tenant_admin. 404 for another tenant's."""
+    require_tenant_id(principal)
+    dataset = await _get_dataset_or_404(session, dataset_id, principal)
+    counts = await _item_counts(session, [dataset.id])
+    return _dataset_to_response(dataset, item_count=counts.get(dataset.id, 0))
+
+
+@router.put("/eval-datasets/{dataset_id}", response_model=EvalDatasetResponse)
+async def update_eval_dataset(
+    dataset_id: UUID,
+    payload: EvalDatasetUpdateRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> EvalDatasetResponse:
+    """Partial-update a golden dataset. tenant_admin. 404 for another tenant's."""
+    require_tenant_id(principal)
+    dataset = await _get_dataset_or_404(session, dataset_id, principal)
+    apply_partial_update(dataset, payload, enum_fields=("kind",))
+    await session.flush()
+    await session.refresh(dataset)
+    counts = await _item_counts(session, [dataset.id])
+    return _dataset_to_response(dataset, item_count=counts.get(dataset.id, 0))
+
+
+@router.delete("/eval-datasets/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_eval_dataset(
+    dataset_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> None:
+    """Soft-delete a golden dataset. tenant_admin. 404 for another tenant's."""
+    require_tenant_id(principal)
+    dataset = await _get_dataset_or_404(session, dataset_id, principal)
+    await soft_delete(session, dataset)
+
+
+# ---------------------------------------------------------------------------
+# Criteria — a dataset's judging rubric (weight / pass threshold for Fase B)
+# ---------------------------------------------------------------------------
+@router.get(
+    "/eval-datasets/{dataset_id}/criteria",
+    response_model=list[EvalCriterionResponse],
+)
+async def list_eval_criteria(
+    dataset_id: UUID,
+    limit: int = limit_query(),
+    offset: int = offset_query(),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[EvalCriterionResponse]:
+    """List a dataset's judging criteria (oldest first), paginated. tenant_admin.
+
+    The parent dataset is resolved under the caller's tenant RLS scope first
+    (404 for another tenant's), so a tenant can never enumerate another
+    tenant's criteria.
+    """
+    require_tenant_id(principal)
+    await _get_dataset_or_404(session, dataset_id, principal)
+    stmt = (
+        select(EvalCriterion)
+        .where(
+            EvalCriterion.dataset_id == dataset_id,
+            EvalCriterion.deleted_at.is_(None),
+        )
+        .order_by(EvalCriterion.created_at, EvalCriterion.id)
+    )
+    stmt = apply_pagination(stmt, limit=limit, offset=offset)
+    result = await session.execute(stmt)
+    return [EvalCriterionResponse.model_validate(c) for c in result.scalars().all()]
+
+
+@router.post(
+    "/eval-datasets/{dataset_id}/criteria",
+    response_model=EvalCriterionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_eval_criterion(
+    dataset_id: UUID,
+    payload: EvalCriterionCreateRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> EvalCriterionResponse:
+    """Add a judging criterion to a dataset. tenant_admin.
+
+    The criterion inherits its parent dataset's ``tenant_id`` (resolved under
+    the caller's RLS scope), so it is only ever visible to that tenant.
+    """
+    require_tenant_id(principal)
+    dataset = await _get_dataset_or_404(session, dataset_id, principal)
+    criterion = EvalCriterion(
+        id=uuid7(),
+        tenant_id=dataset.tenant_id,
+        dataset_id=dataset.id,
+        name=payload.name,
+        description=payload.description,
+        judge_instruction=payload.judge_instruction,
+        weight=payload.weight,
+        pass_threshold=payload.pass_threshold,
+    )
+    session.add(criterion)
+    await session.flush()
+    await session.refresh(criterion)
+    return EvalCriterionResponse.model_validate(criterion)
+
+
+@router.get("/eval-criteria/{criterion_id}", response_model=EvalCriterionResponse)
+async def get_eval_criterion(
+    criterion_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> EvalCriterionResponse:
+    """Get one judging criterion by id. tenant_admin. 404 for another tenant's."""
+    require_tenant_id(principal)
+    criterion = await get_writable_or_404(
+        session, EvalCriterion, criterion_id, principal, not_found_detail="criterion not found"
+    )
+    return EvalCriterionResponse.model_validate(criterion)
+
+
+@router.put("/eval-criteria/{criterion_id}", response_model=EvalCriterionResponse)
+async def update_eval_criterion(
+    criterion_id: UUID,
+    payload: EvalCriterionUpdateRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> EvalCriterionResponse:
+    """Partial-update a criterion. tenant_admin. 404 for another tenant's."""
+    require_tenant_id(principal)
+    criterion = await get_writable_or_404(
+        session, EvalCriterion, criterion_id, principal, not_found_detail="criterion not found"
+    )
+    apply_partial_update(criterion, payload)
+    await session.flush()
+    await session.refresh(criterion)
+    return EvalCriterionResponse.model_validate(criterion)
+
+
+@router.delete("/eval-criteria/{criterion_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_eval_criterion(
+    criterion_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> None:
+    """Soft-delete a criterion. tenant_admin. 404 for another tenant's."""
+    require_tenant_id(principal)
+    criterion = await get_writable_or_404(
+        session, EvalCriterion, criterion_id, principal, not_found_detail="criterion not found"
+    )
+    await soft_delete(session, criterion)
+
+
+# ---------------------------------------------------------------------------
+# Items — the golden rows (input + reference output) a run is graded against
+# ---------------------------------------------------------------------------
+@router.get(
+    "/eval-datasets/{dataset_id}/items",
+    response_model=list[EvalDatasetItemResponse],
+)
+async def list_eval_dataset_items(
+    dataset_id: UUID,
+    limit: int = limit_query(),
+    offset: int = offset_query(),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[EvalDatasetItemResponse]:
+    """List a dataset's golden items (oldest first), paginated. tenant_admin.
+
+    The parent dataset is resolved under the caller's tenant RLS scope first
+    (404 for another tenant's).
+    """
+    require_tenant_id(principal)
+    await _get_dataset_or_404(session, dataset_id, principal)
+    stmt = (
+        select(EvalDatasetItem)
+        .where(
+            EvalDatasetItem.dataset_id == dataset_id,
+            EvalDatasetItem.deleted_at.is_(None),
+        )
+        .order_by(EvalDatasetItem.created_at, EvalDatasetItem.id)
+    )
+    stmt = apply_pagination(stmt, limit=limit, offset=offset)
+    result = await session.execute(stmt)
+    return [EvalDatasetItemResponse.model_validate(i) for i in result.scalars().all()]
+
+
+@router.post(
+    "/eval-datasets/{dataset_id}/items",
+    response_model=EvalDatasetItemResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_eval_dataset_item(
+    dataset_id: UUID,
+    payload: EvalDatasetItemCreateRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> EvalDatasetItemResponse:
+    """Add a hand-authored golden item to a dataset. tenant_admin.
+
+    A hand-authored item has no ``source_task_id``; promotion (task_14_02) is
+    the provenance-carrying path. The item inherits the dataset's ``tenant_id``.
+    """
+    require_tenant_id(principal)
+    dataset = await _get_dataset_or_404(session, dataset_id, principal)
+    item = EvalDatasetItem(
+        id=uuid7(),
+        tenant_id=dataset.tenant_id,
+        dataset_id=dataset.id,
+        input=payload.input,
+        expected_output=payload.expected_output,
+        reference_metadata=payload.reference_metadata,
+    )
+    session.add(item)
+    await session.flush()
+    await session.refresh(item)
+    return EvalDatasetItemResponse.model_validate(item)
+
+
+@router.get("/eval-dataset-items/{item_id}", response_model=EvalDatasetItemResponse)
+async def get_eval_dataset_item(
+    item_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> EvalDatasetItemResponse:
+    """Get one golden item by id. tenant_admin. 404 for another tenant's."""
+    require_tenant_id(principal)
+    item = await get_writable_or_404(
+        session, EvalDatasetItem, item_id, principal, not_found_detail="item not found"
+    )
+    return EvalDatasetItemResponse.model_validate(item)
+
+
+@router.put("/eval-dataset-items/{item_id}", response_model=EvalDatasetItemResponse)
+async def update_eval_dataset_item(
+    item_id: UUID,
+    payload: EvalDatasetItemUpdateRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> EvalDatasetItemResponse:
+    """Partial-update a golden item. tenant_admin. 404 for another tenant's."""
+    require_tenant_id(principal)
+    item = await get_writable_or_404(
+        session, EvalDatasetItem, item_id, principal, not_found_detail="item not found"
+    )
+    # ``input`` / ``reference_metadata`` are NOT NULL; a missing key leaves them
+    # untouched. Only ``expected_output`` is nullable, so a partial update never
+    # NULLs the JSONB columns — assign the sent fields explicitly.
+    changes = payload.model_dump(exclude_unset=True)
+    if "input" in changes and changes["input"] is not None:
+        item.input = changes["input"]
+    if "reference_metadata" in changes and changes["reference_metadata"] is not None:
+        item.reference_metadata = changes["reference_metadata"]
+    if "expected_output" in changes:
+        item.expected_output = changes["expected_output"]
+    await session.flush()
+    await session.refresh(item)
+    return EvalDatasetItemResponse.model_validate(item)
+
+
+@router.delete("/eval-dataset-items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_eval_dataset_item(
+    item_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> None:
+    """Soft-delete a golden item. tenant_admin. 404 for another tenant's."""
+    require_tenant_id(principal)
+    item = await get_writable_or_404(
+        session, EvalDatasetItem, item_id, principal, not_found_detail="item not found"
+    )
+    await soft_delete(session, item)
 
 
 # ---------------------------------------------------------------------------

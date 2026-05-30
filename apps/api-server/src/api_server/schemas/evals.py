@@ -5,19 +5,22 @@ Shapes the request / response bodies for:
   * promoting a real, APPROVED task into a tenant golden dataset as a dataset
     item (task_14_02) — copy the task's input + the approved execution's output
     as the reference, idempotently;
-  * the minimal dataset list / create surface the Promote UI needs to pick or
-    create the target dataset (the full CRUD is task_14_03).
+  * the full dataset / criteria / item CRUD (task_14_03): create / list / get /
+    update / delete datasets, manage each dataset's judging criteria (rubric /
+    weight / pass threshold consumed by the LLM-as-judge in Fase B) and its
+    golden items.
 
 Multi-tenancy (CLAUDE.md principle 1): every row these schemas project is
-tenant-owned (``eval_datasets`` / ``eval_dataset_items`` carry ``tenant_id``
-NOT NULL + RLS). A tenant's golden dataset (its data AND its criteria) is
-visible only to that tenant — the golden dataset is PER-TENANT (Plan 14
-Decisiones Clave).
+tenant-owned (``eval_datasets`` / ``eval_dataset_items`` / ``eval_criteria``
+carry ``tenant_id`` NOT NULL + RLS). A tenant's golden dataset (its data AND
+its criteria) is visible only to that tenant — the golden dataset is PER-TENANT
+(Plan 14 Decisiones Clave).
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -45,6 +48,24 @@ class EvalDatasetCreateRequest(BaseModel):
     target_role: str | None = Field(default=None, max_length=32)
 
 
+class EvalDatasetUpdateRequest(BaseModel):
+    """Partial update of a golden dataset (task_14_03, tenant_admin).
+
+    Every field is optional: only the keys the client actually sends are
+    applied (``exclude_unset``). An explicit ``null`` clears the column
+    (e.g. detach the target agent), a missing key leaves it untouched. The
+    ``kind`` enum is remapped to its string value before assignment.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=4000)
+    kind: EvalDatasetKind | None = Field(default=None)
+    target_agent_id: UUID | None = Field(default=None)
+    target_role: str | None = Field(default=None, max_length=32)
+
+
 class EvalDatasetResponse(BaseModel):
     """A golden dataset's metadata (NEVER another tenant's — RLS scoped)."""
 
@@ -57,6 +78,102 @@ class EvalDatasetResponse(BaseModel):
     target_agent_id: UUID | None
     target_role: str | None
     item_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Criteria — the judging rubric (weight / pass threshold) a dataset scores on
+# ---------------------------------------------------------------------------
+class EvalCriterionCreateRequest(BaseModel):
+    """Body for adding a judging criterion to a dataset (tenant_admin).
+
+    The criterion carries the rubric (``judge_instruction``) the LLM-as-judge
+    follows in Fase B, a ``weight`` (>= 0; its relative contribution to the
+    item's overall verdict) and a ``pass_threshold`` in [0, 1] (the minimum
+    normalised score for the criterion to count as passed).
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=4000)
+    judge_instruction: str = Field(min_length=1)
+    weight: Decimal = Field(default=Decimal("1"), ge=0, max_digits=6, decimal_places=3)
+    pass_threshold: Decimal = Field(
+        default=Decimal("0.5"), ge=0, le=1, max_digits=4, decimal_places=3
+    )
+
+
+class EvalCriterionUpdateRequest(BaseModel):
+    """Partial update of a judging criterion (task_14_03, tenant_admin)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=4000)
+    judge_instruction: str | None = Field(default=None, min_length=1)
+    weight: Decimal | None = Field(default=None, ge=0, max_digits=6, decimal_places=3)
+    pass_threshold: Decimal | None = Field(default=None, ge=0, le=1, max_digits=4, decimal_places=3)
+
+
+class EvalCriterionResponse(BaseModel):
+    """A judging criterion (NEVER another tenant's — RLS scoped)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    dataset_id: UUID
+    name: str
+    description: str | None
+    judge_instruction: str
+    weight: Decimal
+    pass_threshold: Decimal
+    created_at: datetime
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Items — the golden rows (input + reference output) a run is graded against
+# ---------------------------------------------------------------------------
+class EvalDatasetItemCreateRequest(BaseModel):
+    """Body for adding a hand-authored golden item to a dataset (tenant_admin).
+
+    Promotion (task_14_02) is the usual way items land in a dataset, but a
+    tenant_admin can also author one directly: the ``input`` the subject is run
+    against and an optional ``expected_output`` reference. A hand-authored item
+    has no ``source_task_id`` (it never collides on the idempotency UNIQUE).
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    input: dict[str, Any] = Field(default_factory=dict)
+    expected_output: str | None = Field(default=None)
+    reference_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class EvalDatasetItemUpdateRequest(BaseModel):
+    """Partial update of a golden item (task_14_03, tenant_admin)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    input: dict[str, Any] | None = Field(default=None)
+    expected_output: str | None = Field(default=None)
+    reference_metadata: dict[str, Any] | None = Field(default=None)
+
+
+class EvalDatasetItemResponse(BaseModel):
+    """A golden dataset item (NEVER another tenant's — RLS scoped)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    dataset_id: UUID
+    input: dict[str, Any]
+    expected_output: str | None
+    reference_metadata: dict[str, Any]
+    source_task_id: UUID | None
+    source_execution_id: UUID | None
     created_at: datetime
     updated_at: datetime
 
@@ -105,8 +222,15 @@ class PromoteToDatasetResponse(BaseModel):
 
 
 __all__ = [
+    "EvalCriterionCreateRequest",
+    "EvalCriterionResponse",
+    "EvalCriterionUpdateRequest",
     "EvalDatasetCreateRequest",
+    "EvalDatasetItemCreateRequest",
+    "EvalDatasetItemResponse",
+    "EvalDatasetItemUpdateRequest",
     "EvalDatasetResponse",
+    "EvalDatasetUpdateRequest",
     "PromoteToDatasetRequest",
     "PromoteToDatasetResponse",
 ]

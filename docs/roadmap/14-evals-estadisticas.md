@@ -125,7 +125,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_03` — Endpoints CRUD de datasets y criterios
 
-- [ ] **Título**: Endpoints CRUD de datasets y criterios
+- [x] **Título**: Endpoints CRUD de datasets y criterios
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
