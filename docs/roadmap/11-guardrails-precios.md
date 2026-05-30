@@ -91,7 +91,7 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 
 #### `task_11_01` — Pipeline declarativo YAML con puntos pre_llm/post_llm/pre_tool/post_tool
 
-- [ ] **Título**: Pipeline declarativo YAML con puntos pre_llm/post_llm/pre_tool/post_tool
+- [x] **Título**: Pipeline declarativo YAML con puntos pre_llm/post_llm/pre_tool/post_tool
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer

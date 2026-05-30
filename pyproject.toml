@@ -191,6 +191,15 @@ ignore_missing_imports = true
 module = ["shared_test_runtimes", "shared_test_runtimes.*"]
 ignore_missing_imports = true
 
+# `shared-guardrails` is a local path package (Plan 11 task_11_01). Same
+# pattern as shared_llm / shared_mcp / shared_test_runtimes: the
+# pre-commit mypy hook venv doesn't install it; the runtime / dev venv
+# does. Treat the import as untyped in the hook so consumers that import
+# the engine still type-check there.
+[[tool.mypy.overrides]]
+module = ["shared_guardrails", "shared_guardrails.*"]
+ignore_missing_imports = true
+
 # Cross-app imports (Plan 06 task_06_H / orchestrator.plan_runner).
 # The orchestrator imports from api_server.* and workers.* directly to
 # stitch the modules into a sync demo runner. Same story: pre-commit

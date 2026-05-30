@@ -47,6 +47,10 @@ jobs:
           # editable so the runtime template catalog imports resolve in
           # both pytest and pre-commit's mypy hook.
           python -m pip install -e "packages/shared-test-runtimes[dev]"
+          # shared-guardrails: declarative guardrails engine (Plan 11
+          # task_11_01). Reusable library; install editable so its imports
+          # resolve in both pytest and pre-commit's mypy hook.
+          python -m pip install -e "packages/shared-guardrails[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
           python -m pip install pre-commit
 
@@ -164,6 +168,10 @@ jobs:
           # editable so the runtime template catalog imports resolve in
           # both pytest and pre-commit's mypy hook.
           python -m pip install -e "packages/shared-test-runtimes[dev]"
+          # shared-guardrails: declarative guardrails engine (Plan 11
+          # task_11_01). Reusable library; install editable so its imports
+          # resolve in both pytest and pre-commit's mypy hook.
+          python -m pip install -e "packages/shared-guardrails[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
 
       - name: pytest tests/unit
@@ -225,6 +233,10 @@ jobs:
           # editable so the runtime template catalog imports resolve in
           # both pytest and pre-commit's mypy hook.
           python -m pip install -e "packages/shared-test-runtimes[dev]"
+          # shared-guardrails: declarative guardrails engine (Plan 11
+          # task_11_01). Reusable library; install editable so its imports
+          # resolve in both pytest and pre-commit's mypy hook.
+          python -m pip install -e "packages/shared-guardrails[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
 
       # Cross-tenant isolation gate (Plan 06.14 task_06_14_16, tests-quality-6).
