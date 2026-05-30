@@ -254,7 +254,8 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 
 #### `task_11_10` — Modelo model_prices con todos los campos (provider, model_id, modality, prices, currency, vigencia, source, etc.)
 
-- [ ] **Título**: Modelo model_prices con todos los campos (provider, model_id, modality, prices, currency, vigencia, source, etc.)
+- [x] **Título**: Modelo model_prices con todos los campos (provider, model_id, modality, prices, currency, vigencia, source, etc.)
+  - Modelo ORM `ModelPrice` (`apps/api-server/src/api_server/db/model_prices.py`) — catálogo de precios **platform-global** (sin `tenant_id`, sin RLS; escritura System-Admin vía `get_admin_session`, lectura abierta) siguiendo el patrón `PlatformSetting`/`MarketplaceSource` + `updated_by` (FK `users` `ON DELETE SET NULL`). Precios en **USD canónico** (constante `CANONICAL_CURRENCY="USD"`, default + CHECK `currency='USD'`). Campos: `provider`, `model_id`, `modality` (enum `PriceModality`: text/vision/audio/embedding/image/rerank), `input_price`/`output_price` (`Numeric(18,10)`), `cached_input_price` (**nullable** — prompt caching; helper `cached_input_price_or_default()` ~10% de input por convención cuando es NULL), `unit` (enum `PriceUnit`, default `per_1m_tokens`), `currency`, `context_window`, `source` (enum `PriceSource`: litellm/manual/provider_api), vigencia `effective_from`/`effective_to` (NULL == periodo abierto/actual). Regla de unicidad del "precio actual": índice parcial único `uq_model_prices_current` sobre `(provider, model_id, modality)` donde `effective_to IS NULL`. Helper puro `select_current_price(...)`. SIN migración en esta tarea (es 11_11). Test `tests/unit/test_model_prices_model.py` (28 casos): construcción, enums, USD canónico, cached_input nullable + sensible, vigencia, selección del precio actual.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
