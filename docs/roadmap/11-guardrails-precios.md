@@ -18,18 +18,31 @@ docs_language: es
 
 ## Cabecera
 
-| Campo                              | Valor                                     |
-| ---------------------------------- | ----------------------------------------- |
-| **ID del Plan**                    | `11-guardrails-precios`                   |
-| **Estado**                         | `in_progress`                             |
-| **Bloqueado por**                  | `02-ejecucion-agentes`                    |
-| **Tiempo estimado (calendario)**   | 3-4 semanas                               |
-| **Tiempo estimado (persona-días)** | 60-80                                     |
-| **Previsión de coste — humano**    | 24.000 € – 32.000 € (tarifa media 50 €/h) |
-| **Previsión de coste — IA**        | 150 € – 240 €                             |
-| **Aprobador propuesto**            | System Admin                              |
-| **Rama git**                       | `plan/11-guardrails-precios`              |
-| **Secciones del .docx**            | [19.5, 30.8]                              |
+| Campo                              | Valor                                                                                         |
+| ---------------------------------- | --------------------------------------------------------------------------------------------- |
+| **ID del Plan**                    | `11-guardrails-precios`                                                                       |
+| **Estado**                         | `in_progress` (NO pasa a `pending_human_validation`: 11_20 sin commit, 11_21 sin implementar) |
+| **Bloqueado por**                  | `02-ejecucion-agentes`                                                                        |
+| **Tiempo estimado (calendario)**   | 3-4 semanas                                                                                   |
+| **Tiempo estimado (persona-días)** | 60-80                                                                                         |
+| **Previsión de coste — humano**    | 24.000 € – 32.000 € (tarifa media 50 €/h)                                                     |
+| **Previsión de coste — IA**        | 150 € – 240 €                                                                                 |
+| **Aprobador propuesto**            | System Admin                                                                                  |
+| **Rama git**                       | `plan/11-guardrails-precios`                                                                  |
+| **Secciones del .docx**            | [19.5, 30.8]                                                                                  |
+
+> **Nota de cierre (task_11_23).** La documentación del plan (changelog, ADR
+> 0035, referencias) está completa, pero el plan **NO** se mueve a
+> `pending_human_validation` porque no todas sus tareas están `done`:
+>
+> - `task_11_20` (guardrail_events + dashboard) está implementado en el working
+>   tree pero **sin commitear** y su checkbox sigue `[ ]`.
+> - `task_11_21` (alertas configurables) **no está implementada** (sin modelo de
+>   config, endpoint, evaluador de umbral ni `test_guardrail_alerts.py`).
+>
+> Además, el **sistema de Budgets / `exchange_rates` / `display_currency`** que
+> el Resumen/Alcance describen **no tiene tarea numerada y no se implementó**.
+> Ver `docs/07-changelog/11-guardrails-precios.md` (sección Pendiente).
 
 ---
 
@@ -497,7 +510,8 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 
 #### `task_11_23` — Documentación + ADRs + changelog
 
-- [ ] **Título**: Documentación + ADRs + changelog
+- [x] **Título**: Documentación + ADRs + changelog
+  - Entrada de changelog `docs/07-changelog/11-guardrails-precios.md` (estilo de la casa de Plan 10) con Resumen, Cambios por tarea (11_01..11_23 agrupados por fase), tablas de Endpoints nuevos + Migraciones (0049 model_prices / 0050 snapshot / 0051 price_sync_audit / 0052 guardrail_events) + paquete `packages/shared-guardrails` + extras opcionales (pii=Presidio, content-safety) + tunables, Decisiones y Pendiente. **ADR 0035** (motor declarativo en capas con baseline bloqueable + eventos tenant-scoped enmascarados + catálogo USD-canónico con snapshot effective-dated + LiteLLM-JSON como fuente de datos reafirmando ADR 0021 + gate de confirmación >10%). Referencias `docs/04-reference/guardrails.md` + `docs/04-reference/pricing.md` (4 hooks, 12 tipos, 6 acciones, config en capas bloqueable, guardrail_events/dashboard; catálogo + sync + snapshot + RBAC). **Flagea explícitamente** el hueco de alcance Budgets/exchange_rates/display_currency (sin tarea numerada, NO implementado) y el estado real de Fase E (11_20 implementado pero sin commitear; 11_21 alertas NO implementadas). Solo docs. `pre-commit` (prettier/markdown) en verde.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
