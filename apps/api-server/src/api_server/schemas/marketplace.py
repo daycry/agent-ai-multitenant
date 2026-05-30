@@ -38,6 +38,7 @@ from api_server.db.marketplace import (
     MarketplaceInstallation,
     MarketplaceListing,
     MarketplaceListingKind,
+    MarketplaceShare,
     MarketplaceTrustLevel,
 )
 from api_server.marketplace.consent import (
@@ -277,6 +278,61 @@ class PrivateListingUpdateRequest(BaseModel):
 
 
 # =============================================================================
+# Cross-tenant sharing (task_09_17)
+# =============================================================================
+class ShareCreateRequest(BaseModel):
+    """Share one of the caller tenant's PRIVATE listings with a target tenant.
+
+    Opt-in by definition: the owner tenant explicitly names the single
+    ``listing_id`` (which must be its OWN private listing) and the single
+    ``target_tenant_id`` the listing is shared WITH. Everything else — the
+    owner tenant (= the caller), who granted it — is server-derived from the
+    authenticated principal, never honoured from the wire, so a share can
+    never be forged on behalf of another owner.
+    """
+
+    model_config = _BASE_CONFIG
+
+    listing_id: UUID
+    target_tenant_id: UUID
+
+
+class MarketplaceShareResponse(BaseModel):
+    """A cross-tenant share grant as exposed to the owner / target / admin.
+
+    Echoes the grant's coordinates (which private listing, owner tenant,
+    target tenant) plus its lifecycle (granted / revoked). Carries no secret
+    payload — a share names a listing, it does not embed it.
+    """
+
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    listing_id: UUID
+    owner_tenant_id: UUID
+    target_tenant_id: UUID
+    granted_by: UUID | None
+    revoked_at: datetime | None
+    revoked_by: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+def to_share_response(share: MarketplaceShare) -> MarketplaceShareResponse:
+    return MarketplaceShareResponse(
+        id=share.id,
+        listing_id=share.listing_id,
+        owner_tenant_id=share.owner_tenant_id,
+        target_tenant_id=share.target_tenant_id,
+        granted_by=share.granted_by,
+        revoked_at=share.revoked_at,
+        revoked_by=share.revoked_by,
+        created_at=share.created_at,
+        updated_at=share.updated_at,
+    )
+
+
+# =============================================================================
 # Versioning + updates (task_09_12)
 # =============================================================================
 class InstallationUpdateCheckResponse(BaseModel):
@@ -365,14 +421,17 @@ __all__ = [
     "MarketplaceInstallationResponse",
     "MarketplaceListingKind",
     "MarketplaceListingResponse",
+    "MarketplaceShareResponse",
     "MarketplaceTrustLevel",
     "PermissionDecision",
     "PermissionDecisionItem",
     "PermissionStateItem",
     "PrivateListingPublishRequest",
     "PrivateListingUpdateRequest",
+    "ShareCreateRequest",
     "to_installation_response",
     "to_listing_response",
     "to_permissions_response",
+    "to_share_response",
     "to_update_check_response",
 ]

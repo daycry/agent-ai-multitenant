@@ -46,6 +46,7 @@ from api_server.routers.knowledge_bases import (
 from api_server.routers.knowledge_bases import (
     router as knowledge_bases_router,
 )
+from api_server.routers.marketplace import admin_router as marketplace_admin_router
 from api_server.routers.marketplace import router as marketplace_router
 from api_server.routers.mcp import router as mcp_router
 from api_server.routers.mcp_catalog import router as mcp_catalog_router
@@ -169,6 +170,7 @@ def _register_routers(app: FastAPI) -> None:
         kb_categories_router,
         project_kb_router,
         marketplace_router,
+        marketplace_admin_router,
         mcp_router,
         mcp_catalog_router,
         tools_diagnostic_router,

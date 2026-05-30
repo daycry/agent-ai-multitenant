@@ -408,6 +408,101 @@ class MarketplaceInstallation(
 
 
 # =============================================================================
+# marketplace_shares (cross-tenant sharing grant — opt-in, audited)
+# =============================================================================
+class MarketplaceShare(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
+    """An explicit, opt-in grant sharing one tenant's PRIVATE listing with
+    another tenant (Plan 09 task_09_17).
+
+    Cross-tenant sharing is the one place tenant boundaries are deliberately
+    crossed — so it is *never* an implicit RLS bypass. A share is a row that
+    records: which private listing is shared (``listing_id``), the OWNER
+    tenant that shared it (``owner_tenant_id``), and the single TARGET tenant
+    that may now see/install it (``target_tenant_id``). Default = nothing
+    shared: with no live share row, the target tenant sees nothing.
+
+    Tenancy decision — **dual-scoped + System-Admin-auditable**:
+
+      - The OWNER tenant *manages* its grants (create / list / revoke). The
+        RLS ``FOR ALL`` policy keys management on ``owner_tenant_id`` = the
+        current tenant, so a tenant can only ever share its own listings and
+        revoke its own grants (the WITH CHECK rejects a forged
+        ``owner_tenant_id``).
+      - The TARGET tenant may *read* the share rows naming it as recipient (a
+        SELECT-only policy on ``target_tenant_id``), so it can see "shared by
+        tenant X" — but cannot create or revoke a grant.
+      - The visibility of the *shared listing itself* to the target is wired
+        by a SELECT-only RLS policy on ``marketplace_listings`` that exposes a
+        listing iff a live share grants it to the current tenant. Revoking the
+        share removes that visibility immediately. The target therefore sees
+        the listing ONLY through the explicit grant — never via a private-row
+        bypass.
+      - The System Admin (BYPASSRLS session) enumerates ALL shares for audit.
+
+    Every create/revoke also writes a :class:`MarketplaceAuditEntry`
+    (``action=share``) so the platform audit trail records each share event.
+    We declare ``owner_tenant_id`` explicitly (not via
+    :class:`TenantScopedMixin`) because the management vs. recipient split
+    needs two tenant columns, neither of which is the single ``tenant_id`` the
+    mixin assumes.
+    """
+
+    __tablename__ = "marketplace_shares"
+    __table_args__ = (
+        # At most one LIVE share per (listing, target). A revoked / deleted
+        # grant frees the slot for a fresh re-share. NULLs never collide here
+        # (both columns are NOT NULL), so this dedupes cleanly.
+        Index(
+            "uq_marketplace_shares_live",
+            "listing_id",
+            "target_tenant_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL AND revoked_at IS NULL"),
+        ),
+        Index(
+            "ix_marketplace_shares_owner",
+            "owner_tenant_id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_marketplace_shares_target",
+            "target_tenant_id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_marketplace_shares_listing_id", "listing_id"),
+    )
+
+    listing_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("marketplace_listings.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # The tenant that owns the listing and created the grant.
+    owner_tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    # The single tenant the listing is shared WITH.
+    target_tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+
+    granted_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    revoked_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"MarketplaceShare(id={self.id!r}, listing_id={self.listing_id!r}, "
+            f"owner_tenant_id={self.owner_tenant_id!r}, "
+            f"target_tenant_id={self.target_tenant_id!r})"
+        )
+
+
+# =============================================================================
 # audit_entries (tenant-owned, append-only)
 # =============================================================================
 class MarketplaceAuditEntry(Base, UUIDPrimaryKeyMixin):
@@ -477,6 +572,7 @@ __all__ = [
     "MarketplaceInstallation",
     "MarketplaceListing",
     "MarketplaceListingKind",
+    "MarketplaceShare",
     "MarketplaceSource",
     "MarketplaceSourceType",
     "MarketplaceTrustLevel",
