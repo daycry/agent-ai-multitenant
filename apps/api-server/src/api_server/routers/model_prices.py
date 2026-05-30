@@ -450,7 +450,10 @@ async def sync_prices_apply(
     409 listing the offending models — a human must explicitly confirm the
     spike. With ``confirm=true`` every change (including the spikes) is applied.
     A manual override (``source = manual``) is left untouched unless
-    ``overwrite_manual=true``.
+    ``overwrite_manual=true``. With ``discontinue_missing=true`` (task_11_17),
+    open catalog periods the feed no longer lists are flagged discontinued
+    (their open period is closed — never deleted, so history + snapshots stay
+    valid).
 
     RBAC: ``require_system_admin`` (a tenant caller is 403); BYPASSRLS session.
     A feed fetch / parse failure is a 502.
@@ -468,6 +471,7 @@ async def sync_prices_apply(
                 actor_id=principal.user_id,
                 confirm=req.confirm,
                 overwrite_manual=req.overwrite_manual,
+                discontinue_missing=req.discontinue_missing,
             )
         except LargeIncreaseNotConfirmedError as exc:
             raise HTTPException(

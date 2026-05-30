@@ -25,6 +25,7 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
 from api_server.pricing.litellm_sync import (
+    DiscontinuedModel,
     LargeIncrease,
     PriceDiffRow,
     SkippedEntry,
@@ -87,6 +88,13 @@ class PriceSyncApplyRequest(BaseModel):
         default=False,
         description="Let the apply supersede a manually-entered (source=manual) override.",
     )
+    discontinue_missing: bool = Field(
+        default=False,
+        description=(
+            "Flag models the feed no longer lists as discontinued by closing their open "
+            "period (they are NEVER deleted; history + snapshots stay valid)."
+        ),
+    )
 
 
 class SkippedEntryResponse(BaseModel):
@@ -112,8 +120,23 @@ class LargeIncreaseResponse(BaseModel):
     pct_increase: float
 
 
+class DiscontinuedModelResponse(BaseModel):
+    """A catalog model the feed dropped — flagged discontinued, not deleted."""
+
+    model_config = _BASE_CONFIG
+
+    provider: str
+    model_id: str
+    modality: str
+
+
 class PriceSyncResponse(BaseModel):
-    """The outcome of one sync run."""
+    """The outcome of one sync run.
+
+    ``discontinued`` counts the open catalog periods this run closed because
+    the feed no longer lists them (flagged, never deleted — task_11_17);
+    ``discontinued_models`` lists them.
+    """
 
     model_config = _BASE_CONFIG
 
@@ -122,8 +145,10 @@ class PriceSyncResponse(BaseModel):
     updated: int
     unchanged: int
     changed: int
+    discontinued: int
     skipped: list[SkippedEntryResponse]
     large_increases: list[LargeIncreaseResponse]
+    discontinued_models: list[DiscontinuedModelResponse]
 
 
 def to_sync_response(summary: SyncSummary) -> PriceSyncResponse:
@@ -134,8 +159,10 @@ def to_sync_response(summary: SyncSummary) -> PriceSyncResponse:
         updated=summary.updated,
         unchanged=summary.unchanged,
         changed=summary.changed,
+        discontinued=summary.discontinued,
         skipped=[_skip(s) for s in summary.skipped],
         large_increases=[_large(li) for li in summary.large_increases],
+        discontinued_models=[_discontinued(d) for d in summary.discontinued_models],
     )
 
 
@@ -152,6 +179,14 @@ def _large(li: LargeIncrease) -> LargeIncreaseResponse:
         old_price=li.old_price,
         new_price=li.new_price,
         pct_increase=li.pct_increase,
+    )
+
+
+def _discontinued(d: DiscontinuedModel) -> DiscontinuedModelResponse:
+    return DiscontinuedModelResponse(
+        provider=d.provider,
+        model_id=d.model_id,
+        modality=d.modality,
     )
 
 
@@ -193,6 +228,12 @@ class PriceSyncDiffResponse(BaseModel):
     The UI renders ``rows`` and gates its confirmation dialog on
     ``has_large_increase``: when True, the subsequent APPLY must pass
     ``confirm=true`` or the backend rejects it (409).
+
+    The finer ``added`` / ``updated`` / ``unchanged`` / ``increased`` /
+    ``removed`` counters and the coarse lifecycle ``new`` / ``discontinued`` /
+    ``changed`` counters (task_11_17) are both surfaced: ``new`` == ``added``,
+    ``discontinued`` == ``removed`` (flagged, not deleted), ``changed`` ==
+    ``updated`` + ``increased``.
     """
 
     model_config = _BASE_CONFIG
@@ -203,6 +244,9 @@ class PriceSyncDiffResponse(BaseModel):
     unchanged: int
     increased: int
     removed: int
+    new: int
+    discontinued: int
+    changed: int
     has_large_increase: bool
     rows: list[PriceDiffRowResponse]
     skipped: list[SkippedEntryResponse]
@@ -236,6 +280,9 @@ def to_diff_response(diff: SyncDiff) -> PriceSyncDiffResponse:
         unchanged=diff.unchanged,
         increased=diff.increased,
         removed=diff.removed,
+        new=diff.new,
+        discontinued=diff.discontinued,
+        changed=diff.changed,
         has_large_increase=diff.has_large_increase,
         rows=[_diff_row(r) for r in diff.rows],
         skipped=[_skip(s) for s in diff.skipped],
@@ -243,6 +290,7 @@ def to_diff_response(diff: SyncDiff) -> PriceSyncDiffResponse:
 
 
 __all__ = [
+    "DiscontinuedModelResponse",
     "LargeIncreaseResponse",
     "PriceDiffRowResponse",
     "PriceSyncApplyRequest",

@@ -75,6 +75,7 @@ import enum
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from operator import attrgetter
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -209,6 +210,22 @@ class LargeIncrease:
     pct_increase: float
 
 
+@dataclass(frozen=True, slots=True)
+class DiscontinuedModel:
+    """A catalog model the feed dropped — flagged discontinued, NOT deleted (task_11_17).
+
+    Identifies the ``(provider, model_id, modality)`` whose open catalog
+    period this sync closed because the feed no longer lists it. The row is
+    never hard-deleted: closing the period keeps its history (and the per-call
+    price snapshots that reference it) valid while making it no longer the
+    "current" price.
+    """
+
+    provider: str
+    model_id: str
+    modality: str
+
+
 # task_11_16: a model's status in a dry-run diff (no DB write happened).
 class DiffStatus(enum.StrEnum):
     """How a feed entry compares to the current catalog (dry-run diff).
@@ -262,6 +279,188 @@ class PriceDiffRow:
         return self.status is DiffStatus.INCREASED
 
 
+# task_11_17: a coarse new/discontinued/changed/unchanged classification.
+class ModelStatus(enum.StrEnum):
+    """How a model in the feed-vs-catalog comparison is classified (task_11_17).
+
+    A deliberately coarse, **pure** taxonomy on top of the finer
+    :class:`DiffStatus`, framed in lifecycle terms a human reasons about when
+    looking at a sync:
+
+    - ``new``          : in the feed, the catalog has no open period for it
+                         (``DiffStatus.ADDED``);
+    - ``discontinued`` : the catalog has an open period the feed no longer
+                         lists (``DiffStatus.REMOVED``). The model is **never
+                         deleted** — its history (closed periods + snapshots)
+                         must survive; it is flagged and, optionally, its open
+                         period is closed so it stops being "current";
+    - ``changed``      : prices moved (a within-threshold ``UPDATED`` or a
+                         >10% ``INCREASED`` — both are "the price changed");
+    - ``unchanged``    : the feed matches the current open period (a no-op).
+    """
+
+    NEW = "new"
+    DISCONTINUED = "discontinued"
+    CHANGED = "changed"
+    UNCHANGED = "unchanged"
+
+
+def _diff_to_model_status(status: DiffStatus) -> ModelStatus:
+    """Collapse the finer dry-run :class:`DiffStatus` onto the lifecycle one."""
+    if status is DiffStatus.ADDED:
+        return ModelStatus.NEW
+    if status is DiffStatus.REMOVED:
+        return ModelStatus.DISCONTINUED
+    if status is DiffStatus.UNCHANGED:
+        return ModelStatus.UNCHANGED
+    # UPDATED + INCREASED are both "the price changed".
+    return ModelStatus.CHANGED
+
+
+@dataclass(frozen=True, slots=True)
+class ModelClassification:
+    """One model's coarse new/discontinued/changed/unchanged verdict (task_11_17).
+
+    Pure data, produced by :func:`classify_models` from already-loaded feed
+    entries + catalog rows — **no DB, no network**. ``input_pct`` / ``output_pct``
+    are the fractional price change on the current open period (None for a
+    ``new`` or ``discontinued`` model, or when the old price was 0). ``manual``
+    flags a model whose current row was hand-entered (``source = manual``): a
+    sync leaves it untouched, so the UI can explain why a ``changed`` manual
+    row will not actually move.
+    """
+
+    provider: str
+    model_id: str
+    modality: str
+    status: ModelStatus
+    input_pct: float | None = None
+    output_pct: float | None = None
+    manual: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ModelClassificationSet:
+    """The full new/discontinued/changed/unchanged split of a sync (task_11_17).
+
+    Pure aggregate over :class:`ModelClassification` rows. The per-status
+    lists + counts are what the sync summary / diff surfaces so a human (UI)
+    or the audit log (task_11_19) sees, at a glance, which models the feed
+    added, which it dropped (discontinued candidates — flagged, not deleted),
+    which moved, and which stayed put. Lists are deterministically ordered by
+    ``(provider, model_id, modality)``.
+    """
+
+    new: list[ModelClassification] = field(default_factory=list)
+    discontinued: list[ModelClassification] = field(default_factory=list)
+    changed: list[ModelClassification] = field(default_factory=list)
+    unchanged: list[ModelClassification] = field(default_factory=list)
+
+    @property
+    def new_count(self) -> int:
+        return len(self.new)
+
+    @property
+    def discontinued_count(self) -> int:
+        return len(self.discontinued)
+
+    @property
+    def changed_count(self) -> int:
+        return len(self.changed)
+
+    @property
+    def unchanged_count(self) -> int:
+        return len(self.unchanged)
+
+
+def classify_models(
+    mapped: list[MappedPrice],
+    open_rows: list[ModelPrice],
+) -> ModelClassificationSet:
+    """Classify every model new / discontinued / changed / unchanged (task_11_17).
+
+    The **pure, deterministic** core of new+discontinued detection: given the
+    mapped feed entries and the catalog's *current* (open-period) rows, decide
+    each model's lifecycle status without touching the DB or the network.
+
+      - a feed model with no open catalog period for its key → ``new``;
+      - an open catalog row whose key the feed no longer lists →
+        ``discontinued`` (flagged — the row is **never deleted** so its
+        history + price snapshots stay valid);
+      - a feed model whose prices/context differ from the open period →
+        ``changed`` (carrying the input/output % change);
+      - a feed model that matches the open period → ``unchanged``.
+
+    Idempotent and order-independent: the same inputs always yield the same
+    split, and each per-status list is sorted by ``(provider, model_id,
+    modality)`` so callers (tests, the audit log, the UI) get a stable order.
+    """
+    by_key: dict[tuple[str, str, str], ModelPrice] = {
+        (r.provider, r.model_id, r.modality): r for r in open_rows
+    }
+    seen: set[tuple[str, str, str]] = set()
+    result = ModelClassificationSet()
+
+    for candidate in mapped:
+        key = (candidate.provider, candidate.model_id, candidate.modality.value)
+        seen.add(key)
+        current = by_key.get(key)
+        if current is None:
+            result.new.append(
+                ModelClassification(
+                    provider=candidate.provider,
+                    model_id=candidate.model_id,
+                    modality=candidate.modality.value,
+                    status=ModelStatus.NEW,
+                )
+            )
+            continue
+        if _prices_equal(current, candidate):
+            result.unchanged.append(
+                ModelClassification(
+                    provider=current.provider,
+                    model_id=current.model_id,
+                    modality=current.modality,
+                    status=ModelStatus.UNCHANGED,
+                    manual=current.source == PriceSource.MANUAL.value,
+                )
+            )
+            continue
+        result.changed.append(
+            ModelClassification(
+                provider=current.provider,
+                model_id=current.model_id,
+                modality=current.modality,
+                status=ModelStatus.CHANGED,
+                input_pct=_pct_change(current.input_price, candidate.input_price),
+                output_pct=_pct_change(current.output_price, candidate.output_price),
+                manual=current.source == PriceSource.MANUAL.value,
+            )
+        )
+
+    # Open catalog rows the feed no longer lists → discontinued (flagged,
+    # never deleted; their closed periods + snapshots must survive).
+    for key, row in by_key.items():
+        if key in seen:
+            continue
+        result.discontinued.append(
+            ModelClassification(
+                provider=row.provider,
+                model_id=row.model_id,
+                modality=row.modality,
+                status=ModelStatus.DISCONTINUED,
+                manual=row.source == PriceSource.MANUAL.value,
+            )
+        )
+
+    _sort_key = attrgetter("provider", "model_id", "modality")
+    result.new.sort(key=_sort_key)
+    result.discontinued.sort(key=_sort_key)
+    result.changed.sort(key=_sort_key)
+    result.unchanged.sort(key=_sort_key)
+    return result
+
+
 @dataclass(slots=True)
 class SyncDiff:
     """The result of a dry-run sync — a per-model diff, no writes (task_11_16).
@@ -301,6 +500,36 @@ class SyncDiff:
         """True when any model's price rises >10% — apply needs confirmation."""
         return any(r.is_large_increase for r in self.rows)
 
+    # --- new/discontinued lifecycle view (task_11_17) ----------------------
+    # The coarse new / discontinued / changed / unchanged counts surfaced in
+    # the sync summary. ``new`` == added, ``discontinued`` == removed (flagged,
+    # not deleted), ``changed`` == updated + increased (the price moved).
+    @property
+    def new(self) -> int:
+        return self.added
+
+    @property
+    def discontinued(self) -> int:
+        return self.removed
+
+    @property
+    def changed(self) -> int:
+        return self.updated + self.increased
+
+    def discontinued_models(self) -> list[PriceDiffRow]:
+        """The open catalog rows the feed dropped — discontinued candidates.
+
+        Flagged, never deleted: each row's history (closed periods + the
+        per-call price snapshots that reference it) must stay valid. The
+        write-side helper :func:`discontinue_dropped_models` can optionally
+        close their open period so they stop being "current".
+        """
+        return [r for r in self.rows if r.status is DiffStatus.REMOVED]
+
+    def new_models(self) -> list[PriceDiffRow]:
+        """The feed models the catalog has no open period for (brand new)."""
+        return [r for r in self.rows if r.status is DiffStatus.ADDED]
+
 
 class LargeIncreaseNotConfirmedError(Exception):
     """Apply was blocked: a price rises >10% and ``confirm`` was not passed.
@@ -326,8 +555,12 @@ class SyncSummary:
     created: int = 0
     updated: int = 0
     unchanged: int = 0
+    # task_11_17: open catalog periods the feed no longer lists that this run
+    # closed (flagged discontinued). 0 unless ``discontinue_missing`` is set.
+    discontinued: int = 0
     skipped: list[SkippedEntry] = field(default_factory=list)
     large_increases: list[LargeIncrease] = field(default_factory=list)
+    discontinued_models: list[DiscontinuedModel] = field(default_factory=list)
     started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
     @property
@@ -750,6 +983,7 @@ async def apply_sync_from_litellm(
     actor_id: UUID | None = None,
     confirm: bool = False,
     overwrite_manual: bool = False,
+    discontinue_missing: bool = False,
 ) -> SyncSummary:
     """Apply the feed — but REJECT the whole apply on an unconfirmed >10% rise.
 
@@ -761,6 +995,14 @@ async def apply_sync_from_litellm(
     must review the spike. With ``confirm=True`` every change — including the
     spikes — is applied. This is the gate the endpoint maps to a 409 and the UI
     gates its confirmation dialog on (via the dry-run diff).
+
+    When ``discontinue_missing`` is True (task_11_17), any open catalog period
+    whose key the feed no longer lists is **flagged discontinued**: its open
+    period is closed (``effective_to = now``) so it stops being the current
+    price, but the row is **never deleted** — its history + the per-call price
+    snapshots that reference it stay valid. Manual rows are left alone unless
+    ``overwrite_manual`` is also set (a deliberate manual price is not dropped
+    just because the community feed omits the model).
 
     A feed / parse failure raises :class:`PriceFeedError`. The caller commits.
     """
@@ -798,18 +1040,86 @@ async def apply_sync_from_litellm(
         session.add(_new_row(candidate, actor_id=actor_id))
         summary.updated += 1
 
+    if discontinue_missing:
+        dropped = await discontinue_dropped_models(
+            session,
+            mapped,
+            actor_id=actor_id,
+            overwrite_manual=overwrite_manual,
+            now=now,
+        )
+        summary.discontinued_models = dropped
+        summary.discontinued = len(dropped)
+
     await session.flush()
     return summary
+
+
+# =============================================================================
+# New + discontinued detection write side (task_11_17)
+# =============================================================================
+async def discontinue_dropped_models(
+    session: AsyncSession,
+    mapped: list[MappedPrice],
+    *,
+    actor_id: UUID | None = None,
+    overwrite_manual: bool = False,
+    now: datetime | None = None,
+) -> list[DiscontinuedModel]:
+    """Flag (close) the open catalog periods the feed no longer lists (task_11_17).
+
+    A model present in the catalog with an OPEN period but absent from the
+    feed is a *discontinued candidate*. This **flags** it by closing its open
+    period (``effective_to = now``) so it is no longer the current price — it
+    is **NOT deleted**: the row (and its closed-period history + the per-call
+    price snapshots that reference it) survives, keeping historical billing
+    correct. Manual rows (``source = manual``) are left untouched unless
+    ``overwrite_manual`` is set, so a deliberate hand-entered price is not
+    dropped merely because the community feed omits the model.
+
+    Returns the typed list of models it closed (deterministically ordered) so
+    the summary / audit log can record exactly what was discontinued.
+    """
+    stamp = now or datetime.now(tz=UTC)
+    feed_keys = {(m.provider, m.model_id, m.modality.value) for m in mapped}
+    open_rows = await _open_catalog_rows(session)
+
+    discontinued: list[DiscontinuedModel] = []
+    for row in open_rows:
+        key = (row.provider, row.model_id, row.modality)
+        if key in feed_keys:
+            continue
+        if row.source == PriceSource.MANUAL.value and not overwrite_manual:
+            continue
+        row.effective_to = stamp
+        row.updated_by = actor_id
+        session.add(row)
+        discontinued.append(
+            DiscontinuedModel(
+                provider=row.provider,
+                model_id=row.model_id,
+                modality=row.modality,
+            )
+        )
+
+    discontinued.sort(key=attrgetter("provider", "model_id", "modality"))
+    if discontinued:
+        await session.flush()
+    return discontinued
 
 
 __all__ = [
     "DEFAULT_LITELLM_FEED_URL",
     "LARGE_INCREASE_THRESHOLD",
     "DiffStatus",
+    "DiscontinuedModel",
     "HttpxPriceFeedFetcher",
     "LargeIncrease",
     "LargeIncreaseNotConfirmedError",
     "MappedPrice",
+    "ModelClassification",
+    "ModelClassificationSet",
+    "ModelStatus",
     "PriceDiffRow",
     "PriceFeedError",
     "PriceFeedFetcher",
@@ -818,7 +1128,9 @@ __all__ = [
     "SyncDiff",
     "SyncSummary",
     "apply_sync_from_litellm",
+    "classify_models",
     "compute_sync_diff",
+    "discontinue_dropped_models",
     "map_entry",
     "parse_feed",
     "sync_prices_from_litellm",

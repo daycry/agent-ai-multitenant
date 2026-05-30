@@ -314,6 +314,94 @@ async def test_dry_run_flags_removed_models_not_in_feed(
     assert removed.new_input is None
     assert removed.old_input == Decimal("0.02")
     assert diff.removed == 1
+    # task_11_17 lifecycle view: removed == discontinued, added == new.
+    assert diff.discontinued == 1
+    assert removed.model_id in {r.model_id for r in diff.discontinued_models()}
+
+
+@pytest.mark.asyncio
+async def test_apply_discontinue_missing_closes_period_not_deletes(
+    configured_app, admin_session_factory, migrations_pg_dsn: str
+) -> None:
+    """task_11_17: discontinue_missing CLOSES the open period — never deletes the row."""
+    await _seed(migrations_pg_dsn)
+
+    from api_server.db.model_prices import ModelPrice
+    from api_server.pricing.litellm_sync import (
+        StaticPriceFeedFetcher,
+        apply_sync_from_litellm,
+        sync_prices_from_litellm,
+    )
+
+    feed = _feed()
+    async with admin_session_factory() as session, session.begin():
+        await sync_prices_from_litellm(session, fetcher=StaticPriceFeedFetcher(payload=feed))
+
+    # The feed drops the embedding model.
+    feed.pop("text-embedding-3-small")
+
+    async with admin_session_factory() as session, session.begin():
+        summary = await apply_sync_from_litellm(
+            session,
+            fetcher=StaticPriceFeedFetcher(payload=feed),
+            discontinue_missing=True,
+        )
+    assert summary.discontinued == 1
+    assert summary.discontinued_models[0].model_id == "text-embedding-3-small"
+
+    # The row SURVIVES (not deleted) — its open period is now closed.
+    async with admin_session_factory() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(ModelPrice).where(ModelPrice.model_id == "text-embedding-3-small")
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(rows) == 1  # still there
+    assert rows[0].effective_to is not None  # but no longer current
+    assert rows[0].input_price == Decimal("0.02")  # historical price intact
+
+
+@pytest.mark.asyncio
+async def test_apply_without_discontinue_missing_leaves_dropped_open(
+    configured_app, admin_session_factory, migrations_pg_dsn: str
+) -> None:
+    """The default apply does NOT flag dropped models (opt-in only)."""
+    await _seed(migrations_pg_dsn)
+
+    from api_server.db.model_prices import ModelPrice
+    from api_server.pricing.litellm_sync import (
+        StaticPriceFeedFetcher,
+        apply_sync_from_litellm,
+        sync_prices_from_litellm,
+    )
+
+    feed = _feed()
+    async with admin_session_factory() as session, session.begin():
+        await sync_prices_from_litellm(session, fetcher=StaticPriceFeedFetcher(payload=feed))
+
+    feed.pop("text-embedding-3-small")
+
+    async with admin_session_factory() as session, session.begin():
+        summary = await apply_sync_from_litellm(
+            session, fetcher=StaticPriceFeedFetcher(payload=feed)
+        )
+    assert summary.discontinued == 0
+
+    # The dropped model is still the current (open) price by default.
+    async with admin_session_factory() as session:
+        emb = (
+            await session.execute(
+                select(ModelPrice).where(
+                    ModelPrice.model_id == "text-embedding-3-small",
+                    ModelPrice.effective_to.is_(None),
+                )
+            )
+        ).scalar_one()
+    assert emb.input_price == Decimal("0.02")
 
 
 # ===========================================================================
