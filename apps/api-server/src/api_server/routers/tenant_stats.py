@@ -44,7 +44,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import (
     BigInteger,
     ColumnElement,
@@ -71,6 +71,12 @@ from api_server.schemas.tenant_stats import (
     ExecutionRunRow,
     StatsTrendPoint,
     TenantStatsDashboardResponse,
+)
+from api_server.stats.export import (
+    ExportFormat,
+    build_runs_export,
+    filename_for,
+    media_type_for,
 )
 
 router = APIRouter(prefix="/tenant-stats", tags=["stats"])
@@ -292,7 +298,20 @@ async def tenant_consumption_summary(
     tenant_id = require_tenant_id(principal)
     since = datetime.now(tz=UTC) - timedelta(days=window_days)
     base = _exec_filters(tenant_id=tenant_id, since=since, agent_id=agent_id, plan_id=plan_id)
+    return await _compute_consumption(session, base, window_days=window_days)
 
+
+async def _compute_consumption(
+    session: AsyncSession,
+    base: list[ColumnElement[bool]],
+    *,
+    window_days: int,
+) -> ConsumptionSummaryResponse:
+    """Compute the consumption summary for ``base`` (tenant-scoped filters).
+
+    Shared by the JSON ``/consumption`` endpoint and the export's PDF/HTML
+    summary block so the two never drift.
+    """
     headline = (
         await session.execute(
             select(
@@ -371,6 +390,119 @@ async def list_execution_runs(
         model=model,
         min_cost=min_cost,
     )
+    return await _fetch_runs(session, filters, limit=limit, offset=offset)
+
+
+# ===========================================================================
+# GET /tenant-stats/runs/export — CSV / XLSX / PDF(→HTML) of the runs explorer
+# ===========================================================================
+# Hard cap on the number of rows a single export may serialise. Exports are
+# bounded (not streamed): an export is a synchronous build of one response
+# body, so we bound it instead of letting a tenant ask for an unbounded report.
+# A named constant, not a magic number — a platform invariant of the export
+# contract. A tenant that needs more pages the explorer (with its offset).
+MAX_EXPORT_ROWS = 5000
+
+
+@router.get("/runs/export")
+async def export_execution_runs(
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+    fmt: ExportFormat = Query(
+        default=ExportFormat.CSV,
+        alias="format",
+        description="Export format: csv | xlsx | pdf (pdf is a print-ready HTML document).",
+    ),
+    window_days: int = _window_days(),
+    agent_id: UUID | None = Query(default=None, description="Narrow to one agent."),
+    role: str | None = Query(default=None, max_length=32, description="Narrow to one agent role."),
+    plan_id: UUID | None = Query(default=None, description="Narrow to one plan."),
+    task_id: UUID | None = Query(default=None, description="Narrow to one task."),
+    verdict: str | None = Query(
+        default=None, max_length=32, description="Narrow to one execution verdict/status."
+    ),
+    model: str | None = Query(default=None, max_length=120, description="Narrow to one model."),
+    min_cost: Decimal | None = Query(
+        default=None, ge=0, description="Minimum total cost USD threshold."
+    ),
+) -> Response:
+    """Export this tenant's runs explorer to CSV / XLSX / PDF. tenant_admin.
+
+    Same filters as ``GET /tenant-stats/runs``, serialised to a downloadable
+    file (``Content-Disposition: attachment``). Tenant-scoped (RLS) with the
+    same defence-in-depth ``tenant_id`` predicate, so an export NEVER contains
+    another tenant's rows. Costs are canonical USD. The export carries only the
+    operational columns the JSON explorer already exposes — no prompts /
+    completions / credentials / ``steps_log`` leak through this surface.
+
+    Formats: ``csv`` (stdlib), ``xlsx`` (openpyxl, pure-Python) and ``pdf`` —
+    which is DEGRADED to a print-ready ``text/html`` document (the api-server
+    image carries no native PDF renderer; the browser's "Save as PDF" closes
+    the loop). If the optional ``openpyxl`` wheel is absent, ``xlsx`` returns a
+    clean ``501`` rather than a 500.
+
+    Bounded, not streamed: at most :data:`MAX_EXPORT_ROWS` rows in one export.
+    """
+    tenant_id = require_tenant_id(principal)
+    since = datetime.now(tz=UTC) - timedelta(days=window_days)
+    filters = _exec_filters(
+        tenant_id=tenant_id,
+        since=since,
+        agent_id=agent_id,
+        role=role,
+        plan_id=plan_id,
+        task_id=task_id,
+        verdict=verdict,
+        model=model,
+        min_cost=min_cost,
+    )
+    rows = await _fetch_runs(session, filters, limit=MAX_EXPORT_ROWS, offset=0)
+
+    # The PDF/HTML report embeds a consumption summary; CSV/XLSX are raw rows.
+    consumption = (
+        await _compute_consumption(session, filters, window_days=window_days)
+        if fmt is ExportFormat.PDF
+        else None
+    )
+
+    try:
+        content = build_runs_export(
+            rows,
+            fmt,
+            title="Tenant runs export",
+            window_days=window_days,
+            consumption=consumption,
+        )
+    except ImportError as exc:  # openpyxl absent → degrade cleanly, never 500
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="xlsx export is not configured in this runtime; use format=csv",
+        ) from exc
+
+    return Response(
+        content=content,
+        media_type=media_type_for(fmt),
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{filename_for(fmt, stem="tenant-runs")}"'
+            )
+        },
+    )
+
+
+async def _fetch_runs(
+    session: AsyncSession,
+    filters: list[ColumnElement[bool]],
+    *,
+    limit: int,
+    offset: int,
+) -> list[ExecutionRunRow]:
+    """Load the runs-explorer rows for ``filters`` (newest first, paginated).
+
+    The single query behind both the JSON ``/runs`` endpoint and the export
+    surface (task_14_14) so the two never drift. ``filters`` already carries the
+    tenant scope + the time window + the optional narrowing predicates.
+    """
     dur = _duration_ms()
     model_expr = _last_model_expr()
     stmt = (

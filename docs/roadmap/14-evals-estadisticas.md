@@ -318,7 +318,15 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_14` — Exportación CSV/PDF
 
-- [ ] **Título**: Exportación CSV/PDF
+- [x] **Título**: Exportación CSV/PDF
+- **Nota (formatos)**: CSV (stdlib) y XLSX (openpyxl, wheel pure-Python sin
+  dependencias nativas) se entregan completos. El formato **PDF está degradado
+  honestamente**: la imagen del api-server no incorpora un renderizador PDF
+  nativo (mismo criterio que la exportación PDF del docs-viewer, que devuelve
+  501), por lo que `format=pdf` devuelve un documento `text/html` listo para
+  imprimir ("Guardar como PDF" del navegador) en vez de un PDF binario. La
+  columna de coste en moneda del tenant queda fuera: depende del sistema FX
+  (exchange_rates) no construido (gap del Plan 11); solo se expone USD canónico.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev

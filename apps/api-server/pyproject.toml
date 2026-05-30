@@ -85,6 +85,16 @@ dependencies = [
   # (Plan 05 task_05_05/task_05_17). Sync API; we wrap in to_thread
   # from the async endpoints if needed.
   "hvac>=2.0,<3",
+
+  # XLSX export for the tenant statistics / runs explorer (Plan 14
+  # task_14_14). A pure-Python, pip-clean wheel (its only dep, et_xmlfile,
+  # is also pure-Python) — no native libraries, unlike a PDF renderer. The
+  # export router imports it LAZILY and degrades to a clean 501 if absent
+  # (xmlsec/python3-saml precedent), so the api-server still boots without
+  # it; the dependency is declared here so the wheel ships by default. The
+  # PDF format is a print-ready HTML document (browser "Save as PDF"), so
+  # no heavy native PDF dependency is pulled.
+  "openpyxl>=3.1,<4",
 ]
 
 [project.optional-dependencies]
