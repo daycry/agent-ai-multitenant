@@ -49,8 +49,9 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
     # Imported here (not at module top) to avoid Celery importing the
     # maintenance task module before its own celery_app singleton is
     # ready — `maintenance.py` registers tasks against `app`, so we
-    # need the schedule attached AFTER `app` exists.
-    from workers.beat_schedule import BEAT_SCHEDULE
+    # need the schedule attached AFTER `app` exists. `build_beat_schedule`
+    # folds in the CONFIGURABLE price-sync cadence (Plan 11 task_11_18).
+    from workers.beat_schedule import build_beat_schedule
 
     app = Celery("agentic-workers")
     app.conf.update(
@@ -66,6 +67,7 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             "workers.memorizer",
             "workers.maintenance",
             "workers.ingestion",
+            "workers.price_sync",
         ),
         # Agent runs are long; ack only after completion so a worker
         # crash re-queues the job instead of losing it.
@@ -88,8 +90,9 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
         accept_content=["json"],
         timezone="UTC",
         enable_utc=True,
-        # Plan 06.5 Fase D — periodic maintenance.
-        beat_schedule=BEAT_SCHEDULE,
+        # Plan 06.5 Fase D — periodic maintenance + Plan 11 task_11_18
+        # scheduled (configurable) price-catalog sync.
+        beat_schedule=build_beat_schedule(cfg),
     )
     return app
 

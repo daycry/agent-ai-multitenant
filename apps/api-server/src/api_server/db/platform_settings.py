@@ -127,3 +127,31 @@ async def get_double_signature_threshold(session: AsyncSession) -> str:
         default=DEFAULT_DOUBLE_SIGNATURE_THRESHOLD,
     )
     return str(value)
+
+
+# ---------------------------------------------------------------------------
+# Scheduled price-catalog sync (Plan 11 task_11_18)
+# ---------------------------------------------------------------------------
+# The price-sync beat job (workers.sync_model_prices) checks this flag at the
+# top of every run, so a System Admin can turn the scheduled sync OFF (or back
+# ON) from the admin panel and it takes effect on the next fire without
+# restarting Celery beat. The CADENCE is a separate, operator-tunable knob
+# (WORKERS_PRICE_SYNC_CRON read by the beat process at boot) — this flag is the
+# live enable/disable lever. Default ON: keeping prices fresh is the desired
+# behaviour, and an unconfirmed >10% spike is held for manual confirm anyway.
+PRICE_SYNC_ENABLED_KEY = "price_sync_enabled"
+DEFAULT_PRICE_SYNC_ENABLED = True
+
+
+async def get_price_sync_enabled(session: AsyncSession) -> bool:
+    """Whether the scheduled price-catalog sync is currently enabled.
+
+    Read by the ``workers.sync_model_prices`` beat task before it does any
+    work; when False the run is a no-op (it never fetches the feed or writes
+    the catalog). A System Admin flips this from the admin panel — only a
+    System Admin may write a platform setting (``set_platform_setting``).
+    """
+    value = await get_platform_setting(
+        session, PRICE_SYNC_ENABLED_KEY, default=DEFAULT_PRICE_SYNC_ENABLED
+    )
+    return bool(value)

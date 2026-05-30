@@ -157,6 +157,31 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ----- Scheduled price-catalog sync (Plan 11 task_11_18) -----
+    # The price-sync beat job runs the LiteLLM-feed sync (ADR 0021: data feed
+    # only, NOT a provider runtime) on a CONFIGURABLE cadence. The cron string
+    # is read by the beat process at boot — change it (and restart beat) to
+    # alter the cadence. The live enable/disable lever is the `price_sync_enabled`
+    # PLATFORM setting (a System Admin flips it from the admin panel and it takes
+    # effect on the next fire without a restart) — NOT this env. A scheduled run
+    # applies non-spiking changes automatically but DEFERS a >10% rise for manual
+    # confirmation (the task_11_16 gate), even when scheduled.
+    price_sync_cron: str = Field(
+        default="0 4 * * *",
+        description="Cron (minute hour day-of-month month day-of-week) for the "
+        "scheduled price-catalog sync. Default daily at 04:00 UTC. Operator-tunable; "
+        "the beat process reads it at boot.",
+    )
+    litellm_price_feed_url: str = Field(
+        default=(
+            "https://raw.githubusercontent.com/BerriAI/litellm/main/"
+            "model_prices_and_context_window.json"
+        ),
+        description="URL of the community LiteLLM price JSON consumed strictly as a "
+        "DATA FEED (ADR 0021) by the scheduled sync — never a provider runtime. "
+        "Point at an internal mirror to avoid egress.",
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."
