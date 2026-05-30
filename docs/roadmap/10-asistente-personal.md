@@ -104,7 +104,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_02` — Servicio notification-dispatcher con colas dedicadas Celery
 
-- [ ] **Título**: Servicio notification-dispatcher con colas dedicadas Celery
+- [x] **Título**: Servicio notification-dispatcher con colas dedicadas Celery
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

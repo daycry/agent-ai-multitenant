@@ -35,6 +35,9 @@ jobs:
           python -m pip install -e "apps/watchdog[dev]"
           python -m pip install -e "apps/orchestrator[dev]"
           python -m pip install -e "apps/workers[dev]"
+          # notification-dispatcher Celery service (Plan 10 task_10_02) —
+          # install editable so its imports resolve in mypy + pytest.
+          python -m pip install -e "apps/notification-dispatcher[dev]"
           # shared-llm is a path dep of agent-runtime (ADR 0021); install
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
@@ -149,6 +152,9 @@ jobs:
           python -m pip install -e "apps/watchdog[dev]"
           python -m pip install -e "apps/orchestrator[dev]"
           python -m pip install -e "apps/workers[dev]"
+          # notification-dispatcher Celery service (Plan 10 task_10_02) —
+          # install editable so its imports resolve in mypy + pytest.
+          python -m pip install -e "apps/notification-dispatcher[dev]"
           # shared-llm is a path dep of agent-runtime (ADR 0021); install
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
@@ -207,6 +213,9 @@ jobs:
           python -m pip install -e "apps/watchdog[dev]"
           python -m pip install -e "apps/orchestrator[dev]"
           python -m pip install -e "apps/workers[dev]"
+          # notification-dispatcher Celery service (Plan 10 task_10_02) —
+          # install editable so its imports resolve in mypy + pytest.
+          python -m pip install -e "apps/notification-dispatcher[dev]"
           # shared-llm is a path dep of agent-runtime (ADR 0021); install
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
