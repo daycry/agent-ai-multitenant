@@ -343,7 +343,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_15` — Comparativa cross-tenant (solo System Admin)
 
-- [ ] **Título**: Comparativa cross-tenant (solo System Admin)
+- [x] **Título**: Comparativa cross-tenant (solo System Admin)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
