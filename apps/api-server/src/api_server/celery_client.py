@@ -46,12 +46,27 @@ _NOTIFICATIONS_DEFAULT_QUEUE = "notifications.default"
 _DISPATCH_EVENT_TASK = "notification_dispatcher.dispatch_event"
 _EVENTS_PRIORITY_QUEUE = "notifications.priority"
 
+# The restore background jobs (Plan 12 task_12_12). A restore is LONG +
+# DESTRUCTIVE, so the api-server NEVER runs it inline — it enqueues one of these
+# by name onto the privileged lane (a restore touches infra + secrets) and then
+# polls the job's status via the result backend (`get_restore_job_status`). The
+# `workers.restore_task` module owns the implementation + the double-confirmation
+# / verify-before-restore / per-tenant-isolation guards.
+_RESTORE_FULL_TASK = "workers.run_restore"
+_RESTORE_PER_TENANT_TASK = "workers.run_restore_per_tenant"
+_RESTORE_QUEUE = "privileged"
+
 
 @lru_cache(maxsize=1)
 def get_celery_client() -> Celery:
     """Process-global producer bound to the broker. Cached so we don't
-    rebuild the connection pool on every enqueue."""
-    return Celery(broker=get_settings().broker_url)
+    rebuild the connection pool on every enqueue.
+
+    Also wired to the result backend so `AsyncResult(job_id)` resolves the state
+    a background task wrote (the restore job's progress/result, task_12_12). The
+    api-server still only PRODUCES + READS state — it runs no tasks."""
+    settings = get_settings()
+    return Celery(broker=settings.broker_url, backend=settings.result_backend)
 
 
 def reset_celery_client_cache() -> None:
@@ -152,10 +167,108 @@ async def enqueue_event_dispatch(
     return True
 
 
+async def enqueue_restore(
+    backup_id: str,
+    *,
+    confirm: str,
+    tenant_id: str | None = None,
+) -> str:
+    """Enqueue a restore background job (Plan 12 task_12_12) and return its job id.
+
+    A restore is LONG + DESTRUCTIVE, so it runs as a Celery background job, NOT
+    inline on this request thread. When ``tenant_id`` is ``None`` a FULL-stack
+    restore (``workers.run_restore``) is enqueued; otherwise a SELECTIVE
+    per-tenant restore (``workers.run_restore_per_tenant``) that touches ONLY
+    that tenant's data.
+
+    ``confirm`` is the double-confirmation token the operator supplied — it is
+    forwarded verbatim to the task, where the engine refuses unless it matches
+    (the full restore wants the bundle id; the per-tenant restore wants
+    ``<tenant_id>@<backup_id>``). The api-server does NOT re-derive or weaken it.
+
+    Returns the Celery job id the UI then polls via :func:`get_restore_job_status`.
+    A broker failure RAISES so the endpoint surfaces it (a restore the operator
+    explicitly triggered must fail loudly, never be silently dropped).
+    ``send_task`` does blocking socket I/O, so we run it off the event loop.
+    """
+    if tenant_id is None:
+        async_result = await asyncio.to_thread(
+            get_celery_client().send_task,
+            _RESTORE_FULL_TASK,
+            args=[backup_id],
+            kwargs={"confirm": confirm},
+            queue=_RESTORE_QUEUE,
+        )
+    else:
+        async_result = await asyncio.to_thread(
+            get_celery_client().send_task,
+            _RESTORE_PER_TENANT_TASK,
+            args=[backup_id],
+            kwargs={"tenant_id": tenant_id, "confirm": confirm},
+            queue=_RESTORE_QUEUE,
+        )
+    return str(async_result.id)
+
+
+async def get_restore_job_status(job_id: str) -> dict[str, Any]:
+    """Read a restore background job's status from the result backend (task_12_12).
+
+    Returns a JSON-safe ``{job_id, state, progress, result, error}`` snapshot the
+    UI polls:
+
+      * ``state``    — Celery's task state (``PENDING`` / ``PROGRESS`` /
+        ``SUCCESS`` / ``FAILURE``).
+      * ``progress`` — the ``{phase, message}`` meta the task reported while
+        in-flight (``PROGRESS``), else ``None``.
+      * ``result``   — the engine's JSON-safe result dict on ``SUCCESS``, else
+        ``None``.
+      * ``error``    — a non-leaky error string on ``FAILURE``, else ``None``.
+
+    Reading ``AsyncResult`` touches the result backend (blocking socket I/O), so
+    we run it off the event loop. The api-server only READS this state — it runs
+    no tasks.
+    """
+    return await asyncio.to_thread(_read_restore_status, job_id)
+
+
+def _read_restore_status(job_id: str) -> dict[str, Any]:
+    """Synchronous AsyncResult read (run via ``to_thread``)."""
+    async_result = get_celery_client().AsyncResult(job_id)
+    state = str(async_result.state)
+    progress: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None
+    error: str | None = None
+
+    if state == "SUCCESS":
+        raw = async_result.result
+        if isinstance(raw, dict):
+            result = raw
+    elif state == "FAILURE":
+        # `async_result.result` is the exception instance; str() is non-leaky
+        # (the engines never echo secret material into their error messages).
+        error = str(async_result.result)
+    else:
+        # PENDING / PROGRESS / any custom in-flight state — the meta carries the
+        # {phase, message} the task reported (None for an unknown/PENDING job).
+        info = async_result.info
+        if isinstance(info, dict):
+            progress = info
+
+    return {
+        "job_id": job_id,
+        "state": state,
+        "progress": progress,
+        "result": result,
+        "error": error,
+    }
+
+
 __all__ = [
     "enqueue_event_dispatch",
     "enqueue_ingestion",
     "enqueue_notification_send",
+    "enqueue_restore",
     "get_celery_client",
+    "get_restore_job_status",
     "reset_celery_client_cache",
 ]

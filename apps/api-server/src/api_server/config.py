@@ -158,6 +158,30 @@ class Settings(BaseSettings):
             "(sessions / events). api-server only produces, never consumes."
         ),
     )
+    result_backend: str = Field(
+        default="redis://localhost:6379/2",
+        description=(
+            "Celery result backend URL the api-server READS to poll a "
+            "long-running background job's status (Plan 12 task_12_12: the "
+            "restore job's progress/result). Must match the workers' "
+            "`WORKERS_RESULT_BACKEND` (Redis DB 2) so `AsyncResult(job_id)` "
+            "resolves the state the restore task wrote. api-server only reads "
+            "it — it runs no tasks."
+        ),
+    )
+
+    # ----- Backup bundles (read-only; for the restore UI list/preview) -----
+    backup_root: str = Field(
+        default="/data/agent-platform/backups",
+        description=(
+            "Host filesystem root where the workers write backup bundles (one "
+            "timestamped subdirectory per run). The restore UI's list/preview "
+            "endpoints (Plan 12 task_12_12) READ each bundle's manifest.json from "
+            "here to enumerate + introspect available backups. Must match the "
+            "workers' `WORKERS_BACKUP_ROOT`. api-server only READS it — the "
+            "destructive restore itself runs in a workers background job."
+        ),
+    )
 
     # ----- External services (probed by /admin/system-health) -----
     vault_url: str = Field(

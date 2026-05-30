@@ -276,7 +276,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_12` — UI de restore con lista de backups, preview, doble confirmación, log de progreso
 
-- [ ] **Título**: UI de restore con lista de backups, preview, doble confirmación, log de progreso
+- [x] **Título**: UI de restore con lista de backups, preview, doble confirmación, log de progreso
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
