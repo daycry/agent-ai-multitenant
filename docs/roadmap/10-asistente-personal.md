@@ -208,7 +208,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_08` — Canal Microsoft Teams con webhooks + Adaptive Cards
 
-- [ ] **Título**: Canal Microsoft Teams con webhooks + Adaptive Cards
+- [x] **Título**: Canal Microsoft Teams con webhooks + Adaptive Cards
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

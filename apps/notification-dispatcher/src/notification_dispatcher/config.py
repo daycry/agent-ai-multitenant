@@ -156,6 +156,23 @@ class Settings(BaseSettings):
         "number.",
     )
 
+    # ----- Microsoft Teams channel (task_10_08) -----
+    teams_request_timeout_s: float = Field(
+        default=10.0,
+        description="Per-request HTTP timeout the Teams adapter applies to the "
+        "incoming-webhook POST. Bounded under channel_send_timeout_s so the "
+        "dispatcher's overall send budget still wraps it. Tunable, not a magic "
+        "number.",
+    )
+    teams_adaptive_card_version: str = Field(
+        default="1.4",
+        description="Adaptive Card schema version the Teams adapter stamps on "
+        "the card it builds. Teams supports 1.0 to 1.5; 1.4 is broadly available "
+        "across desktop/web/mobile clients. A channel may override it via "
+        "config.card_version. Tunable so it tracks Teams client support, never "
+        "a magic string buried in the adapter.",
+    )
+
     # ----- Event → notification mapping tunables (task_10_04) -----
     default_locale: str = Field(
         default="en",
