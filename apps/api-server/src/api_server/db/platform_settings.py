@@ -271,6 +271,152 @@ async def get_backup_retention_days(session: AsyncSession) -> int:
     return int(value)
 
 
+# ---------------------------------------------------------------------------
+# Remote backup destinations (Plan 12 Phase B — task_12_09)
+# ---------------------------------------------------------------------------
+# After a successful, verified backup the bundle is uploaded to each configured
+# + enabled remote destination (Plan 12: "destinos remotos opcionales (S3, B2,
+# SFTP/NAS, rclone)"). A System Admin manages the list from the admin panel.
+#
+# What is stored here is the NON-secret config ONLY: a list of
+#   {"type": "s3"|"b2"|"sftp"|"rclone", "name", "enabled", "config": {<knobs>}}
+# dicts under one platform_settings key. The CREDENTIALS (S3 access key/secret,
+# B2 keyId/key, SFTP password/private key, the rclone config blob) are NEVER
+# stored here — they live in the workers' secret seam (Vault/env), keyed by each
+# adapter's well-known field names. We reject any secret-looking field landing in
+# the config so a credential can never be persisted (or echoed back) by accident.
+BACKUP_DESTINATIONS_KEY = "backup_destinations"
+
+# The destination types the platform supports. Kept in lockstep with
+# workers.backup_destinations.DESTINATION_TYPES (the two packages deliberately
+# do not import one another at module load).
+BACKUP_DESTINATION_TYPES = ("s3", "b2", "sftp", "rclone")
+
+# The NON-secret config field each destination type requires + the optional ones
+# it accepts. Anything outside (required + optional) for a type is rejected — a
+# guardrail that also blocks a secret field (access_key, password, ...) from ever
+# being stored, because none of them appear in these allow-lists.
+_DEST_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "s3": ("bucket",),
+    "b2": ("bucket", "region"),
+    "sftp": ("host", "username"),
+    "rclone": ("remote",),
+}
+_DEST_OPTIONAL_FIELDS: dict[str, tuple[str, ...]] = {
+    "s3": ("prefix", "endpoint_url", "region"),
+    "b2": ("prefix",),
+    "sftp": ("port", "remote_path", "host_key_policy", "known_hosts_path"),
+    "rclone": ("path",),
+}
+
+# A destination name must be a short, stable identifier (logs/manifest key).
+_DEST_NAME_MAX_LEN = 64
+# Cap the number of configured destinations so a runaway client cannot bloat the
+# single JSONB row.
+_DEST_MAX_COUNT = 25
+
+
+class InvalidBackupDestinationError(ValueError):
+    """Raised when a proposed backup-destination config fails validation
+    (unknown type, missing required field, an unexpected/secret-looking field,
+    or a duplicate name)."""
+
+
+def validate_backup_destinations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Validate + normalise a list of NON-secret destination configs.
+
+    Each item must be ``{"type", "name", "enabled", "config": {...}}`` where
+    ``config`` carries ONLY the type's known non-secret knobs. Returns the
+    normalised list (stable key order, names trimmed) on success; raises
+    :class:`InvalidBackupDestinationError` on any problem WITHOUT persisting.
+
+    The unknown-field rejection is the credential guardrail: every adapter's
+    secret field name (``backup_s3_access_key_id``, ``backup_sftp_password``,
+    the rclone config blob, …) is outside the per-type allow-list, so a client
+    that tries to smuggle a credential into ``config`` is a clean 422 — a secret
+    can never reach this table.
+    """
+    if len(items) > _DEST_MAX_COUNT:
+        raise InvalidBackupDestinationError(f"too many destinations (max {_DEST_MAX_COUNT})")
+    normalised: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    for idx, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise InvalidBackupDestinationError(f"destination #{idx} must be an object")
+        dest_type = str(item.get("type", "")).strip().lower()
+        if dest_type not in BACKUP_DESTINATION_TYPES:
+            raise InvalidBackupDestinationError(
+                f"destination #{idx} has unknown type {dest_type!r}; "
+                f"must be one of {BACKUP_DESTINATION_TYPES}"
+            )
+        name = str(item.get("name", "")).strip()
+        if not name or len(name) > _DEST_NAME_MAX_LEN:
+            raise InvalidBackupDestinationError(
+                f"destination #{idx} requires a name (1..{_DEST_NAME_MAX_LEN} chars)"
+            )
+        if name in seen_names:
+            raise InvalidBackupDestinationError(f"duplicate destination name {name!r}")
+        seen_names.add(name)
+
+        raw_config = item.get("config", {})
+        if not isinstance(raw_config, dict):
+            raise InvalidBackupDestinationError(f"destination {name!r} config must be an object")
+        allowed = set(_DEST_REQUIRED_FIELDS[dest_type]) | set(_DEST_OPTIONAL_FIELDS[dest_type])
+        config: dict[str, Any] = {}
+        for key, value in raw_config.items():
+            if key not in allowed:
+                # Outside the non-secret allow-list — either a typo or an
+                # attempt to store a credential. Reject either way.
+                raise InvalidBackupDestinationError(
+                    f"destination {name!r}: field {key!r} is not allowed for "
+                    f"type {dest_type!r} (secrets are never stored here)"
+                )
+            config[key] = value
+        for required in _DEST_REQUIRED_FIELDS[dest_type]:
+            rv = config.get(required)
+            if rv is None or (isinstance(rv, str) and not rv.strip()):
+                raise InvalidBackupDestinationError(
+                    f"destination {name!r} of type {dest_type!r} is missing "
+                    f"required field {required!r}"
+                )
+        normalised.append(
+            {
+                "type": dest_type,
+                "name": name,
+                "enabled": bool(item.get("enabled", True)),
+                "config": config,
+            }
+        )
+    return normalised
+
+
+async def get_backup_destinations(session: AsyncSession) -> list[dict[str, Any]]:
+    """The configured remote backup destinations (NON-secret config only).
+
+    Returns the stored list, or ``[]`` when none have been configured. Each item
+    is ``{"type", "name", "enabled", "config": {...}}`` — never a credential."""
+    value = await get_platform_setting(session, BACKUP_DESTINATIONS_KEY, default=[])
+    return list(value) if isinstance(value, list) else []
+
+
+async def set_backup_destinations(
+    session: AsyncSession,
+    items: list[dict[str, Any]],
+    *,
+    actor: User,
+) -> list[dict[str, Any]]:
+    """Persist the full destination list (System Admin only).
+
+    Validates EVERY item first (raising :class:`InvalidBackupDestinationError`
+    before any write); ``set_platform_setting`` re-checks the actor is a System
+    Admin. Returns the normalised list. CREDENTIALS are never part of the stored
+    config (validation rejects any secret-looking field), so this write — and the
+    read-back — can never echo a secret."""
+    normalised = validate_backup_destinations(items)
+    await set_platform_setting(session, BACKUP_DESTINATIONS_KEY, normalised, actor=actor)
+    return normalised
+
+
 async def get_backup_schedule(session: AsyncSession) -> tuple[bool, str, int]:
     """Return the full backup schedule as ``(enabled, cron, retention_days)``.
 

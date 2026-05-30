@@ -70,6 +70,12 @@ const NAV: NavItem[] = [
     systemAdminOnly: true,
   },
   {
+    href: "/admin/backup/destinations",
+    label: "Destinos backup",
+    Icon: DatabaseBackup,
+    systemAdminOnly: true,
+  },
+  {
     href: "/admin/guardrails",
     label: "Guardrails",
     Icon: ShieldAlert,

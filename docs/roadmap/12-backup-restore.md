@@ -223,7 +223,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_09` — UI de configuración de destinos con test de conectividad
 
-- [ ] **Título**: UI de configuración de destinos con test de conectividad
+- [x] **Título**: UI de configuración de destinos con test de conectividad
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
