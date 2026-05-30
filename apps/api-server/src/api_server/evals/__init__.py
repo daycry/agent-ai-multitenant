@@ -10,9 +10,13 @@ over those rows (task_14_05 / task_14_06).
 from __future__ import annotations
 
 from api_server.evals.ci_run import (
+    EXIT_GATE_BLOCKED,
+    EXIT_GATE_PASSED,
     CiRunArgs,
+    DiffProvider,
     GateDecision,
     gate_decision,
+    main,
     resolve_threshold,
 )
 from api_server.evals.constants import (
@@ -56,10 +60,13 @@ from api_server.evals.metrics import (
 __all__ = [
     "DEFAULT_PASS_RATE_REGRESSION_THRESHOLD",
     "DEFAULT_SHADOW_SAMPLE_RATE",
+    "EXIT_GATE_BLOCKED",
+    "EXIT_GATE_PASSED",
     "REGRESSION_THRESHOLD_ENV_VAR",
     "CiRunArgs",
     "CriterionScore",
     "DatasetMismatchError",
+    "DiffProvider",
     "DiffVerdict",
     "GateDecision",
     "ItemChange",
@@ -81,6 +88,7 @@ __all__ = [
     "diff_runs",
     "gate_decision",
     "judge_item",
+    "main",
     "mean",
     "parse_judge_response",
     "pass_rate",

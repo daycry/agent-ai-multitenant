@@ -214,7 +214,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_08` — Bloqueo de merge si regresión > umbral configurable
 
-- [ ] **Título**: Bloqueo de merge si regresión > umbral configurable
+- [x] **Título**: Bloqueo de merge si regresión > umbral configurable
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: devops

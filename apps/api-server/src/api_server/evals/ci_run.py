@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
@@ -36,6 +36,16 @@ from api_server.evals.constants import (
     REGRESSION_THRESHOLD_ENV_VAR,
 )
 from api_server.evals.diff import DiffVerdict, RunDiff
+
+# A seam that turns the resolved CI args into the baseline-vs-candidate diff the
+# gate decides over. The real implementation (build the candidate run via the
+# judge engine, load the baseline, diff them) needs an LLM provider + a tenant-
+# bound session, so it is injected: the workflow wires the live producer when a
+# provider secret is present, and task_14_08's test injects a SCRIPTED producer
+# that returns a canned diff (NO real LLM, NO DB) so the gate -> exit-code path
+# is deterministic and unit-coverable. ``None`` (the default) means "no live run
+# requested" — main() stays in the dry-run/skip path.
+DiffProvider = Callable[["CiRunArgs"], RunDiff]
 
 # Process exit codes the CI step keys on: 0 = gate passed (merge may proceed),
 # 1 = gate failed (regression beyond threshold — block the merge).
@@ -206,16 +216,32 @@ def parse_args(argv: Sequence[str] | None = None) -> CiRunArgs:
     )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    diff_provider: DiffProvider | None = None,
+) -> int:
     """CLI entrypoint — returns a process exit code (0 pass / 1 block).
 
     With ``--dry-run`` (the CI path when no LLM provider secret is present) it
     validates the arguments + resolves the threshold and exits ``0`` without
     running the live harness — the workflow skips the harness with a notice in
-    that case, so this never needs an LLM key. The live-harness wiring (build
-    the candidate run, diff against the baseline, then :func:`gate_decision`)
-    lands with task_14_08 / task_14_09; this entrypoint already exposes the
-    deterministic, unit-coverable surface the workflow calls.
+    that case, so this never needs an LLM key.
+
+    Otherwise it asks ``diff_provider`` for the baseline-vs-candidate
+    :class:`~api_server.evals.diff.RunDiff` (the live harness builds the
+    candidate run + diffs it against the baseline; this is the LLM/DB-touching
+    part, hence injected), applies the PURE :func:`gate_decision` over it and
+    returns ``decision.exit_code`` — so a regression beyond the configured
+    threshold yields a NON-ZERO exit that fails the CI job and BLOCKS the merge
+    (task_14_08). When no ``diff_provider`` is supplied (no live run wired in
+    this environment) it returns ``0`` with a notice, exactly as the dry-run
+    path does — shadow/CI evals never falsely block a merge.
+
+    The threshold the gate uses is the diff's own
+    ``pass_rate_regression_threshold`` (the diff already classified the change
+    against it), so ``diff_provider`` must build the diff with
+    ``args.regression_threshold`` — gate and diff can never disagree.
     """
     args = parse_args(argv)
     print(  # - CLI user feedback is the point
@@ -226,9 +252,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.dry_run:
         print("[eval-ci] dry-run: no LLM provider secret present — harness skipped.")
         return EXIT_GATE_PASSED
-    # Live harness (build candidate run + diff + gate) is wired in task_14_08.
-    print("[eval-ci] live harness not yet wired (task_14_08); treating as pass.")
-    return EXIT_GATE_PASSED
+    if diff_provider is None:
+        # No live harness wired in this environment (e.g. no provider secret was
+        # detected but --dry-run was not passed): do NOT block — a gate that
+        # cannot produce a diff has no regression signal to act on.
+        print("[eval-ci] no live diff provider available — nothing to gate, treating as pass.")
+        return EXIT_GATE_PASSED
+
+    diff = diff_provider(args)
+    decision = gate_decision(diff)
+    print(f"[eval-ci] {decision.reason}")
+    return decision.exit_code
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised via the module CLI
@@ -239,6 +273,7 @@ __all__ = [
     "EXIT_GATE_BLOCKED",
     "EXIT_GATE_PASSED",
     "CiRunArgs",
+    "DiffProvider",
     "GateDecision",
     "build_parser",
     "gate_decision",
