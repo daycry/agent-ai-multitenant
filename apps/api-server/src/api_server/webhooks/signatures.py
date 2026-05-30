@@ -103,6 +103,20 @@ def signature_header_for(origin: IncomingWebhookOrigin) -> str:
     return header
 
 
+def signature_scheme_for(origin: IncomingWebhookOrigin) -> tuple[str, bool]:
+    """Return ``(header_name, sha256_prefixed)`` — the scheme an ``origin`` uses.
+
+    The single source of truth for HOW a given origin's signature is carried on
+    the wire: the request header it lives in, and whether the hex digest is
+    prefixed with ``sha256=`` (GitHub/GitLab) or bare (the generic scheme).
+    Exposed so the per-origin TEMPLATES (task_13_09) can DECLARE the scheme from
+    the same table :func:`verify_incoming_signature` enforces, instead of
+    duplicating it.
+    """
+    header, prefixed = _SCHEME_BY_ORIGIN[origin]
+    return header, prefixed
+
+
 def compute_incoming_signature(secret: str, body: bytes) -> str:
     """Hex HMAC-SHA256 of ``body`` under ``secret`` (the value a sender stamps).
 
@@ -177,5 +191,6 @@ __all__ = [
     "SignatureVerificationResult",
     "compute_incoming_signature",
     "signature_header_for",
+    "signature_scheme_for",
     "verify_incoming_signature",
 ]

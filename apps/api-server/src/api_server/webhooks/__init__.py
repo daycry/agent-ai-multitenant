@@ -20,9 +20,27 @@ from api_server.webhooks.signatures import (
     SignatureVerificationResult,
     verify_incoming_signature,
 )
+from api_server.webhooks.templates import (
+    MalformedPayloadError,
+    NormalizedEvent,
+    UnknownOriginError,
+    WebhookEventType,
+    WebhookTemplate,
+    WebhookTemplateError,
+    get_template,
+    parse_incoming_event,
+)
 
 __all__ = [
     "IncomingWebhookOrigin",
+    "MalformedPayloadError",
+    "NormalizedEvent",
     "SignatureVerificationResult",
+    "UnknownOriginError",
+    "WebhookEventType",
+    "WebhookTemplate",
+    "WebhookTemplateError",
+    "get_template",
+    "parse_incoming_event",
     "verify_incoming_signature",
 ]

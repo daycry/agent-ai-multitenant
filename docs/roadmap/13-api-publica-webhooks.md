@@ -227,7 +227,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_09` — Plantillas pre-configuradas: GitHub push, PR review, Jira issue, Sentry error, Linear issue, GitLab MR
 
-- [ ] **Título**: Plantillas pre-configuradas: GitHub push, PR review, Jira issue, Sentry error, Linear issue, GitLab MR
+- [x] **Título**: Plantillas pre-configuradas: GitHub push, PR review, Jira issue, Sentry error, Linear issue, GitLab MR
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
