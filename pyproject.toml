@@ -257,6 +257,16 @@ ignore_missing_imports = true
 module = ["webauthn", "webauthn.*", "cbor2", "cbor2.*"]
 ignore_missing_imports = true
 
+# Marketplace pre-install static analysis (Plan 09 task_09_05). `bandit`
+# is imported LAZILY as an availability probe in
+# `marketplace.static_analysis`; the pre-commit mypy hook doesn't install
+# it (the api-server dev extra + runtime venv do). semgrep is never
+# imported (only its CLI is shelled out to), so no override is needed for
+# it. Same pattern as the other optional-dep overrides above.
+[[tool.mypy.overrides]]
+module = ["bandit", "bandit.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

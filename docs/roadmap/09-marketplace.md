@@ -159,7 +159,7 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
 
 #### `task_09_05` — Análisis estático previo: Bandit para Python, semgrep para patrones genéricos
 
-- [ ] **Título**: Análisis estático previo: Bandit para Python, semgrep para patrones genéricos
+- [x] **Título**: Análisis estático previo: Bandit para Python, semgrep para patrones genéricos
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: security

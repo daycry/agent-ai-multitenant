@@ -93,6 +93,17 @@ dev = [
   "pytest-asyncio>=0.23,<1",
   "pytest-cov>=5.0,<6",
   "freezegun>=1.5,<2",
+  # Marketplace pre-install static analysis (Plan 09 task_09_05). Bandit
+  # is the primary scanner — a clean, pure-Python wheel run as a
+  # subprocess on a temp copy of the analyzed code (never imported/exec'd).
+  # semgrep is the SECOND scanner but is deliberately NOT pinned here: its
+  # published wheel hard-pins opentelemetry/protobuf versions that conflict
+  # with this project's stack (installing it downgrades OTel and breaks the
+  # api-server import). The StaticAnalyzer imports semgrep LAZILY (locates
+  # its CLI) and degrades to a typed "unavailable" result when absent —
+  # the xmlsec/python3-saml precedent. CI/Linux that ships semgrep on PATH
+  # exercises that path; elsewhere the semgrep-specific tests skip-guard.
+  "bandit>=1.7,<2",
 ]
 
 [build-system]
