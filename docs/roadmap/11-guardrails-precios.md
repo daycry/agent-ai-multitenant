@@ -125,7 +125,7 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 
 #### `task_11_03` — 6 acciones (block, redact, warn, retry_with_feedback, escalate_to_human, transform)
 
-- [ ] **Título**: 6 acciones (block, redact, warn, retry_with_feedback, escalate_to_human, transform)
+- [x] **Título**: 6 acciones (block, redact, warn, retry_with_feedback, escalate_to_human, transform)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
