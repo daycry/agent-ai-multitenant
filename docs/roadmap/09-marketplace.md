@@ -210,7 +210,7 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
 
 #### `task_09_08` — Revocación de instalación + audit_log obligatorio
 
-- [ ] **Título**: Revocación de instalación + audit_log obligatorio
+- [x] **Título**: Revocación de instalación + audit_log obligatorio
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

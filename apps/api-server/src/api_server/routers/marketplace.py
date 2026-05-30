@@ -7,8 +7,20 @@ The marketplace REST surface, Phase A (the foundation). Five routes:
   - ``GET  /marketplace/listings/{id}``       listing detail
   - ``POST /marketplace/installations``       install a listing into the caller's
                                               tenant (+ audit)
-  - ``DELETE /marketplace/installations/{id}``  uninstall (revoke + audit)
+  - ``DELETE /marketplace/installations/{id}``  uninstall (tear down + audit)
+  - ``POST /marketplace/installations/{id}/revoke``  revoke (security teardown + audit)
   - ``GET  /marketplace/installations``       list the caller-tenant installs
+
+Uninstall vs. revoke (task_09_08): both flip the install to ``revoked``,
+disable it for agents/projects (it is no longer "live" — the partial-unique
+live index frees up), soft-delete the row, and ALWAYS write a marketplace
+audit entry. They differ only in INTENT / audit action: ``DELETE`` is the
+operator-driven teardown (``uninstall`` action), while ``POST .../revoke`` is
+the explicit security revocation (``revoke`` action) — e.g. a community tool
+flagged after install. The shared teardown lives in
+:func:`_revoke_installation`; the audit is mandatory and append-only (the
+``marketplace_audit_entries`` table enforces no-update/no-delete via RLS,
+migration 0043), so an audit row can never be silently dropped.
 
 Tenancy: every route runs on :func:`get_tenant_session`, so PostgreSQL
 RLS scopes the queries. Browsing a listing exposes the GLOBAL catalog
@@ -119,6 +131,63 @@ async def _load_installation_with_listing(
     if listing is None:  # pragma: no cover - FK + ondelete CASCADE keeps these paired
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="listing not found")
     return installation, listing
+
+
+async def _revoke_installation(
+    session: AsyncSession,
+    installation_id: UUID,
+    principal: AuthPrincipal,
+    *,
+    action: MarketplaceAuditAction,
+) -> None:
+    """Flip a live installation to ``revoked`` and ALWAYS write an audit row.
+
+    Shared teardown for the DELETE-uninstall and POST-revoke endpoints
+    (task_09_08). The row is kept (``status=revoked`` + ``revoked_at`` /
+    ``revoked_by`` + ``deleted_at``) rather than hard-deleted, so the
+    immutable audit trail survives and the partial-unique live index
+    (``uq_marketplace_installations_live``) frees the (tenant, listing,
+    project) slot for a future re-install. RLS scopes the lookup to the
+    caller's tenant, so another tenant's installation — and an already
+    revoked one — surfaces as a clean 404 (no cross-tenant teardown, no
+    double-revoke). The status flip and its audit entry share one
+    transaction, so revocation can never commit without its mandatory audit
+    record.
+    """
+    result = await session.execute(
+        select(MarketplaceInstallation).where(
+            MarketplaceInstallation.id == installation_id,
+            MarketplaceInstallation.deleted_at.is_(None),
+            MarketplaceInstallation.status != InstallationStatus.REVOKED.value,
+        )
+    )
+    installation = result.scalar_one_or_none()
+    if installation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="installation not found")
+
+    previous_status = installation.status
+    now = datetime.now(tz=UTC)
+    # Revoking disables the install for agents/projects: status=revoked drops
+    # it out of the "live" set (the partial unique index excludes revoked),
+    # and the soft-delete frees the live slot for a future re-install.
+    installation.status = InstallationStatus.REVOKED.value
+    installation.revoked_at = now
+    installation.revoked_by = principal.user_id
+    installation.deleted_at = now
+
+    # Mandatory append-only audit (plan decision): same transaction as the
+    # status flip, so the two commit atomically.
+    session.add(
+        MarketplaceAuditEntry(
+            tenant_id=installation.tenant_id,
+            actor=_actor(principal),
+            action=action.value,
+            listing_id=installation.listing_id,
+            installation_id=installation.id,
+            detail={"version": installation.version, "previous_status": previous_status},
+        )
+    )
+    await session.flush()
 
 
 # ===========================================================================
@@ -449,7 +518,7 @@ async def decide_consent(
 
 
 # ===========================================================================
-# DELETE /marketplace/installations/{id} — uninstall (revoke + audit)
+# DELETE /marketplace/installations/{id} — uninstall (teardown + audit)
 # ===========================================================================
 @router.delete("/installations/{installation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def uninstall_listing(
@@ -459,42 +528,62 @@ async def uninstall_listing(
 ) -> None:
     """Uninstall: mark the installation ``revoked`` and write an audit row.
 
-    The row is kept (status=revoked + ``revoked_at``/``revoked_by`` +
-    ``deleted_at``) rather than hard-deleted so the audit trail and the
-    partial-unique live constraint both stay intact. Another tenant's
-    installation (and an already-revoked one) surfaces as 404.
+    The operator-driven teardown. The row is kept (status=revoked +
+    ``revoked_at`` / ``revoked_by`` + ``deleted_at``) rather than
+    hard-deleted so the audit trail and the partial-unique live constraint
+    both stay intact. Another tenant's installation (and an already-revoked
+    one) surfaces as 404. Records the ``uninstall`` audit action; see
+    :func:`revoke_installation` for the security-revocation variant.
     """
     require_tenant_id(principal)
+    await _revoke_installation(
+        session,
+        installation_id,
+        principal,
+        action=MarketplaceAuditAction.UNINSTALL,
+    )
+
+
+# ===========================================================================
+# POST /marketplace/installations/{id}/revoke — revoke (security teardown + audit)
+# ===========================================================================
+@router.post(
+    "/installations/{installation_id}/revoke",
+    response_model=MarketplaceInstallationResponse,
+)
+async def revoke_installation(
+    installation_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> MarketplaceInstallationResponse:
+    """Revoke an installation: flip it to ``revoked`` and write a ``revoke``
+    audit row (mandatory, append-only — plan task_09_08).
+
+    The explicit security-revocation path (distinct from the operator
+    teardown that DELETE performs): same effect — status=revoked, disabled
+    for agents/projects, soft-deleted so the live slot frees up — but logged
+    under the ``revoke`` audit action so the trail distinguishes a security
+    revocation from a routine uninstall. Returns the revoked installation
+    row (200) so the caller sees the new state + ``revoked_at`` / by.
+
+    RBAC: gated to ``tenant_admin`` (this repo's project-owner role). RLS
+    scopes the install to the caller's tenant — a cross-tenant caller gets
+    404, never a cross-tenant write; an already-revoked install also 404s.
+    """
+    require_tenant_id(principal)
+    await _revoke_installation(
+        session,
+        installation_id,
+        principal,
+        action=MarketplaceAuditAction.REVOKE,
+    )
+    # Re-load the revoked row to echo the new state (still visible to its own
+    # tenant under RLS even though it is soft-deleted).
     result = await session.execute(
-        select(MarketplaceInstallation).where(
-            MarketplaceInstallation.id == installation_id,
-            MarketplaceInstallation.deleted_at.is_(None),
-            MarketplaceInstallation.status != InstallationStatus.REVOKED.value,
-        )
+        select(MarketplaceInstallation).where(MarketplaceInstallation.id == installation_id)
     )
-    installation = result.scalar_one_or_none()
-    if installation is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="installation not found")
-
-    now = datetime.now(tz=UTC)
-    installation.status = InstallationStatus.REVOKED.value
-    installation.revoked_at = now
-    installation.revoked_by = principal.user_id
-    # Soft-delete frees the (tenant, listing, project) live slot for a
-    # future re-install while keeping the row for audit.
-    installation.deleted_at = now
-
-    session.add(
-        MarketplaceAuditEntry(
-            tenant_id=installation.tenant_id,
-            actor=_actor(principal),
-            action=MarketplaceAuditAction.UNINSTALL.value,
-            listing_id=installation.listing_id,
-            installation_id=installation.id,
-            detail={"version": installation.version},
-        )
-    )
-    await session.flush()
+    installation = result.scalar_one()
+    return to_installation_response(installation)
 
 
 # ===========================================================================
