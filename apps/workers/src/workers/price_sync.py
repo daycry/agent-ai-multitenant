@@ -71,12 +71,14 @@ async def _sync_model_prices(settings: Settings) -> dict[str, Any]:
     # Lazy import — avoids paying the api_server import cost on workers that
     # never route the beat schedule (mirrors workers.maintenance).
     from api_server.db.platform_settings import get_price_sync_enabled
+    from api_server.db.price_sync_audit import SyncTrigger
     from api_server.pricing.litellm_sync import (
         HttpxPriceFeedFetcher,
         PriceFeedError,
         StaticPriceFeedFetcher,
         sync_prices_from_litellm,
     )
+    from api_server.pricing.sync_audit import write_sync_audit
 
     engine = create_async_engine(settings.database_url)
     try:
@@ -105,6 +107,19 @@ async def _sync_model_prices(settings: Settings) -> dict[str, Any]:
                     db,
                     fetcher=fetcher,
                     confirm_large_increases=False,
+                )
+                # task_11_19: a scheduled sync leaves the SAME immutable audit
+                # trail as a manual one — attributed to the "scheduler" (no
+                # user), written in the same transaction as the catalog writes
+                # so nothing is silently applied. The held spikes + compact
+                # diff land in the row's `diff`.
+                await write_sync_audit(
+                    db,
+                    summary=summary,
+                    trigger=SyncTrigger.SCHEDULED,
+                    actor_user_id=None,
+                    feed_url=settings.litellm_price_feed_url,
+                    confirmed=False,
                 )
     except PriceFeedError as exc:
         _log.warning("price_sync.feed_error", error=str(exc))

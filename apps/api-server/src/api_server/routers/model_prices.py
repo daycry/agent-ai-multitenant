@@ -63,6 +63,7 @@ from api_server.auth.deps import (
 )
 from api_server.config import get_settings
 from api_server.db.model_prices import ModelPrice, PriceModality
+from api_server.db.price_sync_audit import PriceSyncAudit, SyncTrigger
 from api_server.pricing.litellm_sync import (
     HttpxPriceFeedFetcher,
     LargeIncreaseNotConfirmedError,
@@ -71,6 +72,7 @@ from api_server.pricing.litellm_sync import (
     compute_sync_diff,
     sync_prices_from_litellm,
 )
+from api_server.pricing.sync_audit import write_sync_audit
 from api_server.routers._pagination import apply_pagination, limit_query, offset_query
 from api_server.schemas.model_prices import (
     ModelPriceCreateRequest,
@@ -86,6 +88,10 @@ from api_server.schemas.price_sync import (
     PriceSyncResponse,
     to_diff_response,
     to_sync_response,
+)
+from api_server.schemas.price_sync_audit import (
+    PriceSyncAuditResponse,
+    to_audit_response,
 )
 
 # READS — mounted at /model-prices, open to any authenticated caller.
@@ -383,6 +389,19 @@ async def sync_prices(
                 detail=f"could not fetch/parse the LiteLLM price feed: {exc}",
             ) from exc
 
+        # task_11_19: every sync (even one that only deferred spikes) leaves an
+        # immutable audit trail — who, source, counts, held spikes, compact
+        # diff. Written on the SAME admin session/transaction as the catalog
+        # writes, so a change can never be applied without its audit row.
+        await write_sync_audit(
+            session,
+            summary=summary,
+            trigger=SyncTrigger.MANUAL,
+            actor_user_id=principal.user_id,
+            feed_url=url,
+            confirmed=req.confirm_large_increases,
+        )
+
     return to_sync_response(summary)
 
 
@@ -473,6 +492,18 @@ async def sync_prices_apply(
                 overwrite_manual=req.overwrite_manual,
                 discontinue_missing=req.discontinue_missing,
             )
+            # task_11_19: audit the applied change in the SAME transaction. A
+            # rejected apply (an unconfirmed >10% rise) raises below BEFORE any
+            # write, so it correctly writes no catalog row AND no audit row —
+            # nothing was applied. A proceeding apply always leaves a trail.
+            await write_sync_audit(
+                session,
+                summary=summary,
+                trigger=SyncTrigger.MANUAL,
+                actor_user_id=principal.user_id,
+                feed_url=url,
+                confirmed=req.confirm,
+            )
         except LargeIncreaseNotConfirmedError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -499,3 +530,40 @@ async def sync_prices_apply(
             ) from exc
 
     return to_sync_response(summary)
+
+
+# ===========================================================================
+# GET /admin/model-prices/sync/audit — the per-sync audit history (task_11_19)
+#
+# Surfaces the immutable audit trail every sync writes (who / when / source /
+# trigger / counts / held spikes / compact diff). Feeds the "Modelos &
+# Precios" screen history. System-Admin only (the audit is a platform-level
+# action record); BYPASSRLS admin session.
+# ===========================================================================
+@admin_router.get("/sync/audit", response_model=list[PriceSyncAuditResponse])
+async def list_sync_audit(
+    trigger: SyncTrigger | None = Query(
+        default=None,
+        description="Filter by how the sync was started: manual or scheduled.",
+    ),
+    limit: int = limit_query(),
+    offset: int = offset_query(),
+    _: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> list[PriceSyncAuditResponse]:
+    """List the per-sync audit records, newest first (task_11_19).
+
+    The append-only history of every catalog sync — manual or scheduled —
+    that the admin screen renders. Optional ``trigger`` filter; ``limit`` /
+    ``offset`` paging over ``created_at desc, id``. RBAC:
+    ``require_system_admin`` (a tenant caller is 403); BYPASSRLS admin
+    session (the table's global-read RLS would let any session read, but the
+    history is a System-Admin surface so the endpoint gates it).
+    """
+    stmt = select(PriceSyncAudit)
+    if trigger is not None:
+        stmt = stmt.where(PriceSyncAudit.trigger == trigger.value)
+    stmt = stmt.order_by(PriceSyncAudit.created_at.desc(), PriceSyncAudit.id.desc())
+    stmt = apply_pagination(stmt, limit=limit, offset=offset)
+    result = await session.execute(stmt)
+    return [to_audit_response(r) for r in result.scalars().all()]
