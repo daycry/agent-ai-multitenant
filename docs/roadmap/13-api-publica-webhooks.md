@@ -104,7 +104,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_02` — Endpoint admin del tenant para crear/listar/revocar tokens
 
-- [ ] **Título**: Endpoint admin del tenant para crear/listar/revocar tokens
+- [x] **Título**: Endpoint admin del tenant para crear/listar/revocar tokens
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
