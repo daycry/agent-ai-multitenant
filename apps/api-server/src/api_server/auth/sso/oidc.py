@@ -32,6 +32,10 @@ from joserfc.jwk import KeySet
 # OIDC requires the `openid` scope; we always include it even if a
 # tenant's config forgot to list it.
 OPENID_SCOPE = "openid"
+# The claim carrying the user's IdP group memberships (task_08_11). A
+# tenant can point at a different claim via ``claim_mappings["groups"]``
+# (Azure AD uses ``groups``, others ``roles`` / ``memberOf`` / ...).
+DEFAULT_GROUPS_CLAIM = "groups"
 _DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
 # Algorithms we accept on the ID token signature. RS256 is the OIDC
 # baseline mandatory algorithm; we explicitly allow-list it (and the
@@ -86,15 +90,35 @@ class OIDCDiscovery:
 class OIDCUserInfo:
     """Resolved identity claims for the authenticated user.
 
-    ``email`` is the lookup key for JIT provisioning. ``claims`` is the
-    full userinfo payload so future tasks (group→role mapping,
-    task_08_11) can read more without another round-trip.
+    ``email`` is the lookup key for JIT provisioning. ``groups`` is the
+    list of IdP group names asserted for this login (task_08_11), already
+    extracted from the configured ``groups`` claim — the JIT path maps it
+    onto a tenant role. ``claims`` is the full userinfo payload so callers
+    can read more without another round-trip.
     """
 
     subject: str
     email: str
     full_name: str | None
+    groups: list[str]
     claims: dict[str, object]
+
+
+def _extract_groups(raw: object) -> list[str]:
+    """Normalise a raw ``groups`` claim into a list of non-empty strings.
+
+    IdPs are inconsistent: most send a JSON array of strings, but some
+    send a single string (one group) or a comma/space-delimited string.
+    We accept a list of strings or a single string, drop empties and
+    non-string members, and ignore anything else (a missing claim → []).
+    The values are NOT trusted as roles — they are only matched against
+    the tenant's explicit ``group_role_mappings`` keys downstream.
+    """
+    if isinstance(raw, str):
+        return [raw] if raw else []
+    if isinstance(raw, list | tuple):
+        return [item for item in raw if isinstance(item, str) and item]
+    return []
 
 
 class OIDCFlow:
@@ -259,6 +283,7 @@ class OIDCFlow:
         mapping = config.claim_mappings
         email_claim = mapping.get("email", "email")
         name_claim = mapping.get("full_name", "name")
+        groups_claim = mapping.get("groups", DEFAULT_GROUPS_CLAIM)
 
         subject = claims.get("sub")
         if not isinstance(subject, str) or not subject:
@@ -272,11 +297,13 @@ class OIDCFlow:
             subject=subject,
             email=email.lower(),
             full_name=full_name,
+            groups=_extract_groups(claims.get(groups_claim)),
             claims=claims,
         )
 
 
 __all__ = [
+    "DEFAULT_GROUPS_CLAIM",
     "OIDCDiscovery",
     "OIDCError",
     "OIDCFlow",

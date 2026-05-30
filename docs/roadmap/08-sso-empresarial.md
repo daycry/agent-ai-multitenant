@@ -356,7 +356,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_11` — Mapeo grupos IdP → roles tenant
 
-- [ ] **Título**: Mapeo grupos IdP → roles tenant
+- [x] **Título**: Mapeo grupos IdP → roles tenant
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

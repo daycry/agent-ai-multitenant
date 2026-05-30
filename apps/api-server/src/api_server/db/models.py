@@ -383,6 +383,19 @@ class SSOConfiguration(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
 
+    # --- IdP group -> tenant role mapping (Plan 08 task_08_11,
+    # migration 0039). A ``{idp_group: tenant_role}`` object applied on
+    # every SSO login (OIDC + SAML): the user's membership role is set to
+    # the highest-privilege role any of their asserted groups maps to. An
+    # empty object (the default) leaves the JIT default ``tenant_user``
+    # untouched. Only the per-tenant roles ``tenant_admin`` /
+    # ``tenant_user`` are honoured — a group can NEVER grant a platform
+    # role (``system_admin`` is a `users` boolean; ``system_operator`` is
+    # ignored here), see ``auth.sso.group_mapping``.
+    group_role_mappings: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
     # --- SAML 2.0 identity provider (NULL on an `oidc` row; Plan 08
     # task_08_04, migration 0033). The per-provider CHECK constraint
     # requires entity_id + sso_url + x509_cert for `saml` rows.

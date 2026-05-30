@@ -47,6 +47,7 @@ from api_server.auth.deps import (
 )
 from api_server.auth.jwt import encode_jwt
 from api_server.auth.sessions import SessionStore
+from api_server.auth.sso.group_mapping import resolve_role_from_groups
 from api_server.auth.sso.oidc import OIDCError, OIDCFlow, ResolvedOIDCConfig
 from api_server.auth.sso.saml import (
     DEFAULT_NAME_ID_FORMAT,
@@ -80,7 +81,6 @@ from api_server.db.models import (
     SSOProvider,
     User,
     UserOrganizationMembership,
-    UserRole,
 )
 from api_server.db.session import get_sessionmaker
 from api_server.routers._helpers import require_tenant_id
@@ -410,7 +410,13 @@ async def oidc_callback(
         ) from exc
 
     user_id = await _jit_provision_user(
-        login_state.tenant_id, email=userinfo.email, full_name=userinfo.full_name
+        login_state.tenant_id,
+        email=userinfo.email,
+        full_name=userinfo.full_name,
+        groups=userinfo.groups,
+        group_role_mappings={
+            str(k): str(v) for k, v in (config_row.group_role_mappings or {}).items()
+        },
     )
     assert user_id is not None  # provisioning always returns a live user id
 
@@ -573,7 +579,13 @@ async def saml_acs(
 
     tenant_uuid = UUID(tenant_id)
     user_id = await _jit_provision_user(
-        tenant_uuid, email=userinfo.email, full_name=userinfo.full_name
+        tenant_uuid,
+        email=userinfo.email,
+        full_name=userinfo.full_name,
+        groups=userinfo.groups,
+        group_role_mappings={
+            str(k): str(v) for k, v in (config_row.group_role_mappings or {}).items()
+        },
     )
     return await _issue_session(sessions, user_id=user_id, tenant_uuid=tenant_uuid)
 
@@ -619,7 +631,14 @@ async def _bind_tenant(session: AsyncSession, tenant_uuid: UUID) -> None:
     )
 
 
-async def _jit_provision_user(tenant_uuid: UUID, *, email: str, full_name: str | None) -> UUID:
+async def _jit_provision_user(
+    tenant_uuid: UUID,
+    *,
+    email: str,
+    full_name: str | None,
+    groups: list[str] | None = None,
+    group_role_mappings: dict[str, str] | None = None,
+) -> UUID:
     """Just-In-Time provisioning at first SSO login (Plan 08 task_08_07).
 
     Policy (shared by the OIDC callback and the SAML ACS):
@@ -633,11 +652,21 @@ async def _jit_provision_user(tenant_uuid: UUID, *, email: str, full_name: str |
         password (the ``_SSO_PASSWORD_SENTINEL`` hash that no plaintext
         can produce) and ``is_sso_provisioned = true`` so local login
         rejects it cleanly (see ``routers/auth.py``).
-      * **Active membership in the SSO config's tenant**, role
-        ``tenant_user`` (the Tenant Admin promotes later — Plan 08
-        "Decisiones Clave"). The membership is created under
-        ``app.tenant_id`` bound to ``tenant_uuid``, so it can only ever
-        land in THIS tenant.
+      * **Active membership in the SSO config's tenant.** The role is
+        derived from the IdP groups via the tenant's
+        ``group_role_mappings`` (task_08_11): the highest-privilege
+        per-tenant role any asserted group maps to, defaulting to
+        ``tenant_user`` when nothing maps. A group can NEVER grant a
+        platform role (``system_admin`` / ``system_operator``). On EVERY
+        login the existing membership's role is re-synced to the mapped
+        role so an IdP group change takes effect on the next login —
+        EXCEPT we never downgrade a manually-elevated ``tenant_admin``
+        when the mapping resolves to the bare default and the tenant has
+        no group mapping configured at all (so a tenant that never opted
+        into group mapping keeps the old "JIT default, admin promotes
+        manually" behaviour untouched). The membership is created/updated
+        under ``app.tenant_id`` bound to ``tenant_uuid``, so it can only
+        ever land in THIS tenant.
       * **Idempotent under concurrency.** Two simultaneous first-logins
         race on the ``users.email`` unique index and on the
         ``uq_membership_user_tenant`` unique index; both races are caught
@@ -646,6 +675,8 @@ async def _jit_provision_user(tenant_uuid: UUID, *, email: str, full_name: str |
 
     Returns the (existing or freshly created) user's id.
     """
+    mappings = group_role_mappings or {}
+    mapped_role = resolve_role_from_groups(groups or [], mappings)
     normalized_email = email.strip().lower()
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session, session.begin():
@@ -678,9 +709,9 @@ async def _jit_provision_user(tenant_uuid: UUID, *, email: str, full_name: str |
                 existing = await session.execute(select(User).where(User.email == normalized_email))
                 user = existing.scalar_one()
 
-        # Ensure an active membership in this tenant (role tenant_user).
-        # The query runs under app.tenant_id == tenant_uuid, so it only
-        # ever sees / writes a membership for THIS tenant.
+        # Ensure an active membership in this tenant. The query runs under
+        # app.tenant_id == tenant_uuid, so it only ever sees / writes a
+        # membership for THIS tenant.
         membership_q = await session.execute(
             select(UserOrganizationMembership).where(
                 UserOrganizationMembership.user_id == user.id,
@@ -694,7 +725,7 @@ async def _jit_provision_user(tenant_uuid: UUID, *, email: str, full_name: str |
                     id=uuid7(),
                     tenant_id=tenant_uuid,
                     user_id=user.id,
-                    role=UserRole.TENANT_USER.value,
+                    role=mapped_role,
                     is_active=True,
                 )
             )
@@ -706,7 +737,36 @@ async def _jit_provision_user(tenant_uuid: UUID, *, email: str, full_name: str |
                 # the work is done — swallow and return the same user id.
                 await session.rollback()
                 return user.id
+        else:
+            _sync_membership_role(membership, mapped_role=mapped_role, has_mappings=bool(mappings))
         return user.id
+
+
+def _sync_membership_role(
+    membership: UserOrganizationMembership, *, mapped_role: str, has_mappings: bool
+) -> None:
+    """Re-sync an existing membership's role from the IdP group mapping.
+
+    Behaviour split by whether the tenant configured ANY group mapping:
+
+      * **No mapping configured** (``has_mappings`` False): leave the role
+        untouched. ``mapped_role`` is just the bare default here, and a
+        tenant that never opted into group mapping must keep the legacy
+        flow where the JIT default sticks and a Tenant Admin promotes
+        manually — we must not clobber a manual ``tenant_admin``.
+      * **Mapping configured** (``has_mappings`` True): the IdP is the
+        source of truth, so set the role to ``mapped_role`` on every
+        login (an IdP group change — grant OR revoke — takes effect next
+        login). ``mapped_role`` is already a safe per-tenant role
+        (``resolve_role_from_groups`` never returns a platform role), so
+        this can never escalate to ``system_admin`` / ``system_operator``.
+
+    The membership's ``is_active`` flag is deliberately left untouched: a
+    deactivated membership (e.g. a SCIM deprovision, task_08_08) stays
+    deactivated — role mapping governs the role, not access revocation.
+    """
+    if has_mappings and membership.role != mapped_role:
+        membership.role = mapped_role
 
 
 # ===========================================================================
@@ -742,6 +802,7 @@ def _to_response(row: SSOConfiguration) -> SSOConfigResponse:
         client_id=row.client_id or "",
         scopes=list(row.scopes),
         claim_mappings={str(k): str(v) for k, v in (row.claim_mappings or {}).items()},
+        group_role_mappings={str(k): str(v) for k, v in (row.group_role_mappings or {}).items()},
         has_client_secret=source is not None,
         client_secret_source=source,
         created_at=row.created_at,
@@ -872,6 +933,7 @@ async def create_sso_config(
         client_id=payload.client_id,
         scopes=payload.scopes,
         claim_mappings=payload.claim_mappings,
+        group_role_mappings=payload.group_role_mappings,
     )
     _apply_secret(row, payload, is_create=True)
     session.add(row)
@@ -920,6 +982,7 @@ async def update_sso_config(
     row.client_id = payload.client_id
     row.scopes = payload.scopes
     row.claim_mappings = payload.claim_mappings
+    row.group_role_mappings = payload.group_role_mappings
     _apply_secret(row, payload, is_create=False)
     await session.flush()
     await session.refresh(row)
@@ -990,6 +1053,7 @@ def _to_saml_response(row: SSOConfiguration) -> SAMLConfigResponse:
         idp_x509_cert=row.idp_x509_cert or "",
         name_id_format=row.name_id_format,
         attribute_mappings={str(k): str(v) for k, v in (row.attribute_mappings or {}).items()},
+        group_role_mappings={str(k): str(v) for k, v in (row.group_role_mappings or {}).items()},
         sp_x509_cert=row.sp_x509_cert,
         has_sp_private_key=key_source is not None,
         sp_private_key_source=key_source,
@@ -1169,6 +1233,7 @@ async def create_saml_config(
         idp_x509_cert=payload.idp_x509_cert,
         name_id_format=payload.name_id_format,
         attribute_mappings=payload.attribute_mappings,
+        group_role_mappings=payload.group_role_mappings,
         sp_x509_cert=payload.sp_x509_cert,
         authn_requests_signed=payload.authn_requests_signed,
         want_assertions_signed=payload.want_assertions_signed,
@@ -1223,6 +1288,7 @@ async def update_saml_config(
     row.idp_x509_cert = payload.idp_x509_cert
     row.name_id_format = payload.name_id_format
     row.attribute_mappings = payload.attribute_mappings
+    row.group_role_mappings = payload.group_role_mappings
     row.sp_x509_cert = payload.sp_x509_cert
     row.authn_requests_signed = payload.authn_requests_signed
     row.want_assertions_signed = payload.want_assertions_signed

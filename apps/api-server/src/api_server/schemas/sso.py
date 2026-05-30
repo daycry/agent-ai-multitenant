@@ -26,6 +26,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from api_server.auth.sso.group_mapping import is_grantable_role
+
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
 # Field length bounds mirror the SSOConfiguration columns so the API
@@ -55,6 +57,9 @@ class SSOConfigResponse(BaseModel):
     client_id: str
     scopes: list[str]
     claim_mappings: dict[str, str]
+    # IdP group -> tenant role mapping (task_08_11). Only the per-tenant
+    # roles tenant_admin / tenant_user are honoured at login.
+    group_role_mappings: dict[str, str]
     has_client_secret: bool
     client_secret_source: str | None
     created_at: datetime
@@ -82,6 +87,10 @@ class SSOConfigUpsertRequest(BaseModel):
     client_secret_ref: str | None = Field(default=None, max_length=_SECRET_REF_MAX)
     scopes: list[str] = Field(default_factory=lambda: ["openid", "email", "profile"])
     claim_mappings: dict[str, str] = Field(default_factory=dict)
+    # IdP group -> tenant role mapping (task_08_11). Validated below: every
+    # value must be a grantable per-tenant role — a tenant cannot configure
+    # a group that grants a platform role (system_admin / system_operator).
+    group_role_mappings: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _at_most_one_secret_form(self) -> SSOConfigUpsertRequest:
@@ -89,6 +98,17 @@ class SSOConfigUpsertRequest(BaseModel):
             raise ValueError(
                 "provide at most one of client_secret (plaintext) or "
                 "client_secret_ref (Vault pointer), never both"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _group_roles_are_grantable(self) -> SSOConfigUpsertRequest:
+        bad = sorted({r for r in self.group_role_mappings.values() if not is_grantable_role(r)})
+        if bad:
+            raise ValueError(
+                "group_role_mappings may only grant per-tenant roles "
+                "(tenant_admin / tenant_user); these are not grantable via "
+                f"IdP groups: {', '.join(bad)}"
             )
         return self
 
@@ -163,6 +183,9 @@ class SAMLConfigResponse(BaseModel):
     idp_x509_cert: str
     name_id_format: str
     attribute_mappings: dict[str, str]
+    # IdP group -> tenant role mapping (task_08_11). Same grantable-role
+    # restriction as the OIDC config.
+    group_role_mappings: dict[str, str]
     sp_x509_cert: str | None
     has_sp_private_key: bool
     sp_private_key_source: str | None
@@ -203,6 +226,9 @@ class SAMLConfigUpsertRequest(BaseModel):
         default=DEFAULT_SAML_NAME_ID_FORMAT, min_length=1, max_length=_NAME_ID_FORMAT_MAX
     )
     attribute_mappings: dict[str, str] = Field(default_factory=dict)
+    # IdP group -> tenant role mapping (task_08_11). Validated below to a
+    # grantable per-tenant role, exactly like the OIDC config.
+    group_role_mappings: dict[str, str] = Field(default_factory=dict)
     # SP public cert is not secret; the IdP needs it to verify/encrypt.
     sp_x509_cert: str | None = Field(default=None)
     # Exactly-zero-or-one of these. Plaintext PEM is encrypted server-side
@@ -220,6 +246,17 @@ class SAMLConfigUpsertRequest(BaseModel):
             raise ValueError(
                 "provide at most one of sp_private_key (plaintext PEM) or "
                 "sp_private_key_ref (Vault pointer), never both"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _group_roles_are_grantable(self) -> SAMLConfigUpsertRequest:
+        bad = sorted({r for r in self.group_role_mappings.values() if not is_grantable_role(r)})
+        if bad:
+            raise ValueError(
+                "group_role_mappings may only grant per-tenant roles "
+                "(tenant_admin / tenant_user); these are not grantable via "
+                f"IdP groups: {', '.join(bad)}"
             )
         return self
 

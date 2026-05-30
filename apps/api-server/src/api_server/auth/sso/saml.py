@@ -218,14 +218,17 @@ class ResolvedSAMLConfig:
 class SAMLUserInfo:
     """Resolved identity from a validated SAML assertion.
 
-    ``email`` is the JIT lookup key. ``attributes`` is the full attribute
-    statement so later tasks (group→role mapping, task_08_11) can read
-    more without re-parsing.
+    ``email`` is the JIT lookup key. ``groups`` is the list of IdP group
+    names asserted in this login (task_08_11), already extracted from the
+    configured/standard group attribute — the JIT path maps it onto a
+    tenant role. ``attributes`` is the full attribute statement so callers
+    can read more without re-parsing.
     """
 
     name_id: str
     email: str
     full_name: str | None
+    groups: list[str]
     attributes: dict[str, list[str]]
 
 
@@ -243,6 +246,18 @@ _NAME_FALLBACK_ATTRS = (
     "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name",
     "urn:oid:2.16.840.1.113730.3.1.241",
     "cn",
+)
+# Common SAML attribute names IdPs use for group/role membership when the
+# tenant config does not map them explicitly (task_08_11). Checked in
+# order; the FIRST attribute that is present supplies the groups.
+_GROUPS_FALLBACK_ATTRS = (
+    "groups",
+    "Groups",
+    "http://schemas.xmlsoap.org/claims/Group",
+    "http://schemas.microsoft.com/ws/2008/06/identity/claims/groups",
+    "memberOf",
+    "Role",
+    "http://schemas.microsoft.com/ws/2008/06/identity/claims/role",
 )
 
 
@@ -338,10 +353,12 @@ def _extract_identity(config: ResolvedSAMLConfig, auth: OneLogin_Saml2_Auth) -> 
 
     email = _resolve_email(config, name_id, attributes)
     full_name = _resolve_full_name(config, attributes)
+    groups = _resolve_groups(config, attributes)
     return SAMLUserInfo(
         name_id=name_id,
         email=email.lower(),
         full_name=full_name,
+        groups=groups,
         attributes=attributes,
     )
 
@@ -387,6 +404,26 @@ def _resolve_full_name(config: ResolvedSAMLConfig, attributes: dict[str, list[st
         if value:
             return value
     return None
+
+
+def _resolve_groups(config: ResolvedSAMLConfig, attributes: dict[str, list[str]]) -> list[str]:
+    """Resolve the user's IdP group names: mapped attribute → fallbacks.
+
+    A SAML group attribute is multi-valued by nature (each ``groups``
+    entry is one group), so this returns ALL values of the chosen
+    attribute. When the tenant maps ``groups`` explicitly we use that
+    attribute only (even if empty); otherwise we take the first matching
+    standard attribute name. Groups are optional — a login with none
+    simply yields an empty list (the user keeps the default role).
+    """
+    mapped = config.attribute_mappings.get("groups")
+    if mapped:
+        return [v for v in attributes.get(mapped, []) if v]
+    for candidate in _GROUPS_FALLBACK_ATTRS:
+        values = attributes.get(candidate)
+        if values:
+            return [v for v in values if v]
+    return []
 
 
 def validate_saml_security(config: ResolvedSAMLConfig) -> None:
