@@ -28,7 +28,7 @@ from api_server.logging.context import REQUEST_ID_HEADER, RequestContextMiddlewa
 from api_server.routers.admin import router as admin_router
 from api_server.routers.agents import router as agents_router
 from api_server.routers.api_tokens import router as api_tokens_router
-from api_server.routers.api_v1 import api_v1_router
+from api_server.routers.api_v1 import api_v1_docs_router, api_v1_router
 from api_server.routers.approval_policies import router as approval_policies_router
 from api_server.routers.approvals import router as approvals_router
 from api_server.routers.assistant import router as assistant_router
@@ -161,6 +161,7 @@ def _register_routers(app: FastAPI) -> None:
         agents_router,
         api_tokens_router,
         api_v1_router,
+        api_v1_docs_router,
         skills_router,
         tools_router,
         teams_router,

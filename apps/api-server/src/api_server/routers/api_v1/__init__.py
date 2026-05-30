@@ -23,6 +23,7 @@ response.
 
 from __future__ import annotations
 
+from api_server.routers.api_v1.openapi import api_v1_docs_router
 from api_server.routers.api_v1.router import api_v1_router
 
-__all__ = ["api_v1_router"]
+__all__ = ["api_v1_docs_router", "api_v1_router"]
