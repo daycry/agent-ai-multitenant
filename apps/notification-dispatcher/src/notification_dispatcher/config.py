@@ -87,6 +87,22 @@ class Settings(BaseSettings):
         "deployment; channel adapters (Fase B/C) honour it.",
     )
 
+    # ----- Event → notification mapping tunables (task_10_04) -----
+    default_locale: str = Field(
+        default="en",
+        description="Locale used to render a notification when neither the "
+        "matched preference nor the channel carries one. ES + EN only "
+        "(CLAUDE.md §12); the template engine falls back to EN regardless, "
+        "this just picks the first choice. Tunable, never hardcoded.",
+    )
+    quiet_hours_max_defer_s: int = Field(
+        default=24 * 3600,
+        description="Upper bound on how far a quiet-hours-deferred send is "
+        "pushed into the future (seconds). A misconfigured window can never "
+        "defer a send beyond this; the resolver clamps the computed ETA. "
+        "24h by default — one full quiet-hours cycle.",
+    )
+
     # ----- Secrets at rest (never plaintext; Vault-or-Fernet, mirroring the
     # SSO/marketplace precedent). The dispatcher resolves a channel secret
     # from `secret_ref` (Vault) or `secret_encrypted` (Fernet) at send time;

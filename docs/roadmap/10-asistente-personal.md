@@ -138,7 +138,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_04` — Mapeo eventos del sistema → notificaciones
 
-- [ ] **Título**: Mapeo eventos del sistema → notificaciones
+- [x] **Título**: Mapeo eventos del sistema → notificaciones
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

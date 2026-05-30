@@ -1,7 +1,13 @@
-"""Celery tasks the notification-dispatcher executes (task_10_02).
+"""Celery tasks the notification-dispatcher executes (task_10_02 / task_10_04).
 
-One entry point: ``send_notification`` — deliver one notification over a
-configured channel and record the attempt in ``notification_logs``.
+Two entry points:
+
+  * ``send_notification`` (task_10_02) — deliver one notification over a
+    configured channel and record the attempt in ``notification_logs``.
+  * ``dispatch_event`` (task_10_04) — fan one domain event out to its
+    subscribed channels: resolve recipients via ``NotificationPreference``
+    (most-specific-wins), suppress opt-outs, defer quiet-hours, render the
+    template, and enqueue a ``send_notification`` per surviving channel.
 
 The dispatcher connects with the BYPASSRLS ``migrations_user`` role
 (config.py) because it legitimately delivers across tenants, so RLS
@@ -46,6 +52,12 @@ from notification_dispatcher.adapters import (
 )
 from notification_dispatcher.celery_app import app
 from notification_dispatcher.config import Settings, get_settings
+from notification_dispatcher.event_mapping import (
+    DispatchPlan,
+    IncomingEvent,
+    lane_queue,
+    resolve_event_dispatch,
+)
 from notification_dispatcher.secrets import resolve_channel_secret
 
 _log = structlog.get_logger("notification_dispatcher.tasks")
@@ -163,6 +175,85 @@ async def _push_dead_letter(settings: Settings, request: dict[str, Any], exc: Ex
         )
     finally:
         await redis.aclose()
+
+
+# ===========================================================================
+# Plan 10 Fase A task_10_04 — system event → notification fan-out.
+#
+# `dispatch_event` is the entry point the api-server / orchestrator enqueues
+# when a domain event fires (plan approved, task blocked, review requested,
+# …). It resolves the event to a per-channel `DispatchPlan` (recipients via
+# NotificationPreference most-specific-wins, opt-out suppression, quiet-hours
+# deferral, template render) then enqueues one `send_notification` per
+# surviving channel onto that event's lane. The plan resolution is a pure
+# async function (`resolve_event_dispatch`) so it is unit-testable without
+# the broker; this task only adds the engine lifecycle + the enqueue.
+# ===========================================================================
+@app.task(name="notification_dispatcher.dispatch_event")  # type: ignore[misc]
+def dispatch_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Fan one domain event out to its subscribed channels (task_10_04).
+
+    The enqueuer sends the event as a plain dict (``event_type``,
+    ``tenant_id``, ``context``, optional ``locale``). We resolve the
+    dispatch plan and enqueue a ``send_notification`` per SEND/DEFERRED
+    decision (DEFERRED rides an ``eta`` past its quiet-hours window).
+
+    Tenant isolation is enforced inside ``resolve_event_dispatch`` (only
+    the event's tenant + platform-wide channels are ever resolved) and again
+    at each ``send_notification`` boundary. Returns a JSON-safe summary
+    ``{event_type, tenant_id, enqueued, suppressed, deferred, no_op}``.
+    """
+    settings = get_settings()
+    return asyncio.run(_dispatch_event(IncomingEvent.from_dict(event), settings))
+
+
+async def _dispatch_event(event: IncomingEvent, settings: Settings) -> dict[str, Any]:
+    """Async core of ``dispatch_event`` — resolve then enqueue."""
+    engine = create_async_engine(settings.database_url)
+    try:
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        plan = await resolve_event_dispatch(event, settings=settings, sessionmaker=sessionmaker)
+    finally:
+        await engine.dispose()
+
+    return _enqueue_plan(plan, settings)
+
+
+def _enqueue_plan(plan: DispatchPlan, settings: Settings) -> dict[str, Any]:
+    """Enqueue a ``send_notification`` per SEND/DEFERRED decision in ``plan``.
+
+    Split out (and synchronous) so a test can assert which sends the plan
+    produced without a live broker — it can pass a plan and patch
+    ``send_notification.apply_async``. DEFERRED sends ride an ``eta``.
+    """
+    from notification_dispatcher.event_mapping import DispatchDecision
+
+    enqueued = 0
+    deferred = 0
+    suppressed = 0
+    for decision in plan.decisions:
+        if decision.decision is DispatchDecision.SUPPRESSED:
+            suppressed += 1
+            continue
+        if decision.send_request is None:  # pragma: no cover - defensive
+            continue
+        queue = lane_queue(decision.lane, settings)
+        kwargs: dict[str, Any] = {"queue": queue}
+        if decision.decision is DispatchDecision.DEFERRED and decision.eta is not None:
+            kwargs["eta"] = decision.eta
+            deferred += 1
+        else:
+            enqueued += 1
+        send_notification.apply_async(args=[decision.send_request], **kwargs)
+
+    return {
+        "event_type": plan.event_type,
+        "tenant_id": plan.tenant_id,
+        "enqueued": enqueued,
+        "deferred": deferred,
+        "suppressed": suppressed,
+        "no_op": plan.no_op,
+    }
 
 
 async def _send_notification(request: SendRequest, settings: Settings) -> dict[str, Any]:
@@ -321,5 +412,6 @@ def _default_target(channel: Any) -> str | None:
 __all__ = [
     "CrossTenantNotificationError",
     "SendRequest",
+    "dispatch_event",
     "send_notification",
 ]

@@ -170,6 +170,109 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "Requested by {{ requester | default('an agent') }}."
         ),
     ),
+    # --- task_blocked ------------------------------------------------------
+    ("task_blocked", "es"): TemplateSource(
+        subject="Tarea bloqueada: {{ task_title | default('(sin título)') }}",
+        body=(
+            "La tarea «{{ task_title | default('(sin título)') }}» "
+            "del proyecto «{{ project_name | default('(sin proyecto)') }}» "
+            "está bloqueada. Motivo: {{ reason | default('desconocido') }}."
+        ),
+    ),
+    ("task_blocked", "en"): TemplateSource(
+        subject="Task blocked: {{ task_title | default('(untitled)') }}",
+        body=(
+            "Task \"{{ task_title | default('(untitled)') }}\" "
+            "in project \"{{ project_name | default('(no project)') }}\" "
+            "is blocked. Reason: {{ reason | default('unknown') }}."
+        ),
+    ),
+    # --- plan_rejected -----------------------------------------------------
+    ("plan_rejected", "es"): TemplateSource(
+        subject="Plan rechazado: {{ plan_name | default('(sin nombre)') }}",
+        body=(
+            "El plan «{{ plan_name | default('(sin nombre)') }}» "
+            "del proyecto «{{ project_name | default('(sin proyecto)') }}» "
+            "ha sido rechazado por {{ approver | default('un administrador') }}. "
+            "Motivo: {{ reason | default('no indicado') }}."
+        ),
+    ),
+    ("plan_rejected", "en"): TemplateSource(
+        subject="Plan rejected: {{ plan_name | default('(unnamed)') }}",
+        body=(
+            "Plan \"{{ plan_name | default('(unnamed)') }}\" "
+            "in project \"{{ project_name | default('(no project)') }}\" "
+            "was rejected by {{ approver | default('an administrator') }}. "
+            "Reason: {{ reason | default('not given') }}."
+        ),
+    ),
+    # --- execution_failed --------------------------------------------------
+    ("execution_failed", "es"): TemplateSource(
+        subject="Ejecución fallida: {{ plan_name | default('(sin nombre)') }}",
+        body=(
+            "La ejecución del plan «{{ plan_name | default('(sin nombre)') }}» "
+            "ha fallado. Motivo: {{ reason | default('desconocido') }}."
+        ),
+    ),
+    ("execution_failed", "en"): TemplateSource(
+        subject="Execution failed: {{ plan_name | default('(unnamed)') }}",
+        body=(
+            "Execution of plan \"{{ plan_name | default('(unnamed)') }}\" "
+            "failed. Reason: {{ reason | default('unknown') }}."
+        ),
+    ),
+    # --- human_validation_needed -------------------------------------------
+    ("human_validation_needed", "es"): TemplateSource(
+        subject="Validación humana requerida: {{ task_title | default('(sin título)') }}",
+        body=(
+            "Se requiere tu validación de «{{ task_title | default('(sin título)') }}» "
+            "en el proyecto «{{ project_name | default('(sin proyecto)') }}» "
+            "antes de continuar."
+        ),
+    ),
+    ("human_validation_needed", "en"): TemplateSource(
+        subject="Human validation needed: {{ task_title | default('(untitled)') }}",
+        body=(
+            "Your validation is needed for \"{{ task_title | default('(untitled)') }}\" "
+            "in project \"{{ project_name | default('(no project)') }}\" "
+            "before work can continue."
+        ),
+    ),
+    # --- review_escalated --------------------------------------------------
+    ("review_escalated", "es"): TemplateSource(
+        subject="Revisión escalada: {{ task_title | default('(sin título)') }}",
+        body=(
+            "La revisión de «{{ task_title | default('(sin título)') }}» "
+            "se ha escalado a un humano tras "
+            "{{ retries | default('varios') }} reintentos."
+        ),
+    ),
+    ("review_escalated", "en"): TemplateSource(
+        subject="Review escalated: {{ task_title | default('(untitled)') }}",
+        body=(
+            "Review of \"{{ task_title | default('(untitled)') }}\" "
+            "was escalated to a human after "
+            "{{ retries | default('several') }} retries."
+        ),
+    ),
+    # --- budget_alert ------------------------------------------------------
+    ("budget_alert", "es"): TemplateSource(
+        subject="Alerta de presupuesto: {{ plan_name | default('(sin nombre)') }}",
+        body=(
+            "El plan «{{ plan_name | default('(sin nombre)') }}» "
+            "ha cruzado el umbral de presupuesto "
+            "({{ threshold | default('?') }}%). "
+            "Gasto actual: {{ spent | default('?') }}."
+        ),
+    ),
+    ("budget_alert", "en"): TemplateSource(
+        subject="Budget alert: {{ plan_name | default('(unnamed)') }}",
+        body=(
+            "Plan \"{{ plan_name | default('(unnamed)') }}\" "
+            "crossed a budget threshold ({{ threshold | default('?') }}%). "
+            "Current spend: {{ spent | default('?') }}."
+        ),
+    ),
 }
 
 # Public, read-only view of the builtin catalogue keyed by

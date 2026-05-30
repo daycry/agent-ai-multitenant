@@ -201,6 +201,9 @@ module = [
     "api_server.task_lifecycle",
     "api_server.db.review_session_repo",
     "api_server.db.task_audit_repo",
+    # notification-dispatcher (Plan 10) imports the notification ORM lazily
+    # from api_server.db.notification; the package ships no py.typed marker.
+    "api_server.db.notification",
 ]
 ignore_missing_imports = true
 
