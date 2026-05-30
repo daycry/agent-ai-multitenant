@@ -6,8 +6,9 @@ stream:
 
   - a queued notification over an enabled channel **dispatches and logs
     ``sent``** (the default ``in_app`` no-op adapter delivers it),
-  - a **failing send logs ``failed`` and dead-letters** onto
-    ``dlq:notifications`` — never a blind auto-retry,
+  - a **failing send logs ``dead_letter`` and dead-letters** onto
+    ``dlq:notifications`` (auto-retry disabled here via ``max_retries=0``;
+    the retry/backoff machinery has its own suite, ``test_retries_dlq.py``),
   - a **cross-tenant ownership mismatch is rejected** at the worker
     boundary: a Celery payload that pairs tenant A with tenant B's channel
     raises ``CrossTenantNotificationError`` and writes NO log row
@@ -79,6 +80,12 @@ def _test_settings() -> Settings:
         # Distinct stream so the assertions don't collide with the workers'
         # dlq:executions stream on the shared test Redis DB.
         dead_letter_stream="dlq:notifications:test",
+        # task_10_13 layers exponential retries on top of this Fase A path;
+        # these tests exercise the SINGLE-attempt dispatch contract, so disable
+        # auto-retry (max_retries=0) — a failed send is the terminal attempt and
+        # is dead-lettered immediately. The retry/backoff machinery has its own
+        # dedicated suite (tests/integration/test_retries_dlq.py).
+        max_retries=0,
         environment="dev",
     )
 
@@ -268,13 +275,14 @@ def test_failed_send_logs_failed_and_dead_letters(schema_at_head) -> None:
     finally:
         tasks_mod.get_settings = original_get
 
-    # The failed attempt was recorded as a 'failed' log row.
+    # With auto-retry disabled (max_retries=0) the first failed attempt is the
+    # terminal one, so it is recorded straight as 'dead_letter'.
     rows = asyncio.run(_count_logs(_sync_dsn(), channel_id=channel_a))
     assert len(rows) == 1
-    assert rows[0]["status"] == "failed"
+    assert rows[0]["status"] == "dead_letter"
     assert rows[0]["event_type"] == "budget_alert"
 
-    # And the send was dead-lettered (NOT auto-retried).
+    # And the send was dead-lettered.
     async def _read_dlq() -> list:
         redis: Redis = Redis.from_url(settings.events_redis_url, decode_responses=True)
         try:

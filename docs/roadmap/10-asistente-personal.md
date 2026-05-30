@@ -295,7 +295,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_13` — Reintentos exponenciales + dead-letter queue + reintento manual desde UI
 
-- [ ] **Título**: Reintentos exponenciales + dead-letter queue + reintento manual desde UI
+- [x] **Título**: Reintentos exponenciales + dead-letter queue + reintento manual desde UI
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

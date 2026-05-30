@@ -65,18 +65,57 @@ class Settings(BaseSettings):
         "backend (DB 2).",
     )
 
-    # ----- Dead-letter queue (no blind auto-retry; Plan 10 task_10_13 adds
-    # the exponential-retry policy. Fase A only parks terminal failures). -----
+    # ----- Dead-letter queue + exponential-retry policy (task_10_13) -----
     dead_letter_stream: str = Field(
         default="dlq:notifications",
-        description="Redis stream a failed send is parked on for operator "
-        "visibility / manual reprocessing. We do NOT auto-retry here — the "
-        "backoff+retry policy is task_10_13.",
+        description="Redis stream a send that has exhausted its retries is "
+        "parked on for operator visibility / manual reprocessing (the manual "
+        "re-enqueue endpoint reads a dead-lettered NotificationLog, not this "
+        "stream, but the stream is the operator's at-a-glance DLQ view).",
     )
     dead_letter_maxlen: int = Field(
         default=10_000,
         description="Approximate cap on the dead-letter stream length "
         "(XADD MAXLEN ~) so it cannot grow unbounded.",
+    )
+
+    # ----- Retry / backoff (task_10_13). A transient channel failure
+    # (``ChannelSendError``) is retried with EXPONENTIAL BACKOFF + JITTER up to
+    # ``max_retries`` times; once exhausted the send is dead-lettered
+    # (status=dead_letter + DLQ stream). All knobs live here — NO magic numbers
+    # in the task. Mirrors the workers' bounded-retry policy. -----
+    max_retries: int = Field(
+        default=5,
+        ge=0,
+        description="Maximum number of AUTOMATIC retries a transient send "
+        "failure is given before it is dead-lettered. NOT unbounded: after "
+        "this many retries the send is parked (status=dead_letter + DLQ "
+        "stream) for manual reprocessing. 5 matches the human_10_03 checklist "
+        "('Tras 5 reintentos, va a dead-letter queue'). Tunable, never inline.",
+    )
+    retry_base_backoff_s: float = Field(
+        default=2.0,
+        gt=0,
+        description="Base delay (seconds) for the exponential backoff: the "
+        "Nth retry waits ~``base * 2**(N-1)`` seconds (then clamped to "
+        "max_backoff and jittered). 2s by default. Tunable, never inline.",
+    )
+    retry_max_backoff_s: float = Field(
+        default=600.0,
+        gt=0,
+        description="Upper clamp (seconds) on a single retry's backoff so an "
+        "exponential delay can never grow unbounded. 10 min by default — long "
+        "enough to ride out a transient channel/provider outage, short enough "
+        "to bound how long a send sits queued. Tunable, never inline.",
+    )
+    retry_jitter: float = Field(
+        default=0.5,
+        ge=0,
+        le=1,
+        description="Full-jitter fraction [0..1] applied to each computed "
+        "backoff: the actual delay is uniformly sampled from "
+        "``[delay * (1 - jitter), delay]`` so a fleet of dispatchers doesn't "
+        "retry in a thundering herd. 0.5 = up to 50% jitter. Tunable.",
     )
 
     # ----- Channel delivery tunables -----

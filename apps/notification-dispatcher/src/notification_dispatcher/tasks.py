@@ -19,11 +19,22 @@ request.tenant_id``) before doing anything with the channel, and we set
 dispatch path makes is scoped to the request's tenant — exactly the Plan
 06.14 task_06_14_02 pattern the workers use (multi-tenancy-rls-1/5).
 
-On a delivery failure (a channel API error, a tampered cross-tenant
-payload, a missing adapter) the send is recorded as ``failed`` and parked
-on a Redis dead-letter stream for operator visibility / manual
-reprocessing. We deliberately do NOT auto-retry here — the
-exponential-backoff retry policy is Plan 10 Fase C task_10_13.
+On a delivery failure the behaviour depends on the failure kind (task_10_13):
+
+  * a TRANSIENT channel failure (``ChannelSendError`` — a 5xx, a timeout, a
+    flaky provider) is RETRIED with EXPONENTIAL BACKOFF + JITTER up to
+    ``settings.max_retries`` times. Between attempts the ``notification_logs``
+    row records ``status=retrying``; once the retries are exhausted the send is
+    parked (``status=dead_letter`` + a Redis dead-letter stream entry) for
+    operator visibility / manual reprocessing via the api-server endpoint.
+  * a NON-retryable failure (a tampered cross-tenant payload, a DB/broker
+    outage) is dead-lettered immediately and re-raised — retrying it would
+    never succeed.
+
+The retry ceiling is bounded (never unbounded) and every backoff tunable
+(``max_retries``, ``retry_base_backoff_s``, ``retry_max_backoff_s``,
+``retry_jitter``) lives on :class:`~notification_dispatcher.config.Settings`,
+so there is no magic number in this module.
 """
 
 from __future__ import annotations
@@ -65,6 +76,7 @@ from notification_dispatcher.event_mapping import (
     lane_queue,
     resolve_event_dispatch,
 )
+from notification_dispatcher.retry import compute_backoff
 from notification_dispatcher.secrets import resolve_channel_secret
 
 _log = structlog.get_logger("notification_dispatcher.tasks")
@@ -128,32 +140,82 @@ class SendRequest:
         )
 
 
-@app.task(name="notification_dispatcher.send_notification")  # type: ignore[misc]
-def send_notification(request: dict[str, Any]) -> dict[str, Any]:
-    """Deliver one notification end to end (Plan 10 Fase A task_10_02).
+@app.task(  # type: ignore[misc]
+    bind=True,
+    name="notification_dispatcher.send_notification",
+)
+def send_notification(self: Any, request: dict[str, Any]) -> dict[str, Any]:
+    """Deliver one notification end to end, with bounded retries (task_10_13).
 
-    The enqueuer (api-server / orchestrator, task_10_04) sends the request
-    as a plain dict. The DB and Redis handles are built from ``Settings``;
-    the result is a JSON-safe dict ``{log_id, status, channel_type,
-    attempt}``.
+    The enqueuer (api-server / orchestrator, task_10_04, or the manual-retry
+    endpoint) sends the request as a plain dict. The DB and Redis handles are
+    built from ``Settings``; the result is a JSON-safe dict ``{log_id, status,
+    channel_type, attempt}``.
 
-    On an unhandled failure (a tampered cross-tenant payload, a DB/broker
-    outage, a channel API error) the send is recorded — when possible —
-    as ``failed`` and pushed onto the dead-letter stream, then the
-    exception is re-raised so Celery marks the job failed. Sends are NOT
-    auto-retried here (task_10_13 owns retry/backoff).
+    Failure handling:
+
+      * a TRANSIENT channel failure (:class:`ChannelSendError`) records the
+        attempt as ``retrying`` and is re-scheduled via ``self.retry`` with an
+        EXPONENTIAL BACKOFF + JITTER (``notification_dispatcher.retry``) until
+        ``settings.max_retries`` is reached, after which the final attempt is
+        recorded as ``dead_letter`` and pushed onto the DLQ stream.
+      * a NON-retryable failure (:class:`CrossTenantNotificationError`, a
+        DB/broker outage) is dead-lettered immediately and re-raised — no retry
+        would ever make it succeed.
+
+    ``self.request.retries`` is Celery's 0-based count of retries already made,
+    so the 1-based ``attempt`` recorded on the log row is ``retries + 1``.
     """
     settings = get_settings()
+    # Celery's retry counter: 0 on the first try, +1 each retry. Bounded by
+    # settings.max_retries — never unbounded.
+    retries = int(getattr(self.request, "retries", 0) or 0)
+    is_last_attempt = retries >= settings.max_retries
+
     try:
-        return asyncio.run(_send_notification(SendRequest.from_dict(request), settings))
+        return asyncio.run(
+            _send_notification(
+                SendRequest.from_dict(request),
+                settings,
+                attempt=retries + 1,
+                is_last_attempt=is_last_attempt,
+            )
+        )
+    except ChannelSendError as exc:
+        # A transient send failure: retry with backoff until exhausted, then
+        # dead-letter. The ``retrying`` / ``dead_letter`` log row was already
+        # written by _dispatch for this attempt (it knows is_last_attempt).
+        if is_last_attempt:
+            _record_dead_letter(settings, request, exc)
+            raise
+        countdown = compute_backoff(
+            retries,
+            base_backoff_s=settings.retry_base_backoff_s,
+            max_backoff_s=settings.retry_max_backoff_s,
+            jitter=settings.retry_jitter,
+        )
+        _log.info(
+            "notification_dispatcher.send_retry_scheduled",
+            channel_id=str(request.get("channel_id", "")),
+            event_type=str(request.get("event_type", "")),
+            attempt=retries + 1,
+            max_retries=settings.max_retries,
+            countdown_s=round(countdown, 3),
+        )
+        # max_retries here matches our own ceiling so Celery never out-lives it.
+        # ``self.retry`` raises celery.exceptions.Retry; chain it from the
+        # original ChannelSendError so the cause is preserved in logs.
+        raise self.retry(exc=exc, countdown=countdown, max_retries=settings.max_retries) from exc
     except Exception as exc:
+        # A non-retryable failure (cross-tenant payload, DB/broker outage):
+        # dead-letter immediately and re-raise.
         _record_dead_letter(settings, request, exc)
         raise
 
 
 def _record_dead_letter(settings: Settings, request: dict[str, Any], exc: Exception) -> None:
-    """Best-effort: push a failed send onto the dead-letter stream. Never
-    masks the original error (a DLQ outage just logs a warning)."""
+    """Best-effort: push a dead-lettered send onto the dead-letter stream.
+    Never masks the original error (a DLQ outage just logs a warning)."""
     try:
         asyncio.run(_push_dead_letter(settings, request, exc))
     except Exception as dlq_exc:  # pragma: no cover - DLQ is best-effort
@@ -263,12 +325,24 @@ def _enqueue_plan(plan: DispatchPlan, settings: Settings) -> dict[str, Any]:
     }
 
 
-async def _send_notification(request: SendRequest, settings: Settings) -> dict[str, Any]:
+async def _send_notification(
+    request: SendRequest,
+    settings: Settings,
+    *,
+    attempt: int = 1,
+    is_last_attempt: bool = True,
+) -> dict[str, Any]:
     """Async core of ``send_notification`` — owns the engine lifecycle."""
     engine = create_async_engine(settings.database_url)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
-        return await _dispatch(request, settings=settings, sessionmaker=sessionmaker)
+        return await _dispatch(
+            request,
+            settings=settings,
+            sessionmaker=sessionmaker,
+            attempt=attempt,
+            is_last_attempt=is_last_attempt,
+        )
     finally:
         await engine.dispose()
 
@@ -278,12 +352,23 @@ async def _dispatch(
     *,
     settings: Settings,
     sessionmaker: async_sessionmaker[AsyncSession],
+    attempt: int = 1,
+    is_last_attempt: bool = True,
 ) -> dict[str, Any]:
     """Look up the channel, validate ownership, deliver, log the attempt.
 
     Split out from ``_send_notification`` so a test can drive it with an
     injected sessionmaker (and a registered fake adapter) without touching
     the Celery / engine plumbing.
+
+    ``attempt`` is the 1-based attempt number recorded on the
+    ``notification_logs`` row; ``is_last_attempt`` tells the failure path
+    whether more retries remain. A failed delivery that still has retries left
+    is recorded as ``retrying`` (the task wrapper re-schedules it with
+    backoff); a failed delivery on the last attempt is recorded as
+    ``dead_letter`` (the wrapper parks it on the DLQ stream). Either way a
+    NEW append-only log row is written for this attempt and a
+    :class:`ChannelSendError` is raised so the wrapper decides retry-vs-park.
     """
     from api_server.db.notification import NotificationChannel, NotificationLog
 
@@ -348,15 +433,28 @@ async def _dispatch(
         )
 
         # --- Record the attempt -----------------------------------------
+        # On failure the status reflects whether a retry remains: a failed
+        # attempt with retries left is ``retrying`` (the wrapper re-schedules
+        # it with backoff); the final failed attempt is ``dead_letter`` (the
+        # wrapper parks it on the DLQ stream). The log is append-only — each
+        # attempt is a NEW row carrying its 1-based ``attempt`` number, so the
+        # full retry history is preserved.
+        if result.ok:
+            status = "sent"
+        elif is_last_attempt:
+            status = "dead_letter"
+        else:
+            status = "retrying"
+
         now = datetime.now(UTC)
         log = NotificationLog(
             channel_id=channel_id,
             tenant_id=request_tenant,
             event_type=request.event_type,
             channel_type=channel_type,
-            status="sent" if result.ok else "failed",
+            status=status,
             target=target,
-            attempt=1,
+            attempt=attempt,
             error=(result.error[:_MAX_ERROR_LEN] if result.error else None),
             sent_at=now if result.ok else None,
         )
@@ -365,17 +463,16 @@ async def _dispatch(
         log_id = log.id
 
     if not result.ok:
-        # A failed send is dead-lettered (NOT auto-retried). The log row is
-        # already committed as ``failed``; raising here also surfaces the
-        # failure to Celery and triggers the dead-letter push in the task
-        # wrapper.
+        # The attempt's log row (``retrying`` or ``dead_letter``) is already
+        # committed; raising surfaces the failure to the task wrapper, which
+        # decides retry-with-backoff vs park-on-DLQ from ``is_last_attempt``.
         raise ChannelSendError(f"channel {channel_id} ({channel_type}) send failed: {result.error}")
 
     return {
         "log_id": str(log_id),
         "status": "sent",
         "channel_type": channel_type,
-        "attempt": 1,
+        "attempt": attempt,
     }
 
 

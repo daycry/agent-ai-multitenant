@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from functools import lru_cache
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -26,6 +27,15 @@ _log = structlog.get_logger("api_server.celery_client")
 
 _INGEST_TASK = "workers.ingest_document"
 _INGEST_QUEUE = "ingestion"
+
+# The notification-dispatcher send task + its default lane (Plan 10). The
+# api-server only PRODUCES onto the shared broker by name — it never imports
+# the notification_dispatcher package (same clean app boundary as ingestion).
+# The dispatcher owns the implementation, the retry/backoff policy, and the
+# DLQ. The manual-retry endpoint (task_10_13) re-enqueues a dead-lettered send
+# through this producer.
+_SEND_NOTIFICATION_TASK = "notification_dispatcher.send_notification"
+_NOTIFICATIONS_DEFAULT_QUEUE = "notifications.default"
 
 
 @lru_cache(maxsize=1)
@@ -64,4 +74,39 @@ async def enqueue_ingestion(document_id: UUID) -> bool:
     return True
 
 
-__all__ = ["enqueue_ingestion", "get_celery_client", "reset_celery_client_cache"]
+async def enqueue_notification_send(
+    send_request: dict[str, Any],
+    *,
+    queue: str = _NOTIFICATIONS_DEFAULT_QUEUE,
+) -> bool:
+    """Re-enqueue one notification send onto the dispatcher's lane (task_10_13).
+
+    Used by the manual-retry endpoint to re-drive a dead-lettered
+    ``NotificationLog`` through the notification-dispatcher's normal send path
+    (which owns the retry/backoff + DLQ policy). ``send_request`` is the same
+    JSON-safe payload ``notification_dispatcher.tasks.SendRequest.as_dict``
+    produces (``channel_id`` / ``event_type`` / ``tenant_id`` / ``target`` /
+    ``body`` / ``structured``).
+
+    Returns True iff the task was published. ``send_task`` does blocking socket
+    I/O, so we run it off the event loop (same approach as `enqueue_ingestion`).
+    A broker failure raises so the caller can surface it (the endpoint has
+    already not committed its log row in that case — unlike the best-effort
+    ingestion enqueue, a manual retry that can't reach the broker must fail
+    loudly rather than silently drop the user's action).
+    """
+    await asyncio.to_thread(
+        get_celery_client().send_task,
+        _SEND_NOTIFICATION_TASK,
+        args=[send_request],
+        queue=queue,
+    )
+    return True
+
+
+__all__ = [
+    "enqueue_ingestion",
+    "enqueue_notification_send",
+    "get_celery_client",
+    "reset_celery_client_cache",
+]
