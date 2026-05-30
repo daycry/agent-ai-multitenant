@@ -29,6 +29,7 @@ import {
   Pencil,
   Plug,
   Trash2,
+  Webhook,
   Workflow,
 } from "lucide-react";
 
@@ -81,7 +82,7 @@ const STATUS_OPTIONS: { value: ProjectStatus; label: string }[] = [
   { value: "archived", label: "Archivado" },
 ];
 
-// The 7 sub-sections every project always has (some may be empty,
+// The 8 sub-sections every project always has (some may be empty,
 // like dep-cache for a brand-new project, but they're always
 // reachable). Tasks lista TODAS las tareas del proyecto (incluye las
 // que están fuera de un plan).
@@ -127,6 +128,12 @@ const SUBSECTIONS = [
     label: "Caché de dependencias",
     description: "Invalidar caché de deps por runtime.",
     Icon: Layers,
+  },
+  {
+    key: "incoming-webhooks",
+    label: "Webhooks entrantes",
+    description: "Eventos de GitHub, Jira, Sentry… que disparan acciones.",
+    Icon: Webhook,
   },
 ] as const;
 

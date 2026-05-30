@@ -261,7 +261,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_11` — UI configuración de webhooks entrantes por proyecto
 
-- [ ] **Título**: UI configuración de webhooks entrantes por proyecto
+- [x] **Título**: UI configuración de webhooks entrantes por proyecto
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev

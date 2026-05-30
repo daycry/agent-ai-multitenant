@@ -19,10 +19,17 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import secrets
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from api_server.config import get_settings
+
+# Bytes of CSPRNG entropy in a freshly minted incoming-webhook signing secret,
+# urlsafe-base64 encoded (~43 chars). The operator copies this clear value into
+# the external provider (GitHub/Jira/...) so it stamps the matching HMAC; we
+# store only the Fernet ciphertext. 32 bytes is well beyond brute-force reach.
+SIGNING_SECRET_BYTES = 32
 
 
 class IncomingWebhookSecretError(Exception):
@@ -39,6 +46,18 @@ def _fernet() -> Fernet:
     raw = get_settings().incoming_webhook_encryption_key.get_secret_value().encode("utf-8")
     key = base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
     return Fernet(key)
+
+
+def generate_signing_secret() -> str:
+    """Mint a fresh, high-entropy incoming-webhook signing secret (clear).
+
+    The clear value is shown to the operator EXACTLY ONCE (on create / rotate)
+    so they can paste it into the external provider's webhook config; only its
+    Fernet ciphertext (:func:`encrypt_signing_secret`) ever reaches the DB, so
+    the secret can never be retrieved again. A rotate mints a new one and
+    re-encrypts, invalidating the previous value.
+    """
+    return secrets.token_urlsafe(SIGNING_SECRET_BYTES)
 
 
 def encrypt_signing_secret(plaintext: str) -> str:
@@ -69,7 +88,9 @@ def decrypt_signing_secret(ciphertext: str) -> str:
 
 
 __all__ = [
+    "SIGNING_SECRET_BYTES",
     "IncomingWebhookSecretError",
     "decrypt_signing_secret",
     "encrypt_signing_secret",
+    "generate_signing_secret",
 ]
