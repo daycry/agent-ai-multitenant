@@ -142,7 +142,7 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
 
 #### `task_09_04` — Definición de 3 niveles (verified / community / experimental)
 
-- [ ] **Título**: Definición de 3 niveles (verified / community / experimental)
+- [x] **Título**: Definición de 3 niveles (verified / community / experimental)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: arquitecto + security
