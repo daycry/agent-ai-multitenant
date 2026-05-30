@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  BarChart3,
   Bell,
   BellRing,
   BookOpen,
@@ -92,6 +93,12 @@ const NAV: NavItem[] = [
     href: "/admin/eval-quality",
     label: "Calidad (Evals)",
     Icon: Gauge,
+    adminOnly: true,
+  },
+  {
+    href: "/admin/tenant-stats",
+    label: "Estadísticas",
+    Icon: BarChart3,
     adminOnly: true,
   },
   {

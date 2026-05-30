@@ -284,7 +284,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_12` — Dashboard de estadísticas del tenant: tasa éxito, tiempo, coste, top/bottom agentes
 
-- [ ] **Título**: Dashboard de estadísticas del tenant: tasa éxito, tiempo, coste, top/bottom agentes
+- [x] **Título**: Dashboard de estadísticas del tenant: tasa éxito, tiempo, coste, top/bottom agentes
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev

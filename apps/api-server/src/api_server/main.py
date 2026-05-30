@@ -76,6 +76,7 @@ from api_server.routers.task_lifecycle import router as task_lifecycle_router
 from api_server.routers.tasks import router as tasks_router
 from api_server.routers.teams import router as teams_router
 from api_server.routers.tenant_settings import router as tenant_settings_router
+from api_server.routers.tenant_stats import router as tenant_stats_router
 from api_server.routers.tools import router as tools_router
 from api_server.routers.tools_diagnostic import router as tools_diagnostic_router
 from api_server.routers.ws import router as ws_router
@@ -178,6 +179,7 @@ def _register_routers(app: FastAPI) -> None:
         executions_router,
         evals_router,
         eval_quality_router,
+        tenant_stats_router,
         internal_agent_router,
         project_conversations_router,
         conversations_router,
