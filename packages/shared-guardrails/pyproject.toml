@@ -24,6 +24,18 @@ dev = [
 pii = [
   "presidio-analyzer>=2.2,<3",
 ]
+# Content-safety guard model (task_11_07). The classifier is a guard LLM
+# (LlamaGuard / ShieldGemma) reached through the platform LLM layer
+# (`shared-llm`) — a heavy *runtime* dependency (a running Ollama / provider
+# serving the guard model), so it is OPTIONAL and lazy: the `content_safety`
+# guardrail drives it behind an injectable `SafetyClassifier` seam and the
+# `LLMSafetyClassifier` adapter imports `shared-llm` only when a provider is
+# supplied. When no guard model is configured the guardrail degrades to a
+# typed "unavailable" result (never a fake "safe" verdict), keeping the
+# engine importable and CI free of the model.
+content-safety = [
+  "shared-llm",
+]
 
 [build-system]
 requires = ["hatchling>=1.21"]

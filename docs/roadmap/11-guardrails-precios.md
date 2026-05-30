@@ -198,7 +198,8 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 
 #### `task_11_07` — Content safety con LlamaGuard o ShieldGemma
 
-- [ ] **Título**: Content safety con LlamaGuard o ShieldGemma
+- [x] **Título**: Content safety con LlamaGuard o ShieldGemma
+  - Guardrail `content_safety` registrado (hooks `pre_llm` + `post_llm`, funciona en cualquiera) en `packages/shared-guardrails/src/shared_guardrails/checks/content_safety.py`. Clasifica el texto del hook en categorías de seguridad (`violence`, `hate`, `sexual`, `self_harm`, `weapons`, `criminal`, `other`) mediante un guard model (LlamaGuard / ShieldGemma) servido a través de la capa LLM existente (Ollama/provider). El modelo vive tras una seam inyectable `SafetyClassifier` (`classify(text) -> SafetyVerdict`, síncrona como las seams `pii.analyzer` / `prompt_injection.detector`) + un extra OPCIONAL `shared-guardrails[content-safety]` que arrastra `shared-llm`; el adaptador `LLMSafetyClassifier` importa `shared-llm` de forma LAZY y solo cuando se le pasa un provider. Cuando NO hay guard model configurado (o el modelo no devuelve veredicto usable), degrada a un resultado tipado _unavailable_ (`available=False`, `reason`) — NUNCA finge un veredicto "safe" en silencio. Mapa de taxonomía LlamaGuard `S1..S13` → vocabulario estable + parser `parse_guard_response` puro/determinista. Acción sugerida `block` por defecto en contenido inseguro (configurable); severidad con suelo configurable elevado por categorías graves (sexual / self-harm → critical). Test `tests/integration/test_content_safety.py` con el clasificador MOCKEADO (sin modelo real): inseguro → triggered+block, seguro → pasa, categoría+severidad afloran, ruta unavailable tipada; placeholder del backend de modelo real skip-guardado.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
