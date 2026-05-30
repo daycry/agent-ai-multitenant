@@ -314,7 +314,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_14` — Asistente personal conversacional (responde queries del estado global por chat)
 
-- [ ] **Título**: Asistente personal conversacional (responde queries del estado global por chat)
+- [x] **Título**: Asistente personal conversacional (responde queries del estado global por chat)
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: ai-engineer

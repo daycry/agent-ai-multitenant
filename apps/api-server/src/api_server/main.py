@@ -29,6 +29,7 @@ from api_server.routers.admin import router as admin_router
 from api_server.routers.agents import router as agents_router
 from api_server.routers.approval_policies import router as approval_policies_router
 from api_server.routers.approvals import router as approvals_router
+from api_server.routers.assistant import router as assistant_router
 from api_server.routers.auth import router as auth_router
 from api_server.routers.conversations import (
     conversations_router,
@@ -180,6 +181,7 @@ def _register_routers(app: FastAPI) -> None:
         documents_router,
         tenant_settings_router,
         notifications_router,
+        assistant_router,
         ws_router,
     ):
         app.include_router(router)

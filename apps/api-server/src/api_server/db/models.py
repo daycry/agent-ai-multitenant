@@ -109,6 +109,16 @@ class Organization(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     )
     hourly_rate_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
 
+    # Per-tenant gate for the conversational personal assistant (Plan 10
+    # task_10_14). DEFAULT false: the feature is opt-in. When false, every
+    # Tenant Admin of this tenant is denied (403) — the assistant simply
+    # does not exist for them. The tenant-level assistant *identity*
+    # (name/avatar/tone/language/system_prompt/enabled-tools) lives in
+    # ``tenant_settings`` under the ``assistant`` category, not here.
+    personal_assistant_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+
     # No ORM `memberships` relationship: tenant_id is NOT a formal FK
     # to organizations.id (the migration intentionally omits the
     # constraint so RLS policies cannot create circular dependencies
