@@ -87,7 +87,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_01` — Modelos NotificationChannel, Preference, Log con scopes (plataforma/tenant/usuario)
 
-- [ ] **Título**: Modelos NotificationChannel, Preference, Log con scopes (plataforma/tenant/usuario)
+- [x] **Título**: Modelos NotificationChannel, Preference, Log con scopes (plataforma/tenant/usuario)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
