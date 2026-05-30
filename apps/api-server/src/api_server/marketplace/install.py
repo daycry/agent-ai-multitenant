@@ -214,6 +214,7 @@ def verify_artifact_signature(
 
     # Imported lazily so a bad/missing key surfaces only on the verified path.
     from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
     try:
@@ -225,6 +226,14 @@ def verify_artifact_signature(
         public_key = load_pem_public_key(public_key_pem)
     except Exception as exc:  # malformed key material — fail closed
         raise SignatureVerificationError("platform signing key is unusable") from exc
+
+    # The platform signing key must be Ed25519 (the detached-signature scheme
+    # this verifier implements). Narrowing the loaded key both enforces that
+    # invariant at runtime and resolves the verify() overload — load_pem_public_key
+    # returns a broad union (RSA/EC/Ed25519/… in cryptography 48+) and only the
+    # Ed*/Ed25519 keys expose the two-argument verify(signature, data).
+    if not isinstance(public_key, Ed25519PublicKey):
+        raise SignatureVerificationError("platform signing key must be an Ed25519 public key")
 
     try:
         public_key.verify(signature_bytes, manifest_text.encode("utf-8"))
