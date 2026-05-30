@@ -22,6 +22,7 @@ from api_server.seeds.builtin_teams import seed_builtin_teams
 from api_server.seeds.builtin_tools import seed_builtin_tools
 from api_server.seeds.catalog_ingestion import seed_catalog_ingestion
 from api_server.seeds.platform import ensure_platform_tenant
+from api_server.seeds.qa_e2e_automator import seed_qa_e2e_automator
 
 
 async def main() -> None:
@@ -32,6 +33,11 @@ async def main() -> None:
     async with sessionmaker() as session, session.begin():
         await ensure_platform_tenant(session)
         n_agents = await seed_builtin_agents(session)
+        # Plan 09 task_09_14: the QA E2E Automator template references the
+        # Playwright marketplace listing (task_09_13). It is one more
+        # global_builtin platform agent under the same model as the eleven
+        # core built-ins, seeded via its own loader to keep that count stable.
+        n_qa_e2e = await seed_qa_e2e_automator(session)
         n_skills = await seed_builtin_skills(session)
         # Agent<->skill links need both agents AND skills to exist first
         # (FKs on agent_skills). Wire them once both seeds have run.
@@ -57,6 +63,7 @@ async def main() -> None:
     log.info(
         "seed.completed",
         agents=n_agents,
+        qa_e2e_automator=n_qa_e2e,
         skills=n_skills,
         agent_skills=n_agent_skills,
         tools=n_tools,
