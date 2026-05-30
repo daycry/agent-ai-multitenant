@@ -468,8 +468,12 @@ def test_downgrade_drops_all_tables_then_upgrade_recreates(
     # Up at head (fixture) → all present.
     assert _present_tables(migrations_pg_dsn) == _MARKETPLACE_TABLES
 
-    # Downgrade exactly one step (0041 -> 0040) → all four gone cleanly.
-    command.downgrade(alembic_config, "-1")
+    # Downgrade past the whole marketplace migration stack (0041 + any later
+    # marketplace migrations such as 0042 consent / 0043 append-only) back to
+    # the pre-marketplace revision → all four tables gone cleanly. Target the
+    # revision explicitly rather than "-1" so this stays correct as later
+    # phases stack more migrations on top of 0041.
+    command.downgrade(alembic_config, "0040_sso_email_domains")
     assert _present_tables(migrations_pg_dsn) == set()
 
     # Re-upgrade → all present again (proves the migration is replayable).
