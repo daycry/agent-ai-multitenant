@@ -36,6 +36,26 @@ _ISSUER_MAX = 512
 _CLIENT_ID_MAX = 255
 _DISPLAY_NAME_MAX = 120
 _SECRET_REF_MAX = 512
+# A DNS domain label total length bound (RFC 1035) — generous; the real
+# guard is the per-character normalisation below.
+_EMAIL_DOMAIN_MAX = 253
+
+
+def _normalize_email_domains(domains: list[str]) -> list[str]:
+    """Lower-case, strip, and de-duplicate operator-supplied email domains.
+
+    Login discovery matches case-insensitively, so the stored form is
+    normalised to lower-case here (before it reaches the DB). Empties are
+    dropped and order is preserved on the first occurrence of each domain.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in domains:
+        domain = raw.strip().lower()
+        if domain and domain not in seen:
+            seen.add(domain)
+            out.append(domain)
+    return out
 
 
 class SSOConfigResponse(BaseModel):
@@ -60,6 +80,8 @@ class SSOConfigResponse(BaseModel):
     # IdP group -> tenant role mapping (task_08_11). Only the per-tenant
     # roles tenant_admin / tenant_user are honoured at login.
     group_role_mappings: dict[str, str]
+    # Email domains this config claims, for login discovery (task_08_12).
+    email_domains: list[str]
     has_client_secret: bool
     client_secret_source: str | None
     created_at: datetime
@@ -91,6 +113,15 @@ class SSOConfigUpsertRequest(BaseModel):
     # value must be a grantable per-tenant role — a tenant cannot configure
     # a group that grants a platform role (system_admin / system_operator).
     group_role_mappings: dict[str, str] = Field(default_factory=dict)
+    # Email domains this config claims, used by login discovery
+    # (task_08_12). Normalised to lower-case + de-duplicated below;
+    # matching is case-insensitive.
+    email_domains: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _normalize_domains(self) -> SSOConfigUpsertRequest:
+        self.email_domains = _normalize_email_domains(self.email_domains)
+        return self
 
     @model_validator(mode="after")
     def _at_most_one_secret_form(self) -> SSOConfigUpsertRequest:
@@ -186,6 +217,8 @@ class SAMLConfigResponse(BaseModel):
     # IdP group -> tenant role mapping (task_08_11). Same grantable-role
     # restriction as the OIDC config.
     group_role_mappings: dict[str, str]
+    # Email domains this config claims, for login discovery (task_08_12).
+    email_domains: list[str]
     sp_x509_cert: str | None
     has_sp_private_key: bool
     sp_private_key_source: str | None
@@ -229,6 +262,9 @@ class SAMLConfigUpsertRequest(BaseModel):
     # IdP group -> tenant role mapping (task_08_11). Validated below to a
     # grantable per-tenant role, exactly like the OIDC config.
     group_role_mappings: dict[str, str] = Field(default_factory=dict)
+    # Email domains this config claims, used by login discovery
+    # (task_08_12). Normalised to lower-case + de-duplicated below.
+    email_domains: list[str] = Field(default_factory=list)
     # SP public cert is not secret; the IdP needs it to verify/encrypt.
     sp_x509_cert: str | None = Field(default=None)
     # Exactly-zero-or-one of these. Plaintext PEM is encrypted server-side
@@ -239,6 +275,11 @@ class SAMLConfigUpsertRequest(BaseModel):
     want_assertions_signed: bool = Field(default=True)
     want_assertions_encrypted: bool = Field(default=False)
     want_name_id_encrypted: bool = Field(default=False)
+
+    @model_validator(mode="after")
+    def _normalize_domains(self) -> SAMLConfigUpsertRequest:
+        self.email_domains = _normalize_email_domains(self.email_domains)
+        return self
 
     @model_validator(mode="after")
     def _at_most_one_key_form(self) -> SAMLConfigUpsertRequest:
@@ -299,8 +340,46 @@ class IdPMetadataParseResponse(BaseModel):
     name_id_format: str | None
 
 
+# ===========================================================================
+# Login discovery (Plan 08 task_08_12) — the PUBLIC, unauthenticated
+# ``GET /auth/discover?email=<addr>`` endpoint.
+# ===========================================================================
+# Discovery method discriminator. ``sso`` means "route the user to their
+# IdP" (the provider + login_url are then populated); ``password`` is the
+# generic local-login fallback returned for every email whose domain does
+# NOT match an enabled SSO config — IDENTICAL whether or not an account
+# exists, so the endpoint never leaks user existence.
+LOGIN_METHOD_SSO = "sso"
+LOGIN_METHOD_PASSWORD = "password"
+
+
+class LoginDiscoveryResponse(BaseModel):
+    """Which login method to use for an email — never reveals account existence.
+
+    The shape is identical for the SSO and local cases; only the discriminator
+    (``method``) and the SSO-only fields differ. For ``method == "password"``
+    the ``provider`` / ``tenant_id`` / ``login_url`` fields are ``None``.
+
+    Crucially, the answer depends ONLY on whether the email's DOMAIN is
+    claimed by an enabled SSO config — the users table is never queried —
+    so an attacker cannot tell from this response whether a specific
+    account exists.
+    """
+
+    model_config = _BASE_CONFIG
+
+    method: str
+    # SSO-only fields (None for the local-login fallback).
+    provider: str | None = None
+    tenant_id: UUID | None = None
+    login_url: str | None = None
+
+
 __all__ = [
     "DEFAULT_SAML_NAME_ID_FORMAT",
+    "LOGIN_METHOD_PASSWORD",
+    "LOGIN_METHOD_SSO",
+    "LoginDiscoveryResponse",
     "CallbackUrlResponse",
     "IdPMetadataParseRequest",
     "IdPMetadataParseResponse",

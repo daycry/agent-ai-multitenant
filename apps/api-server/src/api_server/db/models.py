@@ -396,6 +396,18 @@ class SSOConfiguration(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
 
+    # --- Login discovery: email-domain -> tenant/SSO (Plan 08
+    # task_08_12, migration 0040). An operator-attested list of email
+    # domains this config claims (e.g. ``["acme.com", "acme.io"]``). The
+    # public ``GET /auth/discover`` endpoint maps an email's domain to the
+    # enabled config that lists it, so the login UI can route the user to
+    # their IdP. Stored lower-cased; matching is case-insensitive. NOT
+    # globally unique across tenants (domains are attested, not verified) —
+    # discovery resolves any collision to the oldest-created config.
+    email_domains: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
     # --- SAML 2.0 identity provider (NULL on an `oidc` row; Plan 08
     # task_08_04, migration 0033). The per-provider CHECK constraint
     # requires entity_id + sso_url + x509_cert for `saml` rows.

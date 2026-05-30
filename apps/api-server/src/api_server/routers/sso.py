@@ -82,14 +82,17 @@ from api_server.db.models import (
     User,
     UserOrganizationMembership,
 )
-from api_server.db.session import get_sessionmaker
+from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers.mcp import get_vault_resolver
 from api_server.schemas.auth import LoginResponse
 from api_server.schemas.sso import (
+    LOGIN_METHOD_PASSWORD,
+    LOGIN_METHOD_SSO,
     CallbackUrlResponse,
     IdPMetadataParseRequest,
     IdPMetadataParseResponse,
+    LoginDiscoveryResponse,
     OIDCTemplateResponse,
     SAMLConfigResponse,
     SAMLConfigUpsertRequest,
@@ -99,6 +102,11 @@ from api_server.schemas.sso import (
 )
 
 router = APIRouter(prefix="/auth/sso", tags=["sso"])
+
+# Login discovery lives at `/auth/discover` (NOT under `/auth/sso/*`) — it
+# is the entry point the login UI hits BEFORE it knows whether SSO applies,
+# so it sits one level up alongside the local-login endpoints.
+discovery_router = APIRouter(prefix="/auth", tags=["sso"])
 
 # `client_secret_source` discriminator values for SSOConfigResponse — the
 # UI shows "secret set" without ever seeing the value.
@@ -122,6 +130,12 @@ _SP_ENTITY_PATH = "/auth/sso/saml/metadata"
 # URL lets the IdP-initiated (unsolicited) Response reach the right
 # tenant's config even though the POST carries no RelayState we minted.
 _SAML_ACS_PATH_TEMPLATE = "/auth/sso/{tenant_id}/saml/acs"
+
+# The per-tenant login-flow entry points login discovery points the UI at.
+# `{tenant_id}` is substituted with the resolved tenant. These match the
+# `oidc_login` / `saml_login` routes below.
+_OIDC_LOGIN_PATH_TEMPLATE = "/auth/sso/{tenant_id}/oidc/login"
+_SAML_LOGIN_PATH_TEMPLATE = "/auth/sso/{tenant_id}/saml/login"
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +318,105 @@ def _resolve_saml_config(row: SSOConfiguration, *, tenant_id: str) -> ResolvedSA
             detail="SSO is misconfigured for this tenant",
         ) from exc
     return config
+
+
+# ===========================================================================
+# Login discovery (Plan 08 task_08_12) — PUBLIC GET /auth/discover?email=...
+#
+# Maps an email's DOMAIN to the tenant whose enabled SSO config claims it.
+# The lookup runs ONCE on the BYPASSRLS admin role (the request is
+# unauthenticated and tenant-agnostic — we don't yet know which tenant the
+# email belongs to), filtering PURELY on the operator-attested
+# `email_domains` of enabled, non-deleted configs. It NEVER touches the
+# `users` table, so it cannot reveal whether a specific account exists:
+# the response shape is identical whether or not a user with that email
+# is registered. The only thing it discloses is whether the *domain* is
+# configured for SSO — which is a deliberate, operator-published fact.
+# ===========================================================================
+def _extract_email_domain(email: str) -> str | None:
+    """Return the lower-cased domain of ``email``, or None if malformed.
+
+    Deliberately lenient (this is a routing hint, not validation): we only
+    need the part after a single ``@`` to match against configured
+    domains. A value with zero or multiple ``@`` yields None → the generic
+    local-login answer (never an error that could be probed).
+    """
+    parts = email.strip().lower().split("@")
+    if len(parts) != 2:
+        return None
+    domain = parts[1]
+    return domain or None
+
+
+async def _resolve_sso_config_for_domain(domain: str) -> SSOConfiguration | None:
+    """Find the oldest enabled SSO config claiming ``domain`` (any tenant).
+
+    Runs on the BYPASSRLS admin role so the cross-tenant scan can see every
+    tenant's configs (the caller is unauthenticated). Matching is
+    case-insensitive — the stored domains are normalised to lower-case on
+    write and ``domain`` is lower-cased by the caller. Multi-tenant-domain
+    collisions (two tenants attesting the same domain) resolve
+    deterministically to the oldest-created config; the result reveals only
+    the configured provider, never that more than one tenant matched.
+    """
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        result = await session.execute(
+            select(SSOConfiguration)
+            .where(
+                SSOConfiguration.enabled.is_(True),
+                SSOConfiguration.deleted_at.is_(None),
+                # JSONB containment: the array column holds `domain`. The
+                # stored values are lower-case (normalised on write) and
+                # `domain` is lower-cased by the caller, so this is the
+                # case-insensitive match.
+                SSOConfiguration.email_domains.contains([domain]),
+            )
+            .order_by(SSOConfiguration.created_at)
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+
+@discovery_router.get("/discover", response_model=LoginDiscoveryResponse)
+async def discover_login(
+    email: str = Query(..., min_length=1, max_length=320),
+) -> LoginDiscoveryResponse:
+    """Public: given an email, say which login method to use.
+
+    If the email's DOMAIN is claimed by an enabled SSO config, return that
+    provider (``oidc`` / ``saml``) + the tenant id + the relative login URL
+    to start the flow. Otherwise return the generic local-login response.
+
+    NO user enumeration: the answer is derived solely from the configured
+    SSO domain — the users table is never queried — so the response is
+    byte-for-byte identical whether or not an account with that email
+    exists. A malformed email (or an unconfigured domain) gets the same
+    generic local-login answer, never an error.
+    """
+    domain = _extract_email_domain(email)
+    config = await _resolve_sso_config_for_domain(domain) if domain else None
+    if config is None:
+        # No SSO domain match — use local (email + password) login. Same
+        # shape regardless of whether the account exists.
+        return LoginDiscoveryResponse(method=LOGIN_METHOD_PASSWORD)
+
+    provider = config.provider
+    if provider == SSOProvider.OIDC.value:
+        login_url = _OIDC_LOGIN_PATH_TEMPLATE.format(tenant_id=config.tenant_id)
+    elif provider == SSOProvider.SAML.value:
+        login_url = _SAML_LOGIN_PATH_TEMPLATE.format(tenant_id=config.tenant_id)
+    else:  # pragma: no cover - provider column is constrained to oidc/saml
+        # Unknown provider value — fail safe to local login rather than
+        # emit a half-formed SSO answer.
+        return LoginDiscoveryResponse(method=LOGIN_METHOD_PASSWORD)
+
+    return LoginDiscoveryResponse(
+        method=LOGIN_METHOD_SSO,
+        provider=provider,
+        tenant_id=config.tenant_id,
+        login_url=login_url,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -803,6 +916,7 @@ def _to_response(row: SSOConfiguration) -> SSOConfigResponse:
         scopes=list(row.scopes),
         claim_mappings={str(k): str(v) for k, v in (row.claim_mappings or {}).items()},
         group_role_mappings={str(k): str(v) for k, v in (row.group_role_mappings or {}).items()},
+        email_domains=[str(d) for d in (row.email_domains or [])],
         has_client_secret=source is not None,
         client_secret_source=source,
         created_at=row.created_at,
@@ -934,6 +1048,7 @@ async def create_sso_config(
         scopes=payload.scopes,
         claim_mappings=payload.claim_mappings,
         group_role_mappings=payload.group_role_mappings,
+        email_domains=payload.email_domains,
     )
     _apply_secret(row, payload, is_create=True)
     session.add(row)
@@ -983,6 +1098,7 @@ async def update_sso_config(
     row.scopes = payload.scopes
     row.claim_mappings = payload.claim_mappings
     row.group_role_mappings = payload.group_role_mappings
+    row.email_domains = payload.email_domains
     _apply_secret(row, payload, is_create=False)
     await session.flush()
     await session.refresh(row)
@@ -1054,6 +1170,7 @@ def _to_saml_response(row: SSOConfiguration) -> SAMLConfigResponse:
         name_id_format=row.name_id_format,
         attribute_mappings={str(k): str(v) for k, v in (row.attribute_mappings or {}).items()},
         group_role_mappings={str(k): str(v) for k, v in (row.group_role_mappings or {}).items()},
+        email_domains=[str(d) for d in (row.email_domains or [])],
         sp_x509_cert=row.sp_x509_cert,
         has_sp_private_key=key_source is not None,
         sp_private_key_source=key_source,
@@ -1234,6 +1351,7 @@ async def create_saml_config(
         name_id_format=payload.name_id_format,
         attribute_mappings=payload.attribute_mappings,
         group_role_mappings=payload.group_role_mappings,
+        email_domains=payload.email_domains,
         sp_x509_cert=payload.sp_x509_cert,
         authn_requests_signed=payload.authn_requests_signed,
         want_assertions_signed=payload.want_assertions_signed,
@@ -1289,6 +1407,7 @@ async def update_saml_config(
     row.name_id_format = payload.name_id_format
     row.attribute_mappings = payload.attribute_mappings
     row.group_role_mappings = payload.group_role_mappings
+    row.email_domains = payload.email_domains
     row.sp_x509_cert = payload.sp_x509_cert
     row.authn_requests_signed = payload.authn_requests_signed
     row.want_assertions_signed = payload.want_assertions_signed

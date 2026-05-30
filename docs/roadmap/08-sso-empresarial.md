@@ -373,7 +373,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_12` — Login discovery: email → tenant
 
-- [ ] **Título**: Login discovery: email → tenant
+- [x] **Título**: Login discovery: email → tenant
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev

@@ -55,6 +55,7 @@ from api_server.routers.projects import router as projects_router
 from api_server.routers.review import router as review_router
 from api_server.routers.scim import router as scim_router
 from api_server.routers.skills import router as skills_router
+from api_server.routers.sso import discovery_router as sso_discovery_router
 from api_server.routers.sso import router as sso_router
 from api_server.routers.task_lifecycle import router as task_lifecycle_router
 from api_server.routers.tasks import router as tasks_router
@@ -142,6 +143,7 @@ def _register_routers(app: FastAPI) -> None:
     for router in (
         auth_router,
         sso_router,
+        sso_discovery_router,
         scim_router,
         mfa_router,
         admin_router,
