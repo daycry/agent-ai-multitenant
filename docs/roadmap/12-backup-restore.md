@@ -119,7 +119,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_03` — Verificación post-backup automática (corruption check)
 
-- [ ] **Título**: Verificación post-backup automática (corruption check)
+- [x] **Título**: Verificación post-backup automática (corruption check)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: devops

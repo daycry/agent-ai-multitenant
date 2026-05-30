@@ -213,6 +213,10 @@ module = [
     # notification-dispatcher (Plan 10) imports the notification ORM lazily
     # from api_server.db.notification; the package ships no py.typed marker.
     "api_server.db.notification",
+    # workers.backup_task (Plan 12) lazily imports the backup enable/cron
+    # platform-setting helpers from api_server; the pre-commit mypy venv lacks
+    # the api_server package. Same cross-app lazy-import story as the rest.
+    "api_server.db.platform_settings",
 ]
 ignore_missing_imports = true
 

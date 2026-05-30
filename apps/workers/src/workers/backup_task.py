@@ -25,7 +25,8 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from workers.backup import BackupError, run_full_backup
+from workers.backup import BackupConfig, BackupError, run_full_backup
+from workers.backup_verification import verify_bundle
 from workers.celery_app import app
 from workers.config import Settings, get_settings
 
@@ -77,11 +78,51 @@ async def _run_daily_backup(settings: Settings) -> dict[str, Any]:
         _log.warning("backup.error", error=str(exc))
         return {"enabled": True, "ok": False, "error": str(exc)}
 
+    # Post-backup corruption check (task_12_03): prove the bundle is intact
+    # (pg_restore --list / tar -tf / checksum match) before trusting it. A
+    # failed verification marks the backup INVALID — the basis for the
+    # "last backup failed" alert in Phase D. Best-effort: a verifier crash is
+    # logged, never raised, but it does flip the run's `valid` to False.
+    valid = _verify_after_backup(settings, result.bundle_dir)
+
     return {
         "enabled": True,
         "ok": True,
+        "valid": valid,
         "backup_id": result.backup_id,
         "bundle_dir": str(result.bundle_dir),
         "artifacts": len(result.artifacts),
         "pruned": len(result.pruned),
     }
+
+
+def _verify_after_backup(settings: Settings, bundle_dir: Any) -> bool:
+    """Verify a just-written bundle; return its overall validity.
+
+    When at-rest encryption is enabled, build the same Vault/env-backed
+    :class:`BackupEncryptor` the engine used so the verifier can additionally
+    prove the encrypted blob decrypts (GCM authentication). A failure inside the
+    verifier itself (unreadable manifest, etc.) is treated as INVALID — an
+    unverifiable backup is not a trustworthy backup.
+    """
+    cfg = BackupConfig.from_settings(settings)
+    encryptor = None
+    if cfg.encryption_enabled:
+        from workers.backup_encryption import BackupEncryptor, EnvSecretsProvider
+
+        encryptor = BackupEncryptor(
+            provider=EnvSecretsProvider(),
+            vault_key_name=cfg.encryption_vault_key,
+        )
+    try:
+        report = verify_bundle(bundle_dir, encryptor=encryptor)
+    except Exception as exc:  # pragma: no cover — defensive: beat must not die
+        _log.warning("backup.verify.error", error=str(exc))
+        return False
+    if not report.valid:
+        _log.warning(
+            "backup.invalid",
+            backup_id=report.backup_id,
+            failures=[c.check + ":" + c.artifact for c in report.failures],
+        )
+    return report.valid
