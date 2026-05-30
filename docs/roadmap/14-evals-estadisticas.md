@@ -91,7 +91,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_01` — Modelos EvalDataset, EvalRun, EvalResult, EvalCriterion
 
-- [ ] **Título**: Modelos EvalDataset, EvalRun, EvalResult, EvalCriterion
+- [x] **Título**: Modelos EvalDataset, EvalRun, EvalResult, EvalCriterion
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
