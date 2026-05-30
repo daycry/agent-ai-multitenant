@@ -1,0 +1,111 @@
+name: Eval on prompt change
+
+# Plan 14 task_14_07 — when a PR/push CHANGES an agent prompt definition, run
+# the eval harness: refresh the golden-dataset run for the new prompt version,
+# diff it against the baseline (task_14_06) and apply the merge-gate
+# (task_14_08). This workflow is ADDITIVE — it does not touch ci.yml.
+#
+# CI has NO LLM provider keys by default, so the live harness step is GATED on
+# a provider secret being present and otherwise skips with a notice (the CLI is
+# invoked with --dry-run, which validates config + exits 0 without an LLM
+# call). The structure + the path filter + the harness invocation are what this
+# task delivers; the live-run wiring lands with task_14_08 / task_14_09.
+
+on:
+  push:
+    branches: [main, "plan/**"]
+    paths:
+      # Agent prompt definitions (the built-in agents ship bilingual
+      # system_prompt text here; promotion/eval grades against these).
+      - "apps/api-server/src/api_server/seeds/builtin_agents.py"
+      - "apps/api-server/src/api_server/seeds/qa_e2e_automator.py"
+      # The eval harness itself — re-run the gate when the judge/diff/CI
+      # logic that decides regressions changes.
+      - "apps/api-server/src/api_server/evals/**"
+      - ".github/workflows/eval-on-prompt-change.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/api-server/src/api_server/seeds/builtin_agents.py"
+      - "apps/api-server/src/api_server/seeds/qa_e2e_automator.py"
+      - "apps/api-server/src/api_server/evals/**"
+      - ".github/workflows/eval-on-prompt-change.yml"
+
+# Cancel in-progress runs of the same workflow on the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval-on-prompt-change:
+    name: Eval prompt change (regression gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the api-server (editable) so api_server.evals imports
+        run: |
+          python -m pip install --upgrade pip
+          # shared-llm is a path dep (ADR 0021); install it first so the
+          # api-server editable install resolves the local wheel.
+          python -m pip install -e "packages/shared-llm[dev]"
+          python -m pip install -e "apps/api-server[dev]"
+
+      # Decide once whether a real LLM provider secret is present. CI has none
+      # by default, so the live harness is gated on this; without it we still
+      # run the CLI in --dry-run so its arg-parse / config-resolution path is
+      # exercised, then skip-with-notice.
+      - name: Detect LLM provider secret
+        id: provider
+        env:
+          # Any one of the catalog's four provider paths (ADR 0021) is enough
+          # to run a real eval. None set => empty => harness skipped.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          COPILOT_OAUTH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+          OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$AZURE_OPENAI_API_KEY" ] \
+            || [ -n "$COPILOT_OAUTH_TOKEN" ] || [ -n "$OLLAMA_BASE_URL" ]; then
+            echo "has_provider=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_provider=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No LLM provider secret present — running the eval CI gate in dry-run (skip-with-notice)."
+          fi
+
+      # No provider secret: validate the harness invocation without an LLM
+      # call. --dry-run resolves the (operator-configurable) regression
+      # threshold and the agent/dataset/baseline args, then exits 0.
+      - name: Eval gate (dry-run, no provider secret)
+        if: steps.provider.outputs.has_provider == 'false'
+        env:
+          # Operator-configurable tunable — never a hard-coded magic number.
+          EVAL_REGRESSION_THRESHOLD: ${{ vars.EVAL_REGRESSION_THRESHOLD }}
+        run: |
+          python -m api_server.evals.ci_run \
+            --agent "${EVAL_SUBJECT_AGENT:-changed-prompt-agent}" \
+            --dataset "${EVAL_GOLDEN_DATASET:-00000000-0000-0000-0000-000000000000}" \
+            --baseline-run "${EVAL_BASELINE_RUN:-00000000-0000-0000-0000-000000000000}" \
+            --dry-run
+
+      # Provider secret present: run the live harness + merge-gate. A non-zero
+      # exit (regression beyond the configured threshold) FAILS the job and
+      # blocks the merge (task_14_08).
+      - name: Eval gate (live harness + merge-gate)
+        if: steps.provider.outputs.has_provider == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          COPILOT_OAUTH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+          OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+          EVAL_REGRESSION_THRESHOLD: ${{ vars.EVAL_REGRESSION_THRESHOLD }}
+        run: |
+          python -m api_server.evals.ci_run \
+            --agent "${EVAL_SUBJECT_AGENT:-changed-prompt-agent}" \
+            --dataset "${EVAL_GOLDEN_DATASET}" \
+            --baseline-run "${EVAL_BASELINE_RUN}"

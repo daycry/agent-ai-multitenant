@@ -197,7 +197,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_07` — Integración con CI: cuando se cambia prompt, dispara eval automático en CI
 
-- [ ] **Título**: Integración con CI: cuando se cambia prompt, dispara eval automático en CI
+- [x] **Título**: Integración con CI: cuando se cambia prompt, dispara eval automático en CI
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops + backend-dev

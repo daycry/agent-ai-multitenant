@@ -9,6 +9,17 @@ over those rows (task_14_05 / task_14_06).
 
 from __future__ import annotations
 
+from api_server.evals.ci_run import (
+    CiRunArgs,
+    GateDecision,
+    gate_decision,
+    resolve_threshold,
+)
+from api_server.evals.constants import (
+    DEFAULT_PASS_RATE_REGRESSION_THRESHOLD,
+    DEFAULT_SHADOW_SAMPLE_RATE,
+    REGRESSION_THRESHOLD_ENV_VAR,
+)
 from api_server.evals.diff import (
     DatasetMismatchError,
     DiffVerdict,
@@ -43,9 +54,14 @@ from api_server.evals.metrics import (
 )
 
 __all__ = [
+    "DEFAULT_PASS_RATE_REGRESSION_THRESHOLD",
+    "DEFAULT_SHADOW_SAMPLE_RATE",
+    "REGRESSION_THRESHOLD_ENV_VAR",
+    "CiRunArgs",
     "CriterionScore",
     "DatasetMismatchError",
     "DiffVerdict",
+    "GateDecision",
     "ItemChange",
     "JudgeModel",
     "JudgeResponseError",
@@ -63,10 +79,12 @@ __all__ = [
     "compute_run_metrics",
     "diff_metrics",
     "diff_runs",
+    "gate_decision",
     "judge_item",
     "mean",
     "parse_judge_response",
     "pass_rate",
     "percentile",
+    "resolve_threshold",
     "run_eval",
 ]
