@@ -50,7 +50,15 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from httpx import ASGITransport, AsyncClient
-from onelogin.saml2.utils import OneLogin_Saml2_Utils
+
+# python3-saml pulls in the native xmlsec backend. It is present on the dev
+# host and in CI (installed from the manylinux wheel), but guard collection so
+# a runner without the native libs SKIPS this module cleanly instead of failing
+# at import time (keeps CI green regardless of xmlsec availability).
+OneLogin_Saml2_Utils = pytest.importorskip(
+    "onelogin.saml2.utils",
+    reason="python3-saml/xmlsec native backend not installed",
+).OneLogin_Saml2_Utils
 
 pytestmark = pytest.mark.integration
 
