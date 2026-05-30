@@ -40,7 +40,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Coins, History, Pencil, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, Coins, History, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
@@ -86,9 +86,74 @@ interface ModelPrice {
   updated_at: string;
 }
 
+// task_11_16 — dry-run diff + mandatory-confirmation apply.
+// Mirror api_server.schemas.price_sync.{PriceSyncDiffResponse,PriceDiffRowResponse}.
+type DiffStatus = "added" | "updated" | "unchanged" | "increased" | "removed";
+
+interface PriceDiffRow {
+  provider: string;
+  model_id: string;
+  modality: string;
+  status: DiffStatus;
+  source: string;
+  old_input: string | null;
+  new_input: string | null;
+  old_output: string | null;
+  new_output: string | null;
+  old_cached_input: string | null;
+  new_cached_input: string | null;
+  input_pct: number | null;
+  output_pct: number | null;
+  manual_skipped: boolean;
+}
+
+interface PriceSyncDiff {
+  fetched: number;
+  added: number;
+  updated: number;
+  unchanged: number;
+  increased: number;
+  removed: number;
+  has_large_increase: boolean;
+  rows: PriceDiffRow[];
+  skipped: { model_key: string; reason: string }[];
+}
+
+interface PriceSyncResult {
+  fetched: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  changed: number;
+}
+
 const MODALITIES: Modality[] = ["text", "vision", "audio", "embedding", "image", "rerank"];
 const UNITS: Unit[] = ["per_1m_tokens", "per_1k_tokens"];
 const SOURCES: Source[] = ["manual", "litellm", "provider_api"];
+
+const DIFF_STATUS_BADGE: Record<DiffStatus, BadgeVariant> = {
+  added: "info",
+  updated: "primary",
+  unchanged: "muted",
+  increased: "danger",
+  removed: "warning",
+};
+
+const DIFF_STATUS_LABEL: Record<DiffStatus, string> = {
+  added: "nuevo",
+  updated: "actualizado",
+  unchanged: "sin cambios",
+  increased: "subida >10%",
+  removed: "descontinuado",
+};
+
+/** Format a fractional change (0.067 -> "+6.7%"); null -> "—". */
+function fmtPct(value: number | null): string {
+  if (value === null) return "—";
+  const pct = value * 100;
+  const sign = pct > 0 ? "+" : "";
+  return `${sign}${pct.toLocaleString("en-US", { maximumFractionDigits: 1 })}%`;
+}
 
 const UNIT_LABEL: Record<string, string> = {
   per_1m_tokens: "por 1M tokens",
@@ -144,6 +209,7 @@ export default function ModelPricesPage() {
   }>({ provider: "", modelId: "", modality: "", currentOnly: true });
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<ModelPrice | null>(null);
   const [historyTarget, setHistoryTarget] = useState<{
     provider: string;
@@ -201,10 +267,21 @@ export default function ModelPricesPage() {
         data-testid="model-prices-header"
         actions={
           <RoleGuard min="system_admin">
-            <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="price-create-open">
-              <Plus className="mr-1 h-3.5 w-3.5" />
-              Nuevo precio
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setSyncOpen(true)}
+                data-testid="price-sync-open"
+              >
+                <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                Sincronizar precios
+              </Button>
+              <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="price-create-open">
+                <Plus className="mr-1 h-3.5 w-3.5" />
+                Nuevo precio
+              </Button>
+            </div>
           </RoleGuard>
         }
       />
@@ -423,7 +500,232 @@ export default function ModelPricesPage() {
       {historyTarget ? (
         <PriceHistoryDialog target={historyTarget} onClose={() => setHistoryTarget(null)} />
       ) : null}
+
+      {syncOpen ? (
+        <SyncDiffDialog
+          onClose={() => setSyncOpen(false)}
+          onApplied={() => {
+            setSyncOpen(false);
+            void queryClient.invalidateQueries({ queryKey: ["model-prices"] });
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+// ===========================================================================
+// Sincronizar precios — dry-run diff + mandatory confirmation (task_11_16)
+//
+// Two-step flow (ADR 0021 — the LiteLLM JSON is a DATA FEED only, never a
+// provider runtime):
+//   1) DRY-RUN  POST /admin/model-prices/sync/diff  computes a per-model diff
+//      (added / updated / unchanged / increased / removed) WITHOUT writing.
+//   2) APPLY    POST /admin/model-prices/sync/apply  writes the catalog. If
+//      ANY price rises >10% the backend REJECTS the apply (409) unless we
+//      pass `confirm: true`. The dialog gates an explicit confirmation
+//      checkbox on `has_large_increase` so the human reviews the spike.
+// ===========================================================================
+interface SyncDiffDialogProps {
+  onClose: () => void;
+  onApplied: () => void;
+}
+
+function SyncDiffDialog({ onClose, onApplied }: SyncDiffDialogProps) {
+  const [confirmed, setConfirmed] = useState(false);
+
+  const diffQuery = useQuery({
+    queryKey: ["model-prices", "sync-diff"],
+    queryFn: () => apiFetch<PriceSyncDiff>("/admin/model-prices/sync/diff", { method: "POST" }),
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
+  const applyMutation = useMutation({
+    mutationFn: (confirm: boolean) =>
+      apiFetch<PriceSyncResult>("/admin/model-prices/sync/apply", {
+        method: "POST",
+        body: { confirm },
+      }),
+    onSuccess: onApplied,
+  });
+
+  const diff = diffQuery.data;
+  const needsConfirm = diff?.has_large_increase ?? false;
+  // A change actually exists when something is added / updated / increased.
+  const hasChanges = diff ? diff.added + diff.updated + diff.increased > 0 : false;
+  // The apply is allowed when there are changes and, if a >10% rise exists,
+  // the human has ticked the explicit confirmation box.
+  const canApply = hasChanges && (!needsConfirm || confirmed);
+
+  return (
+    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())} size="2xl">
+      <DialogContent data-testid="price-sync-dialog">
+        <DialogHeader>
+          <DialogTitle>Sincronizar precios (LiteLLM)</DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          <p className="text-muted-foreground text-xs" data-testid="sync-feed-note">
+            Lee el JSON público de precios de LiteLLM como fuente de datos (no como runtime — ADR
+            0021). Esta es una previsualización: nada se escribe hasta que confirmes. Una subida de
+            precio &gt;10% exige confirmación explícita.
+          </p>
+
+          {diffQuery.isLoading ? (
+            <p className="text-muted-foreground mt-3 text-sm" data-testid="sync-loading">
+              Calculando diff…
+            </p>
+          ) : diffQuery.isError ? (
+            <p className="text-destructive mt-3 text-sm" data-testid="sync-diff-error">
+              {errorText(diffQuery.error)}
+            </p>
+          ) : diff ? (
+            <>
+              <div
+                className="text-muted-foreground mt-3 flex flex-wrap gap-2 text-xs"
+                data-testid="sync-summary"
+              >
+                <Badge variant="info">{diff.added} nuevos</Badge>
+                <Badge variant="primary">{diff.updated} actualizados</Badge>
+                <Badge variant="danger">{diff.increased} subidas &gt;10%</Badge>
+                <Badge variant="warning">{diff.removed} descontinuados</Badge>
+                <Badge variant="muted">{diff.unchanged} sin cambios</Badge>
+              </div>
+
+              {hasChanges ? (
+                <div
+                  className="mt-3 max-h-80 overflow-auto rounded-lg border"
+                  data-testid="sync-diff-table"
+                >
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted text-muted-foreground sticky top-0">
+                      <tr className="text-left">
+                        <th className="px-3 py-2 font-medium">Modelo</th>
+                        <th className="px-3 py-2 font-medium">Estado</th>
+                        <th className="px-3 py-2 font-medium">Input (ant. → nuevo)</th>
+                        <th className="px-3 py-2 font-medium">Output (ant. → nuevo)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {diff.rows
+                        .filter((r) => r.status !== "unchanged")
+                        .map((r) => {
+                          const key = `${r.provider}:${r.model_id}:${r.modality}`;
+                          return (
+                            <tr
+                              key={key}
+                              className="border-t"
+                              data-testid={`sync-row-${r.model_id}`}
+                              data-status={r.status}
+                            >
+                              <td className="px-3 py-2 font-mono text-xs">
+                                {r.provider} / {r.model_id}
+                              </td>
+                              <td className="px-3 py-2">
+                                <Badge variant={DIFF_STATUS_BADGE[r.status]}>
+                                  {DIFF_STATUS_LABEL[r.status]}
+                                </Badge>
+                                {r.manual_skipped ? (
+                                  <span
+                                    className="text-muted-foreground ml-1 text-xs italic"
+                                    data-testid={`sync-manual-${r.model_id}`}
+                                  >
+                                    (manual, no se pisa)
+                                  </span>
+                                ) : null}
+                              </td>
+                              <td className="px-3 py-2 text-xs">
+                                {fmtUsd(r.old_input)} → {fmtUsd(r.new_input)}
+                                {r.input_pct !== null ? (
+                                  <span
+                                    className={
+                                      r.status === "increased"
+                                        ? "text-destructive ml-1 font-medium"
+                                        : "text-muted-foreground ml-1"
+                                    }
+                                    data-testid={`sync-input-pct-${r.model_id}`}
+                                  >
+                                    {fmtPct(r.input_pct)}
+                                  </span>
+                                ) : null}
+                              </td>
+                              <td className="px-3 py-2 text-xs">
+                                {fmtUsd(r.old_output)} → {fmtUsd(r.new_output)}
+                                {r.output_pct !== null ? (
+                                  <span
+                                    className={
+                                      r.status === "increased"
+                                        ? "text-destructive ml-1 font-medium"
+                                        : "text-muted-foreground ml-1"
+                                    }
+                                    data-testid={`sync-output-pct-${r.model_id}`}
+                                  >
+                                    {fmtPct(r.output_pct)}
+                                  </span>
+                                ) : null}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p
+                  className="text-muted-foreground mt-3 text-sm italic"
+                  data-testid="sync-no-changes"
+                >
+                  El catálogo ya está al día — nada que aplicar.
+                </p>
+              )}
+
+              {needsConfirm ? (
+                <div
+                  className="border-destructive/40 bg-destructive/5 mt-4 flex items-start gap-2 rounded-lg border p-3"
+                  data-testid="sync-confirm-gate"
+                >
+                  <AlertTriangle className="text-destructive mt-0.5 h-4 w-4 shrink-0" />
+                  <div className="space-y-2">
+                    <p className="text-destructive text-xs font-medium">
+                      Hay {diff.increased} subida(s) de precio superior(es) al 10%. Revisa los
+                      cambios y confirma explícitamente para aplicarlos.
+                    </p>
+                    <label className="flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4"
+                        checked={confirmed}
+                        onChange={(e) => setConfirmed(e.target.checked)}
+                        data-testid="sync-confirm-checkbox"
+                      />
+                      Confirmo que he revisado las subidas &gt;10% y deseo aplicarlas.
+                    </label>
+                  </div>
+                </div>
+              ) : null}
+
+              {applyMutation.isError ? (
+                <p className="text-destructive mt-3 text-xs" data-testid="sync-apply-error">
+                  {errorText(applyMutation.error)}
+                </p>
+              ) : null}
+            </>
+          ) : null}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} data-testid="sync-cancel">
+            Cancelar
+          </Button>
+          <Button
+            onClick={() => applyMutation.mutate(needsConfirm && confirmed)}
+            disabled={!canApply || applyMutation.isPending}
+            data-testid="sync-apply"
+          >
+            {applyMutation.isPending ? "Aplicando…" : "Aplicar cambios"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

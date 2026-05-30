@@ -65,7 +65,10 @@ from api_server.config import get_settings
 from api_server.db.model_prices import ModelPrice, PriceModality
 from api_server.pricing.litellm_sync import (
     HttpxPriceFeedFetcher,
+    LargeIncreaseNotConfirmedError,
     PriceFeedError,
+    apply_sync_from_litellm,
+    compute_sync_diff,
     sync_prices_from_litellm,
 )
 from api_server.routers._pagination import apply_pagination, limit_query, offset_query
@@ -76,8 +79,12 @@ from api_server.schemas.model_prices import (
     to_price_response,
 )
 from api_server.schemas.price_sync import (
+    PriceSyncApplyRequest,
+    PriceSyncDiffRequest,
+    PriceSyncDiffResponse,
     PriceSyncRequest,
     PriceSyncResponse,
+    to_diff_response,
     to_sync_response,
 )
 
@@ -370,6 +377,117 @@ async def sync_prices(
                 confirm_large_increases=req.confirm_large_increases,
                 overwrite_manual=req.overwrite_manual,
             )
+        except (PriceFeedError, httpx.HTTPError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"could not fetch/parse the LiteLLM price feed: {exc}",
+            ) from exc
+
+    return to_sync_response(summary)
+
+
+# ===========================================================================
+# POST /admin/model-prices/sync/diff — dry-run: compute the diff, NO writes
+#
+# task_11_16 step 1. Fetches + parses the feed and compares it to the current
+# catalog, returning a per-model diff (old vs new + % change, added / updated /
+# unchanged / increased / removed) WITHOUT touching the DB. The UI shows this
+# diff and, when ``has_large_increase`` is true, gates the confirmation dialog.
+# ===========================================================================
+@admin_router.post("/sync/diff", response_model=PriceSyncDiffResponse)
+async def sync_prices_diff(
+    payload: PriceSyncDiffRequest | None = None,
+    _: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> PriceSyncDiffResponse:
+    """Dry-run the sync: return the per-model diff WITHOUT writing (task_11_16).
+
+    Step 1 of the two-step sync flow. Fetches + parses the LiteLLM feed (data
+    feed only — ADR 0021) and diffs it against the current catalog: each model
+    is ``added`` / ``updated`` / ``unchanged`` / ``increased`` (a >10% rise) /
+    ``removed`` (a discontinued candidate the feed dropped — flagged, not
+    deleted). NO catalog row is written. ``has_large_increase`` tells the UI
+    whether the subsequent apply needs explicit confirmation.
+
+    RBAC: ``require_system_admin`` (a tenant caller is 403); BYPASSRLS session.
+    A feed fetch / parse failure is a 502.
+    """
+    req = payload or PriceSyncDiffRequest()
+    settings = get_settings()
+    url = req.url or settings.litellm_price_feed_url
+
+    async with httpx.AsyncClient() as client:
+        fetcher = HttpxPriceFeedFetcher(client=client, url=url)
+        try:
+            diff = await compute_sync_diff(session, fetcher=fetcher)
+        except (PriceFeedError, httpx.HTTPError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"could not fetch/parse the LiteLLM price feed: {exc}",
+            ) from exc
+
+    return to_diff_response(diff)
+
+
+# ===========================================================================
+# POST /admin/model-prices/sync/apply — apply, REJECT >10% rise without confirm
+#
+# task_11_16 step 2. Applies the feed with effective dating, but if ANY price
+# rises >10% and ``confirm`` is not true, the whole apply is REJECTED (409) so
+# a human reviews the spike first. With ``confirm=true`` the spikes are applied.
+# ===========================================================================
+@admin_router.post("/sync/apply", response_model=PriceSyncResponse)
+async def sync_prices_apply(
+    payload: PriceSyncApplyRequest | None = None,
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> PriceSyncResponse:
+    """Apply the sync; REJECT a >10% rise unless ``confirm=true`` (task_11_16).
+
+    Step 2 of the two-step flow. Upserts the catalog with effective dating
+    (Fase C). The mandatory-confirmation gate: if ANY model's price rises more
+    than +10% and ``confirm`` is false, the apply writes NOTHING and returns a
+    409 listing the offending models — a human must explicitly confirm the
+    spike. With ``confirm=true`` every change (including the spikes) is applied.
+    A manual override (``source = manual``) is left untouched unless
+    ``overwrite_manual=true``.
+
+    RBAC: ``require_system_admin`` (a tenant caller is 403); BYPASSRLS session.
+    A feed fetch / parse failure is a 502.
+    """
+    req = payload or PriceSyncApplyRequest()
+    settings = get_settings()
+    url = req.url or settings.litellm_price_feed_url
+
+    async with httpx.AsyncClient() as client:
+        fetcher = HttpxPriceFeedFetcher(client=client, url=url)
+        try:
+            summary = await apply_sync_from_litellm(
+                session,
+                fetcher=fetcher,
+                actor_id=principal.user_id,
+                confirm=req.confirm,
+                overwrite_manual=req.overwrite_manual,
+            )
+        except LargeIncreaseNotConfirmedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": str(exc),
+                    "large_increases": [
+                        {
+                            "provider": li.provider,
+                            "model_id": li.model_id,
+                            "modality": li.modality,
+                            "field": li.field,
+                            "old_price": str(li.old_price),
+                            "new_price": str(li.new_price),
+                            "pct_increase": li.pct_increase,
+                        }
+                        for li in exc.increases
+                    ],
+                },
+            ) from exc
         except (PriceFeedError, httpx.HTTPError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,

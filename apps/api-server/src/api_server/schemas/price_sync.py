@@ -26,7 +26,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api_server.pricing.litellm_sync import (
     LargeIncrease,
+    PriceDiffRow,
     SkippedEntry,
+    SyncDiff,
     SyncSummary,
 )
 
@@ -49,6 +51,41 @@ class PriceSyncRequest(BaseModel):
     overwrite_manual: bool = Field(
         default=False,
         description="Let the sync supersede a manually-entered (source=manual) override.",
+    )
+
+
+class PriceSyncDiffRequest(BaseModel):
+    """Body for the dry-run diff (task_11_16). Only the feed URL is relevant."""
+
+    model_config = _BASE_CONFIG
+
+    url: str | None = Field(
+        default=None,
+        description="Override feed URL (e.g. an internal mirror). Default: the LiteLLM JSON.",
+    )
+
+
+class PriceSyncApplyRequest(BaseModel):
+    """Body for the two-step APPLY (task_11_16).
+
+    ``confirm`` is the mandatory-confirmation gate: when ANY price rises
+    >10%, the apply is rejected (409) unless ``confirm`` is True, so a human
+    explicitly reviews the spike before the catalog is written.
+    """
+
+    model_config = _BASE_CONFIG
+
+    url: str | None = Field(
+        default=None,
+        description="Override feed URL (e.g. an internal mirror). Default: the LiteLLM JSON.",
+    )
+    confirm: bool = Field(
+        default=False,
+        description="Confirm a >10% price rise; required for the apply to proceed when one exists.",
+    )
+    overwrite_manual: bool = Field(
+        default=False,
+        description="Let the apply supersede a manually-entered (source=manual) override.",
     )
 
 
@@ -118,10 +155,102 @@ def _large(li: LargeIncrease) -> LargeIncreaseResponse:
     )
 
 
+# =============================================================================
+# Dry-run diff response (task_11_16)
+# =============================================================================
+class PriceDiffRowResponse(BaseModel):
+    """One model's old-vs-new prices in a dry-run diff.
+
+    ``status`` is one of ``added`` / ``updated`` / ``unchanged`` /
+    ``increased`` (a >10% rise needing confirmation) / ``removed`` (a
+    discontinued candidate the feed dropped — flagged, not deleted). ``old_*``
+    is null for an added model; ``new_*`` is null for a removed one.
+    ``*_pct`` is the fractional change on that field (null when undefined).
+    ``manual_skipped`` flags a changed manual override the sync leaves alone.
+    """
+
+    model_config = _BASE_CONFIG
+
+    provider: str
+    model_id: str
+    modality: str
+    status: str
+    source: str
+    old_input: Decimal | None
+    new_input: Decimal | None
+    old_output: Decimal | None
+    new_output: Decimal | None
+    old_cached_input: Decimal | None
+    new_cached_input: Decimal | None
+    input_pct: float | None
+    output_pct: float | None
+    manual_skipped: bool
+
+
+class PriceSyncDiffResponse(BaseModel):
+    """A dry-run diff of the feed vs the catalog — NO write happened.
+
+    The UI renders ``rows`` and gates its confirmation dialog on
+    ``has_large_increase``: when True, the subsequent APPLY must pass
+    ``confirm=true`` or the backend rejects it (409).
+    """
+
+    model_config = _BASE_CONFIG
+
+    fetched: int
+    added: int
+    updated: int
+    unchanged: int
+    increased: int
+    removed: int
+    has_large_increase: bool
+    rows: list[PriceDiffRowResponse]
+    skipped: list[SkippedEntryResponse]
+
+
+def _diff_row(row: PriceDiffRow) -> PriceDiffRowResponse:
+    return PriceDiffRowResponse(
+        provider=row.provider,
+        model_id=row.model_id,
+        modality=row.modality,
+        status=str(row.status),
+        source=row.source,
+        old_input=row.old_input,
+        new_input=row.new_input,
+        old_output=row.old_output,
+        new_output=row.new_output,
+        old_cached_input=row.old_cached_input,
+        new_cached_input=row.new_cached_input,
+        input_pct=row.input_pct,
+        output_pct=row.output_pct,
+        manual_skipped=row.manual_skipped,
+    )
+
+
+def to_diff_response(diff: SyncDiff) -> PriceSyncDiffResponse:
+    """Map the service-layer :class:`SyncDiff` to its response model."""
+    return PriceSyncDiffResponse(
+        fetched=diff.fetched,
+        added=diff.added,
+        updated=diff.updated,
+        unchanged=diff.unchanged,
+        increased=diff.increased,
+        removed=diff.removed,
+        has_large_increase=diff.has_large_increase,
+        rows=[_diff_row(r) for r in diff.rows],
+        skipped=[_skip(s) for s in diff.skipped],
+    )
+
+
 __all__ = [
     "LargeIncreaseResponse",
+    "PriceDiffRowResponse",
+    "PriceSyncApplyRequest",
+    "PriceSyncDiffRequest",
+    "PriceSyncDiffResponse",
     "PriceSyncRequest",
     "PriceSyncResponse",
     "SkippedEntryResponse",
+    "to_diff_response",
     "to_sync_response",
 ]

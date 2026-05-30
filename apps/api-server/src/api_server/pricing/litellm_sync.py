@@ -71,6 +71,7 @@ System-Admin only
 
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -206,6 +207,115 @@ class LargeIncrease:
     old_price: Decimal
     new_price: Decimal
     pct_increase: float
+
+
+# task_11_16: a model's status in a dry-run diff (no DB write happened).
+class DiffStatus(enum.StrEnum):
+    """How a feed entry compares to the current catalog (dry-run diff).
+
+    - ``added``     : the feed has a model the catalog has no open period for.
+    - ``updated``   : prices changed (within the +10% guard — applies cleanly).
+    - ``unchanged`` : prices match the current open period (no-op on apply).
+    - ``increased`` : a rise above +10% on input/output — apply needs confirm.
+    - ``removed``   : the catalog has an open period the feed no longer lists
+                      (a candidate discontinued model — flagged, not deleted;
+                      task_11_17 acts on it).
+    """
+
+    ADDED = "added"
+    UPDATED = "updated"
+    UNCHANGED = "unchanged"
+    INCREASED = "increased"
+    REMOVED = "removed"
+
+
+@dataclass(frozen=True, slots=True)
+class PriceDiffRow:
+    """One model's old-vs-new prices in a dry-run diff (task_11_16).
+
+    Pure data — produced by :func:`compute_sync_diff` WITHOUT any DB write.
+    ``old_*`` is None for an ``added`` model; ``new_*`` is None for a
+    ``removed`` (discontinued-candidate) model. Each ``*_pct`` is the
+    fractional change (``new/old - 1``) on that field, or None when there is
+    no sensible percentage (no old value, no new value, or old == 0).
+    ``manual_skipped`` marks a row the sync would leave untouched (a manual
+    override) so the UI can explain why an otherwise-changed price won't move.
+    """
+
+    provider: str
+    model_id: str
+    modality: str
+    status: DiffStatus
+    source: str
+    old_input: Decimal | None
+    new_input: Decimal | None
+    old_output: Decimal | None
+    new_output: Decimal | None
+    old_cached_input: Decimal | None
+    new_cached_input: Decimal | None
+    input_pct: float | None
+    output_pct: float | None
+    manual_skipped: bool = False
+
+    @property
+    def is_large_increase(self) -> bool:
+        return self.status is DiffStatus.INCREASED
+
+
+@dataclass(slots=True)
+class SyncDiff:
+    """The result of a dry-run sync — a per-model diff, no writes (task_11_16).
+
+    ``rows`` carries every compared model (added / updated / unchanged /
+    increased / removed). ``skipped`` mirrors the parse skips. The
+    convenience counters + :meth:`has_large_increase` let the UI gate the
+    confirmation dialog and the endpoint gate the apply.
+    """
+
+    rows: list[PriceDiffRow] = field(default_factory=list)
+    skipped: list[SkippedEntry] = field(default_factory=list)
+    fetched: int = 0
+
+    @property
+    def added(self) -> int:
+        return sum(1 for r in self.rows if r.status is DiffStatus.ADDED)
+
+    @property
+    def updated(self) -> int:
+        return sum(1 for r in self.rows if r.status is DiffStatus.UPDATED)
+
+    @property
+    def unchanged(self) -> int:
+        return sum(1 for r in self.rows if r.status is DiffStatus.UNCHANGED)
+
+    @property
+    def increased(self) -> int:
+        return sum(1 for r in self.rows if r.status is DiffStatus.INCREASED)
+
+    @property
+    def removed(self) -> int:
+        return sum(1 for r in self.rows if r.status is DiffStatus.REMOVED)
+
+    @property
+    def has_large_increase(self) -> bool:
+        """True when any model's price rises >10% — apply needs confirmation."""
+        return any(r.is_large_increase for r in self.rows)
+
+
+class LargeIncreaseNotConfirmedError(Exception):
+    """Apply was blocked: a price rises >10% and ``confirm`` was not passed.
+
+    Carries the offending rows so the caller (the endpoint → a 409) can tell
+    the human exactly which models spiked and need an explicit review before
+    the catalog is written.
+    """
+
+    def __init__(self, increases: list[LargeIncrease]) -> None:
+        self.increases = increases
+        super().__init__(
+            f"{len(increases)} model price(s) rose more than "
+            f"{LARGE_INCREASE_THRESHOLD:%}; explicit confirmation required"
+        )
 
 
 @dataclass(slots=True)
@@ -392,6 +502,129 @@ def _large_increase(current: ModelPrice, candidate: MappedPrice) -> LargeIncreas
     return None
 
 
+def _pct_change(old: Decimal, new: Decimal) -> float | None:
+    """Fractional change ``new/old - 1`` as a float, or None when undefined.
+
+    None when ``old`` is 0 (a move from free to priced has no percentage).
+    Exact Decimal arithmetic before the final float cast keeps small per-1M
+    prices honest.
+    """
+    if old == 0:
+        return None
+    return float((new - old) / old)
+
+
+# =============================================================================
+# Dry-run diff (task_11_16) — fetch + compare, NO DB writes
+# =============================================================================
+async def _open_catalog_rows(session: AsyncSession) -> list[ModelPrice]:
+    """Every current (open-period) catalog row — the dry-run comparison base."""
+    result = await session.execute(select(ModelPrice).where(ModelPrice.effective_to.is_(None)))
+    return list(result.scalars().all())
+
+
+def _diff_row(current: ModelPrice | None, candidate: MappedPrice) -> PriceDiffRow:
+    """Build one diff row for a feed entry against its current catalog row."""
+    if current is None:
+        return PriceDiffRow(
+            provider=candidate.provider,
+            model_id=candidate.model_id,
+            modality=candidate.modality.value,
+            status=DiffStatus.ADDED,
+            source=PriceSource.LITELLM.value,
+            old_input=None,
+            new_input=candidate.input_price,
+            old_output=None,
+            new_output=candidate.output_price,
+            old_cached_input=None,
+            new_cached_input=candidate.cached_input_price,
+            input_pct=None,
+            output_pct=None,
+        )
+
+    manual_skipped = current.source == PriceSource.MANUAL.value
+    if _prices_equal(current, candidate):
+        status = DiffStatus.UNCHANGED
+    elif _large_increase(current, candidate) is not None:
+        status = DiffStatus.INCREASED
+    else:
+        status = DiffStatus.UPDATED
+
+    return PriceDiffRow(
+        provider=current.provider,
+        model_id=current.model_id,
+        modality=current.modality,
+        status=status,
+        source=current.source,
+        old_input=current.input_price,
+        new_input=candidate.input_price,
+        old_output=current.output_price,
+        new_output=candidate.output_price,
+        old_cached_input=current.cached_input_price,
+        new_cached_input=candidate.cached_input_price,
+        input_pct=_pct_change(current.input_price, candidate.input_price),
+        output_pct=_pct_change(current.output_price, candidate.output_price),
+        manual_skipped=manual_skipped and status is not DiffStatus.UNCHANGED,
+    )
+
+
+async def compute_sync_diff(
+    session: AsyncSession,
+    *,
+    fetcher: PriceFeedFetcher,
+) -> SyncDiff:
+    """Compute a per-model diff of the feed vs the catalog — NO writes (task_11_16).
+
+    The dry-run half of the two-step sync flow: fetch + parse the feed, then
+    compare each mapped entry to its current open-period catalog row. Every
+    compared model becomes a :class:`PriceDiffRow` (added / updated /
+    unchanged / increased) carrying old-vs-new prices + % change. Open
+    catalog rows the feed no longer lists are emitted as ``removed``
+    (discontinued candidates — flagged, never deleted here). Malformed feed
+    entries are captured as typed skips. This function NEVER mutates the DB,
+    so the UI can show the diff before the human confirms the apply.
+    """
+    payload = await fetcher.fetch()
+    mapped, skipped = parse_feed(payload)
+
+    diff = SyncDiff(skipped=skipped, fetched=len(mapped))
+
+    open_rows = await _open_catalog_rows(session)
+    by_key: dict[tuple[str, str, str], ModelPrice] = {
+        (r.provider, r.model_id, r.modality): r for r in open_rows
+    }
+    seen: set[tuple[str, str, str]] = set()
+
+    for candidate in mapped:
+        key = (candidate.provider, candidate.model_id, candidate.modality.value)
+        seen.add(key)
+        diff.rows.append(_diff_row(by_key.get(key), candidate))
+
+    # Open catalog rows absent from the feed → discontinued candidates.
+    for key, row in by_key.items():
+        if key in seen:
+            continue
+        diff.rows.append(
+            PriceDiffRow(
+                provider=row.provider,
+                model_id=row.model_id,
+                modality=row.modality,
+                status=DiffStatus.REMOVED,
+                source=row.source,
+                old_input=row.input_price,
+                new_input=None,
+                old_output=row.output_price,
+                new_output=None,
+                old_cached_input=row.cached_input_price,
+                new_cached_input=None,
+                input_pct=None,
+                output_pct=None,
+            )
+        )
+
+    return diff
+
+
 # =============================================================================
 # The sync (DB writes; System-Admin session)
 # =============================================================================
@@ -485,17 +718,107 @@ async def sync_prices_from_litellm(
     return summary
 
 
+# =============================================================================
+# Apply with mandatory confirmation on a >10% rise (task_11_16)
+# =============================================================================
+async def _pending_large_increases(
+    session: AsyncSession, mapped: list[MappedPrice]
+) -> list[LargeIncrease]:
+    """The >10% rises a write would apply, computed WITHOUT writing.
+
+    Only counts rises that would actually be applied: a brand-new model has
+    nothing to compare; an unchanged price is a no-op. (Manual overrides are
+    *not* exempted here — a manual row that the feed wants to raise >10% is
+    still surfaced for confirmation, even though the write itself leaves it
+    unless ``overwrite_manual`` is set.)
+    """
+    pending: list[LargeIncrease] = []
+    for candidate in mapped:
+        current = await _current_price(session, candidate)
+        if current is None:
+            continue
+        big = _large_increase(current, candidate)
+        if big is not None:
+            pending.append(big)
+    return pending
+
+
+async def apply_sync_from_litellm(
+    session: AsyncSession,
+    *,
+    fetcher: PriceFeedFetcher,
+    actor_id: UUID | None = None,
+    confirm: bool = False,
+    overwrite_manual: bool = False,
+) -> SyncSummary:
+    """Apply the feed — but REJECT the whole apply on an unconfirmed >10% rise.
+
+    The "apply" half of the two-step flow (task_11_16). Unlike the lower-level
+    :func:`sync_prices_from_litellm` (which *defers* individual large rises and
+    applies the rest), this enforces a **mandatory confirmation gate**: if ANY
+    model's price rises more than +10% and ``confirm`` is False, it raises
+    :class:`LargeIncreaseNotConfirmedError` BEFORE writing anything, so a human
+    must review the spike. With ``confirm=True`` every change — including the
+    spikes — is applied. This is the gate the endpoint maps to a 409 and the UI
+    gates its confirmation dialog on (via the dry-run diff).
+
+    A feed / parse failure raises :class:`PriceFeedError`. The caller commits.
+    """
+    payload = await fetcher.fetch()
+    mapped, skipped = parse_feed(payload)
+
+    if not confirm:
+        pending = await _pending_large_increases(session, mapped)
+        if pending:
+            raise LargeIncreaseNotConfirmedError(pending)
+
+    summary = SyncSummary(fetched=len(mapped), skipped=skipped)
+    now = datetime.now(tz=UTC)
+
+    for candidate in mapped:
+        current = await _current_price(session, candidate)
+
+        if current is None:
+            session.add(_new_row(candidate, actor_id=actor_id))
+            summary.created += 1
+            continue
+
+        if _prices_equal(current, candidate):
+            summary.unchanged += 1
+            continue
+
+        if current.source == PriceSource.MANUAL.value and not overwrite_manual:
+            summary.unchanged += 1
+            continue
+
+        current.effective_to = now
+        current.updated_by = actor_id
+        session.add(current)
+        await session.flush()  # release the partial-unique open-period slot
+        session.add(_new_row(candidate, actor_id=actor_id))
+        summary.updated += 1
+
+    await session.flush()
+    return summary
+
+
 __all__ = [
     "DEFAULT_LITELLM_FEED_URL",
     "LARGE_INCREASE_THRESHOLD",
+    "DiffStatus",
     "HttpxPriceFeedFetcher",
     "LargeIncrease",
+    "LargeIncreaseNotConfirmedError",
     "MappedPrice",
+    "PriceDiffRow",
     "PriceFeedError",
     "PriceFeedFetcher",
     "SkippedEntry",
     "StaticPriceFeedFetcher",
+    "SyncDiff",
     "SyncSummary",
+    "apply_sync_from_litellm",
+    "compute_sync_diff",
     "map_entry",
     "parse_feed",
     "sync_prices_from_litellm",
