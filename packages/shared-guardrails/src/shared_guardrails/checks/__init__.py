@@ -17,6 +17,7 @@ it makes sense, a lightweight pure-Python fallback) instead of crashing.
 from __future__ import annotations
 
 # Importing each module for its import-time registration side effect.
+from shared_guardrails.checks import code_safety as _code_safety  # noqa: F401
 from shared_guardrails.checks import content_safety as _content_safety  # noqa: F401
 from shared_guardrails.checks import pii as _pii  # noqa: F401
 from shared_guardrails.checks import prompt_injection as _prompt_injection  # noqa: F401
