@@ -1,0 +1,45 @@
+# Prometheus scrape configuration for the host/container monitoring stack
+# (Plan 12 — Backup/Restore, Phase D, task_12_13).
+#
+# This file is mounted read-only into the prometheus container by
+# docker/docker-compose.monitoring.yml. It defines the scrape jobs for:
+#   - prometheus itself (self-monitoring),
+#   - node-exporter  → host metrics (CPU / RAM / disk / swap / network),
+#   - cadvisor       → per-container metrics.
+#
+# Alerting rules (task_12_14) live in ./rules/*.yml and are wired through
+# the `rule_files` + `alerting` blocks below so the file is stable across
+# the rest of Phase D. The Alertmanager target is left commented until
+# task_12_14 introduces the alertmanager service.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: agentic-platform
+
+# Alertmanager + alert rules are added in task_12_14. The rule_files glob
+# is harmless when no files match yet.
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # Prometheus self-monitoring.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Host metrics: CPU, RAM, disk, swap, network, load (node_load1, ...).
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # Per-container metrics (cgroup CPU / memory / network / fs).
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]

@@ -1,0 +1,2 @@
+# Alert rule files (*.yml) land here in task_12_14 (Alertmanager rules).
+# Prometheus loads them via the rule_files glob in ../prometheus.yml.

@@ -295,7 +295,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_13` — node-exporter + cAdvisor en el stack para métricas del host y contenedores
 
-- [ ] **Título**: node-exporter + cAdvisor en el stack para métricas del host y contenedores
+- [x] **Título**: node-exporter + cAdvisor en el stack para métricas del host y contenedores
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops

@@ -1,0 +1,123 @@
+# Host + container monitoring overlay (Plan 12 — Backup/Restore, Phase D).
+#
+# Adds the observability data plane referenced by the tech stack
+# (OpenTelemetry + Prometheus + Grafana + Loki):
+#   - prometheus     → time-series DB + scraper (task_12_13).
+#   - node-exporter  → host metrics: CPU / RAM / disk / swap / network
+#                      (task_12_13).
+#   - cadvisor       → per-container metrics (task_12_13).
+#
+# Alertmanager + its rules (task_12_14) and the Grafana host dashboards
+# (task_12_15) are layered on top of this file later in the same phase.
+#
+# Usage (compose with the base stack):
+#   docker compose -f docker/docker-compose.yml \
+#     -f docker/docker-compose.monitoring.yml up -d
+#
+# All images are pinned to a fixed tag (no :latest) — the 06.14 audit
+# (container-isolation-3/4) requires reproducible, supply-chain-pinned
+# images across the stack. Bump tags deliberately.
+
+name: agentic-platform
+
+x-restart: &default-restart
+  restart: unless-stopped
+
+x-logging: &default-logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Prometheus — scrapes node-exporter + cadvisor (+ itself) and evaluates
+  # the alert rules added in task_12_14. Config is mounted read-only.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    user: "65534:65534" # nobody — the image runs as nobody by default.
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
+  # node-exporter — host-level metrics (node_load1, node_memory_*,
+  # node_filesystem_*, node_*_swap, node_network_*). Mounts the host
+  # /proc, /sys and / read-only and reports filesystem usage of the real
+  # host rootfs via --path.rootfs.
+  # ---------------------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
+  # cAdvisor — per-container CPU / memory / network / filesystem metrics.
+  # Needs the standard read-only mounts into the host cgroup/Docker state.
+  # It needs to read privileged host paths, so it is NOT cap-dropped, but
+  # all mounts are read-only and no-new-privileges is set.
+  # ---------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=30s
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+volumes:
+  prometheus_data:
+
+networks:
+  agentic-net:
+    name: agentic-net
+    driver: bridge
