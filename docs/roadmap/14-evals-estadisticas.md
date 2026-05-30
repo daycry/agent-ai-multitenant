@@ -144,7 +144,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_04` — LLM-as-judge con criterios custom + diferente modelo que el evaluado
 
-- [ ] **Título**: LLM-as-judge con criterios custom + diferente modelo que el evaluado
+- [x] **Título**: LLM-as-judge con criterios custom + diferente modelo que el evaluado
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
