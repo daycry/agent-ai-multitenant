@@ -1,9 +1,9 @@
 ---
 plan_id: 09-marketplace
 title: Marketplace de Skills y Tools
-status: pending_approval
+status: in_progress
 blocking_plan: [05-mcp-tools-avanzadas]
-started_at: null
+started_at: 2026-05-30
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 60-80
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `09-marketplace`                          |
-| **Estado**                         | `pending_approval`                        |
+| **Estado**                         | `in_progress`                             |
 | **Bloqueado por**                  | `05-mcp-tools-avanzadas`                  |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                               |
 | **Tiempo estimado (persona-días)** | 60-80                                     |
