@@ -56,7 +56,7 @@ from uuid6 import uuid7
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
 from api_server.db.domain import Execution, ExecutionStatus, Task, TaskStatus
-from api_server.db.evals import EvalCriterion, EvalDataset, EvalDatasetItem
+from api_server.db.evals import EvalCriterion, EvalDataset, EvalDatasetItem, EvalRun
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -74,6 +74,7 @@ from api_server.schemas.evals import (
     EvalDatasetItemUpdateRequest,
     EvalDatasetResponse,
     EvalDatasetUpdateRequest,
+    EvalRunResponse,
     PromoteToDatasetRequest,
     PromoteToDatasetResponse,
 )
@@ -445,6 +446,37 @@ async def delete_eval_dataset_item(
         session, EvalDatasetItem, item_id, principal, not_found_detail="item not found"
     )
     await soft_delete(session, item)
+
+
+# ---------------------------------------------------------------------------
+# Eval runs — read view exposing the standard metrics (task_14_05)
+# ---------------------------------------------------------------------------
+@router.get("/eval-runs/{run_id}", response_model=EvalRunResponse)
+async def get_eval_run(
+    run_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> EvalRunResponse:
+    """Get one eval run with its standard metrics. tenant_admin. 404 cross-tenant.
+
+    Exposes the denormalised roll-up populated when the run completed
+    (task_14_05): ``pass_rate`` / ``mean_latency_ms`` / ``mean_tokens`` /
+    ``mean_cost_usd`` scalar columns plus the ``aggregate_metrics`` JSONB
+    carrying p50/p95 latency + the per-metric counts. Runs are NOT
+    soft-deleted (immutable measurement records), so the lookup is not
+    soft-delete-aware; the ``tenant_id`` filter is the per-tenant guard — a run
+    of another tenant 404s and metrics only ever reflect the caller's runs.
+    """
+    require_tenant_id(principal)
+    run = await get_writable_or_404(
+        session,
+        EvalRun,
+        run_id,
+        principal,
+        not_found_detail="run not found",
+        soft_delete_aware=False,
+    )
+    return EvalRunResponse.model_validate(run)
 
 
 # ---------------------------------------------------------------------------

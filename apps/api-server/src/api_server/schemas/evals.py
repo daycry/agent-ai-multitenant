@@ -221,6 +221,41 @@ class PromoteToDatasetResponse(BaseModel):
     created_at: datetime
 
 
+# ---------------------------------------------------------------------------
+# Eval runs — read view exposing the standard metrics (task_14_05)
+# ---------------------------------------------------------------------------
+class EvalRunResponse(BaseModel):
+    """One eval run with its denormalised standard metrics (NEVER another
+    tenant's — RLS scoped).
+
+    The scalar roll-up columns (``pass_rate`` / ``mean_*``) populated when the
+    run completes (task_14_05), plus ``aggregate_metrics`` JSONB carrying the
+    extras the columns lack (``p50_latency_ms`` / ``p95_latency_ms`` + the
+    per-metric counts). All metrics are ``None`` until the run completes / when
+    nothing reported a given measurement (no divide-by-zero).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    dataset_id: UUID
+    status: str
+    subject_agent_id: UUID | None
+    subject_prompt_version: str | None
+    judge_model: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    total_items: int
+    passed_items: int
+    pass_rate: Decimal | None
+    mean_latency_ms: Decimal | None
+    mean_tokens: Decimal | None
+    mean_cost_usd: Decimal | None
+    aggregate_metrics: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
 __all__ = [
     "EvalCriterionCreateRequest",
     "EvalCriterionResponse",
@@ -231,6 +266,7 @@ __all__ = [
     "EvalDatasetItemUpdateRequest",
     "EvalDatasetResponse",
     "EvalDatasetUpdateRequest",
+    "EvalRunResponse",
     "PromoteToDatasetRequest",
     "PromoteToDatasetResponse",
 ]

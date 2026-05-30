@@ -161,7 +161,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_05` — Métricas estándar: pass rate, p50/p95 latency, coste medio, tokens medios
 
-- [ ] **Título**: Métricas estándar: pass rate, p50/p95 latency, coste medio, tokens medios
+- [x] **Título**: Métricas estándar: pass rate, p50/p95 latency, coste medio, tokens medios
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

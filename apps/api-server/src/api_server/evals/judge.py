@@ -61,6 +61,7 @@ from api_server.db.evals import (
     EvalRun,
     EvalRunStatus,
 )
+from api_server.evals.metrics import apply_to_run, compute_run_metrics
 
 
 # =============================================================================
@@ -528,18 +529,13 @@ async def _load_items(session: AsyncSession, dataset_id: UUID) -> list[EvalDatas
 def _roll_up_run(run: EvalRun, results: Sequence[EvalResult]) -> None:
     """Denormalise the per-item results onto the run (the dashboards read it).
 
-    ``pass_rate`` counts ``pass`` verdicts over total items; the ``mean_*``
-    columns average the per-item usage over the items that reported each
-    metric (NULL when none did).
+    Delegates to :mod:`api_server.evals.metrics` (task_14_05): the standard
+    roll-up — pass rate, p50/p95 latency, mean latency/tokens/cost over the
+    items that reported each metric — is computed once and written onto the
+    run's scalar columns + ``aggregate_metrics`` JSONB. Empty results are
+    well-defined (NULLs, no divide-by-zero).
     """
-    total = len(results)
-    passed = sum(1 for r in results if r.verdict == EvalResultVerdict.PASS.value)
-    run.total_items = total
-    run.passed_items = passed
-    run.pass_rate = _quantize_unit(Decimal(passed) / Decimal(total)) if total > 0 else None
-    run.mean_latency_ms = _mean_decimal([r.latency_ms for r in results], scale=2)
-    run.mean_tokens = _mean_decimal([r.tokens for r in results], scale=2)
-    run.mean_cost_usd = _mean_decimal([r.cost_usd for r in results], scale=6)
+    apply_to_run(run, compute_run_metrics(results))
 
 
 def _clamp_unit(value: Decimal) -> Decimal:
@@ -553,15 +549,6 @@ def _clamp_unit(value: Decimal) -> Decimal:
 def _quantize_unit(value: Decimal) -> Decimal:
     """Quantise to 3 decimals (the Numeric(4,3) columns) clamped to [0,1]."""
     return _clamp_unit(value).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
-
-
-def _mean_decimal(values: Sequence[int | Decimal | None], *, scale: int) -> Decimal | None:
-    present = [Decimal(v) for v in values if v is not None]
-    if not present:
-        return None
-    mean = sum(present, Decimal("0")) / Decimal(len(present))
-    quant = Decimal(1).scaleb(-scale)
-    return mean.quantize(quant, rounding=ROUND_HALF_UP)
 
 
 __all__ = [

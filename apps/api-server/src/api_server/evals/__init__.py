@@ -24,19 +24,33 @@ from api_server.evals.judge import (
     parse_judge_response,
     run_eval,
 )
+from api_server.evals.metrics import (
+    RunMetrics,
+    apply_to_run,
+    compute_run_metrics,
+    mean,
+    pass_rate,
+    percentile,
+)
 
 __all__ = [
     "CriterionScore",
     "JudgeModel",
     "JudgeResponseError",
     "JudgedItem",
+    "RunMetrics",
     "SameModelJudgeError",
     "ScriptedJudgeModel",
     "ScriptedSubjectModel",
     "SubjectModel",
     "SubjectOutput",
+    "apply_to_run",
     "build_judge_prompt",
+    "compute_run_metrics",
     "judge_item",
+    "mean",
     "parse_judge_response",
+    "pass_rate",
+    "percentile",
     "run_eval",
 ]
