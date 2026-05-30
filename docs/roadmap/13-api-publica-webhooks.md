@@ -191,7 +191,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_07` — Versionado: header X-API-Version opcional + tracking de uso por versión
 
-- [ ] **Título**: Versionado: header X-API-Version opcional + tracking de uso por versión
+- [x] **Título**: Versionado: header X-API-Version opcional + tracking de uso por versión
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev

@@ -22,13 +22,11 @@ healthy; the fixtures create a throwaway DB and flush Redis DB 15.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
-from alembic import command
 from api_server.auth.api_tokens import generate_api_token
 from httpx import ASGITransport, AsyncClient
 
@@ -188,51 +186,10 @@ async def _truncate_all(dsn: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# App fixture: real api-server with the v1 router mounted
+# App fixture: real api-server with the v1 router mounted. The ``configured_app``
+# fixture lives in :mod:`tests.integration.conftest` so the v1 endpoint +
+# versioning suites share one wired app.
 # ---------------------------------------------------------------------------
-@pytest.fixture()
-def configured_app(
-    alembic_config,
-    app_database_url: str,
-    admin_database_url: str,
-    test_redis_url: str,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    command.upgrade(alembic_config, "head")
-
-    from tests.integration.conftest import _flush_redis, _grant_app_user_existing_tables
-
-    asyncio.run(_grant_app_user_existing_tables())
-    asyncio.run(_flush_redis(test_redis_url))
-
-    monkeypatch.setenv("API_SERVER_DATABASE_URL", app_database_url)
-    monkeypatch.setenv("API_SERVER_ADMIN_DATABASE_URL", admin_database_url)
-    monkeypatch.setenv("API_SERVER_REDIS_URL", test_redis_url)
-    monkeypatch.setenv("API_SERVER_JWT_SECRET", "test-secret")
-    monkeypatch.setenv("API_SERVER_SSO_ENCRYPTION_KEY", "test-sso-encryption-key")
-    monkeypatch.setenv("API_SERVER_SSO_REDIRECT_BASE_URL", "http://testserver")
-    monkeypatch.delenv("API_SERVER_VAULT_TOKEN", raising=False)
-
-    from api_server.auth.deps import reset_redis_cache
-    from api_server.config import get_settings
-    from api_server.db.session import reset_engine_cache
-
-    get_settings.cache_clear()
-    reset_engine_cache()
-    reset_redis_cache()
-
-    from api_server.main import create_app
-
-    app = create_app()
-    try:
-        yield app
-    finally:
-        app.dependency_overrides.clear()
-        reset_engine_cache()
-        reset_redis_cache()
-        get_settings.cache_clear()
-
-
 def _hdr(token: str) -> dict[str, str]:
     return {"X-API-Token": token}
 

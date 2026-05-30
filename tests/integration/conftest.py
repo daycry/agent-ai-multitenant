@@ -190,3 +190,57 @@ async def _flush_redis(url: str) -> None:
         await client.flushdb()
     finally:
         await client.aclose()
+
+
+@pytest.fixture()
+def configured_app(
+    alembic_config: object,
+    app_database_url: str,
+    admin_database_url: str,
+    test_redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[object]:
+    """A real api-server app, migrated DB + flushed Redis, wired for tests.
+
+    Shared by the public-API integration suites (``test_api_v1_endpoints``,
+    ``test_api_versioning``) so they exercise the SAME wired app (every v1
+    router-level dependency included). Upgrades the throwaway DB to head,
+    grants the app role on the freshly-created tables, flushes the Redis
+    test DB, points the api-server config at all three via env, then builds
+    the app via :func:`create_app`. Engine/Redis/settings caches are reset
+    on both setup and teardown so each test gets a clean, correctly-wired
+    process state.
+    """
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")  # type: ignore[arg-type]
+
+    asyncio.run(_grant_app_user_existing_tables())
+    asyncio.run(_flush_redis(test_redis_url))
+
+    monkeypatch.setenv("API_SERVER_DATABASE_URL", app_database_url)
+    monkeypatch.setenv("API_SERVER_ADMIN_DATABASE_URL", admin_database_url)
+    monkeypatch.setenv("API_SERVER_REDIS_URL", test_redis_url)
+    monkeypatch.setenv("API_SERVER_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("API_SERVER_SSO_ENCRYPTION_KEY", "test-sso-encryption-key")
+    monkeypatch.setenv("API_SERVER_SSO_REDIRECT_BASE_URL", "http://testserver")
+    monkeypatch.delenv("API_SERVER_VAULT_TOKEN", raising=False)
+
+    from api_server.auth.deps import reset_redis_cache
+    from api_server.config import get_settings
+    from api_server.db.session import reset_engine_cache
+
+    get_settings.cache_clear()
+    reset_engine_cache()
+    reset_redis_cache()
+
+    from api_server.main import create_app
+
+    app = create_app()
+    try:
+        yield app
+    finally:
+        app.dependency_overrides.clear()
+        reset_engine_cache()
+        reset_redis_cache()
+        get_settings.cache_clear()

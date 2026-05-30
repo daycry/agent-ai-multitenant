@@ -37,6 +37,7 @@ from api_server.db.knowledge import KnowledgeBase
 from api_server.db.models import ApiTokenScope
 from api_server.routers._pagination import apply_pagination, limit_query, offset_query
 from api_server.routers.api_v1._deps import V1Session, require_scope
+from api_server.routers.api_v1._versioning import enforce_api_version
 from api_server.routers.api_v1.schemas import (
     V1ConversationCreateRequest,
     V1KnowledgeBaseCreateRequest,
@@ -55,8 +56,15 @@ from api_server.schemas.tasks import TaskResponse, to_task_response
 
 # Versioned in the PATH (Plan 13 Decisiones Clave), tagged so the OpenAPI
 # (task_13_06) groups the public surface separately from the interactive
-# routers.
-api_v1_router = APIRouter(prefix="/api/v1", tags=["public-api-v1"])
+# routers. ``enforce_api_version`` (task_13_07) is a router-level dependency
+# so every v1 endpoint negotiates the optional ``X-API-Version`` header,
+# advertises the served version back and tracks per-version usage — it
+# composes WITH the per-endpoint ``require_scope`` auth, never replacing it.
+api_v1_router = APIRouter(
+    prefix="/api/v1",
+    tags=["public-api-v1"],
+    dependencies=[Depends(enforce_api_version)],
+)
 
 _RequireRead = Depends(require_scope(ApiTokenScope.READ))
 _RequireWrite = Depends(require_scope(ApiTokenScope.WRITE))
