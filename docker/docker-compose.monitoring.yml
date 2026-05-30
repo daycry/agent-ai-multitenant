@@ -7,8 +7,12 @@
 #                      (task_12_13).
 #   - cadvisor       → per-container metrics (task_12_13).
 #
-# Alertmanager + its rules (task_12_14) and the Grafana host dashboards
-# (task_12_15) are layered on top of this file later in the same phase.
+#   - alertmanager   → routes firing alerts to the platform notifier
+#                      (task_12_14). Rules live in
+#                      monitoring/prometheus/rules/host_alerts.yml.
+#
+# The Grafana host dashboards (task_12_15) are layered on top of this file
+# later in the same phase.
 #
 # Usage (compose with the base stack):
 #   docker compose -f docker/docker-compose.yml \
@@ -72,14 +76,56 @@ services:
       - --path.sysfs=/host/sys
       - --path.rootfs=/host/root
       - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+      # Textfile collector (task_12_14): the backup engine writes
+      # agentic_backup_*.prom into this directory after every run
+      # (workers.backup_metrics) and node-exporter re-exports those samples.
+      # That is the metric source for the "last backup failed" alert.
+      - --collector.textfile.directory=/host/textfile
     pid: host
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/root:ro,rslave
+      # Shared textfile-collector dir: the worker writes here, node-exporter
+      # reads here. Read-only for node-exporter; the worker mounts it rw.
+      - node_exporter_textfile:/host/textfile:ro
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
+  # Alertmanager — receives firing alerts from Prometheus, dedups/groups/
+  # throttles them, and delivers to the platform notifier via a webhook
+  # receiver (task_12_14). Config + routing live in
+  # monitoring/alertmanager/alertmanager.yml; the alert RULES are evaluated by
+  # Prometheus from monitoring/prometheus/rules/host_alerts.yml.
+  # ---------------------------------------------------------------------------
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    user: "65534:65534" # nobody — matches the prometheus hardening above.
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    environment:
+      # Documented seam for a templating entrypoint (envsubst): Alertmanager
+      # itself does NOT expand env vars in its config, so the receiver URL is a
+      # concrete in-network default inside alertmanager.yml. Override the target
+      # by bind-mounting your own alertmanager.yml. Default empty.
+      ALERTMANAGER_NOTIFIER_WEBHOOK_URL: ${ALERTMANAGER_NOTIFIER_WEBHOOK_URL:-}
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9093/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks: [agentic-net]
     <<: [*default-restart, *default-logging]
 
@@ -116,6 +162,10 @@ services:
 
 volumes:
   prometheus_data:
+  alertmanager_data:
+  # Node-exporter textfile collector drop dir, shared with the backup worker
+  # (which writes agentic_backup_*.prom here after every run, task_12_14).
+  node_exporter_textfile:
 
 networks:
   agentic-net:

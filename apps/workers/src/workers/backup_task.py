@@ -26,6 +26,7 @@ import structlog
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from workers.backup import BackupConfig, BackupError, run_full_backup
+from workers.backup_metrics import write_backup_metrics
 from workers.backup_verification import verify_bundle
 from workers.celery_app import app
 from workers.config import Settings, get_settings
@@ -95,9 +96,11 @@ async def _run_daily_backup(settings: Settings) -> dict[str, Any]:
         result = run_full_backup(settings=run_settings)
     except BackupError as exc:
         _log.warning("backup.failed", error=str(exc))
+        _emit_backup_metric(run_settings, success=False)
         return {"enabled": True, "ok": False, "error": str(exc)}
     except Exception as exc:  # pragma: no cover — defensive: beat must not die
         _log.warning("backup.error", error=str(exc))
+        _emit_backup_metric(run_settings, success=False)
         return {"enabled": True, "ok": False, "error": str(exc)}
 
     # Post-backup corruption check (task_12_03): prove the bundle is intact
@@ -106,6 +109,11 @@ async def _run_daily_backup(settings: Settings) -> dict[str, Any]:
     # "last backup failed" alert in Phase D. Best-effort: a verifier crash is
     # logged, never raised, but it does flip the run's `valid` to False.
     valid = _verify_after_backup(run_settings, result.bundle_dir)
+
+    # Emit the Prometheus health metric (task_12_14): success ONLY when the
+    # bundle both wrote AND verified. A produced-but-invalid bundle is a failed
+    # backup for alerting purposes — it must not advance the success clock.
+    _emit_backup_metric(run_settings, success=valid)
 
     return {
         "enabled": True,
@@ -150,3 +158,17 @@ def _verify_after_backup(settings: Settings, bundle_dir: Any) -> bool:
             failures=[c.check + ":" + c.artifact for c in report.failures],
         )
     return report.valid
+
+
+def _emit_backup_metric(settings: Settings, *, success: bool) -> None:
+    """Write the node-exporter textfile metric for this run (task_12_14).
+
+    Best-effort wrapper around :func:`workers.backup_metrics.write_backup_metrics`
+    — the metric feeds the BackupLastRunFailed / BackupTooOld alert rules but a
+    failure to write it (collector dir absent because the monitoring overlay is
+    not up, permission error, ...) must never affect the backup outcome.
+    """
+    try:
+        write_backup_metrics(settings.backup_metrics_textfile_path, success=success)
+    except Exception as exc:  # pragma: no cover — defensive: beat must not die
+        _log.warning("backup.metrics.error", error=str(exc))

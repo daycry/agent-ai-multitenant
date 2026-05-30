@@ -312,7 +312,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_14` — Alertmanager con reglas: disco >80%, RAM >90% sostenida, swap activo, OOM kills, último backup fallido
 
-- [ ] **Título**: Alertmanager con reglas: disco >80%, RAM >90% sostenida, swap activo, OOM kills, último backup fallido
+- [x] **Título**: Alertmanager con reglas: disco >80%, RAM >90% sostenida, swap activo, OOM kills, último backup fallido
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops

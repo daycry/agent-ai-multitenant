@@ -18,15 +18,19 @@ global:
   external_labels:
     monitor: agentic-platform
 
-# Alertmanager + alert rules are added in task_12_14. The rule_files glob
-# is harmless when no files match yet.
+# Alert rules (task_12_14) live in ./rules/*.yml — host_alerts.yml ships the
+# disk / RAM / swap / OOM / last-backup-failed alerts. The glob loads every
+# rules file in the directory.
 rule_files:
   - /etc/prometheus/rules/*.yml
 
-# alerting:
-#   alertmanagers:
-#     - static_configs:
-#         - targets: ["alertmanager:9093"]
+# Send firing alerts to Alertmanager (task_12_14). The alertmanager service is
+# added in docker/docker-compose.monitoring.yml and reachable on the
+# agentic-net by name.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
 
 scrape_configs:
   # Prometheus self-monitoring.

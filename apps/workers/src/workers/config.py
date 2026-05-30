@@ -229,6 +229,17 @@ class Settings(BaseSettings):
         "`backup_enabled` PLATFORM setting (a System Admin flips it from the "
         "admin panel and it takes effect on the next fire without a restart).",
     )
+    backup_metrics_textfile_path: str = Field(
+        default="/host/textfile/agentic_backup.prom",
+        description="Path to the node-exporter TEXTFILE-COLLECTOR file the daily "
+        "backup task writes after every run (task_12_14). node-exporter "
+        "(docker-compose.monitoring.yml, --collector.textfile.directory) "
+        "re-exports the `agentic_backup_last_success` + "
+        "`agentic_backup_last_success_timestamp_seconds` samples written here, "
+        "which feed the BackupLastRunFailed / BackupTooOld alert rules. Written "
+        "atomically (temp + rename) so node-exporter never reads a half-written "
+        "file.",
+    )
     # ----- Optional at-rest encryption (Plan 12 task_12_02) -----
     # AES-256 (Decisiones Clave). OFF by default: encryption is OPTIONAL and
     # adds a Vault dependency, so an operator opts in explicitly. When ON, the
