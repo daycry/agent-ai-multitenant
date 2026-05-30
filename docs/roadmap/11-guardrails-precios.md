@@ -458,7 +458,7 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 
 #### `task_11_20` — Tabla guardrail_events + dashboard del tenant
 
-- [ ] **Título**: Tabla guardrail_events + dashboard del tenant
+- [x] **Título**: Tabla guardrail_events + dashboard del tenant
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + frontend-dev

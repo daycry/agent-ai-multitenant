@@ -38,6 +38,7 @@ from api_server.routers.conversations import (
 from api_server.routers.dep_cache import router as dep_cache_router
 from api_server.routers.docs_viewer import router as docs_viewer_router
 from api_server.routers.executions import router as executions_router
+from api_server.routers.guardrail_events import router as guardrail_events_router
 from api_server.routers.internal_agent import router as internal_agent_router
 from api_server.routers.kb_categories import router as kb_categories_router
 from api_server.routers.knowledge_bases import (
@@ -185,6 +186,7 @@ def _register_routers(app: FastAPI) -> None:
         documents_router,
         tenant_settings_router,
         notifications_router,
+        guardrail_events_router,
         assistant_router,
         ws_router,
     ):

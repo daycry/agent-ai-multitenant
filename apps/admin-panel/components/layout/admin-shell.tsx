@@ -17,6 +17,7 @@ import {
   LayoutGrid,
   Library,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Store,
@@ -60,6 +61,12 @@ const NAV: NavItem[] = [
     label: "Modelos & Precios",
     Icon: Coins,
     systemAdminOnly: true,
+  },
+  {
+    href: "/admin/guardrails",
+    label: "Guardrails",
+    Icon: ShieldAlert,
+    adminOnly: true,
   },
   {
     href: "/admin/notifications",
