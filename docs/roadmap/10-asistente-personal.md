@@ -348,7 +348,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_16` — Inbox in-app con histórico de notificaciones
 
-- [ ] **Título**: Inbox in-app con histórico de notificaciones
+- [x] **Título**: Inbox in-app con histórico de notificaciones
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev

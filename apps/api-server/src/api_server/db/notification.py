@@ -485,11 +485,64 @@ class NotificationTemplate(
         )
 
 
+# =============================================================================
+# notification_log_reads (per-user read receipt for the in-app inbox)
+# =============================================================================
+class NotificationLogRead(Base, UUIDPrimaryKeyMixin):
+    """A per-user read receipt for one ``notification_logs`` row (task_10_16).
+
+    Tenancy decision: **tenant-owned, per-user receipt**. ``notification_logs``
+    is append-only AND tenant-scoped (no per-user dimension); read/unread is
+    inherently per-user (two Tenant Admins of the same tenant keep independent
+    inboxes), so the marker lives in its own table rather than mutating the
+    immutable log row.
+
+    A row's *existence* means "``user_id`` has read ``log_id``"; "unread" is
+    the absence of a row. ``UNIQUE (user_id, log_id)`` makes the mark
+    idempotent (a second "mark read" is a no-op via ON CONFLICT DO NOTHING).
+    ``tenant_id`` NOT NULL + RLS isolate receipts per tenant exactly like every
+    other tenant table — the inbox is a Tenant-Admin surface, so a NULL-tenant
+    platform send is never inboxed per user.
+    """
+
+    __tablename__ = "notification_log_reads"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "log_id",
+            name="uq_notification_log_reads_user_log",
+        ),
+        Index("ix_notification_log_reads_user_log", "user_id", "log_id"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    log_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("notification_logs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    read_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"NotificationLogRead(user={self.user_id!r}, log={self.log_id!r}, "
+            f"read_at={self.read_at!r})"
+        )
+
+
 __all__ = [
     "NotificationChannel",
     "NotificationChannelType",
     "NotificationLocale",
     "NotificationLog",
+    "NotificationLogRead",
     "NotificationPreference",
     "NotificationScope",
     "NotificationStatus",

@@ -52,12 +52,12 @@ decrypt.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import CursorResult, func, literal, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -75,6 +75,7 @@ from api_server.db.notification import (
     NotificationChannel,
     NotificationChannelType,
     NotificationLog,
+    NotificationLogRead,
     NotificationPreference,
     NotificationScope,
     NotificationStatus,
@@ -83,9 +84,12 @@ from api_server.db.platform_settings import get_platform_setting, set_platform_s
 from api_server.notifications.secrets import encrypt_channel_secret
 from api_server.routers._helpers import require_tenant_id, soft_delete
 from api_server.schemas.notifications import (
+    MarkReadResponse,
     NotificationChannelCreate,
     NotificationChannelResponse,
     NotificationChannelUpdate,
+    NotificationInboxResponse,
+    NotificationLogResponse,
     NotificationPreferenceResponse,
     NotificationPreferenceUpsert,
     PlatformChannelTypesResponse,
@@ -461,6 +465,196 @@ async def delete_preference(
             status_code=status.HTTP_404_NOT_FOUND, detail="notification preference not found"
         )
     await soft_delete(session, pref)
+
+
+# ===========================================================================
+# Inbox — paginated notification-log history + per-user read/unread (task_10_16)
+# ===========================================================================
+def _log_to_response(log: NotificationLog, *, read: bool) -> NotificationLogResponse:
+    """Project an append-only log row to the inbox shape (no secret involved).
+
+    A log row is non-secret by construction (``target`` is a chat id / email /
+    webhook URL, never a token; the channel secret lives elsewhere), so the
+    whole row is safe to surface. ``read`` is the per-user marker resolved by
+    the caller's read-receipt left-join."""
+    return NotificationLogResponse(
+        id=log.id,
+        channel_id=log.channel_id,
+        event_type=log.event_type,
+        channel_type=log.channel_type,
+        status=log.status,
+        target=log.target,
+        attempt=log.attempt,
+        error=log.error,
+        sent_at=log.sent_at,
+        created_at=log.created_at,
+        read=read,
+    )
+
+
+async def _unread_count(session: AsyncSession, *, tenant_id: UUID, user_id: UUID) -> int:
+    """Count the caller's unread tenant logs (no receipt for this user).
+
+    RLS already scopes ``notification_logs`` to the caller's tenant; the
+    LEFT JOIN to the caller's own receipts surfaces the unread rows as the
+    ones with no matching receipt."""
+    read_subq = (
+        select(NotificationLogRead.log_id)
+        .where(NotificationLogRead.user_id == user_id)
+        .scalar_subquery()
+    )
+    stmt = (
+        select(func.count())
+        .select_from(NotificationLog)
+        .where(
+            NotificationLog.tenant_id == tenant_id,
+            NotificationLog.id.not_in(read_subq),
+        )
+    )
+    return int((await session.execute(stmt)).scalar_one())
+
+
+@router.get("/logs", response_model=NotificationInboxResponse)
+async def list_notification_logs(
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    status_filter: str | None = Query(default=None, alias="status", max_length=16),
+    channel_type: str | None = Query(default=None, max_length=16),
+    event_type: str | None = Query(default=None, max_length=64),
+    unread_only: bool = Query(default=False),
+) -> NotificationInboxResponse:
+    """The in-app inbox: the caller's tenant notification-log history, newest
+    first, paginated, with a per-user read marker (task_10_16).
+
+    RLS scopes ``notification_logs`` to the caller's tenant, so another
+    tenant's history is invisible. The per-user read marker comes from a
+    LEFT JOIN to the caller's OWN ``notification_log_reads`` receipts — each
+    Tenant Admin keeps an independent inbox. ``limit``/``offset`` are bounded
+    (1..200 / >=0). Optional ``status`` / ``channel_type`` / ``event_type``
+    filters narrow the window; ``unread_only`` keeps only rows the caller has
+    not read. No secret is ever surfaced — a log row carries only the
+    non-secret ``target`` + transport metadata.
+    """
+    tenant_id = require_tenant_id(principal)
+
+    # Per-user read marker: is there a receipt for (caller, this log)?
+    read_marker = (
+        select(NotificationLogRead.id)
+        .where(
+            NotificationLogRead.log_id == NotificationLog.id,
+            NotificationLogRead.user_id == principal.user_id,
+        )
+        .exists()
+    )
+
+    # The belt-and-braces tenant filter rides on top of RLS (the session is
+    # already RLS-bound to the caller's tenant) so the inbox can never include
+    # a NULL-tenant platform send.
+    conditions = [NotificationLog.tenant_id == tenant_id]
+    if status_filter is not None:
+        conditions.append(NotificationLog.status == status_filter)
+    if channel_type is not None:
+        conditions.append(NotificationLog.channel_type == channel_type)
+    if event_type is not None:
+        conditions.append(NotificationLog.event_type == event_type)
+    if unread_only:
+        conditions.append(~read_marker)
+
+    total = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(NotificationLog).where(*conditions)
+            )
+        ).scalar_one()
+    )
+
+    result = await session.execute(
+        select(NotificationLog, read_marker.label("is_read"))
+        .where(*conditions)
+        .order_by(NotificationLog.created_at.desc(), NotificationLog.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    items = [_log_to_response(row[0], read=bool(row[1])) for row in result.all()]
+
+    unread = await _unread_count(session, tenant_id=tenant_id, user_id=principal.user_id)
+    return NotificationInboxResponse(
+        items=items, total=total, unread=unread, limit=limit, offset=offset
+    )
+
+
+@router.post("/logs/{log_id}/read", response_model=MarkReadResponse)
+async def mark_log_read(
+    log_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> MarkReadResponse:
+    """Mark one inbox item read for the calling user (idempotent).
+
+    Loads the log via the RLS-bound session (another tenant's log → 404), then
+    upserts a per-user receipt. A second call is a no-op (ON CONFLICT DO
+    NOTHING) so the marker is idempotent."""
+    tenant_id = require_tenant_id(principal)
+
+    # RLS scopes this to the caller's tenant: another tenant's log is a 404.
+    log = (
+        await session.execute(select(NotificationLog).where(NotificationLog.id == log_id))
+    ).scalar_one_or_none()
+    if log is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="notification log not found"
+        )
+
+    stmt = (
+        pg_insert(NotificationLogRead)
+        .values(tenant_id=tenant_id, user_id=principal.user_id, log_id=log_id)
+        .on_conflict_do_nothing(constraint="uq_notification_log_reads_user_log")
+    )
+    # ``rowcount`` lives on the CursorResult an INSERT yields at runtime; the
+    # async ``execute`` is typed as the broader ``Result``, hence the cast.
+    res = cast("CursorResult[Any]", await session.execute(stmt))
+    marked = int(res.rowcount or 0)
+
+    unread = await _unread_count(session, tenant_id=tenant_id, user_id=principal.user_id)
+    return MarkReadResponse(marked=marked, unread=unread)
+
+
+@router.post("/logs/read-all", response_model=MarkReadResponse)
+async def mark_all_logs_read(
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> MarkReadResponse:
+    """Mark every unread inbox item read for the calling user (idempotent).
+
+    Inserts a receipt for each of the caller's tenant logs that has none yet,
+    in one statement. A second call inserts nothing (every log already has a
+    receipt). RLS keeps this to the caller's tenant."""
+    tenant_id = require_tenant_id(principal)
+
+    already_read = (
+        select(NotificationLogRead.log_id)
+        .where(NotificationLogRead.user_id == principal.user_id)
+        .scalar_subquery()
+    )
+    unread_logs = select(
+        func.gen_random_uuid().label("id"),
+        NotificationLog.tenant_id.label("tenant_id"),
+        # the caller's user id, bound as a literal column for the INSERT...SELECT
+        literal(principal.user_id).label("user_id"),
+        NotificationLog.id.label("log_id"),
+    ).where(
+        NotificationLog.tenant_id == tenant_id,
+        NotificationLog.id.not_in(already_read),
+    )
+    stmt = pg_insert(NotificationLogRead).from_select(
+        ["id", "tenant_id", "user_id", "log_id"], unread_logs
+    )
+    res = cast("CursorResult[Any]", await session.execute(stmt))
+    marked = int(res.rowcount or 0)
+
+    return MarkReadResponse(marked=marked, unread=0)
 
 
 # Audit action recorded when an operator manually re-enqueues a dead-lettered

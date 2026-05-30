@@ -219,10 +219,66 @@ class NotificationPreferenceUpsert(BaseModel):
         return self
 
 
+# ===========================================================================
+# Inbox — paginated notification-log history (task_10_16)
+# ===========================================================================
+class NotificationLogResponse(BaseModel):
+    """One send attempt in the in-app inbox, WITHOUT any secret.
+
+    The log row is non-secret by construction (``target`` is a chat id /
+    email / webhook URL, never a token), so the whole row is safe to surface.
+    ``read`` is the per-user read marker for the requesting admin: ``true``
+    when a ``notification_log_reads`` receipt exists for ``(caller, log)``.
+    """
+
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    channel_id: UUID | None
+    event_type: str
+    channel_type: str
+    status: str
+    target: str | None
+    attempt: int
+    error: str | None
+    sent_at: datetime | None
+    created_at: datetime
+    read: bool
+
+
+class NotificationInboxResponse(BaseModel):
+    """A page of inbox history plus the counters the badge UI needs.
+
+    ``items`` is the requested ``limit``/``offset`` window (newest first);
+    ``total`` / ``unread`` are the full tenant+user-scoped counts so the UI
+    can render pagination + an unread badge without a second round-trip.
+    """
+
+    model_config = _BASE_CONFIG
+
+    items: list[NotificationLogResponse]
+    total: int
+    unread: int
+    limit: int
+    offset: int
+
+
+class MarkReadResponse(BaseModel):
+    """Result of marking inbox item(s) read — the new unread count."""
+
+    model_config = _BASE_CONFIG
+
+    marked: int = Field(description="How many receipts this call newly created.")
+    unread: int = Field(description="The caller's remaining unread count.")
+
+
 __all__ = [
+    "MarkReadResponse",
     "NotificationChannelCreate",
     "NotificationChannelResponse",
     "NotificationChannelUpdate",
+    "NotificationInboxResponse",
+    "NotificationLogResponse",
     "NotificationPreferenceResponse",
     "NotificationPreferenceUpsert",
     "PlatformChannelTypesResponse",
