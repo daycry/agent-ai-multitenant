@@ -30,6 +30,16 @@ from shared_guardrails.exceptions import (
     GuardrailError,
     UnknownGuardrailTypeError,
 )
+from shared_guardrails.layers import (
+    LAYER_ORDER,
+    FieldProvenance,
+    LayerConfig,
+    LayerName,
+    LockedFieldOverrideError,
+    RejectedOverride,
+    ResolvedConfig,
+    resolve_config,
+)
 from shared_guardrails.pipeline import GuardrailPipeline
 from shared_guardrails.registry import (
     Guardrail,
@@ -52,7 +62,9 @@ from shared_guardrails.types import (
 
 __all__ = [
     "HOOK_POINTS",
+    "LAYER_ORDER",
     "Action",
+    "FieldProvenance",
     "Guardrail",
     "GuardrailConfigError",
     "GuardrailContext",
@@ -64,8 +76,13 @@ __all__ = [
     "GuardrailResult",
     "GuardrailSpec",
     "HookPoint",
+    "LayerConfig",
+    "LayerName",
+    "LockedFieldOverrideError",
     "PipelineConfig",
     "PipelineDecision",
+    "RejectedOverride",
+    "ResolvedConfig",
     "Severity",
     "UnknownGuardrailTypeError",
     "default_registry",
@@ -73,4 +90,5 @@ __all__ = [
     "most_severe_action",
     "parse_config",
     "register_guardrail",
+    "resolve_config",
 ]

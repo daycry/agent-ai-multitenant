@@ -108,7 +108,7 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 
 #### `task_11_02` — Configuración por capas (plataforma/tenant/proyecto) con campos lockable
 
-- [ ] **Título**: Configuración por capas (plataforma/tenant/proyecto) con campos lockable
+- [x] **Título**: Configuración por capas (plataforma/tenant/proyecto) con campos lockable
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
