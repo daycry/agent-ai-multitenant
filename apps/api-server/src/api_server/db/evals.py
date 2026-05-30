@@ -37,6 +37,15 @@ ORM declarations + enums.
     overall pass/fail verdict, and per-item latency/tokens/cost.
     **Tenant-owned** + RLS; cascades from its run.
 
+  - **`eval_shadow_records`** — one row per real, completed task that the
+    shadow-eval sampler (Plan 14 task_14_09, 5% default) replicated to the
+    judge. It links the SAMPLED real task/execution to the shadow
+    :class:`EvalRun` produced for it and records the verdict + the sampling
+    provenance (rate + seed). Shadow evals NEVER block or alter the real
+    execution (Plan 14 *Decisiones Clave*): the FKs to ``tasks`` /
+    ``executions`` are ``SET NULL`` on delete and this is a *recording* table
+    only — the real task is never written through it. **Tenant-owned** + RLS.
+
 All tenant-owned tables use the same UUID v7 + timestamp mixins and the
 RLS isolation guarantee as the rest of the domain.
 """
@@ -115,6 +124,21 @@ class EvalResultVerdict(enum.StrEnum):
 
     PASS = "pass"
     FAIL = "fail"
+    ERROR = "error"
+
+
+class ShadowEvalStatus(enum.StrEnum):
+    """Lifecycle of a single shadow-eval record (Plan 14 task_14_09).
+
+    A real, completed task that the sampler picks is recorded as
+    ``sampled``; once the background judge has scored its replica it flips
+    to ``judged`` (the verdict is then set). ``error`` is the escape hatch
+    when the background replica could not be scored — but NEVER affects the
+    real execution (shadow evals only record).
+    """
+
+    SAMPLED = "sampled"
+    JUDGED = "judged"
     ERROR = "error"
 
 
@@ -461,6 +485,87 @@ class EvalResult(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
         return f"EvalResult(id={self.id!r}, run={self.run_id!r}, verdict={self.verdict!r})"
 
 
+# =============================================================================
+# eval_shadow_records — one shadowed real task replicated to the judge
+# =============================================================================
+class EvalShadowRecord(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """One real, completed task the shadow-eval sampler replicated to the judge.
+
+    The shadow eval (Plan 14 task_14_09) replays a configurable random sample
+    (5% default) of real, completed tasks through a specialised REVIEWER agent /
+    the judge to RECORD a quality signal — it NEVER blocks or alters the real
+    execution (Plan 14 *Decisiones Clave*: "Shadow evals NO bloquean ejecución
+    real, solo registran resultado"). This row is that recording:
+
+      * ``source_task_id`` / ``source_execution_id`` — provenance to the REAL
+        task/execution that was sampled. Both ``SET NULL`` on delete (the
+        shadow record outlives the real rows) and this table is *write-only*
+        against them — the real task is never updated through the shadow path.
+      * ``shadow_run_id`` — the :class:`EvalRun` (against a ``shadow``-kind
+        dataset) the judge produced for the replica; ``SET NULL`` on delete.
+      * ``verdict`` — the replica's overall pass/fail/error (``NULL`` while the
+        record is still ``sampled`` and the background judge has not finished).
+      * ``sample_rate`` — the (operator-configurable) sampling fraction in
+        effect when this task was picked, recorded for provenance/audit so a
+        reader can reproduce why this task was in the sample.
+
+    Results are NOT soft-deleted — immutable measurement records like
+    :class:`EvalRun` / :class:`EvalResult`. **Tenant-owned** + RLS: a shadow
+    record is only ever visible to the tenant whose task was sampled.
+    """
+
+    __tablename__ = "eval_shadow_records"
+    __table_args__ = (
+        Index("ix_eval_shadow_records_tenant_status", "tenant_id", "status"),
+        Index("ix_eval_shadow_records_source_task", "source_task_id"),
+        Index("ix_eval_shadow_records_shadow_run", "shadow_run_id"),
+        CheckConstraint(
+            "sample_rate >= 0 AND sample_rate <= 1",
+            name="ck_eval_shadow_records_sample_rate_unit_range",
+        ),
+    )
+
+    # The real task/execution this shadow eval was sampled from. SET NULL on
+    # delete — the shadow record survives the real rows; never written back.
+    source_task_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_execution_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("executions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # The shadow EvalRun the judge produced for the replica (reuses the Fase B
+    # judge engine against a shadow-kind dataset). SET NULL on delete.
+    shadow_run_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("eval_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'sampled'")
+    )
+    # NULL while still ``sampled``; set to the replica's pass/fail/error once the
+    # background judge scores it.
+    verdict: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # The operator-configurable sampling fraction in effect when this task was
+    # picked (provenance/audit). A fraction in [0, 1].
+    sample_rate: Mapped[Decimal] = mapped_column(
+        Numeric(precision=6, scale=5), nullable=False, server_default=text("0.05")
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"EvalShadowRecord(id={self.id!r}, source_task={self.source_task_id!r}, "
+            f"status={self.status!r})"
+        )
+
+
 __all__ = [
     "EvalCriterion",
     "EvalDataset",
@@ -470,4 +575,6 @@ __all__ = [
     "EvalResultVerdict",
     "EvalRun",
     "EvalRunStatus",
+    "EvalShadowRecord",
+    "ShadowEvalStatus",
 ]

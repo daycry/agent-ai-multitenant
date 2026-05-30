@@ -36,6 +36,11 @@ REGRESSION_THRESHOLD_ENV_VAR = "EVAL_REGRESSION_THRESHOLD"
 # only controls how large the background sample is. Default 5% per the plan.
 DEFAULT_SHADOW_SAMPLE_RATE: Decimal = Decimal("0.05")
 
+# Env var the operator sets to override the shadow sample rate above without
+# editing code. Read by :func:`api_server.evals.shadow.resolve_sample_rate` as
+# a fallback when an explicit rate is not passed.
+SHADOW_SAMPLE_RATE_ENV_VAR = "EVAL_SHADOW_SAMPLE_RATE"
+
 # --- Drift detection (task_14_10) -------------------------------------------
 # A drift alert needs a SUSTAINED decline, not a single dip: at least this
 # many consecutive windows must each fall by at least the drop threshold
@@ -52,4 +57,5 @@ __all__ = [
     "DEFAULT_PASS_RATE_REGRESSION_THRESHOLD",
     "DEFAULT_SHADOW_SAMPLE_RATE",
     "REGRESSION_THRESHOLD_ENV_VAR",
+    "SHADOW_SAMPLE_RATE_ENV_VAR",
 ]

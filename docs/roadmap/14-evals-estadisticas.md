@@ -231,7 +231,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_09` — Shadow eval: muestra aleatoria (5% default) de tareas reales se replica con revisor
 
-- [ ] **Título**: Shadow eval: muestra aleatoria (5% default) de tareas reales se replica con revisor
+- [x] **Título**: Shadow eval: muestra aleatoria (5% default) de tareas reales se replica con revisor
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
