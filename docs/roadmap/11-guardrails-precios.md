@@ -162,7 +162,8 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 
 #### `task_11_05` — Secret leakage con patrones de tokens
 
-- [ ] **Título**: Secret leakage con patrones de tokens
+- [x] **Título**: Secret leakage con patrones de tokens
+  - Guardrail `secret_leakage` registrado (hooks principales `post_llm` + `post_tool`, funciona en cualquiera) en `packages/shared-guardrails/src/shared_guardrails/checks/secret_leakage.py`. Detección pura-Python (regex + entropía Shannon, sin dependencia pesada): familias de tokens bien conocidas (AWS access key, Google API key, GitHub/GitLab token, Slack token, bloque PEM de clave privada, JWT, connection string con contraseña) + asignaciones genéricas de alta entropía (`secret/token/api_key/...`) con gate de entropía para bajos falsos positivos. Acción sugerida por defecto `redact` (configurable a `block`); la redacción enmascara cada span con un marcador `[REDACTED:{type}]` sin volcar nunca el secreto en el resultado (ni en `redacted_text` ni en `spans`, que sólo llevan offsets + familia). Test `tests/integration/test_secret_leakage.py`: cada familia detectada + redactada, string benigno no marcado, y la redacción nunca devuelve el secreto.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: security
