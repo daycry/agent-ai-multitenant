@@ -53,6 +53,8 @@ from api_server.routers.mcp import router as mcp_router
 from api_server.routers.mcp_catalog import router as mcp_catalog_router
 from api_server.routers.memories import router as memories_router
 from api_server.routers.mfa import router as mfa_router
+from api_server.routers.model_prices import admin_router as model_prices_admin_router
+from api_server.routers.model_prices import router as model_prices_router
 from api_server.routers.notifications import router as notifications_router
 from api_server.routers.plans import plans_router, project_plans_router
 from api_server.routers.projects import router as projects_router
@@ -173,6 +175,8 @@ def _register_routers(app: FastAPI) -> None:
         project_kb_router,
         marketplace_router,
         marketplace_admin_router,
+        model_prices_router,
+        model_prices_admin_router,
         mcp_router,
         mcp_catalog_router,
         tools_diagnostic_router,
