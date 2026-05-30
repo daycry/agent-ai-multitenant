@@ -864,6 +864,33 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
+    # --- per-call price snapshot (Plan 11 Fase C, task_11_13) --------------
+    # The catalog price that was IN EFFECT when this run's model calls were
+    # recorded, frozen here (and per-call in steps_log[*].price_snapshot) so
+    # historical billing stays correct even after the model_prices catalog
+    # changes. These columns mirror the LAST priced model call of the run
+    # (the snapshot the dashboards/billing read without scanning JSONB);
+    # the authoritative per-call snapshots live in steps_log. All nullable
+    # / backfill-safe: pre-task runs and runs with no priced model call
+    # leave them NULL (an UNKNOWN price is recorded as NULL cost, never a
+    # fake 0). Canonical USD. The columns inherit executions' tenant RLS.
+    price_snapshot_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    price_snapshot_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    price_input_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=18, scale=10), nullable=True
+    )
+    price_output_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=18, scale=10), nullable=True
+    )
+    price_cached_input_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=18, scale=10), nullable=True
+    )
+    price_snapshot_cost_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=14, scale=6), nullable=True
+    )
+
 
 # =============================================================================
 # ApprovalRequest (a human_approval_policy decision an agent is waiting on)

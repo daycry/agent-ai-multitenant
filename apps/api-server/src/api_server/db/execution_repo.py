@@ -18,6 +18,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.db.domain import Execution, ExecutionStatus
+from api_server.db.price_snapshot import PriceSnapshot, snapshot_model_call
+
+# The step kind that carries an LLM call's tokens + cost (the canonical
+# steps_log shape — see agent_runtime/steps.py). Only these steps get a
+# price snapshot.
+_MODEL_CALL_KIND = "model_call"
+
+# A model call step records its model under `model`; newer producers may
+# also carry an explicit `provider` and a cached-input token count under
+# any of these aliases. We read whatever is present (the snapshot lookup
+# records a typed "unknown" when the key cannot be resolved — never a fake
+# price), so an older steps_log shape degrades cleanly rather than crashing.
+_CACHED_TOKEN_KEYS = ("cached_input_tokens", "tokens_cached_input", "tokens_cached")
 
 
 class ExecutionResultLike(Protocol):
@@ -29,6 +42,83 @@ class ExecutionResultLike(Protocol):
     iterations: int
     steps: list[dict[str, Any]]
     usage: dict[str, Any]
+
+
+def _int_field(step: dict[str, Any], *names: str, default: int = 0) -> int:
+    """First present, int-coercible value among `names`, else `default`."""
+    for name in names:
+        value = step.get(name)
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):  # pragma: no cover - defensive
+                continue
+    return default
+
+
+async def snapshot_execution_prices(
+    session: AsyncSession,
+    *,
+    steps: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], PriceSnapshot | None]:
+    """Freeze a catalog price snapshot onto each `model_call` step.
+
+    For every ``model_call`` step in ``steps`` this looks up the current
+    catalog price for the call's ``(provider, model_id, modality)`` and
+    embeds an immutable ``price_snapshot`` payload (unit prices in effect +
+    ``price_snapshot_at`` + a computed ``cost_usd`` for the call, charging
+    cached-input tokens at the cached rate). A missing price is recorded as
+    a typed *unknown* (``available=False``), never a fake zero.
+
+    Returns ``(enriched_steps, rollup)`` where ``rollup`` is a
+    representative snapshot for the execution row's snapshot columns: the
+    LAST priced model call (so ``executions.price_snapshot_at`` reflects a
+    real lookup and the unit-price columns mirror an actual call), or the
+    last *unknown* snapshot when no call could be priced, or ``None`` when
+    there were no model calls at all. The catalog (``model_prices``) is
+    platform-global with global-read RLS, so the lookup works on a tenant
+    session; the snapshot is written onto the tenant-scoped execution.
+    """
+    enriched: list[dict[str, Any]] = []
+    last_priced: PriceSnapshot | None = None
+    last_any: PriceSnapshot | None = None
+
+    for step in steps:
+        # Copy: never mutate the caller's step dicts.
+        enriched_step = dict(step)
+        if enriched_step.get("kind") == _MODEL_CALL_KIND:
+            model_id = str(enriched_step.get("model_id") or enriched_step.get("model") or "")
+            provider = str(enriched_step.get("provider") or "")
+            modality = str(enriched_step.get("modality") or "text")
+            snapshot = await snapshot_model_call(
+                session,
+                provider=provider,
+                model_id=model_id,
+                modality=modality,
+                tokens_in=_int_field(enriched_step, "tokens_in"),
+                tokens_out=_int_field(enriched_step, "tokens_out"),
+                cached_input_tokens=_int_field(enriched_step, *_CACHED_TOKEN_KEYS),
+            )
+            enriched_step["price_snapshot"] = snapshot.as_step_payload()
+            last_any = snapshot
+            if snapshot.available:
+                last_priced = snapshot
+        enriched.append(enriched_step)
+
+    rollup = last_priced or last_any
+    return enriched, rollup
+
+
+def _apply_price_snapshot(execution: Execution, rollup: PriceSnapshot | None) -> None:
+    """Write the representative snapshot onto the execution's columns."""
+    if rollup is None:
+        return
+    execution.price_snapshot_at = rollup.price_snapshot_at
+    execution.price_snapshot_currency = rollup.currency
+    execution.price_input_usd = rollup.input_price
+    execution.price_output_usd = rollup.output_price
+    execution.price_cached_input_usd = rollup.cached_input_price
+    execution.price_snapshot_cost_usd = rollup.cost_usd
 
 
 async def record_execution(
@@ -43,9 +133,12 @@ async def record_execution(
     """Persist one agent loop run as an `executions` row.
 
     `result` is an `agent_runtime.ExecutionResult` (duck-typed). The
-    caller owns the transaction — this flushes but does not commit.
+    caller owns the transaction — this flushes but does not commit. Each
+    `model_call` step is enriched with an immutable catalog price snapshot
+    (task_11_13) and the execution's snapshot columns are stamped.
     """
     usage = result.usage
+    steps, rollup = await snapshot_execution_prices(session, steps=list(result.steps))
     execution = Execution(
         tenant_id=tenant_id,
         task_id=task_id,
@@ -53,7 +146,7 @@ async def record_execution(
         status=result.status,
         abort_code=result.abort_code,
         output=result.output,
-        steps_log=list(result.steps),
+        steps_log=steps,
         iterations=result.iterations,
         total_tokens=int(usage.get("total_tokens", 0)),
         total_cost_usd=Decimal(str(usage.get("cost_usd", 0))),
@@ -63,6 +156,7 @@ async def record_execution(
         # A finished run (done/aborted/failed) gets a completion stamp.
         completed_at=None if result.status == ExecutionStatus.RUNNING else datetime.now(UTC),
     )
+    _apply_price_snapshot(execution, rollup)
     session.add(execution)
     await session.flush()
     return execution
@@ -149,10 +243,12 @@ async def finalize_execution(
         return None
 
     usage = result.usage
+    steps, rollup = await snapshot_execution_prices(session, steps=list(result.steps))
     execution.status = result.status
     execution.abort_code = result.abort_code
     execution.output = result.output
-    execution.steps_log = list(result.steps)
+    execution.steps_log = steps
+    _apply_price_snapshot(execution, rollup)
     execution.iterations = result.iterations
     execution.total_tokens = int(usage.get("total_tokens", 0))
     execution.total_cost_usd = Decimal(str(usage.get("cost_usd", 0)))
