@@ -69,6 +69,10 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
 # constant so tests + ops can reference it without hardcoding the string.
 PRICE_SYNC_BEAT_ENTRY = "sync-model-prices"
 
+# Plan 12 task_12_01/12_04: the scheduled daily-backup entry name. Same
+# constant-not-hardcoded-string discipline as the price-sync entry.
+BACKUP_BEAT_ENTRY = "run-daily-backup"
+
 
 def _parse_cron(expr: str) -> crontab:
     """Parse a 5-field cron string (minute hour dom month dow) to a crontab.
@@ -104,5 +108,15 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
         "task": "workers.sync_model_prices",
         "schedule": _parse_cron(cfg.price_sync_cron),
         "options": {"queue": "default"},
+    }
+    # Plan 12 task_12_01/12_04: daily full backup on a CONFIGURABLE cadence
+    # (WORKERS_BACKUP_CRON, default 03:00). Pinned to the `privileged` queue —
+    # it touches infra (the DB dump + the data volumes), the lane drained by a
+    # worker with host-level access. Its live enable/disable is the
+    # `backup_enabled` platform setting a System Admin owns.
+    sched[BACKUP_BEAT_ENTRY] = {
+        "task": "workers.run_daily_backup",
+        "schedule": _parse_cron(cfg.backup_cron),
+        "options": {"queue": "privileged"},
     }
     return sched

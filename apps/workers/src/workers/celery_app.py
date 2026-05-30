@@ -68,6 +68,7 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             "workers.maintenance",
             "workers.ingestion",
             "workers.price_sync",
+            "workers.backup_task",
         ),
         # Agent runs are long; ack only after completion so a worker
         # crash re-queues the job instead of losing it.

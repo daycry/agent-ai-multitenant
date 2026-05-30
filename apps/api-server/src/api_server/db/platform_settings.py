@@ -155,3 +155,41 @@ async def get_price_sync_enabled(session: AsyncSession) -> bool:
         session, PRICE_SYNC_ENABLED_KEY, default=DEFAULT_PRICE_SYNC_ENABLED
     )
     return bool(value)
+
+
+# ---------------------------------------------------------------------------
+# Scheduled backup (Plan 12 task_12_01 / task_12_04)
+# ---------------------------------------------------------------------------
+# Live enable/disable lever for the daily backup job, flipped by a System Admin
+# from the admin panel (task_12_04). The beat task reads it at the top of every
+# run; OFF makes the run a no-op without restarting Celery beat. Default ON —
+# an unattended platform should be backing itself up. The CADENCE (cron) and
+# the time WINDOW are separate operator-tunable knobs (`backup_cron` setting /
+# WORKERS_* envs), NOT this flag.
+BACKUP_ENABLED_KEY = "backup_enabled"
+DEFAULT_BACKUP_ENABLED = True
+
+# Operator-tunable cron for the daily backup, read by the beat process at boot
+# (mirrors price_sync). Default daily at 03:00 (Plan 12: "Backup automático
+# diario 03:00"). Stored as a 5-field cron string.
+BACKUP_CRON_KEY = "backup_cron"
+DEFAULT_BACKUP_CRON = "0 3 * * *"
+
+
+async def get_backup_enabled(session: AsyncSession) -> bool:
+    """Whether the scheduled daily backup is currently enabled.
+
+    Read by the backup beat task before it does any work; when False the run
+    is a no-op (no pg_dump, no tar, no disk writes). Only a System Admin may
+    flip it (``set_platform_setting``).
+    """
+    value = await get_platform_setting(session, BACKUP_ENABLED_KEY, default=DEFAULT_BACKUP_ENABLED)
+    return bool(value)
+
+
+async def get_backup_cron(session: AsyncSession) -> str:
+    """The configured backup cron (5-field string). Falls back to the default
+    daily-03:00 schedule when unset. The beat process reads this at boot to
+    build its schedule; changing it takes effect on the next beat restart."""
+    value = await get_platform_setting(session, BACKUP_CRON_KEY, default=DEFAULT_BACKUP_CRON)
+    return str(value)

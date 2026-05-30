@@ -182,6 +182,54 @@ class Settings(BaseSettings):
         "Point at an internal mirror to avoid egress.",
     )
 
+    # ----- Backup engine (Plan 12 task_12_01) -----
+    # The full-backup routine (pg_dump LOGICAL + tar of the data volumes +
+    # a checksummed manifest) is driven by these operator-tunable knobs —
+    # never hardcoded magic numbers. The live enable/disable + the cron
+    # cadence are PLATFORM settings a System Admin owns (task_12_04); these
+    # envs are the host-side wiring the backup process reads at runtime.
+    backup_root: str = Field(
+        default="/data/agent-platform/backups",
+        description="Host filesystem root where backup bundles are written, "
+        "one timestamped subdirectory per run. Defaults under data_root so a "
+        "single bind-mount covers all platform-managed state.",
+    )
+    backup_database_url: str = Field(
+        default="postgresql://migrations_user:changeme-migrations-dev-only"
+        "@localhost:15432/agentic_platform",
+        description="LIBPQ-style URL pg_dump connects with for the FULL logical "
+        "dump. A BYPASSRLS / admin-grade role so the dump captures every "
+        "tenant's rows. NOTE: a plain libpq URL (postgresql://), NOT the "
+        "SQLAlchemy +asyncpg form — pg_dump speaks libpq.",
+    )
+    backup_retention_days: int = Field(
+        default=7,
+        description="Local retention window in days (Plan 12: 'Retención local "
+        "7 días'). Bundles whose timestamp is older than now-this are pruned "
+        "after a successful run. Operator-tunable.",
+    )
+    backup_volumes: list[str] = Field(
+        default_factory=lambda: ["minio_data", "redis_data", "vault_data"],
+        description="Docker named volumes captured in the tar+gzip step: MinIO "
+        "objects, the Redis RDB/AOF, and the Vault file backend (snapshots). "
+        "Names match docker/docker-compose.yml.",
+    )
+    backup_volumes_mount_root: str = Field(
+        default="/var/lib/docker/volumes",
+        description="Host directory under which the named docker volumes are "
+        "materialised (`<root>/<volume>/_data`). The backup tars each volume's "
+        "_data tree from here. Override when volumes live elsewhere (e.g. a "
+        "bind-mounted /data root).",
+    )
+    backup_cron: str = Field(
+        default="0 3 * * *",
+        description="Cron (minute hour day-of-month month day-of-week) for the "
+        "scheduled daily backup. Default 03:00 (Plan 12). Operator-tunable; the "
+        "beat process reads it at boot. The live enable/disable lever is the "
+        "`backup_enabled` PLATFORM setting (a System Admin flips it from the "
+        "admin panel and it takes effect on the next fire without a restart).",
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."
