@@ -10,6 +10,17 @@ machinery.
 
 from __future__ import annotations
 
+from api_server.marketplace.playwright import (
+    PLAYWRIGHT_TOOL_YAML,
+    PlaywrightBrowser,
+    PlaywrightConfigError,
+    PlaywrightToolConfig,
+    ScreenshotMode,
+    TraceMode,
+    config_schema,
+    playwright_tool_manifest,
+    seed_playwright_listing,
+)
 from api_server.marketplace.sandbox import (
     DockerSocketLeakError,
     MarketplaceSandbox,
@@ -47,13 +58,18 @@ from api_server.marketplace.trust import (
 )
 
 __all__ = [
+    "PLAYWRIGHT_TOOL_YAML",
     "DockerSocketLeakError",
     "Finding",
     "MarketplaceSandbox",
     "NetworkPolicy",
+    "PlaywrightBrowser",
+    "PlaywrightConfigError",
+    "PlaywrightToolConfig",
     "SandboxError",
     "SandboxResult",
     "SandboxSpec",
+    "ScreenshotMode",
     "Severity",
     "SkillExample",
     "SkillFormatError",
@@ -64,12 +80,16 @@ __all__ = [
     "ToolFormatError",
     "ToolImplementation",
     "ToolManifest",
+    "TraceMode",
     "TrustPolicy",
     "UnknownTrustLevelError",
     "assert_no_docker_socket",
     "build_sandbox_run_kwargs",
+    "config_schema",
     "is_valid_semver",
     "parse_skill_md",
     "parse_tool_manifest",
+    "playwright_tool_manifest",
+    "seed_playwright_listing",
     "trust_policy",
 ]
