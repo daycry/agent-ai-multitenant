@@ -102,7 +102,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_02` — Cifrado opcional con clave del Vault
 
-- [ ] **Título**: Cifrado opcional con clave del Vault
+- [x] **Título**: Cifrado opcional con clave del Vault
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: security

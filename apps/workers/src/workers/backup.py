@@ -35,9 +35,13 @@ removed and :class:`BackupError` is raised. There is no partial "success" — a
 half-written bundle that looked fine but is missing the DB dump is worse than
 no bundle, because it gives false confidence at restore time.
 
-Encryption (task_12_02) plugs in *after* this engine assembles the bundle; the
-manifest already carries ``encrypted: false`` so the later task only has to
-flip it and wrap the artifacts with the Vault-resolved AES-256 key.
+Encryption (task_12_02) plugs in *after* this engine assembles the bundle. When
+``BackupConfig.encryption_enabled`` is set and an :class:`BackupEncryptor` is
+injected, the assembled bundle is tar'd into one archive and that archive is
+wrapped into a single AES-256-GCM blob (``bundle.tar.enc``) keyed by a
+Vault-resolved secret; the plaintext archive is removed and the manifest records
+``encrypted: true`` plus the encrypted artifact. When disabled the behaviour is
+unchanged (``encrypted: false``, the plaintext bundle is left as-is).
 """
 
 from __future__ import annotations
@@ -55,6 +59,7 @@ from typing import Any, Protocol
 
 import structlog
 
+from workers.backup_encryption import ENCRYPTED_SUFFIX, BackupEncryptor
 from workers.config import Settings, get_settings
 
 _log = structlog.get_logger("workers.backup")
@@ -70,6 +75,11 @@ _BUNDLE_TS_FORMAT = "%Y%m%dT%H%M%SZ"
 
 # The DB dump lives in a directory-format subtree inside the bundle.
 _DB_DUMP_DIRNAME = "postgres"
+
+# When encryption is enabled the whole bundle is collapsed into one tar, then
+# that tar is AES-256-GCM-wrapped. These are the on-disk names of the two.
+_BUNDLE_ARCHIVE_NAME = "bundle.tar"
+_ENCRYPTED_BUNDLE_NAME = _BUNDLE_ARCHIVE_NAME + ENCRYPTED_SUFFIX  # bundle.tar.enc
 
 # Read chunk for checksums — bounded memory even for multi-GB tarballs.
 _CHECKSUM_CHUNK = 1024 * 1024
@@ -146,6 +156,11 @@ class BackupConfig:
     volumes: tuple[str, ...]
     volumes_mount_root: Path
     retention_days: int
+    # Optional at-rest encryption (task_12_02). When True the engine expects an
+    # injected BackupEncryptor; the Vault key NAME (not value) is here so the
+    # engine can build a default encryptor from settings.
+    encryption_enabled: bool = False
+    encryption_vault_key: str = "backup_encryption_key"
     # Wall-clock caps for the two heavy commands. Generous; a hung pg_dump or
     # tar is a problem, but a legitimate multi-GB dump must not be killed.
     pg_dump_timeout_s: int = 3600
@@ -159,6 +174,8 @@ class BackupConfig:
             volumes=tuple(settings.backup_volumes),
             volumes_mount_root=Path(settings.backup_volumes_mount_root),
             retention_days=int(settings.backup_retention_days),
+            encryption_enabled=bool(settings.backup_encryption_enabled),
+            encryption_vault_key=str(settings.backup_encryption_vault_key),
         )
 
 
@@ -270,10 +287,15 @@ class BackupEngine:
         config: BackupConfig,
         *,
         runner: CommandRunner | None = None,
+        encryptor: BackupEncryptor | None = None,
         now: datetime | None = None,
     ) -> None:
         self._config = config
         self._runner: CommandRunner = runner or SubprocessRunner()
+        # The Vault-keyed AES-256 encryptor — only used when encryption is
+        # enabled. Tests inject one backed by a StaticSecretsProvider; in
+        # production it is built from settings in run_full_backup().
+        self._encryptor = encryptor
         # Injectable clock so tests get deterministic bundle ids + retention.
         self._now = now or datetime.now(UTC)
 
@@ -303,7 +325,11 @@ class BackupEngine:
             artifacts.append(self._dump_database(bundle_dir))
             for volume in self._config.volumes:
                 artifacts.append(self._tar_volume(bundle_dir, volume))
-            manifest = self._write_manifest(bundle_dir, backup_id, artifacts)
+            encrypted = False
+            if self._config.encryption_enabled:
+                artifacts = self._encrypt_bundle(bundle_dir, artifacts)
+                encrypted = True
+            manifest = self._write_manifest(bundle_dir, backup_id, artifacts, encrypted=encrypted)
         except BackupError:
             # Remove the partial bundle so a failed run leaves nothing
             # that could be mistaken for a good backup.
@@ -398,8 +424,83 @@ class BackupEngine:
             source=volume,
         )
 
+    def _encrypt_bundle(
+        self, bundle_dir: Path, artifacts: list[ArtifactRecord]
+    ) -> list[ArtifactRecord]:
+        """Collapse the assembled bundle into one tar, then AES-256-GCM wrap it.
+
+        Runs only when ``encryption_enabled``. The plaintext artifacts (DB dump
+        + volume tars) are tar'd into a single ``bundle.tar`` via the command
+        runner, that archive is encrypted with the Vault-keyed
+        :class:`BackupEncryptor` into ``bundle.tar.enc``, and both the plaintext
+        artifacts and the intermediate tar are removed — only the encrypted blob
+        survives in the bundle directory. Returns the new (single-artifact)
+        manifest list.
+        """
+        encryptor = self._encryptor
+        if encryptor is None:
+            raise BackupError(
+                "encryption is enabled but no BackupEncryptor was provided "
+                "(the Vault key could not be wired)"
+            )
+
+        archive_path = bundle_dir / _BUNDLE_ARCHIVE_NAME
+        # tar the plaintext artifacts (relative names) from inside the bundle so
+        # the archive holds them at its root. Encryption happens off-disk after.
+        member_names = [a.path for a in artifacts]
+        args = [
+            "tar",
+            f"--directory={bundle_dir}",
+            f"--file={archive_path}",
+            *member_names,
+        ]
+        result = self._runner.run(args, timeout=self._config.tar_timeout_s)
+        if result.returncode != 0:
+            raise BackupError(
+                f"tar of bundle for encryption failed (rc={result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        if not archive_path.exists():
+            raise BackupError("bundle tar for encryption produced no archive")
+
+        enc_path = bundle_dir / _ENCRYPTED_BUNDLE_NAME
+        try:
+            enc_size = encryptor.encrypt_file(archive_path, enc_path)
+        except Exception as exc:
+            raise BackupError(f"backup encryption failed: {exc}") from exc
+
+        # Remove every plaintext artifact + the intermediate tar — only the
+        # encrypted blob may remain so nothing readable is left at rest.
+        for art in artifacts:
+            target = bundle_dir / art.path
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+            elif target.exists():
+                target.unlink()
+        archive_path.unlink(missing_ok=True)
+
+        _log.info(
+            "backup.encrypted",
+            vault_key_name=self._config.encryption_vault_key,
+            blob=_ENCRYPTED_BUNDLE_NAME,
+        )
+        return [
+            ArtifactRecord(
+                name=_ENCRYPTED_BUNDLE_NAME,
+                kind="encrypted_bundle",
+                path=_ENCRYPTED_BUNDLE_NAME,
+                size_bytes=enc_size,
+                sha256=_checksum_file(enc_path),
+            )
+        ]
+
     def _write_manifest(
-        self, bundle_dir: Path, backup_id: str, artifacts: list[ArtifactRecord]
+        self,
+        bundle_dir: Path,
+        backup_id: str,
+        artifacts: list[ArtifactRecord],
+        *,
+        encrypted: bool,
     ) -> Path:
         manifest = BackupManifest(
             version=MANIFEST_VERSION,
@@ -407,7 +508,7 @@ class BackupEngine:
             created_at=self._now.isoformat(),
             status="completed",
             database_url_sanitized=_sanitize_db_url(self._config.database_url),
-            encrypted=False,
+            encrypted=encrypted,
             artifacts=artifacts,
         )
         manifest_path = bundle_dir / MANIFEST_FILENAME
@@ -456,13 +557,25 @@ def run_full_backup(
     *,
     settings: Settings | None = None,
     runner: CommandRunner | None = None,
+    encryptor: BackupEncryptor | None = None,
     now: datetime | None = None,
 ) -> BackupResult:
     """Convenience entrypoint: build the engine from settings and run it.
 
     This is what ``scripts/backup.sh`` and the beat task call. ``runner`` /
-    ``now`` are injectable for tests; production leaves them ``None`` (real
-    subprocess, real clock).
+    ``encryptor`` / ``now`` are injectable for tests; production leaves them
+    ``None`` (real subprocess, real clock, and — when encryption is enabled —
+    a default Vault/env-backed :class:`BackupEncryptor`).
     """
     cfg = BackupConfig.from_settings(settings or get_settings())
-    return BackupEngine(cfg, runner=runner, now=now).run_full_backup()
+    if encryptor is None and cfg.encryption_enabled:
+        # Build the default Vault/env-backed encryptor. The provider resolves
+        # the AES-256 key from the platform's secret mechanism (Vault → env);
+        # the key never appears in code or the manifest.
+        from workers.backup_encryption import EnvSecretsProvider
+
+        encryptor = BackupEncryptor(
+            provider=EnvSecretsProvider(),
+            vault_key_name=cfg.encryption_vault_key,
+        )
+    return BackupEngine(cfg, runner=runner, encryptor=encryptor, now=now).run_full_backup()

@@ -14,6 +14,11 @@ dependencies = [
   "pydantic>=2.5,<3",
   "pydantic-settings>=2.2,<3",
 
+  # At-rest backup encryption — AES-256-GCM of the backup bundle, keyed by a
+  # Vault-resolved secret (Plan 12 task_12_02). Same lib the rest of the
+  # platform already uses for Fernet-at-rest secrets.
+  "cryptography>=42,<49",
+
   # Observability
   "structlog>=24.1,<25",
 ]

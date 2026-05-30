@@ -229,6 +229,26 @@ class Settings(BaseSettings):
         "`backup_enabled` PLATFORM setting (a System Admin flips it from the "
         "admin panel and it takes effect on the next fire without a restart).",
     )
+    # ----- Optional at-rest encryption (Plan 12 task_12_02) -----
+    # AES-256 (Decisiones Clave). OFF by default: encryption is OPTIONAL and
+    # adds a Vault dependency, so an operator opts in explicitly. When ON, the
+    # assembled bundle is wrapped into a single AES-256-GCM blob keyed by a
+    # Vault-resolved secret (`backup_encryption_vault_key`); when OFF the
+    # plaintext bundle is left unchanged. Never a magic number — both knobs are
+    # operator-tunable env.
+    backup_encryption_enabled: bool = Field(
+        default=False,
+        description="Whether to AES-256 encrypt the backup bundle at rest "
+        "(Plan 12 Decisiones Clave). OFF by default — encryption is optional and "
+        "requires a Vault key. When ON the bundle is wrapped into a single "
+        "encrypted blob and the manifest records `encrypted: true`.",
+    )
+    backup_encryption_vault_key: str = Field(
+        default="backup_encryption_key",
+        description="Name of the secret the workers' Vault/secret provider "
+        "resolves for the AES-256 backup key (never plaintext, never logged). "
+        "Only consulted when `backup_encryption_enabled` is true.",
+    )
 
     # ----- Misc -----
     environment: str = Field(
