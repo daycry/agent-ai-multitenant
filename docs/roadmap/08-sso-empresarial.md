@@ -1,9 +1,9 @@
 ---
 plan_id: 08-sso-empresarial
 title: SSO Empresarial y Auth Avanzada
-status: pending_approval
+status: pending_human_validation
 blocking_plan: [00-fundaciones]
-started_at: null
+started_at: 2026-05-30
 completed_at: null
 estimated_duration_calendar: 2-3 semanas
 estimated_effort_person_days: 40-55
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `08-sso-empresarial`                      |
-| **Estado**                         | `pending_approval`                        |
+| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `00-fundaciones`                          |
 | **Tiempo estimado (calendario)**   | 2-3 semanas                               |
 | **Tiempo estimado (persona-días)** | 40-55                                     |
@@ -390,7 +390,16 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_13` — Documentación, ADRs, changelog
 
-- [ ] **Título**: Documentación, ADRs, changelog
+- [x] **Título**: Documentación, ADRs, changelog
+<!-- Cerrado: changelog docs/07-changelog/08-sso-empresarial.md (qué se entregó,
+     endpoints nuevos, migraciones 0032..0040, vars de entorno, decisiones y
+     notas de seguridad); ADR 0031 (modelo de sesión SSO = Redis no JWT
+     stateless + import perezoso/501 de xmlsec en SAML + token de reto MFA
+     efímero single-use); referencia docs/04-reference/auth-sso.md (endpoints
+     OIDC/SAML/SCIM/MFA + RBAC). Frontmatter del plan -> pending_human_validation
+     (todas las tareas done; faltan tests humanos + PR para completed). Verde:
+     pre-commit (prettier/markdownlint) sobre los .md cambiados; auto_08_13_a
+     (el changelog existe). -->
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
