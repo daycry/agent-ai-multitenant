@@ -56,13 +56,14 @@ from datetime import UTC, datetime
 from ipaddress import ip_address, ip_network
 from uuid import UUID
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, Response, status
 from redis.asyncio import Redis
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.api_tokens import hash_api_token
-from api_server.auth.deps import get_client_ip, get_redis
+from api_server.auth.deps import get_client_ip, get_rate_limiter, get_redis
+from api_server.auth.rate_limit import RateLimiter
 from api_server.config import get_settings
 from api_server.db.models import ApiToken
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
@@ -72,9 +73,27 @@ from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 # holds no plaintext secret either.
 _CACHE_PREFIX = "apitoken:"
 
+# Redis key namespace for the per-token sliding-window rate-limit counter
+# (task_13_04). Keyed by the token id (a UUID, not the secret), so each
+# token has its OWN budget and one token's traffic never throttles another.
+# Because token ids are unique across tenants, this also gives per-tenant
+# isolation for free.
+_RATE_LIMIT_PREFIX = "apitoken:rl:"
+
+# Standard rate-limit response headers (the de-facto ``X-RateLimit-*`` set
+# plus ``Retry-After`` on a 429), emitted on every public-API response.
+_HDR_LIMIT = "X-RateLimit-Limit"
+_HDR_REMAINING = "X-RateLimit-Remaining"
+_HDR_RESET = "X-RateLimit-Reset"
+_HDR_RETRY_AFTER = "Retry-After"
+
 
 def _cache_key(token_hash: str) -> str:
     return f"{_CACHE_PREFIX}{token_hash}"
+
+
+def _rate_limit_key(token_id: UUID) -> str:
+    return f"{_RATE_LIMIT_PREFIX}{token_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -88,11 +107,16 @@ class ApiTokenPrincipal:
     call. ``scopes`` carries the coarse capabilities
     (:class:`api_server.db.models.ApiTokenScope`) the v1 endpoints (Phase B)
     will gate writes on. ``tenant_id`` is what binds the RLS session.
+    ``rate_limit`` is the token's own per-minute request budget (the
+    ``api_tokens.rate_limit`` column), carried here so the sliding-window
+    limiter (task_13_04) applies the right budget with no extra DB hit — it
+    rides the same cache as the tenant resolution.
     """
 
     tenant_id: UUID
     token_id: UUID
     scopes: tuple[str, ...]
+    rate_limit: int
 
 
 class ApiTokenAuthError(Exception):
@@ -136,6 +160,7 @@ async def _resolve_from_db(digest: str) -> ApiTokenPrincipal:
             tenant_id=row.tenant_id,
             token_id=row.id,
             scopes=tuple(row.scopes),
+            rate_limit=row.rate_limit,
         )
 
 
@@ -145,6 +170,7 @@ def _serialize(principal: ApiTokenPrincipal) -> str:
             "tenant_id": str(principal.tenant_id),
             "token_id": str(principal.token_id),
             "scopes": list(principal.scopes),
+            "rate_limit": principal.rate_limit,
         }
     )
 
@@ -155,6 +181,7 @@ def _deserialize(raw: str) -> ApiTokenPrincipal:
         tenant_id=UUID(parsed["tenant_id"]),
         token_id=UUID(parsed["token_id"]),
         scopes=tuple(parsed["scopes"]),
+        rate_limit=int(parsed["rate_limit"]),
     )
 
 
@@ -265,6 +292,63 @@ async def get_api_token_principal(
     return principal
 
 
+def _set_rate_limit_headers(
+    response: Response, *, limit: int, remaining: int, reset_at: int
+) -> None:
+    """Attach the standard ``X-RateLimit-*`` headers to a response."""
+    response.headers[_HDR_LIMIT] = str(limit)
+    response.headers[_HDR_REMAINING] = str(remaining)
+    response.headers[_HDR_RESET] = str(reset_at)
+
+
+async def enforce_api_token_rate_limit(
+    response: Response,
+    principal: ApiTokenPrincipal = Depends(get_api_token_principal),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter),
+) -> ApiTokenPrincipal:
+    """Enforce the token's per-token sliding-window rate limit (task_13_04).
+
+    Counts one hit per request in a Redis sliding window keyed by the
+    token id, against the token's OWN ``rate_limit`` budget (carried on the
+    principal, so no extra DB hit). Each token has its own budget — one
+    token's traffic never throttles another, and since token ids are unique
+    across tenants this isolates tenants too.
+
+    On every call the standard ``X-RateLimit-Limit / -Remaining / -Reset``
+    headers are set on the response. The (limit+1)th request inside the
+    window raises HTTP 429 with a ``Retry-After`` plus the same headers; once
+    the window slides past the early hits, requests succeed again.
+
+    The v1 endpoints (Phase B) depend on this; it also re-exports the
+    resolved principal so an endpoint can depend on this alone to get both
+    the rate-limit gate and the tenant context.
+    """
+    settings = get_settings()
+    result = await rate_limiter.check_with_headers(
+        _rate_limit_key(principal.token_id),
+        limit=principal.rate_limit,
+        window_seconds=settings.api_token_rate_limit_window_seconds,
+    )
+    _set_rate_limit_headers(
+        response,
+        limit=result.limit,
+        remaining=result.remaining,
+        reset_at=result.reset_at,
+    )
+    if not result.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="API token rate limit exceeded",
+            headers={
+                _HDR_RETRY_AFTER: str(result.retry_after),
+                _HDR_LIMIT: str(result.limit),
+                _HDR_REMAINING: str(result.remaining),
+                _HDR_RESET: str(result.reset_at),
+            },
+        )
+    return principal
+
+
 @asynccontextmanager
 async def open_api_token_session(
     principal: ApiTokenPrincipal,
@@ -301,6 +385,7 @@ async def get_api_token_session(
 __all__ = [
     "ApiTokenAuthError",
     "ApiTokenPrincipal",
+    "enforce_api_token_rate_limit",
     "get_api_token_principal",
     "get_api_token_session",
     "invalidate_api_token_cache",

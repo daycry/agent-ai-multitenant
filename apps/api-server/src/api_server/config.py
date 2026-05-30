@@ -245,6 +245,13 @@ class Settings(BaseSettings):
     api_token_default_rate_limit: int = Field(
         default=100, description="Default per-minute request budget for a public-API token."
     )
+    # Sliding window over which a public-API token's `rate_limit` budget is
+    # counted (Plan 13 task_13_04). The budget is expressed per minute, so
+    # the window is 60s by default; the limiter keys the window per token.
+    api_token_rate_limit_window_seconds: int = Field(
+        default=60,
+        description="Sliding-window length (seconds) for per-token public-API rate limiting.",
+    )
     # TTL of the X-API-Token -> tenant resolution cached in Redis by the
     # public-API auth middleware (Plan 13 task_13_03). Short by design: it
     # avoids a DB hit per request while bounding how long a stale entry can

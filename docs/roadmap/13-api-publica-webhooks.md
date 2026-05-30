@@ -138,7 +138,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_04` — Rate limiting por token con sliding window en Redis
 
-- [ ] **Título**: Rate limiting por token con sliding window en Redis
+- [x] **Título**: Rate limiting por token con sliding window en Redis
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
