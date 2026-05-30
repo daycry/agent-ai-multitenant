@@ -19,6 +19,11 @@ dependencies = [
   # platform already uses for Fernet-at-rest secrets.
   "cryptography>=42,<49",
 
+  # Remote backup destinations — S3 / any S3-compatible provider (MinIO,
+  # Backblaze B2, Wasabi, R2) via the AWS SDK (Plan 12 task_12_05+). The S3
+  # adapter uses boto3's managed `upload_file` (automatic multipart).
+  "boto3>=1.34,<2",
+
   # Observability
   "structlog>=24.1,<25",
 ]

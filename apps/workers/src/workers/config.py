@@ -250,6 +250,40 @@ class Settings(BaseSettings):
         "Only consulted when `backup_encryption_enabled` is true.",
     )
 
+    # ----- Remote backup destinations — S3 (Plan 12 task_12_05) -----
+    # After a successful, verified backup the bundle is uploaded to every
+    # configured + enabled remote destination (Plan 12: "destinos remotos
+    # opcionales (S3, B2, SFTP/NAS, rclone)"). These are the NON-secret S3
+    # tunables (bucket, prefix, endpoint, region) — the access key + secret are
+    # SECRETS resolved through the workers' secret seam (Vault/env), NEVER here.
+    # OFF by default: a destination is opt-in. `endpoint_url` is the lever that
+    # makes ANY S3-compatible provider work (MinIO, Backblaze B2, Wasabi, R2);
+    # leave it empty for AWS.
+    backup_s3_enabled: bool = Field(
+        default=False,
+        description="Whether to upload each successful backup bundle to the S3 "
+        "destination. OFF by default — remote destinations are opt-in.",
+    )
+    backup_s3_bucket: str = Field(
+        default="",
+        description="S3 bucket the backup bundle is uploaded to. Required when "
+        "`backup_s3_enabled` is true.",
+    )
+    backup_s3_prefix: str = Field(
+        default="",
+        description="Key prefix ('folder') under which bundles are stored in the "
+        "bucket. Empty = bucket root.",
+    )
+    backup_s3_endpoint_url: str = Field(
+        default="",
+        description="S3 endpoint URL for a NON-AWS S3-compatible provider (MinIO, "
+        "Backblaze B2, Wasabi, Cloudflare R2). Empty = real AWS S3.",
+    )
+    backup_s3_region: str = Field(
+        default="",
+        description="S3 region name. Empty = let the SDK/endpoint decide.",
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."

@@ -155,7 +155,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_05` — Destino S3 (cualquier provider compatible) con boto3
 
-- [ ] **Título**: Destino S3 (cualquier provider compatible) con boto3
+- [x] **Título**: Destino S3 (cualquier provider compatible) con boto3
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops

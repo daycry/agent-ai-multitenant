@@ -80,6 +80,10 @@ repos:
           # task_10_06). Ships py.typed, so mypy needs it installed to resolve
           # the aiosmtplib import in the Email adapter.
           - "aiosmtplib>=3.0,<4"
+          # S3 remote backup destination (workers, Plan 12 task_12_05). boto3
+          # itself is untyped; its TYPE stubs resolve the `mypy_boto3_s3.client`
+          # import used under TYPE_CHECKING in workers.backup_destinations.
+          - "boto3-stubs[s3]>=1.34,<2"
         args: [--config-file=pyproject.toml]
         files: ^(apps|packages)/.*\.py$
         # Skip files that import sibling local packages — the hook
