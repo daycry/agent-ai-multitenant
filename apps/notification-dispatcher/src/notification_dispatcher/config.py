@@ -190,6 +190,38 @@ class Settings(BaseSettings):
         "Tunable, never a magic number buried in the adapter.",
     )
 
+    # ----- WhatsApp Cloud API channel (task_10_10) -----
+    whatsapp_api_base_url: str = Field(
+        default="https://graph.facebook.com",
+        description="Base URL of the Meta WhatsApp Cloud (Graph) API the "
+        "WhatsApp adapter POSTs a template message to "
+        "(``{base}/{version}/{phone_number_id}/messages``). Tunable so a "
+        "deployment can pin a Graph host / proxy and so tests point it at an "
+        "httpx.MockTransport — never hardcoded.",
+    )
+    whatsapp_api_version: str = Field(
+        default="v21.0",
+        description="Graph API version segment in the WhatsApp Cloud send URL. "
+        "Meta versions the Graph API (vNN.0); pin it here so an API change "
+        "never silently shifts the contract. A channel may override it via "
+        "config.api_version. Tunable, never a magic string in the adapter.",
+    )
+    whatsapp_default_language: str = Field(
+        default="en_US",
+        description="Default WhatsApp template language/locale code (BCP-47 "
+        "style, e.g. en_US / es_ES) stamped on the template message when "
+        "neither the channel config nor the template registry pins one. "
+        "WhatsApp matches the approved template by name + language. Tunable, "
+        "never hardcoded.",
+    )
+    whatsapp_request_timeout_s: float = Field(
+        default=10.0,
+        description="Per-request HTTP timeout the WhatsApp adapter applies to "
+        "the Cloud API send. Bounded under channel_send_timeout_s so the "
+        "dispatcher's overall send budget still wraps it. Tunable, not a magic "
+        "number.",
+    )
+
     # ----- Event → notification mapping tunables (task_10_04) -----
     default_locale: str = Field(
         default="en",

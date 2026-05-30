@@ -244,7 +244,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_10` — Canal WhatsApp Cloud API con plantillas pre-aprobadas
 
-- [ ] **Título**: Canal WhatsApp Cloud API con plantillas pre-aprobadas
+- [x] **Título**: Canal WhatsApp Cloud API con plantillas pre-aprobadas
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
