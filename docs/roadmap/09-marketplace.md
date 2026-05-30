@@ -123,7 +123,7 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
 
 #### `task_09_03` — Endpoints REST de marketplace (listings, install, uninstall, list_installed)
 
-- [ ] **Título**: Endpoints REST de marketplace (listings, install, uninstall, list_installed)
+- [x] **Título**: Endpoints REST de marketplace (listings, install, uninstall, list_installed)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

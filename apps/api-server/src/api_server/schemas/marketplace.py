@@ -1,0 +1,165 @@
+"""Pydantic schemas for the `/marketplace` endpoints (Plan 09 task_09_03).
+
+The marketplace REST surface has two read shapes and two write shapes:
+
+  - :class:`MarketplaceListingResponse` — a browseable catalog entry
+    (skill / tool / MCP server). It echoes the public manifest +
+    requested permissions but **never** the cryptographic ``signature``
+    (a secret-adjacent artifact verified server-side; exposing it would
+    let a client forge a "verified" badge). The DB ``signature`` column
+    is surfaced only as a boolean ``is_signed`` flag.
+
+  - :class:`MarketplaceInstallationResponse` — an installation record for
+    the caller's tenant. It echoes the *granted* permissions (what the
+    project owner consented to) but not the listing's full secret
+    payload.
+
+  - :class:`InstallationCreateRequest` — install a listing into the
+    caller's tenant (optionally a project). Phase A persists + audits the
+    install; the trust / static-analysis / sandbox / consent gates are
+    Phase B-C and are stubbed in the router.
+
+All response models use ``from_attributes`` so they map straight off the
+ORM rows. No request model accepts ``tenant_id`` / ``installed_by`` /
+``status`` — those are server-derived from the authenticated principal,
+never honoured from the wire (mirrors the skills/tools routers).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from api_server.db.marketplace import (
+    InstallationStatus,
+    MarketplaceInstallation,
+    MarketplaceListing,
+    MarketplaceListingKind,
+    MarketplaceTrustLevel,
+)
+
+_BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+
+# =============================================================================
+# Listing (browse the catalog)
+# =============================================================================
+class MarketplaceListingResponse(BaseModel):
+    """A catalog entry as exposed to the browse/detail endpoints.
+
+    ``is_signed`` replaces the raw ``signature`` column so a detached
+    signature never crosses the wire. ``tenant_id`` is NULL for global
+    catalog rows and set for a tenant's private listings.
+    """
+
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    source_id: UUID
+    tenant_id: UUID | None
+    kind: str
+    name: str
+    version: str
+    description: str | None
+    author: str | None
+    trust_level: str
+    manifest: dict[str, Any]
+    requested_permissions: list[Any]
+    # Never echo the detached signature itself — only whether one exists.
+    is_signed: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+def to_listing_response(listing: MarketplaceListing) -> MarketplaceListingResponse:
+    return MarketplaceListingResponse(
+        id=listing.id,
+        source_id=listing.source_id,
+        tenant_id=listing.tenant_id,
+        kind=listing.kind,
+        name=listing.name,
+        version=listing.version,
+        description=listing.description,
+        author=listing.author,
+        trust_level=listing.trust_level,
+        manifest=listing.manifest or {},
+        requested_permissions=listing.requested_permissions or [],
+        is_signed=listing.signature is not None,
+        created_at=listing.created_at,
+        updated_at=listing.updated_at,
+    )
+
+
+# =============================================================================
+# Installation (install / uninstall / list_installed)
+# =============================================================================
+class InstallationCreateRequest(BaseModel):
+    """Install a listing into the caller's tenant.
+
+    Only the listing to install, an optional project scope, and the
+    subset of permissions the project owner consents to are accepted.
+    Everything else (tenant_id, installed_by, status, resolved version)
+    is server-derived. ``granted_permissions`` defaults to empty — in
+    Phase A consent is a stub; Phase B-C wires the per-permission UI.
+    """
+
+    model_config = _BASE_CONFIG
+
+    listing_id: UUID
+    project_id: UUID | None = None
+    granted_permissions: list[Any] = Field(default_factory=list)
+
+
+class MarketplaceInstallationResponse(BaseModel):
+    """An installation record for the caller's tenant."""
+
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    tenant_id: UUID
+    listing_id: UUID
+    project_id: UUID | None
+    version: str
+    status: str
+    granted_permissions: list[Any]
+    installed_by: UUID | None
+    installed_at: datetime
+    revoked_at: datetime | None
+    revoked_by: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+def to_installation_response(
+    installation: MarketplaceInstallation,
+) -> MarketplaceInstallationResponse:
+    return MarketplaceInstallationResponse(
+        id=installation.id,
+        tenant_id=installation.tenant_id,
+        listing_id=installation.listing_id,
+        project_id=installation.project_id,
+        version=installation.version,
+        status=installation.status,
+        granted_permissions=installation.granted_permissions or [],
+        installed_by=installation.installed_by,
+        installed_at=installation.installed_at,
+        revoked_at=installation.revoked_at,
+        revoked_by=installation.revoked_by,
+        created_at=installation.created_at,
+        updated_at=installation.updated_at,
+    )
+
+
+__all__ = [
+    "InstallationCreateRequest",
+    "InstallationStatus",
+    "MarketplaceInstallationResponse",
+    "MarketplaceListingKind",
+    "MarketplaceListingResponse",
+    "MarketplaceTrustLevel",
+    "to_installation_response",
+    "to_listing_response",
+]
