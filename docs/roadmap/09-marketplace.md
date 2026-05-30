@@ -89,7 +89,7 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
 
 #### `task_09_01` — Modelos marketplace_sources, listings, installations, audit_entries
 
-- [ ] **Título**: Modelos marketplace_sources, listings, installations, audit_entries
+- [x] **Título**: Modelos marketplace_sources, listings, installations, audit_entries
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
