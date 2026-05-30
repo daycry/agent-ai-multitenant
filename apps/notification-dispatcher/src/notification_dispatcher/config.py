@@ -264,6 +264,24 @@ class Settings(BaseSettings):
         "number.",
     )
 
+    # ----- Outbound webhook channel (task_10_12) -----
+    webhook_request_timeout_s: float = Field(
+        default=10.0,
+        description="Per-request HTTP timeout the outbound-webhook adapter applies "
+        "to the signed POST. Bounded under channel_send_timeout_s so the "
+        "dispatcher's overall send budget still wraps it. Tunable, not a magic "
+        "number.",
+    )
+    webhook_signature_max_skew_s: int = Field(
+        default=300,
+        description="Freshness window (seconds) the outbound-webhook signature is "
+        "valid for: the X-Timestamp header bounds replay, and a receiver MUST "
+        "reject a signature whose timestamp is older (or further in the future) "
+        "than this skew. The reusable verify() helper enforces it. 5 min by "
+        "default — long enough for clock drift, short enough to bound a replay "
+        "window. Tunable, never a magic number.",
+    )
+
     # ----- Event → notification mapping tunables (task_10_04) -----
     default_locale: str = Field(
         default="en",

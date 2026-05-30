@@ -16,6 +16,15 @@ startup; tests import the specific channel module they exercise.
 
 from __future__ import annotations
 
-from notification_dispatcher.channels import discord, email, slack, sms, teams, telegram, whatsapp
+from notification_dispatcher.channels import (
+    discord,
+    email,
+    slack,
+    sms,
+    teams,
+    telegram,
+    webhook,
+    whatsapp,
+)
 
-__all__ = ["discord", "email", "slack", "sms", "teams", "telegram", "whatsapp"]
+__all__ = ["discord", "email", "slack", "sms", "teams", "telegram", "webhook", "whatsapp"]

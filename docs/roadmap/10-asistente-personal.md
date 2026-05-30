@@ -278,7 +278,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_12` — Webhooks salientes con firma HMAC + nonce + timestamp
 
-- [ ] **Título**: Webhooks salientes con firma HMAC + nonce + timestamp
+- [x] **Título**: Webhooks salientes con firma HMAC + nonce + timestamp
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
