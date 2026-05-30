@@ -171,6 +171,12 @@ class UserOrganizationMembership(
     )
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    # The IdP's stable identifier for this user within THIS tenant (SCIM
+    # `externalId`, Plan 08 task_08_08). SCIM externalId is scoped to the
+    # provisioning domain (the tenant's IdP), so it lives on the
+    # tenant-scoped membership, not the global `users` row. NULL for users
+    # not provisioned via SCIM (local register, OIDC/SAML JIT).
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # No ORM `user` / `organization` back-refs — see Organization /
     # User class comments. Resolve via explicit JOIN when needed.
@@ -436,6 +442,60 @@ class SSOConfiguration(
 
 
 # ---------------------------------------------------------------------------
+# ScimToken — per-tenant SCIM 2.0 bearer credential (Plan 08 task_08_08)
+# ---------------------------------------------------------------------------
+class ScimToken(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """A bearer token an IdP uses to provision users into a tenant via SCIM.
+
+    Multi-tenancy: tenant-scoped via :class:`TenantScopedMixin` + RLS
+    (the ``tenant_isolation`` policy in the migration). The token is what
+    identifies the calling tenant — the SCIM endpoints are not behind the
+    JWT/session auth (an IdP has no interactive session), so the token
+    *is* the tenant context. Resolution runs once on the BYPASSRLS role to
+    map ``token_hash`` -> ``tenant_id``; every subsequent SCIM query then
+    runs under ``app.tenant_id`` bound to that tenant, so a token issued
+    for tenant A can never read or write tenant B's users.
+
+    Secret handling (CLAUDE.md: no plaintext secrets in the DB). The token
+    is shown to the operator EXACTLY ONCE at mint time and never stored in
+    clear: only its SHA-256 ``token_hash`` is persisted. A SHA-256 (not a
+    salted argon2 hash) is used deliberately — the token is a long,
+    high-entropy random value, so a single deterministic digest is both
+    safe against brute force and supports the equality lookup the
+    unauthenticated SCIM request needs (a salted hash could not be looked
+    up by value). ``token_prefix`` keeps the first few characters in clear
+    so the UI can disambiguate multiple tokens without revealing them.
+    """
+
+    __tablename__ = "scim_tokens"
+    __table_args__ = (
+        # The SHA-256 digest is globally unique (it identifies a tenant on
+        # an unauthenticated request); a UNIQUE index also makes the
+        # by-hash lookup an index probe.
+        UniqueConstraint("token_hash", name="uq_scim_token_hash"),
+        Index(
+            "ix_scim_tokens_tenant_active",
+            "tenant_id",
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+    )
+
+    # SHA-256 hex digest (64 chars) of the bearer token. Never the token.
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # First characters of the token, kept in clear for UI disambiguation.
+    token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Operator-supplied label ("Okta production", ...).
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Set when the token is revoked — a revoked token authenticates nothing.
+    revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # Bumped on each successful SCIM call (observability; not on the hot path).
+    last_used_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return f"ScimToken(id={self.id!r}, tenant={self.tenant_id!r}, prefix={self.token_prefix!r})"
+
+
+# ---------------------------------------------------------------------------
 # Review sessions — persistence of `workers.review_runtime.ReviewSession`
 # (Plan 06.5 task_06_5_01). The manager was in-memory; this table makes
 # it durable across worker restarts.
@@ -508,6 +568,7 @@ __all__ = [
     "ReviewSession",
     "SSOConfiguration",
     "SSOProvider",
+    "ScimToken",
     "Session",
     "TaskAuditEvent",
     "TenantSetting",

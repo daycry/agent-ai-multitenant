@@ -256,7 +256,29 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_08` — SCIM 2.0 endpoints para creación/actualización/eliminación de usuarios desde IdP
 
-- [ ] **Título**: SCIM 2.0 endpoints para creación/actualización/eliminación de usuarios desde IdP
+- [x] **Título**: SCIM 2.0 endpoints para creación/actualización/eliminación de usuarios desde IdP
+<!-- SCIM 2.0 (RFC 7643/7644) AÑADIDO junto a login local + OIDC + SAML (no
+     los toca). Endpoints /scim/v2/Users (POST/GET-id/GET-list+filter/PUT/
+     PATCH/DELETE) autenticados por bearer token per-tenant (tabla
+     scim_tokens — solo el digest SHA-256 en reposo, NUNCA el token; el
+     token identifica el tenant). El token se resuelve una vez en el rol
+     BYPASSRLS (petición sin sesión) y luego cada query corre bajo
+     app.tenant_id (RLS) -> un token de A no puede tocar B. Mapeo SCIM User
+     -> users (global) + user_org_memberships (per-tenant): userName/email,
+     externalId (nueva columna en la membership), active. Deprovisioning
+     (active=false / DELETE) desactiva la membership Y revoca las sesiones
+     vivas del usuario en el tenant (índice user->sesiones añadido al
+     SessionStore, retrocompatible). Respuestas con forma SCIM (schemas,
+     meta, id, camelCase). Gestión de tokens (mint/list/revoke) vía UI
+     tenant_admin con JWT. Migración 0036 reversible (up/down/up verificado;
+     head único) + columna external_id en memberships. 9 tests en
+     tests/integration/test_scim.py: create->aparece + GET, duplicado 409,
+     list/filter userName eq, PUT replace, PATCH active=false revoca acceso
+     (sesión muerta), DELETE deprovisiona, token malo/ausente 401,
+     cross-tenant (token A no ve/toca B), CRUD de tokens + token revocado
+     401. pre-commit verde (black/ruff/mypy). Login local + OIDC + SAML
+     intactos (87 tests verdes: 18 auth/OIDC + 45 SAML + 24 JIT/OIDC). -->
+- **NO bloqueado por xmlsec**: SCIM no usa SAML/xmlsec.
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

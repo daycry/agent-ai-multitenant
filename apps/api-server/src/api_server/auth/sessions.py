@@ -11,20 +11,37 @@ Why server-side and not stateless JWTs:
 Cookie payload stays in Redis; the `sessions` table only records
 metadata for auditability and is written from richer flows in later
 phases. Phase 0 keeps the table empty.
+
+Per-user session index (Plan 08 task_08_08 — SCIM deprovisioning).
+Besides the per-session key, the store keeps a Redis SET per
+``(user_id, tenant_id)`` holding that user's live session ids in the
+tenant. This is what lets SCIM ``active=false`` / ``DELETE`` revoke a
+user's access immediately: there is otherwise no reverse lookup from a
+user to their sessions. The index is best-effort metadata — the
+per-session key remains the source of truth for a session being live —
+so a stale sid lingering in the set is harmless (revoking it is a no-op).
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable
+from typing import cast
 from uuid import UUID
 
 from redis.asyncio import Redis
 
 _KEY_PREFIX = "session:"
+# Per-user, per-tenant index of live session ids (a Redis SET).
+_USER_INDEX_PREFIX = "user-sessions:"
 
 
 def _key(sid: UUID) -> str:
     return f"{_KEY_PREFIX}{sid}"
+
+
+def _user_index_key(user_id: UUID, tenant_id: UUID) -> str:
+    return f"{_USER_INDEX_PREFIX}{tenant_id}:{user_id}"
 
 
 class SessionStore:
@@ -46,6 +63,18 @@ class SessionStore:
             "tenant_id": str(tenant_id) if tenant_id else None,
         }
         await self._redis.set(_key(sid), json.dumps(payload), ex=ttl_seconds)
+        # Index the session under (user, tenant) so SCIM deprovisioning can
+        # find and revoke it. Only tenant-scoped sessions are indexed: a
+        # pre-tenant session (local login before picking a tenant) is not
+        # subject to per-tenant deprovisioning.
+        if tenant_id is not None:
+            index_key = _user_index_key(user_id, tenant_id)
+            # redis-py types `sadd` as a sync/async union (ResponseT); on the
+            # async client it is an awaitable — cast so mypy strict agrees.
+            await cast("Awaitable[int]", self._redis.sadd(index_key, str(sid)))
+            # Keep the index from outliving the sessions it points at: it
+            # expires no sooner than the longest session it tracks.
+            await self._redis.expire(index_key, ttl_seconds)
 
     async def get(self, sid: UUID) -> dict[str, str | None] | None:
         raw = await self._redis.get(_key(sid))
@@ -55,4 +84,37 @@ class SessionStore:
         return parsed
 
     async def revoke(self, sid: UUID) -> None:
+        # Best-effort cleanup of the per-user index so a revoked sid does
+        # not linger there. Read the payload first to recover (user,
+        # tenant); the per-session delete is what actually ends the session.
+        payload = await self.get(sid)
+        if payload is not None:
+            user_raw = payload.get("user_id")
+            tenant_raw = payload.get("tenant_id")
+            if user_raw and tenant_raw:
+                await cast(
+                    "Awaitable[int]",
+                    self._redis.srem(_user_index_key(UUID(user_raw), UUID(tenant_raw)), str(sid)),
+                )
         await self._redis.delete(_key(sid))
+
+    async def revoke_user_sessions(self, user_id: UUID, tenant_id: UUID) -> int:
+        """Revoke every live session of ``user_id`` in ``tenant_id``.
+
+        Used by SCIM deprovisioning (``active=false`` / ``DELETE``) so a
+        suspended user loses access immediately, not when their token
+        happens to expire. Returns the number of sessions revoked.
+
+        Iterates the per-user index set, deletes each session key, then
+        clears the index. Stale sids (already expired) delete to 0 and are
+        simply dropped — the count reflects sessions that were actually
+        live.
+        """
+        index_key = _user_index_key(user_id, tenant_id)
+        sids = await cast("Awaitable[set[str]]", self._redis.smembers(index_key))
+        revoked = 0
+        for sid in sids:
+            deleted = await self._redis.delete(_key(UUID(sid)))
+            revoked += int(deleted)
+        await self._redis.delete(index_key)
+        return revoked
