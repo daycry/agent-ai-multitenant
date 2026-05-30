@@ -19,6 +19,10 @@ task_11_02.
 # Importing the built-ins for their import-time registration side effect
 # so the `keyword` / `regex` types are available out of the box.
 from shared_guardrails import builtins as _builtins  # noqa: F401
+
+# Importing the Phase B production guardrail types (pii, ...) for the same
+# import-time registration side effect.
+from shared_guardrails import checks as _checks  # noqa: F401
 from shared_guardrails.actions import (
     DEFAULT_MAX_RETRIES,
     AppliedAction,

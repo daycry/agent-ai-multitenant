@@ -144,7 +144,8 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 
 #### `task_11_04` — PII detection con Presidio integrado
 
-- [ ] **Título**: PII detection con Presidio integrado
+- [x] **Título**: PII detection con Presidio integrado
+  - Guardrail `pii` registrado (hooks `pre_llm` + `post_llm`) en `packages/shared-guardrails/src/shared_guardrails/checks/pii.py`. Presidio (`presidio-analyzer`, que arrastra spaCy + modelo NER) es el extra OPCIONAL `shared-guardrails[pii]`, importado de forma LAZY: cuando está ausente degrada a un fallback regex puro de alta confianza (email/tarjeta con Luhn/teléfono/IBAN/IPv4/SSN) o, en modo `backend: presidio` estricto, a un resultado tipado "unavailable" sin romper. Acción sugerida configurable (default `redact` en `post_llm`, `block` en `pre_llm`). Tests con Presidio skip-guardados (`pytest.importorskip`); lógica de detección probada con fallback regex y analyzer mockeado (vocabulario Presidio PERSON/LOCATION). Override mypy para `presidio_analyzer` añadido al patrón optional-dep.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer + security

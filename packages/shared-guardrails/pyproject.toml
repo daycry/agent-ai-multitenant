@@ -14,6 +14,16 @@ dev = [
   "pytest>=8.2,<9",
   "types-PyYAML>=6.0,<7",
 ]
+# PII detection backend (task_11_04). Microsoft Presidio pulls spaCy + an
+# NER model — a multi-hundred-MB dependency — so it is OPTIONAL and lazy:
+# the `pii` guardrail imports it on first use and degrades to a
+# pure-Python regex fallback / a typed "unavailable" result when absent,
+# keeping the engine importable and CI free of the heavy model. Installing
+# this extra still requires a spaCy model, e.g.
+#   python -m spacy download en_core_web_lg
+pii = [
+  "presidio-analyzer>=2.2,<3",
+]
 
 [build-system]
 requires = ["hatchling>=1.21"]

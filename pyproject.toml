@@ -279,6 +279,16 @@ ignore_missing_imports = true
 module = ["bandit", "bandit.*"]
 ignore_missing_imports = true
 
+# PII detection backend (Plan 11 task_11_04). `presidio-analyzer` (which
+# pulls spaCy + an NER model) is the OPTIONAL `shared-guardrails[pii]`
+# extra; the `pii` guardrail imports it LAZILY and degrades to a regex
+# fallback / typed "unavailable" result when absent, so the engine stays
+# importable and the pre-commit mypy hook doesn't install the heavy model.
+# Same pattern as the other optional-dep overrides above.
+[[tool.mypy.overrides]]
+module = ["presidio_analyzer", "presidio_analyzer.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
