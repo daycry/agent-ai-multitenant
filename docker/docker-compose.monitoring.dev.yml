@@ -1,0 +1,34 @@
+# Development overrides for the monitoring overlay (docker-compose.monitoring.yml).
+#
+# Exposes the observability UIs on the host so an operator can open Grafana /
+# Prometheus / Alertmanager from a browser and run the live `curl grafana` /
+# `curl prometheus` checks (the human / CI-with-stack checks for task_12_13 /
+# task_12_15). In prod these UIs stay inside `agentic-net` — same prod-shaped
+# posture as the base stack, where docker-compose.dev.yml is what opens ports.
+#
+# Kept in a SEPARATE file (not docker-compose.dev.yml) on purpose: the CI
+# `docker compose config` step composes only
+#   docker/docker-compose.yml + docker/docker-compose.dev.yml
+# WITHOUT the monitoring overlay, so the monitoring services do not exist
+# there — putting these port keys in docker-compose.dev.yml would make that
+# step fail with "service prometheus has neither an image nor a build context".
+#
+# Usage (compose alongside the base stack + monitoring overlay):
+#   docker compose -f docker/docker-compose.yml \
+#     -f docker/docker-compose.monitoring.yml \
+#     -f docker/docker-compose.monitoring.dev.yml up -d
+
+name: agentic-platform
+
+services:
+  grafana:
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+
+  prometheus:
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+
+  alertmanager:
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"

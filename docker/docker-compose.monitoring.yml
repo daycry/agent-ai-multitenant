@@ -10,9 +10,11 @@
 #   - alertmanager   → routes firing alerts to the platform notifier
 #                      (task_12_14). Rules live in
 #                      monitoring/prometheus/rules/host_alerts.yml.
-#
-# The Grafana host dashboards (task_12_15) are layered on top of this file
-# later in the same phase.
+#   - grafana        → host dashboards (task_12_15). Datasource + dashboards
+#                      are provisioned from monitoring/grafana/ (no manual
+#                      clicking). The host-overview dashboard (uid
+#                      `host-overview`) panels CPU / RAM / disk / network +
+#                      per-container metrics off Prometheus.
 #
 # Usage (compose with the base stack):
 #   docker compose -f docker/docker-compose.yml \
@@ -160,9 +162,54 @@ services:
     networks: [agentic-net]
     <<: [*default-restart, *default-logging]
 
+  # ---------------------------------------------------------------------------
+  # Grafana — host dashboards (task_12_15). The Prometheus datasource and the
+  # host-overview dashboard (uid `host-overview`: CPU / RAM / disk / network +
+  # per-container metrics) are PROVISIONED from monitoring/grafana/ mounted
+  # read-only — no manual UI setup, the files on disk are the source of truth.
+  #
+  # Hardened like the rest of the overlay: runs as the grafana uid (472),
+  # no-new-privileges, all caps dropped. Anonymous access is disabled and the
+  # admin password comes from the environment (defaults to a dev-only value;
+  # override GRAFANA_ADMIN_PASSWORD in production / Vault).
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.2.0
+    user: "472:472" # grafana — the image's built-in non-root uid.
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-changeme-dev-only}
+      # Lock the surface down: no sign-up, no anonymous viewing, no telemetry.
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      # Datasource + dashboard providers (read-only).
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Dashboard JSON files referenced by the provider's options.path.
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Grafana's own state (SQLite, sessions). Provisioned dashboards live on
+      # the read-only mount above, not here.
+      - grafana_data:/var/lib/grafana
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [agentic-net]
+    depends_on:
+      - prometheus
+    <<: [*default-restart, *default-logging]
+
 volumes:
   prometheus_data:
   alertmanager_data:
+  grafana_data:
   # Node-exporter textfile collector drop dir, shared with the backup worker
   # (which writes agentic_backup_*.prom here after every run, task_12_14).
   node_exporter_textfile:

@@ -329,7 +329,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_15` — Dashboards Grafana del host (CPU, RAM, disco, red, contenedores)
 
-- [ ] **Título**: Dashboards Grafana del host (CPU, RAM, disco, red, contenedores)
+- [x] **Título**: Dashboards Grafana del host (CPU, RAM, disco, red, contenedores)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
