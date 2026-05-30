@@ -234,6 +234,7 @@ async def record_pipeline_decision(
     decision: PipelineDecision,
     *,
     context: GuardrailEventContext,
+    evaluate_alerts: bool = True,
 ) -> list[GuardrailEvent]:
     """The hook the pipeline host calls after running the engine.
 
@@ -245,12 +246,27 @@ async def record_pipeline_decision(
     :class:`GuardrailPipeline` (the planning chat in task_11_22, an
     execution worker, …) calls this with the decision + a context to make
     the firing observable in the tenant dashboard.
+
+    After writing the events, it evaluates the tenant's configurable alert
+    rules (task_11_21) so a violation SPIKE is observed at record time: if a
+    rule's matching-event count crossed its threshold within its window
+    (and is not debounced), ONE alert is dispatched through the Plan 10
+    notifier to the tenant's Tenant Admins. The evaluation is best-effort —
+    it never raises into the recording path, so a notifier hiccup can't roll
+    back the event the host just recorded. Pass ``evaluate_alerts=False`` to
+    skip it (e.g. when a periodic evaluator owns alerting separately).
     """
     written: list[GuardrailEvent] = []
     for outcome in decision.triggered_outcomes:
         written.append(
             await record_outcome(session, outcome, hook_point=decision.hook, context=context)
         )
+    if written and evaluate_alerts:
+        # Lazy import to avoid a module-load cycle (alerts imports nothing
+        # from this module, but keep the dependency arrow explicit + cheap).
+        from api_server.guardrails.alerts import maybe_alert_after_events
+
+        await maybe_alert_after_events(session, tenant_id=context.tenant_id)
     return written
 
 

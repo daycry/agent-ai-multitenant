@@ -162,6 +162,15 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.PRIORITY,
         default_channel_types=("in_app", "email"),
     ),
+    # Plan 11 task_11_21 — a tenant guardrail alert rule tripped (violations
+    # crossed a threshold within a window). Time-sensitive (a security
+    # signal), so it rides the priority lane, fanning out to the Tenant
+    # Admins' in-app + email channels by default.
+    "guardrail_alert": EventSpec(
+        "guardrail_alert",
+        lane=NotificationLane.PRIORITY,
+        default_channel_types=("in_app", "email"),
+    ),
 }
 
 

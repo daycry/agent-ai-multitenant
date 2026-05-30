@@ -273,6 +273,27 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "Current spend: {{ spent | default('?') }}."
         ),
     ),
+    # --- guardrail_alert (Plan 11 task_11_21) ------------------------------
+    ("guardrail_alert", "es"): TemplateSource(
+        subject="Alerta de guardrails: {{ rule_name | default('(sin nombre)') }}",
+        body=(
+            "La regla de alerta «{{ rule_name | default('(sin nombre)') }}» se ha "
+            "disparado: {{ count | default('?') }} violación(es) de guardrail "
+            "{{ guardrail_type | default('de cualquier tipo') }} "
+            "en los últimos {{ window_seconds | default('?') }} s "
+            "(umbral {{ threshold | default('?') }})."
+        ),
+    ),
+    ("guardrail_alert", "en"): TemplateSource(
+        subject="Guardrail alert: {{ rule_name | default('(unnamed)') }}",
+        body=(
+            "Alert rule \"{{ rule_name | default('(unnamed)') }}\" tripped: "
+            "{{ count | default('?') }} {{ guardrail_type | default('') }} "
+            "guardrail violation(s) in the last "
+            "{{ window_seconds | default('?') }}s "
+            "(threshold {{ threshold | default('?') }})."
+        ),
+    ),
 }
 
 # Public, read-only view of the builtin catalogue keyed by

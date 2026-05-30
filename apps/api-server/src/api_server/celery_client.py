@@ -37,6 +37,15 @@ _INGEST_QUEUE = "ingestion"
 _SEND_NOTIFICATION_TASK = "notification_dispatcher.send_notification"
 _NOTIFICATIONS_DEFAULT_QUEUE = "notifications.default"
 
+# The notification-dispatcher fan-out task (Plan 10 task_10_04): given a
+# domain event ({event_type, tenant_id, context}) it resolves the tenant's
+# subscribed channels (most-specific-wins preferences, quiet-hours, template
+# render) and enqueues one send per surviving channel. The api-server only
+# PRODUCES it by name (clean app boundary — never imports the dispatcher).
+# Plan 11 task_11_21 fires a `guardrail_alert` event through this path.
+_DISPATCH_EVENT_TASK = "notification_dispatcher.dispatch_event"
+_EVENTS_PRIORITY_QUEUE = "notifications.priority"
+
 
 @lru_cache(maxsize=1)
 def get_celery_client() -> Celery:
@@ -104,7 +113,47 @@ async def enqueue_notification_send(
     return True
 
 
+async def enqueue_event_dispatch(
+    event: dict[str, Any],
+    *,
+    queue: str = _EVENTS_PRIORITY_QUEUE,
+) -> bool:
+    """Fan a domain event out to its subscribed channels via the dispatcher.
+
+    Enqueues ``notification_dispatcher.dispatch_event`` (task_10_04) onto the
+    dispatcher's lane. ``event`` is the JSON-safe payload the dispatcher's
+    ``IncomingEvent.from_dict`` expects (``event_type`` / ``tenant_id`` /
+    ``context`` / optional ``locale``). The dispatcher owns recipient
+    resolution (the tenant's subscribed channels / Tenant-Admin preferences),
+    quiet-hours, template render, and the per-channel send + retry/DLQ — the
+    api-server never imports it (clean app boundary).
+
+    Best-effort: a broker failure is logged and swallowed (returns False) so
+    the work that produced the event still completes — an alert is a
+    notification, not a transaction the caller must roll back on a broker
+    outage. ``send_task`` does blocking socket I/O, so we run it off the event
+    loop (same approach as :func:`enqueue_ingestion`).
+    """
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            _DISPATCH_EVENT_TASK,
+            args=[event],
+            queue=queue,
+        )
+    except Exception as exc:
+        _log.warning(
+            "event_dispatch.enqueue_failed",
+            event_type=str(event.get("event_type", "")),
+            tenant_id=str(event.get("tenant_id") or ""),
+            error=str(exc),
+        )
+        return False
+    return True
+
+
 __all__ = [
+    "enqueue_event_dispatch",
     "enqueue_ingestion",
     "enqueue_notification_send",
     "get_celery_client",
