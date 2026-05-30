@@ -31,6 +31,7 @@ from api_server.routers.approval_policies import router as approval_policies_rou
 from api_server.routers.approvals import router as approvals_router
 from api_server.routers.assistant import router as assistant_router
 from api_server.routers.auth import router as auth_router
+from api_server.routers.backup import router as backup_router
 from api_server.routers.conversations import (
     conversations_router,
     project_conversations_router,
@@ -190,6 +191,7 @@ def _register_routers(app: FastAPI) -> None:
         guardrail_events_router,
         guardrail_alerts_router,
         assistant_router,
+        backup_router,
         ws_router,
     ):
         app.include_router(router)

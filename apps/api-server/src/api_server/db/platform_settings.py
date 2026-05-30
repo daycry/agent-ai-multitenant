@@ -170,10 +170,75 @@ BACKUP_ENABLED_KEY = "backup_enabled"
 DEFAULT_BACKUP_ENABLED = True
 
 # Operator-tunable cron for the daily backup, read by the beat process at boot
-# (mirrors price_sync). Default daily at 03:00 (Plan 12: "Backup automático
-# diario 03:00"). Stored as a 5-field cron string.
+# (mirrors price_sync) AND re-read live by the backup beat task. Default daily
+# at 03:00 (Plan 12: "Backup automático diario 03:00"). Stored as a 5-field
+# cron string.
 BACKUP_CRON_KEY = "backup_cron"
 DEFAULT_BACKUP_CRON = "0 3 * * *"
+
+# Local retention window in days (Plan 12: "Retención local 7 días"). Stored
+# as a platform setting so a System Admin tunes it from the panel (task_12_04)
+# rather than only via the WORKERS_BACKUP_RETENTION_DAYS env. The backup beat
+# task reads it live so a change takes effect on the next run without a restart.
+# Kept in lockstep with workers.config.Settings.backup_retention_days's default.
+BACKUP_RETENTION_DAYS_KEY = "backup_retention_days"
+DEFAULT_BACKUP_RETENTION_DAYS = 7
+
+# Validation bounds for the retention window — never a magic literal scattered
+# across the codebase. At least one day (a 0-day window would prune the bundle
+# we just wrote); a generous upper bound keeps a typo from filling the disk.
+BACKUP_RETENTION_DAYS_MIN = 1
+BACKUP_RETENTION_DAYS_MAX = 3650
+
+
+class InvalidBackupScheduleError(ValueError):
+    """Raised when a proposed backup schedule fails validation (bad cron
+    expression or an out-of-range retention window)."""
+
+
+def validate_backup_cron(expr: str) -> str:
+    """Validate a 5-field cron expression for the backup schedule.
+
+    Returns the normalised (whitespace-collapsed) expression on success.
+    Raises :class:`InvalidBackupScheduleError` for a non-5-field string or a
+    field Celery's ``crontab`` parser rejects. We delegate the field-syntax
+    check to ``celery.schedules.crontab`` — the SAME parser the beat process
+    uses (``workers.beat_schedule._parse_cron``) — so a value the API accepts
+    is one beat can actually schedule, never a "valid here / rejected there"
+    mismatch.
+    """
+    parts = expr.split()
+    if len(parts) != 5:
+        raise InvalidBackupScheduleError(
+            "cron must have exactly 5 fields: 'minute hour day-of-month month day-of-week'"
+        )
+    minute, hour, dom, month, dow = parts
+    try:
+        # Importing here keeps celery out of the api-server import graph for
+        # callers that never touch the backup schedule.
+        from celery.schedules import crontab
+
+        crontab(
+            minute=minute,
+            hour=hour,
+            day_of_month=dom,
+            month_of_year=month,
+            day_of_week=dow,
+        )
+    except Exception as exc:  # celery raises ValueError/KeyError on bad fields
+        raise InvalidBackupScheduleError(f"invalid cron expression: {expr!r}") from exc
+    return " ".join(parts)
+
+
+def validate_backup_retention_days(value: int) -> int:
+    """Validate the retention window is within [MIN, MAX]. Returns it on
+    success; raises :class:`InvalidBackupScheduleError` otherwise."""
+    if value < BACKUP_RETENTION_DAYS_MIN or value > BACKUP_RETENTION_DAYS_MAX:
+        raise InvalidBackupScheduleError(
+            f"retention_days must be between {BACKUP_RETENTION_DAYS_MIN} "
+            f"and {BACKUP_RETENTION_DAYS_MAX}"
+        )
+    return value
 
 
 async def get_backup_enabled(session: AsyncSession) -> bool:
@@ -190,6 +255,53 @@ async def get_backup_enabled(session: AsyncSession) -> bool:
 async def get_backup_cron(session: AsyncSession) -> str:
     """The configured backup cron (5-field string). Falls back to the default
     daily-03:00 schedule when unset. The beat process reads this at boot to
-    build its schedule; changing it takes effect on the next beat restart."""
+    build its schedule; the beat TASK also re-reads it live for its log/summary."""
     value = await get_platform_setting(session, BACKUP_CRON_KEY, default=DEFAULT_BACKUP_CRON)
     return str(value)
+
+
+async def get_backup_retention_days(session: AsyncSession) -> int:
+    """The configured local retention window in days. Falls back to the
+    platform default when unset. The backup beat task reads this live so a
+    change a System Admin makes from the panel takes effect on the next run
+    (it overrides the WORKERS_BACKUP_RETENTION_DAYS env default)."""
+    value = await get_platform_setting(
+        session, BACKUP_RETENTION_DAYS_KEY, default=DEFAULT_BACKUP_RETENTION_DAYS
+    )
+    return int(value)
+
+
+async def get_backup_schedule(session: AsyncSession) -> tuple[bool, str, int]:
+    """Return the full backup schedule as ``(enabled, cron, retention_days)``.
+
+    The single read the get-schedule endpoint and the beat task both use, so
+    the API surface and the scheduled run agree on the same stored config."""
+    return (
+        await get_backup_enabled(session),
+        await get_backup_cron(session),
+        await get_backup_retention_days(session),
+    )
+
+
+async def set_backup_schedule(
+    session: AsyncSession,
+    *,
+    enabled: bool,
+    cron: str,
+    retention_days: int,
+    actor: User,
+) -> tuple[bool, str, int]:
+    """Persist the full backup schedule (System Admin only).
+
+    Validates the cron + retention window FIRST (raising
+    :class:`InvalidBackupScheduleError` on a bad value, before any write), then
+    writes all three settings on the actor's session. ``set_platform_setting``
+    re-checks the actor is a System Admin, so a non-admin never reaches the
+    write. Returns the normalised ``(enabled, cron, retention_days)``."""
+    normalised_cron = validate_backup_cron(cron)
+    validated_retention = validate_backup_retention_days(retention_days)
+
+    await set_platform_setting(session, BACKUP_ENABLED_KEY, bool(enabled), actor=actor)
+    await set_platform_setting(session, BACKUP_CRON_KEY, normalised_cron, actor=actor)
+    await set_platform_setting(session, BACKUP_RETENTION_DAYS_KEY, validated_retention, actor=actor)
+    return bool(enabled), normalised_cron, validated_retention

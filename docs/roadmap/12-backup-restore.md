@@ -136,7 +136,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_04` — Configuración de cron + ventana horaria configurable desde panel admin
 
-- [ ] **Título**: Configuración de cron + ventana horaria configurable desde panel admin
+- [x] **Título**: Configuración de cron + ventana horaria configurable desde panel admin
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops + frontend-dev

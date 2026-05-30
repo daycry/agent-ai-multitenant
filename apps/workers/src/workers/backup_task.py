@@ -46,31 +46,53 @@ def run_daily_backup() -> dict[str, Any]:
 
 
 async def _run_daily_backup(settings: Settings) -> dict[str, Any]:
-    """Async wrapper: check the enable flag, then run the (sync) engine."""
+    """Async wrapper: read the live schedule, then run the (sync) engine.
+
+    The schedule (``backup_enabled`` / ``backup_cron`` / ``backup_retention_days``)
+    is a PLATFORM setting a System Admin configures from the admin panel
+    (task_12_04), NOT a hardcoded constant. We read all three here so:
+
+      * a live OFF (``backup_enabled=False``) makes the run a no-op without
+        restarting Celery (mirrors the price-sync enable lever);
+      * the configured ``retention_days`` overrides the env default, so the
+        prune window the engine applies is the one the operator set in the
+        panel — no restart needed.
+
+    The ``cron`` cadence itself is consumed by the beat PROCESS at boot
+    (``workers.beat_schedule.build_beat_schedule`` reads ``Settings.backup_cron``);
+    we surface it in the summary/log so an operator can see the run honoured the
+    configured schedule.
+    """
     # Lazy import — avoids paying the api_server import cost on workers that
     # never route the beat schedule (mirrors workers.maintenance / price_sync).
-    from api_server.db.platform_settings import get_backup_enabled
+    from api_server.db.platform_settings import get_backup_schedule
 
+    cron = settings.backup_cron
+    retention_days = int(settings.backup_retention_days)
     engine = create_async_engine(settings.database_url)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         async with sessionmaker() as db:
-            enabled = await get_backup_enabled(db)
+            enabled, cron, retention_days = await get_backup_schedule(db)
     except Exception as exc:  # pragma: no cover — defensive: beat must not die
-        _log.warning("backup.enable_check_error", error=str(exc))
-        # If we can't even read the flag, default to running: a missed backup
-        # is worse than a redundant one. The engine's own failure handling
-        # below still protects against partial bundles.
+        _log.warning("backup.schedule_read_error", error=str(exc))
+        # If we can't even read the schedule, default to running with the env
+        # defaults: a missed backup is worse than a redundant one. The engine's
+        # own failure handling below still protects against partial bundles.
         enabled = True
     finally:
         await engine.dispose()
 
     if not enabled:
-        _log.info("backup.skipped", reason="disabled")
+        _log.info("backup.skipped", reason="disabled", cron=cron)
         return {"enabled": False, "skipped": True}
 
+    # Apply the panel-configured retention window over the env default. A copy
+    # so we never mutate the cached process Settings.
+    run_settings = settings.model_copy(update={"backup_retention_days": retention_days})
+
     try:
-        result = run_full_backup(settings=settings)
+        result = run_full_backup(settings=run_settings)
     except BackupError as exc:
         _log.warning("backup.failed", error=str(exc))
         return {"enabled": True, "ok": False, "error": str(exc)}
@@ -83,12 +105,14 @@ async def _run_daily_backup(settings: Settings) -> dict[str, Any]:
     # failed verification marks the backup INVALID — the basis for the
     # "last backup failed" alert in Phase D. Best-effort: a verifier crash is
     # logged, never raised, but it does flip the run's `valid` to False.
-    valid = _verify_after_backup(settings, result.bundle_dir)
+    valid = _verify_after_backup(run_settings, result.bundle_dir)
 
     return {
         "enabled": True,
         "ok": True,
         "valid": valid,
+        "cron": cron,
+        "retention_days": retention_days,
         "backup_id": result.backup_id,
         "bundle_dir": str(result.bundle_dir),
         "artifacts": len(result.artifacts),

@@ -10,6 +10,7 @@ import {
   Bot,
   Brain,
   Coins,
+  DatabaseBackup,
   FileText,
   FolderKanban,
   Inbox,
@@ -60,6 +61,12 @@ const NAV: NavItem[] = [
     href: "/admin/model-prices",
     label: "Modelos & Precios",
     Icon: Coins,
+    systemAdminOnly: true,
+  },
+  {
+    href: "/admin/backup",
+    label: "Backups",
+    Icon: DatabaseBackup,
     systemAdminOnly: true,
   },
   {
