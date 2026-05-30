@@ -32,6 +32,12 @@ from api_server.marketplace.static_analysis import (
     StaticAnalysisReport,
     StaticAnalyzer,
 )
+from api_server.marketplace.tool_format import (
+    ToolFormatError,
+    ToolImplementation,
+    ToolManifest,
+    parse_tool_manifest,
+)
 from api_server.marketplace.trust import (
     NetworkPolicy,
     Severity,
@@ -55,11 +61,15 @@ __all__ = [
     "StaticAnalysisError",
     "StaticAnalysisReport",
     "StaticAnalyzer",
+    "ToolFormatError",
+    "ToolImplementation",
+    "ToolManifest",
     "TrustPolicy",
     "UnknownTrustLevelError",
     "assert_no_docker_socket",
     "build_sandbox_run_kwargs",
     "is_valid_semver",
     "parse_skill_md",
+    "parse_tool_manifest",
     "trust_policy",
 ]

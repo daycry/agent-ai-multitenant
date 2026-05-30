@@ -246,7 +246,7 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
 
 #### `task_09_10` — Formato estándar de tool (manifest YAML + implementación)
 
-- [ ] **Título**: Formato estándar de tool (manifest YAML + implementación)
+- [x] **Título**: Formato estándar de tool (manifest YAML + implementación) <!-- task_09_10: parser/validador del manifest YAML de tool en marketplace/tool_format.py (ToolManifest + ToolImplementation + parse_tool_manifest -> ToolFormatError tipado). Campos: name/version(semver)/description/kind(MarketplaceListingKind)/entrypoint/implementation(runtime+module+reference) + dependencies + input_schema/output_schema + permissions. Vocabulario de permisos y semver COMPARTIDOS con 09_09 vía nuevo helper marketplace/_format_common.py (is_valid_semver + parse_permissions_block + requested_permission_descriptors) — skill_format.py refactorizado para reusarlo, sin duplicar; .requested_permissions renderiza los descriptores {"type","value"} que consumen consent/install. PyYAML (dep existente), sin migración (reutiliza manifest/requested_permissions JSONB). Tests tests/unit/test_tool_manifest_format.py (44 pass); suite skill 09_09 sigue verde (regresión-cero). NOTA: el comando YAML del test apunta a test_tool_format.py pero el bloque de tarea exige test_tool_manifest_format.py — se respeta el bloque de tarea. -->
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer

@@ -42,15 +42,18 @@ vocabulary.
 (``allowed_domains`` / ``allowed_paths`` / ``network_policy``) and the
 ``none | restricted | open`` network posture come straight from
 :mod:`api_server.marketplace.trust` (:data:`PERMISSION_KEYS` +
-:class:`NetworkPolicy`). The parser normalizes the frontmatter
-``permissions`` map into the SAME ``{"type": ..., "value": ...}`` descriptor
-list that the install + consent flow (task_09_07 / task_09_11) already
-consumes via :data:`requested_permissions` — so a parsed manifest drops
-straight onto a ``marketplace_listings`` row.
+:class:`NetworkPolicy`), via the shared
+:mod:`api_server.marketplace._format_common` primitives the tool-manifest
+format (task_09_10) parses with too — semver + permission validation live
+in one place, not duplicated per format. The parser normalizes the
+frontmatter ``permissions`` map into the SAME ``{"type": ..., "value": ...}``
+descriptor list that the install + consent flow (task_09_07 / task_09_11)
+already consumes via :data:`requested_permissions` — so a parsed manifest
+drops straight onto a ``marketplace_listings`` row.
 
 Pure Python, no I/O, no new heavy dependency — PyYAML (already a project
-dep) parses the frontmatter; semver is validated with a small in-module
-regex (the real comparison/ordering lands in task_09_12).
+dep) parses the frontmatter; semver is validated by the shared helper (the
+real comparison/ordering lands in task_09_12).
 """
 
 from __future__ import annotations
@@ -61,12 +64,10 @@ from typing import Any
 
 import yaml
 
-from api_server.marketplace.trust import (
-    PERMISSION_ALLOWED_DOMAINS,
-    PERMISSION_ALLOWED_PATHS,
-    PERMISSION_KEYS,
-    PERMISSION_NETWORK_POLICY,
-    NetworkPolicy,
+from api_server.marketplace._format_common import (
+    is_valid_semver,
+    parse_permissions_block,
+    requested_permission_descriptors,
 )
 
 # The three required frontmatter fields. A SKILL.md missing any of these is
@@ -79,19 +80,6 @@ REQUIRED_FIELDS: tuple[str, ...] = ("name", "description", "version")
 _FRONTMATTER_RE = re.compile(
     r"\A﻿?\s*---[ \t]*\r?\n(?P<frontmatter>.*?)\r?\n---[ \t]*\r?\n?(?P<body>.*)\Z",
     re.DOTALL,
-)
-
-# Semver (https://semver.org) — MAJOR.MINOR.PATCH with optional
-# ``-prerelease`` and ``+build``. Anchored: the whole string must be a
-# version. Kept here so a bad version is rejected at parse time; ordering
-# and range matching are task_09_12.
-_SEMVER_RE = re.compile(
-    r"\A(?P<major>0|[1-9]\d*)\."
-    r"(?P<minor>0|[1-9]\d*)\."
-    r"(?P<patch>0|[1-9]\d*)"
-    r"(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
-    r"(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?"
-    r"(?:\+(?P<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?\Z"
 )
 
 
@@ -107,15 +95,6 @@ class SkillFormatError(ValueError):
     handlers (and the routers' 422 mapping) keep working, while callers that
     care can catch the precise type.
     """
-
-
-def is_valid_semver(value: str) -> bool:
-    """True when ``value`` is a syntactically valid semver string.
-
-    Syntax only — no ordering. The comparison/range logic is task_09_12;
-    here we only reject a version that could never be parsed.
-    """
-    return bool(_SEMVER_RE.match(value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,11 +143,7 @@ class SkillManifest:
         descriptor per declared permission key, in the stable
         :data:`PERMISSION_KEYS` order so output is deterministic.
         """
-        return [
-            {"type": key, "value": self.permissions[key]}
-            for key in PERMISSION_KEYS
-            if key in self.permissions
-        ]
+        return requested_permission_descriptors(self.permissions)
 
     def to_manifest_dict(self) -> dict[str, Any]:
         """Render the JSONB ``manifest`` payload for a listings row.
@@ -251,67 +226,28 @@ def _parse_examples(raw: Any) -> tuple[SkillExample, ...]:
     return tuple(examples)
 
 
+def _skill_err(message: str) -> SkillFormatError:
+    """Error factory for the shared parsing helpers — prefixes ``SKILL.md``.
+
+    Passed to :mod:`api_server.marketplace._format_common` so the shared
+    permission/semver validators raise this format's precise type with a
+    SKILL.md-scoped message.
+    """
+    return SkillFormatError(f"SKILL.md {message}")
+
+
 def _parse_permissions(raw: Any) -> dict[str, Any]:
     """Validate + normalize the optional ``permissions`` mapping.
 
-    Keys must be a subset of the shared :data:`PERMISSION_KEYS`; any other
-    key is a hard error (an unknown permission must never slip through to
-    the consent gate). Value shapes are validated against the key:
-
-      * ``allowed_domains`` / ``allowed_paths`` — a list of non-empty
-        strings (a bare string is coerced to a one-element list for
-        convenience);
-      * ``network_policy`` — one of the :class:`NetworkPolicy` values
-        (``none`` / ``restricted`` / ``open``).
-
-    Absent => no permissions requested (the most restrictive default).
+    Delegates to the shared :func:`parse_permissions_block` so the
+    permission vocabulary (keys + ``network_policy`` posture) is validated
+    in exactly ONE place, shared with the tool-manifest format. Keys must be
+    a subset of the shared :data:`PERMISSION_KEYS`; values are normalized
+    (``allowed_domains`` / ``allowed_paths`` => list of non-empty strings,
+    ``network_policy`` => a :class:`NetworkPolicy` value). Absent => no
+    permissions requested (the most restrictive default).
     """
-    if raw is None:
-        return {}
-    if not isinstance(raw, dict):
-        raise SkillFormatError("SKILL.md 'permissions' must be a mapping")
-
-    permissions: dict[str, Any] = {}
-    for key, value in raw.items():
-        if key not in PERMISSION_KEYS:
-            raise SkillFormatError(
-                f"SKILL.md 'permissions' has unknown key {key!r}; "
-                f"allowed: {', '.join(PERMISSION_KEYS)}"
-            )
-        if key in (PERMISSION_ALLOWED_DOMAINS, PERMISSION_ALLOWED_PATHS):
-            permissions[key] = _parse_str_list(key, value)
-        elif key == PERMISSION_NETWORK_POLICY:
-            permissions[key] = _parse_network_policy(value)
-    return permissions
-
-
-def _parse_str_list(key: str, value: Any) -> list[str]:
-    """Normalize a permission value into a list of non-empty strings."""
-    if isinstance(value, str):
-        items = [value]
-    elif isinstance(value, list):
-        items = value
-    else:
-        raise SkillFormatError(f"SKILL.md permission {key!r} must be a string or list of strings")
-    out: list[str] = []
-    for item in items:
-        if not isinstance(item, str) or not item.strip():
-            raise SkillFormatError(f"SKILL.md permission {key!r} entries must be non-empty strings")
-        out.append(item.strip())
-    return out
-
-
-def _parse_network_policy(value: Any) -> str:
-    """Validate a ``network_policy`` value against the shared vocabulary."""
-    if not isinstance(value, str):
-        raise SkillFormatError("SKILL.md permission 'network_policy' must be a string")
-    try:
-        return NetworkPolicy(value).value
-    except ValueError as exc:
-        allowed = ", ".join(p.value for p in NetworkPolicy)
-        raise SkillFormatError(
-            f"SKILL.md permission 'network_policy' must be one of: {allowed}"
-        ) from exc
+    return parse_permissions_block(raw, _skill_err)
 
 
 def parse_skill_md(text: str) -> SkillManifest:
