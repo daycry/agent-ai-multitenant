@@ -235,6 +235,14 @@ ignore_missing_imports = true
 module = ["yaml", "yaml.*"]
 ignore_missing_imports = true
 
+# `jsonschema` (Plan 11 task_11_09) backs the `output_structure` guardrail.
+# It ships no `py.typed` marker, so the pre-commit mypy hook can't resolve
+# its types; the runtime / dev venv installs it as a base dep of
+# shared-guardrails. Same pattern as the other untyped-runtime-dep overrides.
+[[tool.mypy.overrides]]
+module = ["jsonschema", "jsonschema.*"]
+ignore_missing_imports = true
+
 # Enterprise SSO / OIDC (Plan 08 task_08_01). `authlib` and the
 # `joserfc` it ships sign/verify ID tokens against the IdP JWKS;
 # `cryptography.fernet` encrypts the OIDC client secret at rest. The
