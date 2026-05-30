@@ -172,7 +172,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_06` — Destino Backblaze B2 (es S3-compatible pero con quirks)
 
-- [ ] **Título**: Destino Backblaze B2 (es S3-compatible pero con quirks)
+- [x] **Título**: Destino Backblaze B2 (es S3-compatible pero con quirks)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: devops

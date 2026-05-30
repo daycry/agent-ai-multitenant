@@ -284,6 +284,38 @@ class Settings(BaseSettings):
         description="S3 region name. Empty = let the SDK/endpoint decide.",
     )
 
+    # ----- Remote backup destinations — Backblaze B2 (Plan 12 task_12_06) -----
+    # B2 is S3-COMPATIBLE but with quirks (Plan 12): the endpoint is derived from
+    # the region as `s3.<region>.backblazeb2.com`, multipart wants a larger part
+    # size than AWS's 5 MiB default, and auth is an application keyId + key. These
+    # are the NON-secret B2 tunables; the application key id + key are SECRETS
+    # resolved through the workers' secret seam (Vault/env), NEVER here. OFF by
+    # default — a destination is opt-in. The B2 adapter reuses the S3 adapter via
+    # the S3-compatible endpoint, so no endpoint_url knob is needed: it is built
+    # from the region.
+    backup_b2_enabled: bool = Field(
+        default=False,
+        description="Whether to upload each successful backup bundle to the "
+        "Backblaze B2 destination. OFF by default — remote destinations are opt-in.",
+    )
+    backup_b2_bucket: str = Field(
+        default="",
+        description="B2 bucket the backup bundle is uploaded to. Required when "
+        "`backup_b2_enabled` is true.",
+    )
+    backup_b2_prefix: str = Field(
+        default="",
+        description="Key prefix ('folder') under which bundles are stored in the "
+        "B2 bucket. Empty = bucket root.",
+    )
+    backup_b2_region: str = Field(
+        default="",
+        description="B2 region (e.g. `us-west-002`, `eu-central-003`). The "
+        "S3-compatible endpoint is derived from it as "
+        "`https://s3.<region>.backblazeb2.com`. Required when "
+        "`backup_b2_enabled` is true.",
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."
