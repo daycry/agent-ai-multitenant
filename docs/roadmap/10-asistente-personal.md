@@ -157,7 +157,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_05` — Canal Telegram con python-telegram-bot
 
-- [ ] **Título**: Canal Telegram con python-telegram-bot
+- [x] **Título**: Canal Telegram con python-telegram-bot
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

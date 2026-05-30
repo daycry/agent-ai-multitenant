@@ -44,6 +44,13 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+# Import the channel-adapter package for its registration side effect: each
+# channel module registers itself with the adapter registry at import time,
+# so a worker that imports tasks (celery_app.imports) has every Fase B/C
+# adapter wired up before the first send_notification runs. Beyond in_app
+# (registered in adapters.py), this is what makes get_adapter('telegram')
+# return the real adapter rather than None.
+from notification_dispatcher import channels as _channels  # noqa: F401
 from notification_dispatcher.adapters import (
     ChannelMessage,
     ChannelSendError,

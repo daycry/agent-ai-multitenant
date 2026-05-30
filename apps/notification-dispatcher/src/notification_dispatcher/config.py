@@ -87,6 +87,30 @@ class Settings(BaseSettings):
         "deployment; channel adapters (Fase B/C) honour it.",
     )
 
+    # ----- Telegram channel (task_10_05) -----
+    telegram_api_base_url: str = Field(
+        default="https://api.telegram.org",
+        description="Base URL of the Telegram Bot API the Telegram adapter "
+        "POSTs sendMessage to (``{base}/bot{token}/sendMessage``). Tunable "
+        "so a deployment can route through a proxy / local Bot API server, "
+        "and so tests point it at an httpx.MockTransport — never hardcoded.",
+    )
+    telegram_default_parse_mode: str = Field(
+        default="HTML",
+        description="Default Telegram parse_mode for the rendered body when "
+        "the channel config doesn't override it. HTML matches the template "
+        "engine, which autoescapes the telegram (markup) channel so context "
+        "values can't inject markup. A channel may set config.parse_mode to "
+        "'MarkdownV2' / 'Markdown' / '' (plain) instead.",
+    )
+    telegram_request_timeout_s: float = Field(
+        default=10.0,
+        description="Per-request HTTP timeout the Telegram adapter applies to "
+        "the sendMessage call. Bounded under channel_send_timeout_s so the "
+        "dispatcher's overall send budget still wraps it. Tunable, not a "
+        "magic number.",
+    )
+
     # ----- Event → notification mapping tunables (task_10_04) -----
     default_locale: str = Field(
         default="en",
