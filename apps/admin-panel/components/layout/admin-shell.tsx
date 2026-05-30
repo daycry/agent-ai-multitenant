@@ -9,6 +9,7 @@ import {
   BookOpen,
   Bot,
   Brain,
+  Coins,
   FileText,
   FolderKanban,
   Inbox,
@@ -34,6 +35,8 @@ interface NavItem {
   Icon: typeof LayoutDashboard;
   /** Si `adminOnly`, sólo se muestra a tenant_admin / system_admin. */
   adminOnly?: boolean;
+  /** Si `systemAdminOnly`, sólo se muestra al System Admin global. */
+  systemAdminOnly?: boolean;
 }
 
 const NAV: NavItem[] = [
@@ -52,6 +55,12 @@ const NAV: NavItem[] = [
   { href: "/admin/memories", label: "Memorias", Icon: Brain },
   { href: "/admin/knowledge-bases", label: "Knowledge Bases", Icon: Library },
   { href: "/admin/marketplace", label: "Marketplace", Icon: Store, adminOnly: true },
+  {
+    href: "/admin/model-prices",
+    label: "Modelos & Precios",
+    Icon: Coins,
+    systemAdminOnly: true,
+  },
   {
     href: "/admin/notifications",
     label: "Notificaciones",
@@ -133,8 +142,12 @@ function SidebarContent({
 }) {
   // Plan 06.8 task_06_8_08: ocultar items admin-only para tenant_user.
   // El check del backend sigue siendo la fuente de verdad — esto es UX.
-  const { isTenantAdmin } = useCurrentUser();
-  const visibleNav = NAV.filter((item) => !item.adminOnly || isTenantAdmin);
+  const { isTenantAdmin, isSystemAdmin } = useCurrentUser();
+  const visibleNav = NAV.filter((item) => {
+    if (item.systemAdminOnly) return isSystemAdmin;
+    if (item.adminOnly) return isTenantAdmin;
+    return true;
+  });
 
   return (
     <>
