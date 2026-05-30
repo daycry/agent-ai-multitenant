@@ -206,7 +206,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_08` — Destino rclone genérico (cualquier backend)
 
-- [ ] **Título**: Destino rclone genérico (cualquier backend)
+- [x] **Título**: Destino rclone genérico (cualquier backend)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops

@@ -359,6 +359,32 @@ class Settings(BaseSettings):
         "`reject`/`warn` policies). Empty = paramiko's system host keys only.",
     )
 
+    # ----- Remote backup destinations — generic rclone (Plan 12 task_12_08) -----
+    # rclone speaks ~70 storage backends (Google Drive, Dropbox, OneDrive, Azure
+    # Blob, WebDAV, …) through one CLI, so this destination makes the catalogue
+    # open-ended without a bespoke adapter per provider. These are the NON-secret
+    # rclone tunables (remote name, path); the rclone CONFIG BLOB (an `rclone.conf`
+    # section body with OBSCURED creds) is a SECRET resolved through the workers'
+    # secret seam (Vault/env), NEVER here — it is written to a temp `rclone.conf`
+    # (0600) for the duration of each op and removed afterwards. OFF by default —
+    # a destination is opt-in.
+    backup_rclone_enabled: bool = Field(
+        default=False,
+        description="Whether to upload each successful backup bundle to the generic "
+        "rclone destination. OFF by default — remote destinations are opt-in.",
+    )
+    backup_rclone_remote: str = Field(
+        default="",
+        description="The rclone remote name (the `[section]` header inside the config "
+        "blob, e.g. `gdrive`, `b2-offsite`). Required when `backup_rclone_enabled` is "
+        "true. The config blob (obscured creds) is a SECRET (secret seam), never here.",
+    )
+    backup_rclone_path: str = Field(
+        default="",
+        description="Path under the rclone remote where bundles are stored. Empty = "
+        "the remote's root.",
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."
