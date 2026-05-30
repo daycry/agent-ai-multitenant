@@ -242,7 +242,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_10` — Restore completo desde backup (con detención del stack y reinicio limpio)
 
-- [ ] **Título**: Restore completo desde backup (con detención del stack y reinicio limpio)
+- [x] **Título**: Restore completo desde backup (con detención del stack y reinicio limpio)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: devops + backend-dev

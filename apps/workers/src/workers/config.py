@@ -385,6 +385,44 @@ class Settings(BaseSettings):
         "the remote's root.",
     )
 
+    # ----- Restore engine (Plan 12 task_12_10) -----
+    # The full restore (decrypt + verify-before-restore, then stop app stack →
+    # pg_restore the LOGICAL dump → restore volume tars → restart stack) drives
+    # `docker compose` against THIS project + compose file, never an implicit one
+    # (a host may run several compose stacks). The DB service is deliberately NOT
+    # in `restore_app_services` — Postgres must stay reachable for pg_restore.
+    # Operator-tunable; never hardcoded.
+    restore_compose_project: str = Field(
+        default="agentic-platform",
+        description="docker compose project name the restore stack-control "
+        "commands target (`docker compose --project-name <this>`). Must match the "
+        "running stack so a restore never drives the wrong project.",
+    )
+    restore_compose_file: str = Field(
+        default="docker/docker-compose.yml",
+        description="Path to the compose file the restore stack-control commands "
+        "use (`docker compose --file <this>`).",
+    )
+    restore_app_services: list[str] = Field(
+        default_factory=lambda: [
+            "api-server",
+            "orchestrator",
+            "workers",
+            "web-app",
+            "admin-panel",
+        ],
+        description="The APP services stopped (and brought back up) around a full "
+        "restore. PostgreSQL is deliberately ABSENT — it must stay reachable for "
+        "pg_restore. The volume-backing services are stopped separately around the "
+        "volume restore (`restore_volume_services`).",
+    )
+    restore_volume_services: list[str] = Field(
+        default_factory=lambda: ["minio", "redis", "vault"],
+        description="The services backing the data volumes restored from the tar "
+        "archives. Stopped while each volume's _data tree is wiped + re-extracted, "
+        "then started again with the rest of the stack.",
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."
