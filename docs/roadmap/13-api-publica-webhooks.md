@@ -297,7 +297,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_13` — SDK Python con tipos generados (autogenerado desde OpenAPI con openapi-python-client)
 
-- [ ] **Título**: SDK Python con tipos generados (autogenerado desde OpenAPI con openapi-python-client)
+- [x] **Título**: SDK Python con tipos generados (autogenerado desde OpenAPI con openapi-python-client) — generado con `datamodel-code-generator` (Pydantic v2) + cliente httpx fino escrito a mano; sustitución de generador documentada en `packages/sdk-python/README.md` (openapi-python-client produciría modelos attrs que chocan con ruff-format/mypy). Dir generado excluido de los linters (pyproject + pre-commit), verificado por `tests/integration/test_sdk_python.py`.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

@@ -37,6 +37,11 @@ repos:
     rev: 24.4.2
     hooks:
       - id: black
+        # The generated Python SDK (Plan 13 task_13_13) follows the
+        # generator's own style. `tool.black.extend-exclude` in pyproject is
+        # IGNORED for files pre-commit passes explicitly (only force-exclude
+        # applies to those), so exclude the generated dir at the hook level.
+        exclude: ^packages/sdk-python/src/agentic_platform_sdk/.*$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.5.0
@@ -100,7 +105,12 @@ repos:
         #   apps/notification-dispatcher/.../{tasks,event_mapping}.py -> use api_server.db.notification
         # Also skip tests under packages — the hook venv has no pytest
         # available and tests carry untyped decorators by design.
-        exclude: ^(apps/(([^/]+/migrations/.*)|watchdog/.*|orchestrator/src/orchestrator/(__main__|dispatch)\.py|workers/src/workers/(execution|tasks|memorizer)\.py|notification-dispatcher/src/notification_dispatcher/(tasks|event_mapping)\.py)|packages/[^/]+/tests/.*)$
+        # `packages/sdk-python/src/agentic_platform_sdk/*` is the GENERATED
+        # Python SDK (Plan 13 task_13_13): datamodel-code-generator output +
+        # a thin hand-written client. Generated style is not the repo's; it's
+        # verified by tests/integration/test_sdk_python.py instead (see
+        # packages/sdk-python/README.md).
+        exclude: ^(apps/(([^/]+/migrations/.*)|watchdog/.*|orchestrator/src/orchestrator/(__main__|dispatch)\.py|workers/src/workers/(execution|tasks|memorizer)\.py|notification-dispatcher/src/notification_dispatcher/(tasks|event_mapping)\.py)|packages/sdk-python/src/agentic_platform_sdk/.*|packages/[^/]+/tests/.*)$
 
   # -------------------- TypeScript / JavaScript --------------------
   - repo: https://github.com/pre-commit/mirrors-prettier
@@ -112,5 +122,6 @@ repos:
           (?x)^(
             \.venv/.*|
             node_modules/.*|
-            .*\.min\.(js|css)
+            .*\.min\.(js|css)|
+            packages/sdk-python/openapi-v1\.json
           )$

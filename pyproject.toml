@@ -7,6 +7,11 @@ requires-python = ">=3.12"
 [tool.black]
 line-length = 100
 target-version = ["py312"]
+# `packages/sdk-python/src/agentic_platform_sdk` is the GENERATED Python SDK
+# (Plan 13 task_13_13): `models.py` is emitted by datamodel-code-generator and
+# follows the generator's own style, and the thin hand-written client shares
+# the dir for cohesion. Excluded from the lint gate; verified instead by
+# tests/integration/test_sdk_python.py (see packages/sdk-python/README.md).
 extend-exclude = '''
 /(
     \.venv
@@ -14,6 +19,7 @@ extend-exclude = '''
   | build
   | dist
   | node_modules
+  | packages/sdk-python/src/agentic_platform_sdk
 )/
 '''
 
@@ -28,6 +34,10 @@ extend-exclude = [
   # Reference designs the user provided as input to ADR 0021. Kept in
   # the repo for traceability but not part of the codebase.
   "docs/provider-example",
+  # Generated Python SDK (Plan 13 task_13_13): datamodel-code-generator
+  # output + a thin hand-written client. Generated style differs from the
+  # repo's; verified by tests/integration/test_sdk_python.py instead.
+  "packages/sdk-python/src/agentic_platform_sdk",
 ]
 
 [tool.ruff.lint]
@@ -115,6 +125,10 @@ exclude = [
   "^build/",
   "^dist/",
   "^node_modules/",
+  # Generated Python SDK (Plan 13 task_13_13): generated Pydantic models +
+  # thin hand-written client. Excluded from the strict type gate; covered by
+  # tests/integration/test_sdk_python.py (see packages/sdk-python/README.md).
+  "^packages/sdk-python/src/agentic_platform_sdk/",
 ]
 
 # Celery and kombu ship no py.typed marker; treat their imports as
@@ -217,6 +231,11 @@ module = [
     # platform-setting helpers from api_server; the pre-commit mypy venv lacks
     # the api_server package. Same cross-app lazy-import story as the rest.
     "api_server.db.platform_settings",
+    # packages/sdk-python/scripts/generate.py (Plan 13 task_13_13) lazily
+    # imports `build_v1_openapi` to build the v1 spec in-process before code
+    # generation; the pre-commit mypy venv has no api_server package. Same
+    # cross-app lazy-import story as the rest.
+    "api_server.routers.api_v1.openapi",
 ]
 ignore_missing_imports = true
 
