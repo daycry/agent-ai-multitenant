@@ -10,6 +10,14 @@ machinery.
 
 from __future__ import annotations
 
+from api_server.marketplace.e2e_templates import (
+    BUILTIN_E2E_TEMPLATES,
+    E2ETemplateError,
+    E2ETemplateParameter,
+    E2ETestTemplate,
+    get_e2e_template,
+    load_e2e_templates,
+)
 from api_server.marketplace.playwright import (
     PLAYWRIGHT_TOOL_YAML,
     PlaywrightBrowser,
@@ -58,8 +66,12 @@ from api_server.marketplace.trust import (
 )
 
 __all__ = [
+    "BUILTIN_E2E_TEMPLATES",
     "PLAYWRIGHT_TOOL_YAML",
     "DockerSocketLeakError",
+    "E2ETemplateError",
+    "E2ETemplateParameter",
+    "E2ETestTemplate",
     "Finding",
     "MarketplaceSandbox",
     "NetworkPolicy",
@@ -86,7 +98,9 @@ __all__ = [
     "assert_no_docker_socket",
     "build_sandbox_run_kwargs",
     "config_schema",
+    "get_e2e_template",
     "is_valid_semver",
+    "load_e2e_templates",
     "parse_skill_md",
     "parse_tool_manifest",
     "playwright_tool_manifest",
