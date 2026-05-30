@@ -16,11 +16,15 @@ Orientados a quien mantiene el sistema corriendo en una sola máquina
 > Kubernetes, no multi-máquina). El instalador de producción y los
 > runbooks de despliegue formal llegan con la Fase 15.
 
-| Runbook                                      | Cuándo usarlo                                                   |
-| -------------------------------------------- | --------------------------------------------------------------- |
-| [health-check.md](./health-check.md)         | Verificar que todos los servicios del stack están sanos         |
-| [backups.md](./backups.md)                   | Hacer y restaurar copias de seguridad de los volúmenes de datos |
-| [restart-services.md](./restart-services.md) | Reiniciar el stack o un servicio concreto sin perder datos      |
+| Runbook                                                      | Cuándo usarlo                                                       |
+| ------------------------------------------------------------ | ------------------------------------------------------------------- |
+| [health-check.md](./health-check.md)                         | Verificar que todos los servicios del stack están sanos             |
+| [backups.md](./backups.md)                                   | Copia/restauración manual a nivel de volumen (procedimiento básico) |
+| [restart-services.md](./restart-services.md)                 | Reiniciar el stack o un servicio concreto sin perder datos          |
+| [dr-full-restore.md](./dr-full-restore.md)                   | DR completo: restaurar todo el stack desde un backup                |
+| [dr-tenant-restore.md](./dr-tenant-restore.md)               | Restore selectivo de un solo tenant sin afectar a los demás         |
+| [dr-manual-backup.md](./dr-manual-backup.md)                 | Backup manual con el motor, verificación y subida a destino remoto  |
+| [dr-vault-unseal-rotation.md](./dr-vault-unseal-rotation.md) | Rotar las unseal keys de Vault con `vault operator rekey`           |
 
 ## Convención
 

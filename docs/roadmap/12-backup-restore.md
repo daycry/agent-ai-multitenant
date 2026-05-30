@@ -346,7 +346,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_16` — Runbooks: DR completo, restore selectivo, backup manual, rotación unseal keys
 
-- [ ] **Título**: Runbooks: DR completo, restore selectivo, backup manual, rotación unseal keys
+- [x] **Título**: Runbooks: DR completo, restore selectivo, backup manual, rotación unseal keys
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: technical-writer + devops
