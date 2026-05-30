@@ -11,14 +11,20 @@ old executions keep their historical cost even after a price change).
 Tenancy decision (ADR 0028 + CLAUDE.md principle 9 / 1):
 **platform-global, NOT tenant-scoped.** A price is the same for every
 tenant — it is a property of the *provider's* pricing, not of any
-tenant's data — so the table carries **no ``tenant_id`` and no RLS
-policy**, exactly like :class:`~api_server.db.models.PlatformSetting`
-and :class:`~api_server.db.marketplace.MarketplaceSource`. Writes are
-gated to the **System Admin** in the service/endpoint layer
-(task_11_12, via the BYPASSRLS ``get_admin_session``); reads are open to
-any authenticated caller (tenant-agnostic catalog with endpoint-level
-RBAC). ``updated_by`` tracks the last System Admin who touched a row,
-mirroring ``platform_settings.updated_by`` — the price outlives the
+tenant's data — so the table carries **no ``tenant_id``**. The
+read/write split is enforced at the DB layer by a **global-read RLS
+policy** (migration task_11_11): RLS is ENABLED + FORCED with a single
+SELECT-only policy ``USING (true)`` (every authenticated session may
+read) and **no write policy**, so a NOBYPASSRLS / tenant session is
+denied every INSERT/UPDATE/DELETE while the BYPASSRLS System-Admin
+session (``get_admin_session``) bypasses RLS and writes freely. This
+mirrors the SELECT-only ``global_read`` pattern of
+:class:`~api_server.db.marketplace.MarketplaceListing` (migration 0041)
+and the ``agents_global_builtin_read`` policy (migration 0004), giving a
+*provable* "reads open to all, writes System-Admin-only" guarantee that
+does not rely on application code alone (task_11_12 adds the endpoint
+RBAC on top). ``updated_by`` tracks the last System Admin who touched a
+row, mirroring ``platform_settings.updated_by`` — the price outlives the
 user, so the FK is ``ON DELETE SET NULL``.
 
 Currency decision: the catalog is **USD-only**. Every price column is in

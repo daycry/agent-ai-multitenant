@@ -272,7 +272,8 @@ Los guardrails endurecen el sistema. El catálogo de precios habilita estimacion
 
 #### `task_11_11` — Migración + RLS (es global, accesible a System Admin)
 
-- [ ] **Título**: Migración + RLS (es global, accesible a System Admin)
+- [x] **Título**: Migración + RLS (es global, accesible a System Admin)
+  - Migración `0049_model_prices` (`apps/api-server/migrations/versions/20260530_0049_model_prices.py`, `down_revision = 0048_notification_log_reads`, head único) que crea la tabla **platform-global** `model_prices` con las columnas/enums/índices/CHECKs definidos en 11*10 (USD canónico + `cached_input_price` nullable + vigencia `effective_from`/`effective_to`). Decisión de tenancy: **sin `tenant_id`**; el split lectura/escritura se aplica en BD con una **RLS de lectura global** — `ENABLE` + `FORCE ROW LEVEL SECURITY` + una única política `model_prices_global_read` `FOR SELECT USING (true)` y **ninguna política de escritura**, de modo que una sesión NOBYPASSRLS (tenant) puede leer todo el catálogo pero tiene denegado todo INSERT/UPDATE/DELETE, mientras la sesión System-Admin BYPASSRLS (`get_admin_session`) escribe libremente (espeja el patrón `marketplace_listings*\*\_read`de 0041 y`agents_global_builtin_read`de 0004). Índice de lookup del precio actual`(provider, model_id, modality, effective_from)`+ parcial-único`uq_model_prices_current`(un periodo abierto por clave) + índice FK`updated_by`. Reversibilidad probada en BD scratch (up/down a `0040_sso_email_domains`/up). Test `tests/integration/test_prices_migration.py`(10 casos): tabla + columnas (sin`tenant_id`) + índices, RLS habilitada con la política SELECT-only, lectura global desde cualquier sesión, tenant no puede escribir (la fila sobrevive a UPDATE/DELETE denegados) mientras admin sí, CHECK USD, unicidad del periodo abierto, downgrade limpio.
 - **Tiempo estimado**: 3 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
