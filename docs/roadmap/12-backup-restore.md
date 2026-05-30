@@ -1,7 +1,7 @@
 ---
 plan_id: 12-backup-restore
 title: Backup, Restore y Continuidad
-status: in_progress
+status: pending_human_validation
 blocking_plan: [00-fundaciones]
 started_at: 2026-05-30
 completed_at: null
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `12-backup-restore`                       |
-| **Estado**                         | `in_progress`                             |
+| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `00-fundaciones`                          |
 | **Tiempo estimado (calendario)**   | 2-3 semanas                               |
 | **Tiempo estimado (persona-días)** | 40-55                                     |
@@ -363,7 +363,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_17` — Documentación + ADRs + changelog
 
-- [ ] **Título**: Documentación + ADRs + changelog
+- [x] **Título**: Documentación + ADRs + changelog
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
