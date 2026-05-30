@@ -22,11 +22,14 @@ from uuid6 import uuid7
 from api_server.auth.deps import (
     AuthPrincipal,
     get_client_ip,
+    get_mfa_challenge_store,
     get_principal,
     get_rate_limiter,
     get_session_store,
 )
 from api_server.auth.jwt import encode_jwt
+from api_server.auth.mfa.challenge_store import MfaChallenge, MfaChallengeStore, new_challenge_token
+from api_server.auth.mfa.store import user_has_confirmed_totp
 from api_server.auth.passwords import hash_password, verify_password
 from api_server.auth.rate_limit import RateLimiter
 from api_server.auth.sessions import SessionStore
@@ -39,6 +42,7 @@ from api_server.schemas.auth import (
     RegisterRequest,
     UserResponse,
 )
+from api_server.schemas.mfa import MfaRequiredResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -113,14 +117,22 @@ async def register(payload: RegisterRequest) -> UserResponse:
 # ---------------------------------------------------------------------------
 # POST /auth/login
 # ---------------------------------------------------------------------------
-@router.post("/login", response_model=LoginResponse)
+@router.post("/login", response_model=LoginResponse | MfaRequiredResponse)
 async def login(
     payload: LoginRequest,
     request: Request,
     rate_limiter: RateLimiter = Depends(get_rate_limiter),
     sessions: SessionStore = Depends(get_session_store),
-) -> LoginResponse:
-    """Verify credentials, mint a JWT + Redis session, return both."""
+    challenges: MfaChallengeStore = Depends(get_mfa_challenge_store),
+) -> LoginResponse | MfaRequiredResponse:
+    """Verify credentials, then issue a session — OR, if the user has a
+    confirmed TOTP factor, return an interim ``mfa_required`` challenge.
+
+    A user WITHOUT a confirmed second factor logs in EXACTLY as before:
+    the password check passes straight to a Redis session + JWT. A user
+    WITH a confirmed TOTP factor gets NO session here — only a single-use,
+    short-lived challenge token to complete at ``/auth/mfa/totp/verify``.
+    """
     settings = get_settings()
     ip = get_client_ip(request)
     email = payload.email.lower()
@@ -168,29 +180,46 @@ async def login(
                 detail="invalid email or password",
             )
 
-        # Issue a session id and persist it in Redis with the same
-        # TTL as the JWT — both expire together.
-        session_id = uuid7()
-        ttl_seconds = settings.jwt_expiration_minutes * 60
-        await sessions.create(
-            session_id,
-            user_id=user.id,
-            tenant_id=None,
-            ttl_seconds=ttl_seconds,
-        )
+        user_id = user.id
+        is_system_admin = user.is_system_admin
 
-        token = encode_jwt(
-            user_id=user.id,
-            session_id=session_id,
-            tenant_id=None,
-            is_system_admin=user.is_system_admin,
+    # First factor passed. If the user has a confirmed TOTP second factor,
+    # do NOT mint a session here — return an interim challenge instead. A
+    # user without MFA falls straight through to a session, exactly as
+    # before. The check runs outside the login txn (it is a narrow,
+    # tenant-agnostic existence probe on the admin role).
+    if await user_has_confirmed_totp(user_id):
+        mfa_token = new_challenge_token()
+        await challenges.create(
+            mfa_token,
+            MfaChallenge(user_id=user_id, tenant_id=None, is_system_admin=is_system_admin),
+            ttl_seconds=settings.mfa_challenge_ttl_seconds,
         )
+        return MfaRequiredResponse(mfa_token=mfa_token)
 
-        return LoginResponse(
-            access_token=token,
-            token_type="bearer",
-            expires_in=ttl_seconds,
-        )
+    # Issue a session id and persist it in Redis with the same
+    # TTL as the JWT — both expire together.
+    session_id = uuid7()
+    ttl_seconds = settings.jwt_expiration_minutes * 60
+    await sessions.create(
+        session_id,
+        user_id=user_id,
+        tenant_id=None,
+        ttl_seconds=ttl_seconds,
+    )
+
+    token = encode_jwt(
+        user_id=user_id,
+        session_id=session_id,
+        tenant_id=None,
+        is_system_admin=is_system_admin,
+    )
+
+    return LoginResponse(
+        access_token=token,
+        token_type="bearer",
+        expires_in=ttl_seconds,
+    )
 
 
 # ---------------------------------------------------------------------------

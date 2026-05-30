@@ -26,6 +26,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.jwt import InvalidTokenError, decode_jwt
+from api_server.auth.mfa.challenge_store import MfaChallengeStore
 from api_server.auth.rate_limit import RateLimiter
 from api_server.auth.sessions import SessionStore
 from api_server.config import get_settings
@@ -87,6 +88,15 @@ def get_session_store(redis: Redis = Depends(get_redis)) -> SessionStore:
 
 def get_rate_limiter(redis: Redis = Depends(get_redis)) -> RateLimiter:
     return RateLimiter(redis)
+
+
+def get_mfa_challenge_store(redis: Redis = Depends(get_redis)) -> MfaChallengeStore:
+    """The Redis-backed store for interim MFA challenge tokens (task_08_09).
+
+    Rides the same Redis client as the session store; the challenge token
+    lives under its own key namespace and grants NO access on its own.
+    """
+    return MfaChallengeStore(redis)
 
 
 # ---------------------------------------------------------------------------

@@ -295,7 +295,34 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_09` — MFA TOTP con pyotp (setup, QR, verificación)
 
-- [ ] **Título**: MFA TOTP con pyotp (setup, QR, verificación)
+- [x] **Título**: MFA TOTP con pyotp (setup, QR, verificación)
+<!-- MFA TOTP (RFC 6238, pyotp) AÑADIDO como SEGUNDO factor OPT-IN junto al
+     login local + OIDC + SAML (no los toca). Un usuario SIN TOTP confirmado
+     entra EXACTAMENTE igual que antes (regresión cubierta). Endpoints
+     /auth/mfa/totp: POST enroll (genera secreto + otpauth:// URI/QR +
+     códigos de recovery), POST confirm (verifica un código pyotp válido y
+     activa el factor), GET status, DELETE (desactiva). enroll/confirm/
+     status/disable son tenant-scoped (require_tenant_member + RLS): la fila
+     vive en user_mfa_totp bajo app.tenant_id. Cableado en login: si el
+     usuario tiene TOTP confirmado, el paso de contraseña NO emite sesión —
+     devuelve {status: mfa_required, mfa_token} (token de reto interino en
+     Redis, single-use GETDEL, TTL corto, NO una sesión); POST
+     /auth/mfa/totp/verify (token + código) completa la sesión real
+     (SessionStore + encode_jwt). verify acepta también un código de recovery
+     de un solo uso (se consume al usarse). Secretos en reposo (CLAUDE.md): el
+     seed TOTP cifrado Fernet (mismo mecanismo que el client_secret OIDC,
+     API_SERVER_SSO_ENCRYPTION_KEY) y los códigos de recovery solo como
+     digest SHA-256 — nunca en claro. Migración 0037 reversible (up/down/up
+     verificado; head único) con RLS tenant_isolation. 7 tests en
+     tests/integration/test_mfa_totp.py: enroll+confirm (+ secreto cifrado y
+     recovery hasheados en reposo), código erróneo al confirmar (400),
+     login sin MFA inalterado (regresión), login con MFA -> mfa_required ->
+     verify código válido -> sesión que /auth/me acepta, código TOTP erróneo
+     en verify (400) + reto single-use no reutilizable, código de recovery
+     funciona una vez y se consume (9 restantes), aislamiento cross-tenant
+     (@cross_tenant: el factor de B no se ve desde A vía status, RLS).
+     pre-commit verde (black/ruff/mypy). Login local + OIDC + JIT + SCIM
+     intactos (33 tests de regresión verdes). -->
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

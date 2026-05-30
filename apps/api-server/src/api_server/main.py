@@ -49,6 +49,7 @@ from api_server.routers.knowledge_bases import (
 from api_server.routers.mcp import router as mcp_router
 from api_server.routers.mcp_catalog import router as mcp_catalog_router
 from api_server.routers.memories import router as memories_router
+from api_server.routers.mfa import router as mfa_router
 from api_server.routers.plans import plans_router, project_plans_router
 from api_server.routers.projects import router as projects_router
 from api_server.routers.review import router as review_router
@@ -130,6 +131,52 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
     )
 
 
+def _register_routers(app: FastAPI) -> None:
+    """Mount every API router on ``app``.
+
+    Extracted from :func:`create_app` so the latter stays under the
+    statement-count lint threshold as routers keep being added (the list
+    only grows). Order is not significant — FastAPI matches by path — so
+    new routers can be appended freely.
+    """
+    for router in (
+        auth_router,
+        sso_router,
+        scim_router,
+        mfa_router,
+        admin_router,
+        agents_router,
+        skills_router,
+        tools_router,
+        teams_router,
+        projects_router,
+        tasks_router,
+        task_lifecycle_router,
+        review_router,
+        approval_policies_router,
+        approvals_router,
+        executions_router,
+        internal_agent_router,
+        project_conversations_router,
+        conversations_router,
+        project_plans_router,
+        plans_router,
+        memories_router,
+        knowledge_bases_router,
+        kb_categories_router,
+        project_kb_router,
+        mcp_router,
+        mcp_catalog_router,
+        tools_diagnostic_router,
+        dep_cache_router,
+        docs_viewer_router,
+        documents_router,
+        tenant_settings_router,
+        ws_router,
+    ):
+        app.include_router(router)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="agentic-platform / api-server",
@@ -158,38 +205,7 @@ def create_app() -> FastAPI:
     # here.
     app.add_exception_handler(Exception, _unhandled_exception_handler)
 
-    app.include_router(auth_router)
-    app.include_router(sso_router)
-    app.include_router(scim_router)
-    app.include_router(admin_router)
-    app.include_router(agents_router)
-    app.include_router(skills_router)
-    app.include_router(tools_router)
-    app.include_router(teams_router)
-    app.include_router(projects_router)
-    app.include_router(tasks_router)
-    app.include_router(task_lifecycle_router)
-    app.include_router(review_router)
-    app.include_router(approval_policies_router)
-    app.include_router(approvals_router)
-    app.include_router(executions_router)
-    app.include_router(internal_agent_router)
-    app.include_router(project_conversations_router)
-    app.include_router(conversations_router)
-    app.include_router(project_plans_router)
-    app.include_router(plans_router)
-    app.include_router(memories_router)
-    app.include_router(knowledge_bases_router)
-    app.include_router(kb_categories_router)
-    app.include_router(project_kb_router)
-    app.include_router(mcp_router)
-    app.include_router(mcp_catalog_router)
-    app.include_router(tools_diagnostic_router)
-    app.include_router(dep_cache_router)
-    app.include_router(docs_viewer_router)
-    app.include_router(documents_router)
-    app.include_router(tenant_settings_router)
-    app.include_router(ws_router)
+    _register_routers(app)
 
     instrument_fastapi(app)
 

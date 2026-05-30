@@ -496,6 +496,67 @@ class ScimToken(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
 
 
 # ---------------------------------------------------------------------------
+# UserMfaTotp — per-user, per-tenant TOTP second-factor enrollment
+# (Plan 08 task_08_09)
+# ---------------------------------------------------------------------------
+class UserMfaTotp(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """A user's TOTP (RFC 6238) second-factor enrollment within a tenant.
+
+    MFA is an OPT-IN second factor added ALONGSIDE the existing auth: a
+    user with no confirmed row here logs in EXACTLY as before. Only a user
+    with ``confirmed_at IS NOT NULL`` is challenged for a 6-digit TOTP code
+    after the password/SSO step succeeds.
+
+    Tenant-scoped via :class:`TenantScopedMixin` + RLS (the
+    ``tenant_isolation`` policy in the migration): enrollment, confirmation
+    and recovery-code consumption all run under ``app.tenant_id`` bound to
+    the active tenant, so one tenant's MFA state is invisible to another.
+    There is at most one enrollment per ``(tenant_id, user_id)`` (a UNIQUE
+    constraint); re-enrolling overwrites the unconfirmed secret.
+
+    Secret handling (CLAUDE.md: no plaintext secrets in the DB):
+
+      * ``secret_encrypted`` — the base32 TOTP seed, Fernet-encrypted at
+        rest with the SAME ``API_SERVER_SSO_ENCRYPTION_KEY`` mechanism the
+        OIDC client secret uses. The plaintext seed only ever lives in
+        memory during enrollment-URI generation and code verification.
+      * ``recovery_codes`` — a JSON array of one-time recovery codes, each
+        stored ONLY as its SHA-256 hex digest (never the clear code). A
+        code is consumed by removing its digest from the array, so each
+        works exactly once.
+    """
+
+    __tablename__ = "user_mfa_totp"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "user_id", name="uq_mfa_totp_tenant_user"),
+        Index("ix_mfa_totp_tenant_user", "tenant_id", "user_id"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Fernet ciphertext of the base32 TOTP seed. Never the clear seed.
+    secret_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    # Set when the user proves possession by submitting a valid code once.
+    # NULL = enrollment started but not yet confirmed; such a row does NOT
+    # gate login (the user can still get in with just their password).
+    confirmed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # One-time recovery codes, each stored as a SHA-256 hex digest only.
+    # Consuming a code removes its digest from this array.
+    recovery_codes: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"UserMfaTotp(id={self.id!r}, tenant={self.tenant_id!r}, "
+            f"user={self.user_id!r}, confirmed={self.confirmed_at is not None})"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Review sessions — persistence of `workers.review_runtime.ReviewSession`
 # (Plan 06.5 task_06_5_01). The manager was in-memory; this table makes
 # it durable across worker restarts.

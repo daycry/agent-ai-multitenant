@@ -86,6 +86,17 @@ class Settings(BaseSettings):
         description="Seconds an OIDC login state/nonce stays valid in Redis.",
     )
 
+    # ----- MFA (Plan 08 task_08_09) -----
+    # TTL of the interim MFA challenge token stored in Redis between the
+    # password/SSO step (returns `mfa_required`) and the TOTP verify call
+    # that mints the real session. Tight by design: it grants no access,
+    # only a brief window to complete the second factor before the user
+    # must re-authenticate the first factor.
+    mfa_challenge_ttl_seconds: int = Field(
+        default=300,
+        description="Seconds an interim MFA challenge token stays valid in Redis.",
+    )
+
     # ----- Redis (sessions, rate limit) -----
     redis_url: str = Field(
         default="redis://localhost:6379/0",

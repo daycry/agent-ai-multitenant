@@ -242,6 +242,13 @@ ignore_missing_imports = true
 module = ["onelogin", "onelogin.*", "xmlsec", "xmlsec.*"]
 ignore_missing_imports = true
 
+# MFA TOTP (Plan 08 task_08_09). `pyotp` ships no type stubs; the
+# pre-commit mypy hook doesn't install it (the runtime venv does). Same
+# pattern as the other optional-dep overrides above.
+[[tool.mypy.overrides]]
+module = ["pyotp", "pyotp.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

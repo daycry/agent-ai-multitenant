@@ -41,6 +41,13 @@ dependencies = [
   # the api-server imports it LAZILY inside the SAML flow so a node
   # without the native backend still boots (SAML reports 501 there).
   "python3-saml>=1.16,<2",
+  # MFA TOTP (Plan 08 task_08_09). pyotp implements RFC 6238 TOTP — the
+  # per-user secret, the otpauth:// provisioning URI an authenticator app
+  # scans, and the time-window verification. Pure-Python, no native deps.
+  # The TOTP secret is Fernet-encrypted at rest (same mechanism as the
+  # OIDC client secret) and recovery codes are stored only as SHA-256
+  # digests, so nothing TOTP-related is ever persisted in clear.
+  "pyotp>=2.9,<3",
 
   # Cache / session store / rate limit
   "redis[hiredis]>=5.0,<6",
