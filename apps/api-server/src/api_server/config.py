@@ -227,6 +227,19 @@ class Settings(BaseSettings):
     )
 
     # ----- Misc -----
+    # ----- Price catalog sync (Plan 11 task_11_15) -----
+    # The community LiteLLM price JSON, consumed strictly as a DATA FEED
+    # (ADR 0021) to refresh the model_prices catalog — NOT a provider
+    # runtime. Overridable to an internal mirror; the System-Admin sync
+    # endpoint also accepts a per-call URL override.
+    litellm_price_feed_url: str = Field(
+        default=(
+            "https://raw.githubusercontent.com/BerriAI/litellm/main/"
+            "model_prices_and_context_window.json"
+        ),
+        description="URL of the LiteLLM community price JSON used as a data feed.",
+    )
+
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."
     )

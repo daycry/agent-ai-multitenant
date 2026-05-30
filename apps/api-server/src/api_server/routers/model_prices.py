@@ -48,6 +48,7 @@ import enum
 from datetime import UTC, datetime
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -60,13 +61,24 @@ from api_server.auth.deps import (
     get_tenant_session,
     require_system_admin,
 )
+from api_server.config import get_settings
 from api_server.db.model_prices import ModelPrice, PriceModality
+from api_server.pricing.litellm_sync import (
+    HttpxPriceFeedFetcher,
+    PriceFeedError,
+    sync_prices_from_litellm,
+)
 from api_server.routers._pagination import apply_pagination, limit_query, offset_query
 from api_server.schemas.model_prices import (
     ModelPriceCreateRequest,
     ModelPriceResponse,
     ModelPriceUpdateRequest,
     to_price_response,
+)
+from api_server.schemas.price_sync import (
+    PriceSyncRequest,
+    PriceSyncResponse,
+    to_sync_response,
 )
 
 # READS — mounted at /model-prices, open to any authenticated caller.
@@ -311,3 +323,57 @@ async def supersede_price(
     await session.flush()
     await session.refresh(price)
     return to_price_response(price)
+
+
+# ===========================================================================
+# POST /admin/model-prices/sync — refresh the catalog from the LiteLLM feed
+#
+# ADR 0021: the LiteLLM JSON is a DATA FEED only (community reference
+# pricing), NOT a provider runtime — the closed runtime catalog (Claude SDK
+# + Copilot + Azure Foundry APIM + Ollama) is untouched. System-Admin only;
+# the sync writes through the BYPASSRLS admin session and the platform-global
+# catalog (no tenant_id), so a tenant cannot trigger it.
+# ===========================================================================
+@admin_router.post("/sync", response_model=PriceSyncResponse)
+async def sync_prices(
+    payload: PriceSyncRequest | None = None,
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> PriceSyncResponse:
+    """Sync the catalog from the LiteLLM community price JSON (data feed).
+
+    Fetches + parses the feed and upserts the catalog with effective dating
+    (Fase C): a changed price CLOSES the current period and opens a new one
+    (``source = litellm``); an unchanged price is a no-op. Malformed feed
+    entries are skipped (typed warnings in the summary), never a crash.
+
+    Price rises above +10% on an existing key are DEFERRED for explicit
+    confirmation (``confirm_large_increases=true`` applies them — task_11_16).
+    A manual override (``source = manual``) is left untouched unless
+    ``overwrite_manual=true``. A feed fetch / parse failure is a 502 (the
+    upstream feed faulted, not the caller).
+
+    RBAC: ``require_system_admin`` (a tenant caller is 403); BYPASSRLS admin
+    session.
+    """
+    req = payload or PriceSyncRequest()
+    settings = get_settings()
+    url = req.url or settings.litellm_price_feed_url
+
+    async with httpx.AsyncClient() as client:
+        fetcher = HttpxPriceFeedFetcher(client=client, url=url)
+        try:
+            summary = await sync_prices_from_litellm(
+                session,
+                fetcher=fetcher,
+                actor_id=principal.user_id,
+                confirm_large_increases=req.confirm_large_increases,
+                overwrite_manual=req.overwrite_manual,
+            )
+        except (PriceFeedError, httpx.HTTPError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"could not fetch/parse the LiteLLM price feed: {exc}",
+            ) from exc
+
+    return to_sync_response(summary)
