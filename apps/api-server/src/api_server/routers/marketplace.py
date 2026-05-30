@@ -41,6 +41,7 @@ in Phase A the install simply persists the row and records an audit entry
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -70,6 +71,14 @@ from api_server.marketplace.consent import (
     consent_required_for,
     summarize,
 )
+from api_server.marketplace.install import InstallError, InstallOrchestrator, LocalArtifactFetcher
+from api_server.marketplace.install import default_artifact_root as _default_artifact_root
+from api_server.marketplace.versioning import (
+    VersioningError,
+    is_major_bump,
+    is_outdated,
+    select_update_target,
+)
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers._pagination import (
     apply_pagination,
@@ -80,11 +89,15 @@ from api_server.schemas.marketplace import (
     ConsentDecisionRequest,
     InstallationCreateRequest,
     InstallationPermissionsResponse,
+    InstallationUpdateCheckResponse,
+    InstallationUpdateRequest,
+    InstallationUpdateResponse,
     MarketplaceInstallationResponse,
     MarketplaceListingResponse,
     to_installation_response,
     to_listing_response,
     to_permissions_response,
+    to_update_check_response,
 )
 
 router = APIRouter(prefix="/marketplace", tags=["marketplace"])
@@ -131,6 +144,56 @@ async def _load_installation_with_listing(
     if listing is None:  # pragma: no cover - FK + ondelete CASCADE keeps these paired
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="listing not found")
     return installation, listing
+
+
+async def _sibling_listings(
+    session: AsyncSession, listing: MarketplaceListing
+) -> list[MarketplaceListing]:
+    """All visible listing rows that are the SAME logical listing as ``listing``.
+
+    A logical marketplace listing is keyed by ``(source_id, tenant_id, kind,
+    name)``; each published version is a distinct row (the
+    ``uq_marketplace_listings_source_tenant_name_version`` constraint). The
+    update flow needs every available version of the installed listing, so we
+    match those four coordinates (including the SAME ``tenant_id`` — a global
+    catalog listing and a tenant's private listing of the same name are
+    distinct lines and must not cross-pollinate versions). RLS already scopes
+    the visible set; soft-deleted rows are excluded.
+    """
+    tenant_filter = (
+        MarketplaceListing.tenant_id == listing.tenant_id
+        if listing.tenant_id is not None
+        else MarketplaceListing.tenant_id.is_(None)
+    )
+    result = await session.execute(
+        select(MarketplaceListing).where(
+            MarketplaceListing.source_id == listing.source_id,
+            tenant_filter,
+            MarketplaceListing.kind == listing.kind,
+            MarketplaceListing.name == listing.name,
+            MarketplaceListing.deleted_at.is_(None),
+        )
+    )
+    return list(result.scalars().all())
+
+
+def get_install_orchestrator() -> InstallOrchestrator:
+    """FastAPI dependency: the install orchestrator for the update path.
+
+    Reuses the Phase C pipeline (task_09_11): the official catalog's on-disk
+    artifacts via :class:`LocalArtifactFetcher`. The platform signing key is
+    read from the environment (``MARKETPLACE_SIGNING_PUBLIC_KEY``); a verified
+    update with no key configured fails closed at the signature gate, exactly
+    like a fresh install. Exposed as a dependency so the live registry
+    fetcher / sandbox can be injected in tests (the on-disk artifact fetch +
+    Docker sandbox are capability-gapped — see task_09_11) without touching
+    the route.
+    """
+    public_key = os.environ.get("MARKETPLACE_SIGNING_PUBLIC_KEY")
+    return InstallOrchestrator(
+        fetcher=LocalArtifactFetcher(root_dir=_default_artifact_root()),
+        public_key_pem=public_key.encode("utf-8") if public_key else None,
+    )
 
 
 async def _revoke_installation(
@@ -515,6 +578,175 @@ async def decide_consent(
         denied_permissions=installation.denied_permissions or [],
     )
     return to_permissions_response(installation=installation, summary=summary)
+
+
+# ===========================================================================
+# GET /marketplace/installations/{id}/update-check — is it outdated?
+# ===========================================================================
+@router.get(
+    "/installations/{installation_id}/update-check",
+    response_model=InstallationUpdateCheckResponse,
+)
+async def check_installation_update(
+    installation_id: UUID,
+    allow_major: bool = Query(
+        default=False,
+        description=(
+            "Include a MAJOR-version bump as the proposed target. Off by "
+            "default — an update never auto-jumps a major version (semver "
+            "compatibility); the explicit opt-in is required."
+        ),
+    ),
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> InstallationUpdateCheckResponse:
+    """Report whether an installation is outdated + which version it can take.
+
+    Compares the install's resolved version against every available version
+    of the same logical listing (task_09_12). The proposed ``target_version``
+    respects semver compatibility: a major-version bump is only proposed with
+    ``allow_major=true``. RLS scopes the lookup to the caller's tenant — a
+    cross-tenant install is a clean 404.
+    """
+    installation, listing = await _load_installation_with_listing(session, installation_id)
+    siblings = await _sibling_listings(session, listing)
+    candidate_versions = [s.version for s in siblings]
+    try:
+        assessment = select_update_target(
+            installation.version, candidate_versions, allow_major=allow_major
+        )
+    except VersioningError as exc:
+        # A stored listing version is not parseable semver — a data integrity
+        # problem, not a client error.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"listing has an invalid version: {exc}",
+        ) from exc
+    return to_update_check_response(
+        installation=installation, name=listing.name, assessment=assessment
+    )
+
+
+# ===========================================================================
+# POST /marketplace/installations/{id}/update — perform the update (re-run gates)
+# ===========================================================================
+@router.post(
+    "/installations/{installation_id}/update",
+    response_model=InstallationUpdateResponse,
+)
+async def perform_installation_update(
+    installation_id: UUID,
+    payload: InstallationUpdateRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    orchestrator: InstallOrchestrator = Depends(get_install_orchestrator),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> InstallationUpdateResponse:
+    """Update an installation to a newer compatible version (re-runs the gates).
+
+    Resolves the update target (task_09_12): the highest available version
+    strictly newer than the installed one, within the same MAJOR unless
+    ``allow_major`` is set (the explicit opt-in — an update never silently
+    crosses a major boundary). A pinned ``target_version`` must itself be a
+    visible, newer, compatibility-respecting version. The update then re-runs
+    the FULL install pipeline gates (signature / static-analysis / sandbox per
+    the target's trust level, task_09_11) against the new version's artifact
+    and, on success, re-points the install + writes an ``update`` audit row.
+
+    A gate failure aborts (typed :class:`InstallError` → 422) leaving the
+    install on its old version. RBAC: ``tenant_admin``; RLS scopes the
+    install + listings to the caller's tenant.
+    """
+    tenant_id = require_tenant_id(principal)
+    installation, listing = await _load_installation_with_listing(session, installation_id)
+
+    if installation.status == InstallationStatus.REVOKED.value:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="installation is revoked")
+
+    siblings = await _sibling_listings(session, listing)
+    by_version = {s.version: s for s in siblings}
+    try:
+        assessment = select_update_target(
+            installation.version, list(by_version), allow_major=payload.allow_major
+        )
+    except VersioningError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"listing has an invalid version: {exc}",
+        ) from exc
+
+    # Resolve the concrete target: a pinned version (validated for
+    # newer-ness + compatibility) or the auto-selected highest eligible one.
+    if payload.target_version is not None:
+        target_version = payload.target_version
+        if target_version not in by_version:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"no listing version {target_version!r} available for this install",
+            )
+        try:
+            newer = is_outdated(installation.version, target_version)
+        except VersioningError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+        if not newer:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"target version {target_version!r} is not newer than the "
+                    f"installed version {installation.version!r}"
+                ),
+            )
+        # A major-version pin still needs the explicit opt-in — an update
+        # never crosses a major boundary without it (semver compatibility).
+        if not payload.allow_major and is_major_bump(installation.version, target_version):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="target crosses a major version; set allow_major=true to opt in",
+            )
+    else:
+        target_version = assessment.target_version or ""
+        if not target_version:
+            # Either already up to date, or the only newer versions are major
+            # bumps the caller did not opt into.
+            if assessment.outdated:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "a newer version exists but crosses a major boundary; "
+                        "set allow_major=true to opt in"
+                    ),
+                )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="installation is already up to date",
+            )
+
+    target_listing = by_version[target_version]
+    from_version = installation.version
+    try:
+        await orchestrator.update(
+            session=session,
+            tenant_id=tenant_id,
+            actor=_actor(principal),
+            installation=installation,
+            target_listing=target_listing,
+        )
+    except InstallError as exc:
+        # A gate failed (bad signature, blocking analysis, failed sandbox).
+        # The orchestrator already committed the abort audit row; the install
+        # stays on its old version. Surface a 422 with a sanitized message.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"update blocked by install gate: {exc}",
+        ) from exc
+
+    await session.refresh(installation)
+    return InstallationUpdateResponse(
+        installation=to_installation_response(installation),
+        from_version=from_version,
+        to_version=target_version,
+    )
 
 
 # ===========================================================================

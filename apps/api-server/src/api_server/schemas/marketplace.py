@@ -237,12 +237,92 @@ def to_permissions_response(
     )
 
 
+# =============================================================================
+# Versioning + updates (task_09_12)
+# =============================================================================
+class InstallationUpdateCheckResponse(BaseModel):
+    """Whether an installation is outdated and which version it can move to.
+
+    The read shape of ``GET /installations/{id}/update-check``. Surfaces the
+    currently-installed version, the single highest available listing
+    version, the compatibility-respecting ``target_version`` an update would
+    move to (``None`` when the only newer versions are major bumps and the
+    caller did not opt in), and whether that highest version crosses a major
+    boundary so the UI can prompt for the explicit opt-in.
+    """
+
+    model_config = _BASE_CONFIG
+
+    installation_id: UUID
+    listing_id: UUID
+    name: str
+    installed_version: str
+    latest_version: str
+    target_version: str | None
+    outdated: bool
+    update_available: bool
+    latest_is_major_bump: bool
+
+
+class InstallationUpdateRequest(BaseModel):
+    """Perform an update of an installation to a newer compatible version.
+
+    ``allow_major`` is the explicit opt-in the plan requires: an update never
+    auto-jumps a MAJOR version unless the caller sets this true. An optional
+    ``target_version`` pins the exact version to move to (it must be an
+    available, newer, and — absent ``allow_major`` — same-major version);
+    when omitted the server picks the highest eligible version.
+    """
+
+    model_config = _BASE_CONFIG
+
+    allow_major: bool = False
+    target_version: str | None = None
+
+
+class InstallationUpdateResponse(BaseModel):
+    """The outcome of performing an update.
+
+    Echoes the installation after the version re-point plus the version diff
+    so the caller sees what moved.
+    """
+
+    model_config = _BASE_CONFIG
+
+    installation: MarketplaceInstallationResponse
+    from_version: str
+    to_version: str
+
+
+def to_update_check_response(
+    *,
+    installation: MarketplaceInstallation,
+    name: str,
+    assessment: Any,
+) -> InstallationUpdateCheckResponse:
+    """Render a :class:`~api_server.marketplace.versioning.UpdateAssessment`."""
+    return InstallationUpdateCheckResponse(
+        installation_id=installation.id,
+        listing_id=installation.listing_id,
+        name=name,
+        installed_version=assessment.installed_version,
+        latest_version=assessment.latest_version,
+        target_version=assessment.target_version,
+        outdated=assessment.outdated,
+        update_available=assessment.update_available,
+        latest_is_major_bump=assessment.latest_is_major_bump,
+    )
+
+
 __all__ = [
     "ConsentDecisionRequest",
     "ConsentState",
     "InstallationCreateRequest",
     "InstallationPermissionsResponse",
     "InstallationStatus",
+    "InstallationUpdateCheckResponse",
+    "InstallationUpdateRequest",
+    "InstallationUpdateResponse",
     "MarketplaceInstallationResponse",
     "MarketplaceListingKind",
     "MarketplaceListingResponse",
@@ -253,4 +333,5 @@ __all__ = [
     "to_installation_response",
     "to_listing_response",
     "to_permissions_response",
+    "to_update_check_response",
 ]

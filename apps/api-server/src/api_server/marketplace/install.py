@@ -253,6 +253,10 @@ class _GateContext:
     actor: str
     listing: MarketplaceListing
     gate_report: dict[str, Any] = field(default_factory=dict)
+    # The audit action a gate abort is recorded under: ``install`` for a
+    # fresh install, ``update`` for the update path (task_09_12) — so the
+    # trail distinguishes a failed install from a failed update.
+    abort_action: MarketplaceAuditAction = MarketplaceAuditAction.INSTALL
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,27 +322,9 @@ class InstallOrchestrator:
         them). Raises a typed :class:`InstallError` on any gate failure
         (after committing the matching audit row).
         """
-        policy = trust_policy(listing.trust_level)
-        ctx = _GateContext(
-            session=session,
-            tenant_id=tenant_id,
-            actor=actor,
-            listing=listing,
-            gate_report={"trust_level": str(policy.level)},
+        ctx = await self._run_security_gates(
+            session=session, tenant_id=tenant_id, actor=actor, listing=listing
         )
-
-        # --- gates 1-5: fetch → parse → signature → analysis → sandbox ----
-        # Each helper runs its gate, records the verdict on ctx.gate_report,
-        # and on failure writes a committed abort audit row + raises a typed
-        # InstallError (so NO install row is created).
-        artifact = await self._gate_fetch(ctx)
-        await self._gate_parse(ctx, artifact)
-        if policy.signature_required:
-            await self._gate_signature(ctx, artifact)
-        if policy.static_analysis_required:
-            await self._gate_static_analysis(ctx, artifact, policy)
-        if policy.sandbox_required:
-            await self._gate_sandbox(ctx, artifact)
 
         # --- gate 6+7: consent gate + persist ----------------------------
         gate_report = ctx.gate_report
@@ -398,6 +384,129 @@ class InstallOrchestrator:
             enabled=initial_status == InstallationStatus.ENABLED.value,
             gate_report=gate_report,
         )
+
+    async def update(
+        self,
+        *,
+        session: AsyncSession,
+        tenant_id: UUID,
+        actor: str,
+        installation: MarketplaceInstallation,
+        target_listing: MarketplaceListing,
+    ) -> InstallResult:
+        """Re-point ``installation`` to ``target_listing`` after re-running gates.
+
+        The update path (task_09_12). It re-runs the SAME security gates the
+        first install ran (fetch → parse → signature → static-analysis →
+        sandbox) against the NEW version's artifact — an outdated install can
+        only move to a version that itself passes the trust policy — then
+        re-points the install's ``version`` and writes an ``update`` audit
+        row carrying the version diff + the gate trail.
+
+        Compatibility (no auto-major-jump) is the CALLER's call: the router
+        resolves ``target_listing`` via
+        :func:`api_server.marketplace.versioning.select_update_target`, which
+        only yields a major-version target with the explicit opt-in. By the
+        time we are here the target is already an approved, compatible bump.
+
+        Like :meth:`install`, any gate failure raises a typed
+        :class:`InstallError` after committing an abort audit row, and NO
+        version change is persisted (the install stays on its old version).
+        The success path flushes the version re-point + ``update`` audit row
+        in the caller's transaction so they commit atomically.
+        """
+        from_version = installation.version
+        to_version = target_listing.version
+
+        ctx = await self._run_security_gates(
+            session=session,
+            tenant_id=tenant_id,
+            actor=actor,
+            listing=target_listing,
+            abort_action=MarketplaceAuditAction.UPDATE,
+        )
+        gate_report = ctx.gate_report
+        gate_report["update"] = {"from_version": from_version, "to_version": to_version}
+
+        # Re-point the existing install to the new listing version. We keep
+        # the granted/denied consent state: a compatible (non-major) update
+        # does not change the requested-permission surface; a major bump that
+        # WOULD change it is gated behind the explicit opt-in upstream, and a
+        # future iteration can re-trigger consent there.
+        installation.listing_id = target_listing.id
+        installation.version = to_version
+        session.add(installation)
+        await session.flush()
+
+        session.add(
+            MarketplaceAuditEntry(
+                tenant_id=tenant_id,
+                actor=actor,
+                action=MarketplaceAuditAction.UPDATE.value,
+                listing_id=target_listing.id,
+                installation_id=installation.id,
+                detail={
+                    "from_version": from_version,
+                    "to_version": to_version,
+                    "trust_level": target_listing.trust_level,
+                    "status": installation.status,
+                    "gates": gate_report,
+                },
+            )
+        )
+        await session.flush()
+        await session.refresh(installation)
+
+        _log.info(
+            "marketplace.install.updated",
+            listing_id=str(target_listing.id),
+            from_version=from_version,
+            to_version=to_version,
+        )
+        return InstallResult(
+            installation=installation,
+            enabled=installation.status == InstallationStatus.ENABLED.value,
+            gate_report=gate_report,
+        )
+
+    # --- gate orchestration ---------------------------------------------
+    async def _run_security_gates(
+        self,
+        *,
+        session: AsyncSession,
+        tenant_id: UUID,
+        actor: str,
+        listing: MarketplaceListing,
+        abort_action: MarketplaceAuditAction = MarketplaceAuditAction.INSTALL,
+    ) -> _GateContext:
+        """Run gates 1-5 (fetch → parse → signature → analysis → sandbox).
+
+        Shared by :meth:`install` and :meth:`update`: each helper runs its
+        gate, records the verdict on ``ctx.gate_report``, and on failure
+        writes a COMMITTED abort audit row (under ``abort_action`` — ``install``
+        or ``update``) + raises a typed :class:`InstallError` (so no install
+        row / version change survives). Returns the populated context (its
+        ``gate_report`` carries the trail the caller folds into the install /
+        update audit detail).
+        """
+        policy = trust_policy(listing.trust_level)
+        ctx = _GateContext(
+            session=session,
+            tenant_id=tenant_id,
+            actor=actor,
+            listing=listing,
+            gate_report={"trust_level": str(policy.level)},
+            abort_action=abort_action,
+        )
+        artifact = await self._gate_fetch(ctx)
+        await self._gate_parse(ctx, artifact)
+        if policy.signature_required:
+            await self._gate_signature(ctx, artifact)
+        if policy.static_analysis_required:
+            await self._gate_static_analysis(ctx, artifact, policy)
+        if policy.sandbox_required:
+            await self._gate_sandbox(ctx, artifact)
+        return ctx
 
     # --- gate helpers (one per ordered gate) ----------------------------
     async def _gate_fetch(self, ctx: _GateContext) -> FetchedArtifact:
@@ -547,7 +656,7 @@ class InstallOrchestrator:
             MarketplaceAuditEntry(
                 tenant_id=ctx.tenant_id,
                 actor=ctx.actor,
-                action=MarketplaceAuditAction.INSTALL.value,
+                action=ctx.abort_action.value,
                 listing_id=ctx.listing.id,
                 installation_id=None,
                 detail={
