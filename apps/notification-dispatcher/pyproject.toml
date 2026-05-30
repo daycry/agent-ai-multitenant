@@ -51,6 +51,14 @@ dev = [
   # the transport (httpx.MockTransport) so no real network is hit. httpx
   # is a runtime dep above; pinned here too so the dev env always has it.
   "httpx>=0.27,<1",
+  # Slack channel SDK (Plan 10 task_10_07). The Slack adapter drives the
+  # documented Web API (chat.postMessage) over httpx — uniform with the
+  # other HTTP-POST channels and avoiding slack_sdk's aiohttp-backed async
+  # client inside the per-send asyncio.run — so slack_sdk is a dev-only dep:
+  # it pins the SDK whose Block Kit contract the adapter's blocks follow and
+  # keeps the SDK available for local introspection. No real network in tests
+  # (the httpx transport is mocked).
+  "slack_sdk>=3.27,<4",
 ]
 
 [build-system]

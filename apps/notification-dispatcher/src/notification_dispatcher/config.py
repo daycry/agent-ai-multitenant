@@ -140,6 +140,22 @@ class Settings(BaseSettings):
         "is the primary one. Tunable so tests point it at an httpx.MockTransport.",
     )
 
+    # ----- Slack channel (task_10_07) -----
+    slack_api_base_url: str = Field(
+        default="https://slack.com",
+        description="Base URL of the Slack Web API the Slack adapter POSTs "
+        "chat.postMessage to (``{base}/api/chat.postMessage``). Tunable so a "
+        "deployment can route through a proxy and so tests point it at an "
+        "httpx.MockTransport — never hardcoded.",
+    )
+    slack_request_timeout_s: float = Field(
+        default=10.0,
+        description="Per-request HTTP timeout the Slack adapter applies to the "
+        "chat.postMessage call. Bounded under channel_send_timeout_s so the "
+        "dispatcher's overall send budget still wraps it. Tunable, not a magic "
+        "number.",
+    )
+
     # ----- Event → notification mapping tunables (task_10_04) -----
     default_locale: str = Field(
         default="en",

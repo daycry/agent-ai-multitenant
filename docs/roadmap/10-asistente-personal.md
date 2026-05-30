@@ -191,7 +191,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_07` — Canal Slack con slack-bolt + blocks
 
-- [ ] **Título**: Canal Slack con slack-bolt + blocks
+- [x] **Título**: Canal Slack con slack-bolt + blocks
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
