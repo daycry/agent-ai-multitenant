@@ -278,7 +278,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_12` — Replay desde audit (debugging)
 
-- [ ] **Título**: Replay desde audit (debugging)
+- [x] **Título**: Replay desde audit (debugging)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

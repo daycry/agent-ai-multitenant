@@ -52,7 +52,9 @@ from api_server.schemas.incoming_webhooks import (
     IncomingWebhookConfigSecretResponse,
     IncomingWebhookConfigUpdateRequest,
     IncomingWebhookDeliveryResponse,
+    IncomingWebhookReplayResponse,
 )
+from api_server.webhooks.replay import WebhookReplayError, replay_delivery
 from api_server.webhooks.secrets import encrypt_signing_secret, generate_signing_secret
 
 router = APIRouter(prefix="/projects/{project_id}/incoming-webhooks", tags=["incoming-webhooks"])
@@ -273,6 +275,65 @@ async def list_incoming_webhook_deliveries(
         .limit(limit)
     )
     return [IncomingWebhookDeliveryResponse.model_validate(row) for row in result.scalars().all()]
+
+
+@router.post(
+    "/{config_id}/deliveries/{event_id}/replay",
+    response_model=IncomingWebhookReplayResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def replay_incoming_webhook_delivery(
+    project_id: UUID,
+    config_id: UUID,
+    event_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> IncomingWebhookReplayResponse:
+    """Replay a recorded delivery — re-run verify+parse+map+action. tenant_admin.
+
+    For debugging: re-runs the pipeline against the delivery's STORED payload
+    (task_13_12). The replay RE-VERIFIES the stored signature against the
+    config's current secret, re-maps the payload and re-executes the mapped
+    action, and is ITSELF audited (a new ``incoming_webhook_events`` row with
+    ``replayed_from_event_id`` set). It is explicitly operator-initiated, so the
+    replay row carries no ``delivery_id`` and never collides with inbound
+    idempotency — replaying twice records two replay rows.
+
+    Multi-tenancy: ``_get_config_or_404`` confirms the config belongs to the
+    caller's tenant AND the path project; the source event is then loaded under
+    the same RLS scope (config_id + project_id filter) and 404s otherwise — so a
+    tenant can never replay another tenant's (or project's) delivery. A replay
+    whose stored signature no longer verifies (e.g. the secret was rotated) is a
+    422 rather than a silent re-run.
+    """
+    require_tenant_id(principal)
+    config = await _get_config_or_404(
+        session, project_id=project_id, config_id=config_id, principal=principal
+    )
+    result = await session.execute(
+        select(IncomingWebhookEvent).where(
+            IncomingWebhookEvent.id == event_id,
+            IncomingWebhookEvent.config_id == config_id,
+            IncomingWebhookEvent.project_id == project_id,
+        )
+    )
+    source_event = result.scalar_one_or_none()
+    if source_event is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="webhook delivery not found"
+        )
+    try:
+        outcome = await replay_delivery(session, config=config, source_event=source_event)
+    except WebhookReplayError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    return IncomingWebhookReplayResponse(
+        replay_event_id=outcome.replay_event_id,
+        source_event_id=outcome.source_event_id,
+        action=outcome.action.kind.value if outcome.action is not None else None,
+        task_id=outcome.action.task_id if outcome.action is not None else None,
+    )
 
 
 @router.delete("/{config_id}", status_code=status.HTTP_204_NO_CONTENT)

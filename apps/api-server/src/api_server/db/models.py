@@ -994,6 +994,14 @@ class IncomingWebhookEvent(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
     signature: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # The EXACT raw request body the signature was computed over (JSON text).
     raw_body: Mapped[str] = mapped_column(Text, nullable=False)
+    # When this row is a REPLAY (task_13_12), points at the ORIGINAL recorded
+    # delivery it re-ran. NULL for a genuine inbound delivery. A replay is its
+    # OWN audit row (operator-initiated, delivery_id NULL so it never collides),
+    # so the deliveries trail shows both the original event and each replay of
+    # it. Self-FK ON DELETE SET NULL: dropping the source keeps the replay audit.
+    replayed_from_event_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("incoming_webhook_events.id", ondelete="SET NULL"), nullable=True
+    )
     # True once verification passed — only verified events are persisted today,
     # but the column makes the contract explicit + future-proofs a "rejected
     # attempts" audit if ever wanted.

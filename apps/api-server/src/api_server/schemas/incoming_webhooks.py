@@ -148,6 +148,29 @@ class IncomingWebhookDeliveryResponse(BaseModel):
     event_type: str | None
     verified: bool
     received_at: datetime
+    # Set when this row is a REPLAY (task_13_12) of an earlier delivery; the
+    # original event's id. NULL for a genuine inbound delivery. Lets the
+    # operator tell replays apart in the trail without exposing any payload.
+    replayed_from_event_id: UUID | None = None
+
+
+class IncomingWebhookReplayResponse(BaseModel):
+    """The outcome of replaying a recorded delivery (task_13_12).
+
+    A replay re-runs verify + parse + map + action against the STORED payload of
+    a recorded delivery and is itself audited as a NEW delivery row.
+    ``replay_event_id`` is that new audit row; ``source_event_id`` is the
+    delivery that was re-run. ``action`` / ``task_id`` describe what the replay
+    re-executed (both NULL when the stored payload maps to no action — the
+    replay is still recorded). No raw body / signature / secret is exposed.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    replay_event_id: UUID
+    source_event_id: UUID
+    action: str | None = None
+    task_id: UUID | None = None
 
 
 class IncomingWebhookConfigSecretResponse(IncomingWebhookConfigResponse):
@@ -168,4 +191,5 @@ __all__ = [
     "IncomingWebhookConfigSecretResponse",
     "IncomingWebhookConfigUpdateRequest",
     "IncomingWebhookDeliveryResponse",
+    "IncomingWebhookReplayResponse",
 ]
