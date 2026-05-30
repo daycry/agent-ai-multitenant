@@ -23,6 +23,7 @@ from uuid import UUID
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     ForeignKey,
     Index,
     LargeBinary,
@@ -858,9 +859,156 @@ class TaskAuditEvent(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
         return f"TaskAuditEvent(task={self.task_id!r}, kind={self.kind!r}, at={self.at!r})"
 
 
+# ---------------------------------------------------------------------------
+# Incoming webhooks (Plan 13 Fase C, task_13_08) — INBOUND: an external tool
+# (GitHub/Jira/Sentry/...) POSTs an event we VERIFY (the inverse of Plan 10's
+# OUTGOING signing). A config + its received events are tenant + PROJECT
+# scoped + RLS — an event for project A never acts on tenant B.
+# ---------------------------------------------------------------------------
+class IncomingWebhookConfig(
+    Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDeleteMixin
+):
+    """A per-project incoming-webhook endpoint config (Plan 13 task_13_08).
+
+    One row configures how a SPECIFIC external origin (``github`` / ``jira``
+    / ...) may POST events into ONE project. The ``{config_id}`` in the public
+    URL ``/webhooks/incoming/{origin}/{config_id}`` resolves to this row, and
+    THROUGH it to the row's ``tenant_id`` + ``project_id`` — so the resolution
+    is what binds an inbound event to exactly one project's tenant (an event
+    for project A can never act on tenant B).
+
+    Multi-tenancy (CLAUDE.md principle 1): tenant-scoped via
+    :class:`TenantScopedMixin` + the ``tenant_isolation`` RLS policy, AND
+    additionally project-scoped (``project_id`` NOT NULL, FK
+    ``ON DELETE CASCADE``). Resolving the config on the PUBLIC endpoint runs
+    once on the BYPASSRLS role (the request is unauthenticated until the HMAC
+    is verified); the secret it returns only ever validates a signature for
+    THIS config's own project/tenant.
+
+    Secret handling (CLAUDE.md: no plaintext secrets, never echoed/logged). The
+    HMAC signing secret is stored ONLY as Fernet ciphertext
+    (``signing_secret_encrypted``), encrypted at rest with the webhook
+    encryption key (see :mod:`api_server.webhooks.secrets`). It is resolved in
+    memory to verify a signature and is never returned by any API.
+    """
+
+    __tablename__ = "incoming_webhook_configs"
+    __table_args__ = (
+        Index(
+            "ix_incoming_webhook_configs_tenant_project",
+            "tenant_id",
+            "project_id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        CheckConstraint(
+            "origin IN ('github', 'gitlab', 'jira', 'sentry', 'linear', 'generic')",
+            name="ck_incoming_webhook_configs_origin",
+        ),
+    )
+
+    # The project this config feeds — the SECOND tenancy axis (with tenant_id).
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    # External sender family (values of webhooks.IncomingWebhookOrigin); selects
+    # the per-origin signature scheme. Stored as the URL path segment.
+    origin: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Operator label ("CI on acme/api", "Sentry prod", ...).
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Fernet ciphertext of the HMAC signing secret — NEVER the clear value.
+    signing_secret_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    # A disabled config rejects every event (404) without touching the secret.
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    # Bumped on each successfully VERIFIED event (observability; not hot-path).
+    last_event_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"IncomingWebhookConfig(id={self.id!r}, tenant={self.tenant_id!r}, "
+            f"project={self.project_id!r}, origin={self.origin!r})"
+        )
+
+
+class IncomingWebhookEvent(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
+    """One received incoming-webhook event, recorded for replay (Plan 13).
+
+    Persisted AFTER the HMAC signature is verified (the verification gate runs
+    BEFORE any expensive work). Stores the raw body + the headers needed to
+    re-derive the signature so the event can be replayed for debugging
+    (task_13_12). Append-only by convention (no UPDATE/DELETE path), like
+    :class:`TaskAuditEvent`.
+
+    Multi-tenancy: tenant-scoped via :class:`TenantScopedMixin` + RLS, and
+    carries ``config_id`` + ``project_id`` so a listing / replay is scoped to
+    the owning config's project. ``tenant_id`` / ``project_id`` are copied from
+    the resolved config at insert time so a tenant only ever sees its own
+    events under RLS.
+
+    The raw body is the EXACT bytes the signature was computed over (stored
+    decoded as text — webhook payloads are JSON/UTF-8). The signing secret is
+    NEVER stored here (only on the config, encrypted); the ``signature`` header
+    we DID verify is recorded for audit, which is safe (it is a MAC, not the
+    key).
+    """
+
+    __tablename__ = "incoming_webhook_events"
+    __table_args__ = (
+        # An external sender that retries a delivery reuses the SAME delivery
+        # id; a partial unique index makes a redelivery idempotent (the second
+        # insert collides) without forbidding a NULL id (senders that omit it).
+        Index(
+            "uq_incoming_webhook_events_delivery",
+            "config_id",
+            "delivery_id",
+            unique=True,
+            postgresql_where=text("delivery_id IS NOT NULL"),
+        ),
+        Index("ix_incoming_webhook_events_config", "config_id", "received_at"),
+    )
+
+    config_id: Mapped[UUID] = mapped_column(
+        ForeignKey("incoming_webhook_configs.id", ondelete="CASCADE"), nullable=False
+    )
+    # Denormalised from the config so a replay query is project-scoped without
+    # a join (and RLS still scopes by tenant_id).
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    # External sender family (mirrors the config's origin at receive time).
+    origin: Mapped[str] = mapped_column(String(16), nullable=False)
+    # The sender's per-delivery id (GitHub X-GitHub-Delivery, ...) when present;
+    # the dedup key for idempotent redelivery. NULL when the sender omits it.
+    delivery_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The declared event type header (GitHub X-GitHub-Event, ...); informational
+    # for the mapping/template phases (task_13_09 / task_13_10).
+    event_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The signature header value we verified (a MAC — safe to store; NOT the
+    # secret). Kept for audit / replay re-verification.
+    signature: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # The EXACT raw request body the signature was computed over (JSON text).
+    raw_body: Mapped[str] = mapped_column(Text, nullable=False)
+    # True once verification passed — only verified events are persisted today,
+    # but the column makes the contract explicit + future-proofs a "rejected
+    # attempts" audit if ever wanted.
+    verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    received_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"IncomingWebhookEvent(id={self.id!r}, config={self.config_id!r}, "
+            f"origin={self.origin!r}, verified={self.verified!r})"
+        )
+
+
 __all__ = [
+    "ApiToken",
+    "ApiTokenScope",
     "AuditAction",
     "AuditLog",
+    "IncomingWebhookConfig",
+    "IncomingWebhookEvent",
     "Organization",
     "PlatformSetting",
     "ReviewSession",

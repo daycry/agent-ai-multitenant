@@ -263,6 +263,36 @@ class Settings(BaseSettings):
         description="Seconds an X-API-Token -> tenant resolution stays cached in Redis.",
     )
 
+    # ----- Incoming webhooks (Plan 13 Fase C, task_13_08) -----
+    # Fernet-derived key used to encrypt a per-project incoming-webhook SIGNING
+    # SECRET at rest when Vault is NOT wired. The raw value is run through
+    # SHA-256 + urlsafe-base64 to a valid 32-byte Fernet key (any non-empty
+    # string works). Mirrors `sso_encryption_key`; production MUST override the
+    # dev default (the dev-secret guard below rejects it outside dev).
+    incoming_webhook_encryption_key: SecretStr = Field(
+        default=SecretStr("dev-only-incoming-webhook-encryption-key-change-me"),
+        description="Secret used to derive the Fernet key for incoming-webhook signing secrets.",
+    )
+    # Hard cap (bytes) on an incoming-webhook request body. The endpoint is
+    # PUBLIC, so an oversize body is rejected (413) BEFORE the HMAC math — a
+    # DDoS / memory-exhaustion guard (Plan 13 Riesgos: webhooks as a DDoS
+    # vector). 1 MiB comfortably fits any GitHub/Jira/Sentry payload.
+    incoming_webhook_max_body_bytes: int = Field(
+        default=1_048_576,
+        description="Max accepted incoming-webhook request body size in bytes (413 if exceeded).",
+    )
+    # Per-config sliding-window request budget for the PUBLIC incoming-webhook
+    # endpoint, counted over `incoming_webhook_rate_limit_window_seconds`. Keyed
+    # by webhook config id so one project's traffic never throttles another.
+    incoming_webhook_rate_limit: int = Field(
+        default=120,
+        description="Max incoming-webhook requests per window per config (429 if exceeded).",
+    )
+    incoming_webhook_rate_limit_window_seconds: int = Field(
+        default=60,
+        description="Sliding-window length (s) for per-config incoming-webhook rate limiting.",
+    )
+
     # ----- Plan 06: shared data root for worktrees + dep-cache -----
     data_root: str = Field(
         default="/data/agent-platform",
@@ -312,6 +342,9 @@ class Settings(BaseSettings):
             "API_SERVER_SSO_ENCRYPTION_KEY": self.sso_encryption_key.get_secret_value(),
             "API_SERVER_NOTIFICATION_ENCRYPTION_KEY": (
                 self.notification_encryption_key.get_secret_value()
+            ),
+            "API_SERVER_INCOMING_WEBHOOK_ENCRYPTION_KEY": (
+                self.incoming_webhook_encryption_key.get_secret_value()
             ),
             "API_SERVER_MINIO_SECRET_KEY": self.minio_secret_key.get_secret_value(),
             "API_SERVER_MINIO_ACCESS_KEY": self.minio_access_key,

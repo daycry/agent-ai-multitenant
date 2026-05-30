@@ -210,7 +210,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_08` — Endpoint /webhooks/incoming/{origin}/{secret} con verificación HMAC
 
-- [ ] **Título**: Endpoint /webhooks/incoming/{origin}/{secret} con verificación HMAC
+- [x] **Título**: Endpoint /webhooks/incoming/{origin}/{secret} con verificación HMAC
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
