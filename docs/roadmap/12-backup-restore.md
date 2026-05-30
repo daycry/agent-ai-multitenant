@@ -259,7 +259,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_11` — Restore selectivo por tenant (solo sus tablas + sus volúmenes parciales)
 
-- [ ] **Título**: Restore selectivo por tenant (solo sus tablas + sus volúmenes parciales)
+- [x] **Título**: Restore selectivo por tenant (solo sus tablas + sus volúmenes parciales)
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

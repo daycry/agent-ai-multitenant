@@ -423,6 +423,30 @@ class Settings(BaseSettings):
         "then started again with the rest of the stack.",
     )
 
+    # ----- Selective per-tenant restore (Plan 12 task_12_11) -----
+    # Restore ONE tenant's data from a full bundle without clobbering others. The
+    # logical dump is pg_restore'd into a throwaway STAGING db, then ONLY the
+    # target tenant's rows are copied into the live tables (filtered by tenant_id
+    # on both sides, in FK order). These knobs are the tenant-scoped table set (in
+    # FK parent→child order) + which captured volume holds the object store. The
+    # admin DB URL the cross-tenant copy runs as is `backup_database_url` (a
+    # BYPASSRLS role) — reused, never a second credential. Operator-tunable so a
+    # schema change is config, not a worker code change. An empty list falls back
+    # to the built-in DEFAULT_TENANT_SCOPED_TABLES.
+    restore_tenant_scoped_tables: list[str] = Field(
+        default_factory=list,
+        description="The tenant-scoped tables a per-tenant restore copies, in FK "
+        "(parent→child) order: inserts go in this order, deletes in reverse. Empty "
+        "= the built-in default set (every tenant_id-bearing domain table). Each "
+        "name must be a plain SQL identifier (validated before use).",
+    )
+    restore_object_store_volume: str = Field(
+        default="minio_data",
+        description="The captured docker volume that holds object storage (MinIO). "
+        "A per-tenant restore re-extracts ONLY the tenant's `<tenant_id>/` key "
+        "prefix from this volume's tar, never the whole volume.",
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."
