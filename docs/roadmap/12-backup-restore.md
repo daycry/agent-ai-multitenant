@@ -189,7 +189,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_07` — Destino SFTP/NAS
 
-- [ ] **Título**: Destino SFTP/NAS
+- [x] **Título**: Destino SFTP/NAS
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops

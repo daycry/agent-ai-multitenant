@@ -316,6 +316,49 @@ class Settings(BaseSettings):
         "`backup_b2_enabled` is true.",
     )
 
+    # ----- Remote backup destinations — SFTP / NAS (Plan 12 task_12_07) -----
+    # Any SSH-reachable host (a NAS, an offsite box) is a remote destination.
+    # These are the NON-secret SFTP tunables (host, port, remote path, username,
+    # host-key policy); the password / private key are SECRETS resolved through
+    # the workers' secret seam (Vault/env), NEVER here. OFF by default — a
+    # destination is opt-in. `host_key_policy` defaults to "reject" (the host
+    # must be in a known_hosts file) — never silently disable host-key checking.
+    backup_sftp_enabled: bool = Field(
+        default=False,
+        description="Whether to upload each successful backup bundle to the SFTP/"
+        "NAS destination. OFF by default — remote destinations are opt-in.",
+    )
+    backup_sftp_host: str = Field(
+        default="",
+        description="SFTP/NAS hostname or IP the backup bundle is uploaded to. "
+        "Required when `backup_sftp_enabled` is true.",
+    )
+    backup_sftp_port: int = Field(
+        default=22,
+        description="SFTP (SSH) port. Default 22.",
+    )
+    backup_sftp_username: str = Field(
+        default="",
+        description="SFTP username. Required when `backup_sftp_enabled` is true. "
+        "The password / private key are SECRETS (secret seam), never here.",
+    )
+    backup_sftp_path: str = Field(
+        default="",
+        description="Remote directory under which bundles are stored. Empty = the "
+        "session's default directory (the user's home).",
+    )
+    backup_sftp_host_key_policy: str = Field(
+        default="reject",
+        description="How an unknown server host key is handled: `reject` (default, "
+        "safest — host must be in known_hosts), `auto_add` (trust-on-first-use), "
+        "or `warn`. Never silently disable host-key checking.",
+    )
+    backup_sftp_known_hosts_path: str = Field(
+        default="",
+        description="Path to a known_hosts file loaded before connecting (for the "
+        "`reject`/`warn` policies). Empty = paramiko's system host keys only.",
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."

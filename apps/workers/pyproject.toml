@@ -24,6 +24,11 @@ dependencies = [
   # adapter uses boto3's managed `upload_file` (automatic multipart).
   "boto3>=1.34,<2",
 
+  # SFTP / NAS remote backup destination (Plan 12 task_12_07). paramiko opens
+  # the SSH+SFTP session the SftpDestination adapter uploads/lists/downloads
+  # over. Mocked in tests — no real SSH host is reachable.
+  "paramiko>=3.4,<4",
+
   # Observability
   "structlog>=24.1,<25",
 ]
