@@ -193,7 +193,7 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
 
 #### `task_09_07` — Consentimiento granular: UI que muestra permisos solicitados y el project_owner aprueba uno por uno
 
-- [ ] **Título**: Consentimiento granular: UI que muestra permisos solicitados y el project_owner aprueba uno por uno
+- [x] **Título**: Consentimiento granular: UI que muestra permisos solicitados y el project_owner aprueba uno por uno <!-- task_09_07: backend GET .../permissions + POST .../consent (routers/marketplace.py) sobre marketplace.consent (lógica pura) — community/experimental requieren consentimiento por permiso (allowed_domains/allowed_paths/network_policy); install consent-gated nace DISABLED y solo pasa a ENABLED cuando TODOS los permisos requeridos están concedidos; deny -> sigue disabled + audit consent_denied. Migración 0042 reversible (denied_permissions JSONB). RBAC tenant_admin (rol project_owner de facto en este repo) + RLS + @pytest.mark.cross_tenant (tests/integration/test_consent.py, 7 pass). FRONTEND: /admin/marketplace/installations/[id]/permissions con RoleGuard tenant_admin + shadcn/ui (typecheck/lint/build verdes). e2e/permission-consent.spec.ts ESCRITO pero NO ejecutado (PENDING HUMAN VERIFICATION). -->
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev

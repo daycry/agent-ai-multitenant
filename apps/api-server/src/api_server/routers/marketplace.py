@@ -52,6 +52,12 @@ from api_server.db.marketplace import (
     MarketplaceListingKind,
     MarketplaceTrustLevel,
 )
+from api_server.marketplace.consent import (
+    ConsentError,
+    apply_decisions,
+    consent_required_for,
+    summarize,
+)
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers._pagination import (
     apply_pagination,
@@ -59,11 +65,14 @@ from api_server.routers._pagination import (
     offset_query,
 )
 from api_server.schemas.marketplace import (
+    ConsentDecisionRequest,
     InstallationCreateRequest,
+    InstallationPermissionsResponse,
     MarketplaceInstallationResponse,
     MarketplaceListingResponse,
     to_installation_response,
     to_listing_response,
+    to_permissions_response,
 )
 
 router = APIRouter(prefix="/marketplace", tags=["marketplace"])
@@ -77,6 +86,39 @@ _ACTOR_PREFIX = "user"
 def _actor(principal: AuthPrincipal) -> str:
     """Render the audit actor string for the authenticated principal."""
     return f"{_ACTOR_PREFIX}:{principal.user_id}"
+
+
+async def _load_installation_with_listing(
+    session: AsyncSession, installation_id: UUID
+) -> tuple[MarketplaceInstallation, MarketplaceListing]:
+    """Load a tenant-owned installation + its listing, or 404.
+
+    RLS scopes the installation to the caller's tenant, so another tenant's
+    install is a clean 404 (no cross-tenant leak). The listing is resolved
+    separately by id: a global (NULL-tenant) listing is visible, and a
+    tenant's own private listing is too — either way the install could only
+    exist for a listing this tenant can see. Soft-deleted (revoked)
+    installs are included here so consent state is still inspectable; the
+    write path rejects deciding on a revoked install.
+    """
+    inst_result = await session.execute(
+        select(MarketplaceInstallation).where(
+            MarketplaceInstallation.id == installation_id,
+        )
+    )
+    installation = inst_result.scalar_one_or_none()
+    if installation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="installation not found")
+
+    listing_result = await session.execute(
+        select(MarketplaceListing).where(
+            MarketplaceListing.id == installation.listing_id,
+        )
+    )
+    listing = listing_result.scalar_one_or_none()
+    if listing is None:  # pragma: no cover - FK + ondelete CASCADE keeps these paired
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="listing not found")
+    return installation, listing
 
 
 # ===========================================================================
@@ -208,11 +250,24 @@ async def install_listing(
             detail="listing already installed for this tenant/project",
         )
 
-    # TODO(Plan 09 Fase B/C): apply trust-level guardrails, run the
-    # pre-install static analysis (Bandit/semgrep), the post-install
-    # sandbox probe, and the per-permission consent flow before
-    # persisting. In Phase A the install is a record-and-audit stub: the
-    # granted permissions are taken verbatim from the request.
+    # TODO(Plan 09 Fase B/C): run the pre-install static analysis
+    # (Bandit/semgrep) and the post-install sandbox probe before persisting.
+
+    # Trust-level consent gate (plan decisions (a)+(b), task_09_07).
+    # community / experimental listings ALWAYS require explicit
+    # per-permission consent from the project owner: such an install lands
+    # DISABLED with NO granted permissions and cannot be enabled until every
+    # requested permission is granted via POST .../consent. A verified
+    # listing needs no per-permission consent (minimal friction, decision
+    # (d)) so it installs ENABLED, honouring the granted permissions from
+    # the request verbatim (Phase A behaviour preserved).
+    needs_consent = consent_required_for(listing.trust_level)
+    if needs_consent:
+        initial_status = InstallationStatus.DISABLED.value
+        granted: list[object] = []
+    else:
+        initial_status = InstallationStatus.ENABLED.value
+        granted = list(payload.granted_permissions)
 
     installation = MarketplaceInstallation(
         tenant_id=tenant_id,
@@ -221,8 +276,9 @@ async def install_listing(
         # The resolved version is the listing's current version (semver
         # re-pointing on update is task_09_12).
         version=listing.version,
-        status=InstallationStatus.ENABLED.value,
-        granted_permissions=payload.granted_permissions,
+        status=initial_status,
+        granted_permissions=granted,
+        denied_permissions=[],
         installed_by=principal.user_id,
     )
     session.add(installation)
@@ -247,7 +303,9 @@ async def install_listing(
             detail={
                 "version": listing.version,
                 "trust_level": listing.trust_level,
-                "granted_permissions": payload.granted_permissions,
+                "consent_required": needs_consent,
+                "status": initial_status,
+                "granted_permissions": granted,
                 "project_id": (str(payload.project_id) if payload.project_id else None),
             },
         )
@@ -255,6 +313,139 @@ async def install_listing(
     await session.flush()
     await session.refresh(installation)
     return to_installation_response(installation)
+
+
+# ===========================================================================
+# GET /marketplace/installations/{id}/permissions — surface for consent
+# ===========================================================================
+@router.get(
+    "/installations/{installation_id}/permissions",
+    response_model=InstallationPermissionsResponse,
+)
+async def get_installation_permissions(
+    installation_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> InstallationPermissionsResponse:
+    """Surface an install's requested permissions + their consent state.
+
+    The consent UI (task_09_07) lists every permission the listing requests
+    (allowed_domains / allowed_paths / network_policy) tagged GRANTED /
+    DENIED / PENDING, whether this install requires per-permission consent
+    at all (trust-level driven), and whether it is currently enabled. RLS
+    scopes the lookup to the caller's tenant — another tenant's install is a
+    clean 404. Any member may read; only the owner may decide (POST).
+    """
+    installation, listing = await _load_installation_with_listing(session, installation_id)
+    summary = summarize(
+        trust_level=listing.trust_level,
+        requested_permissions=listing.requested_permissions or [],
+        granted_permissions=installation.granted_permissions or [],
+        denied_permissions=installation.denied_permissions or [],
+    )
+    return to_permissions_response(installation=installation, summary=summary)
+
+
+# ===========================================================================
+# POST /marketplace/installations/{id}/consent — record per-permission decisions
+# ===========================================================================
+@router.post(
+    "/installations/{installation_id}/consent",
+    response_model=InstallationPermissionsResponse,
+)
+async def decide_consent(
+    installation_id: UUID,
+    payload: ConsentDecisionRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> InstallationPermissionsResponse:
+    """Record the project owner's grant/deny verdict on each permission.
+
+    Granted permissions persist on the installation; denied ones persist in
+    a parallel set. When EVERY requested permission is granted, a
+    consent-gated install transitions to ``enabled`` and a ``consent`` audit
+    row is written. If ANY required permission is denied (or still pending)
+    the install stays ``disabled``; an explicit deny additionally writes a
+    ``consent_denied`` audit row. A decision referencing a permission the
+    listing never requested is a 422.
+
+    RBAC: gated to ``tenant_admin`` (this repo's project-owner role, see the
+    module docstring). RLS scopes the install to the caller's tenant — a
+    non-owner / cross-tenant caller gets 403 / 404, never a cross-tenant
+    write.
+    """
+    installation, listing = await _load_installation_with_listing(session, installation_id)
+
+    # A revoked install is terminal — consent cannot be (re)decided on it.
+    if installation.status == InstallationStatus.REVOKED.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="installation is revoked",
+        )
+
+    decisions = {item.type: item.decision for item in payload.decisions}
+    try:
+        outcome = apply_decisions(
+            trust_level=listing.trust_level,
+            requested_permissions=listing.requested_permissions or [],
+            existing_granted=installation.granted_permissions or [],
+            existing_denied=installation.denied_permissions or [],
+            decisions=decisions,
+        )
+    except ConsentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    installation.granted_permissions = outcome.granted
+    installation.denied_permissions = outcome.denied
+    # Enable only once every requested permission is granted (or consent is
+    # not required); otherwise the install stays disabled.
+    installation.status = (
+        InstallationStatus.ENABLED.value if outcome.enable else InstallationStatus.DISABLED.value
+    )
+
+    actor = _actor(principal)
+    detail = {
+        "decisions": {ptype: decision.value for ptype, decision in decisions.items()},
+        "granted_permissions": outcome.granted,
+        "denied_permissions": outcome.denied,
+        "enabled": outcome.enable,
+    }
+    # A grant batch is a CONSENT event; a deny additionally records the
+    # immutable CONSENT_DENIED event (mandatory audit, plan decision).
+    session.add(
+        MarketplaceAuditEntry(
+            tenant_id=installation.tenant_id,
+            actor=actor,
+            action=MarketplaceAuditAction.CONSENT.value,
+            listing_id=listing.id,
+            installation_id=installation.id,
+            detail=detail,
+        )
+    )
+    if outcome.any_denied:
+        session.add(
+            MarketplaceAuditEntry(
+                tenant_id=installation.tenant_id,
+                actor=actor,
+                action=MarketplaceAuditAction.CONSENT_DENIED.value,
+                listing_id=listing.id,
+                installation_id=installation.id,
+                detail=detail,
+            )
+        )
+    await session.flush()
+    await session.refresh(installation)
+
+    summary = summarize(
+        trust_level=listing.trust_level,
+        requested_permissions=listing.requested_permissions or [],
+        granted_permissions=installation.granted_permissions or [],
+        denied_permissions=installation.denied_permissions or [],
+    )
+    return to_permissions_response(installation=installation, summary=summary)
 
 
 # ===========================================================================

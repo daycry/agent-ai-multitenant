@@ -374,6 +374,14 @@ class MarketplaceInstallation(
     granted_permissions: Mapped[list[Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
+    # The subset of the listing's requested permissions the project owner
+    # explicitly DENIED (task_09_07). The "pending" set is derived (requested
+    # minus granted minus denied). An install whose trust level requires
+    # per-permission consent stays ``disabled`` while any required
+    # permission is still pending or denied.
+    denied_permissions: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
 
     installed_by: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),

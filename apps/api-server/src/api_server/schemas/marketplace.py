@@ -40,6 +40,11 @@ from api_server.db.marketplace import (
     MarketplaceListingKind,
     MarketplaceTrustLevel,
 )
+from api_server.marketplace.consent import (
+    ConsentState,
+    ConsentSummary,
+    PermissionDecision,
+)
 
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
@@ -125,6 +130,7 @@ class MarketplaceInstallationResponse(BaseModel):
     version: str
     status: str
     granted_permissions: list[Any]
+    denied_permissions: list[Any]
     installed_by: UUID | None
     installed_at: datetime
     revoked_at: datetime | None
@@ -144,6 +150,7 @@ def to_installation_response(
         version=installation.version,
         status=installation.status,
         granted_permissions=installation.granted_permissions or [],
+        denied_permissions=installation.denied_permissions or [],
         installed_by=installation.installed_by,
         installed_at=installation.installed_at,
         revoked_at=installation.revoked_at,
@@ -153,13 +160,97 @@ def to_installation_response(
     )
 
 
+# =============================================================================
+# Per-permission consent (task_09_07)
+# =============================================================================
+class PermissionDecisionItem(BaseModel):
+    """One project-owner verdict on a single requested permission.
+
+    ``type`` is the canonical permission key (allowed_domains /
+    allowed_paths / network_policy); ``decision`` is grant or deny. The
+    router rejects (422) a ``type`` the listing did not request.
+    """
+
+    model_config = _BASE_CONFIG
+
+    type: str
+    decision: PermissionDecision
+
+
+class ConsentDecisionRequest(BaseModel):
+    """A batch of per-permission decisions from the project owner.
+
+    The project owner approves/denies EACH requested permission. Granting
+    every requested permission enables a consent-gated install; denying any
+    keeps it disabled and writes a ``consent_denied`` audit row.
+    """
+
+    model_config = _BASE_CONFIG
+
+    decisions: list[PermissionDecisionItem] = Field(min_length=1)
+
+
+class PermissionStateItem(BaseModel):
+    """A requested permission + its current consent state, for the UI."""
+
+    model_config = _BASE_CONFIG
+
+    type: str
+    descriptor: dict[str, Any]
+    state: ConsentState
+
+
+class InstallationPermissionsResponse(BaseModel):
+    """The full permission surface of an install, for the consent UI.
+
+    Surfaces every requested permission (from the listing) with its current
+    GRANTED / DENIED / PENDING state, whether this install requires
+    per-permission consent at all (trust-level driven), and whether it is
+    currently enabled.
+    """
+
+    model_config = _BASE_CONFIG
+
+    installation_id: UUID
+    listing_id: UUID
+    status: str
+    consent_required: bool
+    all_granted: bool
+    permissions: list[PermissionStateItem]
+
+
+def to_permissions_response(
+    *,
+    installation: MarketplaceInstallation,
+    summary: ConsentSummary,
+) -> InstallationPermissionsResponse:
+    return InstallationPermissionsResponse(
+        installation_id=installation.id,
+        listing_id=installation.listing_id,
+        status=installation.status,
+        consent_required=summary.consent_required,
+        all_granted=summary.all_granted,
+        permissions=[
+            PermissionStateItem(type=p.type, descriptor=p.descriptor, state=p.state)
+            for p in summary.permissions
+        ],
+    )
+
+
 __all__ = [
+    "ConsentDecisionRequest",
+    "ConsentState",
     "InstallationCreateRequest",
+    "InstallationPermissionsResponse",
     "InstallationStatus",
     "MarketplaceInstallationResponse",
     "MarketplaceListingKind",
     "MarketplaceListingResponse",
     "MarketplaceTrustLevel",
+    "PermissionDecision",
+    "PermissionDecisionItem",
+    "PermissionStateItem",
     "to_installation_response",
     "to_listing_response",
+    "to_permissions_response",
 ]
