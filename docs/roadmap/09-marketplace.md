@@ -176,7 +176,7 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
 
 #### `task_09_06` — Sandbox de ejecución durante prueba post-instalación
 
-- [ ] **Título**: Sandbox de ejecución durante prueba post-instalación
+- [x] **Título**: Sandbox de ejecución durante prueba post-instalación <!-- task_09_06: SandboxSpec + run/teardown en marketplace/sandbox.py reutilizando el patrón de aislamiento (cap_drop ALL, no-new-privileges, read-only root, mem/pids/cpu limits, network policy honored, sin socket Docker). Tests con cliente Docker MOCKEADO (tests/integration/test_install_sandbox.py); la ejecución real en contenedor queda como paso de integración pendiente de la imagen runtime. -->
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: security + devops

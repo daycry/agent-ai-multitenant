@@ -10,6 +10,15 @@ machinery.
 
 from __future__ import annotations
 
+from api_server.marketplace.sandbox import (
+    DockerSocketLeakError,
+    MarketplaceSandbox,
+    SandboxError,
+    SandboxResult,
+    SandboxSpec,
+    assert_no_docker_socket,
+    build_sandbox_run_kwargs,
+)
 from api_server.marketplace.static_analysis import (
     Finding,
     StaticAnalysisError,
@@ -25,13 +34,20 @@ from api_server.marketplace.trust import (
 )
 
 __all__ = [
+    "DockerSocketLeakError",
     "Finding",
+    "MarketplaceSandbox",
     "NetworkPolicy",
+    "SandboxError",
+    "SandboxResult",
+    "SandboxSpec",
     "Severity",
     "StaticAnalysisError",
     "StaticAnalysisReport",
     "StaticAnalyzer",
     "TrustPolicy",
     "UnknownTrustLevelError",
+    "assert_no_docker_socket",
+    "build_sandbox_run_kwargs",
     "trust_policy",
 ]
