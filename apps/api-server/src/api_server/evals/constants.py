@@ -42,13 +42,23 @@ DEFAULT_SHADOW_SAMPLE_RATE: Decimal = Decimal("0.05")
 SHADOW_SAMPLE_RATE_ENV_VAR = "EVAL_SHADOW_SAMPLE_RATE"
 
 # --- Drift detection (task_14_10) -------------------------------------------
-# A drift alert needs a SUSTAINED decline, not a single dip: at least this
-# many consecutive windows must each fall by at least the drop threshold
-# below before an alert fires.
+# A drift alert needs a SUSTAINED decline, not a single dip: the latest this
+# many consecutive windows must EACH fall by at least the drop threshold below
+# before drift is declared. With the default 3 a one-off dip (a single low
+# window flanked by recovery) never triggers — three windows in a row must keep
+# sliding. Operator-configurable via the env var / explicit arg, never a magic
+# number at the call site.
 DEFAULT_DRIFT_WINDOW: int = 3
-# Minimum per-window pass-rate drop (fraction in [0, 1]) that counts toward a
-# sustained decline.
+# Minimum per-step pass-rate drop (fraction in [0, 1]) that counts as a decline
+# for one window vs its predecessor. A step that drops by less than this (or
+# rises) breaks the sustained run.
 DEFAULT_DRIFT_DROP_THRESHOLD: Decimal = Decimal("0.1")
+
+# Env vars an operator sets to override the two drift tunables above without
+# editing code (read by ``api_server.evals.drift.resolve_drift_config`` as a
+# fallback when an explicit value is not passed).
+DRIFT_WINDOW_ENV_VAR = "EVAL_DRIFT_WINDOW"
+DRIFT_DROP_THRESHOLD_ENV_VAR = "EVAL_DRIFT_DROP_THRESHOLD"
 
 
 __all__ = [
@@ -56,6 +66,8 @@ __all__ = [
     "DEFAULT_DRIFT_WINDOW",
     "DEFAULT_PASS_RATE_REGRESSION_THRESHOLD",
     "DEFAULT_SHADOW_SAMPLE_RATE",
+    "DRIFT_DROP_THRESHOLD_ENV_VAR",
+    "DRIFT_WINDOW_ENV_VAR",
     "REGRESSION_THRESHOLD_ENV_VAR",
     "SHADOW_SAMPLE_RATE_ENV_VAR",
 ]

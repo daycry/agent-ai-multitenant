@@ -171,6 +171,14 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.PRIORITY,
         default_channel_types=("in_app", "email"),
     ),
+    # Plan 14 task_14_10 — a benchmark's quality drifted (a SUSTAINED pass-rate
+    # decline over the trailing window). A quality signal the Tenant Admins act
+    # on; rides the priority lane, fanning out to in-app + email by default.
+    "quality_drift_alert": EventSpec(
+        "quality_drift_alert",
+        lane=NotificationLane.PRIORITY,
+        default_channel_types=("in_app", "email"),
+    ),
 }
 
 

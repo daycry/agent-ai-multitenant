@@ -248,7 +248,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_10` — Detección de drift: alerta si calidad cae sostenidamente
 
-- [ ] **Título**: Detección de drift: alerta si calidad cae sostenidamente
+- [x] **Título**: Detección de drift: alerta si calidad cae sostenidamente
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer

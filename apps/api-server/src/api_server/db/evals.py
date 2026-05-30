@@ -566,11 +566,63 @@ class EvalShadowRecord(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMi
         )
 
 
+# =============================================================================
+# eval_drift_state — per-(tenant, dataset) debounce anchor for drift alerts
+# =============================================================================
+class EvalDriftState(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """The debounce anchor for quality-drift alerts (Plan 14 task_14_10).
+
+    The drift detector (``api_server.evals.drift``) watches a tenant's trailing
+    eval/shadow-run pass rates for a SUSTAINED decline. When drift is declared it
+    fires ONE alert through the Plan 10 notifier — and stamps ``last_alerted_at``
+    here so a still-declining stream does not spam (mirrors the
+    :class:`~api_server.db.guardrail_alert_rule.GuardrailAlertRule` debounce).
+    Exactly one row per ``(tenant_id, dataset_id)``.
+
+    **Tenant-owned** + RLS: a tenant's drift state is visible only to that
+    tenant, so tenant A's decline can never debounce / alert tenant B. Scoped
+    to a dataset (the quality signal being watched) so independent benchmarks
+    debounce independently.
+    """
+
+    __tablename__ = "eval_drift_state"
+    __table_args__ = (
+        # One state row per benchmark stream per tenant (partial-free: the pair
+        # is the natural key). The unique index doubles as the lookup index.
+        Index(
+            "uq_eval_drift_state_tenant_dataset",
+            "tenant_id",
+            "dataset_id",
+            unique=True,
+        ),
+    )
+
+    dataset_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("eval_datasets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # The last time a drift alert fired for this (tenant, dataset). NULL until
+    # the first alert; the detector suppresses a re-alert until a full debounce
+    # window has elapsed since this anchor.
+    last_alerted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"EvalDriftState(id={self.id!r}, dataset={self.dataset_id!r}, "
+            f"last_alerted_at={self.last_alerted_at!r})"
+        )
+
+
 __all__ = [
     "EvalCriterion",
     "EvalDataset",
     "EvalDatasetItem",
     "EvalDatasetKind",
+    "EvalDriftState",
     "EvalResult",
     "EvalResultVerdict",
     "EvalRun",

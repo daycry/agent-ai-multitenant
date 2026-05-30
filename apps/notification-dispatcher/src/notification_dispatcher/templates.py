@@ -294,6 +294,29 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "(threshold {{ threshold | default('?') }})."
         ),
     ),
+    # --- quality_drift_alert (Plan 14 task_14_10) --------------------------
+    ("quality_drift_alert", "es"): TemplateSource(
+        subject="Deriva de calidad detectada en un dataset de evaluación",
+        body=(
+            "La calidad ha caído de forma sostenida: "
+            "{{ consecutive_declines | default('?') }} ejecución(es) consecutiva(s) "
+            "con descenso del pass-rate (caída total {{ total_decline | default('?') }}) "
+            "sobre una ventana de {{ window | default('?') }} "
+            "(umbral por paso {{ drop_threshold | default('?') }}). "
+            "Dataset {{ dataset_id | default('(desconocido)') }}."
+        ),
+    ),
+    ("quality_drift_alert", "en"): TemplateSource(
+        subject="Quality drift detected on an eval dataset",
+        body=(
+            "Quality declined in a sustained way: "
+            "{{ consecutive_declines | default('?') }} consecutive run(s) with a "
+            "pass-rate drop (total slide {{ total_decline | default('?') }}) over a "
+            "window of {{ window | default('?') }} "
+            "(per-step threshold {{ drop_threshold | default('?') }}). "
+            "Dataset {{ dataset_id | default('(unknown)') }}."
+        ),
+    ),
 }
 
 # Public, read-only view of the builtin catalogue keyed by
