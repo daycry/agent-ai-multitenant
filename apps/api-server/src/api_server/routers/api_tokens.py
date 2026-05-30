@@ -26,12 +26,19 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
 
+from api_server.auth.api_token_auth import invalidate_api_token_cache
 from api_server.auth.api_tokens import generate_api_token
-from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
+from api_server.auth.deps import (
+    AuthPrincipal,
+    get_redis,
+    get_tenant_session,
+    require_tenant_admin,
+)
 from api_server.db.models import ApiToken
 from api_server.routers._helpers import require_tenant_id
 from api_server.schemas.api_tokens import (
@@ -102,6 +109,7 @@ async def revoke_api_token(
     token_id: UUID,
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
+    redis: Redis = Depends(get_redis),
 ) -> None:
     """Revoke a public-API token. tenant_admin only.
 
@@ -109,6 +117,10 @@ async def revoke_api_token(
     revoked token authenticates nothing thereafter. RLS scopes the lookup
     to the caller's tenant, so a tenant cannot revoke another tenant's
     token (it 404s, never silently succeeds).
+
+    Invalidates the X-API-Token resolution cache (task_13_03) so the
+    revoked token stops authenticating IMMEDIATELY rather than after the
+    cache TTL ages out.
     """
     require_tenant_id(principal)
     result = await session.execute(
@@ -125,3 +137,6 @@ async def revoke_api_token(
         )
     row.revoked_at = datetime.now(tz=UTC)
     await session.flush()
+    # Evict the cached resolution (keyed by the token's SHA-256 digest) so
+    # the revocation is effective now, not after the short TTL.
+    await invalidate_api_token_cache(row.token_hash, redis)

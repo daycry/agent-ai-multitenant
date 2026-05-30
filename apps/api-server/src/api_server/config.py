@@ -245,6 +245,16 @@ class Settings(BaseSettings):
     api_token_default_rate_limit: int = Field(
         default=100, description="Default per-minute request budget for a public-API token."
     )
+    # TTL of the X-API-Token -> tenant resolution cached in Redis by the
+    # public-API auth middleware (Plan 13 task_13_03). Short by design: it
+    # avoids a DB hit per request while bounding how long a stale entry can
+    # linger if the explicit cache invalidation on revocation is ever missed.
+    # Revocation deletes the cache key directly, so the common case is
+    # immediate; this TTL is the worst-case staleness ceiling.
+    api_token_cache_ttl_seconds: int = Field(
+        default=30,
+        description="Seconds an X-API-Token -> tenant resolution stays cached in Redis.",
+    )
 
     # ----- Plan 06: shared data root for worktrees + dep-cache -----
     data_root: str = Field(

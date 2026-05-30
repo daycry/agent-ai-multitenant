@@ -121,7 +121,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_03` — Middleware X-API-Token con cache Redis
 
-- [ ] **Título**: Middleware X-API-Token con cache Redis
+- [x] **Título**: Middleware X-API-Token con cache Redis
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
