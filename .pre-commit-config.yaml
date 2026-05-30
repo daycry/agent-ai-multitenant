@@ -123,5 +123,7 @@ repos:
             \.venv/.*|
             node_modules/.*|
             .*\.min\.(js|css)|
-            packages/sdk-python/openapi-v1\.json
+            packages/sdk-python/openapi-v1\.json|
+            packages/sdk-typescript/openapi-v1\.json|
+            packages/sdk-typescript/src/generated/.*
           )$

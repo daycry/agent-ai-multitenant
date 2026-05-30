@@ -314,7 +314,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_14` — SDK TypeScript con tipos generados (openapi-typescript-codegen)
 
-- [ ] **Título**: SDK TypeScript con tipos generados (openapi-typescript-codegen)
+- [x] **Título**: SDK TypeScript con tipos generados (openapi-typescript-codegen) — generado con `openapi-typescript-codegen` v0.30.0 (preset `fetch`) para los **tipos** de modelo + cliente fino tipado escrito a mano (`packages/sdk-typescript`). El generador nombrado SÍ se usa para los modelos; el cliente se escribe a mano porque `openapi-typescript-codegen` no respeta el esquema `apiKey`/`X-API-Token` (solo emite `Authorization: Bearer`), así que el cliente configura la cabecera `X-API-Token` una vez (Decisiones Clave). Dir generado `src/generated/` excluido de eslint (`.eslintrc.json`) + prettier (`.pre-commit-config.yaml`), documentado en `packages/sdk-typescript/README.md`; verificado por `packages/sdk-typescript/test/sdk-typescript.test.ts` (`npm test -- sdk-typescript`, 9 tests) + `tsc`/`build` en verde.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev

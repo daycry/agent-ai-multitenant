@@ -1,0 +1,35 @@
+{
+  "name": "@agentic-platform/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Official, typed TypeScript client for the Agentic Platform public v1 REST API (Plan 13).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "openapi-v1.json",
+    "README.md"
+  ],
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "openapi-typescript-codegen": "0.30.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
+  }
+}
