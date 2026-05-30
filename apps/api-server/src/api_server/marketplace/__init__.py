@@ -19,6 +19,13 @@ from api_server.marketplace.sandbox import (
     assert_no_docker_socket,
     build_sandbox_run_kwargs,
 )
+from api_server.marketplace.skill_format import (
+    SkillExample,
+    SkillFormatError,
+    SkillManifest,
+    is_valid_semver,
+    parse_skill_md,
+)
 from api_server.marketplace.static_analysis import (
     Finding,
     StaticAnalysisError,
@@ -42,6 +49,9 @@ __all__ = [
     "SandboxResult",
     "SandboxSpec",
     "Severity",
+    "SkillExample",
+    "SkillFormatError",
+    "SkillManifest",
     "StaticAnalysisError",
     "StaticAnalysisReport",
     "StaticAnalyzer",
@@ -49,5 +59,7 @@ __all__ = [
     "UnknownTrustLevelError",
     "assert_no_docker_socket",
     "build_sandbox_run_kwargs",
+    "is_valid_semver",
+    "parse_skill_md",
     "trust_policy",
 ]

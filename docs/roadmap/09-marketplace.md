@@ -229,7 +229,7 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
 
 #### `task_09_09` — Formato SKILL.md: frontmatter YAML + descripción + ejemplos + dependencias
 
-- [ ] **Título**: Formato SKILL.md: frontmatter YAML + descripción + ejemplos + dependencias
+- [x] **Título**: Formato SKILL.md: frontmatter YAML + descripción + ejemplos + dependencias <!-- task_09_09: parser/validador SKILL.md en marketplace/skill_format.py (SkillManifest + parse_skill_md -> SkillFormatError tipado). Frontmatter YAML (name/description/version semver + dependencies/permissions/examples) + cuerpo Markdown. Reutiliza PERMISSION_KEYS + NetworkPolicy de marketplace/trust.py; .requested_permissions renderiza los descriptores {"type","value"} que ya consumen consent/install. PyYAML (dep existente), sin nueva dep pesada, sin migración (reutiliza manifest/requested_permissions JSONB). Tests tests/unit/test_skill_md_format.py (40 pass). -->
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
