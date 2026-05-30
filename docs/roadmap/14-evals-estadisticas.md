@@ -267,7 +267,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_11` — Dashboard de calidad por agente, proyecto, release de prompt
 
-- [ ] **Título**: Dashboard de calidad por agente, proyecto, release de prompt
+- [x] **Título**: Dashboard de calidad por agente, proyecto, release de prompt
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev

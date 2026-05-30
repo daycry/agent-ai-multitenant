@@ -40,6 +40,7 @@ from api_server.routers.conversations import (
 )
 from api_server.routers.dep_cache import router as dep_cache_router
 from api_server.routers.docs_viewer import router as docs_viewer_router
+from api_server.routers.eval_quality import router as eval_quality_router
 from api_server.routers.evals import router as evals_router
 from api_server.routers.executions import router as executions_router
 from api_server.routers.guardrail_alerts import router as guardrail_alerts_router
@@ -176,6 +177,7 @@ def _register_routers(app: FastAPI) -> None:
         approvals_router,
         executions_router,
         evals_router,
+        eval_quality_router,
         internal_agent_router,
         project_conversations_router,
         conversations_router,

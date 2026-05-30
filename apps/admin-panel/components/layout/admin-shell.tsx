@@ -13,6 +13,7 @@ import {
   DatabaseBackup,
   FileText,
   FolderKanban,
+  Gauge,
   Inbox,
   LayoutDashboard,
   LayoutGrid,
@@ -85,6 +86,12 @@ const NAV: NavItem[] = [
     href: "/admin/guardrails",
     label: "Guardrails",
     Icon: ShieldAlert,
+    adminOnly: true,
+  },
+  {
+    href: "/admin/eval-quality",
+    label: "Calidad (Evals)",
+    Icon: Gauge,
     adminOnly: true,
   },
   {
