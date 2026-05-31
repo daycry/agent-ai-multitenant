@@ -299,6 +299,33 @@ class ApprovalRequestStatus(enum.StrEnum):
     TIMED_OUT = "timed_out"
 
 
+class HumanTaskAssignmentStatus(enum.StrEnum):
+    """Lifecycle of one :class:`HumanTaskAssignment` (Plan 16 task_16_05).
+
+    The assignment row tracks WHO a human task is currently with and where
+    that person is in the accept/work cycle — distinct from, but kept in step
+    with, the Task's own §7.2 status (an ``assigned_to_human`` Task has a
+    ``pending_acceptance`` assignment; the Task moves to ``in_progress`` when
+    the assignment moves to ``accepted``).
+
+    - ``PENDING_ACCEPTANCE``: freshly created by the orchestrator (task_16_05)
+      — the assigned user has been notified and has up to
+      ``acceptance_timeout_hours`` to accept before escalation (task_16_06).
+    - ``ACCEPTED``: the user accepted; work has started.
+    - ``REASSIGNED``: superseded by a newer assignment (the acceptance-timeout
+      escalation hands the task to the ``escalation_target_user_id``,
+      task_16_06). The superseding row is a fresh ``pending_acceptance`` one.
+    - ``DECLINED``: the user explicitly rejected the task (Fase C inbox).
+    - ``EXPIRED``: the acceptance window lapsed with no decision (task_16_06).
+    """
+
+    PENDING_ACCEPTANCE = "pending_acceptance"
+    ACCEPTED = "accepted"
+    REASSIGNED = "reassigned"
+    DECLINED = "declined"
+    EXPIRED = "expired"
+
+
 # =============================================================================
 # Agent
 # =============================================================================
@@ -1192,6 +1219,104 @@ class HumanWorkSession(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMi
         )
 
 
+# =============================================================================
+# HumanTaskAssignment (who a human task is currently with + accept cycle)
+# =============================================================================
+class HumanTaskAssignment(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """One assignment of a human task to a concrete User (Plan 16 task_16_05).
+
+    When the orchestrator routes a ``ready`` task whose assignee Agent is
+    ``agent_type='human'`` it does NOT request a runtime container from the
+    pool (the AI path). Instead it creates one of these rows — recording the
+    human Agent (``human_agent_id``) and the concrete User the work landed on
+    (``assigned_to_user_id``, resolved from
+    ``human_agent_config.assigned_user_id``) — and transitions the Task to
+    ``assigned_to_human`` via the §7.2 state machine (task_16_04). The
+    acceptance-timeout job (task_16_06) reads the ``pending_acceptance`` rows
+    and, on expiry, creates a fresh assignment for the
+    ``escalation_target_user_id`` (marking this one ``reassigned``).
+
+    Tenant-owned: the row carries ``tenant_id`` (TenantScopedMixin) and the DB
+    enforces isolation with the SAME RLS policy shape as ``human_work_sessions``
+    / ``agents`` (``{table}_tenant_isolation`` FOR ALL, ``tenant_id = NULLIF(
+    current_setting('app.tenant_id', true), '')::uuid``). An assignment is
+    intrinsically tenant-scoped (it names a tenant ``users`` row and a tenant
+    ``agents`` row), so this table is never global.
+
+    Assignments are an append-only audit-style trail (no soft-delete): a task
+    may accrue several rows over its life (initial assignment, escalation
+    reassignment, …); ``status`` records each one's outcome.
+    """
+
+    __tablename__ = "human_task_assignments"
+    __table_args__ = (
+        Index("ix_human_task_assignments_tenant_id", "tenant_id"),
+        # Read path: "the assignments of this task" (detail view / audit) and
+        # "the live assignments of this user" (the personal inbox, Fase C).
+        Index("ix_human_task_assignments_task_id", "task_id"),
+        Index("ix_human_task_assignments_assigned_user", "assigned_to_user_id"),
+        # The acceptance-timeout sweep (task_16_06) scans the open
+        # pending_acceptance rows by age — a partial index keeps that scan
+        # cheap as accepted/expired rows accumulate.
+        Index(
+            "ix_human_task_assignments_pending",
+            "assigned_at",
+            postgresql_where=text("status = 'pending_acceptance'"),
+        ),
+        # The DB enforces the HumanTaskAssignmentStatus value set (mirrors the
+        # ck_agents_agent_type CHECK shape).
+        CheckConstraint(
+            "status IN ('pending_acceptance', 'accepted', 'reassigned'," " 'declined', 'expired')",
+            name="ck_human_task_assignments_status",
+        ),
+    )
+
+    # The human task this assignment is for. CASCADE so deleting the task
+    # removes its assignments (mirrors human_work_sessions.task_id).
+    task_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # The human Agent (agent_type='human') the task is assigned to. SET NULL so
+    # the assignment record survives the agent's (soft) removal.
+    human_agent_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("agents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # The concrete User the work landed on (resolved from
+    # human_agent_config.assigned_user_id). SET NULL so the record survives a
+    # user deletion (same trade-off human_work_sessions.user_id makes).
+    assigned_to_user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # When the assignment was created. Defaults to now() so a freshly-created
+    # row is timestamped; the acceptance-timeout sweep ages off this column.
+    assigned_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    # Where this assignment is in the accept/work cycle. Stored as the
+    # :class:`HumanTaskAssignmentStatus` value (TEXT) — same string-backed-enum
+    # convention as agent_type/scope. DB-constrained by
+    # ck_human_task_assignments_status.
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'pending_acceptance'")
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"HumanTaskAssignment(id={self.id!r}, task_id={self.task_id!r},"
+            f" assigned_to_user_id={self.assigned_to_user_id!r}, status={self.status!r})"
+        )
+
+
 __all__ = [
     "Agent",
     "AgentRole",
@@ -1210,6 +1335,8 @@ __all__ = [
     "Execution",
     "ExecutionStatus",
     "HumanAgentConfig",
+    "HumanTaskAssignment",
+    "HumanTaskAssignmentStatus",
     "HumanWorkSession",
     "MemoryScope",
     "Message",

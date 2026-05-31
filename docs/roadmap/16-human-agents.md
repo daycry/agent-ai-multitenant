@@ -164,7 +164,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_05` — Orchestrator: ruta de tareas humanas (no solicita pool de runtime)
 
-- [ ] **Título**: Cuando `assignee.agent_type=human`, el orchestrator NO solicita contenedor del pool. En su lugar crea `HumanTaskAssignment` con `task_id`, `human_agent_id`, `assigned_to_user_id` (resuelto desde `human_agent_config.assigned_user_id`), `assigned_at`. Transiciona la tarea a `assigned_to_human`.
+- [x] **Título**: Cuando `assignee.agent_type=human`, el orchestrator NO solicita contenedor del pool. En su lugar crea `HumanTaskAssignment` con `task_id`, `human_agent_id`, `assigned_to_user_id` (resuelto desde `human_agent_config.assigned_user_id`), `assigned_at`. Transiciona la tarea a `assigned_to_human`.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

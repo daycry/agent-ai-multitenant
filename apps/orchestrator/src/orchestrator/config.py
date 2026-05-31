@@ -63,6 +63,14 @@ class Settings(BaseSettings):
         default="default",
         description="Celery queue the dispatcher enqueues agent runs onto.",
     )
+    notifications_event_queue: str = Field(
+        default="notifications.priority",
+        description="Celery queue the orchestrator enqueues a "
+        "`notification_dispatcher.dispatch_event` onto when it routes a human "
+        "task (task_16_05). The priority lane — a human-task assignment is "
+        "time-sensitive (the user has acceptance_timeout_hours to accept). "
+        "MUST match the notification-dispatcher's priority_queue.",
+    )
 
     # ----- Misc -----
     environment: str = Field(

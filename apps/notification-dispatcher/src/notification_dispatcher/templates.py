@@ -238,6 +238,25 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "before work can continue."
         ),
     ),
+    # --- human_task_assigned (Plan 16 task_16_05) --------------------------
+    # The context carries task_title / project_name / assigned_to (the
+    # human-readable assignee name). All keys tolerate a missing value.
+    ("human_task_assigned", "es"): TemplateSource(
+        subject="Tarea asignada: {{ task_title | default('(sin título)') }}",
+        body=(
+            "Se te ha asignado la tarea «{{ task_title | default('(sin título)') }}» "
+            "en el proyecto «{{ project_name | default('(sin proyecto)') }}». "
+            "Acéptala desde tu bandeja antes de que expire el plazo de aceptación."
+        ),
+    ),
+    ("human_task_assigned", "en"): TemplateSource(
+        subject="Task assigned: {{ task_title | default('(untitled)') }}",
+        body=(
+            "You have been assigned the task \"{{ task_title | default('(untitled)') }}\" "
+            "in project \"{{ project_name | default('(no project)') }}\". "
+            "Accept it from your inbox before the acceptance window expires."
+        ),
+    ),
     # --- review_escalated --------------------------------------------------
     ("review_escalated", "es"): TemplateSource(
         subject="Revisión escalada: {{ task_title | default('(sin título)') }}",

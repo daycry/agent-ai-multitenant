@@ -152,6 +152,18 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.PRIORITY,
         default_channel_types=("in_app", "telegram"),
     ),
+    # Plan 16 task_16_05 — a human task was routed to a concrete User: the
+    # orchestrator created a HumanTaskAssignment and moved the task to
+    # assigned_to_human (NO runtime container). Time-sensitive (the user has
+    # acceptance_timeout_hours to accept before escalation, task_16_06), so it
+    # rides the priority lane, fanning out to the user's in-app + telegram
+    # channels by default. The context carries task_title / project_name /
+    # assigned_to (the human-readable assignee).
+    "human_task_assigned": EventSpec(
+        "human_task_assigned",
+        lane=NotificationLane.PRIORITY,
+        default_channel_types=("in_app", "telegram"),
+    ),
     "review_escalated": EventSpec(
         "review_escalated",
         lane=NotificationLane.PRIORITY,
