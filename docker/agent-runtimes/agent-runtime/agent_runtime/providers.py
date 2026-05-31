@@ -31,7 +31,8 @@ import asyncio
 import contextlib
 import json
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Protocol, runtime_checkable
 
 import httpx
 from shared_llm import (
@@ -344,9 +345,90 @@ class ClaudeSDKModelClient:
 
 
 # ---------------------------------------------------------------------------
+# Provider config resolution — DB row (llm_providers) + Vault > env/installer
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ResolvedProviderConfig:
+    """A provider's runtime config resolved from an active `llm_providers`
+    row plus its Vault-stored credential (Plan 11.2, ADR 0028).
+
+    `base_url` is the row's endpoint (the APIM gateway / the Ollama URL;
+    `None` for the subscription-based Claude SDK path). `secret` is the
+    `{field: value}` dict read from Vault for the provider — the well-known
+    field names the admin layer writes (`oauth_token` / `api_key` /
+    `bearer_token`). NEITHER is ever logged; this object only ever lives in
+    memory long enough to build the provider client.
+    """
+
+    base_url: str | None = None
+    secret: dict[str, str] = field(default_factory=dict)
+
+
+@runtime_checkable
+class ProviderConfigResolver(Protocol):
+    """Resolve a provider `kind` to its DB+Vault config, or `None`.
+
+    The single seam the factory uses to let an active `llm_providers` row
+    win over the env/installer spec (precedence: **DB row > env**). A
+    resolver returns a :class:`ResolvedProviderConfig` when an active row
+    exists for the requested kind, or `None` to keep the current
+    env/installer behaviour. The agent-runtime container has no DB/Vault
+    access (CLAUDE.md principle 2) so it never passes a resolver — `None`
+    is the default and every existing call site is unchanged. The server
+    side (api-server / worker) injects a DB+Vault-backed resolver to build
+    the spec from `llm_providers`.
+    """
+
+    def __call__(self, kind: str) -> ResolvedProviderConfig | None: ...
+
+
+# How a resolved config overlays onto a spec, per kind. Each kind reads
+# different spec keys, so the overlay maps the DB `base_url` + the Vault
+# secret field onto the spec key that kind's client constructor consumes.
+# A resolved value WINS over whatever the env/installer put in the spec.
+def _overlay_resolved(
+    spec: dict[str, Any], kind: str, resolved: ResolvedProviderConfig
+) -> dict[str, Any]:
+    """Return a copy of `spec` with the resolved DB+Vault config applied.
+
+    Precedence is **DB row > env**: a non-empty resolved field overwrites
+    the spec's env/installer-derived value; an absent resolved field leaves
+    the spec untouched (so e.g. an Ollama row with no bearer keeps any
+    env api_key). The input `spec` is never mutated.
+    """
+    merged = dict(spec)
+    base_url = resolved.base_url
+    secret = resolved.secret
+    if kind == "azure_foundry":
+        if base_url:
+            merged["apim_base_url"] = base_url
+        if secret.get("api_key"):
+            merged["subscription_key"] = secret["api_key"]
+    elif kind == "copilot":
+        if secret.get("oauth_token"):
+            merged["github_token"] = secret["oauth_token"]
+    elif kind in ("claude_sdk", "claude"):
+        # Claude SDK uses ambient subscription auth — the row carries no
+        # spec-level override beyond the (rare) base_url; the OAuth token in
+        # Vault is consumed out-of-band by the SDK environment. Nothing to
+        # overlay onto the spec here.
+        pass
+    elif kind == "ollama":
+        if base_url:
+            merged["base_url"] = base_url
+        if secret.get("bearer_token"):
+            merged["api_key"] = secret["bearer_token"]
+    return merged
+
+
+# ---------------------------------------------------------------------------
 # Factory — model_from_spec delegates here for non-scripted kinds
 # ---------------------------------------------------------------------------
-def build_provider_client(spec: dict[str, Any]) -> ModelClient:
+def build_provider_client(
+    spec: dict[str, Any],
+    *,
+    resolver: ProviderConfigResolver | None = None,
+) -> ModelClient:
     """Build a real `ModelClient` from a JSON model spec.
 
     Kinds (ADR 0021 closed catalog):
@@ -355,10 +437,24 @@ def build_provider_client(spec: dict[str, Any]) -> ModelClient:
       * `claude_sdk`    — Claude Agent SDK (alias `claude`).
       * `ollama`        — Ollama local or cloud.
 
+    Provider config precedence (Plan 11.2 / ADR 0028): **DB row > env**.
+    When a `resolver` is supplied AND it returns a config for the spec's
+    `kind` (i.e. an active `llm_providers` row exists), that row's
+    `base_url` + its Vault-stored credential overlay the spec before the
+    client is built. With no resolver (the default — the runtime container
+    has no DB/Vault access) or when the resolver returns `None` (no active
+    row), the spec's env/installer-derived fields are used unchanged. No
+    call site or signature breaks: `resolver` is optional and defaults to
+    the historical behaviour.
+
     The `scripted` kind is handled by `agent_runtime.model.model_from_spec`.
     The historical `litellm` kind is rejected (see ADR 0021).
     """
     kind = spec.get("kind")
+    if resolver is not None and isinstance(kind, str):
+        resolved = resolver(kind)
+        if resolved is not None:
+            spec = _overlay_resolved(spec, kind, resolved)
     model = spec.get("model", "")
     tools = spec.get("tools")
     if kind == "azure_foundry":
@@ -403,5 +499,7 @@ __all__ = [
     "ClaudeSDKModelClient",
     "CopilotModelClient",
     "OllamaModelClient",
+    "ProviderConfigResolver",
+    "ResolvedProviderConfig",
     "build_provider_client",
 ]

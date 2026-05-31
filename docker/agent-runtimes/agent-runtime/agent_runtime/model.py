@@ -134,7 +134,7 @@ def _review_response(raw: dict[str, Any]) -> ReviewResponse:
     )
 
 
-def model_from_spec(spec: dict[str, Any]) -> ModelClient:
+def model_from_spec(spec: dict[str, Any], *, resolver: Any | None = None) -> ModelClient:
     """Build a ModelClient from a JSON spec — the agent-runtime entrypoint
     uses this to deserialise the model for a containerised run.
 
@@ -143,6 +143,13 @@ def model_from_spec(spec: dict[str, Any]) -> ModelClient:
     `ollama` — ADR 0021) are built by `agent_runtime.providers` —
     imported lazily to keep the loop independent of `httpx` / the
     Claude SDK when a scripted run is used.
+
+    `resolver` is the optional `ProviderConfigResolver` seam (Plan 11.2 /
+    ADR 0028): when supplied, an active `llm_providers` row + its Vault
+    credential win over the spec's env/installer fields (precedence: **DB
+    row > env**). It defaults to `None`, so the runtime container (no
+    DB/Vault access) and every existing caller keep the historical
+    behaviour unchanged.
     """
     kind = spec.get("kind", "scripted")
     if kind == "scripted":
@@ -152,4 +159,4 @@ def model_from_spec(spec: dict[str, Any]) -> ModelClient:
         )
     from agent_runtime.providers import build_provider_client
 
-    return build_provider_client(spec)
+    return build_provider_client(spec, resolver=resolver)
