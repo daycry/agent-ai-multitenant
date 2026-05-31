@@ -232,6 +232,14 @@ class PlanStatus(enum.StrEnum):
 class TaskStatus(enum.StrEnum):
     BACKLOG = "backlog"
     READY = "ready"
+    # La tarea ha sido asignada a un Human Agent (agent_type=human) y
+    # espera que el User asignado la acepte (Plan 16 §7.2 / task_16_04).
+    # Solo alcanzable desde `ready` y SOLO para tareas cuyo agente asignado
+    # es humano — el orchestrator (task_16_05) la fija al rutear una tarea
+    # humana en lugar de pedir contenedor. Desde aquí: `in_progress` (el
+    # humano acepta), `assigned_to_human` (reasignación) o `blocked`
+    # (escalación agotada, task_16_06).
+    ASSIGNED_TO_HUMAN = "assigned_to_human"
     IN_PROGRESS = "in_progress"
     # La tarea está aparcada esperando una decisión humana sobre una
     # acción sensible (ADR 0020). El agente queda libre; al aprobar la

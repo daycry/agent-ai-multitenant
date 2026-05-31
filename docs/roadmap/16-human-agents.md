@@ -147,7 +147,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_04` — Extender state machine de Task con estados de tareas humanas
 
-- [ ] **Título**: Añadir transiciones `ready → assigned_to_human`, `assigned_to_human → in_progress`, `assigned_to_human → assigned_to_human (reasignación)`, `assigned_to_human → blocked` al state machine del Servicio de Dominio. Validar que solo aplican si `assignee.agent_type=human`.
+- [x] **Título**: Añadir transiciones `ready → assigned_to_human`, `assigned_to_human → in_progress`, `assigned_to_human → assigned_to_human (reasignación)`, `assigned_to_human → blocked` al state machine del Servicio de Dominio. Validar que solo aplican si `assignee.agent_type=human`.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
