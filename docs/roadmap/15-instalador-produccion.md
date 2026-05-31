@@ -456,7 +456,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_21` — Runbook: upgrade del sistema
 
-- [ ] **Título**: Runbook: upgrade del sistema
+- [x] **Título**: Runbook: upgrade del sistema
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
