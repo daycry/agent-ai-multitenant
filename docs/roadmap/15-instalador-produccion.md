@@ -299,7 +299,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_12` — Script uninstall.sh con doble confirmación
 
-- [ ] **Título**: Script uninstall.sh con doble confirmación
+- [x] **Título**: Script uninstall.sh con doble confirmación
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: devops

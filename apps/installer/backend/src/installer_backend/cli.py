@@ -81,6 +81,13 @@ from installer_backend.seams import (
     StubInstallerLifecycle,
     StubPrereqChecker,
 )
+from installer_backend.uninstall import (
+    Confirmer,
+    UninstallAbortedError,
+    Uninstaller,
+    UninstallRequest,
+    build_default_uninstaller,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -171,6 +178,50 @@ class StubCredentialBuilder:
             vault_root_token=self.vault_root_token,
             vault_unseal_keys=self.vault_unseal_keys,
         )
+
+
+# ---------------------------------------------------------------------------
+# Confirmers — supply the uninstall's confirmation gates (task 15_12).
+# ---------------------------------------------------------------------------
+@dataclass
+class FlagConfirmer:
+    """A non-interactive :class:`Confirmer` whose answers come from CLI flags.
+
+    Used by ``--yes`` automation: :meth:`confirm_name` returns the typed
+    ``--confirm-name`` value (so the double confirmation still requires the
+    operator to have spelled the deployment name on the command line), and
+    :meth:`confirm_yes` returns ``--yes`` for the second of the double
+    confirmation AND for the purge's extra confirmation — but the purge gate
+    ALSO requires ``--purge-data`` upstream, so ``--yes`` alone never wipes data
+    that the operator did not opt into. Without ``--yes`` every yes/no gate
+    answers *no* and the uninstall aborts.
+    """
+
+    confirm_name_value: str = ""
+    yes: bool = False
+
+    def confirm_name(self, prompt: str) -> str:  # noqa: ARG002 - prompt unused (non-interactive)
+        return self.confirm_name_value
+
+    def confirm_yes(self, prompt: str) -> bool:  # noqa: ARG002 - prompt unused (non-interactive)
+        return self.yes
+
+
+@dataclass
+class InteractiveConfirmer:
+    """A TTY-reading :class:`Confirmer` for an interactive ``uninstall`` run.
+
+    Reads the typed deployment name and the yes/no answers from stdin. Only the
+    interactive path uses ``input``; the headless ``--yes`` path uses
+    :class:`FlagConfirmer`, so the test suite never blocks on a prompt.
+    """
+
+    def confirm_name(self, prompt: str) -> str:  # pragma: no cover - needs a TTY
+        return input(prompt)
+
+    def confirm_yes(self, prompt: str) -> bool:  # pragma: no cover - needs a TTY
+        answer = input(prompt).strip().lower()
+        return answer in ("y", "yes", "s", "si", "sí")
 
 
 # ---------------------------------------------------------------------------
@@ -374,10 +425,10 @@ def build_default_installer(out: TextIO) -> HeadlessInstaller:
 
 
 # ---------------------------------------------------------------------------
-# Argument parsing + the `install` subcommand.
+# Argument parsing + the `install` / `uninstall` subcommands.
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
-    """Build the CLI argument parser (``install`` subcommand)."""
+    """Build the CLI argument parser (``install`` + ``uninstall`` subcommands)."""
 
     parser = argparse.ArgumentParser(
         prog="installer_backend.cli",
@@ -397,6 +448,60 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="install.yaml",
         help="Ruta al fichero YAML de configuración de la instalación.",
+    )
+
+    uninstall = sub.add_parser(
+        "uninstall",
+        help=(
+            "Detiene y elimina el stack (DESTRUCTIVO). Requiere doble "
+            "confirmación; conserva los datos salvo --purge-data."
+        ),
+    )
+    uninstall.add_argument(
+        "--deployment-name",
+        default="agentic-platform",
+        metavar="NAME",
+        help=(
+            "Nombre del despliegue (proyecto compose) a eliminar. Hay que "
+            "teclearlo en --confirm-name para confirmar."
+        ),
+    )
+    uninstall.add_argument(
+        "--data-root",
+        default="/data/agent-platform",
+        metavar="PATH",
+        help="Raíz de datos que --purge-data eliminaría (por defecto se conserva).",
+    )
+    uninstall.add_argument(
+        "--confirm-name",
+        default="",
+        metavar="NAME",
+        help=(
+            "Primera confirmación: teclea el nombre EXACTO del despliegue. Debe "
+            "coincidir con --deployment-name."
+        ),
+    )
+    uninstall.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Segunda confirmación: confirma explícitamente el borrado del stack "
+            "(la doble confirmación necesita --confirm-name Y --yes)."
+        ),
+    )
+    uninstall.add_argument(
+        "--purge-data",
+        action="store_true",
+        help=(
+            "TAMBIÉN borra de forma irreversible los datos bajo --data-root. "
+            "Requiere su propia confirmación extra (--yes); por defecto los "
+            "datos se conservan."
+        ),
+    )
+    uninstall.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Pide las confirmaciones por terminal en lugar de derivarlas de los flags.",
     )
     return parser
 
@@ -439,6 +544,50 @@ def run_install(
     return ExitCode.OK
 
 
+def run_uninstall(
+    *,
+    deployment_name: str,
+    data_root: str,
+    purge_data: bool,
+    confirm_name: str,
+    yes: bool,
+    interactive: bool = False,
+    uninstaller: Uninstaller | None = None,
+    out: TextIO | None = None,
+) -> ExitCode:
+    """Run the gated uninstall; return the :class:`ExitCode`.
+
+    Resolves the confirmation source: an interactive run reads the gates from a
+    TTY (:class:`InteractiveConfirmer`); the default ``--yes`` automation path
+    derives them from the flags (:class:`FlagConfirmer` — the operator must have
+    typed ``--confirm-name`` AND passed ``--yes``). ``uninstaller`` is injectable
+    (tests pass one wired to recording / scripted fakes); when omitted a default
+    stub-wired uninstaller is built. A failed confirmation maps to
+    :data:`ExitCode.ABORTED` with NOTHING removed.
+    """
+
+    stream = out if out is not None else sys.stdout
+
+    if uninstaller is None:
+        confirmer: Confirmer
+        if interactive:
+            confirmer = InteractiveConfirmer()
+        else:
+            confirmer = FlagConfirmer(confirm_name_value=confirm_name, yes=yes)
+        uninstaller = build_default_uninstaller(stream, confirmer)
+
+    req = UninstallRequest(
+        deployment_name=deployment_name,
+        data_root=data_root,
+        purge_data=purge_data,
+    )
+    try:
+        uninstaller.run(req)
+    except UninstallAbortedError as exc:
+        raise CliError(str(exc), ExitCode.ABORTED) from exc
+    return ExitCode.OK
+
+
 def main(argv: Sequence[str] | None = None, *, out: TextIO | None = None) -> int:
     """CLI entry point. Returns a process exit code (see :class:`ExitCode`).
 
@@ -458,6 +607,18 @@ def main(argv: Sequence[str] | None = None, *, out: TextIO | None = None) -> int
     try:
         if args.command == "install":
             return int(run_install(args.config, out=out))
+        if args.command == "uninstall":
+            return int(
+                run_uninstall(
+                    deployment_name=args.deployment_name,
+                    data_root=args.data_root,
+                    purge_data=args.purge_data,
+                    confirm_name=args.confirm_name,
+                    yes=args.yes,
+                    interactive=args.interactive,
+                    out=out,
+                )
+            )
     except CliError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return int(exc.code)
