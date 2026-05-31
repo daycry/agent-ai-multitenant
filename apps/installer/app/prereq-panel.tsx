@@ -26,6 +26,12 @@ import {
 interface PrereqPanelProps {
   /** Called whenever the install gate opens/closes (no required failures). */
   onGateChange?: (canProceed: boolean) => void;
+  /**
+   * When true the panel renders without its own `step-resources` section/title
+   * wrapper, so it can be embedded inside the resources step (task_15_03) which
+   * owns that wrapper. Defaults to false (standalone, as task_15_02 shipped it).
+   */
+  embedded?: boolean;
 }
 
 const STATUS_ICON: Record<PrereqStatus, typeof CheckCircle2> = {
@@ -40,7 +46,7 @@ const STATUS_CLASS: Record<PrereqStatus, string> = {
   fail: "text-red-500",
 };
 
-export function PrereqPanel({ onGateChange }: PrereqPanelProps) {
+export function PrereqPanel({ onGateChange, embedded = false }: PrereqPanelProps) {
   const [data, setData] = useState<PrereqResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -71,10 +77,14 @@ export function PrereqPanel({ onGateChange }: PrereqPanelProps) {
     return () => controller.abort();
   }, [load]);
 
-  return (
-    <section data-testid="step-resources" className="flex flex-col gap-4">
+  const body = (
+    <div className="flex flex-col gap-4" data-testid="prereq-panel">
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-semibold tracking-tight">Recursos / GPU</h2>
+        {embedded ? (
+          <h3 className="text-lg font-semibold tracking-tight">Prerequisitos</h3>
+        ) : (
+          <h2 className="text-2xl font-semibold tracking-tight">Recursos / GPU</h2>
+        )}
         <button
           type="button"
           data-testid="prereq-recheck"
@@ -126,6 +136,17 @@ export function PrereqPanel({ onGateChange }: PrereqPanelProps) {
           continuar.
         </p>
       )}
+    </div>
+  );
+
+  // Standalone (task_15_02): own the `step-resources` section wrapper. Embedded
+  // (task_15_03): the resources step owns the wrapper, so render bare.
+  if (embedded) {
+    return body;
+  }
+  return (
+    <section data-testid="step-resources" className="flex flex-col gap-4">
+      {body}
     </section>
   );
 }

@@ -37,6 +37,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from installer_backend import __version__
+from installer_backend.config import (
+    ConfigValidationResponse,
+    InstallerConfig,
+    validate_config,
+)
 from installer_backend.seams import (
     PrereqChecker,
     PrereqStatus,
@@ -252,6 +257,23 @@ def create_app() -> FastAPI:
         # FAILs by construction.
         can_proceed = not any(r.blocking for r in results)
         return PrereqResponse(results=items, all_required_ok=can_proceed, can_proceed=can_proceed)
+
+    @app.post(
+        "/api/config/validate",
+        response_model=ConfigValidationResponse,
+        tags=["config"],
+    )
+    def validate_installer_config(config: InstallerConfig) -> ConfigValidationResponse:
+        """Server-side validation of the captured config (wizard steps 2-6).
+
+        FastAPI already ran per-field Pydantic validation (a malformed field
+        yields a 422 before this body runs). This adds the cross-field provider
+        rules and returns a secret-free result: secrets are NEVER echoed — the
+        response carries only normalised non-secret values + ``*_set`` booleans.
+        Nothing here is logged.
+        """
+
+        return validate_config(config)
 
     return app
 

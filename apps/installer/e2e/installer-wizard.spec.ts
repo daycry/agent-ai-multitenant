@@ -75,12 +75,47 @@ test("a not-yet-visited step in the stepper is disabled", async ({ page }) => {
 });
 
 test("navigating to the summary step swaps the primary button to Instalar", async ({ page }) => {
+  // The config steps (2-6, task_15_03) now gate "next" on client-side
+  // validation and the resources step gates on the prereq probe, so mock the
+  // backend and fill each form before advancing. The detailed per-field
+  // validation lives in installer-steps.spec.ts; here we only walk to summary.
+  await page.route("**/api/prereqs", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        results: [
+          {
+            key: "docker",
+            label: "Docker",
+            status: "ok",
+            ok: true,
+            detail: "",
+            remediation: "",
+            required: true,
+          },
+        ],
+        all_required_ok: true,
+        can_proceed: true,
+      }),
+    });
+  });
   await page.goto("/", { waitUntil: "domcontentloaded" });
 
-  // Advance through to the summary (index 6 → 6 clicks from welcome).
-  for (let i = 0; i < 6; i += 1) {
-    await page.getByTestId("wizard-next").click();
-  }
+  await page.getByTestId("wizard-next").click(); // welcome -> basics
+  await page.getByTestId("input-domain").fill("agentic.example.com");
+  await page.getByTestId("wizard-next").click(); // basics -> resources
+  await expect(page.getByTestId("step-resources")).toBeVisible();
+  await page.getByTestId("wizard-next").click(); // resources -> storage
+  await page.getByTestId("input-minioAccessKey").fill("minioadmin");
+  await page.getByTestId("input-minioSecretKey").fill("supersecret123");
+  await page.getByTestId("wizard-next").click(); // storage -> providers
+  await page.getByTestId("input-ollama-enabled").check();
+  await page.getByTestId("input-ollama-endpoint").fill("http://localhost:11434");
+  await page.getByTestId("wizard-next").click(); // providers -> tenant
+  await page.getByTestId("input-tenantName").fill("Acme Corp");
+  await page.getByTestId("input-adminEmail").fill("admin@acme.com");
+  await page.getByTestId("wizard-next").click(); // tenant -> summary
 
   await expect(page.getByTestId("step-summary")).toBeVisible();
   await expect(page.getByTestId("wizard-next")).toContainText("Instalar");

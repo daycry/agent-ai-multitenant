@@ -144,7 +144,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_03` — Pasos 2-6: Captura de config (sistema, recursos, almacenamiento, providers LLM, tenant inicial)
 
-- [ ] **Título**: Pasos 2-6: Captura de config (sistema, recursos, almacenamiento, providers LLM, tenant inicial)
+- [x] **Título**: Pasos 2-6: Captura de config (sistema, recursos, almacenamiento, providers LLM, tenant inicial)
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: frontend-dev
