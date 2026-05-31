@@ -282,7 +282,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_11` — Plantillas YAML por perfil (minimal, recommended, gpu)
 
-- [ ] **Título**: Plantillas YAML por perfil (minimal, recommended, gpu)
+- [x] **Título**: Plantillas YAML por perfil (minimal, recommended, gpu)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: devops
