@@ -1,9 +1,9 @@
 ---
 plan_id: 07-documentacion-visor
 title: Documentación Estructurada y Visor Cross-Proyecto
-status: pending_approval
+status: pending_human_validation
 blocking_plan: [06-testing-revision-git]
-started_at: null
+started_at: 2026-05-30
 completed_at: null
 estimated_duration_calendar: 3 semanas
 estimated_effort_person_days: 55-65
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `07-documentacion-visor`                  |
-| **Estado**                         | `pending_approval`                        |
+| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `06-testing-revision-git`                 |
 | **Tiempo estimado (calendario)**   | 3 semanas                                 |
 | **Tiempo estimado (persona-días)** | 55-65                                     |
