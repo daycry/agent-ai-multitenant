@@ -248,7 +248,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_09` — Bootstrap del Vault: init + unseal + KV v2 + políticas iniciales
 
-- [ ] **Título**: Bootstrap del Vault: init + unseal + KV v2 + políticas iniciales
+- [x] **Título**: Bootstrap del Vault: init + unseal + KV v2 + políticas iniciales
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: security + devops
