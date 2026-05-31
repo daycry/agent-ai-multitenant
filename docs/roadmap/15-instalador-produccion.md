@@ -507,7 +507,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_24` — Runbook: gestión de capacity (escalar workers, etc.)
 
-- [ ] **Título**: Runbook: gestión de capacity (escalar workers, etc.)
+- [x] **Título**: Runbook: gestión de capacity (escalar workers, etc.)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer + devops
