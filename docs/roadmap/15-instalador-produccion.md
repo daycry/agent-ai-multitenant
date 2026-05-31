@@ -231,7 +231,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_08` — Generador de .env, config/global.yaml, estructura /data/agent-platform/
 
-- [ ] **Título**: Generador de .env, config/global.yaml, estructura /data/agent-platform/
+- [x] **Título**: Generador de .env, config/global.yaml, estructura /data/agent-platform/
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
