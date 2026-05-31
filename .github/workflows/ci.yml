@@ -38,6 +38,10 @@ jobs:
           # notification-dispatcher Celery service (Plan 10 task_10_02) —
           # install editable so its imports resolve in mypy + pytest.
           python -m pip install -e "apps/notification-dispatcher[dev]"
+          # installer bootstrap backend (Plan 15) — its tests live in tests/
+          # (test_installer_prereq.py / test_installer_backend.py) so it must
+          # be importable in pytest + the mypy hook.
+          python -m pip install -e "apps/installer/backend[dev]"
           # shared-llm is a path dep of agent-runtime (ADR 0021); install
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
@@ -159,6 +163,10 @@ jobs:
           # notification-dispatcher Celery service (Plan 10 task_10_02) —
           # install editable so its imports resolve in mypy + pytest.
           python -m pip install -e "apps/notification-dispatcher[dev]"
+          # installer bootstrap backend (Plan 15) — its tests live in tests/
+          # (test_installer_prereq.py / test_installer_backend.py) so it must
+          # be importable in pytest + the mypy hook.
+          python -m pip install -e "apps/installer/backend[dev]"
           # shared-llm is a path dep of agent-runtime (ADR 0021); install
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
@@ -224,6 +232,10 @@ jobs:
           # notification-dispatcher Celery service (Plan 10 task_10_02) —
           # install editable so its imports resolve in mypy + pytest.
           python -m pip install -e "apps/notification-dispatcher[dev]"
+          # installer bootstrap backend (Plan 15) — its tests live in tests/
+          # (test_installer_prereq.py / test_installer_backend.py) so it must
+          # be importable in pytest + the mypy hook.
+          python -m pip install -e "apps/installer/backend[dev]"
           # shared-llm is a path dep of agent-runtime (ADR 0021); install
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
