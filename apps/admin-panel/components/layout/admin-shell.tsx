@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   Sparkles,
   Store,
+  UserRound,
   Users,
   X,
 } from "lucide-react";
@@ -46,6 +47,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { href: "/admin/dashboard", label: "Dashboard", Icon: LayoutDashboard },
   { href: "/admin/agents", label: "Agentes", Icon: Bot },
+  { href: "/admin/human-agents", label: "Agentes humanos", Icon: UserRound, adminOnly: true },
   { href: "/admin/teams", label: "Equipos", Icon: Users },
   { href: "/admin/projects", label: "Proyectos", Icon: FolderKanban },
   { href: "/admin/board", label: "Tablero", Icon: LayoutGrid },

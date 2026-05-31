@@ -21,6 +21,7 @@ from api_server.seeds.builtin_skills import seed_builtin_skills
 from api_server.seeds.builtin_teams import seed_builtin_teams
 from api_server.seeds.builtin_tools import seed_builtin_tools
 from api_server.seeds.catalog_ingestion import seed_catalog_ingestion
+from api_server.seeds.human_agent_templates import seed_human_agent_templates
 from api_server.seeds.platform import ensure_platform_tenant
 from api_server.seeds.qa_e2e_automator import seed_qa_e2e_automator
 
@@ -38,6 +39,11 @@ async def main() -> None:
         # global_builtin platform agent under the same model as the eleven
         # core built-ins, seeded via its own loader to keep that count stable.
         n_qa_e2e = await seed_qa_e2e_automator(session)
+        # Plan 16 task_16_07: five global Human-Agent templates (Security
+        # Reviewer, Brand Lead, DBA, Legal Reviewer, UX Lead). Another set of
+        # global_builtin platform agents — agent_type='human' — that tenants
+        # clone-and-fork from the Human Agents gallery.
+        n_human_templates = await seed_human_agent_templates(session)
         n_skills = await seed_builtin_skills(session)
         # Agent<->skill links need both agents AND skills to exist first
         # (FKs on agent_skills). Wire them once both seeds have run.
@@ -64,6 +70,7 @@ async def main() -> None:
         "seed.completed",
         agents=n_agents,
         qa_e2e_automator=n_qa_e2e,
+        human_agent_templates=n_human_templates,
         skills=n_skills,
         agent_skills=n_agent_skills,
         tools=n_tools,

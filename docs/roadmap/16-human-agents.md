@@ -200,7 +200,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_07` — Galería de Human Agents en panel del tenant
 
-- [ ] **Título**: Página en panel admin del tenant que lista Human Agents existentes y permite crear nuevos. Formulario con todos los campos de `human_agent_config`. Catálogo de plantillas globales con botón "clonar y forkar al tenant".
+- [x] **Título**: Página en panel admin del tenant que lista Human Agents existentes y permite crear nuevos. Formulario con todos los campos de `human_agent_config`. Catálogo de plantillas globales con botón "clonar y forkar al tenant". _(backend pytest verde vs DB real + @pytest.mark.cross_tenant; admin-panel typecheck/lint/build verde; e2e Playwright escritos NO ejecutados — pendiente verificación humana)._
 - **Tiempo estimado**: 12 h
 - **Complejidad**: l
 - **Rol sugerido**: frontend-dev + backend-dev
