@@ -120,12 +120,26 @@ interface ExecutionRunRow {
   duration_ms: number | null;
   total_tokens: number;
   total_cost_usd: string;
+  // FX display-only (Plan 11.1): when the chosen display currency is not USD,
+  // the backend converts each row at its OWN run date and carries the applied
+  // rate for traceability. Null when no conversion (USD) or no rate for the date.
+  display_currency: string | null;
+  display_cost: string | null;
+  applied_rate: string | null;
+  applied_rate_date: string | null;
   started_at: string | null;
   completed_at: string | null;
 }
 
 const WINDOW_OPTIONS = [30, 90, 365] as const;
 const PAGE_SIZE = 25;
+
+// Display-currency toggle (Plan 11.1 task_11_1_03). USD is canonical; the
+// alternatives are converted on the fly at each run's own date (display only —
+// the stored USD never changes). Kept short + common; the backend accepts any
+// ISO-4217 code for which a rate exists.
+const CURRENCY_OPTIONS = ["USD", "EUR", "GBP"] as const;
+type DisplayCurrency = (typeof CURRENCY_OPTIONS)[number];
 
 const VERDICT_BADGE: Record<string, BadgeVariant> = {
   done: "success",
@@ -175,6 +189,15 @@ function fmtMeanDuration(ms: string | null): string {
 
 function usd(value: string | null): string {
   return value === null ? "—" : `$${value}`;
+}
+
+/**
+ * The display-currency cell: the converted amount + its code, or a dash with
+ * a "no rate" hint when this run's date had no FX rate (the USD figure stands).
+ */
+function convertedCost(row: ExecutionRunRow, currency: DisplayCurrency): string {
+  if (row.display_cost === null) return "—";
+  return `${row.display_cost} ${currency}`;
 }
 
 /** Pure-SVG sparkline of the per-day success rate (0..1). No heavy chart dep. */
@@ -290,7 +313,13 @@ interface RunFilters {
   minCost: string;
 }
 
-function RunsExplorer({ windowDays }: { windowDays: number }) {
+function RunsExplorer({
+  windowDays,
+  displayCurrency,
+}: {
+  windowDays: number;
+  displayCurrency: DisplayCurrency;
+}) {
   const [page, setPage] = useState(0);
   const [filters, setFilters] = useState<RunFilters>({
     role: "",
@@ -298,6 +327,8 @@ function RunsExplorer({ windowDays }: { windowDays: number }) {
     model: "",
     minCost: "",
   });
+
+  const showConverted = displayCurrency !== "USD";
 
   const params = new URLSearchParams();
   params.set("window_days", String(windowDays));
@@ -307,6 +338,8 @@ function RunsExplorer({ windowDays }: { windowDays: number }) {
   if (filters.verdict.trim()) params.set("verdict", filters.verdict.trim());
   if (filters.model.trim()) params.set("model", filters.model.trim());
   if (filters.minCost.trim()) params.set("min_cost", filters.minCost.trim());
+  // Drive the backend's per-row conversion. USD stays canonical (no param).
+  if (showConverted) params.set("display_currency", displayCurrency);
 
   const query = params.toString();
   const runs = useQuery({
@@ -385,6 +418,11 @@ function RunsExplorer({ windowDays }: { windowDays: number }) {
                   <th className="py-2 pr-3">Duración</th>
                   <th className="py-2 pr-3">Tokens</th>
                   <th className="py-2 pr-3">Coste USD</th>
+                  {showConverted ? (
+                    <th className="py-2 pr-3" data-testid="runs-col-converted">
+                      Coste {displayCurrency}
+                    </th>
+                  ) : null}
                   <th className="py-2 pr-3">Verdict</th>
                   <th className="py-2 pr-3">Reintentos</th>
                 </tr>
@@ -409,6 +447,21 @@ function RunsExplorer({ windowDays }: { windowDays: number }) {
                     <td className="text-muted-foreground py-2 pr-3 tabular-nums">
                       {usd(r.total_cost_usd)}
                     </td>
+                    {showConverted ? (
+                      <td
+                        className="text-muted-foreground py-2 pr-3 tabular-nums"
+                        data-testid={`run-converted-${r.id}`}
+                        title={
+                          r.applied_rate
+                            ? `Convertido a ${displayCurrency} con la tasa del ${
+                                r.applied_rate_date ?? "—"
+                              } (1 USD = ${r.applied_rate} ${displayCurrency})`
+                            : "Sin tasa de cambio para la fecha de este run"
+                        }
+                      >
+                        {convertedCost(r, displayCurrency)}
+                      </td>
+                    ) : null}
                     <td className="py-2 pr-3">
                       <Badge variant={VERDICT_BADGE[r.verdict] ?? "muted"}>{r.verdict}</Badge>
                     </td>
@@ -454,6 +507,7 @@ function RunsExplorer({ windowDays }: { windowDays: number }) {
 // ---------------------------------------------------------------------------
 function StatsBody() {
   const [windowDays, setWindowDays] = useState<number>(90);
+  const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>("USD");
 
   const dashboard = useQuery({
     queryKey: ["tenant-stats-dashboard", windowDays],
@@ -493,24 +547,44 @@ function StatsBody() {
 
   return (
     <div className="space-y-6" data-testid="tenant-stats-dashboard">
-      {/* Window selector */}
-      <div className="flex items-center gap-2" data-testid="window-selector">
-        <span className="text-muted-foreground text-sm">Ventana:</span>
-        {WINDOW_OPTIONS.map((w) => (
-          <button
-            key={w}
-            type="button"
-            onClick={() => setWindowDays(w)}
-            data-testid={`window-${w}`}
-            className={
-              windowDays === w
-                ? "bg-primary text-primary-foreground rounded-md px-3 py-1 text-sm"
-                : "bg-muted text-muted-foreground rounded-md px-3 py-1 text-sm"
-            }
-          >
-            {w}d
-          </button>
-        ))}
+      {/* Window selector + display-currency toggle */}
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="flex items-center gap-2" data-testid="window-selector">
+          <span className="text-muted-foreground text-sm">Ventana:</span>
+          {WINDOW_OPTIONS.map((w) => (
+            <button
+              key={w}
+              type="button"
+              onClick={() => setWindowDays(w)}
+              data-testid={`window-${w}`}
+              className={
+                windowDays === w
+                  ? "bg-primary text-primary-foreground rounded-md px-3 py-1 text-sm"
+                  : "bg-muted text-muted-foreground rounded-md px-3 py-1 text-sm"
+              }
+            >
+              {w}d
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2" data-testid="currency-selector">
+          <span className="text-muted-foreground text-sm">Moneda:</span>
+          {CURRENCY_OPTIONS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => setDisplayCurrency(c)}
+              data-testid={`currency-${c}`}
+              className={
+                displayCurrency === c
+                  ? "bg-primary text-primary-foreground rounded-md px-3 py-1 text-sm"
+                  : "bg-muted text-muted-foreground rounded-md px-3 py-1 text-sm"
+              }
+            >
+              {c}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Headline cards + trend */}
@@ -686,12 +760,12 @@ function StatsBody() {
       </Card>
 
       {/* Runs explorer */}
-      <RunsExplorer windowDays={windowDays} />
+      <RunsExplorer windowDays={windowDays} displayCurrency={displayCurrency} />
 
       <p className="text-muted-foreground text-xs" data-testid="currency-note">
-        Costes en {data.currency} canónico. La conversión a moneda del tenant está pendiente del
-        sistema FX (gap de alcance del Plan 11). Los tokens cacheados se muestran como 0 hasta que
-        el runtime capture el recuento por llamada.
+        Costes almacenados en {data.currency} canónico. El selector de moneda convierte cada run a
+        la tasa de cambio de su propia fecha (solo visualización; el coste USD no cambia). Los
+        tokens cacheados se muestran como 0 hasta que el runtime capture el recuento por llamada.
       </p>
     </div>
   );

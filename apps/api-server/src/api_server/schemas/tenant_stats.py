@@ -24,10 +24,11 @@ its own executions:
   * :class:`ExecutionRunRow` — one execution as returned by the paginated,
     filterable runs explorer (``/tenant-stats/runs``).
 
-Costs are CANONICAL USD. A tenant-currency display toggle is intentionally NOT
-modelled here: the FX / display-currency system it depends on (exchange_rates)
-has no numbered task and was not built (flagged as a scope gap in Plan 11's
-changelog). USD is the only currency surfaced.
+Costs are CANONICAL USD. On top of that, the runs explorer (:class:`ExecutionRunRow`)
+ALSO surfaces a per-row DISPLAY conversion when the caller's display currency is
+not USD: the USD cost converted with the FX rate of each run's own date plus the
+applied rate (for traceability). The stored USD is never mutated — conversion is
+presentation only (Plan 11.1 task_11_1_03, ``api_server.fx`` / ``exchange_rates``).
 
 Cached-token counts: the per-step ``steps_log`` records only ``tokens_in`` /
 ``tokens_out`` (the Plan 11 price snapshot freezes the *cached price*, not the
@@ -37,7 +38,7 @@ the runtime captures cached counts per call — never fabricated.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -173,7 +174,26 @@ class ExecutionRunRow(BaseModel):
     no priced model call). ``retry_count`` is the owning task's retry count
     (per the task, shared across its executions). ``duration_ms`` is
     ``completed_at - started_at`` in ms (``None`` when the run never finished).
-    Costs in canonical USD.
+
+    Cost is CANONICAL USD (``total_cost_usd``, the stored value — never
+    mutated). When the caller's display currency is not USD the explorer ALSO
+    surfaces a *display* conversion, computed on the fly with the FX rate of
+    **this run's own date** (Plan 11.1, FX is display-only):
+
+      * ``display_currency`` — the currency the conversion targets (``None``
+        when display is USD, i.e. no conversion was done);
+      * ``display_cost`` — ``total_cost_usd`` converted to ``display_currency``
+        at this run's date (``None`` when no conversion / no rate available —
+        the UI falls back to the USD figure);
+      * ``applied_rate`` — the FX rate applied (units of ``display_currency``
+        per 1 USD), for traceability / the tooltip;
+      * ``applied_rate_date`` — the ``as_of_date`` of the rate row actually
+        used (this run's date or the most recent prior publish), so the UI can
+        show *which* day's rate priced the row.
+
+    The display fields are populated per-row, so two runs on different dates may
+    carry different ``applied_rate`` / ``applied_rate_date`` for the same
+    currency. A run whose date has no rate on or before it leaves them ``None``.
     """
 
     model_config = _CONFIG
@@ -194,6 +214,10 @@ class ExecutionRunRow(BaseModel):
     duration_ms: int | None
     total_tokens: int
     total_cost_usd: Decimal
+    display_currency: str | None = None
+    display_cost: Decimal | None = None
+    applied_rate: Decimal | None = None
+    applied_rate_date: date | None = None
     started_at: datetime | None
     completed_at: datetime | None
 

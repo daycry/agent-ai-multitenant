@@ -31,6 +31,7 @@ currency per 1 USD*, so ``display = usd * rate``. e.g. EUR rate 0.92 turns
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -99,6 +100,56 @@ async def select_rate_for_date(
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
+async def resolve_rates_for_dates(
+    session: AsyncSession,
+    currency: str,
+    on_dates: Iterable[date],
+) -> dict[date, ExchangeRate | None]:
+    """Resolve, for each requested date, the applicable FX rate row (or None).
+
+    The bulk counterpart of :func:`select_rate_for_date`, for the runs
+    explorer which converts **per row, at each run's own date** and must
+    not fire one query per row (N+1). Returns a mapping
+    ``{requested_date: ExchangeRate | None}`` where each date maps to the
+    rate whose ``as_of_date`` is that date or, failing that, the most
+    recent PRIOR rate (weekends/holidays have no ECB publish); ``None``
+    when no row exists on or before that date.
+
+    One query: every row for ``currency`` whose ``as_of_date`` is ``<=``
+    the LATEST requested date, ascending, then a single linear pass picks
+    each requested date's rate. USD is never queried — it is the identity
+    handled by callers. An empty ``on_dates`` yields an empty mapping with
+    no query.
+    """
+    wanted = sorted(set(on_dates))
+    if not wanted:
+        return {}
+
+    normalized = _normalize(currency)
+    stmt = (
+        select(ExchangeRate)
+        .where(
+            ExchangeRate.currency == normalized,
+            ExchangeRate.as_of_date <= wanted[-1],
+        )
+        .order_by(ExchangeRate.as_of_date.asc())
+    )
+    rows = list((await session.execute(stmt)).scalars().all())
+
+    # Linear merge: walk requested dates ascending, advancing the row
+    # cursor to the latest row that is still <= the current date. That row
+    # (the most recent on-or-before) is the date's applicable rate.
+    resolved: dict[date, ExchangeRate | None] = {}
+    cursor = 0
+    current: ExchangeRate | None = None
+    for d in wanted:
+        while cursor < len(rows) and rows[cursor].as_of_date <= d:
+            current = rows[cursor]
+            cursor += 1
+        resolved[d] = current
+    return resolved
+
+
 async def convert_from_usd(
     session: AsyncSession,
     amount_usd: Decimal,
@@ -137,5 +188,6 @@ __all__ = [
     "UnknownCurrencyError",
     "convert_from_usd",
     "convert_from_usd_with_rate",
+    "resolve_rates_for_dates",
     "select_rate_for_date",
 ]

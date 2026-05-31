@@ -21,7 +21,9 @@ import { expect, test, type Page } from "@playwright/test";
  *     consumption summary + the runs explorer table,
  *   - the window selector re-queries with the chosen window_days,
  *   - a runs filter (verdict) re-queries with the chosen filter,
- *   - the USD-only currency note is shown (tenant-currency FX pending, Plan 11).
+ *   - the currency toggle (Plan 11.1) re-queries with display_currency and shows
+ *     the per-run converted cost column,
+ *   - the currency note explains USD-canonical + display-only conversion.
  *
  * NOTE: written, not run (task_14_12 e2e is pending human verification — there
  * is no browser in the implementing environment).
@@ -133,7 +135,11 @@ const CONSUMPTION = {
   },
 };
 
-function makeRun(verdict: string) {
+function makeRun(verdict: string, displayCurrency = "") {
+  // FX is display-only: USD is canonical and unchanged; when a non-USD display
+  // currency is requested the backend adds the converted amount + applied rate
+  // (here 1 USD = 0.92 EUR on the run's date → 0.050000 USD = 0.05 EUR).
+  const converted = displayCurrency && displayCurrency !== "USD";
   return [
     {
       id: EXEC_ID,
@@ -152,6 +158,10 @@ function makeRun(verdict: string) {
       duration_ms: 1234,
       total_tokens: 1500,
       total_cost_usd: "0.050000",
+      display_currency: converted ? displayCurrency : null,
+      display_cost: converted ? "0.05" : null,
+      applied_rate: converted ? "0.9200000000" : null,
+      applied_rate_date: converted ? "2026-05-30" : null,
       started_at: "2026-05-30T10:00:00Z",
       completed_at: "2026-05-30T10:00:01Z",
     },
@@ -161,13 +171,14 @@ function makeRun(verdict: string) {
 interface Capture {
   windows: number[];
   verdicts: string[];
+  currencies: string[];
 }
 
 async function setup(
   page: Page,
   identity: typeof TENANT_ADMIN | typeof TENANT_USER = TENANT_ADMIN,
 ): Promise<Capture> {
-  const capture: Capture = { windows: [], verdicts: [] };
+  const capture: Capture = { windows: [], verdicts: [], currencies: [] };
 
   await page.addInitScript(
     ([token, tenantKey, tenantId]) => {
@@ -204,10 +215,12 @@ async function setup(
     const url = new URL(route.request().url());
     const verdict = url.searchParams.get("verdict") ?? "";
     if (verdict) capture.verdicts.push(verdict);
+    const currency = url.searchParams.get("display_currency") ?? "";
+    if (currency) capture.currencies.push(currency);
     return route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(makeRun(verdict || "done")),
+      body: JSON.stringify(makeRun(verdict || "done", currency)),
     });
   });
 
@@ -281,11 +294,33 @@ test("the verdict filter re-queries the runs explorer", async ({ page }) => {
 });
 
 // ---------------------------------------------------------------------------
-// The USD-only currency note is shown (tenant-currency FX pending, Plan 11)
+// The currency note explains USD-canonical + display-only conversion
 // ---------------------------------------------------------------------------
-test("the dashboard shows the USD-only currency note", async ({ page }) => {
+test("the dashboard shows the currency note", async ({ page }) => {
   await setup(page, TENANT_ADMIN);
   await page.goto("/admin/tenant-stats", { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("currency-note")).toContainText("USD");
-  await expect(page.getByTestId("currency-note")).toContainText("sistema FX");
+  await expect(page.getByTestId("currency-note")).toContainText("tasa de cambio");
+});
+
+// ---------------------------------------------------------------------------
+// The currency toggle re-queries with display_currency and converts per row
+// (Plan 11.1 task_11_1_03)
+// ---------------------------------------------------------------------------
+test("the currency toggle converts the runs explorer per run", async ({ page }) => {
+  const capture = await setup(page, TENANT_ADMIN);
+  await page.goto("/admin/tenant-stats", { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("runs-table")).toBeVisible();
+
+  // Default USD: no converted column, no display_currency param.
+  await expect(page.getByTestId("runs-col-converted")).toHaveCount(0);
+
+  // Switch to EUR → re-query carries display_currency=EUR and a converted
+  // column appears with the per-run-date amount.
+  await page.getByTestId("currency-EUR").click();
+  await expect.poll(() => capture.currencies).toContain("EUR");
+  await expect(page.getByTestId("runs-col-converted")).toContainText("EUR");
+  await expect(page.getByTestId(`run-converted-${EXEC_ID}`)).toContainText("0.05 EUR");
+  // The canonical USD figure is still shown alongside.
+  await expect(page.getByTestId(`run-row-${EXEC_ID}`)).toContainText("$0.050000");
 });
