@@ -524,7 +524,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_25` — Documentación pública + portal de desarrollador (API reference, SDKs, tutoriales)
 
-- [ ] **Título**: Documentación pública + portal de desarrollador (API reference, SDKs, tutoriales)
+- [x] **Título**: Documentación pública + portal de desarrollador (API reference, SDKs, tutoriales)
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: technical-writer
