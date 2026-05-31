@@ -16,6 +16,7 @@ import { type ConfigController } from "@/lib/use-config";
 import { stepById, type WizardStepId } from "@/lib/wizard";
 
 import { BasicsStep } from "./steps/basics-step";
+import { InstallStep } from "./steps/install-step";
 import { ProvidersStep } from "./steps/providers-step";
 import { ResourcesStep } from "./steps/resources-step";
 import { StorageStep } from "./steps/storage-step";
@@ -32,14 +33,16 @@ interface StepPanelProps {
   /** Summary-step confirm gate (task_15_04), owned by the wizard shell. */
   confirmed: boolean;
   onConfirmChange: (confirmed: boolean) => void;
+  /** Install-step (task_15_05) completion callback, owned by the wizard shell. */
+  onInstallComplete?: () => void;
 }
 
 /**
  * Renders the body of the current wizard step. task_15_03 fills the capture
  * forms for steps 2-6 (basics / resources / storage / providers / tenant);
- * task_15_04 fills the summary/confirmation step (7). The install progress
- * (15_05) and finalize (15_06) steps keep a typed placeholder until their
- * tasks land.
+ * task_15_04 fills the summary/confirmation step (7); task_15_05 fills the
+ * install progress step (8). The finalize (15_06) step keeps a typed
+ * placeholder until its task lands.
  */
 export function StepPanel({
   step,
@@ -48,6 +51,7 @@ export function StepPanel({
   onGateChange,
   confirmed,
   onConfirmChange,
+  onInstallComplete,
 }: StepPanelProps) {
   const meta = stepById(step);
   const errors: FieldErrors =
@@ -128,6 +132,10 @@ export function StepPanel({
     return (
       <SummaryStep config={config.config} confirmed={confirmed} onConfirmChange={onConfirmChange} />
     );
+  }
+
+  if (step === "install") {
+    return <InstallStep config={config.config} onComplete={onInstallComplete} />;
   }
 
   return (

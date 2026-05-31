@@ -178,7 +178,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_05` — Paso 8: Instalación con progress + logs en tiempo real
 
-- [ ] **Título**: Paso 8: Instalación con progress + logs en tiempo real
+- [x] **Título**: Paso 8: Instalación con progress + logs en tiempo real
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

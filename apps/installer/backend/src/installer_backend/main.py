@@ -29,11 +29,14 @@ persisted in plaintext nor written to the log.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator
 from typing import Annotated
 
 import structlog
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from installer_backend import __version__
@@ -42,9 +45,16 @@ from installer_backend.config import (
     InstallerConfig,
     validate_config,
 )
+from installer_backend.install import (
+    INSTALL_STEP_ORDER,
+    FakeStepExecutor,
+    InstallOrchestrator,
+    StepExecutor,
+)
 from installer_backend.seams import (
     PrereqChecker,
     PrereqStatus,
+    ProgressEvent,
     StubInstallerLifecycle,
     StubInstallRunner,
     StubPrereqChecker,
@@ -132,6 +142,37 @@ class PrereqResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Install step 8 — progress + logs (task 15_05). The orchestration runs the
+# ordered pipeline behind the StepExecutor seam; the API exposes the pipeline
+# definition and streams progress events over SSE. Models never carry secrets.
+# ---------------------------------------------------------------------------
+class InstallStepInfo(BaseModel):
+    """One step in the install pipeline, as served to the UI (no run state)."""
+
+    id: str
+    index: int
+    title_es: str
+    title_en: str
+
+
+class InstallPipelineResponse(BaseModel):
+    """The ordered install pipeline definition surfaced to the progress view."""
+
+    steps: list[InstallStepInfo]
+
+
+class InstallStreamRequest(BaseModel):
+    """Body for the install stream: the captured (secret-free) config echo.
+
+    The frontend posts the non-secret normalised config here so the executor
+    can provision from it. Secrets are NOT carried in this payload — the real
+    secrets reach Vault via Phase B's bootstrap, not over this stream.
+    """
+
+    config: dict[str, object] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
 # Dependency providers for the seams. Overridable via
 # `app.dependency_overrides` in tests and replaced by real host bindings in
 # Phase B. Module-level singletons keep the stub state (e.g. lifecycle flag)
@@ -140,10 +181,41 @@ class PrereqResponse(BaseModel):
 _default_prereq_checker = StubPrereqChecker()
 _default_install_runner = StubInstallRunner()
 _default_lifecycle = StubInstallerLifecycle()
+_default_step_executor = FakeStepExecutor()
 
 
 def get_prereq_checker() -> PrereqChecker:
     return _default_prereq_checker
+
+
+def get_step_executor() -> StepExecutor:
+    """The install :class:`StepExecutor` seam.
+
+    Defaults to the in-memory :class:`FakeStepExecutor` so the app serves on a
+    host with no Docker. Tests override this to script success/failure; Phase B
+    swaps in the real host binding that shells out to ``docker compose`` etc.
+    """
+
+    return _default_step_executor
+
+
+def _sse_event(event: ProgressEvent) -> str:
+    """Encode one :class:`ProgressEvent` as a Server-Sent Events frame.
+
+    The payload is the event's JSON (stage/message/percent/done/failed). No
+    secret ever appears here — the orchestrator's events are secret-free.
+    """
+
+    payload = json.dumps(
+        {
+            "stage": event.stage,
+            "message": event.message,
+            "percent": event.percent,
+            "done": event.done,
+            "failed": event.failed,
+        }
+    )
+    return f"data: {payload}\n\n"
 
 
 def create_app() -> FastAPI:
@@ -274,6 +346,55 @@ def create_app() -> FastAPI:
         """
 
         return validate_config(config)
+
+    @app.get(
+        "/api/install/steps",
+        response_model=InstallPipelineResponse,
+        tags=["install"],
+    )
+    def get_install_steps() -> InstallPipelineResponse:
+        """The ordered install pipeline definition (step 8 progress view)."""
+
+        from installer_backend.install import (
+            INSTALL_STEP_TITLES_EN,
+            INSTALL_STEP_TITLES_ES,
+        )
+
+        steps = [
+            InstallStepInfo(
+                id=step.value,
+                index=index,
+                title_es=INSTALL_STEP_TITLES_ES[step],
+                title_en=INSTALL_STEP_TITLES_EN[step],
+            )
+            for index, step in enumerate(INSTALL_STEP_ORDER)
+        ]
+        return InstallPipelineResponse(steps=steps)
+
+    @app.post("/api/install/stream", tags=["install"])
+    def install_stream(
+        req: InstallStreamRequest,
+        executor: Annotated[StepExecutor, Depends(get_step_executor)],
+    ) -> StreamingResponse:
+        """Run the install pipeline and STREAM progress + logs over SSE.
+
+        Each step transitions pending → running → ok (or failed). A failing
+        step halts the pipeline, emits a ``failed`` event and leaves later
+        steps untouched so the UI can offer retry/abort. The response is a
+        ``text/event-stream`` of secret-free progress events; nothing is logged.
+        """
+
+        orchestrator = InstallOrchestrator(executor=executor, config=req.config)
+
+        def event_stream() -> Iterator[str]:
+            for event in orchestrator.run():
+                yield _sse_event(event)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return app
 

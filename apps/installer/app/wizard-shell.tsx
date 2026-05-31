@@ -42,8 +42,16 @@ export function WizardShell() {
     setConfirmed(value);
   }, []);
 
+  // Install step (task_15_05): "next" (to the done step) is gated on the
+  // install run reaching its terminal success state.
+  const [installComplete, setInstallComplete] = useState(false);
+  const onInstallComplete = useCallback(() => {
+    setInstallComplete(true);
+  }, []);
+
   const blockedByPrereqs = wizard.current === "resources" && !prereqGateOpen;
   const blockedByConfirm = wizard.current === "summary" && !confirmed;
+  const blockedByInstall = wizard.current === "install" && !installComplete;
   const blockedByConfig =
     isConfigStep(wizard.current) && stepHasBlockingErrors(wizard.current, config.config);
 
@@ -63,8 +71,11 @@ export function WizardShell() {
     if (step === "summary" && !confirmed) {
       return;
     }
+    if (step === "install" && !installComplete) {
+      return;
+    }
     wizard.advance();
-  }, [wizard, config.config, prereqGateOpen, confirmed]);
+  }, [wizard, config.config, prereqGateOpen, confirmed, installComplete]);
 
   // Going back from the summary step un-confirms (the operator may edit config).
   const handleBack = useCallback(() => {
@@ -87,8 +98,13 @@ export function WizardShell() {
   // The button stays enabled for config steps (so the click can reveal errors);
   // it's hard-disabled while the prereq probe blocks the resources step or the
   // confirm gate blocks the summary step.
-  const nextDisabled = !wizard.canAdvance || blockedByPrereqs || blockedByConfirm;
+  const nextDisabled =
+    !wizard.canAdvance || blockedByPrereqs || blockedByConfirm || blockedByInstall;
   const showErrors = showErrorsFor.has(wizard.current);
+
+  // The install step is irreversible: once provisioning has begun there's no
+  // going back to edit config. Disable "back" while on the install step.
+  const backDisabled = !wizard.canGoBack || wizard.current === "install";
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-6 py-10">
@@ -116,6 +132,7 @@ export function WizardShell() {
               onGateChange={onGateChange}
               confirmed={confirmed}
               onConfirmChange={onConfirmChange}
+              onInstallComplete={onInstallComplete}
             />
           </div>
 
@@ -123,12 +140,12 @@ export function WizardShell() {
             <button
               type="button"
               data-testid="wizard-back"
-              disabled={!wizard.canGoBack}
+              disabled={backDisabled}
               onClick={handleBack}
               className={cn(
                 "inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm transition-colors",
                 "text-muted-foreground hover:bg-muted",
-                !wizard.canGoBack && "cursor-not-allowed opacity-40 hover:bg-transparent",
+                backDisabled && "cursor-not-allowed opacity-40 hover:bg-transparent",
               )}
             >
               <ArrowLeft className="h-4 w-4" />
