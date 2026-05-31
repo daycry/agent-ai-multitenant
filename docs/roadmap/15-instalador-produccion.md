@@ -214,7 +214,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_07` — Generador de docker-compose.yml según opciones del wizard
 
-- [ ] **Título**: Generador de docker-compose.yml según opciones del wizard
+- [x] **Título**: Generador de docker-compose.yml según opciones del wizard
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

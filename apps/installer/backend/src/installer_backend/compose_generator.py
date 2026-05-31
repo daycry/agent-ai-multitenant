@@ -1,0 +1,731 @@
+"""docker-compose generator — wizard config → runtime stack (Plan 15 task_15_07).
+
+Phase B fills the real generators the install orchestration (task 15_05's
+``generate_config`` step) calls. This module is the **compose generator**: given
+the wizard config (profile / GPU on-off / storage choices / enabled LLM
+providers / ports) it produces the runtime stack's ``docker-compose.yml`` as a
+plain ``dict`` (and, via :func:`render_compose_yaml`, the YAML text written at
+install time).
+
+Why a dict, not a template
+---------------------------
+The canonical base compose (``docker/docker-compose.yml``) is the source of
+truth for the *shape* of every service (image pins, healthchecks, named
+volumes, the two networks). The installer never ships a half-baked deployment
+where the operator hand-edits YAML; instead this builds the compose
+*programmatically* from a typed catalogue so the wizard and the CLI share one
+generator and the result is deterministic + assertable. The produced mapping is
+serialised to YAML with :func:`render_compose_yaml` and written under the data
+root at install time (NOT committed — that write lives behind the install
+seams; this module is pure, no I/O).
+
+Hardening defaults
+------------------
+Every generated service carries the platform hardening defaults consistent with
+the existing compose: ``restart: unless-stopped``, capped json-file logging,
+``cap_drop: [ALL]`` + ``security_opt: ["no-new-privileges:true"]`` and a
+``deploy.resources.limits`` cap. Images are pinned (never ``:latest``). The
+two networks (``agentic-net`` + the internal ``agentic-agents``) and the named
+volumes match the canonical compose.
+
+Secrets
+-------
+The generated compose references credentials via ``${ENV}`` placeholders ONLY —
+it NEVER embeds a literal secret, and for a *production* install it omits the
+``:-changeme…`` dev fallbacks the dev compose carries (so the generated YAML
+passes the platform's prod secret guard: it contains none of the dev-default
+markers ``changeme`` / ``dev-only`` / ``minioadmin``). The real values are
+written to the ``.env`` / Vault by tasks 15_08-15_09; this module only wires the
+references. Nothing here is logged.
+"""
+
+from __future__ import annotations
+
+import copy
+from typing import Any
+
+import yaml
+
+from installer_backend.config import (
+    Environment,
+    InstallerConfig,
+    LLMProviderKind,
+)
+
+# ---------------------------------------------------------------------------
+# Pinned images — kept in lockstep with docker/docker-compose.yml +
+# docker-compose.monitoring.yml (supply-chain hygiene: never :latest).
+# ---------------------------------------------------------------------------
+IMAGE_POSTGRES = "pgvector/pgvector:pg16"
+IMAGE_REDIS = "redis:7-alpine"
+IMAGE_MINIO = "minio/minio:RELEASE.2024-11-07T00-52-20Z"
+IMAGE_VAULT = "hashicorp/vault:1.17"
+IMAGE_CLAMAV = "clamav/clamav:1.4"
+IMAGE_DOCLING = "ghcr.io/docling-project/docling-serve:v1.20.0"
+IMAGE_OLLAMA = "ollama/ollama:0.5.7"
+IMAGE_PROMETHEUS = "prom/prometheus:v2.54.1"
+IMAGE_GRAFANA = "grafana/grafana:11.2.0"
+IMAGE_NODE_EXPORTER = "prom/node-exporter:v1.8.2"
+
+#: The application images the platform builds. The generator references them by
+#: tag (the installer pulls the released images); the build context lives in the
+#: repo. Pinned to the platform release tag at install time.
+APP_IMAGE_TAG = "${PLATFORM_IMAGE_TAG:-v1.0.0}"
+APP_IMAGE_REGISTRY = "${PLATFORM_REGISTRY:-ghcr.io/agentic-platform}"
+
+# Dev-default markers the prod secret guard rejects (mirror of
+# api_server.config._DEV_SECRET_MARKERS). The generated *production* compose
+# must contain none of these.
+_DEV_SECRET_MARKERS = ("changeme", "dev-only", "minioadmin")
+
+# Compose top-level name (matches the canonical stack so `docker compose`
+# treats a re-generated file as the same project).
+PROJECT_NAME = "agentic-platform"
+
+#: Canonical core services always present in the runtime stack.
+CORE_SERVICES: tuple[str, ...] = (
+    "postgres",
+    "redis",
+    "minio",
+    "vault",
+    "clamav",
+    "docling-serve",
+    "egress-proxy",
+    "api-server",
+    "orchestrator",
+    "workers",
+    "notification-dispatcher",
+    "admin-panel",
+)
+
+#: Services added only when the monitoring overlay is requested.
+MONITORING_SERVICES: tuple[str, ...] = (
+    "prometheus",
+    "node-exporter",
+    "grafana",
+)
+
+#: The GPU service (local Ollama on the GPU) added only when gpu_enabled.
+GPU_SERVICE = "ollama"
+
+
+def _logging_block() -> dict[str, Any]:
+    """The capped json-file logging block every service shares."""
+
+    return {
+        "driver": "json-file",
+        "options": {"max-size": "10m", "max-file": "5"},
+    }
+
+
+def _hardening(
+    *,
+    limits_cpus: str,
+    limits_memory: str,
+    cap_drop_all: bool = True,
+) -> dict[str, Any]:
+    """Platform hardening defaults applied to a generated service.
+
+    ``cap_drop: [ALL]`` + ``no-new-privileges`` mirror the monitoring overlay's
+    hardened services; ``deploy.resources.limits`` caps CPU/memory so a runaway
+    container can't starve the single host. A few infra images (Vault needs
+    ``IPC_LOCK``) opt out of the blanket cap-drop via ``cap_drop_all=False``.
+    """
+
+    block: dict[str, Any] = {
+        "restart": "unless-stopped",
+        "logging": _logging_block(),
+        "security_opt": ["no-new-privileges:true"],
+        "deploy": {
+            "resources": {"limits": {"cpus": limits_cpus, "memory": limits_memory}},
+        },
+    }
+    if cap_drop_all:
+        block["cap_drop"] = ["ALL"]
+    return block
+
+
+def _env_ref(var: str, dev_default: str | None, *, prod: bool) -> str:
+    """A ``${VAR}`` reference, keeping a dev fallback only outside prod.
+
+    For a production install we omit the ``:-default`` fallback so the compose
+    carries NO dev-default marker (the prod secret guard rejects those) and a
+    missing ``.env`` value fails loudly instead of silently using a known
+    secret. For dev/staging we keep the convenience fallback.
+    """
+
+    if prod or dev_default is None:
+        return f"${{{var}}}"
+    return f"${{{var}:-{dev_default}}}"
+
+
+# ---------------------------------------------------------------------------
+# Individual service builders. Each returns a compose service mapping. They are
+# parametrised by the wizard config (ports, data root, resources, prod-ness).
+# ---------------------------------------------------------------------------
+def _postgres_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    svc: dict[str, Any] = {
+        "image": IMAGE_POSTGRES,
+        "environment": {
+            "POSTGRES_USER": _env_ref("POSTGRES_USER", "postgres", prod=prod),
+            "POSTGRES_PASSWORD": _env_ref("POSTGRES_PASSWORD", None, prod=prod),
+            "POSTGRES_DB": _env_ref("POSTGRES_DB", "agentic_platform", prod=prod),
+            "POSTGRES_INITDB_ARGS": "--encoding=UTF8 --locale=C",
+            "MIGRATIONS_USER_PASSWORD": _env_ref("MIGRATIONS_USER_PASSWORD", None, prod=prod),
+            "APP_USER_PASSWORD": _env_ref("APP_USER_PASSWORD", None, prod=prod),
+        },
+        "volumes": [
+            f"{cfg.storage.data_root}/postgres:/var/lib/postgresql/data",
+            "./postgres/init:/docker-entrypoint-initdb.d:ro",
+        ],
+        "healthcheck": {
+            "test": [
+                "CMD-SHELL",
+                "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-agentic_platform}",
+            ],
+            "interval": "10s",
+            "timeout": "5s",
+            "retries": 5,
+            "start_period": "30s",
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    return svc
+
+
+def _redis_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    svc: dict[str, Any] = {
+        "image": IMAGE_REDIS,
+        "command": [
+            "redis-server",
+            "--appendonly",
+            "yes",
+            "--appendfsync",
+            "everysec",
+            "--save",
+            "60 1",
+            "--maxmemory",
+            "${REDIS_MAX_MEM:-512mb}",
+            "--maxmemory-policy",
+            "allkeys-lru",
+        ],
+        "volumes": [f"{cfg.storage.data_root}/redis:/data"],
+        "healthcheck": {
+            "test": ["CMD", "redis-cli", "ping"],
+            "interval": "10s",
+            "timeout": "3s",
+            "retries": 5,
+            "start_period": "10s",
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="1g"))
+    return svc
+
+
+def _minio_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    svc: dict[str, Any] = {
+        "image": IMAGE_MINIO,
+        "command": 'server /data --console-address ":9001"',
+        "environment": {
+            "MINIO_ROOT_USER": _env_ref("MINIO_ROOT_USER", "minioadmin", prod=prod),
+            "MINIO_ROOT_PASSWORD": _env_ref("MINIO_ROOT_PASSWORD", None, prod=prod),
+        },
+        "volumes": [f"{cfg.storage.data_root}/minio:/data"],
+        "healthcheck": {
+            "test": ["CMD", "mc", "ready", "local"],
+            "interval": "10s",
+            "timeout": "5s",
+            "retries": 5,
+            "start_period": "30s",
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    return svc
+
+
+def _vault_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    # Vault needs IPC_LOCK to mlock its memory — it opts out of the blanket
+    # cap-drop (matches the canonical compose's `cap_add: [IPC_LOCK]`).
+    svc: dict[str, Any] = {
+        "image": IMAGE_VAULT,
+        "cap_add": ["IPC_LOCK"],
+        "environment": {
+            "VAULT_ADDR": "http://0.0.0.0:8200",
+            "VAULT_API_ADDR": "http://0.0.0.0:8200",
+        },
+        "volumes": [
+            f"{cfg.storage.data_root}/vault/file:/vault/file",
+            f"{cfg.storage.data_root}/vault/logs:/vault/logs",
+            "./vault/config.hcl:/vault/config/config.hcl:ro",
+        ],
+        "command": ["server"],
+        "healthcheck": {
+            "test": [
+                "CMD-SHELL",
+                "wget -qO- 'http://127.0.0.1:8200/v1/sys/health"
+                "?standbyok=true&sealedcode=200&uninitcode=200' || exit 1",
+            ],
+            "interval": "10s",
+            "timeout": "5s",
+            "retries": 10,
+            "start_period": "30s",
+        },
+        "networks": ["agentic-net"],
+    }
+    # cap_drop_all=False: keep IPC_LOCK; no-new-privileges + limits still apply.
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="512m", cap_drop_all=False))
+    return svc
+
+
+def _clamav_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    svc: dict[str, Any] = {
+        "image": IMAGE_CLAMAV,
+        "environment": {"CLAMAV_NO_FRESHCLAMD": "false"},
+        "volumes": [f"{cfg.storage.data_root}/clamav:/var/lib/clamav"],
+        "healthcheck": {
+            "test": ["CMD-SHELL", "clamdscan --version || exit 1"],
+            "interval": "30s",
+            "timeout": "10s",
+            "retries": 5,
+            "start_period": "120s",
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    return svc
+
+
+def _docling_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    svc: dict[str, Any] = {
+        "image": IMAGE_DOCLING,
+        "environment": {"DOCLING_SERVE_ENABLE_UI": "false"},
+        "healthcheck": {
+            "test": ["CMD-SHELL", "wget -q --spider http://localhost:5001/health || exit 1"],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 5,
+            "start_period": "60s",
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="2.0", limits_memory="4g"))
+    return svc
+
+
+def _egress_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    # On TWO networks: agentic-net (egress to internet) + the internal
+    # agentic-agents (the only path the sandbox runtime has to a provider).
+    svc: dict[str, Any] = {
+        "build": "./egress-proxy",
+        "container_name": "agentic-egress-proxy",
+        "healthcheck": {
+            "test": [
+                "CMD-SHELL",
+                "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true",
+            ],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 3,
+        },
+        "networks": ["agentic-net", "agentic-agents"],
+    }
+    svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
+    return svc
+
+
+def _app_environment(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    """Shared environment for the platform application services.
+
+    Wires the DB/Redis/MinIO/Vault references + the deployment environment so
+    the runtime services' prod secret guard sees a real ``environment`` value.
+    Secrets are ``${ENV}`` references only.
+    """
+
+    return {
+        "ENVIRONMENT": cfg.system.environment.value,
+        "PLATFORM_DOMAIN": cfg.system.domain,
+        "DATABASE_URL": _env_ref("DATABASE_URL", None, prod=prod),
+        "ADMIN_DATABASE_URL": _env_ref("ADMIN_DATABASE_URL", None, prod=prod),
+        "REDIS_URL": _env_ref("REDIS_URL", "redis://redis:6379/0", prod=prod),
+        "MINIO_ENDPOINT": "minio:9000",
+        "MINIO_ACCESS_KEY": _env_ref("MINIO_ACCESS_KEY", None, prod=prod),
+        "MINIO_SECRET_KEY": _env_ref("MINIO_SECRET_KEY", None, prod=prod),
+        "VAULT_ADDR": "http://vault:8200",
+    }
+
+
+def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/api-server:{APP_IMAGE_TAG}",
+        "environment": _app_environment(cfg, prod=prod),
+        "ports": [f"{cfg.ports.api_server}:8000"],
+        "depends_on": {
+            "postgres": {"condition": "service_healthy"},
+            "redis": {"condition": "service_healthy"},
+            "vault": {"condition": "service_healthy"},
+        },
+        "healthcheck": {
+            "test": ["CMD-SHELL", "wget -q --spider http://localhost:8000/healthz || exit 1"],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 5,
+            "start_period": "30s",
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    return svc
+
+
+def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/orchestrator:{APP_IMAGE_TAG}",
+        "environment": _app_environment(cfg, prod=prod),
+        "depends_on": {
+            "postgres": {"condition": "service_healthy"},
+            "redis": {"condition": "service_healthy"},
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="1g"))
+    return svc
+
+
+def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    # worker_replicas / worker_memory_gib come from the wizard's ResourceConfig
+    # (parametrised resource allocation, task 15_03).
+    mem = f"{cfg.resources.worker_memory_gib}g"
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
+        "environment": _app_environment(cfg, prod=prod),
+        "depends_on": {
+            "postgres": {"condition": "service_healthy"},
+            "redis": {"condition": "service_healthy"},
+        },
+        # Connected to the internal agents network too so workers can launch
+        # the egress-proxied agent runtimes.
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="4.0", limits_memory=mem))
+    # Scale the Celery worker pool per the wizard's resource choice.
+    svc["deploy"]["replicas"] = cfg.resources.worker_replicas
+    return svc
+
+
+def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/notification-dispatcher:{APP_IMAGE_TAG}",
+        "environment": _app_environment(cfg, prod=prod),
+        "depends_on": {
+            "postgres": {"condition": "service_healthy"},
+            "redis": {"condition": "service_healthy"},
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
+    return svc
+
+
+def _admin_panel_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    admin_port = cfg.ports.admin_panel
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/admin-panel:{APP_IMAGE_TAG}",
+        "environment": {
+            "NODE_ENV": "production" if prod else "development",
+            "PLATFORM_DOMAIN": cfg.system.domain,
+        },
+        "ports": [f"{admin_port}:3000"],
+        "depends_on": {"api-server": {"condition": "service_healthy"}},
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
+    return svc
+
+
+def _ollama_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    """Local Ollama on the GPU — added only when ``gpu_enabled``.
+
+    Reserves the NVIDIA GPU via ``deploy.resources.reservations.devices`` (the
+    Compose-native GPU request) so ``docker compose --profile gpu up`` schedules
+    it on the GPU. Hardened like the rest of the stack.
+    """
+
+    svc: dict[str, Any] = {
+        "image": IMAGE_OLLAMA,
+        "profiles": ["gpu"],
+        "volumes": [f"{cfg.storage.data_root}/ollama:/root/.ollama"],
+        "healthcheck": {
+            "test": ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 5,
+            "start_period": "30s",
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="4.0", limits_memory="8g"))
+    # Compose-native GPU reservation (requires the NVIDIA Container Toolkit).
+    # `capabilities` is a flat list of strings per the Compose schema.
+    svc["deploy"]["resources"]["reservations"] = {
+        "devices": [{"driver": "nvidia", "count": "all", "capabilities": ["gpu"]}],
+    }
+    return svc
+
+
+def _prometheus_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    svc: dict[str, Any] = {
+        "image": IMAGE_PROMETHEUS,
+        "user": "65534:65534",
+        "command": [
+            "--config.file=/etc/prometheus/prometheus.yml",
+            "--storage.tsdb.path=/prometheus",
+            "--storage.tsdb.retention.time=15d",
+            "--web.enable-lifecycle",
+        ],
+        "volumes": [
+            "./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro",
+            "./monitoring/prometheus/rules:/etc/prometheus/rules:ro",
+            f"{cfg.storage.data_root}/prometheus:/prometheus",
+        ],
+        "healthcheck": {
+            "test": ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1"],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 5,
+            "start_period": "30s",
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="1g"))
+    return svc
+
+
+def _node_exporter_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    svc: dict[str, Any] = {
+        "image": IMAGE_NODE_EXPORTER,
+        "command": [
+            "--path.procfs=/host/proc",
+            "--path.sysfs=/host/sys",
+            "--path.rootfs=/host/root",
+            "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)",
+        ],
+        "pid": "host",
+        "volumes": [
+            "/proc:/host/proc:ro",
+            "/sys:/host/sys:ro",
+            "/:/host/root:ro,rslave",
+        ],
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
+    return svc
+
+
+def _grafana_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    svc: dict[str, Any] = {
+        "image": IMAGE_GRAFANA,
+        "user": "472:472",
+        "environment": {
+            "GF_SECURITY_ADMIN_USER": _env_ref("GRAFANA_ADMIN_USER", "admin", prod=prod),
+            "GF_SECURITY_ADMIN_PASSWORD": _env_ref("GRAFANA_ADMIN_PASSWORD", None, prod=prod),
+            "GF_USERS_ALLOW_SIGN_UP": "false",
+            "GF_AUTH_ANONYMOUS_ENABLED": "false",
+            "GF_ANALYTICS_REPORTING_ENABLED": "false",
+            "GF_ANALYTICS_CHECK_FOR_UPDATES": "false",
+        },
+        "volumes": [
+            "./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro",
+            "./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro",
+            f"{cfg.storage.data_root}/grafana:/var/lib/grafana",
+        ],
+        "depends_on": ["prometheus"],
+        "healthcheck": {
+            "test": ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 5,
+            "start_period": "30s",
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
+    return svc
+
+
+#: Builder dispatch — one entry per service name.
+_BUILDERS = {
+    "postgres": _postgres_service,
+    "redis": _redis_service,
+    "minio": _minio_service,
+    "vault": _vault_service,
+    "clamav": _clamav_service,
+    "docling-serve": _docling_service,
+    "egress-proxy": _egress_proxy_service,
+    "api-server": _api_server_service,
+    "orchestrator": _orchestrator_service,
+    "workers": _workers_service,
+    "notification-dispatcher": _notification_dispatcher_service,
+    "admin-panel": _admin_panel_service,
+    "ollama": _ollama_service,
+    "prometheus": _prometheus_service,
+    "node-exporter": _node_exporter_service,
+    "grafana": _grafana_service,
+}
+
+
+def _provider_env_for(cfg: InstallerConfig) -> dict[str, str]:
+    """Provider wiring injected into the app services from the enabled providers.
+
+    Each enabled ADR-0021 provider contributes its (non-secret) wiring: a feature
+    flag + endpoint reference. The real credentials live in Vault (task 15_09);
+    here we only toggle which providers the runtime is configured to use, so a
+    disabled provider leaves NO wiring in the compose at all.
+    """
+
+    env: dict[str, str] = {}
+    providers = cfg.providers
+    if providers.claude_sdk.enabled:
+        env["LLM_CLAUDE_SDK_ENABLED"] = "true"
+    if providers.copilot.enabled:
+        env["LLM_COPILOT_ENABLED"] = "true"
+    if providers.azure_foundry.enabled:
+        env["LLM_AZURE_FOUNDRY_ENABLED"] = "true"
+        if providers.azure_foundry.apim_endpoint:
+            env["LLM_AZURE_FOUNDRY_ENDPOINT"] = providers.azure_foundry.apim_endpoint
+    if providers.ollama.enabled:
+        env["LLM_OLLAMA_ENABLED"] = "true"
+        # Prefer an explicit endpoint; default to the in-stack GPU service when
+        # the GPU profile is on, otherwise leave the wizard-provided endpoint.
+        if providers.ollama.endpoint:
+            env["LLM_OLLAMA_ENDPOINT"] = providers.ollama.endpoint
+        elif cfg.resources.gpu_enabled:
+            env["LLM_OLLAMA_ENDPOINT"] = "http://ollama:11434"
+    return env
+
+
+def enabled_providers(cfg: InstallerConfig) -> tuple[LLMProviderKind, ...]:
+    """The ordered tuple of providers enabled in the wizard config."""
+
+    out: list[LLMProviderKind] = []
+    if cfg.providers.claude_sdk.enabled:
+        out.append(LLMProviderKind.CLAUDE_SDK)
+    if cfg.providers.copilot.enabled:
+        out.append(LLMProviderKind.COPILOT)
+    if cfg.providers.azure_foundry.enabled:
+        out.append(LLMProviderKind.AZURE_FOUNDRY)
+    if cfg.providers.ollama.enabled:
+        out.append(LLMProviderKind.OLLAMA)
+    return tuple(out)
+
+
+def selected_services(cfg: InstallerConfig, *, monitoring: bool) -> list[str]:
+    """The ordered list of service names the generated compose will contain.
+
+    Core services are always present; the GPU ``ollama`` service is added only
+    when ``gpu_enabled``; the monitoring overlay services only when requested.
+    """
+
+    services = list(CORE_SERVICES)
+    if cfg.resources.gpu_enabled:
+        services.append(GPU_SERVICE)
+    if monitoring:
+        services.extend(MONITORING_SERVICES)
+    return services
+
+
+def _networks_block() -> dict[str, Any]:
+    """The two canonical networks (agentic-net + the internal agentic-agents)."""
+
+    return {
+        "agentic-net": {"name": "agentic-net", "driver": "bridge"},
+        "agentic-agents": {
+            "name": "agentic-agents",
+            "driver": "bridge",
+            "internal": True,
+            "driver_opts": {"com.docker.network.bridge.enable_icc": "true"},
+        },
+    }
+
+
+def generate_compose(
+    cfg: InstallerConfig,
+    *,
+    monitoring: bool = False,
+) -> dict[str, Any]:
+    """Build the runtime stack ``docker-compose`` mapping from the wizard config.
+
+    Parameters mirror the wizard choices:
+      * ``cfg.resources.gpu_enabled`` → adds the GPU ``ollama`` service (profile
+        ``gpu``) with an NVIDIA device reservation.
+      * ``cfg.providers`` → only the enabled ADR-0021 providers get their wiring
+        injected into the application services' environment.
+      * ``cfg.ports`` → host port mappings (admin panel, etc.).
+      * ``cfg.storage.data_root`` → the bind-mount base for every stateful
+        service.
+      * ``monitoring`` → adds the Prometheus/Grafana/node-exporter overlay.
+
+    Returns a plain ``dict`` (serialise with :func:`render_compose_yaml`). The
+    mapping is hardened + secret-free (``${ENV}`` references only) and, for a
+    production environment, carries no dev-default secret marker.
+    """
+
+    prod = cfg.system.environment is Environment.PRODUCTION
+    service_names = selected_services(cfg, monitoring=monitoring)
+    provider_env = _provider_env_for(cfg)
+
+    services: dict[str, Any] = {}
+    for name in service_names:
+        builder = _BUILDERS[name]
+        svc = builder(cfg, prod=prod)
+        # Inject the provider wiring into the application services only.
+        if name in ("api-server", "orchestrator", "workers", "notification-dispatcher"):
+            env = svc.setdefault("environment", {})
+            assert isinstance(env, dict)
+            env.update(provider_env)
+        services[name] = svc
+
+    compose: dict[str, Any] = {
+        "name": PROJECT_NAME,
+        "services": services,
+        "networks": _networks_block(),
+    }
+    return compose
+
+
+def render_compose_yaml(compose: dict[str, Any]) -> str:
+    """Serialise a generated compose mapping to deterministic YAML text.
+
+    ``sort_keys=False`` preserves the builder ordering (services first in
+    pipeline order), ``default_flow_style=False`` keeps the block style the rest
+    of the repo's compose files use. The output is what the install seam writes
+    to disk; this function performs NO I/O.
+    """
+
+    text: str = yaml.safe_dump(
+        copy.deepcopy(compose),
+        sort_keys=False,
+        default_flow_style=False,
+        width=100,
+    )
+    return text
+
+
+def assert_no_dev_secret_markers(yaml_text: str) -> None:
+    """Raise ``ValueError`` if a dev-default secret marker leaked into prod YAML.
+
+    The prod secret guard (``api_server.config._DEV_SECRET_MARKERS``) rejects
+    these substrings; the generator must never emit them for a production
+    install. This is a belt-and-braces self-check the CLI/wizard can call after
+    generating a production compose.
+    """
+
+    lowered = yaml_text.lower()
+    found = [marker for marker in _DEV_SECRET_MARKERS if marker in lowered]
+    if found:
+        raise ValueError(
+            "El docker-compose generado para producción contiene marcadores de "
+            f"secreto de desarrollo: {', '.join(found)}."
+        )

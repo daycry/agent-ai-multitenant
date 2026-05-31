@@ -255,6 +255,26 @@ class ProvidersConfig(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Host port mappings (parametrised by the wizard; consumed by the compose
+# generator, task 15_07). Only services that publish a host port are listed;
+# everything else stays inside the compose network.
+# ---------------------------------------------------------------------------
+class PortsConfig(BaseModel):
+    """Host ports the generated compose publishes.
+
+    Defaults match the canonical dev compose. The admin panel is the operator
+    entry point; the others let the installer expose a service on the host when
+    the operator overrides the default. All are validated to the IANA range.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    admin_panel: int = Field(default=3000, ge=1, le=65535)
+    api_server: int = Field(default=8000, ge=1, le=65535)
+    minio_console: int = Field(default=9001, ge=1, le=65535)
+
+
+# ---------------------------------------------------------------------------
 # Step 6 — initial tenant.
 # ---------------------------------------------------------------------------
 class TenantConfig(BaseModel):
@@ -287,6 +307,7 @@ class InstallerConfig(BaseModel):
     storage: StorageConfig
     providers: ProvidersConfig
     tenant: TenantConfig
+    ports: PortsConfig = Field(default_factory=PortsConfig)
 
 
 class FieldError(BaseModel):
