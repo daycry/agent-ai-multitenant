@@ -335,7 +335,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_14` — Pentest interno: enumeración de superficie + escalada de privilegios + escapes de contenedor
 
-- [ ] **Título**: Pentest interno: enumeración de superficie + escalada de privilegios + escapes de contenedor
+- [x] **Título**: Pentest interno: enumeración de superficie + escalada de privilegios + escapes de contenedor
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: security
