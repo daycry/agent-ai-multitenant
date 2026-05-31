@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
 
+from api_server.auth.admin_hardening import require_hardened_system_admin
 from api_server.auth.audit import write_audit_log
 from api_server.auth.deps import (
     AuthPrincipal,
@@ -61,7 +62,18 @@ _PROBE_TIMEOUT_S = 10.0
 
 _logger = get_logger(__name__)
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+# The admin-hardening gate (Plan 15 task_15_18) is wired at the ROUTER level
+# so it applies to every `/admin/*` route without touching each handler. In
+# staging/prod it enforces mandatory MFA + IP allowlist + a short session TTL;
+# in dev it is a pass-through. It composes `require_system_admin`, so the
+# per-route `Depends(require_system_admin)` still gives handlers the principal
+# (FastAPI dedups the shared dependency) while the router-level dependency adds
+# the hardening checks.
+router = APIRouter(
+    prefix="/admin",
+    tags=["admin"],
+    dependencies=[Depends(require_hardened_system_admin)],
+)
 
 
 # ---------------------------------------------------------------------------

@@ -403,7 +403,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_18` — Hardening del panel admin: MFA obligatorio, IP allowlist, sesiones cortas (15 min)
 
-- [ ] **Título**: Hardening del panel admin: MFA obligatorio, IP allowlist, sesiones cortas (15 min)
+- [x] **Título**: Hardening del panel admin: MFA obligatorio, IP allowlist, sesiones cortas (15 min)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: security + backend-dev
