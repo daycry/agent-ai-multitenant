@@ -422,7 +422,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_19` — Runbook: instalación desde cero
 
-- [ ] **Título**: Runbook: instalación desde cero
+- [x] **Título**: Runbook: instalación desde cero
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer

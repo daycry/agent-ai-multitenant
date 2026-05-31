@@ -18,6 +18,7 @@ Orientados a quien mantiene el sistema corriendo en una sola máquina
 
 | Runbook                                                              | Cuándo usarlo                                                                     |
 | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| [01-installation-from-scratch.md](./01-installation-from-scratch.md) | Instalar desde cero en una máquina virgen (wizard de 9 pasos o CLI desatendido)   |
 | [health-check.md](./health-check.md)                                 | Verificar que todos los servicios del stack están sanos                           |
 | [backups.md](./backups.md)                                           | Copia/restauración manual a nivel de volumen (procedimiento básico)               |
 | [restart-services.md](./restart-services.md)                         | Reiniciar el stack o un servicio concreto sin perder datos                        |
