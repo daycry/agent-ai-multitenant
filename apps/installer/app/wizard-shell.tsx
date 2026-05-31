@@ -34,7 +34,16 @@ export function WizardShell() {
   // Inline errors appear only after the user attempts to advance a config step.
   const [showErrorsFor, setShowErrorsFor] = useState<ReadonlySet<WizardStepId>>(new Set());
 
+  // Summary step (task_15_04): the operator must tick the confirm gate before
+  // the irreversible install can start. Reset whenever we navigate away so a
+  // change of config forces re-confirmation.
+  const [confirmed, setConfirmed] = useState(false);
+  const onConfirmChange = useCallback((value: boolean) => {
+    setConfirmed(value);
+  }, []);
+
   const blockedByPrereqs = wizard.current === "resources" && !prereqGateOpen;
+  const blockedByConfirm = wizard.current === "summary" && !confirmed;
   const blockedByConfig =
     isConfigStep(wizard.current) && stepHasBlockingErrors(wizard.current, config.config);
 
@@ -51,12 +60,34 @@ export function WizardShell() {
     if (step === "resources" && !prereqGateOpen) {
       return;
     }
+    if (step === "summary" && !confirmed) {
+      return;
+    }
     wizard.advance();
-  }, [wizard, config.config, prereqGateOpen]);
+  }, [wizard, config.config, prereqGateOpen, confirmed]);
+
+  // Going back from the summary step un-confirms (the operator may edit config).
+  const handleBack = useCallback(() => {
+    if (wizard.current === "summary") {
+      setConfirmed(false);
+    }
+    wizard.goBack();
+  }, [wizard]);
+
+  const handleGoTo = useCallback(
+    (id: WizardStepId) => {
+      if (wizard.current === "summary" && id !== "summary") {
+        setConfirmed(false);
+      }
+      wizard.goTo(id);
+    },
+    [wizard],
+  );
 
   // The button stays enabled for config steps (so the click can reveal errors);
-  // it's only hard-disabled while the prereq probe blocks the resources step.
-  const nextDisabled = !wizard.canAdvance || blockedByPrereqs;
+  // it's hard-disabled while the prereq probe blocks the resources step or the
+  // confirm gate blocks the summary step.
+  const nextDisabled = !wizard.canAdvance || blockedByPrereqs || blockedByConfirm;
   const showErrors = showErrorsFor.has(wizard.current);
 
   return (
@@ -73,7 +104,7 @@ export function WizardShell() {
 
       <div className="grid flex-1 gap-6 md:grid-cols-[16rem_1fr]">
         <aside className="rounded-lg border border-border bg-card p-3">
-          <Stepper current={wizard.current} furthest={wizard.furthest} onSelect={wizard.goTo} />
+          <Stepper current={wizard.current} furthest={wizard.furthest} onSelect={handleGoTo} />
         </aside>
 
         <div className="flex flex-col rounded-lg border border-border bg-card p-6">
@@ -83,6 +114,8 @@ export function WizardShell() {
               config={config}
               showErrors={showErrors}
               onGateChange={onGateChange}
+              confirmed={confirmed}
+              onConfirmChange={onConfirmChange}
             />
           </div>
 
@@ -91,7 +124,7 @@ export function WizardShell() {
               type="button"
               data-testid="wizard-back"
               disabled={!wizard.canGoBack}
-              onClick={wizard.goBack}
+              onClick={handleBack}
               className={cn(
                 "inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm transition-colors",
                 "text-muted-foreground hover:bg-muted",

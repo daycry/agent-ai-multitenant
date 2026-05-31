@@ -161,7 +161,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_04` — Paso 7: Resumen y confirmación con preview de recursos
 
-- [ ] **Título**: Paso 7: Resumen y confirmación con preview de recursos
+- [x] **Título**: Paso 7: Resumen y confirmación con preview de recursos
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: frontend-dev

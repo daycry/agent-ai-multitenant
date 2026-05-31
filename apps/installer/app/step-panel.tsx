@@ -19,6 +19,7 @@ import { BasicsStep } from "./steps/basics-step";
 import { ProvidersStep } from "./steps/providers-step";
 import { ResourcesStep } from "./steps/resources-step";
 import { StorageStep } from "./steps/storage-step";
+import { SummaryStep } from "./steps/summary-step";
 import { TenantStep } from "./steps/tenant-step";
 
 interface StepPanelProps {
@@ -28,15 +29,26 @@ interface StepPanelProps {
   showErrors: boolean;
   /** Forwarded to the prereq step so the shell can gate "next" on it. */
   onGateChange?: (canProceed: boolean) => void;
+  /** Summary-step confirm gate (task_15_04), owned by the wizard shell. */
+  confirmed: boolean;
+  onConfirmChange: (confirmed: boolean) => void;
 }
 
 /**
  * Renders the body of the current wizard step. task_15_03 fills the capture
- * forms for steps 2-6 (basics / resources / storage / providers / tenant); the
- * summary (15_04), install progress (15_05) and finalize (15_06) steps keep a
- * typed placeholder until their tasks land.
+ * forms for steps 2-6 (basics / resources / storage / providers / tenant);
+ * task_15_04 fills the summary/confirmation step (7). The install progress
+ * (15_05) and finalize (15_06) steps keep a typed placeholder until their
+ * tasks land.
  */
-export function StepPanel({ step, config, showErrors, onGateChange }: StepPanelProps) {
+export function StepPanel({
+  step,
+  config,
+  showErrors,
+  onGateChange,
+  confirmed,
+  onConfirmChange,
+}: StepPanelProps) {
   const meta = stepById(step);
   const errors: FieldErrors =
     showErrors && isConfigStep(step) ? validateStep(step, config.config) : {};
@@ -109,6 +121,12 @@ export function StepPanel({ step, config, showErrors, onGateChange }: StepPanelP
         errors={errors}
         onChange={(partial: Partial<TenantConfig>) => config.patch("tenant", partial)}
       />
+    );
+  }
+
+  if (step === "summary") {
+    return (
+      <SummaryStep config={config.config} confirmed={confirmed} onConfirmChange={onConfirmChange} />
     );
   }
 
