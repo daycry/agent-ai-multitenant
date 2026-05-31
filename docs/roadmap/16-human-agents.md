@@ -111,7 +111,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_02` — Tabla `human_agent_config` con campos específicos del modelo humano
 
-- [ ] **Título**: Tabla `human_agent_config` con `agent_id` (FK), `assignment_mode`, `assigned_user_id` (FK User), `hourly_rate`, `hourly_rate_currency`, `notification_channels` JSONB, `acceptance_timeout_hours`, `escalation_target_user_id` (FK User), `expected_response_time_hours`, `expected_execution_time_hours`.
+- [x] **Título**: Tabla `human_agent_config` con `agent_id` (FK), `assignment_mode`, `assigned_user_id` (FK User), `hourly_rate`, `hourly_rate_currency`, `notification_channels` JSONB, `acceptance_timeout_hours`, `escalation_target_user_id` (FK User), `expected_response_time_hours`, `expected_execution_time_hours`.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

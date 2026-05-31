@@ -75,6 +75,22 @@ class AgentType(enum.StrEnum):
     HUMAN = "human"
 
 
+class AssignmentMode(enum.StrEnum):
+    """How a human agent's tasks are routed to actual people (Plan 16).
+
+    - ``SPECIFIC_USER``: tasks go to one fixed :class:`User`
+      (``human_agent_config.assigned_user_id``). The ONLY mode in the MVP
+      (Plan 16 Decisiones Clave) — a DB CHECK constrains the column to it.
+    - ``ROLE_QUEUE`` / ``TEAM_POOL``: queue- and team-based routing. Modelled
+      here for forward-compatibility but explicitly out of scope this plan;
+      the CHECK rejects them until a later plan lifts the constraint.
+    """
+
+    SPECIFIC_USER = "specific_user"
+    ROLE_QUEUE = "role_queue"
+    TEAM_POOL = "team_pool"
+
+
 class AgentScope(enum.StrEnum):
     """Where an agent lives in the linked-vs-forked taxonomy (spec §5.7.5).
 
@@ -963,6 +979,122 @@ class ApprovalRequest(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMix
     )
 
 
+# =============================================================================
+# HumanAgentConfig (the human-specific fields of an agent_type=human Agent)
+# =============================================================================
+class HumanAgentConfig(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """Human-specific configuration of a human agent (Plan 16 task_16_02).
+
+    Plan 16 Decisiones Clave: ``agent_type`` extends the EXISTING Agent
+    entity rather than introducing a separate one. The columns that are
+    meaningless for an AI agent (who the human is, their rate, how to reach
+    them, the acceptance timeout / escalation target) live here, one row per
+    ``agent_type='human'`` agent, instead of widening the ``agents`` table
+    with a dozen always-NULL-for-AI columns. The ``agent_id`` FK is UNIQUE so
+    the relationship is strictly 1:1.
+
+    Tenant-owned: the row carries ``tenant_id`` (TenantScopedMixin) and the DB
+    enforces isolation with the SAME RLS policy shape as ``agents``
+    (``{table}_tenant_isolation`` FOR ALL, ``tenant_id = NULLIF(
+    current_setting('app.tenant_id', true), '')::uuid``). The
+    ``assigned_user_id`` is intrinsically a tenant concept — a global Human
+    Agent template MUST be forked to the tenant before it can name a User
+    (Plan 16 Decisiones Clave), which is why this table is never global.
+
+    MVP constrains ``assignment_mode`` to ``specific_user`` at the DB level
+    (``ck_human_agent_config_assignment_mode``); the :class:`AssignmentMode`
+    enum models the future ``role_queue`` / ``team_pool`` modes but the CHECK
+    rejects them this plan.
+    """
+
+    __tablename__ = "human_agent_config"
+    __table_args__ = (
+        # 1:1 with the human agent — at most one config row per agent.
+        UniqueConstraint("agent_id", name="uq_human_agent_config_agent"),
+        Index("ix_human_agent_config_tenant_id", "tenant_id"),
+        Index("ix_human_agent_config_assigned_user", "assigned_user_id"),
+        # MVP: only specific_user. Model the enum, constrain the column.
+        CheckConstraint(
+            "assignment_mode = 'specific_user'",
+            name="ck_human_agent_config_assignment_mode",
+        ),
+        # A non-negative rate when present (NULL = no rate configured).
+        CheckConstraint(
+            "hourly_rate IS NULL OR hourly_rate >= 0",
+            name="ck_human_agent_config_hourly_rate_non_negative",
+        ),
+        # Timeouts / expected times are positive when present.
+        CheckConstraint(
+            "acceptance_timeout_hours > 0",
+            name="ck_human_agent_config_acceptance_timeout_positive",
+        ),
+    )
+
+    # The human agent this config belongs to (agent_type='human'). UNIQUE via
+    # __table_args__; CASCADE so deleting the agent removes its config.
+    agent_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # MVP: specific_user. Stored as the :class:`AssignmentMode` value (TEXT) —
+    # same string-backed-enum convention as agent_type/scope. DB-constrained
+    # to 'specific_user' by ck_human_agent_config_assignment_mode.
+    assignment_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'specific_user'")
+    )
+
+    # The concrete User this human agent resolves to (assignment_mode=
+    # specific_user). SET NULL so the config survives a user deletion (the
+    # orchestrator then surfaces an unassigned human agent). Nullable so a
+    # config can be created before the User is picked.
+    assigned_user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Cost inputs: rate + ISO-4217 currency (mirrors organizations.hourly_rate
+    # / hourly_rate_currency, migration 0019). Coste humano = rate * horas
+    # (imputed in Plan 16 Fase D). NULL = no rate configured yet.
+    hourly_rate: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=10, scale=2), nullable=True
+    )
+    hourly_rate_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+
+    # Preferred notification channels for the assigned user — a JSONB list of
+    # channel identifiers (e.g. ["email", "in_app"]). JSONB so the shape can
+    # evolve migration-free.
+    notification_channels: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
+    # How long the assigned user has to accept before escalation (Plan 16
+    # Decisiones Clave: 24h default). Acceptance-timeout job lands in Fase B.
+    acceptance_timeout_hours: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("24")
+    )
+
+    # Who the task escalates to if the assigned user does not accept in time.
+    # SET NULL so the config survives that user's deletion.
+    escalation_target_user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Planning estimates the PM agent uses (Plan 16 Fase E). NULL = unknown.
+    expected_response_time_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expected_execution_time_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"HumanAgentConfig(id={self.id!r}, agent_id={self.agent_id!r},"
+            f" assigned_user_id={self.assigned_user_id!r})"
+        )
+
+
 __all__ = [
     "Agent",
     "AgentRole",
@@ -972,6 +1104,7 @@ __all__ = [
     "AgentTool",
     "AgentType",
     "ApprovalPolicyTemplate",
+    "AssignmentMode",
     "ApprovalRequest",
     "ApprovalRequestStatus",
     "BudgetPeriod",
@@ -979,6 +1112,7 @@ __all__ = [
     "Conversation",
     "Execution",
     "ExecutionStatus",
+    "HumanAgentConfig",
     "MemoryScope",
     "Message",
     "MessageAuthorKind",
