@@ -1,7 +1,7 @@
 ---
 plan_id: 14-evals-estadisticas
 title: Sistema de Evaluación de Calidad y Estadísticas
-status: in_progress
+status: pending_human_validation
 blocking_plan: [06-testing-revision-git]
 started_at: 2026-05-30
 completed_at: null
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `14-evals-estadisticas`                   |
-| **Estado**                         | `in_progress`                             |
+| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `06-testing-revision-git`                 |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                               |
 | **Tiempo estimado (persona-días)** | 60-80                                     |
@@ -360,7 +360,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_16` — Documentación + ADRs + changelog
 
-- [ ] **Título**: Documentación + ADRs + changelog
+- [x] **Título**: Documentación + ADRs + changelog
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
