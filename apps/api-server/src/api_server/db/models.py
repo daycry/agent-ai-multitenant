@@ -129,6 +129,17 @@ class Organization(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     )
     hourly_rate_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
 
+    # Per-tenant DISPLAY currency (Plan 11.1 task_11_1_01). Cost is always
+    # stored/computed in canonical USD (executions.total_cost_usd); this is
+    # purely how a tenant's dashboards *show* that cost, converted on the
+    # fly with the FX rate of each execution's date (api_server.fx). NOT
+    # NULL with a server_default of 'EUR' (the platform's primary operating
+    # currency) so every tenant has a well-defined display currency without
+    # a per-row backfill. Set to 'USD' to disable conversion (USD identity).
+    display_currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, server_default=text("'EUR'")
+    )
+
     # Per-tenant gate for the conversational personal assistant (Plan 10
     # task_10_14). DEFAULT false: the feature is opt-in. When false, every
     # Tenant Admin of this tenant is denied (403) — the assistant simply
