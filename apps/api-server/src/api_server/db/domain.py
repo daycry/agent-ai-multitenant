@@ -298,12 +298,24 @@ class Agent(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDe
             "     AND project_id IS NULL)",
             name="ck_agents_scope_project_consistency",
         ),
+        # agent_type enum value set (Plan 16 task_16_01). The column itself
+        # ships with the domain-minimum migration (0002) as String(16) NOT
+        # NULL DEFAULT 'ai'; migration 0066 adds this CHECK so the DB enforces
+        # the AgentType value set (ai|human) instead of accepting any text.
+        CheckConstraint(
+            "agent_type IN ('ai', 'human')",
+            name="ck_agents_agent_type",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # AI vs human agent (Plan 16). Values are the :class:`AgentType` StrEnum
+    # (ai|human) stored as TEXT — same string-backed-enum convention as
+    # `scope`/`AgentScope`. Existing rows default to 'ai' (no behaviour change
+    # for AI agents). DB-enforced by ck_agents_agent_type (migration 0066).
     agent_type: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'ai'"))
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)

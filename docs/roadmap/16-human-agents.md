@@ -94,7 +94,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_01` — Añadir `agent_type` enum a entidad Agent + migración Alembic
 
-- [ ] **Título**: Añadir `agent_type` enum (ai/human, default ai) a entidad Agent. Migración Alembic reversible. Validar que agentes existentes quedan con `agent_type=ai`.
+- [x] **Título**: Añadir `agent_type` enum (ai/human, default ai) a entidad Agent. Migración Alembic reversible. Validar que agentes existentes quedan con `agent_type=ai`.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
