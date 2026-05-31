@@ -265,7 +265,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_10` — Modo CLI desatendido: install.sh --config install.yaml
 
-- [ ] **Título**: Modo CLI desatendido: install.sh --config install.yaml
+- [x] **Título**: Modo CLI desatendido: install.sh --config install.yaml
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
