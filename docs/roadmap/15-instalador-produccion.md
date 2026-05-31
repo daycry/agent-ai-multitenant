@@ -369,7 +369,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_16` — AppArmor profiles aplicados a contenedores
 
-- [ ] **Título**: AppArmor profiles aplicados a contenedores
+- [x] **Título**: AppArmor profiles aplicados a contenedores
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: security + devops

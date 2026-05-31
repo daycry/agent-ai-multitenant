@@ -106,8 +106,13 @@ class Settings(BaseSettings):
     )
     apparmor_profile: str = Field(
         default="",
-        description="AppArmor profile name to pin. Empty = Docker's automatic "
-        "docker-default profile where the host kernel supports AppArmor.",
+        description="AppArmor profile NAME to pin for the untrusted agent/test "
+        "runtime (forwarded as security_opt apparmor=<name> by isolation.py). "
+        "Empty = Docker's automatic docker-default profile where the host kernel "
+        "supports AppArmor. The platform ships a STRICTER hand-written profile at "
+        "docker/apparmor/agent-runtime.profile (Plan 15 task_15_16); load it on "
+        "the host with apparmor_parser and set WORKERS_APPARMOR_PROFILE="
+        "agent-runtime to pin it.",
     )
 
     # ----- Test-runtime aux services + DinD proxy hardening (Plan 06.14

@@ -116,6 +116,14 @@ GPU_SERVICE = "ollama"
 #: time; the path stays relative so it resolves wherever the stack is deployed.
 SECCOMP_DEFAULT_PROFILE = "./seccomp/default.json"
 
+#: Name of the AppArmor MAC profile every generated service pins via
+#: ``security_opt: apparmor=…`` (Plan 15 task_15_16). Unlike seccomp (a path),
+#: AppArmor profiles are referenced by the NAME they were loaded under with
+#: ``apparmor_parser`` on the host. The installer ships
+#: docker/apparmor/agentic-default.profile and the install/runbook step loads
+#: it (real load is a host/HUMAN step — the kernel cannot be exercised in CI).
+APPARMOR_DEFAULT_PROFILE = "agentic-default"
+
 
 def _logging_block() -> dict[str, Any]:
     """The capped json-file logging block every service shares."""
@@ -137,15 +145,22 @@ def _hardening(
     ``cap_drop: [ALL]`` + ``no-new-privileges`` mirror the monitoring overlay's
     hardened services; the tightened default-deny seccomp profile
     (``seccomp=./seccomp/default.json``, Plan 15 task_15_15) pins SCMP_ACT_ERRNO
-    for off-allowlist syscalls; ``deploy.resources.limits`` caps CPU/memory so a
-    runaway container can't starve the single host. A few infra images (Vault
-    needs ``IPC_LOCK``) opt out of the blanket cap-drop via ``cap_drop_all=False``.
+    for off-allowlist syscalls; the AppArmor MAC profile
+    (``apparmor=agentic-default``, Plan 15 task_15_16) lets the host kernel deny
+    the container-escape primitives; ``deploy.resources.limits`` caps CPU/memory
+    so a runaway container can't starve the single host. A few infra images
+    (Vault needs ``IPC_LOCK``) opt out of the blanket cap-drop via
+    ``cap_drop_all=False``.
     """
 
     block: dict[str, Any] = {
         "restart": "unless-stopped",
         "logging": _logging_block(),
-        "security_opt": ["no-new-privileges:true", f"seccomp={SECCOMP_DEFAULT_PROFILE}"],
+        "security_opt": [
+            "no-new-privileges:true",
+            f"seccomp={SECCOMP_DEFAULT_PROFILE}",
+            f"apparmor={APPARMOR_DEFAULT_PROFILE}",
+        ],
         "deploy": {
             "resources": {"limits": {"cpus": limits_cpus, "memory": limits_memory}},
         },

@@ -21,18 +21,30 @@ x-logging: &default-logging
       max-size: "10m"
       max-file: "5"
 
-# Tightened default-deny seccomp profile (Plan 15 task_15_15). Every
-# long-lived service pins it via `security_opt` so the daemon enforces
-# SCMP_ACT_ERRNO for any syscall not on the allowlist — the opposite of
-# Docker's permissive built-in default. The untrusted agent/test runtime
-# sandbox uses the STRICTER docker/seccomp/agent-runtime.json, loaded by the
-# worker at launch (workers.isolation), not here. Profiles are validated in
-# tests/security/test_seccomp_profiles.py; real kernel enforcement is
-# confirmed on a Linux host (internal-pentest-methodology.md §5).
+# Tightened default-deny seccomp profile (Plan 15 task_15_15) + AppArmor MAC
+# confinement (Plan 15 task_15_16). Every long-lived service pins both via
+# `security_opt`:
+#   * seccomp=./seccomp/default.json — the daemon enforces SCMP_ACT_ERRNO for
+#     any syscall not on the allowlist (the opposite of Docker's permissive
+#     built-in default).
+#   * apparmor=agentic-default — the host kernel's MAC layer denies the
+#     container-escape primitives (raw mount/pivot_root, ptrace, kernel modules,
+#     reboot, raw I/O, docker.sock) and confines writes to the expected runtime
+#     dirs. The profile must be loaded on the host first
+#     (`apparmor_parser -r -W docker/apparmor/agentic-default.profile`); see
+#     docs/06-runbooks/apparmor-profiles.md. On a host WITHOUT AppArmor (e.g.
+#     non-Linux dev) drop this overlay or override security_opt.
+# The untrusted agent/test runtime sandbox uses the STRICTER
+# docker/seccomp/agent-runtime.json + docker/apparmor/agent-runtime.profile,
+# loaded by the worker at launch (workers.isolation), not here. Profiles are
+# validated in tests/security/test_seccomp_profiles.py +
+# tests/security/test_apparmor.py; real kernel enforcement is confirmed on a
+# Linux host (internal-pentest-methodology.md §5).
 x-seccomp: &default-seccomp
   security_opt:
     - no-new-privileges:true
     - seccomp=./seccomp/default.json
+    - apparmor=agentic-default
 
 services:
   # ---------------------------------------------------------------------------

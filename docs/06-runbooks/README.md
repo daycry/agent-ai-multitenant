@@ -26,6 +26,7 @@ Orientados a quien mantiene el sistema corriendo en una sola máquina
 | [dr-manual-backup.md](./dr-manual-backup.md)                         | Backup manual con el motor, verificación y subida a destino remoto                |
 | [dr-vault-unseal-rotation.md](./dr-vault-unseal-rotation.md)         | Rotar las unseal keys de Vault con `vault operator rekey`                         |
 | [internal-pentest-methodology.md](./internal-pentest-methodology.md) | Pentest interno: threat model, invariantes automáticas y plan de pruebas manuales |
+| [apparmor-profiles.md](./apparmor-profiles.md)                       | Cargar y verificar los perfiles AppArmor de confinamiento de contenedores         |
 
 ## Convención
 
