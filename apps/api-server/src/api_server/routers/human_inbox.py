@@ -54,6 +54,7 @@ from api_server.db.domain import (
     Task,
     TaskStatus,
 )
+from api_server.db.human_metrics import compute_user_metrics
 from api_server.db.task_audit_repo import append_audit_event
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers._pagination import apply_pagination, limit_query, offset_query
@@ -62,6 +63,8 @@ from api_server.schemas.human_inbox import (
     InboxActionRequest,
     InboxActionResult,
     InboxAssignmentResponse,
+    InboxHistoryEntry,
+    InboxMetricsResponse,
     InboxSubmitRequest,
     InboxSubmitResult,
 )
@@ -156,6 +159,106 @@ def _acceptance_deadline(
         return None
     hours = timeout_hours if timeout_hours is not None else 24
     return assignment.assigned_at + timedelta(hours=hours)
+
+
+# ---------------------------------------------------------------------------
+# GET /inbox/history — the caller's past tasks (closed work sessions)
+# ---------------------------------------------------------------------------
+@router.get("/history", response_model=list[InboxHistoryEntry])
+async def list_my_history(
+    limit: int = limit_query(),
+    offset: int = offset_query(),
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[InboxHistoryEntry]:
+    """List the CALLER user's past human-task deliveries (task_16_10).
+
+    The "Histórico" tab: the caller's OWN closed
+    :class:`~api_server.db.domain.HumanWorkSession` rows (``end_at`` set),
+    newest first, joined to their Task / project / plan context. Scoped on
+    ``user_id == caller`` AND ``tenant_id`` (belt-and-braces over RLS) so a user
+    only ever sees the work they themselves delivered.
+    """
+    tenant_id = require_tenant_id(principal)
+    stmt = (
+        select(
+            HumanWorkSession,
+            Task.title,
+            Task.status,
+            Task.project_id,
+            Project.name,
+            Task.plan_id,
+            Plan.title,
+        )
+        .join(Task, Task.id == HumanWorkSession.task_id)
+        .join(Project, Project.id == Task.project_id)
+        .outerjoin(Plan, Plan.id == Task.plan_id)
+        .where(
+            HumanWorkSession.user_id == principal.user_id,
+            HumanWorkSession.tenant_id == tenant_id,
+            HumanWorkSession.end_at.isnot(None),
+        )
+        .order_by(HumanWorkSession.end_at.desc(), HumanWorkSession.id.desc())
+    )
+    stmt = apply_pagination(stmt, limit=limit, offset=offset)
+    rows = (await session.execute(stmt)).all()
+    return [
+        InboxHistoryEntry(
+            work_session_id=ws.id,
+            task_id=ws.task_id,
+            task_title=task_title,
+            task_status=task_status,
+            project_id=project_id,
+            project_name=project_name,
+            plan_id=plan_id,
+            plan_title=plan_title,
+            start_at=ws.start_at,
+            end_at=ws.end_at,
+            hours_logged=ws.hours_logged,
+            comments=ws.comments,
+            attachments_count=len(ws.output_files_attached or []),
+        )
+        for (
+            ws,
+            task_title,
+            task_status,
+            project_id,
+            project_name,
+            plan_id,
+            plan_title,
+        ) in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# GET /inbox/metrics — the caller's own performance metrics
+# ---------------------------------------------------------------------------
+@router.get("/metrics", response_model=InboxMetricsResponse)
+async def my_metrics(
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> InboxMetricsResponse:
+    """The CALLER user's human-task performance metrics (task_16_10).
+
+    Pure aggregation over the caller's own
+    :class:`~api_server.db.domain.HumanWorkSession` +
+    :class:`~api_server.db.domain.HumanTaskAssignment` rows
+    (:func:`~api_server.db.human_metrics.compute_user_metrics`): mean acceptance
+    time, mean execution time, first-try approval rate and mean logged hours.
+    Strictly per-user (``principal.user_id``) and tenant-scoped (RLS). The same
+    aggregation feeds future PM estimates (task_16_13).
+    """
+    tenant_id = require_tenant_id(principal)
+    metrics = await compute_user_metrics(session, tenant_id=tenant_id, user_id=principal.user_id)
+    return InboxMetricsResponse(
+        tasks_worked=metrics.tasks_worked,
+        work_sessions_completed=metrics.work_sessions_completed,
+        assignments_accepted=metrics.assignments_accepted,
+        mean_acceptance_time_seconds=metrics.mean_acceptance_time_seconds,
+        mean_execution_time_seconds=metrics.mean_execution_time_seconds,
+        first_try_approval_rate=metrics.first_try_approval_rate,
+        mean_hours_logged=metrics.mean_hours_logged,
+    )
 
 
 # ---------------------------------------------------------------------------

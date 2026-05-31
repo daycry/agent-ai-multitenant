@@ -196,12 +196,67 @@ class InboxSubmitResult(InboxActionResult):
     attachments_count: int
 
 
+# ---------------------------------------------------------------------------
+# Histórico + métricas personales (task_16_10)
+# ---------------------------------------------------------------------------
+class InboxHistoryEntry(BaseModel):
+    """One past task the caller worked on — the "Histórico" tab row (task_16_10).
+
+    A history entry is a closed :class:`~api_server.db.domain.HumanWorkSession`
+    the caller authored, folded with the Task / project / plan context. Where
+    the active inbox shows ``pending_acceptance`` / ``accepted`` rows, the
+    history shows the deliverables the user submitted — with the logged hours,
+    the output note, the attachment count and the work window — so the user can
+    review what they delivered and when.
+    """
+
+    model_config = _BASE_CONFIG
+
+    work_session_id: UUID
+    task_id: UUID
+    task_title: str
+    task_status: str
+    project_id: UUID
+    project_name: str | None
+    plan_id: UUID | None
+    plan_title: str | None
+
+    start_at: datetime
+    end_at: datetime | None
+    hours_logged: Decimal | None
+    comments: str | None
+    attachments_count: int
+
+
+class InboxMetricsResponse(BaseModel):
+    """The caller's own human-task performance metrics (task_16_10).
+
+    Mirrors :class:`~api_server.db.human_metrics.HumanUserMetrics`. Time figures
+    are in **seconds** (the UI formats them); means / rates are ``None`` when
+    there is nothing to average (empty history) — distinct from a real ``0.0``
+    — so the panel can render "sin datos aún". These same numbers feed future PM
+    estimates (task_16_13), which is why they are exposed queryably.
+    """
+
+    model_config = _BASE_CONFIG
+
+    tasks_worked: int
+    work_sessions_completed: int
+    assignments_accepted: int
+    mean_acceptance_time_seconds: float | None
+    mean_execution_time_seconds: float | None
+    first_try_approval_rate: float | None
+    mean_hours_logged: float | None
+
+
 __all__ = [
     "AttachmentKind",
     "InboxAction",
     "InboxActionRequest",
     "InboxActionResult",
     "InboxAssignmentResponse",
+    "InboxHistoryEntry",
+    "InboxMetricsResponse",
     "InboxSubmitRequest",
     "InboxSubmitResult",
     "SubmitAttachment",

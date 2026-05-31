@@ -257,7 +257,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_10` — Histórico personal con métricas de performance
 
-- [ ] **Título**: Pestaña "Histórico" en la bandeja personal: tareas pasadas con tiempo medio de aceptación, tiempo medio de ejecución, % de tareas aprobadas a la primera. Las métricas alimentan estimaciones futuras del PM agente.
+- [x] **Título**: Pestaña "Histórico" en la bandeja personal: tareas pasadas con tiempo medio de aceptación, tiempo medio de ejecución, % de tareas aprobadas a la primera. Las métricas alimentan estimaciones futuras del PM agente. _(backend pytest verde vs DB real + @pytest.mark.cross_tenant; admin-panel typecheck/lint/build verde; e2e Playwright escrito NO ejecutado — pendiente verificación humana)._
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev

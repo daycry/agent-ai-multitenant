@@ -16,12 +16,18 @@
  * assigned_to_user_id en el servidor + RLS por tenant). No es admin-only: es la
  * bandeja personal de quien esté logueado.
  *
+ * Dos pestañas (Tabs):
+ *   - "Activas"   — las asignaciones activas con sus acciones contextuales.
+ *   - "Histórico" — tareas pasadas + métricas personales (task_16_10).
+ *
  * Endpoints (routers/human_inbox.py):
  *   GET  /inbox/assignments
  *   POST /inbox/assignments/{id}/accept
  *   POST /inbox/assignments/{id}/reject      { justification }
  *   POST /inbox/assignments/{id}/complete    { comments? }
  *   POST /inbox/assignments/{id}/escalate    { justification? }
+ *   GET  /inbox/history                      (task_16_10)
+ *   GET  /inbox/metrics                      (task_16_10)
  */
 
 import { useState } from "react";
@@ -30,6 +36,7 @@ import {
   CheckCircle2,
   Clock,
   FolderKanban,
+  History,
   Home,
   Inbox,
   ListChecks,
@@ -42,8 +49,10 @@ import { Breadcrumb } from "@/components/layout/breadcrumb";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError, apiFetch } from "@/lib/api";
 
+import { HistoryTab } from "./history-tab";
 import { InboxJustifyDialog } from "./justify-dialog";
 import { InboxSubmitDialog } from "./submit-dialog";
 
@@ -333,43 +342,62 @@ export default function InboxPage() {
         }}
       />
 
-      {query.isLoading && (
-        <p className="text-muted-foreground text-sm" data-testid="inbox-loading">
-          Cargando tus tareas…
-        </p>
-      )}
-      {query.isError && (
-        <Card className="border-destructive p-4" data-testid="inbox-error">
-          <p className="text-destructive text-sm">
-            No se pudieron cargar tus tareas: {apiErrorBody(query.error)}
-          </p>
-        </Card>
-      )}
-      {!query.isLoading && !query.isError && items.length === 0 && (
-        <Card className="p-8" data-testid="inbox-empty">
-          <div className="text-muted-foreground flex flex-col items-center gap-2 text-center text-sm">
-            <Inbox className="h-8 w-8 opacity-50" />
-            <p>No tienes tareas asignadas ahora mismo.</p>
-            <p className="text-xs">Cuando te asignen una tarea humana, aparecerá aquí.</p>
-          </div>
-        </Card>
-      )}
-      {items.length > 0 && (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2" data-testid="inbox-grid">
-          {items.map((item) => (
-            <AssignmentCard
-              key={item.assignment_id}
-              item={item}
-              busy={busyId === item.assignment_id}
-              actionError={actionErrors[item.assignment_id] ?? null}
-              onAccept={(a) => actionMutation.mutate({ item: a, action: "accept" })}
-              onReject={(a) => setDialog({ mode: "reject", item: a })}
-              onComplete={(a) => setSubmit({ item: a })}
-              onEscalate={(a) => setDialog({ mode: "escalate", item: a })}
-            />
-          ))}
-        </div>
-      )}
+      <Tabs defaultValue="active" className="mt-6">
+        <TabsList data-testid="inbox-tabs">
+          <TabsTrigger value="active" data-testid="inbox-tab-active">
+            <ListChecks className="mr-1.5 h-4 w-4" />
+            Activas
+          </TabsTrigger>
+          <TabsTrigger value="history" data-testid="inbox-tab-history">
+            <History className="mr-1.5 h-4 w-4" />
+            Histórico
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="active">
+          {query.isLoading && (
+            <p className="text-muted-foreground text-sm" data-testid="inbox-loading">
+              Cargando tus tareas…
+            </p>
+          )}
+          {query.isError && (
+            <Card className="border-destructive p-4" data-testid="inbox-error">
+              <p className="text-destructive text-sm">
+                No se pudieron cargar tus tareas: {apiErrorBody(query.error)}
+              </p>
+            </Card>
+          )}
+          {!query.isLoading && !query.isError && items.length === 0 && (
+            <Card className="p-8" data-testid="inbox-empty">
+              <div className="text-muted-foreground flex flex-col items-center gap-2 text-center text-sm">
+                <Inbox className="h-8 w-8 opacity-50" />
+                <p>No tienes tareas asignadas ahora mismo.</p>
+                <p className="text-xs">Cuando te asignen una tarea humana, aparecerá aquí.</p>
+              </div>
+            </Card>
+          )}
+          {items.length > 0 && (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2" data-testid="inbox-grid">
+              {items.map((item) => (
+                <AssignmentCard
+                  key={item.assignment_id}
+                  item={item}
+                  busy={busyId === item.assignment_id}
+                  actionError={actionErrors[item.assignment_id] ?? null}
+                  onAccept={(a) => actionMutation.mutate({ item: a, action: "accept" })}
+                  onReject={(a) => setDialog({ mode: "reject", item: a })}
+                  onComplete={(a) => setSubmit({ item: a })}
+                  onEscalate={(a) => setDialog({ mode: "escalate", item: a })}
+                />
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="history">
+          <HistoryTab />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
