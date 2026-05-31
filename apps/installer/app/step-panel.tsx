@@ -16,6 +16,7 @@ import { type ConfigController } from "@/lib/use-config";
 import { stepById, type WizardStepId } from "@/lib/wizard";
 
 import { BasicsStep } from "./steps/basics-step";
+import { DoneStep } from "./steps/done-step";
 import { InstallStep } from "./steps/install-step";
 import { ProvidersStep } from "./steps/providers-step";
 import { ResourcesStep } from "./steps/resources-step";
@@ -136,6 +137,10 @@ export function StepPanel({
 
   if (step === "install") {
     return <InstallStep config={config.config} onComplete={onInstallComplete} />;
+  }
+
+  if (step === "done") {
+    return <DoneStep />;
   }
 
   return (

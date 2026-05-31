@@ -195,7 +195,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_06` — Paso 9: Confirmación con credenciales mostradas UNA vez + autodestrucción del installer
 
-- [ ] **Título**: Paso 9: Confirmación con credenciales mostradas UNA vez + autodestrucción del installer
+- [x] **Título**: Paso 9: Confirmación con credenciales mostradas UNA vez + autodestrucción del installer
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

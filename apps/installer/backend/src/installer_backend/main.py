@@ -30,6 +30,7 @@ persisted in plaintext nor written to the log.
 from __future__ import annotations
 
 import json
+import secrets
 from collections.abc import Iterator
 from typing import Annotated
 
@@ -45,6 +46,13 @@ from installer_backend.config import (
     InstallerConfig,
     validate_config,
 )
+from installer_backend.finalize import (
+    CredentialsAlreadyRevealedError,
+    FinalizeService,
+    InstallCredentials,
+    InstallNotCompleteError,
+    RevealPayload,
+)
 from installer_backend.install import (
     INSTALL_STEP_ORDER,
     FakeStepExecutor,
@@ -52,6 +60,7 @@ from installer_backend.install import (
     StepExecutor,
 )
 from installer_backend.seams import (
+    InstallerLifecycle,
     PrereqChecker,
     PrereqStatus,
     ProgressEvent,
@@ -173,6 +182,60 @@ class InstallStreamRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Finalize step 9 — credentials ONCE + self-destruct (task_15_06). The reveal
+# is the ONLY surface that ever carries the generated secret values, and it is
+# served exactly once. These models exist solely for that single hand-off.
+# ---------------------------------------------------------------------------
+class CredentialFieldModel(BaseModel):
+    """One labelled credential line in the one-time reveal."""
+
+    key: str
+    label_es: str
+    label_en: str
+    secret: str
+
+
+class RevealResponse(BaseModel):
+    """The one-time reveal payload. Returned by ``/api/finalize/reveal`` ONCE.
+
+    After this is served the in-memory secrets are dropped and the installer
+    self-destructs, so this body cannot be fetched again. It is never persisted
+    nor logged.
+    """
+
+    credentials: list[CredentialFieldModel]
+    unseal_keys: list[str]
+    warning_es: str
+    warning_en: str
+
+    @classmethod
+    def from_payload(cls, payload: RevealPayload) -> RevealResponse:
+        return cls(
+            credentials=[
+                CredentialFieldModel(
+                    key=f.key, label_es=f.label_es, label_en=f.label_en, secret=f.secret
+                )
+                for f in payload.credentials
+            ],
+            unseal_keys=list(payload.unseal_keys),
+            warning_es=payload.warning_es,
+            warning_en=payload.warning_en,
+        )
+
+
+class FinalizeStatusResponse(BaseModel):
+    """Non-secret status of the finalize step (drives the UI gate).
+
+    Carries NO secret values — only whether the install completed, whether the
+    one-time reveal is still available, and whether it has already been shown.
+    """
+
+    installed: bool
+    can_reveal: bool
+    revealed: bool
+
+
+# ---------------------------------------------------------------------------
 # Dependency providers for the seams. Overridable via
 # `app.dependency_overrides` in tests and replaced by real host bindings in
 # Phase B. Module-level singletons keep the stub state (e.g. lifecycle flag)
@@ -182,6 +245,11 @@ _default_prereq_checker = StubPrereqChecker()
 _default_install_runner = StubInstallRunner()
 _default_lifecycle = StubInstallerLifecycle()
 _default_step_executor = FakeStepExecutor()
+# The finalize service is a PROCESS-WIDE singleton: the install stream arms it
+# on terminal success and a later request reveals it exactly once, so the two
+# must share the same instance across requests. Defaults to the recording stub
+# lifecycle; Phase B swaps in the real self-destruct binding.
+_default_finalize_service = FinalizeService(lifecycle=_default_lifecycle)
 
 
 def get_prereq_checker() -> PrereqChecker:
@@ -197,6 +265,50 @@ def get_step_executor() -> StepExecutor:
     """
 
     return _default_step_executor
+
+
+def get_lifecycle() -> InstallerLifecycle:
+    """The installer self-destruct seam (mocked in tests; real in Phase B)."""
+
+    return _default_lifecycle
+
+
+def get_finalize_service() -> FinalizeService:
+    """The process-wide :class:`FinalizeService` for the one-time reveal.
+
+    A singleton so the install stream (which arms it on success) and the later
+    reveal request observe the same state. Tests override this to inject a fresh
+    service wired to a recording lifecycle fake.
+    """
+
+    return _default_finalize_service
+
+
+def build_install_credentials(config: dict[str, object]) -> InstallCredentials:
+    """Build the one-shot credentials produced by a successful install.
+
+    Phase A has no real secret generator (Vault init / password minting land in
+    Phase B). To keep the finalize state machine exercisable end-to-end without
+    a Docker host, this derives a deterministic-but-non-persisted placeholder
+    set from the (secret-free) config echo: the real binding replaces it with
+    the actual ``vault operator init`` output + minted admin password. The
+    values produced here are NEVER written to disk nor logged.
+    """
+
+    tenant = config.get("tenant")
+    admin_username = "admin"
+    if isinstance(tenant, dict):
+        email = tenant.get("admin_email")
+        if isinstance(email, str) and email:
+            admin_username = email
+    # Placeholder secrets — replaced by real Vault output in Phase B. Generated
+    # fresh per install; held only in memory by the FinalizeService.
+    return InstallCredentials(
+        admin_username=admin_username,
+        admin_password=secrets.token_urlsafe(18),
+        vault_root_token=secrets.token_urlsafe(24),
+        vault_unseal_keys=tuple(secrets.token_urlsafe(24) for _ in range(5)),
+    )
 
 
 def _sse_event(event: ProgressEvent) -> str:
@@ -375,6 +487,7 @@ def create_app() -> FastAPI:
     def install_stream(
         req: InstallStreamRequest,
         executor: Annotated[StepExecutor, Depends(get_step_executor)],
+        finalize: Annotated[FinalizeService, Depends(get_finalize_service)],
     ) -> StreamingResponse:
         """Run the install pipeline and STREAM progress + logs over SSE.
 
@@ -382,6 +495,10 @@ def create_app() -> FastAPI:
         step halts the pipeline, emits a ``failed`` event and leaves later
         steps untouched so the UI can offer retry/abort. The response is a
         ``text/event-stream`` of secret-free progress events; nothing is logged.
+
+        On terminal success the finalize service is ARMED with the one-shot
+        credentials so step 9 can reveal them exactly once. A failed (or
+        halted) run never arms it — incomplete installs reveal nothing.
         """
 
         orchestrator = InstallOrchestrator(executor=executor, config=req.config)
@@ -389,6 +506,10 @@ def create_app() -> FastAPI:
         def event_stream() -> Iterator[str]:
             for event in orchestrator.run():
                 yield _sse_event(event)
+            # Arm the one-time reveal only when the pipeline fully completed.
+            # A failed/halted run leaves the finalize service un-armed.
+            if orchestrator.completed:
+                finalize.arm(build_install_credentials(req.config))
 
         return StreamingResponse(
             event_stream(),
@@ -396,7 +517,65 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    _register_finalize_routes(app)
+
     return app
+
+
+def _register_finalize_routes(app: FastAPI) -> None:
+    """Register the step-9 finalize routes (one-time reveal + status).
+
+    Split out of :func:`create_app` so the factory stays under the statement
+    cap; the routes still close over the shared seam dependency providers.
+    """
+
+    @app.get(
+        "/api/finalize/status",
+        response_model=FinalizeStatusResponse,
+        tags=["finalize"],
+    )
+    def finalize_status(
+        finalize: Annotated[FinalizeService, Depends(get_finalize_service)],
+    ) -> FinalizeStatusResponse:
+        """Non-secret status of the one-time reveal (drives the step-9 gate).
+
+        Carries no secret — only whether the install completed, whether the
+        reveal is still available, and whether it has already been shown.
+        """
+
+        return FinalizeStatusResponse(
+            installed=finalize.installed,
+            can_reveal=finalize.can_reveal,
+            revealed=finalize.revealed,
+        )
+
+    @app.post(
+        "/api/finalize/reveal",
+        response_model=RevealResponse,
+        tags=["finalize"],
+    )
+    def finalize_reveal(
+        finalize: Annotated[FinalizeService, Depends(get_finalize_service)],
+    ) -> RevealResponse:
+        """Reveal the generated credentials + Vault unseal keys EXACTLY ONCE.
+
+        First call on a completed install returns the secret payload, drops the
+        in-memory copy and triggers the installer self-destruct. A second call
+        is denied with ``410 Gone`` (the payload is gone — no recovery). An
+        incomplete install is refused with ``409 Conflict`` and never reveals
+        nor self-destructs. Nothing here is logged.
+        """
+
+        from fastapi import HTTPException
+
+        try:
+            payload = finalize.reveal()
+        except InstallNotCompleteError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except CredentialsAlreadyRevealedError as exc:
+            # 410 Gone: the one-time payload has already been served.
+            raise HTTPException(status_code=410, detail=str(exc)) from exc
+        return RevealResponse.from_payload(payload)
 
 
 # Module-level app for `uvicorn installer_backend.main:app`.
