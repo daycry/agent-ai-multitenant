@@ -21,7 +21,6 @@ blocking_plan:
     13-api-publica-webhooks,
     14-evals-estadisticas,
   ]
-started_at: null
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 80-100
