@@ -439,7 +439,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_20` — Runbook: troubleshooting común
 
-- [ ] **Título**: Runbook: troubleshooting común
+- [x] **Título**: Runbook: troubleshooting común
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: technical-writer
