@@ -17,24 +17,62 @@ with no Docker.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Protocol, runtime_checkable
+
+
+class PrereqStatus(str, Enum):
+    """Tri-state outcome of a prerequisite check (task 15_02).
+
+    * ``OK``   — the prerequisite is satisfied.
+    * ``WARN`` — not satisfied but non-blocking (e.g. an optional GPU is
+                 absent, or a soft recommendation is below target). The
+                 install can still proceed.
+    * ``FAIL`` — a *required* prerequisite is unmet. This is a hard failure
+                 that blocks proceeding past the prereq step.
+
+    ``str`` so it serialises as its value over the API.
+    """
+
+    OK = "ok"
+    WARN = "warn"
+    FAIL = "fail"
 
 
 @dataclass(frozen=True)
 class PrereqResult:
     """Outcome of a single prerequisite probe (Docker, RAM, disk, GPU, ...).
 
-    Phase A defines the SHAPE; the real probe logic is task 15_02. ``ok`` is
-    the pass/fail signal the wizard uses to gate the install button.
+    ``status`` is the tri-state signal (task 15_02). ``ok`` is the derived
+    boolean the wizard uses to gate the install button: a result is "ok" for
+    gating purposes when it is not a hard ``FAIL`` (so a non-blocking ``WARN``
+    — e.g. GPU absent — does not close the gate). ``remediation`` is a clear,
+    actionable message shown to the operator when something is wrong; it is
+    empty when the check passes cleanly.
     """
 
     key: str
     label: str
-    ok: bool
+    status: PrereqStatus
     detail: str = ""
+    # Actionable guidance shown when status is WARN/FAIL. Never empty for a
+    # non-OK result; the checker is responsible for filling it.
+    remediation: str = ""
     # Probes that are informational (e.g. GPU absent on a CPU-only box) are
-    # not fatal: a non-required probe that fails does not block the install.
+    # not fatal: a non-required probe never produces a hard FAIL.
     required: bool = True
+
+    @property
+    def ok(self) -> bool:
+        """True unless this is a hard failure (the install-gate signal)."""
+
+        return self.status is not PrereqStatus.FAIL
+
+    @property
+    def blocking(self) -> bool:
+        """True when this result must block the operator from proceeding."""
+
+        return self.status is PrereqStatus.FAIL
 
 
 @dataclass(frozen=True)
@@ -98,15 +136,20 @@ class InstallerLifecycle(Protocol):
 # ---------------------------------------------------------------------------
 @dataclass
 class StubPrereqChecker:
-    """A configurable fake checker. Defaults to a single passing probe."""
+    """A configurable fake checker. Defaults to a single passing probe.
+
+    Real prereq checking (task 15_02) is :class:`installer_backend.prereqs.
+    RealPrereqChecker`, which probes the host behind a seam. This stub stays
+    as the convenience default for route tests that only care about the gate.
+    """
 
     results: list[PrereqResult] = field(
         default_factory=lambda: [
             PrereqResult(
                 key="scaffold",
                 label="Installer scaffold ready",
-                ok=True,
-                detail="Phase A shell — real probes arrive in task 15_02.",
+                status=PrereqStatus.OK,
+                detail="Phase A shell — real probes added in task 15_02.",
             )
         ]
     )

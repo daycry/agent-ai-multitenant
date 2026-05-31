@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 from installer_backend.main import create_app, get_prereq_checker
-from installer_backend.seams import PrereqResult, StubPrereqChecker
+from installer_backend.seams import PrereqResult, PrereqStatus, StubPrereqChecker
 from installer_backend.wizard import (
     CONFIRMATION_STEP,
     STEP_ORDER,
@@ -161,10 +161,15 @@ def test_prereq_route_uses_injected_checker() -> None:
     def fake_checker() -> StubPrereqChecker:
         return StubPrereqChecker(
             results=[
-                PrereqResult(key="docker", label="Docker", ok=True, detail="27.0"),
-                PrereqResult(key="ram", label="RAM >= 8GB", ok=False, detail="4GB"),
-                # informational GPU probe failing must NOT block the install
-                PrereqResult(key="gpu", label="NVIDIA GPU", ok=False, required=False),
+                PrereqResult(key="docker", label="Docker", status=PrereqStatus.OK, detail="27.0"),
+                PrereqResult(key="ram", label="RAM >= 8GB", status=PrereqStatus.FAIL, detail="4GB"),
+                # informational GPU probe warning must NOT block the install
+                PrereqResult(
+                    key="gpu",
+                    label="NVIDIA GPU",
+                    status=PrereqStatus.WARN,
+                    required=False,
+                ),
             ]
         )
 
@@ -185,8 +190,8 @@ def test_prereq_gate_open_when_required_pass_even_if_optional_fails() -> None:
     def fake_checker() -> StubPrereqChecker:
         return StubPrereqChecker(
             results=[
-                PrereqResult(key="docker", label="Docker", ok=True),
-                PrereqResult(key="gpu", label="GPU", ok=False, required=False),
+                PrereqResult(key="docker", label="Docker", status=PrereqStatus.OK),
+                PrereqResult(key="gpu", label="GPU", status=PrereqStatus.WARN, required=False),
             ]
         )
 

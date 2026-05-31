@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowLeft, ArrowRight } from "lucide-react";
+import { useCallback, useState } from "react";
 
 import { useWizard } from "@/lib/use-wizard";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,18 @@ export function WizardShell() {
   const total = WIZARD_STEPS.length;
   const position = stepIndex(wizard.current) + 1;
 
+  // Step 1 (resources) gate: "next" is blocked until the prerequisite check
+  // reports no required failures. Other steps are not gated here (their own
+  // validation arrives in later tasks). Starts closed and opens once the
+  // prereq panel reports it can proceed.
+  const [prereqGateOpen, setPrereqGateOpen] = useState(false);
+  const onGateChange = useCallback((canProceed: boolean) => {
+    setPrereqGateOpen(canProceed);
+  }, []);
+
+  const blockedByPrereqs = wizard.current === "resources" && !prereqGateOpen;
+  const canAdvance = wizard.canAdvance && !blockedByPrereqs;
+
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-6 py-10">
       <header className="flex flex-col gap-1">
@@ -40,7 +53,7 @@ export function WizardShell() {
 
         <div className="flex flex-col rounded-lg border border-border bg-card p-6">
           <div className="flex-1" data-testid="wizard-panel">
-            <StepPanel step={wizard.current} />
+            <StepPanel step={wizard.current} onGateChange={onGateChange} />
           </div>
 
           <footer className="mt-8 flex items-center justify-between border-t border-border pt-4">
@@ -62,11 +75,11 @@ export function WizardShell() {
             <button
               type="button"
               data-testid="wizard-next"
-              disabled={!wizard.canAdvance}
+              disabled={!canAdvance}
               onClick={wizard.advance}
               className={cn(
                 "inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity",
-                !wizard.canAdvance && "cursor-not-allowed opacity-40",
+                !canAdvance && "cursor-not-allowed opacity-40",
               )}
             >
               {meta.isConfirmation ? "Instalar" : "Siguiente"}

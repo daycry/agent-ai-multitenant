@@ -127,7 +127,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_02` — Paso 1: Validación de prerequisitos (Docker, Compose, RAM, disco, GPU)
 
-- [ ] **Título**: Paso 1: Validación de prerequisitos (Docker, Compose, RAM, disco, GPU)
+- [x] **Título**: Paso 1: Validación de prerequisitos (Docker, Compose, RAM, disco, GPU)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops

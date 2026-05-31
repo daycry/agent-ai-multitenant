@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field
 from installer_backend import __version__
 from installer_backend.seams import (
     PrereqChecker,
+    PrereqStatus,
     StubInstallerLifecycle,
     StubInstallRunner,
     StubPrereqChecker,
@@ -106,16 +107,23 @@ class WizardTransitionResponse(BaseModel):
 class PrereqItem(BaseModel):
     key: str
     label: str
+    # Tri-state outcome (task 15_02): ok / warn / fail.
+    status: PrereqStatus
     ok: bool
     detail: str = ""
+    # Actionable guidance shown when status is warn/fail; empty when ok.
+    remediation: str = ""
     required: bool = True
 
 
 class PrereqResponse(BaseModel):
     results: list[PrereqItem]
-    # True only when every REQUIRED prerequisite passes — the gate for the
-    # install button. Informational (non-required) failures don't block.
+    # True only when no REQUIRED prerequisite is a hard FAIL — the gate for the
+    # install button. Informational (non-required) WARNs don't block.
     all_required_ok: bool
+    # Mirror of all_required_ok kept as an explicit "can the wizard advance
+    # past step 1" signal for the frontend gate.
+    can_proceed: bool
 
 
 # ---------------------------------------------------------------------------
@@ -231,14 +239,19 @@ def create_app() -> FastAPI:
             PrereqItem(
                 key=r.key,
                 label=r.label,
+                status=r.status,
                 ok=r.ok,
                 detail=r.detail,
+                remediation=r.remediation,
                 required=r.required,
             )
             for r in results
         ]
-        all_required_ok = all(r.ok for r in results if r.required)
-        return PrereqResponse(results=items, all_required_ok=all_required_ok)
+        # A hard FAIL on any (required) check blocks; a non-blocking WARN
+        # (e.g. GPU absent) does not. `blocking` is only true for required
+        # FAILs by construction.
+        can_proceed = not any(r.blocking for r in results)
+        return PrereqResponse(results=items, all_required_ok=can_proceed, can_proceed=can_proceed)
 
     return app
 

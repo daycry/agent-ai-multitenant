@@ -2,8 +2,12 @@
 
 import { stepById, type WizardStepId } from "@/lib/wizard";
 
+import { PrereqPanel } from "./prereq-panel";
+
 interface StepPanelProps {
   step: WizardStepId;
+  /** Forwarded to the prereq step so the shell can gate "next" on it. */
+  onGateChange?: (canProceed: boolean) => void;
 }
 
 /**
@@ -11,13 +15,18 @@ interface StepPanelProps {
  * Welcome step in full and a typed placeholder for every other step; tasks
  * 15_02–15_06 replace each placeholder with its real form / panel:
  *
- *   resources/storage/providers/tenant/basics → 15_03 (capture forms)
+ *   resources → 15_02 (prerequisite validation — implemented here)
+ *   storage/providers/tenant/basics → 15_03 (capture forms)
  *   summary  → 15_04 (resource preview + confirm)
  *   install  → 15_05 (progress + live logs)
  *   done     → 15_06 (one-shot credentials + self-destruct)
  */
-export function StepPanel({ step }: StepPanelProps) {
+export function StepPanel({ step, onGateChange }: StepPanelProps) {
   const meta = stepById(step);
+
+  if (step === "resources") {
+    return <PrereqPanel onGateChange={onGateChange} />;
+  }
 
   if (step === "welcome") {
     return (
