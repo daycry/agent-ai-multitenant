@@ -53,8 +53,11 @@ services:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./monitoring/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
+    # Default-deny seccomp profile (Plan 15 task_15_15): SCMP_ACT_ERRNO for any
+    # syscall off the allowlist. Path is relative to docker/ (the compose dir).
     security_opt:
       - no-new-privileges:true
+      - seccomp=./seccomp/default.json
     cap_drop: [ALL]
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1"]
@@ -119,8 +122,10 @@ services:
     volumes:
       - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager_data:/alertmanager
+    # Default-deny seccomp profile (Plan 15 task_15_15).
     security_opt:
       - no-new-privileges:true
+      - seccomp=./seccomp/default.json
     cap_drop: [ALL]
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:9093/-/healthy || exit 1"]
@@ -192,8 +197,10 @@ services:
       # Grafana's own state (SQLite, sessions). Provisioned dashboards live on
       # the read-only mount above, not here.
       - grafana_data:/var/lib/grafana
+    # Default-deny seccomp profile (Plan 15 task_15_15).
     security_opt:
       - no-new-privileges:true
+      - seccomp=./seccomp/default.json
     cap_drop: [ALL]
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]

@@ -352,7 +352,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_15` — Endurecimiento seccomp con perfiles validados por contenedor
 
-- [ ] **Título**: Endurecimiento seccomp con perfiles validados por contenedor
+- [x] **Título**: Endurecimiento seccomp con perfiles validados por contenedor
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: security + devops

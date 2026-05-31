@@ -97,8 +97,12 @@ class Settings(BaseSettings):
     )
     seccomp_profile_path: str = Field(
         default="",
-        description="Path to a custom seccomp JSON profile. Empty = rely on "
-        "Docker's built-in default-deny (SCMP_ACT_ERRNO) profile.",
+        description="Path to a custom seccomp JSON profile for the untrusted "
+        "agent/test runtime. Empty = rely on Docker's built-in default-deny "
+        "(SCMP_ACT_ERRNO) profile. The platform ships a STRICTER hand-tightened "
+        "profile at docker/seccomp/agent-runtime.json (Plan 15 task_15_15); "
+        "point WORKERS_SECCOMP_PROFILE at its in-container path to pin it. The "
+        "worker forwards the file CONTENT to the daemon (isolation.py).",
     )
     apparmor_profile: str = Field(
         default="",

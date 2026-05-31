@@ -108,6 +108,14 @@ MONITORING_SERVICES: tuple[str, ...] = (
 #: The GPU service (local Ollama on the GPU) added only when gpu_enabled.
 GPU_SERVICE = "ollama"
 
+#: Relative path (from the generated compose's directory) to the tightened
+#: default-deny seccomp profile shipped under docker/seccomp/ (Plan 15
+#: task_15_15). Every generated service pins it via ``security_opt`` so the
+#: daemon enforces SCMP_ACT_ERRNO for any syscall off the allowlist. The
+#: installer copies docker/seccomp/ next to the generated compose at install
+#: time; the path stays relative so it resolves wherever the stack is deployed.
+SECCOMP_DEFAULT_PROFILE = "./seccomp/default.json"
+
 
 def _logging_block() -> dict[str, Any]:
     """The capped json-file logging block every service shares."""
@@ -127,15 +135,17 @@ def _hardening(
     """Platform hardening defaults applied to a generated service.
 
     ``cap_drop: [ALL]`` + ``no-new-privileges`` mirror the monitoring overlay's
-    hardened services; ``deploy.resources.limits`` caps CPU/memory so a runaway
-    container can't starve the single host. A few infra images (Vault needs
-    ``IPC_LOCK``) opt out of the blanket cap-drop via ``cap_drop_all=False``.
+    hardened services; the tightened default-deny seccomp profile
+    (``seccomp=./seccomp/default.json``, Plan 15 task_15_15) pins SCMP_ACT_ERRNO
+    for off-allowlist syscalls; ``deploy.resources.limits`` caps CPU/memory so a
+    runaway container can't starve the single host. A few infra images (Vault
+    needs ``IPC_LOCK``) opt out of the blanket cap-drop via ``cap_drop_all=False``.
     """
 
     block: dict[str, Any] = {
         "restart": "unless-stopped",
         "logging": _logging_block(),
-        "security_opt": ["no-new-privileges:true"],
+        "security_opt": ["no-new-privileges:true", f"seccomp={SECCOMP_DEFAULT_PROFILE}"],
         "deploy": {
             "resources": {"limits": {"cpus": limits_cpus, "memory": limits_memory}},
         },

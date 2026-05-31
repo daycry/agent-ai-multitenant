@@ -21,6 +21,19 @@ x-logging: &default-logging
       max-size: "10m"
       max-file: "5"
 
+# Tightened default-deny seccomp profile (Plan 15 task_15_15). Every
+# long-lived service pins it via `security_opt` so the daemon enforces
+# SCMP_ACT_ERRNO for any syscall not on the allowlist — the opposite of
+# Docker's permissive built-in default. The untrusted agent/test runtime
+# sandbox uses the STRICTER docker/seccomp/agent-runtime.json, loaded by the
+# worker at launch (workers.isolation), not here. Profiles are validated in
+# tests/security/test_seccomp_profiles.py; real kernel enforcement is
+# confirmed on a Linux host (internal-pentest-methodology.md §5).
+x-seccomp: &default-seccomp
+  security_opt:
+    - no-new-privileges:true
+    - seccomp=./seccomp/default.json
+
 services:
   # ---------------------------------------------------------------------------
   # PostgreSQL 16 + pgvector (vector store lives in the same DB).
@@ -50,7 +63,7 @@ services:
       retries: 5
       start_period: 30s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
   # ---------------------------------------------------------------------------
   # Redis 7 — sessions (server-side), Celery broker, rate-limit counters.
@@ -79,7 +92,7 @@ services:
       retries: 5
       start_period: 10s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
   # ---------------------------------------------------------------------------
   # MinIO — S3-compatible object storage. The web console runs on 9001.
@@ -103,7 +116,7 @@ services:
       retries: 5
       start_period: 30s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
   # ---------------------------------------------------------------------------
   # HashiCorp Vault in server mode with file backend.
@@ -139,7 +152,7 @@ services:
       retries: 10
       start_period: 30s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
   # ---------------------------------------------------------------------------
   # ClamAV — antivirus scanning for user-uploaded files (RAG ingestion,
@@ -159,7 +172,7 @@ services:
       retries: 5
       start_period: 120s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
   # ---------------------------------------------------------------------------
   # docling-serve — IBM's open-source document parser (Plan 04 task_04_10).
@@ -184,7 +197,7 @@ services:
       retries: 5
       start_period: 60s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
   # ---------------------------------------------------------------------------
   # docling-mcp — MCP-protocol surface of Docling (Plan 04 task_04_21).
@@ -236,7 +249,7 @@ services:
     networks:
       - agentic-net
       - agentic-agents
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
 volumes:
   postgres_data:
