@@ -11,6 +11,7 @@ swaps in the real assignment policies via `set_handler`.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
@@ -23,10 +24,19 @@ from orchestrator.events import MalformedEventError, TaskEvent, parse_event
 
 _log = structlog.get_logger("orchestrator.consumer")
 
-# A handler reacts to one parsed event. Returns nothing; raising
-# propagates to the consumer, which logs + counts a failure but still
-# ACKs (task_02_01 keeps it simple — no dead-letter yet).
+# A handler reacts to one parsed event. Returns nothing; raising propagates to
+# the consumer, which logs + counts a failure, dead-letters the event, then
+# still ACKs so a poison message can't wedge the group (Plan 06.14
+# task_06_14_05 / workers-orchestrator-4).
 EventHandler = Callable[[TaskEvent], Awaitable[None]]
+
+# Events whose handler raised are XADDed here before the caller ACKs, so a
+# failed dispatch is observable and replayable instead of silently lost.
+# Mirrors the workers' `dlq:executions` stream (task_06_14_04).
+DEAD_LETTER_STREAM = "dlq:orchestrator_events"
+# Cap the dead-letter stream so an outage that fails thousands of events can't
+# grow Redis unbounded; approximate trimming keeps XADD O(1).
+_DEAD_LETTER_MAXLEN = 10_000
 
 
 async def _noop_handler(event: TaskEvent) -> None:
@@ -138,9 +148,10 @@ class StreamConsumer:
         """Parse + hand one entry to the handler, updating counters.
 
         Malformed entries are counted and skipped (still ACKed by the
-        caller so a poison message can't wedge the group). A handler
-        that raises is counted as `failed` but also ACKed — Plan 02
-        keeps the path simple; a dead-letter stream is a later refinement.
+        caller so a poison message can't wedge the group). A handler that
+        raises is counted as `failed` and pushed to the dead-letter stream
+        BEFORE the caller ACKs, so the failed dispatch is observable and
+        replayable rather than silently lost (workers-orchestrator-4).
         """
         try:
             event = parse_event(entry_id, fields)
@@ -162,7 +173,36 @@ class StreamConsumer:
                 task_id=event.task_id,
                 error=str(exc),
             )
+            await self._dead_letter(event, exc)
             return
 
         self.stats.processed += 1
         result.processed += 1
+
+    async def _dead_letter(self, event: TaskEvent, exc: Exception) -> None:
+        """Best-effort: record a failed event on the dead-letter stream.
+
+        Runs before the caller ACKs so the event survives. A dead-letter
+        outage only logs a warning — it must never re-raise into the consume
+        loop (the event is counted `failed` and ACKed regardless)."""
+        try:
+            await self._redis.xadd(
+                DEAD_LETTER_STREAM,
+                {
+                    "entry_id": event.stream_id,
+                    "type": event.type,
+                    "task_id": event.task_id,
+                    "tenant_id": event.tenant_id,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "failed_at_unix": str(time.time()),
+                },
+                maxlen=_DEAD_LETTER_MAXLEN,
+                approximate=True,
+            )
+        except Exception as dlq_exc:  # pragma: no cover - DLQ is best-effort
+            _log.warning(
+                "orchestrator.dead_letter_record_failed",
+                entry=event.stream_id,
+                task_id=event.task_id,
+                error=str(dlq_exc),
+            )

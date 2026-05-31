@@ -36,6 +36,11 @@ from api_server.routers._helpers import (
     get_writable_or_404,
     require_tenant_id,
 )
+from api_server.routers._pagination import (
+    apply_pagination,
+    limit_query,
+    offset_query,
+)
 from api_server.schemas.tasks import (
     TaskCreateRequest,
     TaskResponse,
@@ -113,6 +118,8 @@ async def list_tasks(
     priority: str | None = Query(default=None),
     assigned_agent_id: UUID | None = Query(default=None),
     plan_id: UUID | None = Query(default=None),
+    limit: int = limit_query(),
+    offset: int = offset_query(),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[TaskResponse]:
@@ -127,7 +134,8 @@ async def list_tasks(
         stmt = stmt.where(Task.assigned_agent_id == assigned_agent_id)
     if plan_id is not None:
         stmt = stmt.where(Task.plan_id == plan_id)
-    stmt = stmt.order_by(Task.created_at)
+    stmt = stmt.order_by(Task.created_at, Task.id)
+    stmt = apply_pagination(stmt, limit=limit, offset=offset)
     result = await session.execute(stmt)
     tasks = list(result.scalars().all())
 

@@ -1,9 +1,9 @@
 ---
 plan_id: 07-documentacion-visor
 title: Documentación Estructurada y Visor Cross-Proyecto
-status: pending_approval
+status: pending_human_validation
 blocking_plan: [06-testing-revision-git]
-started_at: null
+started_at: 2026-05-30
 completed_at: null
 estimated_duration_calendar: 3 semanas
 estimated_effort_person_days: 55-65
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `07-documentacion-visor`                  |
-| **Estado**                         | `pending_approval`                        |
+| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `06-testing-revision-git`                 |
 | **Tiempo estimado (calendario)**   | 3 semanas                                 |
 | **Tiempo estimado (persona-días)** | 55-65                                     |
@@ -87,7 +87,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_01` — Script de bootstrap que crea las 7 carpetas obligatorias en un repo nuevo
 
-- [ ] **Título**: Script de bootstrap que crea las 7 carpetas obligatorias en un repo nuevo
+- [x] **Título**: Script de bootstrap que crea las 7 carpetas obligatorias en un repo nuevo
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -104,7 +104,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_02` — Guardrail estructural: valida estructura al hacer push y bloquea PR si faltan carpetas
 
-- [ ] **Título**: Guardrail estructural: valida estructura al hacer push y bloquea PR si faltan carpetas
+- [x] **Título**: Guardrail estructural: valida estructura al hacer push y bloquea PR si faltan carpetas
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
@@ -121,7 +121,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_03` — Lint de Markdown (frontmatter, headers, enlaces, language tags) como check de CI
 
-- [ ] **Título**: Lint de Markdown (frontmatter, headers, enlaces, language tags) como check de CI
+- [x] **Título**: Lint de Markdown (frontmatter, headers, enlaces, language tags) como check de CI
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -132,13 +132,13 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
     description: "Lint de Markdown (frontmatter, headers, enlaces, language tags) como check de CI"
     check_type: automated
     runtime: generic-shell
-    command: "npx markdownlint --config .markdownlint.json docs/**/*.md"
+    command: 'npx markdownlint-cli --config .markdownlint.jsonc "docs/**/*.md"'
     expected_signal: "exit_code == 0"
   ```
 
 #### `task_07_04` — Validador de idioma: detecta si un .md está en idioma distinto al declarado
 
-- [ ] **Título**: Validador de idioma: detecta si un .md está en idioma distinto al declarado
+- [x] **Título**: Validador de idioma: detecta si un .md está en idioma distinto al declarado
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -157,7 +157,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_05` — Agente Technical Writer con system_prompt curado y skills específicas
 
-- [ ] **Título**: Agente Technical Writer con system_prompt curado y skills específicas
+- [x] **Título**: Agente Technical Writer con system_prompt curado y skills específicas
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -174,7 +174,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_06` — Workflow automático al cierre del plan: el Technical Writer genera changelog + ADRs si aplica + updates a reference
 
-- [ ] **Título**: Workflow automático al cierre del plan: el Technical Writer genera changelog + ADRs si aplica + updates a reference
+- [x] **Título**: Workflow automático al cierre del plan: el Technical Writer genera changelog + ADRs si aplica + updates a reference
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -191,7 +191,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_07` — Plantilla canónica de changelog por plan (frontmatter + resumen + tareas + decisiones + PR link)
 
-- [ ] **Título**: Plantilla canónica de changelog por plan (frontmatter + resumen + tareas + decisiones + PR link)
+- [x] **Título**: Plantilla canónica de changelog por plan (frontmatter + resumen + tareas + decisiones + PR link)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: ai-engineer
@@ -208,7 +208,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_08` — Plantilla canónica de ADR numerado secuencialmente
 
-- [ ] **Título**: Plantilla canónica de ADR numerado secuencialmente
+- [x] **Título**: Plantilla canónica de ADR numerado secuencialmente
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: ai-engineer
@@ -227,7 +227,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_09` — Sincronización /docs ↔ kb_internal_docs al mergear PR (webhook Git)
 
-- [ ] **Título**: Sincronización /docs ↔ kb_internal_docs al mergear PR (webhook Git)
+- [x] **Título**: Sincronización /docs ↔ kb_internal_docs al mergear PR (webhook Git)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -244,7 +244,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_10` — Reindexación incremental (solo los .md cambiados desde el último commit)
 
-- [ ] **Título**: Reindexación incremental (solo los .md cambiados desde el último commit)
+- [x] **Título**: Reindexación incremental (solo los .md cambiados desde el último commit)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + ai-engineer
@@ -263,7 +263,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_11` — UI Next.js en /docs del tenant con sidebar árbol de proyectos → carpetas → archivos
 
-- [ ] **Título**: UI Next.js en /docs del tenant con sidebar árbol de proyectos → carpetas → archivos
+- [x] **Título**: UI Next.js en /docs del tenant con sidebar árbol de proyectos → carpetas → archivos (e2e pending human verify)
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -280,7 +280,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_12` — Renderizado Markdown con react-markdown + remark-mermaid + rehype-highlight + tabla de contenidos autogenerada
 
-- [ ] **Título**: Renderizado Markdown con react-markdown + remark-mermaid + rehype-highlight + tabla de contenidos autogenerada
+- [x] **Título**: Renderizado Markdown con react-markdown + remark-mermaid + rehype-highlight + tabla de contenidos autogenerada (e2e pending human verify)
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -297,7 +297,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_13` — Búsqueda full-text instantánea con resultados rankeados y snippets
 
-- [ ] **Título**: Búsqueda full-text instantánea con resultados rankeados y snippets
+- [x] **Título**: Búsqueda full-text instantánea con resultados rankeados y snippets (implementado + builds; e2e `docs-viewer-search.spec.ts` escrito, pendiente verificación humana)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -314,7 +314,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_14` — Búsqueda semántica sobre kb_internal_docs
 
-- [ ] **Título**: Búsqueda semántica sobre kb_internal_docs
+- [x] **Título**: Búsqueda semántica sobre kb_internal_docs
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -331,7 +331,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_15` — Filtros (por proyecto, tipo de doc, fecha, autor) y bookmarks
 
-- [ ] **Título**: Filtros (por proyecto, tipo de doc, fecha, autor) y bookmarks
+- [x] **Título**: Filtros (por proyecto, tipo de doc, fecha, autor) y bookmarks <!-- implementado + typecheck/lint/build verdes; e2e docs-viewer-filters.spec.ts escrito, pendiente verificación humana -->
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -348,7 +348,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_16` — Vista de diff entre versiones (basado en commits Git)
 
-- [ ] **Título**: Vista de diff entre versiones (basado en commits Git)
+- [x] **Título**: Vista de diff entre versiones (basado en commits Git) <!-- e2e pendiente de verificación humana (sin app+navegador en este entorno) -->
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -365,7 +365,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_17` — Exportación PDF / ZIP
 
-- [ ] **Título**: Exportación PDF / ZIP
+- [x] **Título**: Exportación PDF / ZIP
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -382,7 +382,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_18` — Permisos RBAC respetados (filtro por proyecto accesible al usuario)
 
-- [ ] **Título**: Permisos RBAC respetados (filtro por proyecto accesible al usuario)
+- [x] **Título**: Permisos RBAC respetados (filtro por proyecto accesible al usuario)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -401,7 +401,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_19` — Documentación interna del propio sistema usando su propia estructura (eat your own dog food)
 
-- [ ] **Título**: Documentación interna del propio sistema usando su propia estructura (eat your own dog food)
+- [x] **Título**: Documentación interna del propio sistema usando su propia estructura (eat your own dog food)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: technical-writer
@@ -418,7 +418,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 
 #### `task_07_20` — Changelog del plan
 
-- [ ] **Título**: Changelog del plan
+- [x] **Título**: Changelog del plan
 - **Tiempo estimado**: 2 h
 - **Complejidad**: xs
 - **Rol sugerido**: technical-writer

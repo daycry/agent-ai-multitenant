@@ -1,9 +1,9 @@
 ---
 plan_id: 08-sso-empresarial
 title: SSO Empresarial y Auth Avanzada
-status: pending_approval
+status: pending_human_validation
 blocking_plan: [00-fundaciones]
-started_at: null
+started_at: 2026-05-30
 completed_at: null
 estimated_duration_calendar: 2-3 semanas
 estimated_effort_person_days: 40-55
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `08-sso-empresarial`                      |
-| **Estado**                         | `pending_approval`                        |
+| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `00-fundaciones`                          |
 | **Tiempo estimado (calendario)**   | 2-3 semanas                               |
 | **Tiempo estimado (persona-días)** | 40-55                                     |
@@ -85,7 +85,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_01` — Integración OIDC con authlib
 
-- [ ] **Título**: Integración OIDC con authlib
+- [x] **Título**: Integración OIDC con authlib
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -102,7 +102,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_02` — Plantillas por IdP: Azure AD, Google Workspace, Okta, Auth0, GitHub, GitLab, Apple, Facebook
 
-- [ ] **Título**: Plantillas por IdP: Azure AD, Google Workspace, Okta, Auth0, GitHub, GitLab, Apple, Facebook
+- [x] **Título**: Plantillas por IdP: Azure AD, Google Workspace, Okta, Auth0, GitHub, GitLab, Apple, Facebook
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -119,7 +119,10 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_03` — UI configuración OIDC por tenant
 
-- [ ] **Título**: UI configuración OIDC por tenant
+- [x] **Título**: UI configuración OIDC por tenant
+<!-- e2e (e2e/sso-oidc-config.spec.ts) escrito pero NO ejecutado: PENDING HUMAN VERIFICATION.
+     Verde: typecheck + lint + build del admin-panel, CRUD backend (15 tests integración OIDC config). -->
+
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -138,7 +141,18 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_04` — Integración SAML con python3-saml (SP-initiated y IdP-initiated)
 
-- [ ] **Título**: Integración SAML con python3-saml (SP-initiated y IdP-initiated)
+- [x] **Título**: Integración SAML con python3-saml (SP-initiated y IdP-initiated)
+<!-- python3-saml + xmlsec 1.3.17 instalado OK en este host (wheel Windows);
+     flujo SAML COMPLETO implementado y verde, incluida la validación de firma
+     XML del assertion (no bloqueado-por-xmlsec en este entorno). El import de
+     python3-saml es perezoso dentro del flujo: en un nodo SIN el backend nativo
+     xmlsec los endpoints devuelven 501 (guard testeado) y el resto de auth
+     (login local + OIDC) sigue funcionando. 13 tests en
+     tests/integration/test_saml.py (SP-initiated, IdP-initiated/unsolicited,
+     JIT, tampered/garbage assertion, config ausente/deshabilitada, aislamiento
+     cross-tenant, import-guard). Migración 0033 reversible (up/down/up) con
+     CHECK por-provider. OIDC + login local intactos (24 tests verdes). -->
+
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -155,7 +169,31 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_05` — Configuración de firma y cifrado XML
 
-- [ ] **Título**: Configuración de firma y cifrado XML
+- [x] **Título**: Configuración de firma y cifrado XML
+<!-- xmlsec 1.3.17 + python3-saml instalados OK en este host (wheel Windows):
+     la firma/cifrado XML (la parte nativa) NO está bloqueada-por-xmlsec aquí y
+     el camino completo corre verde. Implementado: migración 0034 reversible
+     (up/down/up) añadiendo a sso_configurations las columnas SP de firma/cifrado
+     — sp_x509_cert (PEM público, no secreto), sp_private_key_ref /
+     sp_private_key_encrypted (clave privada SP, exactamente-una-fuente, cifrada
+     en reposo con Fernet — mismo mecanismo que el client_secret OIDC, NUNCA en
+     claro) y los flags de política authn_requests_signed, want_assertions_signed
+     (antes hard-coded en 08_04, ahora columna, default true),
+     want_assertions_encrypted, want_name_id_encrypted; dos CHECK (una sola fuente
+     de clave + clave/cert presentes si cualquier feature de cripto está activa).
+     ResolvedSAMLConfig.to_settings() cablea el par SP + bloque security
+     (authnRequestsSigned / wantAssertionsEncrypted / wantNameIdEncrypted /
+     signature+digest SHA-256). validate_saml_security() valida invariantes sin
+     necesitar xmlsec (camino degradado seguro). resolve_sp_private_key() en
+     secrets.py refleja resolve_client_secret (Vault-first, Fernet fallback,
+     None si no hay clave). El router resuelve la clave SP y valida en
+     _resolve_saml_config. 13 tests en tests/integration/test_saml_crypto.py:
+     superficie de config (validación + Fernet round-trip, corren sin xmlsec) +
+     superficie cripto (BLOQUEADO-POR-XMLSEC, verde aquí): AuthnRequest firmada
+     lleva Signature+SigAlg sha256; assertion correctamente firmada ACEPTADA;
+     assertion manipulada/sin firma RECHAZADA (400); aislamiento cross-tenant
+     (la clave SP de A no se filtra en la request de B). OIDC + login local +
+     SAML 08_04 intactos (37 tests verdes). -->
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
@@ -172,11 +210,21 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_06` — UI de configuración SAML por tenant con upload de metadata IdP
 
-- [ ] **Título**: UI de configuración SAML por tenant con upload de metadata IdP
+- [x] **Título**: UI de configuración SAML por tenant con upload de metadata IdP
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
 - **Dependencias**: `task_08_05`
+- **Estado**: completado. Página `/admin/settings/sso/saml` (consume el CRUD
+  SAML añadido en `routers/sso.py`: GET/POST/PUT/DELETE `/auth/sso/saml/config`,
+  GET `/auth/sso/saml/sp-metadata`, POST `/auth/sso/saml/parse-metadata`). Parseo
+  de metadata IdP server-side con lxml endurecido (sin xmlsec, anti-XXE). Backend
+  CRUD + parse cubierto por `tests/integration/test_saml_config_crud.py` (19 tests
+  verdes: RBAC, RLS cross-tenant, clave SP cifrada y nunca devuelta, invariante de
+  firma/cifrado, coexistencia OIDC+SAML, parseo de metadata). Frontend verde:
+  `npm run typecheck && lint && build`. El e2e `e2e/sso-saml-config.spec.ts` está
+  ESCRITO pero NO ejecutado — pendiente de verificación humana (requiere navegador
+  - dev server).
 - **Tests automáticos**:
   ```yaml
   - id: auto_08_06_a
@@ -191,7 +239,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_07` — JIT provisioning al primer login SSO
 
-- [ ] **Título**: JIT provisioning al primer login SSO
+- [x] **Título**: JIT provisioning al primer login SSO
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -208,7 +256,29 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_08` — SCIM 2.0 endpoints para creación/actualización/eliminación de usuarios desde IdP
 
-- [ ] **Título**: SCIM 2.0 endpoints para creación/actualización/eliminación de usuarios desde IdP
+- [x] **Título**: SCIM 2.0 endpoints para creación/actualización/eliminación de usuarios desde IdP
+<!-- SCIM 2.0 (RFC 7643/7644) AÑADIDO junto a login local + OIDC + SAML (no
+     los toca). Endpoints /scim/v2/Users (POST/GET-id/GET-list+filter/PUT/
+     PATCH/DELETE) autenticados por bearer token per-tenant (tabla
+     scim_tokens — solo el digest SHA-256 en reposo, NUNCA el token; el
+     token identifica el tenant). El token se resuelve una vez en el rol
+     BYPASSRLS (petición sin sesión) y luego cada query corre bajo
+     app.tenant_id (RLS) -> un token de A no puede tocar B. Mapeo SCIM User
+     -> users (global) + user_org_memberships (per-tenant): userName/email,
+     externalId (nueva columna en la membership), active. Deprovisioning
+     (active=false / DELETE) desactiva la membership Y revoca las sesiones
+     vivas del usuario en el tenant (índice user->sesiones añadido al
+     SessionStore, retrocompatible). Respuestas con forma SCIM (schemas,
+     meta, id, camelCase). Gestión de tokens (mint/list/revoke) vía UI
+     tenant_admin con JWT. Migración 0036 reversible (up/down/up verificado;
+     head único) + columna external_id en memberships. 9 tests en
+     tests/integration/test_scim.py: create->aparece + GET, duplicado 409,
+     list/filter userName eq, PUT replace, PATCH active=false revoca acceso
+     (sesión muerta), DELETE deprovisiona, token malo/ausente 401,
+     cross-tenant (token A no ve/toca B), CRUD de tokens + token revocado
+     401. pre-commit verde (black/ruff/mypy). Login local + OIDC + SAML
+     intactos (87 tests verdes: 18 auth/OIDC + 45 SAML + 24 JIT/OIDC). -->
+- **NO bloqueado por xmlsec**: SCIM no usa SAML/xmlsec.
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -225,7 +295,34 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_09` — MFA TOTP con pyotp (setup, QR, verificación)
 
-- [ ] **Título**: MFA TOTP con pyotp (setup, QR, verificación)
+- [x] **Título**: MFA TOTP con pyotp (setup, QR, verificación)
+<!-- MFA TOTP (RFC 6238, pyotp) AÑADIDO como SEGUNDO factor OPT-IN junto al
+     login local + OIDC + SAML (no los toca). Un usuario SIN TOTP confirmado
+     entra EXACTAMENTE igual que antes (regresión cubierta). Endpoints
+     /auth/mfa/totp: POST enroll (genera secreto + otpauth:// URI/QR +
+     códigos de recovery), POST confirm (verifica un código pyotp válido y
+     activa el factor), GET status, DELETE (desactiva). enroll/confirm/
+     status/disable son tenant-scoped (require_tenant_member + RLS): la fila
+     vive en user_mfa_totp bajo app.tenant_id. Cableado en login: si el
+     usuario tiene TOTP confirmado, el paso de contraseña NO emite sesión —
+     devuelve {status: mfa_required, mfa_token} (token de reto interino en
+     Redis, single-use GETDEL, TTL corto, NO una sesión); POST
+     /auth/mfa/totp/verify (token + código) completa la sesión real
+     (SessionStore + encode_jwt). verify acepta también un código de recovery
+     de un solo uso (se consume al usarse). Secretos en reposo (CLAUDE.md): el
+     seed TOTP cifrado Fernet (mismo mecanismo que el client_secret OIDC,
+     API_SERVER_SSO_ENCRYPTION_KEY) y los códigos de recovery solo como
+     digest SHA-256 — nunca en claro. Migración 0037 reversible (up/down/up
+     verificado; head único) con RLS tenant_isolation. 7 tests en
+     tests/integration/test_mfa_totp.py: enroll+confirm (+ secreto cifrado y
+     recovery hasheados en reposo), código erróneo al confirmar (400),
+     login sin MFA inalterado (regresión), login con MFA -> mfa_required ->
+     verify código válido -> sesión que /auth/me acepta, código TOTP erróneo
+     en verify (400) + reto single-use no reutilizable, código de recovery
+     funciona una vez y se consume (9 restantes), aislamiento cross-tenant
+     (@cross_tenant: el factor de B no se ve desde A vía status, RLS).
+     pre-commit verde (black/ruff/mypy). Login local + OIDC + JIT + SCIM
+     intactos (33 tests de regresión verdes). -->
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -242,7 +339,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_10` — MFA WebAuthn con py_webauthn (registro, autenticación)
 
-- [ ] **Título**: MFA WebAuthn con py_webauthn (registro, autenticación)
+- [x] **Título**: MFA WebAuthn con py_webauthn (registro, autenticación)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
@@ -259,7 +356,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_11` — Mapeo grupos IdP → roles tenant
 
-- [ ] **Título**: Mapeo grupos IdP → roles tenant
+- [x] **Título**: Mapeo grupos IdP → roles tenant
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -276,7 +373,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_12` — Login discovery: email → tenant
 
-- [ ] **Título**: Login discovery: email → tenant
+- [x] **Título**: Login discovery: email → tenant
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -293,7 +390,16 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 
 #### `task_08_13` — Documentación, ADRs, changelog
 
-- [ ] **Título**: Documentación, ADRs, changelog
+- [x] **Título**: Documentación, ADRs, changelog
+<!-- Cerrado: changelog docs/07-changelog/08-sso-empresarial.md (qué se entregó,
+     endpoints nuevos, migraciones 0032..0040, vars de entorno, decisiones y
+     notas de seguridad); ADR 0031 (modelo de sesión SSO = Redis no JWT
+     stateless + import perezoso/501 de xmlsec en SAML + token de reto MFA
+     efímero single-use); referencia docs/04-reference/auth-sso.md (endpoints
+     OIDC/SAML/SCIM/MFA + RBAC). Frontmatter del plan -> pending_human_validation
+     (todas las tareas done; faltan tests humanos + PR para completed). Verde:
+     pre-commit (prettier/markdownlint) sobre los .md cambiados; auto_08_13_a
+     (el changelog existe). -->
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer

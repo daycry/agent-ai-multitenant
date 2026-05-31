@@ -1,14 +1,24 @@
 """WebSocket endpoints for real-time UI (task_02_20 / task_02_21).
 
-Two streams the browser can tail:
+Streams the browser can tail:
 
   /ws/executions/{execution_id}  — every step event of one agent run.
   /ws/kanban/{project_id}        — task transitions of one project.
+  /ws/conversation/{id}          — one conversation's message/mode events.
+  /ws/documents/{id}             — one document's ingestion progress.
 
-Both tail a Redis stream and forward each entry as JSON. The browser
-WebSocket API cannot set an Authorization header, so the JWT travels as
-a `?token=` query parameter; an invalid or missing token closes the
-socket with 1008 (policy violation).
+Each socket tails a Redis stream and forwards every entry as JSON. The
+browser WebSocket API cannot set an Authorization header, so the JWT
+travels as a `?token=` query parameter.
+
+Authorization (Plan 06.14 task_06_14_01): a socket is accepted only when
+the token (a) decodes, (b) maps to a *live* server-side session in Redis
+(so logout/revocation closes existing sockets), and (c) the requested
+resource exists **within the caller's tenant** under PostgreSQL RLS. Any
+failure closes the socket with 1008 (policy violation) — we never leak
+whether the resource exists in another tenant. This closes the
+cross-tenant real-time leak where any valid JWT could tail any tenant's
+streams by guessing a UUID.
 
 Each socket reads its stream from the beginning (`0`), so a client that
 connects mid-run still gets the backlog and then the live tail.
@@ -20,13 +30,23 @@ import asyncio
 import contextlib
 import json
 from typing import Any
+from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from redis.asyncio import Redis
 
-from api_server.auth.deps import get_redis
+from api_server.auth.deps import (
+    AuthPrincipal,
+    get_redis,
+    get_session_store,
+    open_tenant_session,
+)
 from api_server.auth.jwt import InvalidTokenError, decode_jwt
+from api_server.auth.sessions import SessionStore
+from api_server.db.conversation import Conversation
+from api_server.db.domain import Execution, Project
+from api_server.db.knowledge import Document
 from api_server.events import (
     EVENTS_STREAM,
     conversation_stream_key,
@@ -42,6 +62,9 @@ router = APIRouter(tags=["ws"])
 # that a closing socket is noticed reasonably soon.
 _BLOCK_MS = 10_000
 _READ_COUNT = 64
+
+# Close codes (RFC 6455 1008 = policy violation).
+_CLOSE_POLICY = 1008
 
 
 def _decode(value: object) -> str:
@@ -59,18 +82,55 @@ def _to_event(entry_id: object, fields: dict[Any, Any]) -> dict[str, Any]:
     return event
 
 
-async def _authenticate(ws: WebSocket, token: str | None) -> bool:
-    """Validate the query-param JWT; close the socket and return False
-    if it is missing or invalid."""
+async def _resolve_principal(token: str | None, sessions: SessionStore) -> AuthPrincipal | None:
+    """Decode the query-param JWT and confirm its session is still live.
+
+    Returns the principal, or None if the token is missing/invalid or the
+    server-side session has been revoked (logout). Mirrors the REST
+    `get_principal` checks; WebSocket can't use it directly because it
+    reads the bearer from a Header dependency.
+    """
     if not token:
-        await ws.close(code=1008, reason="missing token")
-        return False
+        return None
     try:
-        decode_jwt(token)
+        claims = decode_jwt(token)
     except InvalidTokenError:
-        await ws.close(code=1008, reason="invalid token")
+        return None
+    try:
+        user_id = UUID(claims["sub"])
+        session_id = UUID(claims["sid"])
+    except (KeyError, ValueError, TypeError):
+        return None
+    tenant_id: UUID | None = None
+    if claims.get("tid") is not None:
+        try:
+            tenant_id = UUID(claims["tid"])
+        except (ValueError, TypeError):
+            return None
+    # Revoked session → reject (immediate logout for live sockets too).
+    if not await sessions.get(session_id):
+        return None
+    return AuthPrincipal(
+        user_id=user_id,
+        session_id=session_id,
+        tenant_id=tenant_id,
+        is_system_admin=bool(claims.get("sys", False)),
+    )
+
+
+async def _owns_resource(principal: AuthPrincipal, model: type[Any], resource_id: str) -> bool:
+    """True if `resource_id` resolves to a row of `model` visible to the
+    caller under RLS (i.e. in their tenant). A malformed UUID, a missing
+    row, or a row in another tenant all return False — the database
+    itself refuses to surface cross-tenant rows for the app_user role.
+    """
+    try:
+        rid = UUID(resource_id)
+    except (ValueError, TypeError):
         return False
-    return True
+    async with open_tenant_session(principal) as session:
+        row = await session.get(model, rid)
+        return row is not None
 
 
 async def _pump(
@@ -79,10 +139,12 @@ async def _pump(
     stream: str,
     *,
     project_filter: str | None,
+    tenant_filter: str | None = None,
 ) -> None:
     """Tail `stream` from the start and forward entries until the client
-    disconnects. When `project_filter` is set, only entries for that
-    project are forwarded (the kanban stream is global).
+    disconnects. `project_filter`/`tenant_filter`, when set, drop entries
+    whose `project_id`/`tenant_id` field does not match — the kanban
+    stream is global, so it is scoped to one project AND one tenant.
 
     A single `ws.receive()` runs alongside the Redis read so a client
     that closes while the stream is idle is noticed at once — no leaked
@@ -108,6 +170,8 @@ async def _pump(
                     event = _to_event(entry_id, fields)
                     if project_filter is not None and event.get("project_id") != project_filter:
                         continue
+                    if tenant_filter is not None and event.get("tenant_id") != tenant_filter:
+                        continue
                     await ws.send_json(event)
     except WebSocketDisconnect:
         return
@@ -119,16 +183,27 @@ async def _pump(
         reader.cancel()
 
 
+async def _reject(ws: WebSocket, reason: str) -> None:
+    with contextlib.suppress(Exception):
+        await ws.close(code=_CLOSE_POLICY, reason=reason)
+
+
 @router.websocket("/ws/executions/{execution_id}")
 async def execution_stream(
     ws: WebSocket,
     execution_id: str,
     token: str | None = Query(default=None),
     redis: Redis = Depends(get_redis),
+    sessions: SessionStore = Depends(get_session_store),
 ) -> None:
-    """Stream one execution's step events as they happen."""
+    """Stream one execution's step events — only to a member of its tenant."""
     await ws.accept()
-    if not await _authenticate(ws, token):
+    principal = await _resolve_principal(token, sessions)
+    if principal is None:
+        await _reject(ws, "unauthenticated")
+        return
+    if not await _owns_resource(principal, Execution, execution_id):
+        await _reject(ws, "forbidden")
         return
     await _pump(ws, redis, execution_stream_key(execution_id), project_filter=None)
 
@@ -139,12 +214,24 @@ async def kanban_stream(
     project_id: str,
     token: str | None = Query(default=None),
     redis: Redis = Depends(get_redis),
+    sessions: SessionStore = Depends(get_session_store),
 ) -> None:
-    """Stream a project's task transitions as they happen."""
+    """Stream a project's task transitions — only to a member of its tenant.
+
+    The kanban stream is the single global EVENTS_STREAM, so it is scoped
+    both by `project_id` and by the caller's `tenant_id` (defence in depth;
+    project ids are globally-unique UUIDs already).
+    """
     await ws.accept()
-    if not await _authenticate(ws, token):
+    principal = await _resolve_principal(token, sessions)
+    if principal is None:
+        await _reject(ws, "unauthenticated")
         return
-    await _pump(ws, redis, EVENTS_STREAM, project_filter=project_id)
+    if not await _owns_resource(principal, Project, project_id):
+        await _reject(ws, "forbidden")
+        return
+    tenant_filter = str(principal.tenant_id) if principal.tenant_id is not None else None
+    await _pump(ws, redis, EVENTS_STREAM, project_filter=project_id, tenant_filter=tenant_filter)
 
 
 @router.websocket("/ws/conversation/{conversation_id}")
@@ -153,16 +240,18 @@ async def conversation_stream(
     conversation_id: str,
     token: str | None = Query(default=None),
     redis: Redis = Depends(get_redis),
+    sessions: SessionStore = Depends(get_session_store),
 ) -> None:
-    """Stream one conversation's message + mode-change events live.
-
-    Same pattern as `/ws/executions/{id}`: per-conversation Redis stream,
-    tailed from the start so a late connection still gets the recent
-    backlog. The REST endpoint POST /conversations/{id}/messages is the
-    sole producer.
-    """
+    """Stream one conversation's message + mode-change events live —
+    only to a member of its tenant. The REST endpoint
+    POST /conversations/{id}/messages is the sole producer."""
     await ws.accept()
-    if not await _authenticate(ws, token):
+    principal = await _resolve_principal(token, sessions)
+    if principal is None:
+        await _reject(ws, "unauthenticated")
+        return
+    if not await _owns_resource(principal, Conversation, conversation_id):
+        await _reject(ws, "forbidden")
         return
     await _pump(ws, redis, conversation_stream_key(conversation_id), project_filter=None)
 
@@ -173,14 +262,19 @@ async def document_stream(
     document_id: str,
     token: str | None = Query(default=None),
     redis: Redis = Depends(get_redis),
+    sessions: SessionStore = Depends(get_session_store),
 ) -> None:
-    """Stream KB document ingestion progress (Plan 04 task_04_15).
-
-    The producer is the Celery ingestion task — it publishes
-    ``document.status`` and ``document.progress`` events to the
-    per-document Redis stream as it walks scan → parse → embed →
-    persist. The UI bar tails this socket to render the progress."""
+    """Stream KB document ingestion progress (Plan 04 task_04_15) —
+    only to a member of its tenant. The producer is the Celery ingestion
+    task, which publishes ``document.status`` / ``document.progress``
+    events to the per-document Redis stream as it walks scan → parse →
+    embed → persist."""
     await ws.accept()
-    if not await _authenticate(ws, token):
+    principal = await _resolve_principal(token, sessions)
+    if principal is None:
+        await _reject(ws, "unauthenticated")
+        return
+    if not await _owns_resource(principal, Document, document_id):
+        await _reject(ws, "forbidden")
         return
     await _pump(ws, redis, document_stream_key(document_id), project_filter=None)

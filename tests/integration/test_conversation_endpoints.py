@@ -370,29 +370,43 @@ def test_ws_conversation_streams_new_messages(
     ws_client: TestClient, configured_app, migrations_pg_dsn: str, test_redis_url: str
 ) -> None:
     """A message published onto the per-conversation Redis stream lands
-    on a connected WebSocket.
+    on a connected WebSocket — for a member of the conversation's tenant.
 
     We pre-seed the stream with a raw Redis publish (instead of POSTing
     through the REST endpoint) because Starlette's sync TestClient and
     async httpx in the same test cause a portal/event-loop race on
     Windows. The publish path used by the REST endpoint is exercised
-    end-to-end in the REST tests above; here we focus on the WS pump.
+    end-to-end in the REST tests above; here we focus on the WS pump +
+    tenant authorization (Plan 06.14 task_06_14_01): the socket now
+    resolves the conversation under RLS, so it must exist in the
+    caller's tenant and be backed by a live session.
     """
-    from api_server.events import (
-        EVENT_MESSAGE_CREATED,
-        publish_conversation_event,
-    )
+    from api_server.events import EVENT_MESSAGE_CREATED, publish_conversation_event
     from redis.asyncio import Redis
 
-    conv_id = str(uuid4())
+    seeded = asyncio.run(_seed(migrations_pg_dsn))
+    conv_id = uuid4()
 
-    async def _seed_stream() -> None:
+    async def _prep() -> str:
+        conn = await asyncpg.connect(migrations_pg_dsn)
+        try:
+            await conn.execute(
+                "INSERT INTO conversations (id, tenant_id, project_id, title)"
+                " VALUES ($1, $2, $3, $4)",
+                conv_id,
+                seeded["tenant_a"],
+                seeded["project_a"],
+                "Chat",
+            )
+        finally:
+            await conn.close()
+        token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
         redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
         try:
             await redis.delete(f"conv:{conv_id}")
             await publish_conversation_event(
                 redis,
-                conv_id,
+                str(conv_id),
                 event_type=EVENT_MESSAGE_CREATED,
                 payload={
                     "message_id": str(uuid4()),
@@ -405,27 +419,15 @@ def test_ws_conversation_streams_new_messages(
             )
         finally:
             await redis.aclose()
+        return token
 
-    asyncio.run(_seed_stream())
-
-    token = _ws_only_token()
+    token = asyncio.run(_prep())
     with ws_client.websocket_connect(f"/ws/conversation/{conv_id}?token={token}") as ws:
         event = ws.receive_json()
 
     assert event["type"] == "message.created"
     assert event["payload"]["content"] == "live hello"
     assert event["payload"]["author_kind"] == "user"
-
-
-def _ws_only_token() -> str:
-    """A bare JWT (no Redis session) accepted by the WS auth gate.
-
-    `/ws/conversation/{id}` only checks JWT validity, not session
-    presence — same shape used by test_ws_streaming.
-    """
-    from api_server.auth.jwt import encode_jwt
-
-    return encode_jwt(user_id=uuid4(), session_id=uuid4())
 
 
 def test_ws_conversation_rejects_invalid_token(ws_client: TestClient) -> None:

@@ -44,6 +44,7 @@ from concurrent.futures import Future
 from contextlib import AsyncExitStack
 from typing import Any
 
+import jsonschema
 from shared_mcp import (
     MCPAuthError,
     MCPClient,
@@ -59,6 +60,59 @@ from shared_mcp import (
 from agent_runtime.tools import ToolFn, ToolRegistry, ToolResult
 
 logger = logging.getLogger(__name__)
+
+# Fallback output ceiling (bytes, UTF-8) used when a tool's owning server
+# config is unavailable (e.g. a tool registered against a closed runner).
+# The live path reads the per-server `MCPServerConfig.max_output_bytes`
+# (default 65536) instead — this constant only guards the degenerate case
+# so output is *never* returned to the LLM completely unbounded.
+_DEFAULT_MAX_OUTPUT_BYTES = 65536
+
+
+def _truncate_output(text: str, max_bytes: int) -> str:
+    """Cap a tool's text output at `max_bytes` UTF-8 bytes (mcp-tools-2).
+
+    Mirrors :func:`agent_runtime.shell_exec._truncate` but is byte- (not
+    char-) bounded because the audit caps MCP output in bytes and tool
+    payloads are frequently non-ASCII JSON. The cut is made on a UTF-8
+    encoding and decoded back ignoring a possibly split trailing
+    multibyte sequence, then a visible marker is appended so both the
+    agent and the model know data was omitted.
+    """
+    if max_bytes <= 0:
+        return text
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    head = encoded[:max_bytes].decode("utf-8", errors="ignore")
+    return f"{head}\n…[output truncated at {max_bytes} bytes]"
+
+
+def _validate_args(args: dict[str, Any], input_schema: dict[str, Any]) -> str | None:
+    """Validate `args` against a tool's JSON Schema (mcp-tools-1).
+
+    Returns ``None`` when the args are valid (or when there is no
+    meaningful schema to check against — an absent/empty schema, or one
+    with neither ``properties`` nor ``type``, is treated as "anything
+    goes" so tools that publish no schema still work). Otherwise returns
+    a short human-readable error string describing the first violation.
+    A malformed schema is *not* fatal: we log and skip rather than
+    block a tool because the server published a bad schema.
+    """
+    if not input_schema or not isinstance(input_schema, dict):
+        return None
+    if "type" not in input_schema and "properties" not in input_schema:
+        return None
+    try:
+        jsonschema.validate(instance=args, schema=input_schema)
+    except jsonschema.ValidationError as exc:
+        # `exc.message` is the human-facing reason; `exc.json_path`
+        # (e.g. "$.query") points at the offending field.
+        return f"{exc.json_path}: {exc.message}"
+    except jsonschema.SchemaError as exc:
+        logger.warning("ignoring malformed MCP tool input_schema: %s", exc)
+        return None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +248,18 @@ class MCPToolRunner:
         """Return the cached tools for an already-connected server."""
         return list(self._tools.get(server_name, []))
 
+    def max_output_bytes(self, server_name: str) -> int:
+        """Per-server output ceiling (bytes) from its `MCPServerConfig`.
+
+        Falls back to :data:`_DEFAULT_MAX_OUTPUT_BYTES` when the server is
+        no longer connected (e.g. after :meth:`close`) so a tool's output
+        is never returned to the LLM completely unbounded (mcp-tools-2).
+        """
+        session = self._sessions.get(server_name)
+        if session is None:
+            return _DEFAULT_MAX_OUTPUT_BYTES
+        return session.config.max_output_bytes
+
     def call_tool(
         self,
         server_name: str,
@@ -261,13 +327,29 @@ def register_mcp_server(
     names: list[str] = []
     for tool in tools:
         full_name = f"{server_name}{namespace_separator}{tool.name}"
-        registry.register(full_name, _make_tool_fn(runner, server_name, tool.name))
+        registry.register(full_name, _make_tool_fn(runner, server_name, tool))
         names.append(full_name)
     return names
 
 
-def _make_tool_fn(runner: MCPToolRunner, server_name: str, tool_name: str) -> ToolFn:
+def _make_tool_fn(runner: MCPToolRunner, server_name: str, tool: MCPTool | str) -> ToolFn:
     """Closure that turns one MCP tool into a sync `ToolFn`.
+
+    `tool` is the :class:`MCPTool` (so the closure can validate args
+    against its ``input_schema``); a bare tool-name string is also
+    accepted for callers/tests that only know the name (validation is
+    then skipped for that tool).
+
+    Two guards run *before* and *after* the wire call (task_06_14_12):
+
+      - **pre (mcp-tools-1):** args are validated against the tool's
+        declared JSON Schema; invalid args fold into
+        ``ToolResult(ok=False)`` with a clear message and the wire call
+        is never made — garbage never reaches the server.
+      - **post (mcp-tools-2):** the tool's text output is capped at the
+        owning server's ``max_output_bytes`` with a visible marker
+        before it is parsed/returned, so a chatty or malicious server
+        cannot exhaust the LLM context window.
 
     Error mapping:
 
@@ -279,8 +361,16 @@ def _make_tool_fn(runner: MCPToolRunner, server_name: str, tool_name: str) -> To
     The agent loop never sees a raised exception from the tool — it
     just gets a `ToolResult` with `ok=False` and a short error string.
     """
+    tool_name = tool if isinstance(tool, str) else tool.name
+    input_schema: dict[str, Any] = {} if isinstance(tool, str) else tool.input_schema
 
     def _tool(args: dict[str, Any]) -> ToolResult:
+        violation = _validate_args(args, input_schema)
+        if violation is not None:
+            return ToolResult(
+                ok=False,
+                error=f"invalid arguments for {server_name}.{tool_name}: {violation}",
+            )
         try:
             text = runner.call_tool(server_name, tool_name, args)
         except MCPToolError as exc:
@@ -291,8 +381,11 @@ def _make_tool_fn(runner: MCPToolRunner, server_name: str, tool_name: str) -> To
             return ToolResult(ok=False, error=f"mcp transport error: {exc}")
         except MCPError as exc:
             return ToolResult(ok=False, error=f"mcp error: {exc}")
+        text = _truncate_output(text, runner.max_output_bytes(server_name))
         # Tools commonly return JSON-as-text; pre-parse so the agent
-        # gets a dict rather than a raw string when possible.
+        # gets a dict rather than a raw string when possible. Truncated
+        # output usually won't parse as JSON, so it stays a (capped)
+        # string — exactly what we want the model to see.
         output: Any
         try:
             output = json.loads(text)

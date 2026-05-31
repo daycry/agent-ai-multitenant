@@ -54,10 +54,14 @@ class ChatModeConfig:
     # is active. The agent loop appends the team's role-specific
     # prompt + the chat history on top of this.
     system_prompt: str
-    # Tool names (subset of the project's registry) that the agent
-    # is allowed to call in this mode. Empty list = no tools (pure
-    # discussion). The runtime enforces this in the `pre_tool`
-    # guardrail layer.
+    # Tool names (subset of the project's registry) that the agent is
+    # allowed to call in this mode. Empty tuple = no tools (pure
+    # discussion). The worker forwards this list to the agent-runtime in
+    # the task spec; the runtime's `ToolRegistry` enforces it at tool-call
+    # time — a tool outside the set is rejected before it runs
+    # (task_06_14_07). This is a lightweight call-time allowlist, NOT the
+    # full layered guardrail engine (pre_llm / post_llm / pre_tool /
+    # post_tool), which lands in Plan 11.
     allowed_tools: tuple[str, ...] = ()
     # Whether the planning sub-graph (PM agent as portavoz, others
     # chiming in) is active. Only ``planning`` flips this on by

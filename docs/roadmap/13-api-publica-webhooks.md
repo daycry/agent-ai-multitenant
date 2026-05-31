@@ -1,9 +1,9 @@
 ---
 plan_id: 13-api-publica-webhooks
 title: API Pública, Webhooks Entrantes y Eventos Externos
-status: pending_approval
+status: pending_human_validation
 blocking_plan: [01-dominio-minimo]
-started_at: null
+started_at: 2026-05-30
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 60-80
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `13-api-publica-webhooks`                 |
-| **Estado**                         | `pending_approval`                        |
+| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `01-dominio-minimo`                       |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                               |
 | **Tiempo estimado (persona-días)** | 60-80                                     |
@@ -87,7 +87,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_01` — Modelo ApiToken con scope, vigencia, rate_limit, IP allowlist
 
-- [ ] **Título**: Modelo ApiToken con scope, vigencia, rate_limit, IP allowlist
+- [x] **Título**: Modelo ApiToken con scope, vigencia, rate_limit, IP allowlist
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -104,7 +104,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_02` — Endpoint admin del tenant para crear/listar/revocar tokens
 
-- [ ] **Título**: Endpoint admin del tenant para crear/listar/revocar tokens
+- [x] **Título**: Endpoint admin del tenant para crear/listar/revocar tokens
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -121,7 +121,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_03` — Middleware X-API-Token con cache Redis
 
-- [ ] **Título**: Middleware X-API-Token con cache Redis
+- [x] **Título**: Middleware X-API-Token con cache Redis
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
@@ -138,7 +138,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_04` — Rate limiting por token con sliding window en Redis
 
-- [ ] **Título**: Rate limiting por token con sliding window en Redis
+- [x] **Título**: Rate limiting por token con sliding window en Redis
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -157,7 +157,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_05` — Endpoints REST públicos: /api/v1/projects, /plans, /tasks, /conversations, /kbs
 
-- [ ] **Título**: Endpoints REST públicos: /api/v1/projects, /plans, /tasks, /conversations, /kbs
+- [x] **Título**: Endpoints REST públicos: /api/v1/projects, /plans, /tasks, /conversations, /kbs
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: backend-dev
@@ -174,7 +174,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_06` — Documentación OpenAPI 3.1 + Swagger UI
 
-- [ ] **Título**: Documentación OpenAPI 3.1 + Swagger UI
+- [x] **Título**: Documentación OpenAPI 3.1 + Swagger UI
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -191,7 +191,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_07` — Versionado: header X-API-Version opcional + tracking de uso por versión
 
-- [ ] **Título**: Versionado: header X-API-Version opcional + tracking de uso por versión
+- [x] **Título**: Versionado: header X-API-Version opcional + tracking de uso por versión
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -210,7 +210,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_08` — Endpoint /webhooks/incoming/{origin}/{secret} con verificación HMAC
 
-- [ ] **Título**: Endpoint /webhooks/incoming/{origin}/{secret} con verificación HMAC
+- [x] **Título**: Endpoint /webhooks/incoming/{origin}/{secret} con verificación HMAC
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
@@ -227,7 +227,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_09` — Plantillas pre-configuradas: GitHub push, PR review, Jira issue, Sentry error, Linear issue, GitLab MR
 
-- [ ] **Título**: Plantillas pre-configuradas: GitHub push, PR review, Jira issue, Sentry error, Linear issue, GitLab MR
+- [x] **Título**: Plantillas pre-configuradas: GitHub push, PR review, Jira issue, Sentry error, Linear issue, GitLab MR
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -244,7 +244,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_10` — Mapeo webhook → acción del sistema (crear tarea, comentar tarea, escalar)
 
-- [ ] **Título**: Mapeo webhook → acción del sistema (crear tarea, comentar tarea, escalar)
+- [x] **Título**: Mapeo webhook → acción del sistema (crear tarea, comentar tarea, escalar)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -261,7 +261,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_11` — UI configuración de webhooks entrantes por proyecto
 
-- [ ] **Título**: UI configuración de webhooks entrantes por proyecto
+- [x] **Título**: UI configuración de webhooks entrantes por proyecto
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -278,7 +278,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_12` — Replay desde audit (debugging)
 
-- [ ] **Título**: Replay desde audit (debugging)
+- [x] **Título**: Replay desde audit (debugging)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -297,7 +297,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_13` — SDK Python con tipos generados (autogenerado desde OpenAPI con openapi-python-client)
 
-- [ ] **Título**: SDK Python con tipos generados (autogenerado desde OpenAPI con openapi-python-client)
+- [x] **Título**: SDK Python con tipos generados (autogenerado desde OpenAPI con openapi-python-client) — generado con `datamodel-code-generator` (Pydantic v2) + cliente httpx fino escrito a mano; sustitución de generador documentada en `packages/sdk-python/README.md` (openapi-python-client produciría modelos attrs que chocan con ruff-format/mypy). Dir generado excluido de los linters (pyproject + pre-commit), verificado por `tests/integration/test_sdk_python.py`.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -314,7 +314,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_14` — SDK TypeScript con tipos generados (openapi-typescript-codegen)
 
-- [ ] **Título**: SDK TypeScript con tipos generados (openapi-typescript-codegen)
+- [x] **Título**: SDK TypeScript con tipos generados (openapi-typescript-codegen) — generado con `openapi-typescript-codegen` v0.30.0 (preset `fetch`) para los **tipos** de modelo + cliente fino tipado escrito a mano (`packages/sdk-typescript`). El generador nombrado SÍ se usa para los modelos; el cliente se escribe a mano porque `openapi-typescript-codegen` no respeta el esquema `apiKey`/`X-API-Token` (solo emite `Authorization: Bearer`), así que el cliente configura la cabecera `X-API-Token` una vez (Decisiones Clave). Dir generado `src/generated/` excluido de eslint (`.eslintrc.json`) + prettier (`.pre-commit-config.yaml`), documentado en `packages/sdk-typescript/README.md`; verificado por `packages/sdk-typescript/test/sdk-typescript.test.ts` (`npm test -- sdk-typescript`, 9 tests) + `tsc`/`build` en verde.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -331,7 +331,7 @@ Hasta aquí el sistema es una isla. Esta fase lo conecta a las herramientas del 
 
 #### `task_13_15` — Documentación + ejemplos de uso + ADRs + changelog
 
-- [ ] **Título**: Documentación + ejemplos de uso + ADRs + changelog
+- [x] **Título**: Documentación + ejemplos de uso + ADRs + changelog — changelog `docs/07-changelog/13-api-publica-webhooks.md`, ADR 0037 (X-API-Token scoped por tenant + versionado en path + webhook HMAC con config-id-en-URL + SDKs generados desde OpenAPI), guía `docs/03-guides/api-publica-y-webhooks.md` (token + SDK Python/TS + curl + registro de webhook por proveedor) y referencia `docs/04-reference/public-api.md`. Plan a `pending_human_validation` (faltan tests humanos `human_13_*` + PR, human-owned).
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: technical-writer

@@ -183,6 +183,14 @@ class AuxServiceSpec:
     healthcheck_cmd: tuple[str, ...] | None = None
     # Maximum seconds we'll poll the healthcheck before giving up.
     healthcheck_timeout_s: int = 30
+    # Hardening caps (task_06_14_11 / container-isolation-1). When None
+    # the runner falls back to the operator-tunable Settings defaults
+    # (``aux_postgres_mem_limit`` / ``aux_redis_mem_limit`` /
+    # ``aux_default_pids_limit``). Even a transient sidecar on the
+    # private bridge gets cap-drop ALL + no-new-privileges + these caps
+    # so a leak or fork-bomb cannot reach the host (CLAUDE.md §2).
+    mem_limit: str | None = None
+    pids_limit: int | None = None
 
     def resolved_alias(self) -> str:
         return self.alias or self.name
@@ -201,18 +209,104 @@ DEFAULT_POSTGRES = AuxServiceSpec(
         "POSTGRES_INITDB_ARGS": "--encoding=UTF8",
     },
     healthcheck_cmd=("pg_isready", "-U", "test", "-d", "test"),
+    # Postgres needs a touch more headroom than redis for shared_buffers.
+    mem_limit="256m",
 )
 
 DEFAULT_REDIS = AuxServiceSpec(
     name="redis-test",
     image="redis:7-alpine",
     healthcheck_cmd=("redis-cli", "ping"),
+    mem_limit="128m",
 )
 
 
 def default_aux_services() -> tuple[AuxServiceSpec, ...]:
     """The two services every project gets by default."""
     return (DEFAULT_POSTGRES, DEFAULT_REDIS)
+
+
+# The redis-test stack is the one we recognise by name when an aux spec
+# leaves ``mem_limit`` unset, so we can pick the right operator default.
+_REDIS_MEM_HINT = "redis"
+
+# Common lockdown applied to every aux sidecar AND the DinD proxy: zero
+# Linux capabilities + no privilege escalation through setuid binaries.
+# Mirrors :func:`isolation.build_hardened_run_kwargs` (same principles,
+# CLAUDE.md §2) without the read-only root / non-root uid bits, which the
+# stateful sidecars (postgres/redis write their data dirs as root) can't
+# take. The resource caps are what bound a runaway / fork-bomb.
+_AUX_SECURITY_OPT = ["no-new-privileges:true"]
+
+
+def build_aux_run_kwargs(
+    settings: Settings,
+    aux: AuxServiceSpec,
+    network_name: str,
+) -> dict[str, Any]:
+    """Build the hardened ``docker.containers.run`` kwargs for one aux service.
+
+    Extracted as a module-level helper (task_06_14_11) so the hardening
+    envelope is testable the same way ``isolation.build_hardened_run_kwargs``
+    is — assert cap_drop ALL + no-new-privileges + mem/pids caps without a
+    live daemon. The mem/pids caps fall back to the operator-tunable
+    Settings when the spec leaves them unset; the per-spec values
+    (``DEFAULT_POSTGRES`` 256m / ``DEFAULT_REDIS`` 128m) win when present.
+    """
+    if aux.mem_limit is not None:
+        mem_limit = aux.mem_limit
+    elif _REDIS_MEM_HINT in aux.image.lower() or _REDIS_MEM_HINT in aux.name.lower():
+        mem_limit = settings.aux_redis_mem_limit
+    else:
+        mem_limit = settings.aux_postgres_mem_limit
+    pids_limit = aux.pids_limit if aux.pids_limit is not None else settings.aux_default_pids_limit
+    return {
+        "detach": True,
+        "environment": dict(aux.env),
+        "network": network_name,
+        "network_mode": None,
+        "hostname": aux.resolved_alias(),
+        "cap_drop": ["ALL"],
+        "security_opt": list(_AUX_SECURITY_OPT),
+        "mem_limit": mem_limit,
+        "pids_limit": pids_limit,
+        "labels": {**_TEST_LABELS, "com.agentic-platform.role": "aux-service"},
+    }
+
+
+def build_dind_proxy_run_kwargs(
+    settings: Settings,
+    mode: TestcontainersMode,
+    network_name: str,
+) -> dict[str, Any]:
+    """Build the hardened kwargs for the DinD socket-proxy sidecar.
+
+    The proxy already had cap_drop ALL + read-only root + no-new-privileges;
+    task_06_14_11 (container-isolation-2) adds the missing mem/pids caps so a
+    misbehaving testcontainer cannot exhaust the host through the proxy. The
+    host docker.sock bind onto the *proxy only* (never the test container)
+    stays exactly as before — see :class:`TestcontainersMode`.
+    """
+    return {
+        "detach": True,
+        "environment": dict(mode.acl),
+        "network": network_name,
+        "hostname": mode.proxy_alias(),
+        "mounts": [
+            Mount(
+                target="/var/run/docker.sock",
+                source="/var/run/docker.sock",
+                type="bind",
+                read_only=False,
+            )
+        ],
+        "read_only": True,
+        "cap_drop": ["ALL"],
+        "security_opt": list(_AUX_SECURITY_OPT),
+        "mem_limit": settings.dind_proxy_mem_limit,
+        "pids_limit": settings.dind_proxy_pids_limit,
+        "labels": {**_TEST_LABELS, "com.agentic-platform.role": "dind-proxy"},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -399,18 +493,15 @@ class TestRuntimeRunner:
         spec: TestRuntimeSpec,
         network_name: str,
     ) -> list[Any]:
-        """Bring up each aux service on the task's bridge."""
+        """Bring up each aux service on the task's bridge.
+
+        Each sidecar gets the hardened envelope (cap_drop ALL +
+        no-new-privileges + mem/pids caps) via
+        :func:`build_aux_run_kwargs` — task_06_14_11."""
         started: list[Any] = []
         for aux in spec.aux_services:
-            container = self.client.containers.run(
-                aux.image,
-                detach=True,
-                environment=dict(aux.env),
-                network=network_name,
-                network_mode=None,
-                hostname=aux.resolved_alias(),
-                labels={**_TEST_LABELS, "com.agentic-platform.role": "aux-service"},
-            )
+            run_kwargs = build_aux_run_kwargs(self._settings, aux, network_name)
+            container = self.client.containers.run(aux.image, **run_kwargs)
             started.append(container)
             if aux.healthcheck_cmd is not None:
                 self._wait_healthy(container, aux)
@@ -450,26 +541,8 @@ class TestRuntimeRunner:
         # proxy, never the test container. Assert this is intentional
         # by labeling it differently from the test container.
         mode = spec.testcontainers
-        env = dict(mode.acl)
-        return self.client.containers.run(
-            mode.proxy_image,
-            detach=True,
-            environment=env,
-            network=network_name,
-            hostname=mode.proxy_alias(),
-            mounts=[
-                Mount(
-                    target="/var/run/docker.sock",
-                    source="/var/run/docker.sock",
-                    type="bind",
-                    read_only=False,
-                )
-            ],
-            read_only=True,
-            cap_drop=["ALL"],
-            security_opt=["no-new-privileges:true"],
-            labels={**_TEST_LABELS, "com.agentic-platform.role": "dind-proxy"},
-        )
+        run_kwargs = build_dind_proxy_run_kwargs(self._settings, mode, network_name)
+        return self.client.containers.run(mode.proxy_image, **run_kwargs)
 
     # --- main container -------------------------------------------------
 
@@ -633,6 +706,8 @@ __all__ = [
     "TestRuntimeRunner",
     "TestRuntimeSpec",
     "TestcontainersMode",
+    "build_aux_run_kwargs",
+    "build_dind_proxy_run_kwargs",
     "default_aux_services",
     "group_tasks_by_runtime",
     # Re-exported for tests

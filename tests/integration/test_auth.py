@@ -325,14 +325,14 @@ async def test_rate_limit(configured_app) -> None:
         for _ in range(5):
             r = await client.post(
                 "/auth/login",
-                json={"email": "frank@example.com", "password": "wrong"},
+                json={"email": "frank@example.com", "password": "wrongpassword"},
             )
             assert r.status_code == 401, r.text
 
         # 6th attempt within the same window — limit tripped.
         sixth = await client.post(
             "/auth/login",
-            json={"email": "frank@example.com", "password": "wrong"},
+            json={"email": "frank@example.com", "password": "wrongpassword"},
         )
 
     assert sixth.status_code == 429, sixth.text

@@ -85,7 +85,11 @@ services:
   # MinIO — S3-compatible object storage. The web console runs on 9001.
   # ---------------------------------------------------------------------------
   minio:
-    image: minio/minio:latest
+    # Pinned to a fixed RELEASE tag for reproducibility — matches the
+    # postgres:16 / redis:7-alpine / vault:1.17 pinning strategy and
+    # blocks an unexpected :latest pull from running a different (or
+    # compromised) build (task_06_14_11 / container-isolation-3).
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -164,7 +168,10 @@ services:
   # `chunks`. Self-contained Python service; no DB, no Redis.
   # ---------------------------------------------------------------------------
   docling-serve:
-    image: ghcr.io/docling-project/docling-serve:latest
+    # Pinned (no :latest) for reproducible builds + supply-chain hygiene
+    # (container-isolation-4). Bump deliberately after verifying the
+    # /v1/convert contract still matches the ingestion worker.
+    image: ghcr.io/docling-project/docling-serve:v1.20.0
     environment:
       # Open API surface: parse + structured chunks. Whisper is
       # included; audio just routes through the same /v1/convert API

@@ -79,20 +79,90 @@ class TaskDispatcher:
         """Event handler — dispatch a task that has just gone `ready`."""
         if not _is_ready_trigger(event):
             return
-        request = await self._dispatch(UUID(event.task_id))
+        task_id = UUID(event.task_id)
+        request = await self._dispatch(task_id)
         if request is None:
             return
+        # Operator-tunable backstop limits, read fresh per dispatch so a
+        # platform-settings change takes effect without restarting the
+        # workers (Plan 06.14 task_06_14_04 / workers-orchestrator-10).
+        soft_limit, hard_limit = await self._execution_time_limits()
         # send_task does blocking broker I/O — keep it off the loop.
-        await asyncio.to_thread(
-            self._celery.send_task,
-            _RUN_EXECUTION_TASK,
-            kwargs={"request": request},
-            queue=self._settings.dispatch_queue,
-        )
+        #
+        # The task is already committed `in_progress` with an assignee at this
+        # point. If the broker enqueue fails (broker down, network blip) the
+        # task would be stranded `in_progress` yet never picked up by a worker
+        # (workers-orchestrator-8). Revert it to `ready` in a fresh transaction
+        # so the next dispatch trigger re-enqueues it. A transactional outbox
+        # would be sturdier but is overkill here — revert-on-failure is the
+        # pragmatic safe fix (Plan 06.14 task_06_14_05).
+        try:
+            await asyncio.to_thread(
+                self._send_run_execution,
+                request,
+                soft_limit,
+                hard_limit,
+            )
+        except Exception as exc:
+            await self._revert_to_ready(task_id)
+            _log.error(
+                "orchestrator.dispatch_enqueue_failed",
+                task_id=event.task_id,
+                agent_id=request["agent_id"],
+                error=str(exc),
+            )
+            return
         _log.info(
             "orchestrator.task_dispatched",
             task_id=event.task_id,
             agent_id=request["agent_id"],
+        )
+
+    async def _revert_to_ready(self, task_id: UUID) -> None:
+        """Undo a dispatch whose broker enqueue failed: move the task back to
+        `ready` and clear the assignment so it can be re-dispatched.
+
+        Best-effort and idempotent — only a task still `in_progress` is
+        reverted (a worker may have raced ahead, though the broker-down case
+        that triggers this makes that unlikely). A revert that itself fails is
+        logged, never masking the original enqueue error."""
+        try:
+            async with self._sessionmaker() as session, session.begin():
+                task = (
+                    await session.execute(select(Task).where(Task.id == task_id))
+                ).scalar_one_or_none()
+                if task is None or task.status != _IN_PROGRESS:
+                    return
+                task.status = _READY
+                task.assigned_agent_id = None
+                task.started_at = None
+        except Exception as revert_exc:  # pragma: no cover - defensive
+            _log.error(
+                "orchestrator.dispatch_revert_failed",
+                task_id=str(task_id),
+                error=str(revert_exc),
+            )
+
+    async def _execution_time_limits(self) -> tuple[int, int]:
+        """Read the operator-tunable (soft, hard) run_execution time limits
+        from platform settings — fresh per dispatch so a UI change applies
+        to new runs immediately."""
+        from api_server.db.platform_settings import get_execution_time_limits
+
+        async with self._sessionmaker() as session:
+            return await get_execution_time_limits(session)
+
+    def _send_run_execution(
+        self, request: dict[str, Any], soft_limit: int, hard_limit: int
+    ) -> None:
+        """Blocking broker enqueue (runs in a thread). Per-task time limits
+        are passed as Celery execution options."""
+        self._celery.send_task(
+            _RUN_EXECUTION_TASK,
+            kwargs={"request": request},
+            queue=self._settings.dispatch_queue,
+            soft_time_limit=soft_limit,
+            time_limit=hard_limit,
         )
 
     async def _dispatch(self, task_id: UUID) -> dict[str, Any] | None:

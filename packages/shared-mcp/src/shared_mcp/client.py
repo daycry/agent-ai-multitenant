@@ -102,16 +102,18 @@ class MCPSession:
             raise MCPTransportError(f"call_tool({name!r}) failed: {inner}") from eg
         except Exception as exc:
             raise MCPTransportError(f"call_tool({name!r}) failed: {exc}") from exc
-        # Concatenate text blocks; everything else stays in `raw`.
+        # Concatenate text blocks; multimedia/resource blocks are dropped.
+        # We deliberately do NOT keep the raw payload (mcp-tools-3): it is
+        # untrusted server data that nothing reads and would leak if the
+        # result were ever logged or persisted.
         text_parts: list[str] = []
         for block in response.content:
             if getattr(block, "type", None) == "text":
                 text_parts.append(getattr(block, "text", ""))
         text = "".join(text_parts)
-        raw_dict = response.model_dump() if hasattr(response, "model_dump") else {}
         if response.isError:
             raise MCPToolError(f"tool {name!r} returned isError=True: {text[:200]}")
-        return MCPToolResult(content=text, is_error=False, raw=raw_dict)
+        return MCPToolResult(content=text, is_error=False)
 
 
 class MCPClient:

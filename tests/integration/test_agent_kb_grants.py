@@ -375,3 +375,40 @@ async def test_grant_missing_kb_id_is_422(configured_app, migrations_pg_dsn: str
             json={},
         )
         assert r.status_code == 422, r.text
+
+
+# ---------------------------------------------------------------------------
+# task_06_14_15 — typed GrantKBRequest body (api-routers-validation-2)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_grant_invalid_uuid_is_422(configured_app, migrations_pg_dsn: str) -> None:
+    """A malformed kb_id is rejected by the schema with a 422, not a 500."""
+    seed = await _seed(migrations_pg_dsn)
+    token = await _mint(seed["admin_user"], seed["tenant"])
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        r = await client.post(
+            f"/agents/{seed['template_agent']}/knowledge-bases",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"kb_id": "not-a-uuid"},
+        )
+        assert r.status_code == 422, r.text
+
+
+@pytest.mark.asyncio
+async def test_grant_rejects_unexpected_fields(configured_app, migrations_pg_dsn: str) -> None:
+    """`extra='forbid'` blocks mass-assignment of unexpected fields."""
+    seed = await _seed(migrations_pg_dsn)
+    token = await _mint(seed["admin_user"], seed["tenant"])
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        r = await client.post(
+            f"/agents/{seed['template_agent']}/knowledge-bases",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"kb_id": str(seed["kb_a"]), "tenant_id": str(uuid4())},
+        )
+        assert r.status_code == 422, r.text

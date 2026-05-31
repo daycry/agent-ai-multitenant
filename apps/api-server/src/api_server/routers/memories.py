@@ -41,6 +41,19 @@ _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 _SCOPE_LITERAL = Literal["private", "team_shared", "project_shared", "global"]
 _TYPE_LITERAL = Literal["episodic", "semantic"]
 
+# Owner-pointer column that identifies "who owns" a memory within a
+# non-global scope. RLS only scopes rows by ``tenant_id``; two rows of
+# the same tenant + same scope can still belong to *different* owners
+# (project A vs project B, team X vs team Y, user U vs user V). Anything
+# that crosses owners — merging or surfacing as a "similar" candidate —
+# would leak content across owners, so these operations must also match
+# on the owner pointer. ``global`` has no owner pointer (tenant-wide).
+_SCOPE_OWNER_ATTR: dict[str, str] = {
+    "private": "user_id",
+    "team_shared": "team_id",
+    "project_shared": "project_id",
+}
+
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -314,8 +327,15 @@ async def list_similar_memories(
         else int(await get_setting(session, tenant_id, "memories", "similarity.limit"))
     )
 
+    # Candidates must share the source's owner pointer, not just its
+    # scope: RLS only fences by tenant, so without this clause a
+    # project_shared memory of project A would surface project B's
+    # rows (same tenant, same scope) — a cross-owner leak. For
+    # ``global`` there is no owner pointer, so no extra filter applies.
+    owner_attr = _SCOPE_OWNER_ATTR.get(src.scope)
+    owner_clause = f"AND {owner_attr} = :owner_id" if owner_attr is not None else ""
     sql = _text(
-        """
+        f"""
         SELECT
             id,
             1 - (embedding <=> CAST(:src_embedding AS vector)) AS similarity
@@ -325,6 +345,7 @@ async def list_similar_memories(
           AND embedding IS NOT NULL
           AND scope = :scope
           AND tenant_id = :tenant_id
+          {owner_clause}
           AND (1 - (embedding <=> CAST(:src_embedding AS vector))) >= :threshold
         ORDER BY embedding <=> CAST(:src_embedding AS vector)
         LIMIT :limit
@@ -334,19 +355,17 @@ async def list_similar_memories(
     # devuelve `'[a b c]'` con espacios y rompe el CAST. Misma receta
     # que `memorizer/recall.py` y `rag/search.py`.
     src_vec_literal = "[" + ",".join(f"{x:.6f}" for x in src.embedding) + "]"
-    rows = (
-        await session.execute(
-            sql,
-            {
-                "src_id": src.id,
-                "src_embedding": src_vec_literal,
-                "scope": src.scope,
-                "tenant_id": tenant_id,
-                "threshold": eff_threshold,
-                "limit": eff_limit,
-            },
-        )
-    ).all()
+    params: dict[str, object] = {
+        "src_id": src.id,
+        "src_embedding": src_vec_literal,
+        "scope": src.scope,
+        "tenant_id": tenant_id,
+        "threshold": eff_threshold,
+        "limit": eff_limit,
+    }
+    if owner_attr is not None:
+        params["owner_id"] = getattr(src, owner_attr)
+    rows = (await session.execute(sql, params)).all()
     if not rows:
         return []
 
@@ -408,6 +427,22 @@ async def merge_memory_into(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"cannot merge across scopes ({src.scope!r} -> {tgt.scope!r})",
+        )
+    # Same scope is necessary but not sufficient: within a scope the
+    # owner pointer (project_id / team_id / user_id) partitions rows
+    # by owner. Merging two project_shared memories of *different*
+    # projects (or team_shared of different teams, or private of
+    # different users) folds one owner's content into another — a
+    # cross-owner leak. ``global`` has no owner pointer, so any two
+    # global rows of the tenant may merge.
+    owner_attr = _SCOPE_OWNER_ATTR.get(src.scope)
+    if owner_attr is not None and getattr(src, owner_attr) != getattr(tgt, owner_attr):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"cannot merge across {owner_attr} within scope {src.scope!r}"
+                f" ({getattr(src, owner_attr)!r} -> {getattr(tgt, owner_attr)!r})"
+            ),
         )
 
     tgt.content = f"{tgt.content}\n\n---\n{src.content}"

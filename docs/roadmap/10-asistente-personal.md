@@ -1,9 +1,9 @@
 ---
 plan_id: 10-asistente-personal
 title: Asistente Personal y Notificaciones Multicanal
-status: pending_approval
+status: pending_human_validation
 blocking_plan: [06-testing-revision-git]
-started_at: null
+started_at: 2026-05-30
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 60-80
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `10-asistente-personal`                   |
-| **Estado**                         | `pending_approval`                        |
+| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `06-testing-revision-git`                 |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                               |
 | **Tiempo estimado (persona-días)** | 60-80                                     |
@@ -87,7 +87,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_01` — Modelos NotificationChannel, Preference, Log con scopes (plataforma/tenant/usuario)
 
-- [ ] **Título**: Modelos NotificationChannel, Preference, Log con scopes (plataforma/tenant/usuario)
+- [x] **Título**: Modelos NotificationChannel, Preference, Log con scopes (plataforma/tenant/usuario)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -104,7 +104,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_02` — Servicio notification-dispatcher con colas dedicadas Celery
 
-- [ ] **Título**: Servicio notification-dispatcher con colas dedicadas Celery
+- [x] **Título**: Servicio notification-dispatcher con colas dedicadas Celery
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -121,7 +121,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_03` — Sistema de plantillas con Jinja2 + plantillas pre-cargadas
 
-- [ ] **Título**: Sistema de plantillas con Jinja2 + plantillas pre-cargadas
+- [x] **Título**: Sistema de plantillas con Jinja2 + plantillas pre-cargadas
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -138,7 +138,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_04` — Mapeo eventos del sistema → notificaciones
 
-- [ ] **Título**: Mapeo eventos del sistema → notificaciones
+- [x] **Título**: Mapeo eventos del sistema → notificaciones
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -157,7 +157,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_05` — Canal Telegram con python-telegram-bot
 
-- [ ] **Título**: Canal Telegram con python-telegram-bot
+- [x] **Título**: Canal Telegram con python-telegram-bot
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -174,7 +174,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_06` — Canal Email con aiosmtplib (SMTP) o sendgrid (opcional)
 
-- [ ] **Título**: Canal Email con aiosmtplib (SMTP) o sendgrid (opcional)
+- [x] **Título**: Canal Email con aiosmtplib (SMTP) o sendgrid (opcional)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -191,7 +191,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_07` — Canal Slack con slack-bolt + blocks
 
-- [ ] **Título**: Canal Slack con slack-bolt + blocks
+- [x] **Título**: Canal Slack con slack-bolt + blocks
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -208,7 +208,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_08` — Canal Microsoft Teams con webhooks + Adaptive Cards
 
-- [ ] **Título**: Canal Microsoft Teams con webhooks + Adaptive Cards
+- [x] **Título**: Canal Microsoft Teams con webhooks + Adaptive Cards
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -225,7 +225,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_09` — Canal Discord con embeds via webhook
 
-- [ ] **Título**: Canal Discord con embeds via webhook
+- [x] **Título**: Canal Discord con embeds via webhook
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -244,7 +244,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_10` — Canal WhatsApp Cloud API con plantillas pre-aprobadas
 
-- [ ] **Título**: Canal WhatsApp Cloud API con plantillas pre-aprobadas
+- [x] **Título**: Canal WhatsApp Cloud API con plantillas pre-aprobadas
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -261,7 +261,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_11` — Canal SMS con Twilio
 
-- [ ] **Título**: Canal SMS con Twilio
+- [x] **Título**: Canal SMS con Twilio
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -278,7 +278,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_12` — Webhooks salientes con firma HMAC + nonce + timestamp
 
-- [ ] **Título**: Webhooks salientes con firma HMAC + nonce + timestamp
+- [x] **Título**: Webhooks salientes con firma HMAC + nonce + timestamp
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
@@ -295,7 +295,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_13` — Reintentos exponenciales + dead-letter queue + reintento manual desde UI
 
-- [ ] **Título**: Reintentos exponenciales + dead-letter queue + reintento manual desde UI
+- [x] **Título**: Reintentos exponenciales + dead-letter queue + reintento manual desde UI
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -314,7 +314,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_14` — Asistente personal conversacional (responde queries del estado global por chat)
 
-- [ ] **Título**: Asistente personal conversacional (responde queries del estado global por chat)
+- [x] **Título**: Asistente personal conversacional (responde queries del estado global por chat)
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: ai-engineer
@@ -331,7 +331,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_15` — UI de configuración de canales en 3 capas (plataforma/tenant/usuario)
 
-- [ ] **Título**: UI de configuración de canales en 3 capas (plataforma/tenant/usuario)
+- [x] **Título**: UI de configuración de canales en 3 capas (plataforma/tenant/usuario)
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -348,7 +348,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_16` — Inbox in-app con histórico de notificaciones
 
-- [ ] **Título**: Inbox in-app con histórico de notificaciones
+- [x] **Título**: Inbox in-app con histórico de notificaciones
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -365,7 +365,7 @@ Hasta aquí las notificaciones eran in-app. Esta fase abre el sistema a los cana
 
 #### `task_10_17` — Documentación + ADRs + changelog
 
-- [ ] **Título**: Documentación + ADRs + changelog
+- [x] **Título**: Documentación + ADRs + changelog
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer

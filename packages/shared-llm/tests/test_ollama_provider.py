@@ -3,11 +3,29 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 
 import httpx
 import pytest
+from shared_llm.exceptions import AuthError, ProviderError
 from shared_llm.providers import OllamaProvider
 from shared_llm.types import Message
+
+
+class _RaisingStream(httpx.AsyncByteStream):
+    """SSE body that yields good lines then raises mid-stream."""
+
+    def __init__(self, *, good: list[bytes], exc: BaseException) -> None:
+        self._good = good
+        self._exc = exc
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._good:
+            yield chunk
+        raise self._exc
+
+    async def aclose(self) -> None:
+        return None
 
 
 def _mock_client(handler) -> httpx.AsyncClient:  # type: ignore[no-untyped-def]
@@ -86,6 +104,59 @@ async def test_stream_concatenates_deltas_until_done() -> None:
         chunks.append(c)
     assert "".join(c.delta for c in chunks if not c.done) == "hello"
     assert chunks[-1].done is True
+
+
+@pytest.mark.asyncio
+async def test_stream_midstream_error_becomes_provider_error() -> None:
+    """A connection drop while iterating the SSE body is converted to a
+    typed ProviderError instead of leaking a raw httpx error."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=_RaisingStream(
+                good=[b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'],
+                exc=httpx.ReadError("connection reset"),
+            ),
+        )
+
+    p = OllamaProvider.local(http_client=_mock_client(handler))
+    deltas: list[str] = []
+    with pytest.raises(ProviderError, match="stream interrupted"):
+        async for c in p.stream([Message(role="user", content="hi")]):
+            if c.delta:
+                deltas.append(c.delta)
+    assert deltas == ["hi"]
+
+
+@pytest.mark.asyncio
+async def test_stream_403_is_provider_error_not_auth_error() -> None:
+    """A 403 on the stream call maps to ProviderError (permission), not
+    AuthError (which is reserved for 401 / re-auth)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="forbidden")
+
+    p = OllamaProvider.cloud(api_key="sk-x", http_client=_mock_client(handler))
+    with pytest.raises(ProviderError) as info:
+        async for _c in p.stream([Message(role="user", content="hi")]):
+            pass
+    assert not isinstance(info.value, AuthError)
+    assert info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_stream_401_is_auth_error() -> None:
+    """A 401 on the stream call maps to AuthError."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="bad key")
+
+    p = OllamaProvider.cloud(api_key="sk-x", http_client=_mock_client(handler))
+    with pytest.raises(AuthError):
+        async for _c in p.stream([Message(role="user", content="hi")]):
+            pass
 
 
 @pytest.mark.asyncio

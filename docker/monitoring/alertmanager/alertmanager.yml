@@ -1,0 +1,71 @@
+# Alertmanager configuration (Plan 12 — Backup/Restore, task_12_14).
+#
+# Mounted read-only into the alertmanager container by
+# docker/docker-compose.monitoring.yml. Prometheus pushes firing alerts here
+# (the `alerting.alertmanagers: [alertmanager:9093]` target in
+# ../prometheus/prometheus.yml); Alertmanager dedups/groups/throttles them and
+# delivers to the platform notifier.
+#
+# REUSE THE PLATFORM NOTIFIER (task_12_14): rather than wiring SMTP/Slack here
+# (a second, divergent notification path), the default receiver is a
+# `webhook_config` that POSTs the Alertmanager payload to the platform's
+# notification ingest (the api-server, on the in-network agentic-net DNS name).
+# The api-server turns it into a Plan 10 notification to the System Admin
+# channel and fans it out over the configured channels.
+#
+# NOTE: Alertmanager does NOT expand ${ENV} placeholders in its config file
+# (unlike docker-compose), so the receiver URL below is a CONCRETE in-network
+# default. To point it elsewhere, override this mounted file (bind-mount your
+# own alertmanager.yml) — the compose service carries
+# ALERTMANAGER_NOTIFIER_WEBHOOK_URL purely as the documented seam for an
+# entrypoint that templates this file (envsubst), not consumed by Alertmanager
+# directly. The alert still fires + is visible in the Alertmanager UI /
+# Prometheus regardless of where it is delivered.
+
+global:
+  # If an alert stops firing, Alertmanager waits this long before declaring it
+  # resolved (covers a scrape gap without a flapping resolve/refire).
+  resolve_timeout: 5m
+
+# ---------------------------------------------------------------------------
+# Routing tree. Everything funnels to the platform-notifier receiver; the two
+# critical classes (backup failures, OOM kills) get a tighter repeat window so
+# the System Admin is reminded more often until acknowledged.
+# ---------------------------------------------------------------------------
+route:
+  receiver: platform-notifier
+  # Group alerts by the dimensions an operator reasons about together so one
+  # incident is one notification, not one-per-mountpoint.
+  group_by: ["alertname", "component", "instance"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Backup + OOM are page-worthy: remind hourly, not every 4h.
+    - matchers:
+        - severity = "critical"
+      receiver: platform-notifier
+      repeat_interval: 1h
+
+receivers:
+  - name: platform-notifier
+    webhook_configs:
+      # The platform notification ingest (System Admin channel). The api-server
+      # turns this Alertmanager payload into a Plan 10 notification and fans it
+      # out over the configured channels (email / Slack / Telegram / ...).
+      - url: "http://api-server:8000/internal/alerts/ingest"
+        send_resolved: true
+
+# ---------------------------------------------------------------------------
+# Inhibition: while the host kernel is OOM-killing, suppress the noisier
+# warning-level host alerts (high RAM, swap) for the same instance — they are
+# symptoms of the same incident the critical OOM alert already reports.
+# ---------------------------------------------------------------------------
+inhibit_rules:
+  - source_matchers:
+      - severity = "critical"
+      - component = "host"
+    target_matchers:
+      - severity = "warning"
+      - component = "host"
+    equal: ["instance"]

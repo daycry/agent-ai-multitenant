@@ -1,0 +1,69 @@
+[project]
+name = "notification-dispatcher"
+version = "0.0.0"
+description = "Notification dispatcher: Celery service that delivers multichannel notifications and logs every send."
+requires-python = ">=3.12"
+dependencies = [
+  # Task queue
+  "celery[redis]>=5.4,<6",
+
+  # Persistence — looks up channels / writes notification_logs (BYPASSRLS).
+  "sqlalchemy[asyncio]>=2.0,<3",
+  "asyncpg>=0.29,<1",
+  "redis>=5.0,<6",
+
+  # Secrets at rest — Fernet decrypt of channel secrets (never plaintext).
+  "cryptography>=42,<49",
+
+  # Notification template rendering — SANDBOXED Jinja2 (task_10_03). Never
+  # the default Environment: a tenant override must not execute arbitrary
+  # code, so the renderer uses jinja2.sandbox.SandboxedEnvironment.
+  "jinja2>=3.1,<4",
+
+  # Validation / config
+  "pydantic>=2.5,<3",
+  "pydantic-settings>=2.2,<3",
+
+  # HTTP transport for the channel adapters (Plan 10 Fase B/C). Telegram,
+  # WhatsApp Cloud API, Teams / Discord webhooks, etc. are plain HTTPS
+  # POSTs — we drive them with httpx rather than each vendor's heavy SDK,
+  # which keeps the async-Celery send path uniform and lets tests inject an
+  # httpx.MockTransport so no adapter ever touches the real network.
+  "httpx>=0.27,<1",
+
+  # Email channel SMTP transport (Plan 10 task_10_06). aiosmtplib drives the
+  # async SMTP send (STARTTLS / implicit-SSL) the Email adapter's PRIMARY path
+  # uses; the MIME message itself is built with the stdlib ``email`` package.
+  # The OPTIONAL SendGrid path is driven over the documented v3 HTTP API with
+  # httpx (above) rather than the heavy ``sendgrid`` SDK, so it needs no extra
+  # dependency and its absence never breaks import / CI.
+  "aiosmtplib>=3.0,<4",
+
+  # Observability
+  "structlog>=24.1,<25",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2,<9",
+  "pytest-asyncio>=0.23,<1",
+  # The channel adapters talk to external services over HTTP; tests mock
+  # the transport (httpx.MockTransport) so no real network is hit. httpx
+  # is a runtime dep above; pinned here too so the dev env always has it.
+  "httpx>=0.27,<1",
+  # Slack channel SDK (Plan 10 task_10_07). The Slack adapter drives the
+  # documented Web API (chat.postMessage) over httpx — uniform with the
+  # other HTTP-POST channels and avoiding slack_sdk's aiohttp-backed async
+  # client inside the per-send asyncio.run — so slack_sdk is a dev-only dep:
+  # it pins the SDK whose Block Kit contract the adapter's blocks follow and
+  # keeps the SDK available for local introspection. No real network in tests
+  # (the httpx transport is mocked).
+  "slack_sdk>=3.27,<4",
+]
+
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/notification_dispatcher"]

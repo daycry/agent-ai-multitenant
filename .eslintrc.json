@@ -36,7 +36,8 @@
     ".turbo",
     "out",
     "*.d.ts",
-    "**/.venv/**"
+    "**/.venv/**",
+    "packages/sdk-typescript/src/generated/**"
   ],
   "overrides": [
     {

@@ -23,6 +23,11 @@ from typing import Any
 # Where the worker drops a task spec when it does not pass AGENT_TASK_SPEC.
 _TASK_SPEC_FILE = "/workspace/agent_task.json"
 
+# Sentinel distinguishing "spec has no `allowed_tools` key" (no restriction)
+# from "spec has `allowed_tools: []`" (block every tool). A plain falsy
+# default would conflate the two.
+_NO_ALLOWLIST = object()
+
 
 def _dep_version(dist: str) -> str:
     """Best-effort installed version of a distribution."""
@@ -73,13 +78,28 @@ def run_task(spec: dict[str, Any]) -> int:
     from agent_runtime.graph import AgentDeps, run_agent
     from agent_runtime.model import model_from_spec
     from agent_runtime.safeguards import Budgets
+    from agent_runtime.tools import default_registry
 
     task = spec["task"]
     # The worker passes the project's human_approval_policy here; with a
     # policy the loop gates sensitive tool calls (task_02_33).
     policy = spec.get("approval_policy")
+
+    # The active chat mode's tool whitelist (task_06_14_07). The worker
+    # forwards `ChatModeConfig.allowed_tools` here; when present, the
+    # registry rejects any tool outside the set at call time. Absent
+    # (None) = no restriction. An explicit empty list = block every tool
+    # (the `discussion` mode). We must distinguish "key missing" from
+    # "key present but empty", so we read with a sentinel rather than a
+    # falsy default.
+    registry = default_registry()
+    allowed_tools = spec.get("allowed_tools", _NO_ALLOWLIST)
+    if allowed_tools is not _NO_ALLOWLIST:
+        registry.set_allowed_tools(allowed_tools)
+
     deps = AgentDeps(
         model=model_from_spec(spec["model"]),
+        tools=registry,
         approval=ApprovalGate(policy) if policy else None,
     )
 

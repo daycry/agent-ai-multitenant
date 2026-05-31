@@ -11,6 +11,7 @@ the API does not accept it from the request.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -22,6 +23,30 @@ from api_server.db.domain import BudgetPeriod, Project, ProjectStatus
 from api_server.mcp.config import validate_mcp_servers_payload
 
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+# Free-form JSONB config blobs (`worker_config`, `repository_config`,
+# `human_approval_policy`, `rag_knowledge_bases`) are typed loosely until
+# their own validated schemas land in Plans 02-05. We do NOT lock their
+# shape here (that would pre-empt unbuilt roadmap), but we DO cap their
+# serialized size so a client can't stuff megabytes of arbitrary JSON into
+# a project row that later gets folded into orchestrator context
+# (api-routers-validation-6). 64 KiB is generous for config.
+_MAX_JSON_CONFIG_BYTES = 65536
+
+
+def _check_json_config_size(value: Any, field_name: str) -> None:
+    """Reject a free-form JSON config blob over `_MAX_JSON_CONFIG_BYTES`.
+
+    `default=str` keeps it from blowing up on stray non-serializable
+    values — we only care about an order-of-magnitude size guard here.
+    """
+    if value is None:
+        return
+    size = len(json.dumps(value, default=str).encode("utf-8"))
+    if size > _MAX_JSON_CONFIG_BYTES:
+        raise ValueError(
+            f"{field_name} is too large ({size} bytes); " f"max {_MAX_JSON_CONFIG_BYTES} bytes"
+        )
 
 
 def _validate_budget_invariants(self: BaseModel) -> BaseModel:
@@ -61,6 +86,12 @@ class ProjectCreateRequest(BaseModel):
     status: ProjectStatus = ProjectStatus.ACTIVE
     team_id: UUID | None = None
 
+    # Plan 06.13 task_06_13_03: optional project template to adopt. When
+    # set, the new project is pre-granted the template's
+    # `default_kb_grants` (built-in KB slugs → kb_projects rows). Absent
+    # = a plain project with no auto-grants (backward-compatible).
+    template_id: UUID | None = None
+
     mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
     rag_knowledge_bases: list[dict[str, Any]] = Field(default_factory=list)
     worker_config: dict[str, Any] = Field(default_factory=dict)
@@ -78,6 +109,18 @@ class ProjectCreateRequest(BaseModel):
     @classmethod
     def _validate_mcp_servers(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return validate_mcp_servers_payload(value)
+
+    @field_validator(
+        "rag_knowledge_bases",
+        "worker_config",
+        "repository_config",
+        "human_approval_policy",
+        mode="after",
+    )
+    @classmethod
+    def _cap_json_config(cls, value: Any, info: Any) -> Any:
+        _check_json_config_size(value, info.field_name)
+        return value
 
     @model_validator(mode="after")
     def _budget_invariants(self) -> ProjectCreateRequest:
@@ -116,6 +159,18 @@ class ProjectUpdateRequest(BaseModel):
         if value is None:
             return None
         return validate_mcp_servers_payload(value)
+
+    @field_validator(
+        "rag_knowledge_bases",
+        "worker_config",
+        "repository_config",
+        "human_approval_policy",
+        mode="after",
+    )
+    @classmethod
+    def _cap_json_config(cls, value: Any, info: Any) -> Any:
+        _check_json_config_size(value, info.field_name)
+        return value
 
     @model_validator(mode="after")
     def _budget_invariants(self) -> ProjectUpdateRequest:

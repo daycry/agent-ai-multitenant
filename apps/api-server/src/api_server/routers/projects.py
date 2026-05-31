@@ -22,7 +22,7 @@ from api_server.auth.deps import (
     require_tenant_admin,
     require_tenant_member,
 )
-from api_server.db.domain import Project, Team
+from api_server.db.domain import Project, ProjectStatus, Team
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -35,6 +35,8 @@ from api_server.schemas.projects import (
     ProjectUpdateRequest,
     to_project_response,
 )
+from api_server.seeds import PLATFORM_TENANT_ID
+from api_server.seeds.template_adoption import apply_template_kb_grants
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -50,12 +52,47 @@ async def _verify_team_visible(session: AsyncSession, team_id: UUID) -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team not found")
 
 
+async def _verify_template_visible(
+    session: AsyncSession, template_id: UUID, tenant_id: UUID
+) -> None:
+    """Resolve `template_id` to a usable project template or raise 404.
+
+    The `projects_template_read` RLS policy (FOR SELECT USING
+    is_template=true) is permissive: a tenant session can read *any*
+    tenant's template, not just its own + the platform catalog. So we
+    cannot rely on RLS alone to scope adoption — we explicitly require
+    the template to belong either to the caller's tenant or to the
+    platform tenant (the built-in catalog). A template owned by a
+    *different* tenant surfaces as a clean 404 and grants nothing,
+    preventing cross-tenant leakage of `default_kb_grants`.
+    """
+    result = await session.execute(
+        select(Project.id).where(
+            Project.id == template_id,
+            Project.is_template.is_(True),
+            Project.deleted_at.is_(None),
+            Project.tenant_id.in_([tenant_id, PLATFORM_TENANT_ID]),
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="project template not found"
+        )
+
+
 # ---------------------------------------------------------------------------
 # GET /projects
 # ---------------------------------------------------------------------------
 @router.get("", response_model=list[ProjectResponse])
 async def list_projects(
-    status_: str | None = Query(default=None, alias="status"),
+    status_: ProjectStatus | None = Query(
+        default=None,
+        alias="status",
+        description=(
+            "Filter by project status. Validated against the ProjectStatus "
+            "enum (422 on an unknown value), matching the POST/PUT contract."
+        ),
+    ),
     team_id: UUID | None = Query(default=None),
     include_templates: bool = Query(
         default=False,
@@ -133,6 +170,9 @@ async def create_project(
     if payload.team_id is not None:
         await _verify_team_visible(session, payload.team_id)
 
+    if payload.template_id is not None:
+        await _verify_template_visible(session, payload.template_id, tenant_id)
+
     project = Project(
         tenant_id=tenant_id,
         name=payload.name,
@@ -159,6 +199,20 @@ async def create_project(
     except IntegrityError as exc:
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
+
+    # Plan 06.13 task_06_13_03: adopt the template's KB grants. Runs after
+    # the project is flushed (so the FK target exists) and is idempotent —
+    # the helper resolves `default_kb_grants` slugs to built-in KB ids and
+    # inserts kb_projects rows ON CONFLICT DO NOTHING.
+    if payload.template_id is not None:
+        await apply_template_kb_grants(
+            session,
+            template_id=payload.template_id,
+            new_project_id=project.id,
+            tenant_id=tenant_id,
+            granted_by=principal.user_id,
+        )
+
     await session.refresh(project)
     return to_project_response(project)
 

@@ -52,6 +52,11 @@ from api_server.routers._helpers import (
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers._pagination import (
+    apply_pagination,
+    limit_query,
+    offset_query,
+)
 from api_server.schemas.plans import (
     AICostBreakdownResponse,
     CostBreakdownResponse,
@@ -168,6 +173,8 @@ async def create_plan(
 async def list_plans(
     project_id: UUID,
     status_: str | None = Query(default=None, alias="status"),
+    limit: int = limit_query(),
+    offset: int = offset_query(),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[PlanResponse]:
@@ -175,7 +182,8 @@ async def list_plans(
     stmt = select(Plan).where(Plan.project_id == project_id, Plan.deleted_at.is_(None))
     if status_ is not None:
         stmt = stmt.where(Plan.status == status_)
-    stmt = stmt.order_by(Plan.created_at.desc())
+    stmt = stmt.order_by(Plan.created_at.desc(), Plan.id)
+    stmt = apply_pagination(stmt, limit=limit, offset=offset)
     result = await session.execute(stmt)
     return [to_plan_response(p) for p in result.scalars().all()]
 
@@ -324,6 +332,8 @@ async def post_plan_comment(
 @plans_router.get("/{plan_id}/comments", response_model=list[PlanCommentResponse])
 async def list_plan_comments(
     plan_id: UUID,
+    limit: int = limit_query(),
+    offset: int = offset_query(),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[PlanCommentResponse]:
@@ -332,7 +342,9 @@ async def list_plan_comments(
     result = await session.execute(
         select(PlanComment)
         .where(PlanComment.plan_id == plan_id, PlanComment.deleted_at.is_(None))
-        .order_by(PlanComment.created_at)
+        .order_by(PlanComment.created_at, PlanComment.id)
+        .limit(limit)
+        .offset(offset)
     )
     return [to_plan_comment_response(c) for c in result.scalars().all()]
 
@@ -659,6 +671,8 @@ async def create_free_task(
 @plans_router.get("/{plan_id}/escalated-tasks")
 async def list_escalated_tasks(
     plan_id: UUID,
+    limit: int = limit_query(),
+    offset: int = offset_query(),
     _: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> dict[str, list[dict[str, object]]]:
@@ -688,10 +702,14 @@ async def list_escalated_tasks(
     task_rows = (
         (
             await session.execute(
-                select(Task).where(
+                select(Task)
+                .where(
                     Task.plan_id == plan_id,
                     Task.status == "awaiting_human_approval",
                 )
+                .order_by(Task.created_at, Task.id)
+                .limit(limit)
+                .offset(offset)
             )
         )
         .scalars()

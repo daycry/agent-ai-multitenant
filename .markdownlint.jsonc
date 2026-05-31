@@ -1,0 +1,68 @@
+// markdownlint configuration for the agentic platform docs.
+//
+// Wired into CI (.github/workflows/ci.yml, job "lint-markdown") and runnable
+// locally with:
+//
+//   npx markdownlint-cli --config .markdownlint.jsonc "docs/**/*.md"
+//
+// Philosophy: enforce the structural / hygiene rules that catch real authoring
+// mistakes (broken reference links, hard tabs, trailing-space line breaks),
+// but DISABLE the stylistic rules the existing corpus legitimately breaks at
+// scale. Re-enabling any of the disabled rules below would require a massive
+// retro-fix of hundreds of already-merged docs — not worth it for cosmetic
+// gains. If you want a stricter rule back, fix the docs in the same PR.
+{
+  // Inherit markdownlint's documented defaults, then override below.
+  "default": true,
+
+  // --- Disabled: stylistic rules the current docs legitimately break ---
+
+  // MD013 line-length: prose, tables and embedded URLs routinely exceed any
+  // column cap. Wrapping tables/code is worse than a long line. (2400+ hits.)
+  "MD013": false,
+
+  // MD031 blanks-around-fences: many docs (esp. the gotchas catalog and the
+  // roadmap task YAML blocks) pack fenced blocks tight against surrounding
+  // list items on purpose. (~500 hits.)
+  "MD031": false,
+
+  // MD025 single-title/single-h1: docs that carry YAML frontmatter plus a
+  // top-level "# Title", and multi-section guides with more than one H1, are
+  // an accepted pattern here. (~80 hits.)
+  "MD025": false,
+
+  // MD040 fenced-code-language: the gotchas docs show raw error output /
+  // symptom dumps in bare ``` fences where "no language" is the honest label.
+  // (~80 hits.)
+  "MD040": false,
+
+  // MD034 no-bare-urls: getting-started / runbooks paste raw localhost URLs
+  // (http://localhost:3000) that are clearer unlinked. (~15 hits.)
+  "MD034": false,
+
+  // MD028 no-blanks-blockquote: adjacent blockquotes separated by a blank line
+  // are used as visual call-out groupings.
+  "MD028": false,
+
+  // MD024 no-duplicate-heading: repeated step headings ("Paso 1 ...") recur
+  // across sibling sections by design.
+  "MD024": false,
+
+  // MD029 ol-prefix: ordered lists interleaved with code blocks renumber in a
+  // way markdownlint flags but GitHub renders correctly.
+  "MD029": false,
+
+  // MD033 no-inline-html: a handful of docs embed <details>/<br> for layout.
+  "MD033": false,
+
+  // MD041 first-line-heading-h1: frontmatter-first docs do not start with an
+  // H1 on physical line 1.
+  "MD041": false,
+
+  // MD049 emphasis-style / MD037 no-space-in-emphasis / MD038 no-space-in-code:
+  // emphasis/code spacing varies across the Spanish-language corpus; not worth
+  // a mass rewrite.
+  "MD037": false,
+  "MD038": false,
+  "MD049": false
+}

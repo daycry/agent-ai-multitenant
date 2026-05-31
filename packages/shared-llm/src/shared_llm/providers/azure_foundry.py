@@ -25,8 +25,8 @@ import httpx
 
 from shared_llm.providers._openai_compat import (
     check_status,
+    iter_sse_chunks,
     parse_chat_completion,
-    parse_sse_delta,
     to_openai_messages,
 )
 from shared_llm.types import CompletionResponse, Message, StreamChunk
@@ -132,13 +132,10 @@ class AzureFoundryAPIMProvider:
             "POST", self._url(), json=body, headers=self._headers()
         ) as resp:
             check_status(resp, provider=self.name)
-            async for line in resp.aiter_lines():
-                delta, done = parse_sse_delta(line)
-                if done:
-                    yield StreamChunk(delta="", done=True)
-                    return
-                if delta:
-                    yield StreamChunk(delta=delta)
+            # iter_sse_chunks wraps the body iteration so a mid-stream
+            # network/transport error becomes a typed ProviderError.
+            async for chunk in iter_sse_chunks(resp, provider=self.name):
+                yield chunk
 
     async def aclose(self) -> None:
         if self._owns_client:

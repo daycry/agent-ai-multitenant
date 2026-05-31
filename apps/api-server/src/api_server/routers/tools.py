@@ -29,6 +29,11 @@ from api_server.routers._helpers import (
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers._pagination import (
+    apply_pagination,
+    limit_query,
+    offset_query,
+)
 from api_server.schemas.catalog import (
     ToolCreateRequest,
     ToolResponse,
@@ -44,6 +49,8 @@ async def list_tools(
     category: str | None = Query(default=None),
     implementation_type: str | None = Query(default=None),
     is_builtin: bool | None = Query(default=None),
+    limit: int = limit_query(),
+    offset: int = offset_query(),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[ToolResponse]:
@@ -54,7 +61,8 @@ async def list_tools(
         stmt = stmt.where(Tool.implementation_type == implementation_type)
     if is_builtin is not None:
         stmt = stmt.where(Tool.is_builtin.is_(is_builtin))
-    stmt = stmt.order_by(Tool.created_at)
+    stmt = stmt.order_by(Tool.created_at, Tool.id)
+    stmt = apply_pagination(stmt, limit=limit, offset=offset)
     result = await session.execute(stmt)
     return [to_tool_response(t) for t in result.scalars().all()]
 

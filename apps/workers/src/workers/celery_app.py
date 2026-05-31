@@ -49,8 +49,9 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
     # Imported here (not at module top) to avoid Celery importing the
     # maintenance task module before its own celery_app singleton is
     # ready — `maintenance.py` registers tasks against `app`, so we
-    # need the schedule attached AFTER `app` exists.
-    from workers.beat_schedule import BEAT_SCHEDULE
+    # need the schedule attached AFTER `app` exists. `build_beat_schedule`
+    # folds in the CONFIGURABLE price-sync cadence (Plan 11 task_11_18).
+    from workers.beat_schedule import build_beat_schedule
 
     app = Celery("agentic-workers")
     app.conf.update(
@@ -66,6 +67,9 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             "workers.memorizer",
             "workers.maintenance",
             "workers.ingestion",
+            "workers.price_sync",
+            "workers.backup_task",
+            "workers.restore_task",
         ),
         # Agent runs are long; ack only after completion so a worker
         # crash re-queues the job instead of losing it.
@@ -74,6 +78,11 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
         # cheap, prefetching would stall the queue behind a slow job.
         worker_prefetch_multiplier=1,
         task_track_started=True,
+        # NOTE: the run_execution backstop time limit (workers-orchestrator-10)
+        # is NOT hardcoded here. It is an operator-tunable platform setting
+        # (`execution_soft/hard_time_limit_s`) applied per-task by the
+        # orchestrator at enqueue time, so a UI change takes effect for new
+        # runs without restarting the workers (Plan 06.14 task_06_14_04).
         # Redis broker can drop the connection; retry on boot rather
         # than crash if Redis isn't up yet.
         broker_connection_retry_on_startup=True,
@@ -83,8 +92,9 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
         accept_content=["json"],
         timezone="UTC",
         enable_utc=True,
-        # Plan 06.5 Fase D — periodic maintenance.
-        beat_schedule=BEAT_SCHEDULE,
+        # Plan 06.5 Fase D — periodic maintenance + Plan 11 task_11_18
+        # scheduled (configurable) price-catalog sync.
+        beat_schedule=build_beat_schedule(cfg),
     )
     return app
 

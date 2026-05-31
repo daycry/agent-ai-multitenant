@@ -24,6 +24,11 @@ dependencies = [
   "pydantic>=2.5,<3.0",
   "structlog>=24.1,<26.0",
   "tenacity>=8.2,<10.0",
+
+  # JSON Schema validation of MCP tool arguments (task_06_14_12,
+  # mcp-tools-1): args from the LLM are checked against each tool's
+  # advertised input_schema before the call is dispatched.
+  "jsonschema>=4.0,<5.0",
 ]
 
 [project.optional-dependencies]

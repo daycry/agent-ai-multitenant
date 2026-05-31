@@ -360,3 +360,58 @@ async def test_project_isolation_across_tenants(configured_app, migrations_pg_ds
             headers={"Authorization": f"Bearer {token_b}"},
         )
         assert fetch_b.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# task_06_14_15 — input-validation cleanups (api-routers-validation-4/6)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_list_projects_rejects_invalid_status_filter(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """`?status=` is now typed against ProjectStatus -> 422 on garbage
+    (api-routers-validation-4), instead of silently matching nothing."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        bad = await client.get("/projects?status=not-a-real-status", headers=headers)
+        assert bad.status_code == 422, bad.text
+        # A valid enum value still works.
+        good = await client.get("/projects?status=active", headers=headers)
+        assert good.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_create_project_rejects_oversized_json_config(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """A free-form JSON config blob over the size cap -> 422
+    (api-routers-validation-6)."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    huge = {"blob": "x" * 70_000}  # > 64 KiB once serialized
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/projects",
+            json=_minimal_payload(worker_config=huge),
+            headers=headers,
+        )
+        assert resp.status_code == 422, resp.text
+        assert "worker_config" in resp.text
+
+        # A reasonably-sized config is accepted.
+        ok = await client.post(
+            "/projects",
+            json=_minimal_payload(name="small cfg", worker_config={"max_workers": 4}),
+            headers=headers,
+        )
+        assert ok.status_code == 201, ok.text

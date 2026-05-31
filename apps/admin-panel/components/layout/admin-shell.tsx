@@ -4,17 +4,26 @@ import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  BarChart3,
+  Bell,
   BellRing,
+  BookOpen,
   Bot,
   Brain,
+  Coins,
+  DatabaseBackup,
   FileText,
   FolderKanban,
+  Gauge,
+  Inbox,
   LayoutDashboard,
   LayoutGrid,
   Library,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Store,
   Users,
   X,
 } from "lucide-react";
@@ -30,6 +39,8 @@ interface NavItem {
   Icon: typeof LayoutDashboard;
   /** Si `adminOnly`, sólo se muestra a tenant_admin / system_admin. */
   adminOnly?: boolean;
+  /** Si `systemAdminOnly`, sólo se muestra al System Admin global. */
+  systemAdminOnly?: boolean;
 }
 
 const NAV: NavItem[] = [
@@ -47,7 +58,58 @@ const NAV: NavItem[] = [
   },
   { href: "/admin/memories", label: "Memorias", Icon: Brain },
   { href: "/admin/knowledge-bases", label: "Knowledge Bases", Icon: Library },
+  { href: "/admin/marketplace", label: "Marketplace", Icon: Store, adminOnly: true },
+  {
+    href: "/admin/model-prices",
+    label: "Modelos & Precios",
+    Icon: Coins,
+    systemAdminOnly: true,
+  },
+  {
+    href: "/admin/backup",
+    label: "Backups",
+    Icon: DatabaseBackup,
+    systemAdminOnly: true,
+  },
+  {
+    href: "/admin/backup/destinations",
+    label: "Destinos backup",
+    Icon: DatabaseBackup,
+    systemAdminOnly: true,
+  },
+  {
+    href: "/admin/backup/restore",
+    label: "Restaurar backup",
+    Icon: DatabaseBackup,
+    systemAdminOnly: true,
+  },
+  {
+    href: "/admin/guardrails",
+    label: "Guardrails",
+    Icon: ShieldAlert,
+    adminOnly: true,
+  },
+  {
+    href: "/admin/eval-quality",
+    label: "Calidad (Evals)",
+    Icon: Gauge,
+    adminOnly: true,
+  },
+  {
+    href: "/admin/tenant-stats",
+    label: "Estadísticas",
+    Icon: BarChart3,
+    adminOnly: true,
+  },
+  {
+    href: "/admin/notifications",
+    label: "Notificaciones",
+    Icon: Bell,
+    adminOnly: true,
+  },
+  { href: "/admin/notifications/inbox", label: "Bandeja", Icon: Inbox },
   { href: "/admin/documents", label: "Documentos", Icon: FileText },
+  { href: "/admin/docs", label: "Documentación", Icon: BookOpen },
   { href: "/admin/settings", label: "Settings", Icon: Settings, adminOnly: true },
 ];
 
@@ -120,8 +182,12 @@ function SidebarContent({
 }) {
   // Plan 06.8 task_06_8_08: ocultar items admin-only para tenant_user.
   // El check del backend sigue siendo la fuente de verdad — esto es UX.
-  const { isTenantAdmin } = useCurrentUser();
-  const visibleNav = NAV.filter((item) => !item.adminOnly || isTenantAdmin);
+  const { isTenantAdmin, isSystemAdmin } = useCurrentUser();
+  const visibleNav = NAV.filter((item) => {
+    if (item.systemAdminOnly) return isSystemAdmin;
+    if (item.adminOnly) return isTenantAdmin;
+    return true;
+  });
 
   return (
     <>

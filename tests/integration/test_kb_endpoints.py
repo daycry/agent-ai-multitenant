@@ -135,6 +135,56 @@ def configured_app(
         get_settings.cache_clear()
 
 
+async def _seed_two_tenants(dsn: str) -> dict[str, dict[str, UUID]]:
+    """Two independent tenants, each with one ``tenant_admin``. Used by the
+    cross-tenant denial tests: tenant B must never see/touch tenant A's KB."""
+    a_tenant, a_user = uuid4(), uuid4()
+    b_tenant, b_user = uuid4(), uuid4()
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "TRUNCATE kb_projects, chunks, documents, knowledge_bases,"
+            " memory_entries, plans, conversations, projects, agents, teams,"
+            " user_org_memberships, organizations, users"
+            " RESTART IDENTITY CASCADE"
+        )
+        await conn.execute(
+            "INSERT INTO organizations (id, name, slug)"
+            " VALUES ($1, $2, $3), ($4, $5, $6), ($7, $8, $9)",
+            a_tenant,
+            "Tenant A",
+            "tenant-a-kb-xt",
+            b_tenant,
+            "Tenant B",
+            "tenant-b-kb-xt",
+            _PLATFORM_TENANT_ID,
+            "Platform",
+            "platform-kb-xt",
+        )
+        await conn.execute(
+            "INSERT INTO users (id, email, password_hash)"
+            " VALUES ($1, 'a@kb.xt', 'h'), ($2, 'b@kb.xt', 'h')",
+            a_user,
+            b_user,
+        )
+        await conn.execute(
+            "INSERT INTO user_org_memberships (id, tenant_id, user_id, role) VALUES"
+            " ($1, $2, $3, 'tenant_admin'), ($4, $5, $6, 'tenant_admin')",
+            uuid4(),
+            a_tenant,
+            a_user,
+            uuid4(),
+            b_tenant,
+            b_user,
+        )
+    finally:
+        await conn.close()
+    return {
+        "a": {"tenant_id": a_tenant, "user_id": a_user},
+        "b": {"tenant_id": b_tenant, "user_id": b_user},
+    }
+
+
 async def _mint_token(user_id: UUID, tenant_id: UUID) -> str:
     from api_server.auth.deps import get_redis
     from api_server.auth.jwt import encode_jwt
@@ -517,3 +567,88 @@ async def test_delete_document_drops_blob_and_soft_deletes_row(
         # Row is soft-deleted — listing skips it.
         listed = await client.get(f"/knowledge-bases/{kb_id}/documents", headers=headers)
         assert doc_id not in [d["id"] for d in listed.json()]
+
+
+# ===========================================================================
+# Cross-tenant denial (Plan 06.14 task_06_14_16, tests-quality-1)
+#
+# The KB suite above exercises a single tenant. RLS hides foreign rows, so a
+# cross-tenant read/delete should look like a *miss* (404), never a 403 — the
+# row simply isn't visible to tenant B's session. These two tests pin that
+# contract so a regression in the RLS policy (or a missing tenant filter)
+# breaks CI under the `cross_tenant` gate.
+# ===========================================================================
+@pytest.mark.cross_tenant
+@pytest.mark.asyncio
+async def test_tenant_b_cannot_read_tenant_a_kb(configured_app, migrations_pg_dsn: str) -> None:
+    app, _ = configured_app
+    seeded = await _seed_two_tenants(migrations_pg_dsn)
+    a, b = seeded["a"], seeded["b"]
+    token_a = await _mint_token(a["user_id"], a["tenant_id"])
+    token_b = await _mint_token(b["user_id"], b["tenant_id"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # Tenant A creates a KB.
+        created = await client.post(
+            "/knowledge-bases",
+            json={"name": "A Secret KB"},
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert created.status_code == 201, created.text
+        kb_id = created.json()["id"]
+
+        # Tenant B cannot GET it — RLS hides the row, so it's a 404, not 403.
+        foreign_get = await client.get(
+            f"/knowledge-bases/{kb_id}",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert foreign_get.status_code == 404, foreign_get.text
+
+        # Tenant B's own listing never includes A's KB.
+        b_list = await client.get(
+            "/knowledge-bases", headers={"Authorization": f"Bearer {token_b}"}
+        )
+        assert b_list.status_code == 200
+        assert kb_id not in [r["id"] for r in b_list.json()]
+
+        # Tenant A still sees its KB (the row really exists; it's only hidden
+        # from B). Confirms the 404 above is RLS isolation, not a phantom miss.
+        a_get = await client.get(
+            f"/knowledge-bases/{kb_id}",
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert a_get.status_code == 200, a_get.text
+
+
+@pytest.mark.cross_tenant
+@pytest.mark.asyncio
+async def test_tenant_b_cannot_delete_tenant_a_kb(configured_app, migrations_pg_dsn: str) -> None:
+    app, _ = configured_app
+    seeded = await _seed_two_tenants(migrations_pg_dsn)
+    a, b = seeded["a"], seeded["b"]
+    token_a = await _mint_token(a["user_id"], a["tenant_id"])
+    token_b = await _mint_token(b["user_id"], b["tenant_id"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        created = await client.post(
+            "/knowledge-bases",
+            json={"name": "A Undeletable KB"},
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert created.status_code == 201, created.text
+        kb_id = created.json()["id"]
+
+        # Tenant B's DELETE finds nothing (RLS) → 404, and must NOT delete it.
+        foreign_del = await client.delete(
+            f"/knowledge-bases/{kb_id}",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert foreign_del.status_code == 404, foreign_del.text
+
+        # The KB is intact for tenant A — B's attempt did not soft-delete it.
+        a_get = await client.get(
+            f"/knowledge-bases/{kb_id}",
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert a_get.status_code == 200, a_get.text
+        assert a_get.json()["name"] == "A Undeletable KB"

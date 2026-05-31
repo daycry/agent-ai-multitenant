@@ -42,6 +42,11 @@ from api_server.routers._helpers import (
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers._pagination import (
+    apply_pagination,
+    limit_query,
+    offset_query,
+)
 from api_server.schemas.agents import (
     AgentCreateRequest,
     AgentDiffResponse,
@@ -50,6 +55,7 @@ from api_server.schemas.agents import (
     AgentMergeRequest,
     AgentResponse,
     AgentUpdateRequest,
+    GrantKBRequest,
     to_agent_response,
 )
 
@@ -82,6 +88,8 @@ async def list_agents(
     project_id: UUID | None = Query(default=None, description="Filter by project_id"),
     role: str | None = Query(default=None, description="Filter by role"),
     agent_type: str | None = Query(default=None, description="Filter by agent_type (ai|human)"),
+    limit: int = limit_query(),
+    offset: int = offset_query(),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[AgentResponse]:
@@ -91,6 +99,9 @@ async def list_agents(
       * Tenant's own `global_tenant_template` + `project_local` rows.
       * Every `global_builtin` row, regardless of tenant_id (added by
         migration 0004 via a SELECT-only policy).
+
+    Paged via `limit`/`offset` (task_06_14_13) so a tenant with many
+    agents never produces an unbounded response.
     """
     stmt = select(Agent).where(Agent.deleted_at.is_(None))
     if scope is not None:
@@ -101,7 +112,10 @@ async def list_agents(
         stmt = stmt.where(Agent.role == role)
     if agent_type is not None:
         stmt = stmt.where(Agent.agent_type == agent_type)
-    stmt = stmt.order_by(Agent.created_at)
+    # Deterministic order (created_at, then id as a tiebreaker) so
+    # offset paging is stable even when many rows share a timestamp.
+    stmt = stmt.order_by(Agent.created_at, Agent.id)
+    stmt = apply_pagination(stmt, limit=limit, offset=offset)
     result = await session.execute(stmt)
     return [to_agent_response(a) for a in result.scalars().all()]
 
@@ -465,10 +479,12 @@ async def _load_writable_agent_for_kb(
 )
 async def list_agent_kbs(
     agent_id: UUID,
+    limit: int = limit_query(),
+    offset: int = offset_query(),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[dict[str, object]]:
-    """List KBs granted to this agent."""
+    """List KBs granted to this agent (paged via `limit`/`offset`)."""
     # First: make sure the agent is visible to the caller. RLS handles
     # cross-tenant; here we only need to surface 404 on miss instead of
     # an empty list (a hidden grant would otherwise look like "no
@@ -493,7 +509,9 @@ async def list_agent_kbs(
             AgentKnowledgeBase.agent_id == agent_id,
             KnowledgeBase.deleted_at.is_(None),
         )
-        .order_by(KnowledgeBase.name)
+        .order_by(KnowledgeBase.name, KnowledgeBase.id)
+        .limit(limit)
+        .offset(offset)
     )
     return [
         {
@@ -515,25 +533,13 @@ async def list_agent_kbs(
 )
 async def grant_kb_to_agent(
     agent_id: UUID,
-    payload: dict[str, str],
+    payload: GrantKBRequest,
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> dict[str, object]:
     """Grant a KB to the agent. Re-granting is a no-op (idempotent)."""
     tenant_id = require_tenant_id(principal)
-    kb_id_str = payload.get("kb_id")
-    if not kb_id_str:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="body must include 'kb_id'",
-        )
-    try:
-        kb_id = UUID(str(kb_id_str))
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="kb_id is not a valid UUID",
-        ) from exc
+    kb_id = payload.kb_id
 
     agent = await _load_writable_agent_for_kb(session, agent_id, principal)
 

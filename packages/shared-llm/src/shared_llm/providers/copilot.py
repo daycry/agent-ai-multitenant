@@ -34,8 +34,8 @@ import httpx
 from shared_llm.exceptions import AuthError, ProviderError
 from shared_llm.providers._openai_compat import (
     check_status,
+    iter_sse_chunks,
     parse_chat_completion,
-    parse_sse_delta,
     to_openai_messages,
 )
 from shared_llm.types import CompletionResponse, Message, StreamChunk
@@ -59,7 +59,11 @@ _COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
 _COPILOT_API = "https://api.githubcopilot.com"
 
 # Re-mint the JWT once it has under this many seconds of life left.
-_JWT_REFRESH_MARGIN_S = 60.0
+# 120s (was 60s) buys headroom on high-latency / proxied networks where
+# the mint round-trip itself can take 10-30s: with the old 60s margin a
+# token that had exactly 60s left when the call started could expire
+# in-flight (llm-providers-7). Override per-instance via the constructor.
+_JWT_REFRESH_MARGIN_S = 120.0
 
 
 @dataclass
@@ -82,14 +86,20 @@ class CopilotProvider:
         github_token: str | None = None,
         timeout: float = 60.0,
         http_client: httpx.AsyncClient | None = None,
+        jwt_refresh_margin_s: float = _JWT_REFRESH_MARGIN_S,
     ) -> None:
         """Initialise the provider.
 
         `github_token` is the long-lived OAuth token (`gho_*` / `ghu_*`)
         the device flow returns. If you don't have one yet, leave it
         None and call `authenticate_interactive()` first.
+
+        `jwt_refresh_margin_s` is how early (seconds before expiry) the
+        minted Copilot JWT is pre-emptively re-minted. Defaults to 120s;
+        raise it further on very high-latency links.
         """
         self._github_token = github_token
+        self._jwt_refresh_margin_s = jwt_refresh_margin_s
         self._jwt: str | None = None
         self._jwt_expires_at = 0.0
         if http_client is not None:
@@ -167,7 +177,7 @@ class CopilotProvider:
     # ------------------------------------------------------------------
     async def _ensure_jwt(self) -> str:
         now = time.time()
-        if self._jwt is not None and now < self._jwt_expires_at - _JWT_REFRESH_MARGIN_S:
+        if self._jwt is not None and now < self._jwt_expires_at - self._jwt_refresh_margin_s:
             return self._jwt
         if not self._github_token:
             raise AuthError("no GitHub token — run authenticate_interactive() first")
@@ -263,20 +273,33 @@ class CopilotProvider:
         }
         if tools:
             body["tools"] = tools
+        # Same 401 handling as complete(): a 401 on the first attempt
+        # means the JWT expired between mint and call. Drop the cached
+        # JWT, re-mint, and retry the stream exactly once. We must close
+        # the first response body before re-opening, so the retry happens
+        # outside the first `async with` block.
         async with self._client.stream(
             "POST",
             f"{_COPILOT_API}/chat/completions",
             headers=await self._chat_headers(),
             json=body,
         ) as resp:
-            check_status(resp, provider=self.name)
-            async for line in resp.aiter_lines():
-                delta, done = parse_sse_delta(line)
-                if done:
-                    yield StreamChunk(delta="", done=True)
-                    return
-                if delta:
-                    yield StreamChunk(delta=delta)
+            if resp.status_code != 401:
+                check_status(resp, provider=self.name)
+                async for chunk in iter_sse_chunks(resp, provider=self.name):
+                    yield chunk
+                return
+            self._jwt = None
+        # Retry once with a freshly minted JWT.
+        async with self._client.stream(
+            "POST",
+            f"{_COPILOT_API}/chat/completions",
+            headers=await self._chat_headers(),
+            json=body,
+        ) as retry_resp:
+            check_status(retry_resp, provider=self.name)
+            async for chunk in iter_sse_chunks(retry_resp, provider=self.name):
+                yield chunk
 
     async def aclose(self) -> None:
         if self._owns_client:

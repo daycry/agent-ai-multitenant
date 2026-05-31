@@ -176,6 +176,23 @@ class AgentDiffResponse(BaseModel):
     fields: dict[str, AgentFieldDiff]
 
 
+# ---------------------------------------------------------------------------
+# Grant a KB to an agent
+# ---------------------------------------------------------------------------
+class GrantKBRequest(BaseModel):
+    """Payload for POST /agents/{agent_id}/knowledge-bases.
+
+    Replaces the previous raw ``dict[str, str]`` body (api-routers-validation-2):
+    a typed schema gives automatic UUID coercion, a standard 422 on a bad
+    payload, rejection of unexpected fields (no mass-assignment), and OpenAPI
+    docs consistent with the rest of the API.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kb_id: UUID
+
+
 def to_agent_response(a: Agent) -> AgentResponse:
     """ORM -> DTO with the `model_config` rename baked in.
 

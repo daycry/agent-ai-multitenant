@@ -174,7 +174,14 @@ def configured_app(
     get_settings.cache_clear()
 
 
-async def _mint(user_id: UUID, tenant_id: UUID | None, *, is_system_admin: bool = False) -> str:
+async def _mint(
+    user_id: UUID,
+    tenant_id: UUID | None,
+    *,
+    is_system_admin: bool = False,
+) -> tuple[str, UUID]:
+    """Mint a JWT + create its Redis session. Returns ``(token, session_id)``
+    so callers that want to test revocation can drop the session afterwards."""
     from api_server.auth.deps import get_redis
     from api_server.auth.jwt import encode_jwt
     from api_server.auth.sessions import SessionStore
@@ -182,12 +189,20 @@ async def _mint(user_id: UUID, tenant_id: UUID | None, *, is_system_admin: bool 
     sid = uuid7()
     store = SessionStore(get_redis())
     await store.create(sid, user_id=user_id, tenant_id=tenant_id, ttl_seconds=3600)
-    return encode_jwt(
+    token = encode_jwt(
         user_id=user_id,
         session_id=sid,
         tenant_id=tenant_id,
         is_system_admin=is_system_admin,
     )
+    return token, sid
+
+
+async def _revoke_session(session_id: UUID) -> None:
+    from api_server.auth.deps import get_redis
+    from api_server.auth.sessions import SessionStore
+
+    await SessionStore(get_redis()).revoke(session_id)
 
 
 async def _get(client: AsyncClient, path: str, token: str) -> int:
@@ -201,7 +216,7 @@ async def _get(client: AsyncClient, path: str, token: str) -> int:
 @pytest.mark.asyncio
 async def test_tenant_admin_passes_all_gates(configured_app, migrations_pg_dsn: str) -> None:
     seed = await _seed_db(migrations_pg_dsn)
-    token = await _mint(seed["admin_user"], seed["tenant"])
+    token, _ = await _mint(seed["admin_user"], seed["tenant"])
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
@@ -221,7 +236,7 @@ async def test_tenant_user_passes_member_and_role_user_only(
     configured_app, migrations_pg_dsn: str
 ) -> None:
     seed = await _seed_db(migrations_pg_dsn)
-    token = await _mint(seed["plain_user"], seed["tenant"])
+    token, _ = await _mint(seed["plain_user"], seed["tenant"])
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
@@ -241,7 +256,7 @@ async def test_system_admin_bypasses_all_gates(configured_app, migrations_pg_dsn
     # Stranger has no membership in `tenant`, but promote to system admin.
     await _promote_to_system_admin(migrations_pg_dsn, seed["stranger"])
     # Mint a token with no tid — system admins don't need one to pass.
-    token = await _mint(seed["stranger"], None, is_system_admin=True)
+    token, _ = await _mint(seed["stranger"], None, is_system_admin=True)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
@@ -262,7 +277,7 @@ async def test_stranger_with_tid_but_no_membership_is_403(
     seed = await _seed_db(migrations_pg_dsn)
     # Stranger carries the tenant's id in their JWT but has no row in
     # user_org_memberships for that tenant.
-    token = await _mint(seed["stranger"], seed["tenant"])
+    token, _ = await _mint(seed["stranger"], seed["tenant"])
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
@@ -280,7 +295,7 @@ async def test_stranger_with_tid_but_no_membership_is_403(
 async def test_no_tid_is_403_for_regular_user(configured_app, migrations_pg_dsn: str) -> None:
     seed = await _seed_db(migrations_pg_dsn)
     # admin_user without a tid claim — fresh login, hasn't picked tenant.
-    token = await _mint(seed["admin_user"], None)
+    token, _ = await _mint(seed["admin_user"], None)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
@@ -303,3 +318,109 @@ async def test_unauthenticated_is_401(configured_app) -> None:
         for path in ("/probe/member", "/probe/admin", "/probe/role-user"):
             resp = await client.get(path)
             assert resp.status_code == 401, path
+
+
+# ---------------------------------------------------------------------------
+# Edge cases for the role matrix (Plan 06.14 task_06_14_16, tests-quality-5)
+#
+# The matrix above covers the role × gate cells. These tests fill the *auth
+# edge* gaps the audit flagged: a structurally valid JWT whose Redis session
+# was revoked, a garbage token, and the system-admin tenant-override path
+# (which is the only way a caller passes a gate for a tenant they don't belong
+# to — hence the cross_tenant marker).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_revoked_session_is_401_on_every_gate(configured_app, migrations_pg_dsn: str) -> None:
+    """A JWT that was valid at mint time but whose session was revoked
+    (logout) must be rejected with 401 — not silently honoured — on every
+    gate. The session check lives in `get_principal` (deps.py), so it fires
+    before any role logic."""
+    seed = await _seed_db(migrations_pg_dsn)
+    token, sid = await _mint(seed["admin_user"], seed["tenant"])
+
+    # Sanity: the token works while the session is live.
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        assert await _get(client, "/probe/member", token) == 200
+
+    # Revoke (logout) and confirm the very same token now 401s everywhere.
+    await _revoke_session(sid)
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        for path in ("/probe/member", "/probe/admin", "/probe/role-user"):
+            assert await _get(client, path, token) == 401, path
+
+
+@pytest.mark.asyncio
+async def test_malformed_bearer_is_401_not_403(configured_app) -> None:
+    """A syntactically broken token is an authentication failure (401), not
+    an authorization failure (403) — `get_principal` must reject it before the
+    role gates ever run."""
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        for path in ("/probe/member", "/probe/admin", "/probe/role-user"):
+            resp = await client.get(path, headers={"Authorization": "Bearer not-a-jwt"})
+            assert resp.status_code == 401, path
+
+
+@pytest.mark.asyncio
+async def test_tenant_user_token_cannot_forge_admin_via_header(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """A regular tenant_user cannot escalate by sending an `X-Tenant-Id`
+    header: the header is honoured only for system admins. The tenant_user
+    still fails the admin gate (403) and the foreign-tenant header is ignored
+    (member gate still 200 against their own tenant)."""
+    seed = await _seed_db(migrations_pg_dsn)
+    token, _ = await _mint(seed["plain_user"], seed["tenant"])
+    foreign_tenant = str(uuid4())
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        # Header points at a tenant they don't belong to — must be ignored.
+        admin_resp = await client.get(
+            "/probe/admin",
+            headers={"Authorization": f"Bearer {token}", "X-Tenant-Id": foreign_tenant},
+        )
+        assert admin_resp.status_code == 403
+        member_resp = await client.get(
+            "/probe/member",
+            headers={"Authorization": f"Bearer {token}", "X-Tenant-Id": foreign_tenant},
+        )
+        # The header is ignored for non-admins, so membership in the JWT's own
+        # tenant still passes — the forged header buys nothing.
+        assert member_resp.status_code == 200
+
+
+@pytest.mark.cross_tenant
+@pytest.mark.asyncio
+async def test_system_admin_passes_gate_for_foreign_tenant_via_header(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """A system admin can act inside ANY tenant via the `X-Tenant-Id` header,
+    including one they have no membership in — this is the only path by which a
+    gate passes for a tenant the caller doesn't belong to. A non-admin sending
+    the same header is denied (covered above), so the override can't leak."""
+    seed = await _seed_db(migrations_pg_dsn)
+    await _promote_to_system_admin(migrations_pg_dsn, seed["stranger"])
+    # The stranger has NO membership in `tenant`, mints with no tid of its own.
+    token, _ = await _mint(seed["stranger"], None, is_system_admin=True)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        headers = {"Authorization": f"Bearer {token}", "X-Tenant-Id": str(seed["tenant"])}
+        # System admin bypasses the membership check entirely for the foreign
+        # tenant supplied via the header.
+        assert (await client.get("/probe/member", headers=headers)).status_code == 200
+        assert (await client.get("/probe/admin", headers=headers)).status_code == 200
+        assert (await client.get("/probe/role-user", headers=headers)).status_code == 200

@@ -37,6 +37,11 @@ repos:
     rev: 24.4.2
     hooks:
       - id: black
+        # The generated Python SDK (Plan 13 task_13_13) follows the
+        # generator's own style. `tool.black.extend-exclude` in pyproject is
+        # IGNORED for files pre-commit passes explicitly (only force-exclude
+        # applies to those), so exclude the generated dir at the hook level.
+        exclude: ^packages/sdk-python/src/agentic_platform_sdk/.*$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.5.0
@@ -73,6 +78,21 @@ repos:
           - "opentelemetry-instrumentation-httpx>=0.48b0,<1"
           - "httpx>=0.27,<1"
           - "docker>=7.1,<8"
+          # Sandboxed Jinja2 template rendering (notification-dispatcher,
+          # Plan 10 task_10_03). Ships py.typed, so mypy needs it installed.
+          - "jinja2>=3.1,<4"
+          # Email channel SMTP transport (notification-dispatcher, Plan 10
+          # task_10_06). Ships py.typed, so mypy needs it installed to resolve
+          # the aiosmtplib import in the Email adapter.
+          - "aiosmtplib>=3.0,<4"
+          # S3 remote backup destination (workers, Plan 12 task_12_05). boto3
+          # itself is untyped; its TYPE stubs resolve the `mypy_boto3_s3.client`
+          # import used under TYPE_CHECKING in workers.backup_destinations.
+          - "boto3-stubs[s3]>=1.34,<2"
+          # SFTP/NAS remote backup destination (workers, Plan 12 task_12_07).
+          # paramiko ships type stubs separately; types-paramiko resolves the
+          # `paramiko` import used under TYPE_CHECKING in backup_destinations.
+          - "types-paramiko>=3.4,<4"
         args: [--config-file=pyproject.toml]
         files: ^(apps|packages)/.*\.py$
         # Skip files that import sibling local packages — the hook
@@ -82,9 +102,15 @@ repos:
         #   apps/orchestrator/.../__main__.py    -> uses api_server.logging
         #   apps/orchestrator/.../dispatch.py    -> uses api_server.db
         #   apps/workers/.../{execution,tasks,memorizer}.py -> use api_server.db + .memorizer
+        #   apps/notification-dispatcher/.../{tasks,event_mapping}.py -> use api_server.db.notification
         # Also skip tests under packages — the hook venv has no pytest
         # available and tests carry untyped decorators by design.
-        exclude: ^(apps/(([^/]+/migrations/.*)|watchdog/.*|orchestrator/src/orchestrator/(__main__|dispatch)\.py|workers/src/workers/(execution|tasks|memorizer)\.py)|packages/[^/]+/tests/.*)$
+        # `packages/sdk-python/src/agentic_platform_sdk/*` is the GENERATED
+        # Python SDK (Plan 13 task_13_13): datamodel-code-generator output +
+        # a thin hand-written client. Generated style is not the repo's; it's
+        # verified by tests/integration/test_sdk_python.py instead (see
+        # packages/sdk-python/README.md).
+        exclude: ^(apps/(([^/]+/migrations/.*)|watchdog/.*|orchestrator/src/orchestrator/(__main__|dispatch)\.py|workers/src/workers/(execution|tasks|memorizer)\.py|notification-dispatcher/src/notification_dispatcher/(tasks|event_mapping)\.py)|packages/sdk-python/src/agentic_platform_sdk/.*|packages/[^/]+/tests/.*)$
 
   # -------------------- TypeScript / JavaScript --------------------
   - repo: https://github.com/pre-commit/mirrors-prettier
@@ -96,5 +122,8 @@ repos:
           (?x)^(
             \.venv/.*|
             node_modules/.*|
-            .*\.min\.(js|css)
+            .*\.min\.(js|css)|
+            packages/sdk-python/openapi-v1\.json|
+            packages/sdk-typescript/openapi-v1\.json|
+            packages/sdk-typescript/src/generated/.*
           )$

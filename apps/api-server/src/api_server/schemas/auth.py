@@ -6,22 +6,35 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
 
+# Single source of truth for password length bounds. Login and register
+# share these so a credential that can be *registered* can always be
+# *submitted* at login (no off-by-one validation gap — api-routers-validation-7).
+# Phase-0 minimum: 8 chars. Phase 1 will plug a stronger policy
+# (zxcvbn-style) behind the same shape.
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 128
+
 
 class RegisterRequest(BaseModel):
     """Payload for POST /auth/register."""
 
     email: EmailStr
-    # Phase-0 minimum: 8 chars. Phase 1 will plug a stronger policy
-    # (zxcvbn-style) behind the same shape.
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
     full_name: str | None = Field(default=None, max_length=255)
 
 
 class LoginRequest(BaseModel):
-    """Payload for POST /auth/login."""
+    """Payload for POST /auth/login.
+
+    Length bounds match :class:`RegisterRequest` (api-routers-validation-7).
+    A 1-char password could never have been registered, so accepting it
+    at login only widened the brute-force surface and the error-message
+    inconsistency. Validation here is a cheap pre-filter; the real check
+    is the constant-time hash comparison in the auth router.
+    """
 
     email: EmailStr
-    password: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
 
 
 class LoginResponse(BaseModel):

@@ -1,9 +1,9 @@
 ---
 plan_id: 12-backup-restore
 title: Backup, Restore y Continuidad
-status: pending_approval
+status: pending_human_validation
 blocking_plan: [00-fundaciones]
-started_at: null
+started_at: 2026-05-30
 completed_at: null
 estimated_duration_calendar: 2-3 semanas
 estimated_effort_person_days: 40-55
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `12-backup-restore`                       |
-| **Estado**                         | `pending_approval`                        |
+| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `00-fundaciones`                          |
 | **Tiempo estimado (calendario)**   | 2-3 semanas                               |
 | **Tiempo estimado (persona-días)** | 40-55                                     |
@@ -85,7 +85,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_01` — Script de backup full: pg_dump + tar de volúmenes + verificación
 
-- [ ] **Título**: Script de backup full: pg_dump + tar de volúmenes + verificación
+- [x] **Título**: Script de backup full: pg_dump + tar de volúmenes + verificación
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: devops + backend-dev
@@ -102,7 +102,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_02` — Cifrado opcional con clave del Vault
 
-- [ ] **Título**: Cifrado opcional con clave del Vault
+- [x] **Título**: Cifrado opcional con clave del Vault
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: security
@@ -119,7 +119,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_03` — Verificación post-backup automática (corruption check)
 
-- [ ] **Título**: Verificación post-backup automática (corruption check)
+- [x] **Título**: Verificación post-backup automática (corruption check)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: devops
@@ -136,7 +136,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_04` — Configuración de cron + ventana horaria configurable desde panel admin
 
-- [ ] **Título**: Configuración de cron + ventana horaria configurable desde panel admin
+- [x] **Título**: Configuración de cron + ventana horaria configurable desde panel admin
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops + frontend-dev
@@ -155,7 +155,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_05` — Destino S3 (cualquier provider compatible) con boto3
 
-- [ ] **Título**: Destino S3 (cualquier provider compatible) con boto3
+- [x] **Título**: Destino S3 (cualquier provider compatible) con boto3
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -172,7 +172,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_06` — Destino Backblaze B2 (es S3-compatible pero con quirks)
 
-- [ ] **Título**: Destino Backblaze B2 (es S3-compatible pero con quirks)
+- [x] **Título**: Destino Backblaze B2 (es S3-compatible pero con quirks)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: devops
@@ -189,7 +189,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_07` — Destino SFTP/NAS
 
-- [ ] **Título**: Destino SFTP/NAS
+- [x] **Título**: Destino SFTP/NAS
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -206,7 +206,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_08` — Destino rclone genérico (cualquier backend)
 
-- [ ] **Título**: Destino rclone genérico (cualquier backend)
+- [x] **Título**: Destino rclone genérico (cualquier backend)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -223,7 +223,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_09` — UI de configuración de destinos con test de conectividad
 
-- [ ] **Título**: UI de configuración de destinos con test de conectividad
+- [x] **Título**: UI de configuración de destinos con test de conectividad
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -242,7 +242,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_10` — Restore completo desde backup (con detención del stack y reinicio limpio)
 
-- [ ] **Título**: Restore completo desde backup (con detención del stack y reinicio limpio)
+- [x] **Título**: Restore completo desde backup (con detención del stack y reinicio limpio)
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: devops + backend-dev
@@ -259,7 +259,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_11` — Restore selectivo por tenant (solo sus tablas + sus volúmenes parciales)
 
-- [ ] **Título**: Restore selectivo por tenant (solo sus tablas + sus volúmenes parciales)
+- [x] **Título**: Restore selectivo por tenant (solo sus tablas + sus volúmenes parciales)
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -276,7 +276,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_12` — UI de restore con lista de backups, preview, doble confirmación, log de progreso
 
-- [ ] **Título**: UI de restore con lista de backups, preview, doble confirmación, log de progreso
+- [x] **Título**: UI de restore con lista de backups, preview, doble confirmación, log de progreso
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -295,7 +295,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_13` — node-exporter + cAdvisor en el stack para métricas del host y contenedores
 
-- [ ] **Título**: node-exporter + cAdvisor en el stack para métricas del host y contenedores
+- [x] **Título**: node-exporter + cAdvisor en el stack para métricas del host y contenedores
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -312,7 +312,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_14` — Alertmanager con reglas: disco >80%, RAM >90% sostenida, swap activo, OOM kills, último backup fallido
 
-- [ ] **Título**: Alertmanager con reglas: disco >80%, RAM >90% sostenida, swap activo, OOM kills, último backup fallido
+- [x] **Título**: Alertmanager con reglas: disco >80%, RAM >90% sostenida, swap activo, OOM kills, último backup fallido
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -329,7 +329,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_15` — Dashboards Grafana del host (CPU, RAM, disco, red, contenedores)
 
-- [ ] **Título**: Dashboards Grafana del host (CPU, RAM, disco, red, contenedores)
+- [x] **Título**: Dashboards Grafana del host (CPU, RAM, disco, red, contenedores)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -346,7 +346,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_16` — Runbooks: DR completo, restore selectivo, backup manual, rotación unseal keys
 
-- [ ] **Título**: Runbooks: DR completo, restore selectivo, backup manual, rotación unseal keys
+- [x] **Título**: Runbooks: DR completo, restore selectivo, backup manual, rotación unseal keys
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: technical-writer + devops
@@ -363,7 +363,7 @@ El backup manual con cron de Fase 0 es suficiente para arrancar; esta fase lo in
 
 #### `task_12_17` — Documentación + ADRs + changelog
 
-- [ ] **Título**: Documentación + ADRs + changelog
+- [x] **Título**: Documentación + ADRs + changelog
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer

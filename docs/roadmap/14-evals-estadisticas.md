@@ -1,9 +1,9 @@
 ---
 plan_id: 14-evals-estadisticas
 title: Sistema de Evaluación de Calidad y Estadísticas
-status: pending_approval
+status: pending_human_validation
 blocking_plan: [06-testing-revision-git]
-started_at: null
+started_at: 2026-05-30
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 60-80
@@ -21,7 +21,7 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `14-evals-estadisticas`                   |
-| **Estado**                         | `pending_approval`                        |
+| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `06-testing-revision-git`                 |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                               |
 | **Tiempo estimado (persona-días)** | 60-80                                     |
@@ -91,7 +91,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_01` — Modelos EvalDataset, EvalRun, EvalResult, EvalCriterion
 
-- [ ] **Título**: Modelos EvalDataset, EvalRun, EvalResult, EvalCriterion
+- [x] **Título**: Modelos EvalDataset, EvalRun, EvalResult, EvalCriterion
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -108,7 +108,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_02` — Promoción de tarea real a golden con UI 'Promote to dataset'
 
-- [ ] **Título**: Promoción de tarea real a golden con UI 'Promote to dataset'
+- [x] **Título**: Promoción de tarea real a golden con UI 'Promote to dataset'
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -125,7 +125,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_03` — Endpoints CRUD de datasets y criterios
 
-- [ ] **Título**: Endpoints CRUD de datasets y criterios
+- [x] **Título**: Endpoints CRUD de datasets y criterios
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -144,7 +144,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_04` — LLM-as-judge con criterios custom + diferente modelo que el evaluado
 
-- [ ] **Título**: LLM-as-judge con criterios custom + diferente modelo que el evaluado
+- [x] **Título**: LLM-as-judge con criterios custom + diferente modelo que el evaluado
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -161,7 +161,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_05` — Métricas estándar: pass rate, p50/p95 latency, coste medio, tokens medios
 
-- [ ] **Título**: Métricas estándar: pass rate, p50/p95 latency, coste medio, tokens medios
+- [x] **Título**: Métricas estándar: pass rate, p50/p95 latency, coste medio, tokens medios
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -178,7 +178,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_06` — Comparativa entre dos eval runs (diff)
 
-- [ ] **Título**: Comparativa entre dos eval runs (diff)
+- [x] **Título**: Comparativa entre dos eval runs (diff)
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -197,7 +197,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_07` — Integración con CI: cuando se cambia prompt, dispara eval automático en CI
 
-- [ ] **Título**: Integración con CI: cuando se cambia prompt, dispara eval automático en CI
+- [x] **Título**: Integración con CI: cuando se cambia prompt, dispara eval automático en CI
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops + backend-dev
@@ -214,7 +214,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_08` — Bloqueo de merge si regresión > umbral configurable
 
-- [ ] **Título**: Bloqueo de merge si regresión > umbral configurable
+- [x] **Título**: Bloqueo de merge si regresión > umbral configurable
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: devops
@@ -231,7 +231,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_09` — Shadow eval: muestra aleatoria (5% default) de tareas reales se replica con revisor
 
-- [ ] **Título**: Shadow eval: muestra aleatoria (5% default) de tareas reales se replica con revisor
+- [x] **Título**: Shadow eval: muestra aleatoria (5% default) de tareas reales se replica con revisor
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -248,7 +248,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_10` — Detección de drift: alerta si calidad cae sostenidamente
 
-- [ ] **Título**: Detección de drift: alerta si calidad cae sostenidamente
+- [x] **Título**: Detección de drift: alerta si calidad cae sostenidamente
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer
@@ -267,7 +267,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_11` — Dashboard de calidad por agente, proyecto, release de prompt
 
-- [ ] **Título**: Dashboard de calidad por agente, proyecto, release de prompt
+- [x] **Título**: Dashboard de calidad por agente, proyecto, release de prompt
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev
@@ -284,7 +284,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_12` — Dashboard de estadísticas del tenant: tasa éxito, tiempo, coste, top/bottom agentes
 
-- [ ] **Título**: Dashboard de estadísticas del tenant: tasa éxito, tiempo, coste, top/bottom agentes
+- [x] **Título**: Dashboard de estadísticas del tenant: tasa éxito, tiempo, coste, top/bottom agentes
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -301,7 +301,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_13` — Identificación de outliers + alertas configurables
 
-- [ ] **Título**: Identificación de outliers + alertas configurables
+- [x] **Título**: Identificación de outliers + alertas configurables
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -318,7 +318,15 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_14` — Exportación CSV/PDF
 
-- [ ] **Título**: Exportación CSV/PDF
+- [x] **Título**: Exportación CSV/PDF
+- **Nota (formatos)**: CSV (stdlib) y XLSX (openpyxl, wheel pure-Python sin
+  dependencias nativas) se entregan completos. El formato **PDF está degradado
+  honestamente**: la imagen del api-server no incorpora un renderizador PDF
+  nativo (mismo criterio que la exportación PDF del docs-viewer, que devuelve
+  501), por lo que `format=pdf` devuelve un documento `text/html` listo para
+  imprimir ("Guardar como PDF" del navegador) en vez de un PDF binario. La
+  columna de coste en moneda del tenant queda fuera: depende del sistema FX
+  (exchange_rates) no construido (gap del Plan 11); solo se expone USD canónico.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -335,7 +343,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_15` — Comparativa cross-tenant (solo System Admin)
 
-- [ ] **Título**: Comparativa cross-tenant (solo System Admin)
+- [x] **Título**: Comparativa cross-tenant (solo System Admin)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -352,7 +360,7 @@ Sin evals no hay forma de saber si los agentes mejoran o empeoran con cada cambi
 
 #### `task_14_16` — Documentación + ADRs + changelog
 
-- [ ] **Título**: Documentación + ADRs + changelog
+- [x] **Título**: Documentación + ADRs + changelog
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer

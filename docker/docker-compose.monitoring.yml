@@ -1,0 +1,220 @@
+# Host + container monitoring overlay (Plan 12 — Backup/Restore, Phase D).
+#
+# Adds the observability data plane referenced by the tech stack
+# (OpenTelemetry + Prometheus + Grafana + Loki):
+#   - prometheus     → time-series DB + scraper (task_12_13).
+#   - node-exporter  → host metrics: CPU / RAM / disk / swap / network
+#                      (task_12_13).
+#   - cadvisor       → per-container metrics (task_12_13).
+#
+#   - alertmanager   → routes firing alerts to the platform notifier
+#                      (task_12_14). Rules live in
+#                      monitoring/prometheus/rules/host_alerts.yml.
+#   - grafana        → host dashboards (task_12_15). Datasource + dashboards
+#                      are provisioned from monitoring/grafana/ (no manual
+#                      clicking). The host-overview dashboard (uid
+#                      `host-overview`) panels CPU / RAM / disk / network +
+#                      per-container metrics off Prometheus.
+#
+# Usage (compose with the base stack):
+#   docker compose -f docker/docker-compose.yml \
+#     -f docker/docker-compose.monitoring.yml up -d
+#
+# All images are pinned to a fixed tag (no :latest) — the 06.14 audit
+# (container-isolation-3/4) requires reproducible, supply-chain-pinned
+# images across the stack. Bump tags deliberately.
+
+name: agentic-platform
+
+x-restart: &default-restart
+  restart: unless-stopped
+
+x-logging: &default-logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Prometheus — scrapes node-exporter + cadvisor (+ itself) and evaluates
+  # the alert rules added in task_12_14. Config is mounted read-only.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    user: "65534:65534" # nobody — the image runs as nobody by default.
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
+  # node-exporter — host-level metrics (node_load1, node_memory_*,
+  # node_filesystem_*, node_*_swap, node_network_*). Mounts the host
+  # /proc, /sys and / read-only and reports filesystem usage of the real
+  # host rootfs via --path.rootfs.
+  # ---------------------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+      # Textfile collector (task_12_14): the backup engine writes
+      # agentic_backup_*.prom into this directory after every run
+      # (workers.backup_metrics) and node-exporter re-exports those samples.
+      # That is the metric source for the "last backup failed" alert.
+      - --collector.textfile.directory=/host/textfile
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+      # Shared textfile-collector dir: the worker writes here, node-exporter
+      # reads here. Read-only for node-exporter; the worker mounts it rw.
+      - node_exporter_textfile:/host/textfile:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
+  # Alertmanager — receives firing alerts from Prometheus, dedups/groups/
+  # throttles them, and delivers to the platform notifier via a webhook
+  # receiver (task_12_14). Config + routing live in
+  # monitoring/alertmanager/alertmanager.yml; the alert RULES are evaluated by
+  # Prometheus from monitoring/prometheus/rules/host_alerts.yml.
+  # ---------------------------------------------------------------------------
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    user: "65534:65534" # nobody — matches the prometheus hardening above.
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    environment:
+      # Documented seam for a templating entrypoint (envsubst): Alertmanager
+      # itself does NOT expand env vars in its config, so the receiver URL is a
+      # concrete in-network default inside alertmanager.yml. Override the target
+      # by bind-mounting your own alertmanager.yml. Default empty.
+      ALERTMANAGER_NOTIFIER_WEBHOOK_URL: ${ALERTMANAGER_NOTIFIER_WEBHOOK_URL:-}
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9093/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
+  # cAdvisor — per-container CPU / memory / network / filesystem metrics.
+  # Needs the standard read-only mounts into the host cgroup/Docker state.
+  # It needs to read privileged host paths, so it is NOT cap-dropped, but
+  # all mounts are read-only and no-new-privileges is set.
+  # ---------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=30s
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  # ---------------------------------------------------------------------------
+  # Grafana — host dashboards (task_12_15). The Prometheus datasource and the
+  # host-overview dashboard (uid `host-overview`: CPU / RAM / disk / network +
+  # per-container metrics) are PROVISIONED from monitoring/grafana/ mounted
+  # read-only — no manual UI setup, the files on disk are the source of truth.
+  #
+  # Hardened like the rest of the overlay: runs as the grafana uid (472),
+  # no-new-privileges, all caps dropped. Anonymous access is disabled and the
+  # admin password comes from the environment (defaults to a dev-only value;
+  # override GRAFANA_ADMIN_PASSWORD in production / Vault).
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.2.0
+    user: "472:472" # grafana — the image's built-in non-root uid.
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-changeme-dev-only}
+      # Lock the surface down: no sign-up, no anonymous viewing, no telemetry.
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      # Datasource + dashboard providers (read-only).
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Dashboard JSON files referenced by the provider's options.path.
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Grafana's own state (SQLite, sessions). Provisioned dashboards live on
+      # the read-only mount above, not here.
+      - grafana_data:/var/lib/grafana
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [agentic-net]
+    depends_on:
+      - prometheus
+    <<: [*default-restart, *default-logging]
+
+volumes:
+  prometheus_data:
+  alertmanager_data:
+  grafana_data:
+  # Node-exporter textfile collector drop dir, shared with the backup worker
+  # (which writes agentic_backup_*.prom here after every run, task_12_14).
+  node_exporter_textfile:
+
+networks:
+  agentic-net:
+    name: agentic-net
+    driver: bridge
