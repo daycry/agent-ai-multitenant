@@ -1,9 +1,9 @@
 ---
 plan_id: 16-human-agents
 title: Human Agents y Workflows Mixtos Humano-IA
-status: pending_approval
+status: in_progress
 blocking_plan: [06-testing-revision-git, 10-asistente-personal, 11-guardrails-precios]
-started_at: null
+started_at: 2026-05-31
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 85-100
@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo                              | Valor                                                                       |
-| ---------------------------------- | --------------------------------------------------------------------------- |
-| **ID del Plan**                    | `16-human-agents`                                                           |
-| **Estado**                         | `pending_approval`                                                          |
-| **Bloqueado por**                  | `06-testing-revision-git`, `10-asistente-personal`, `11-guardrails-precios` |
-| **Tiempo estimado (calendario)**   | 4-5 semanas                                                                 |
-| **Tiempo estimado (persona-días)** | 85-100                                                                      |
-| **Previsión de coste — humano**    | 34.000 € – 40.000 € (tarifa media 50 €/h)                                   |
-| **Previsión de coste — IA**        | 100 € – 180 €                                                               |
-| **Aprobador propuesto**            | System Admin                                                                |
-| **Rama git**                       | `plan/16-human-agents`                                                      |
-| **Secciones del .docx**            | [3.1.3, 5.8, 7.2, 13.6, 17, 28.7.2]                                         |
+| Campo                              | Valor                                                                                     |
+| ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| **ID del Plan**                    | `16-human-agents`                                                                         |
+| **Estado**                         | `in_progress` (override humano del gate blocking_plan: 10/11 en pending_human_validation) |
+| **Bloqueado por**                  | `06-testing-revision-git`, `10-asistente-personal`, `11-guardrails-precios`               |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                                                                               |
+| **Tiempo estimado (persona-días)** | 85-100                                                                                    |
+| **Previsión de coste — humano**    | 34.000 € – 40.000 € (tarifa media 50 €/h)                                                 |
+| **Previsión de coste — IA**        | 100 € – 180 €                                                                             |
+| **Aprobador propuesto**            | System Admin                                                                              |
+| **Rama git**                       | `plan/16-human-agents`                                                                    |
+| **Secciones del .docx**            | [3.1.3, 5.8, 7.2, 13.6, 17, 28.7.2]                                                       |
 
 ---
 
