@@ -11,6 +11,7 @@ import {
   Bot,
   Brain,
   Coins,
+  Cpu,
   DatabaseBackup,
   FileText,
   FolderKanban,
@@ -67,6 +68,12 @@ const NAV: NavItem[] = [
     href: "/admin/model-prices",
     label: "Modelos & Precios",
     Icon: Coins,
+    systemAdminOnly: true,
+  },
+  {
+    href: "/admin/llm-providers",
+    label: "Proveedores LLM",
+    Icon: Cpu,
     systemAdminOnly: true,
   },
   {
