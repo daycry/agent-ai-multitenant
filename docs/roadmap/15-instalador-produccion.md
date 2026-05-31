@@ -490,7 +490,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_23` — Runbook: rotación de unseal keys + rotación de credenciales
 
-- [ ] **Título**: Runbook: rotación de unseal keys + rotación de credenciales
+- [x] **Título**: Runbook: rotación de unseal keys + rotación de credenciales
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer + security

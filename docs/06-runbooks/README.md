@@ -22,6 +22,7 @@ Orientados a quien mantiene el sistema corriendo en una sola máquina
 | [02-troubleshooting.md](./02-troubleshooting.md)                     | Diagnóstico y fix de fallos frecuentes tras instalar o en operación               |
 | [03-system-upgrade.md](./03-system-upgrade.md)                       | Actualizar una instalación en marcha a una versión nueva (imágenes + esquema)     |
 | [04-disaster-recovery.md](./04-disaster-recovery.md)                 | DR: punto de entrada canónico para restore completo o selectivo por tenant        |
+| [05-key-rotation.md](./05-key-rotation.md)                           | Rotar unseal keys + credenciales (estáticas/dinámicas) y revocación de emergencia |
 | [health-check.md](./health-check.md)                                 | Verificar que todos los servicios del stack están sanos                           |
 | [backups.md](./backups.md)                                           | Copia/restauración manual a nivel de volumen (procedimiento básico)               |
 | [restart-services.md](./restart-services.md)                         | Reiniciar el stack o un servicio concreto sin perder datos                        |
