@@ -23,10 +23,19 @@ Hardening defaults
 ------------------
 Every generated service carries the platform hardening defaults consistent with
 the existing compose: ``restart: unless-stopped``, capped json-file logging,
-``cap_drop: [ALL]`` + ``security_opt: ["no-new-privileges:true"]`` and a
-``deploy.resources.limits`` cap. Images are pinned (never ``:latest``). The
-two networks (``agentic-net`` + the internal ``agentic-agents``) and the named
-volumes match the canonical compose.
+``cap_drop: [ALL]`` + ``security_opt: ["no-new-privileges:true",
+"apparmor=agentic-default"]`` and a ``deploy.resources.limits`` cap. Images are
+pinned (never ``:latest``). The two networks (``agentic-net`` + the internal
+``agentic-agents``) and the named volumes match the canonical compose.
+
+These are all TRUSTED first-party platform services, so — like the canonical
+``docker-compose.yml`` (revised, ADR 0040) — they rely on Docker's DEFAULT
+seccomp profile (by NOT overriding it) rather than a hand-rolled default-deny
+allowlist. The hand-rolled profile, when force-applied to every service,
+SIGSEGV'd the Go services (vault/minio) and broke postgres; the strict
+default-deny allowlist is reserved for the UNTRUSTED agent/test/review runtimes
+the worker launches (``docker/seccomp/agent-runtime.json``). The generated
+services still pin ``apparmor=agentic-default`` for host MAC confinement.
 
 Secrets
 -------
@@ -108,14 +117,6 @@ MONITORING_SERVICES: tuple[str, ...] = (
 #: The GPU service (local Ollama on the GPU) added only when gpu_enabled.
 GPU_SERVICE = "ollama"
 
-#: Relative path (from the generated compose's directory) to the tightened
-#: default-deny seccomp profile shipped under docker/seccomp/ (Plan 15
-#: task_15_15). Every generated service pins it via ``security_opt`` so the
-#: daemon enforces SCMP_ACT_ERRNO for any syscall off the allowlist. The
-#: installer copies docker/seccomp/ next to the generated compose at install
-#: time; the path stays relative so it resolves wherever the stack is deployed.
-SECCOMP_DEFAULT_PROFILE = "./seccomp/default.json"
-
 #: Name of the AppArmor MAC profile every generated service pins via
 #: ``security_opt: apparmor=…`` (Plan 15 task_15_16). Unlike seccomp (a path),
 #: AppArmor profiles are referenced by the NAME they were loaded under with
@@ -142,15 +143,21 @@ def _hardening(
 ) -> dict[str, Any]:
     """Platform hardening defaults applied to a generated service.
 
-    ``cap_drop: [ALL]`` + ``no-new-privileges`` mirror the monitoring overlay's
-    hardened services; the tightened default-deny seccomp profile
-    (``seccomp=./seccomp/default.json``, Plan 15 task_15_15) pins SCMP_ACT_ERRNO
-    for off-allowlist syscalls; the AppArmor MAC profile
-    (``apparmor=agentic-default``, Plan 15 task_15_16) lets the host kernel deny
-    the container-escape primitives; ``deploy.resources.limits`` caps CPU/memory
-    so a runaway container can't starve the single host. A few infra images
-    (Vault needs ``IPC_LOCK``) opt out of the blanket cap-drop via
-    ``cap_drop_all=False``.
+    ``cap_drop: [ALL]`` + ``no-new-privileges`` mirror the canonical compose's
+    hardened services; the AppArmor MAC profile (``apparmor=agentic-default``,
+    Plan 15 task_15_16) lets the host kernel deny the container-escape
+    primitives; ``deploy.resources.limits`` caps CPU/memory so a runaway
+    container can't starve the single host. A few infra images (Vault needs
+    ``IPC_LOCK``) opt out of the blanket cap-drop via ``cap_drop_all=False``.
+
+    These are TRUSTED first-party services: like the canonical
+    ``docker-compose.yml`` (revised, ADR 0040) they rely on Docker's DEFAULT
+    seccomp profile (NOT overridden). The hand-rolled default-deny allowlist
+    SIGSEGV'd the Go services and broke postgres when force-applied here; it is
+    reserved for the UNTRUSTED agent/test runtimes (the worker pins
+    ``docker/seccomp/agent-runtime.json`` at launch). Operators who want the
+    extra-hardening opt-in profile (``docker/seccomp/default.json``) can pin it
+    after validating it on their own kernel.
     """
 
     block: dict[str, Any] = {
@@ -158,7 +165,6 @@ def _hardening(
         "logging": _logging_block(),
         "security_opt": [
             "no-new-privileges:true",
-            f"seccomp={SECCOMP_DEFAULT_PROFILE}",
             f"apparmor={APPARMOR_DEFAULT_PROFILE}",
         ],
         "deploy": {

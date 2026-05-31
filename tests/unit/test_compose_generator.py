@@ -245,7 +245,10 @@ def test_hardening_defaults_on_every_service() -> None:
     compose = generate_compose(_config(gpu_enabled=True), monitoring=True)
     for name, svc in compose["services"].items():
         assert svc["restart"] == "unless-stopped", name
-        assert "no-new-privileges:true" in svc["security_opt"], name
+        opts = svc["security_opt"]
+        assert "no-new-privileges:true" in opts, name
+        # AppArmor MAC confinement is pinned on every generated service.
+        assert "apparmor=agentic-default" in opts, name
         limits = svc["deploy"]["resources"]["limits"]
         assert "cpus" in limits and "memory" in limits, name
         # Vault keeps IPC_LOCK; everything else drops ALL caps.
@@ -253,6 +256,24 @@ def test_hardening_defaults_on_every_service() -> None:
             assert svc["cap_add"] == ["IPC_LOCK"]
         else:
             assert svc["cap_drop"] == ["ALL"], name
+
+
+def test_generated_services_rely_on_docker_default_seccomp() -> None:
+    """TRUSTED first-party services do NOT pin a hand-rolled seccomp profile
+    (ADR 0040, revised): they rely on Docker's proven DEFAULT seccomp. The
+    custom default-deny allowlist SIGSEGV'd the Go services + broke postgres
+    when force-applied, so the generator must never emit a ``seccomp=…`` pin.
+    The strict default-deny profile is reserved for the UNTRUSTED runtimes the
+    worker launches (docker/seccomp/agent-runtime.json)."""
+    compose = generate_compose(_config(gpu_enabled=True), monitoring=True)
+    offenders: list[str] = []
+    for name, svc in compose["services"].items():
+        opts = [str(x) for x in svc.get("security_opt", [])]
+        if any(o.startswith("seccomp=") for o in opts):
+            offenders.append(name)
+    assert not offenders, "generated services pinning a custom seccomp profile: " + ", ".join(
+        offenders
+    )
 
 
 def test_images_are_pinned_never_latest() -> None:

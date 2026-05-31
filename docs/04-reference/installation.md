@@ -136,14 +136,21 @@ el árbol cifrado por Vault están ligados a ellos).
 
 ### Aislamiento de contenedores (seccomp + AppArmor)
 
-| Capa     | Perfil compartido                            | Perfil del runtime no confiable                            | ADR                                                                                       |
-| -------- | -------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| seccomp  | `docker/seccomp/default.json` (default-deny) | `docker/seccomp/agent-runtime.json` (subconjunto estricto) | [0040](../05-architecture-decisions/0040-seccomp-apparmor-default-deny-por-contenedor.md) |
-| AppArmor | `docker/apparmor/agentic-default.profile`    | `docker/apparmor/agent-runtime.profile` (más estricto)     | [0040](../05-architecture-decisions/0040-seccomp-apparmor-default-deny-por-contenedor.md) |
+| Capa     | Servicios confiables (plataforma)                     | Runtime no confiable (agent/test)                          | ADR                                                                                       |
+| -------- | ----------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| seccomp  | seccomp **por defecto de Docker** (no se sobrescribe) | `docker/seccomp/agent-runtime.json` (subconjunto estricto) | [0040](../05-architecture-decisions/0040-seccomp-apparmor-default-deny-por-contenedor.md) |
+| AppArmor | `docker/apparmor/agentic-default.profile`             | `docker/apparmor/agent-runtime.profile` (más estricto)     | [0040](../05-architecture-decisions/0040-seccomp-apparmor-default-deny-por-contenedor.md) |
 
-Cada servicio de prod referencia su perfil vía `security_opt`; el generador de
-compose del instalador emite las mismas referencias. Cargar y verificar los
-perfiles AppArmor en el host: runbook
+> **Revisado (ADR 0040, 2026-05-31).** Los servicios confiables usan el
+> **seccomp por defecto de Docker** + `no-new-privileges` + `cap_drop` +
+> AppArmor — **no** un perfil hand-rolled (aplicarlo rompía postgres/vault/minio).
+> `docker/seccomp/default.json` se conserva como perfil **opt-in** de
+> endurecimiento extra, no cableado por defecto. La allowlist estricta
+> (`agent-runtime.json`) es para el runtime no confiable que pina el worker.
+
+Cada servicio confiable pina `no-new-privileges` + `apparmor=agentic-default`
+vía `security_opt`; el generador de compose del instalador emite la misma
+postura. Cargar y verificar los perfiles AppArmor en el host: runbook
 [apparmor-profiles.md](../06-runbooks/apparmor-profiles.md). Metodología del
 pentest interno:
 [internal-pentest-methodology.md](../06-runbooks/internal-pentest-methodology.md).

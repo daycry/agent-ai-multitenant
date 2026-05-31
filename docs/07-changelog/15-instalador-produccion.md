@@ -72,6 +72,46 @@ Las **2 restantes están reservadas al humano** y NO están hechas: `task_15_27`
 > (toggle de moneda del tenant / `exchange_rates`) sigue abierto. Ver
 > [Pendiente / reservado al humano](#pendiente--reservado-al-humano).
 
+## Fix posterior (2026-05-31) — seccomp confiable vs. no confiable (`task_15_15`)
+
+> **Malfunción confirmada + corregida.** El `task_15_15` aplicaba el perfil
+> seccomp hand-rolled default-deny (`docker/seccomp/default.json`) **a TODOS los
+> servicios** vía el anchor `x-seccomp` de `docker-compose.yml`, el overlay de
+> monitoring y el generador del instalador. Esa allowlist estaba **incompleta**
+> para imágenes reales: **PostgreSQL** entraba en crash-loop (fallo en
+> `signalfd()` y luego `shmget` "Operation not permitted") y **Vault + MinIO**
+> (Go) hacían **SIGSEGV** (exit 139). El modelo de amenazas correcto
+> (CLAUDE.md §2): la allowlist estricta es para los **runtimes no confiables**
+> (agent/test/review), **no** para los servicios de plataforma de primera parte.
+>
+> **Corrección:**
+>
+> - **Servicios confiables:** ya **no** pinean el perfil hand-rolled. Su
+>   hardening es `no-new-privileges` + `apparmor=agentic-default` +
+>   `cap_drop: [ALL]` + el **seccomp por defecto de Docker** (~350 syscalls,
+>   probado; no se sobrescribe). Aplica al anchor `x-seccomp` de
+>   `docker-compose.yml`, al overlay `docker-compose.monitoring.yml`
+>   (prometheus/alertmanager/grafana) y al generador del instalador
+>   (`compose_generator.py`, que ya **no** emite `SECCOMP_DEFAULT_PROFILE`).
+> - **Runtime no confiable:** sigue con `docker/seccomp/agent-runtime.json`
+>   (subconjunto estricto que pina el worker). Se le **añadieron los esenciales de
+>   arranque** que le faltaban (`signalfd`/`signalfd4`, `set_tid_address`/
+>   `set_robust_list`/`get_robust_list`, `membarrier`) SIN añadir ninguna syscall
+>   peligrosa, para que un contenedor no confiable pueda arrancar.
+> - **`docker/seccomp/default.json` se conserva** como **perfil opt-in de
+>   endurecimiento extra** (ya no cableado a ningún servicio por defecto); su
+>   `_comment` lo documenta así.
+> - **ADR 0040** amendada con la sección _Revisión_; tests de
+>   `tests/security/test_seccomp_profiles.py` + `tests/unit/test_compose_generator.py`
+>   repuntados (servicios confiables ⇒ `no-new-privileges` sin pin hand-rolled;
+>   agent-runtime ⇒ subconjunto estricto + esenciales de arranque).
+>
+> Nota aparte: el crash de **MinIO** (error `decodeXLHeaders` por una versión de
+> metadatos `xl` desconocida) es un **mismatch de versión de datos del entorno
+> dev** preexistente (volumen escrito por un MinIO más nuevo que la imagen
+> pinada), **no** seccomp — reservado al humano (no se borra el volumen ni se
+> sube el pin).
+
 ## Cambios por tarea
 
 ### Fase A — Wizard del Instalador
@@ -177,15 +217,18 @@ Las **2 restantes están reservadas al humano** y NO están hechas: `task_15_27`
   tabla tenant sin RLS, un secreto-dev en un perfil de prod— **se pone en rojo
   antes de poder mergear**. Las invariantes reflejan los no-negociables de
   CLAUDE.md (§2 aislamiento, §1 multi-tenancy, ADR 0019 egress, secretos, auth).
-- ✅ **`task_15_15`** — **Perfiles seccomp default-deny por contenedor**
-  (`docker/seccomp/default.json` + `agent-runtime.json` +
-  `tests/security/test_seccomp_profiles.py`). `defaultAction: SCMP_ACT_ERRNO`
-  (default-deny: cualquier syscall fuera de la allowlist se rechaza). La familia
-  peligrosa (`mount`, `ptrace`, `kexec_load`, `init_module`, `setns`,
-  `unshare`…) no está en ninguna allowlist; el perfil del **agent-runtime** es un
-  **subconjunto estricto** del default; cada servicio de prod referencia su
-  perfil vía `security_opt`; el generador del instalador emite la referencia; el
-  seam del worker reenvía el **contenido**. Registrado en **ADR 0040**.
+- ✅ **`task_15_15`** — **Perfiles seccomp por contenedor** (`docker/seccomp/
+default.json` + `agent-runtime.json` + `tests/security/test_seccomp_profiles.py`).
+  `defaultAction: SCMP_ACT_ERRNO` (default-deny: cualquier syscall fuera de la
+  allowlist se rechaza). La familia peligrosa (`mount`, `ptrace`, `kexec_load`,
+  `init_module`, `setns`, `unshare`…) no está en ninguna allowlist; el perfil del
+  **agent-runtime** (runtime no confiable) es un **subconjunto estricto** del
+  default y lo pina el worker (el seam reenvía el **contenido**). **Revisado
+  (2026-05-31, ver [Fix posterior](#fix-posterior-2026-05-31--seccomp-confiable-vs-no-confiable-task_15_15)):**
+  los servicios de plataforma **confiables** usan el **seccomp por defecto de
+  Docker** (no el hand-rolled), que se demostró rompía postgres/vault/minio;
+  `default.json` queda como perfil **opt-in**. Registrado en **ADR 0040** (con
+  sección _Revisión_).
 - ✅ **`task_15_16`** — **Perfiles AppArmor (MAC) por contenedor**
   (`docker/apparmor/agentic-default.profile` + `agent-runtime.profile` +
   `tests/security/test_apparmor.py` + runbook `apparmor-profiles.md`). Cada
@@ -294,14 +337,14 @@ Módulos del backend: `prereqs.py` (paso 1), `wizard.py` + `config.py` (pasos
 
 ### Hardening de seguridad
 
-| Artefacto                                 | Para qué                                                          |
-| ----------------------------------------- | ----------------------------------------------------------------- |
-| `docker/seccomp/default.json`             | Perfil seccomp default-deny compartido (servicios de plataforma)  |
-| `docker/seccomp/agent-runtime.json`       | Perfil seccomp del runtime no confiable (subconjunto estricto)    |
-| `docker/apparmor/agentic-default.profile` | Perfil AppArmor (MAC) compartido                                  |
-| `docker/apparmor/agent-runtime.profile`   | Perfil AppArmor del runtime no confiable (más estricto)           |
-| `workers/credential_rotation.py`          | Motor de rotación con Vault dynamic secrets (job beat, fail-safe) |
-| `api_server/auth/admin_hardening.py`      | MFA obligatorio + IP allowlist + sesiones de 15 min (solo prod)   |
+| Artefacto                                 | Para qué                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------- |
+| `docker/seccomp/default.json`             | Perfil seccomp default-deny **opt-in** (ya no cableado por defecto) |
+| `docker/seccomp/agent-runtime.json`       | Perfil seccomp del runtime no confiable (subconjunto estricto)      |
+| `docker/apparmor/agentic-default.profile` | Perfil AppArmor (MAC) compartido                                    |
+| `docker/apparmor/agent-runtime.profile`   | Perfil AppArmor del runtime no confiable (más estricto)             |
+| `workers/credential_rotation.py`          | Motor de rotación con Vault dynamic secrets (job beat, fail-safe)   |
+| `api_server/auth/admin_hardening.py`      | MFA obligatorio + IP allowlist + sesiones de 15 min (solo prod)     |
 
 ### Runbooks (`docs/06-runbooks/`)
 
@@ -369,8 +412,9 @@ Módulos del backend: `prereqs.py` (paso 1), `wizard.py` + `config.py` (pasos
   `tests/integration/test_credential_rotation.py`, `tests/security/test_admin_hardening.py`,
   `tests/smoke/`.
 - `compose` parsea (el compose generado por `task_15_07` es YAML válido y
-  referencia los perfiles seccomp/AppArmor); `pre-commit --all-files` verde tras
-  el cambio de CI (`task_15_01`).
+  referencia el perfil AppArmor + `no-new-privileges` de los servicios
+  confiables; ver Fix posterior: ya **no** pina un seccomp hand-rolled);
+  `pre-commit --all-files` verde tras el cambio de CI (`task_15_01`).
 - **Existencia de artefactos** (checks `generic-shell` de las tareas D): los 6
   runbooks numerados existen; el portal de desarrollador existe; esta entrada de
   changelog existe (`auto_15_28_a`:

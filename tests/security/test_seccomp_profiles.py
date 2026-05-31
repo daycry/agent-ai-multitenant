@@ -1,10 +1,22 @@
-"""Seccomp profile validation — per-container hardening (task_15_15).
+"""Seccomp profile validation — per-container hardening (task_15_15, revised).
 
 Real kernel seccomp enforcement cannot run in CI (no privileged Linux host,
 no live container escape harness). So — exactly as the Plan 15 Fase C charter
-requires — this suite delivers the PROFILES + wires them into compose/runtime
-and then VALIDATES the profiles **structurally**:
+requires — this suite delivers the PROFILES + wires them into runtime and then
+VALIDATES the profiles **structurally**.
 
+Trusted vs untrusted (ADR 0040, revised after a confirmed malfunction)
+---------------------------------------------------------------------
+The TRUSTED first-party platform services (postgres/redis/minio/vault/…) rely on
+Docker's proven DEFAULT seccomp profile + ``no-new-privileges`` + ``cap_drop`` +
+AppArmor — NOT a hand-rolled allowlist. The hand-rolled default-deny profile,
+when force-applied to every trusted service, SIGSEGV'd the Go services
+(vault/minio) and crash-looped postgres (signalfd/shmget). The strict
+default-deny allowlist is reserved for the UNTRUSTED agent/test/review runtimes
+the worker launches, where hostile code runs and least-privilege matters most.
+
+What this suite asserts
+-----------------------
   * every profile under ``docker/seccomp/`` is valid JSON with a default-deny
     ``defaultAction`` (``SCMP_ACT_ERRNO`` — any syscall off the allowlist is
     rejected, the opposite of Docker's permissive built-in default);
@@ -12,12 +24,19 @@ and then VALIDATES the profiles **structurally**:
     ``bpf`` where not needed, ``init_module``, ``setns``, ``unshare`` …) is NOT
     on any allowlist — so default-deny rejects it;
   * the untrusted agent-runtime profile is a STRICT subset of the shared
-    default (it can only do *less*);
-  * every long-lived platform service in the prod compose files references a
-    seccomp profile via ``security_opt`` (the host-agent exemptions
-    cAdvisor/node-exporter are documented);
-  * the installer compose generator (task_15_07) EMITS the same reference;
-  * the worker isolation seam forwards the profile *content* to the daemon.
+    ``default.json`` opt-in profile (it can only do *less*), yet still carries
+    the runtime essentials an untrusted container needs to even boot;
+  * every long-lived TRUSTED service in the prod compose files pins
+    ``no-new-privileges`` (the trusted hardening baseline) and NO custom
+    ``seccomp=…`` pin (it uses Docker's default seccomp);
+  * the installer compose generator (task_15_07) emits the SAME trusted
+    posture (no custom seccomp pin);
+  * the worker isolation seam forwards the UNTRUSTED profile *content* to the
+    daemon when a profile path is configured.
+
+``docker/seccomp/default.json`` is kept as a documented OPT-IN extra-hardening
+profile operators may pin to trusted services AFTER validating it on their own
+kernel; it is no longer wired to any service by default.
 
 Actual enforcement-by-the-kernel is a documented HUMAN test
 (``docs/06-runbooks/internal-pentest-methodology.md`` §5) confirmed on a Linux
@@ -47,18 +66,19 @@ SECCOMP_DIR = DOCKER_DIR / "seccomp"
 DEFAULT_PROFILE = SECCOMP_DIR / "default.json"
 AGENT_PROFILE = SECCOMP_DIR / "agent-runtime.json"
 
-# Long-lived prod compose files whose services must each pin a seccomp profile.
+# Long-lived prod compose files whose trusted services must carry the trusted
+# hardening baseline (no-new-privileges) and NOT a hand-rolled seccomp pin.
 PROD_COMPOSE_FILES: tuple[Path, ...] = (
     DOCKER_DIR / "docker-compose.yml",
     DOCKER_DIR / "docker-compose.monitoring.yml",
 )
 
 # Host-agent / privileged services that legitimately need the host syscall
-# surface and are exempt from the seccomp pin (mirrors the pentest suite's
-# HOST_AGENT_SERVICES). cAdvisor runs privileged (privileged disables seccomp
-# at the daemon anyway); node-exporter mounts host /proc,/sys,/ ro and needs
-# broad syscalls to read them. Both keep no-new-privileges + read-only mounts.
-SECCOMP_EXEMPT_SERVICES = frozenset({"cadvisor", "node-exporter"})
+# surface (mirrors the pentest suite's HOST_AGENT_SERVICES). cAdvisor runs
+# privileged (privileged disables seccomp at the daemon anyway); node-exporter
+# mounts host /proc,/sys,/ ro and needs broad syscalls to read them. Both keep
+# no-new-privileges + read-only mounts.
+HOST_AGENT_SERVICES = frozenset({"cadvisor", "node-exporter"})
 
 # Default-deny actions the daemon treats as "reject unless allowlisted". The
 # profiles use SCMP_ACT_ERRNO; SCMP_ACT_KILL(_PROCESS)/TRAP are also acceptable.
@@ -198,6 +218,10 @@ def _references_seccomp(spec: dict[str, Any]) -> bool:
     return any(o.startswith("seccomp=") for o in _security_opt(spec))
 
 
+def _references_no_new_privileges(spec: dict[str, Any]) -> bool:
+    return "no-new-privileges:true" in _security_opt(spec)
+
+
 # ---------------------------------------------------------------------------
 # Profiles exist + are valid JSON
 # ---------------------------------------------------------------------------
@@ -274,7 +298,7 @@ def test_profiles_allowlist_the_baseline_a_service_actually_needs() -> None:
 
 def test_agent_runtime_profile_is_a_strict_subset_of_default() -> None:
     """The untrusted agent/test sandbox can only do *less* than the shared
-    services: its allowlist is a subset of the default profile's, and it is
+    opt-in default: its allowlist is a subset of ``default.json``'s, and it is
     strictly smaller (it drops at least the xattr / module-adjacent extras).
     A regression that widened the sandbox above the shared baseline fails."""
     default_allowed = _allowed_syscalls(_load_profile(DEFAULT_PROFILE))
@@ -290,52 +314,101 @@ def test_agent_runtime_profile_is_a_strict_subset_of_default() -> None:
     )
 
 
+def test_agent_runtime_profile_has_the_boot_viability_essentials() -> None:
+    """The UNTRUSTED runtime profile is a strict subset, but it must still let
+    an agent/test container actually BOOT — a profile modelled as a subset of a
+    broken allowlist could be missing the runtime essentials a libc/runtime
+    threads layer needs to start (signal handling, thread bookkeeping, NPTL
+    futex, epoll, process spawn, memory). Without these the untrusted container
+    crash-loops before running anything. The dangerous family stays absent (that
+    is asserted separately); this only guarantees boot-viability."""
+    agent_allowed = _allowed_syscalls(_load_profile(AGENT_PROFILE))
+    essentials = {
+        # signal delivery / handling — libc + runtimes install handlers
+        "signalfd",
+        "signalfd4",
+        "rt_sigaction",
+        "rt_sigprocmask",
+        "rt_sigreturn",
+        "sigaltstack",
+        # thread bookkeeping (glibc/musl NPTL startup)
+        "set_tid_address",
+        "set_robust_list",
+        "get_robust_list",
+        "membarrier",
+        "rseq",
+        # synchronisation
+        "futex",
+        # event loop
+        "epoll_create1",
+        "epoll_ctl",
+        "epoll_pwait",
+        # process spawn + memory + fd
+        "clone",
+        "execve",
+        "mmap",
+        "mprotect",
+        "munmap",
+        "brk",
+        "close",
+        "openat",
+        "read",
+        "write",
+    }
+    missing = sorted(essentials - agent_allowed)
+    assert not missing, (
+        "the agent-runtime profile is missing startup essentials an untrusted "
+        f"container needs to boot: {missing}"
+    )
+
+
 # ---------------------------------------------------------------------------
-# compose wiring — every long-lived service pins a seccomp profile
+# compose wiring — TRUSTED services carry the hardening baseline (revised)
 # ---------------------------------------------------------------------------
 
 
-def test_every_prod_service_references_a_seccomp_profile() -> None:
-    """Each long-lived service in the base + monitoring compose pins a seccomp
-    profile via ``security_opt: seccomp=…`` (the host-agent exemptions are
-    documented). Drop the pin from any service and this lists it."""
+def test_every_prod_service_carries_the_trusted_hardening_baseline() -> None:
+    """Each long-lived TRUSTED service in the base + monitoring compose pins the
+    trusted hardening baseline ``no-new-privileges:true`` (the host-agent
+    services cAdvisor/node-exporter are still hardened with it too). These are
+    first-party services: they rely on Docker's DEFAULT seccomp (ADR 0040,
+    revised) — they do NOT pin a hand-rolled allowlist. Drop the baseline from
+    any service and this lists it."""
     missing: list[str] = []
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
         for name, spec in _rendered_services(path).items():
-            if name in SECCOMP_EXEMPT_SERVICES:
-                continue
-            if not _references_seccomp(spec):
+            if not _references_no_new_privileges(spec):
                 missing.append(f"{path.name}:{name}")
-    assert not missing, "services WITHOUT a seccomp profile pinned: " + ", ".join(missing)
+    assert not missing, "services WITHOUT no-new-privileges pinned: " + ", ".join(missing)
 
 
-def test_pinned_compose_profiles_point_at_files_that_exist() -> None:
-    """The ``seccomp=<path>`` each service pins resolves to a profile file that
-    actually ships (a dangling path silently disables enforcement)."""
-    dangling: list[str] = []
+def test_trusted_services_do_not_pin_a_custom_seccomp_profile() -> None:
+    """TRUSTED first-party services must NOT pin a hand-rolled seccomp profile
+    (ADR 0040, revised): force-applying ``seccomp=./seccomp/default.json`` to
+    every trusted service SIGSEGV'd the Go services (vault/minio) and broke
+    postgres (signalfd/shmget). Trusted services use Docker's proven DEFAULT
+    seccomp. The strict default-deny allowlist is reserved for the UNTRUSTED
+    runtimes the worker launches. A regression re-pinning a custom profile on a
+    trusted service is listed here."""
+    offenders: list[str] = []
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
         for name, spec in _rendered_services(path).items():
-            for opt in _security_opt(spec):
-                if not opt.startswith("seccomp="):
-                    continue
-                rel = opt.split("=", 1)[1]
-                if rel in ("unconfined", "runtime/default"):
-                    dangling.append(f"{path.name}:{name} uses {rel}")
-                    continue
-                # Paths are relative to the compose directory (docker/).
-                resolved = (DOCKER_DIR / rel).resolve()
-                if not resolved.is_file():
-                    dangling.append(f"{path.name}:{name} -> {rel} (missing)")
-    assert not dangling, "compose seccomp pins that don't resolve: " + ", ".join(dangling)
+            if _references_seccomp(spec):
+                offenders.append(f"{path.name}:{name}")
+    assert not offenders, (
+        "trusted services pinning a custom seccomp profile (should rely on "
+        "Docker's default seccomp): " + ", ".join(offenders)
+    )
 
 
 def test_base_compose_never_sets_seccomp_unconfined() -> None:
     """No service may disable seccomp with ``seccomp=unconfined`` — that throws
-    the whole profile away. Regression guard for an accidental opt-out."""
+    Docker's default profile away. Regression guard for an accidental opt-out
+    (the trusted services rely on the DEFAULT profile, not on NO profile)."""
     offenders: list[str] = []
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
@@ -347,18 +420,18 @@ def test_base_compose_never_sets_seccomp_unconfined() -> None:
 
 
 # ---------------------------------------------------------------------------
-# installer compose generator (task_15_07) emits the seccomp pin
+# installer compose generator (task_15_07) emits the trusted hardening baseline
 # ---------------------------------------------------------------------------
 
 
-def test_compose_generator_emits_seccomp_on_every_service() -> None:
-    """The installer's compose generator wires the same default-deny seccomp
-    pin into every generated service (so an installed stack matches the
-    committed compose's posture)."""
-    from installer_backend.compose_generator import (
-        SECCOMP_DEFAULT_PROFILE,
-        generate_compose,
-    )
+def test_compose_generator_emits_trusted_baseline_without_custom_seccomp() -> None:
+    """The installer's compose generator wires the SAME trusted posture as the
+    committed compose (ADR 0040, revised): every generated service pins
+    ``no-new-privileges:true`` + ``apparmor=agentic-default`` but NO hand-rolled
+    ``seccomp=…`` pin — trusted first-party services rely on Docker's DEFAULT
+    seccomp. (The hand-rolled allowlist SIGSEGV'd the Go services + broke
+    postgres when force-applied; it is reserved for the UNTRUSTED runtimes.)"""
+    from installer_backend.compose_generator import generate_compose
     from installer_backend.config import (
         InstallerConfig,
         OllamaProvider,
@@ -381,13 +454,20 @@ def test_compose_generator_emits_seccomp_on_every_service() -> None:
         tenant=TenantConfig(tenant_name="Acme", admin_email="admin@example.com"),
     )
     compose = generate_compose(cfg, monitoring=True)
-    expected = f"seccomp={SECCOMP_DEFAULT_PROFILE}"
-    missing: list[str] = []
+    missing_baseline: list[str] = []
+    custom_seccomp: list[str] = []
     for name, svc in compose["services"].items():
         opts = [str(x) for x in svc.get("security_opt", [])]
-        if expected not in opts:
-            missing.append(name)
-    assert not missing, "generated services WITHOUT the seccomp pin: " + ", ".join(missing)
+        if "no-new-privileges:true" not in opts or "apparmor=agentic-default" not in opts:
+            missing_baseline.append(name)
+        if any(o.startswith("seccomp=") for o in opts):
+            custom_seccomp.append(name)
+    assert not missing_baseline, "generated services WITHOUT the trusted baseline: " + ", ".join(
+        missing_baseline
+    )
+    assert not custom_seccomp, "generated services pinning a custom seccomp profile: " + ", ".join(
+        custom_seccomp
+    )
 
 
 # ---------------------------------------------------------------------------
