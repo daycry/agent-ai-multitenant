@@ -15,6 +15,18 @@ Binding decisions (Plan 11.1 Fase B):
 
 from __future__ import annotations
 
+from api_server.budgets.consumption import (
+    BUDGET_ALERT_EVENT_TYPE,
+    BudgetAlertDispatcher,
+    BudgetConsumption,
+    BudgetEvaluationResult,
+    BudgetFiring,
+    CeleryBudgetAlertDispatcher,
+    compute_budget_consumption,
+    evaluate_budget_alerts,
+    maybe_alert_budgets,
+    tenant_budget_summary,
+)
 from api_server.budgets.period import (
     BudgetPeriodWindow,
     InvalidBudgetPeriodError,
@@ -22,7 +34,17 @@ from api_server.budgets.period import (
 )
 
 __all__ = [
+    "BUDGET_ALERT_EVENT_TYPE",
+    "BudgetAlertDispatcher",
+    "BudgetConsumption",
+    "BudgetEvaluationResult",
+    "BudgetFiring",
     "BudgetPeriodWindow",
+    "CeleryBudgetAlertDispatcher",
     "InvalidBudgetPeriodError",
+    "compute_budget_consumption",
     "current_budget_period",
+    "evaluate_budget_alerts",
+    "maybe_alert_budgets",
+    "tenant_budget_summary",
 ]

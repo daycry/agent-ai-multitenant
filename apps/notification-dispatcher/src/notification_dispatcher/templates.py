@@ -255,21 +255,38 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "{{ retries | default('several') }} retries."
         ),
     ),
-    # --- budget_alert ------------------------------------------------------
+    # --- budget_alert (Plan 11.1 task_11_1_05) -----------------------------
+    # Scope-aware: ``scope`` is 'tenant' or 'project'; ``plan_name`` carries the
+    # human label (the tenant or the project name). ``percent_used`` is the
+    # real percent of budget; ``spent`` is the canonical-USD spend. All keys
+    # tolerate a missing value (ChainableUndefined → '') so a partial context
+    # still renders.
     ("budget_alert", "es"): TemplateSource(
-        subject="Alerta de presupuesto: {{ plan_name | default('(sin nombre)') }}",
+        subject=(
+            "Alerta de presupuesto ({{ threshold | default('?') }}%): "
+            "{{ plan_name | default('(sin nombre)') }}"
+        ),
         body=(
-            "El plan «{{ plan_name | default('(sin nombre)') }}» "
-            "ha cruzado el umbral de presupuesto "
-            "({{ threshold | default('?') }}%). "
+            "El presupuesto "
+            "{% if scope == 'project' %}del proyecto «{{ project_name | "
+            "default(plan_name) | default('(sin nombre)') }}»"
+            "{% else %}del tenant{% endif %} "
+            "ha cruzado el umbral del {{ threshold | default('?') }}% "
+            "({{ percent_used | default('?') }}% usado). "
             "Gasto actual: {{ spent | default('?') }}."
         ),
     ),
     ("budget_alert", "en"): TemplateSource(
-        subject="Budget alert: {{ plan_name | default('(unnamed)') }}",
+        subject=(
+            "Budget alert ({{ threshold | default('?') }}%): "
+            "{{ plan_name | default('(unnamed)') }}"
+        ),
         body=(
-            "Plan \"{{ plan_name | default('(unnamed)') }}\" "
-            "crossed a budget threshold ({{ threshold | default('?') }}%). "
+            "The "
+            "{% if scope == 'project' %}project \"{{ project_name | "
+            "default(plan_name) | default('(unnamed)') }}\"{% else %}tenant{% endif %} "
+            "budget crossed the {{ threshold | default('?') }}% threshold "
+            "({{ percent_used | default('?') }}% used). "
             "Current spend: {{ spent | default('?') }}."
         ),
     ),

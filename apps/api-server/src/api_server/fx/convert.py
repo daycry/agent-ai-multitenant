@@ -44,6 +44,13 @@ from api_server.db.exchange_rates import CANONICAL_CURRENCY, ExchangeRate
 # bankers'-free half-up rounding so a UI never shows 9.199999… EUR.
 _MONEY_QUANTUM = Decimal("0.01")
 
+# A budget cap converted INTO USD for comparison keeps more precision than a
+# display amount: USD is the canonical comparison currency (against
+# executions.total_cost_usd, Numeric(14,6)), so a budget cap rounded only to
+# cents could shift a tight threshold crossing. Quantize to 6 dp (the cost
+# column's scale) so the comparison is stable without inventing precision.
+_USD_QUANTUM = Decimal("0.000001")
+
 
 class UnknownCurrencyError(ValueError):
     """No FX rate is available for ``currency`` on or before ``on_date``.
@@ -150,6 +157,54 @@ async def resolve_rates_for_dates(
     return resolved
 
 
+def convert_to_usd_with_rate(amount: Decimal, rate_vs_usd: Decimal) -> Decimal:
+    """Pure reverse conversion: ``amount`` units of a currency back to USD.
+
+    The inverse of :func:`convert_from_usd_with_rate`. ``rate_vs_usd`` is
+    *units of the source currency per 1 USD*, so ``usd = amount / rate``. No
+    DB, no I/O — quantized to 6 dp (the canonical-USD comparison scale). The
+    rate is strictly positive (DB CHECK), so there is no divide-by-zero.
+    """
+    return (amount / rate_vs_usd).quantize(_USD_QUANTUM, rounding=ROUND_HALF_UP)
+
+
+async def convert_to_usd(
+    session: AsyncSession,
+    amount: Decimal,
+    currency: str,
+    on_date: date,
+    *,
+    fallback_to_usd: bool = False,
+) -> Decimal:
+    """Convert ``amount`` (in ``currency``) INTO canonical USD on ``on_date``.
+
+    The inverse of :func:`convert_from_usd` — used to bring a budget cap
+    (denominated in its own currency) into USD so it compares against the
+    canonical ``executions.total_cost_usd`` (Plan 11.1 task_11_1_05). USD ->
+    USD is the identity. For any other currency the rate is
+    :func:`select_rate_for_date` (the day's rate or the most recent prior).
+    When no rate is available:
+
+      - ``fallback_to_usd=False`` (default): raise :class:`UnknownCurrencyError`.
+      - ``fallback_to_usd=True``: treat ``amount`` as already-USD (return it
+        unchanged) so a missing rate degrades gracefully rather than blocking
+        the budget evaluation.
+
+    The returned Decimal is quantized to 6 decimal places (the USD cost scale).
+    """
+    normalized = _normalize(currency)
+    if normalized == CANONICAL_CURRENCY:
+        return amount
+
+    rate_row = await select_rate_for_date(session, normalized, on_date)
+    if rate_row is None:
+        if fallback_to_usd:
+            return amount
+        raise UnknownCurrencyError(normalized, on_date)
+
+    return convert_to_usd_with_rate(amount, rate_row.rate_vs_usd)
+
+
 async def convert_from_usd(
     session: AsyncSession,
     amount_usd: Decimal,
@@ -188,6 +243,8 @@ __all__ = [
     "UnknownCurrencyError",
     "convert_from_usd",
     "convert_from_usd_with_rate",
+    "convert_to_usd",
+    "convert_to_usd_with_rate",
     "resolve_rates_for_dates",
     "select_rate_for_date",
 ]

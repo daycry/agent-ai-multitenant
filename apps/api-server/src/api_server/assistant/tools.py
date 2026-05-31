@@ -11,9 +11,11 @@ constraints (see the plan) make tenant isolation + RBAC non-negotiable:
   * Tools are READ-ONLY: they only ``SELECT``. The assistant cannot mutate
     state through them.
 
-``tenant_budget_status`` is a typed placeholder: the budget engine lands
-in Plan 11 (§28.7). Rather than fabricate numbers, it returns a structured
-``available: false`` result the UI/LLM can render as "not available yet".
+``tenant_budget_status`` returns the tenant's REAL budget consumption
+(Plan 11.1 task_11_1_05): the tenant-wide + per-project spend vs budget in
+canonical USD, with the percent used, the active period and a status. When no
+budget is configured it returns a structured ``available: false`` result the
+UI/LLM can render honestly (rather than fabricating numbers).
 """
 
 from __future__ import annotations
@@ -136,20 +138,19 @@ async def _tenant_recent_activity(
     return {"active_task_count": int(total_active or 0), "recent": items}
 
 
-async def _tenant_budget_status(_ctx: AssistantToolContext, **_: Any) -> dict[str, Any]:
-    """Typed placeholder — the budget engine lands in Plan 11 (§28.7).
+async def _tenant_budget_status(ctx: AssistantToolContext, **_: Any) -> dict[str, Any]:
+    """Real tenant/project budget status (Plan 11.1 task_11_1_05).
 
-    Returns a structured "not available yet" result rather than fake
-    numbers, so the LLM / UI can say so honestly.
-    """
-    return {
-        "available": False,
-        "reason": "budget_engine_not_implemented",
-        "message": (
-            "El motor de presupuesto se implementa en el Plan 11; "
-            "todavía no hay cifras de presupuesto disponibles."
-        ),
-    }
+    Sums the canonical-USD spend of the current budget period per scope (the
+    tenant-wide budget + each project with one), compares it against the
+    USD-converted cap, and returns the percent used, the active period and a
+    coarse status. Runs on the caller's tenant-scoped RLS session, so only this
+    tenant's budgets / spend are ever seen. When no budget is configured
+    anywhere, returns a structured ``available: false`` result (an honest "no
+    budget", never fabricated numbers)."""
+    from api_server.budgets import tenant_budget_summary
+
+    return await tenant_budget_summary(ctx.session, tenant_id=ctx.tenant_id)
 
 
 # ---------------------------------------------------------------------------
@@ -216,9 +217,9 @@ ASSISTANT_TOOLS: dict[str, ToolEntry] = {
         schema={
             "name": "tenant_budget_status",
             "description": (
-                "Estado de presupuesto del tenant. NOTA: el motor de "
-                "presupuesto se implementa en el Plan 11; de momento "
-                "devuelve un marcador 'no disponible'."
+                "Estado real de presupuesto del tenant y sus proyectos: gasto "
+                "en USD del periodo actual, porcentaje del presupuesto, periodo "
+                "y estado. Si no hay presupuesto configurado, lo indica."
             ),
             "parameters": {"type": "object", "properties": {}},
         },

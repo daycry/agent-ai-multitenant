@@ -12,6 +12,8 @@ from api_server.fx.convert import (
     UnknownCurrencyError,
     convert_from_usd,
     convert_from_usd_with_rate,
+    convert_to_usd,
+    convert_to_usd_with_rate,
     resolve_rates_for_dates,
     select_rate_for_date,
 )
@@ -42,6 +44,8 @@ __all__ = [
     "UnknownCurrencyError",
     "convert_from_usd",
     "convert_from_usd_with_rate",
+    "convert_to_usd",
+    "convert_to_usd_with_rate",
     "fetch_and_upsert_rates",
     "parse_ecb_feed",
     "parse_feed",
