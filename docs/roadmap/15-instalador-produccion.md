@@ -541,7 +541,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_26` — Smoke tests post-deploy automáticos completos
 
-- [ ] **Título**: Smoke tests post-deploy automáticos completos
+- [x] **Título**: Smoke tests post-deploy automáticos completos
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops + qa
