@@ -77,6 +77,10 @@ BACKUP_BEAT_ENTRY = "run-daily-backup"
 # constant-not-hardcoded-string discipline as the price-sync / backup entries.
 CRED_ROTATION_BEAT_ENTRY = "rotate-credentials"
 
+# Plan 11.1 task_11_1_02: the scheduled exchange-rates-fetcher entry name. Same
+# constant-not-hardcoded-string discipline as the price-sync / backup entries.
+FX_FETCH_BEAT_ENTRY = "fetch-exchange-rates"
+
 
 def _parse_cron(expr: str) -> crontab:
     """Parse a 5-field cron string (minute hour dom month dow) to a crontab.
@@ -133,5 +137,15 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
         "task": "workers.rotate_credentials",
         "schedule": _parse_cron(cfg.cred_rotation_cron),
         "options": {"queue": "privileged"},
+    }
+    # Plan 11.1 task_11_1_02: daily exchange-rates fetch on a CONFIGURABLE
+    # cadence (WORKERS_FX_FETCH_CRON, default 06:00 UTC). Pinned to the `default`
+    # queue — a cheap HTTP fetch + a handful of global-catalog upserts, no infra
+    # side-effects. Its live enable/disable + the SOURCE selection are the
+    # `fx_fetch_enabled` / `fx_source` platform settings a System Admin owns.
+    sched[FX_FETCH_BEAT_ENTRY] = {
+        "task": "workers.fetch_exchange_rates",
+        "schedule": _parse_cron(cfg.fx_fetch_cron),
+        "options": {"queue": "default"},
     }
     return sched

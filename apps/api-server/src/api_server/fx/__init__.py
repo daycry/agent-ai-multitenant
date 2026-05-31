@@ -14,10 +14,36 @@ from api_server.fx.convert import (
     convert_from_usd_with_rate,
     select_rate_for_date,
 )
+from api_server.fx.fetcher import (
+    DEFAULT_ECB_FEED_URL,
+    EcbRateFetcher,
+    FxFeedError,
+    FxRateFetcher,
+    FxUpsertSummary,
+    ParsedFeed,
+    ParsedRate,
+    StaticFxRateFetcher,
+    fetch_and_upsert_rates,
+    parse_ecb_feed,
+    parse_feed,
+    upsert_exchange_rates,
+)
 
 __all__ = [
+    "DEFAULT_ECB_FEED_URL",
+    "EcbRateFetcher",
+    "FxFeedError",
+    "FxRateFetcher",
+    "FxUpsertSummary",
+    "ParsedFeed",
+    "ParsedRate",
+    "StaticFxRateFetcher",
     "UnknownCurrencyError",
     "convert_from_usd",
     "convert_from_usd_with_rate",
+    "fetch_and_upsert_rates",
+    "parse_ecb_feed",
+    "parse_feed",
     "select_rate_for_date",
+    "upsert_exchange_rates",
 ]

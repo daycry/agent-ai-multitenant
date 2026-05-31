@@ -200,6 +200,18 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.PRIORITY,
         default_channel_types=("in_app", "email"),
     ),
+    # Plan 11.1 task_11_1_02 — the scheduled exchange-rates fetch FAILED (the
+    # source feed could not be fetched/parsed, or lacked a USD anchor). A
+    # platform-scoped (tenant_id=None) ops signal a System Admin acts on; the
+    # catalog keeps its last good rates (conversion falls back to the most-recent
+    # prior rate) but the staleness must be surfaced. Rides the priority lane,
+    # fanning out to in-app + email by default. The payload carries only the
+    # source name + the non-leaky error string.
+    "fx_fetch_failed": EventSpec(
+        "fx_fetch_failed",
+        lane=NotificationLane.PRIORITY,
+        default_channel_types=("in_app", "email"),
+    ),
 }
 
 

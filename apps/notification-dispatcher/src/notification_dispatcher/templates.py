@@ -369,6 +369,30 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "runbook."
         ),
     ),
+    # --- fx_fetch_failed (Plan 11.1 task_11_1_02) --------------------------
+    # Platform-scoped ops alert. The context carries only the source name + the
+    # non-leaky error string — the catalog keeps its last good rates, so the
+    # message points the System Admin at the staleness, not a credential.
+    ("fx_fetch_failed", "es"): TemplateSource(
+        subject="Fallo al actualizar los tipos de cambio",
+        body=(
+            "La descarga diaria de tipos de cambio (fuente "
+            "{{ source | default('ecb') }}) ha fallado. Motivo: "
+            "{{ error | default('(sin detalle)') }}. El catálogo conserva los "
+            "últimos tipos válidos (la conversión usa el más reciente anterior); "
+            "revisa la fuente de tipos de cambio."
+        ),
+    ),
+    ("fx_fetch_failed", "en"): TemplateSource(
+        subject="Exchange-rates update failed",
+        body=(
+            "The daily exchange-rates fetch (source "
+            "{{ source | default('ecb') }}) failed. Reason: "
+            "{{ error | default('(no detail)') }}. The catalog keeps its last "
+            "good rates (conversion falls back to the most-recent prior rate); "
+            "check the exchange-rates source."
+        ),
+    ),
 }
 
 # Public, read-only view of the builtin catalogue keyed by

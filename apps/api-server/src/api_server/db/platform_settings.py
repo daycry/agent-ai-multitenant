@@ -158,6 +158,59 @@ async def get_price_sync_enabled(session: AsyncSession) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Scheduled exchange-rates fetch (Plan 11.1 task_11_1_02)
+# ---------------------------------------------------------------------------
+# Live enable/disable lever for the daily FX-fetcher job
+# (workers.fetch_exchange_rates). The beat task reads it at the top of every
+# run; OFF makes the run a no-op (no feed fetch, no catalog write) without
+# restarting Celery beat — mirroring the price-sync / backup enable levers. The
+# CADENCE (cron) is a separate operator-tunable knob (WORKERS_FX_FETCH_CRON read
+# by the beat process at boot), NOT this flag. Default ON: an unattended
+# platform should keep its display-currency rates fresh (USD stays canonical).
+FX_FETCH_ENABLED_KEY = "fx_fetch_enabled"
+DEFAULT_FX_FETCH_ENABLED = True
+
+# The FX rate SOURCE the fetcher uses, selectable by a System Admin from the
+# admin panel (Plan 11.1 decision: "fuente por defecto ECB, configurable por
+# System Admin"). Read live by the FX-fetcher beat task so a change takes effect
+# on the next fire without a restart. Only ECB is wired today; the key is a
+# free-form string so a future source (e.g. a paid feed) needs no schema change,
+# and an unknown value falls back to ECB rather than crashing the run.
+FX_SOURCE_KEY = "fx_source"
+DEFAULT_FX_SOURCE = "ecb"
+# The FX sources the fetcher knows how to fetch. Kept in lockstep with
+# workers.fx_fetcher.FX_FETCHER_SOURCES (the two packages deliberately do not
+# import one another at module load).
+FX_SOURCES = ("ecb",)
+
+
+async def get_fx_fetch_enabled(session: AsyncSession) -> bool:
+    """Whether the scheduled exchange-rates fetch is currently enabled.
+
+    Read by the ``workers.fetch_exchange_rates`` beat task before it does any
+    work; when False the run is a no-op (it never fetches the feed or writes the
+    catalog). A System Admin flips this from the admin panel — only a System
+    Admin may write a platform setting (``set_platform_setting``).
+    """
+    value = await get_platform_setting(
+        session, FX_FETCH_ENABLED_KEY, default=DEFAULT_FX_FETCH_ENABLED
+    )
+    return bool(value)
+
+
+async def get_fx_source(session: AsyncSession) -> str:
+    """The configured FX rate source (default ECB).
+
+    Read live by the FX-fetcher beat task so a System-Admin source change from
+    the admin panel takes effect on the next run. An unknown / unset value
+    falls back to the default ECB source (the fetcher never crashes on a typo).
+    """
+    value = await get_platform_setting(session, FX_SOURCE_KEY, default=DEFAULT_FX_SOURCE)
+    source = str(value).strip().lower()
+    return source if source in FX_SOURCES else DEFAULT_FX_SOURCE
+
+
+# ---------------------------------------------------------------------------
 # Scheduled credential rotation (Plan 15 task_15_17)
 # ---------------------------------------------------------------------------
 # Live enable/disable lever for the periodic Vault credential-rotation job

@@ -71,6 +71,7 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             "workers.backup_task",
             "workers.restore_task",
             "workers.credential_rotation_task",
+            "workers.fx_fetcher",
         ),
         # Agent runs are long; ack only after completion so a worker
         # crash re-queues the job instead of losing it.

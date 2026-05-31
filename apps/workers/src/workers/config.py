@@ -191,6 +191,28 @@ class Settings(BaseSettings):
         "Point at an internal mirror to avoid egress.",
     )
 
+    # ----- Scheduled exchange-rates fetch (Plan 11.1 task_11_1_02) -----
+    # The FX-fetcher beat job downloads the daily reference rates from the
+    # configured source (ECB by default) and upserts `exchange_rates` (a global
+    # catalog; ADR USD-canonical). The CRON cadence is read by the beat process
+    # at boot — change it (and restart beat) to alter the cadence. The live
+    # enable/disable lever + the SOURCE selection are PLATFORM settings a System
+    # Admin owns (`fx_fetch_enabled` / `fx_source`); these envs are only the
+    # boot-time defaults + the per-source feed URL. Best-effort: a fetch failure
+    # logs + alerts (a platform-scoped ops signal) but never crashes beat.
+    fx_fetch_cron: str = Field(
+        default="0 6 * * *",
+        description="Cron (minute hour day-of-month month day-of-week) for the "
+        "scheduled exchange-rates fetch. Default daily at 06:00 UTC (Plan 11.1). "
+        "Operator-tunable; the beat process reads it at boot.",
+    )
+    ecb_fx_feed_url: str = Field(
+        default="https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml",
+        description="URL of the ECB daily reference-rates XML feed (the default "
+        "FX source). ECB publishes rates vs EUR; the fetcher converts them to "
+        "vs-USD via the USD rate. Point at an internal mirror to avoid egress.",
+    )
+
     # ----- Backup engine (Plan 12 task_12_01) -----
     # The full-backup routine (pg_dump LOGICAL + tar of the data volumes +
     # a checksummed manifest) is driven by these operator-tunable knobs —
