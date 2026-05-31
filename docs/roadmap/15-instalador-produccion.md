@@ -35,18 +35,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo                              | Valor                                                                                                                     |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| **ID del Plan**                    | `15-instalador-produccion`                                                                                                |
-| **Estado**                         | `in_progress` (override humano del gate blocking_plan; 15_27 pentest externo + 15_29 release v1.0.0 reservados al humano) |
-| **Bloqueado por**                  | todas las fases anteriores (`00-fundaciones` … `14-evals-estadisticas`)                                                   |
-| **Tiempo estimado (calendario)**   | 4-5 semanas                                                                                                               |
-| **Tiempo estimado (persona-días)** | 80-100                                                                                                                    |
-| **Previsión de coste — humano**    | 32.000 € – 40.000 € (tarifa media 50 €/h)                                                                                 |
-| **Previsión de coste — IA**        | 150 € – 240 €                                                                                                             |
-| **Aprobador propuesto**            | System Admin                                                                                                              |
-| **Rama git**                       | `plan/15-instalador-produccion`                                                                                           |
-| **Secciones del .docx**            | [22]                                                                                                                      |
+| Campo                              | Valor                                                                                                                                                                                       |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ID del Plan**                    | `15-instalador-produccion`                                                                                                                                                                  |
+| **Estado**                         | `in_progress` — 27/29 tareas construibles completas + verdes; restan SOLO las 2 reservadas al humano: 15_27 pentest externo + 15_29 release v1.0.0 (override humano del gate blocking_plan) |
+| **Bloqueado por**                  | todas las fases anteriores (`00-fundaciones` … `14-evals-estadisticas`)                                                                                                                     |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                                                                                                                                                                                 |
+| **Tiempo estimado (persona-días)** | 80-100                                                                                                                                                                                      |
+| **Previsión de coste — humano**    | 32.000 € – 40.000 € (tarifa media 50 €/h)                                                                                                                                                   |
+| **Previsión de coste — IA**        | 150 € – 240 €                                                                                                                                                                               |
+| **Aprobador propuesto**            | System Admin                                                                                                                                                                                |
+| **Rama git**                       | `plan/15-instalador-produccion`                                                                                                                                                             |
+| **Secciones del .docx**            | [22]                                                                                                                                                                                        |
 
 ---
 
@@ -577,7 +577,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_28` — Documentación final + ADRs + changelog del plan
 
-- [ ] **Título**: Documentación final + ADRs + changelog del plan
+- [x] **Título**: Documentación final + ADRs + changelog del plan
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: technical-writer
