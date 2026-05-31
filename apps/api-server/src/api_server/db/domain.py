@@ -1095,6 +1095,95 @@ class HumanAgentConfig(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMi
         )
 
 
+# =============================================================================
+# HumanWorkSession (the Execution-equivalent audit trail for human tasks)
+# =============================================================================
+class HumanWorkSession(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """One session of a human working on a task (Plan 16 task_16_03).
+
+    Plan 16 Decisiones Clave: ``HumanWorkSession`` replaces ``Execution`` for
+    ``agent_type='human'`` tasks. Where an AI task records a row in
+    :class:`Execution` per run of the agent loop, a human task records a row
+    here per work session — who did the work (``user_id``), when (``start_at``
+    / ``end_at``), how many hours it took (``hours_logged``), free-form
+    ``comments``, and the deliverables the human attached
+    (``output_files_attached``). Like :class:`Execution`, sessions are NOT
+    soft-deleted — they are an immutable audit record of what a human did; a
+    task can have several.
+
+    Tenant-owned: the row carries ``tenant_id`` (TenantScopedMixin) and the DB
+    enforces isolation with the SAME RLS policy shape as ``executions``
+    (``{table}_tenant_isolation`` FOR ALL, ``tenant_id = NULLIF(
+    current_setting('app.tenant_id', true), '')::uuid``). A work session is
+    intrinsically tenant-scoped (it references a ``users`` row, which is
+    tenant-owned), so this table is never global.
+    """
+
+    __tablename__ = "human_work_sessions"
+    __table_args__ = (
+        Index("ix_human_work_sessions_tenant_id", "tenant_id"),
+        # Audit-trail read path: "the sessions of this task" (mirrors
+        # ix_executions_task_id, the Execution table this replaces).
+        Index("ix_human_work_sessions_task_id", "task_id"),
+        # Logged hours non-negative when present (NULL = not logged).
+        CheckConstraint(
+            "hours_logged IS NULL OR hours_logged >= 0",
+            name="ck_human_work_sessions_hours_non_negative",
+        ),
+        # A finished session cannot end before it started.
+        CheckConstraint(
+            "end_at IS NULL OR end_at >= start_at",
+            name="ck_human_work_sessions_end_after_start",
+        ),
+    )
+
+    # The human task this session belongs to. CASCADE so deleting the task
+    # removes its sessions (mirrors executions.task_id).
+    task_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # The human who worked. SET NULL so the audit record survives a user
+    # deletion (the session stays, the attribution is lost — same trade-off
+    # executions.agent_id makes for a deleted agent). Nullable for that reason.
+    user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # When the session began. Defaults to now() so a freshly-created session
+    # is timestamped without the caller having to set it.
+    start_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    # When the session finished. NULL while the human is still working.
+    end_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    # Optional logged hours; feeds coste humano = rate * hours (Plan 16 Fase
+    # D). NULL = the human did not log hours for this session.
+    hours_logged: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=8, scale=2), nullable=True
+    )
+
+    # The human's free-form notes / output text for this session.
+    comments: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Deliverables the human attached — a JSONB list of attachment descriptors
+    # (files, URLs, screenshots). JSONB so the shape can evolve migration-free.
+    output_files_attached: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"HumanWorkSession(id={self.id!r}, task_id={self.task_id!r},"
+            f" user_id={self.user_id!r})"
+        )
+
+
 __all__ = [
     "Agent",
     "AgentRole",
@@ -1113,6 +1202,7 @@ __all__ = [
     "Execution",
     "ExecutionStatus",
     "HumanAgentConfig",
+    "HumanWorkSession",
     "MemoryScope",
     "Message",
     "MessageAuthorKind",

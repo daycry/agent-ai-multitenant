@@ -128,7 +128,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_03` — Tabla `human_work_sessions` para trazabilidad de tareas humanas
 
-- [ ] **Título**: Tabla `human_work_sessions` con `task_id`, `user_id`, `start_at`, `end_at`, `hours_logged`, `comments`, `output_files_attached` JSONB, `tenant_id`. Reemplaza el rol de Executions para tareas con agent_type=human.
+- [x] **Título**: Tabla `human_work_sessions` con `task_id`, `user_id`, `start_at`, `end_at`, `hours_logged`, `comments`, `output_files_attached` JSONB, `tenant_id`. Reemplaza el rol de Executions para tareas con agent_type=human.
 - **Tiempo estimado**: 5 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
