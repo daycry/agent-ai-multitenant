@@ -110,7 +110,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_01` — Contenedor installer (Next.js + FastAPI mínimo) que sirve UI temporal
 
-- [ ] **Título**: Contenedor installer (Next.js + FastAPI mínimo) que sirve UI temporal
+- [x] **Título**: Contenedor installer (Next.js + FastAPI mínimo) que sirve UI temporal
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev

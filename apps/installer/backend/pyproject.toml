@@ -1,0 +1,32 @@
+[project]
+name = "installer-backend"
+version = "0.0.0"
+description = "Temporary bootstrap installer backend (FastAPI) — served by the self-destructing installer container, NOT part of the runtime stack."
+requires-python = ">=3.12"
+dependencies = [
+  # Web framework — the only thing the installer backend needs at runtime.
+  # The installer is bootstrap-only tooling: it speaks to the host (docker
+  # compose, prereq probes, /data writes) via injectable seams that the
+  # tests mock. No DB, no Redis, no Vault client linked in here directly;
+  # the real provisioning bindings arrive in Phase B (15_07–15_09).
+  "fastapi>=0.110,<1",
+  "uvicorn[standard]>=0.30,<1",
+  "pydantic>=2.5,<3",
+  "structlog>=24.1,<25",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2,<9",
+  "httpx>=0.27,<1",
+]
+
+[project.scripts]
+installer-backend = "installer_backend.__main__:main"
+
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/installer_backend"]
