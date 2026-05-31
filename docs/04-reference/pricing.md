@@ -46,10 +46,20 @@ periodo abierto por clave. Helper puro `select_current_price(...)`.
 ## USD canónico
 
 Todo el catálogo está **siempre en USD** (CHECK en BD; ningún endpoint acepta
-`currency`). La conversión a la moneda de visualización del tenant
-(`Organization.display_currency`) y la tabla `exchange_rates` que el plan
-describe en su Alcance **no se implementaron en este plan** (no hay tarea
-numerada) — ver el changelog, sección Pendiente.
+`currency`). USD es además la **moneda canónica del coste** de cada ejecución
+(snapshot por llamada, abajo).
+
+> **Conversión a la moneda del tenant — implementada en el Plan 11.1.** La
+> conversión a la moneda de visualización del tenant
+> (`Organization.display_currency`, default `EUR`), la tabla **global**
+> `exchange_rates` (job diario ECB, RLS de lectura global) y el **sistema de
+> Budgets** (umbrales platform-global, auto-pausa de nuevos arranques al 100%,
+> override auditado) que el Plan 11 describió en su Alcance **se construyeron en
+> el sub-plan de seguimiento `11.1-budgets-fx`**. El coste sigue siendo USD; la
+> moneda del tenant es **solo de visualización**, convertida on-the-fly con el
+> rate del **día de cada ejecución**. Ver el
+> [changelog 11.1](../07-changelog/11.1-budgets-fx.md) y la
+> [ADR 0043](../05-architecture-decisions/0043-coste-usd-canonico-fx-de-visualizacion-budgets-con-auto-pausa.md).
 
 ## RLS de lectura global
 
