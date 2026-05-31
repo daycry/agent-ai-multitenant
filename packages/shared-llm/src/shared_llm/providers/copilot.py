@@ -77,6 +77,43 @@ class DeviceCodeInfo:
     interval: int
 
 
+@dataclass
+class DevicePollResult:
+    """Outcome of a SINGLE device-flow poll attempt (`poll_device_flow_once`).
+
+    Unlike :meth:`CopilotProvider.poll_device_flow`, which blocks an event
+    loop until the operator authorises (a fine fit for a CLI), this models
+    one non-blocking poll so a web backend can be driven by the browser:
+    each HTTP poll request maps to one attempt and the UI keeps polling
+    while ``status`` is ``pending`` / ``slow_down``.
+
+    ``status`` is one of:
+
+      * ``authorized``  — the operator approved; ``token`` carries the
+                          long-lived GitHub OAuth token (the ONLY status
+                          that ever carries a token).
+      * ``pending``     — still waiting (GitHub's ``authorization_pending``);
+                          poll again after ``interval`` seconds.
+      * ``slow_down``   — poll too fast; GitHub asks us to back off. The
+                          caller should add 5s to its interval.
+      * ``expired``     — the device code expired (``expired_token``).
+      * ``denied``      — the operator declined (``access_denied``).
+    """
+
+    status: str
+    token: str | None = None
+    # GitHub's suggested new interval after a slow_down (interval + 5s).
+    interval: int | None = None
+
+
+# Single-poll status constants (mirror GitHub's device-flow `error` codes).
+POLL_AUTHORIZED = "authorized"
+POLL_PENDING = "pending"
+POLL_SLOW_DOWN = "slow_down"
+POLL_EXPIRED = "expired"
+POLL_DENIED = "denied"
+
+
 class CopilotProvider:
     name = "github_copilot"
 
@@ -160,6 +197,49 @@ class CopilotProvider:
             if err in ("expired_token", "access_denied"):
                 raise AuthError(f"Device flow aborted: {err}")
         raise AuthError("Device flow expired without authorisation")
+
+    async def poll_device_flow_once(
+        self, device_code: str, *, interval: int = 5
+    ) -> DevicePollResult:
+        """Single, non-blocking device-flow poll (the web-friendly variant).
+
+        Hits GitHub's OAuth token endpoint exactly ONCE with *device_code*
+        and classifies the reply into a :class:`DevicePollResult` instead of
+        looping until a deadline like :meth:`poll_device_flow`. A web backend
+        calls this once per browser poll so it never blocks a worker for the
+        whole authorisation window.
+
+        On ``authorized`` the long-lived GitHub OAuth token is returned in
+        ``result.token`` AND stored on the provider (so a subsequent
+        ``_ensure_jwt`` works). Pending/slow_down are non-error states; the
+        caller keeps polling. Expired/denied are terminal. ``interval`` is
+        only used to compute the suggested back-off on ``slow_down``.
+        """
+        resp = await self._client.post(
+            _OAUTH_TOKEN_URL,
+            headers={"Accept": "application/json", **EDITOR_HEADERS},
+            data={
+                "client_id": VSCODE_CLIENT_ID,
+                "device_code": device_code,
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            },
+        )
+        d = resp.json()
+        if "access_token" in d:
+            token = str(d["access_token"])
+            self._github_token = token
+            return DevicePollResult(status=POLL_AUTHORIZED, token=token)
+        err = d.get("error")
+        if err == "authorization_pending":
+            return DevicePollResult(status=POLL_PENDING)
+        if err == "slow_down":
+            return DevicePollResult(status=POLL_SLOW_DOWN, interval=interval + 5)
+        if err == "expired_token":
+            return DevicePollResult(status=POLL_EXPIRED)
+        if err == "access_denied":
+            return DevicePollResult(status=POLL_DENIED)
+        # Any other error code is an auth failure we cannot recover from.
+        raise AuthError(f"Device flow poll failed: {err or resp.text}")
 
     async def authenticate_interactive(
         self,
@@ -306,4 +386,15 @@ class CopilotProvider:
             await self._client.aclose()
 
 
-__all__ = ["EDITOR_HEADERS", "VSCODE_CLIENT_ID", "CopilotProvider", "DeviceCodeInfo"]
+__all__ = [
+    "EDITOR_HEADERS",
+    "POLL_AUTHORIZED",
+    "POLL_DENIED",
+    "POLL_EXPIRED",
+    "POLL_PENDING",
+    "POLL_SLOW_DOWN",
+    "VSCODE_CLIENT_ID",
+    "CopilotProvider",
+    "DeviceCodeInfo",
+    "DevicePollResult",
+]

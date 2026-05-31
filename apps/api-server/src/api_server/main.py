@@ -39,6 +39,9 @@ from api_server.routers.conversations import (
     conversations_router,
     project_conversations_router,
 )
+from api_server.routers.copilot_device_flow import (
+    admin_router as copilot_device_flow_admin_router,
+)
 from api_server.routers.cross_tenant_stats import router as cross_tenant_stats_router
 from api_server.routers.dep_cache import router as dep_cache_router
 from api_server.routers.docs_viewer import router as docs_viewer_router
@@ -202,6 +205,7 @@ def _register_routers(app: FastAPI) -> None:
         model_prices_router,
         model_prices_admin_router,
         llm_providers_admin_router,
+        copilot_device_flow_admin_router,
         mcp_router,
         mcp_catalog_router,
         tools_diagnostic_router,

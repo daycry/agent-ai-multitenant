@@ -9,7 +9,16 @@ import httpx
 import pytest
 from shared_llm.exceptions import AuthError, ProviderError
 from shared_llm.providers import CopilotProvider
+from shared_llm.providers.copilot import (
+    POLL_AUTHORIZED,
+    POLL_DENIED,
+    POLL_EXPIRED,
+    POLL_PENDING,
+    POLL_SLOW_DOWN,
+)
 from shared_llm.types import Message
+
+_OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token"
 
 _TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
 _CHAT_URL = "https://api.githubcopilot.com/chat/completions"
@@ -333,3 +342,68 @@ async def test_stream_midstream_error_becomes_provider_error() -> None:
             if c.delta:
                 deltas.append(c.delta)
     assert deltas == ["partial"]
+
+
+# ---------------------------------------------------------------------------
+# poll_device_flow_once — single, non-blocking poll for the web backend
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_poll_once_authorized_returns_and_stores_token() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert str(req.url) == _OAUTH_TOKEN_URL
+        return httpx.Response(200, json={"access_token": "gho_authorised_token"})
+
+    p = CopilotProvider(http_client=_mock_client(handler))
+    result = await p.poll_device_flow_once("dev-abc")
+    assert result.status == POLL_AUTHORIZED
+    assert result.token == "gho_authorised_token"
+    # The token is also stored on the provider for a subsequent JWT mint.
+    assert p._github_token == "gho_authorised_token"
+
+
+@pytest.mark.asyncio
+async def test_poll_once_pending_keeps_waiting() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error": "authorization_pending"})
+
+    p = CopilotProvider(http_client=_mock_client(handler))
+    result = await p.poll_device_flow_once("dev-abc")
+    assert result.status == POLL_PENDING
+    assert result.token is None
+
+
+@pytest.mark.asyncio
+async def test_poll_once_slow_down_backs_off_interval() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error": "slow_down"})
+
+    p = CopilotProvider(http_client=_mock_client(handler))
+    result = await p.poll_device_flow_once("dev-abc", interval=5)
+    assert result.status == POLL_SLOW_DOWN
+    assert result.interval == 10  # interval + 5
+    assert result.token is None
+
+
+@pytest.mark.asyncio
+async def test_poll_once_expired_and_denied_are_terminal() -> None:
+    def expired(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error": "expired_token"})
+
+    def denied(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error": "access_denied"})
+
+    p_exp = CopilotProvider(http_client=_mock_client(expired))
+    assert (await p_exp.poll_device_flow_once("dev-abc")).status == POLL_EXPIRED
+
+    p_den = CopilotProvider(http_client=_mock_client(denied))
+    assert (await p_den.poll_device_flow_once("dev-abc")).status == POLL_DENIED
+
+
+@pytest.mark.asyncio
+async def test_poll_once_unknown_error_raises_auth_error() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error": "incomprehensible_thing"})
+
+    p = CopilotProvider(http_client=_mock_client(handler))
+    with pytest.raises(AuthError, match="Device flow poll failed"):
+        await p.poll_device_flow_once("dev-abc")
