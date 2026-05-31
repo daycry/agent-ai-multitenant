@@ -158,6 +158,34 @@ async def get_price_sync_enabled(session: AsyncSession) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Scheduled credential rotation (Plan 15 task_15_17)
+# ---------------------------------------------------------------------------
+# Live enable/disable lever for the periodic Vault credential-rotation job
+# (workers.rotate_credentials). The beat task reads it at the top of every run;
+# OFF makes the run a no-op (no Vault writes, no lease churn) without restarting
+# Celery beat — mirroring the price-sync / backup enable levers. The CADENCE
+# (cron) is a separate operator-tunable knob (WORKERS_CRED_ROTATION_CRON read by
+# the beat process at boot), NOT this flag. Default ON: an unattended production
+# platform should keep its static secrets fresh + its dynamic leases short-lived.
+CRED_ROTATION_ENABLED_KEY = "cred_rotation_enabled"
+DEFAULT_CRED_ROTATION_ENABLED = True
+
+
+async def get_cred_rotation_enabled(session: AsyncSession) -> bool:
+    """Whether the scheduled credential-rotation job is currently enabled.
+
+    Read by the ``workers.rotate_credentials`` beat task before it does any
+    work; when False the run is a no-op (no Vault writes, no lease renewal). A
+    System Admin flips this from the admin panel — only a System Admin may write
+    a platform setting (``set_platform_setting``).
+    """
+    value = await get_platform_setting(
+        session, CRED_ROTATION_ENABLED_KEY, default=DEFAULT_CRED_ROTATION_ENABLED
+    )
+    return bool(value)
+
+
+# ---------------------------------------------------------------------------
 # Scheduled backup (Plan 12 task_12_01 / task_12_04)
 # ---------------------------------------------------------------------------
 # Live enable/disable lever for the daily backup job, flipped by a System Admin

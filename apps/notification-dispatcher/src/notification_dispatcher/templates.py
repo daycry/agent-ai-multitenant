@@ -342,6 +342,33 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "vs bound {{ bound | default('?') }}."
         ),
     ),
+    # --- credential_rotation_failed (Plan 15 task_15_17) -------------------
+    # Platform-scoped ops alert. The context is the rotation audit's
+    # secret-free log fields (status / static_secrets / new_lease_id / error) —
+    # NEVER a credential value, so the template can only ever render names +
+    # lease-ids + the non-leaky error string.
+    ("credential_rotation_failed", "es"): TemplateSource(
+        subject="Fallo en la rotación automática de credenciales",
+        body=(
+            "La rotación automática de credenciales (Vault) ha fallado a las "
+            "{{ rotated_at | default('(desconocido)') }} con estado "
+            "{{ status | default('failed') }}. Motivo: "
+            "{{ error | default('(sin detalle)') }}. El sistema sigue operativo "
+            "con las credenciales actuales; revisa Vault y el runbook de "
+            "rotación de credenciales."
+        ),
+    ),
+    ("credential_rotation_failed", "en"): TemplateSource(
+        subject="Automatic credential rotation failed",
+        body=(
+            "Automatic credential rotation (Vault) failed at "
+            "{{ rotated_at | default('(unknown)') }} with status "
+            "{{ status | default('failed') }}. Reason: "
+            "{{ error | default('(no detail)') }}. The system stays up on its "
+            "current credentials; check Vault and the credential-rotation "
+            "runbook."
+        ),
+    ),
 }
 
 # Public, read-only view of the builtin catalogue keyed by

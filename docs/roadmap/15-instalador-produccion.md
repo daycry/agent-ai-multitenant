@@ -386,7 +386,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_17` — Rotación automática de credenciales con Vault dynamic secrets
 
-- [ ] **Título**: Rotación automática de credenciales con Vault dynamic secrets
+- [x] **Título**: Rotación automática de credenciales con Vault dynamic secrets
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: security + devops

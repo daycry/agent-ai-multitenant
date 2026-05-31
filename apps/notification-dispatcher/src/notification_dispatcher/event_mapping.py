@@ -188,6 +188,18 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.PRIORITY,
         default_channel_types=("in_app", "email"),
     ),
+    # Plan 15 task_15_17 — the scheduled Vault credential-rotation cycle FAILED
+    # (a static-secret rotation, a dynamic-credential issue, or a lease
+    # renew/revoke did not complete). A platform-scoped (tenant_id=None) ops
+    # signal a System Admin acts on; the rotation engine keeps the system up on
+    # its current credentials but must alert. Rides the priority lane, fanning
+    # out to in-app + email by default. The payload carries NO credential value
+    # (only the audit's secret-free names / lease-ids / counts).
+    "credential_rotation_failed": EventSpec(
+        "credential_rotation_failed",
+        lane=NotificationLane.PRIORITY,
+        default_channel_types=("in_app", "email"),
+    ),
 }
 
 

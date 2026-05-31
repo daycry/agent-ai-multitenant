@@ -73,6 +73,10 @@ PRICE_SYNC_BEAT_ENTRY = "sync-model-prices"
 # constant-not-hardcoded-string discipline as the price-sync entry.
 BACKUP_BEAT_ENTRY = "run-daily-backup"
 
+# Plan 15 task_15_17: the scheduled credential-rotation entry name. Same
+# constant-not-hardcoded-string discipline as the price-sync / backup entries.
+CRED_ROTATION_BEAT_ENTRY = "rotate-credentials"
+
 
 def _parse_cron(expr: str) -> crontab:
     """Parse a 5-field cron string (minute hour dom month dow) to a crontab.
@@ -117,6 +121,17 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
     sched[BACKUP_BEAT_ENTRY] = {
         "task": "workers.run_daily_backup",
         "schedule": _parse_cron(cfg.backup_cron),
+        "options": {"queue": "privileged"},
+    }
+    # Plan 15 task_15_17: Vault credential rotation on a CONFIGURABLE cadence
+    # (WORKERS_CRED_ROTATION_CRON, default weekly Sunday 02:00). Pinned to the
+    # `privileged` queue — it touches the platform's secrets/Vault, the lane
+    # drained by a worker with the tighter security profile. Its live
+    # enable/disable is the `cred_rotation_enabled` platform setting a System
+    # Admin owns.
+    sched[CRED_ROTATION_BEAT_ENTRY] = {
+        "task": "workers.rotate_credentials",
+        "schedule": _parse_cron(cfg.cred_rotation_cron),
         "options": {"queue": "privileged"},
     }
     return sched
