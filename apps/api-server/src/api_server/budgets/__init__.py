@@ -27,6 +27,14 @@ from api_server.budgets.consumption import (
     maybe_alert_budgets,
     tenant_budget_summary,
 )
+from api_server.budgets.pause import (
+    BUDGET_PAUSE_OVERRIDE_ACTION,
+    BudgetPauseBlock,
+    BudgetPauseRefresh,
+    budget_pause_block,
+    clear_budget_pause,
+    refresh_budget_pause_flags,
+)
 from api_server.budgets.period import (
     BudgetPeriodWindow,
     InvalidBudgetPeriodError,
@@ -35,16 +43,22 @@ from api_server.budgets.period import (
 
 __all__ = [
     "BUDGET_ALERT_EVENT_TYPE",
+    "BUDGET_PAUSE_OVERRIDE_ACTION",
     "BudgetAlertDispatcher",
     "BudgetConsumption",
     "BudgetEvaluationResult",
     "BudgetFiring",
+    "BudgetPauseBlock",
+    "BudgetPauseRefresh",
     "BudgetPeriodWindow",
     "CeleryBudgetAlertDispatcher",
     "InvalidBudgetPeriodError",
+    "budget_pause_block",
+    "clear_budget_pause",
     "compute_budget_consumption",
     "current_budget_period",
     "evaluate_budget_alerts",
     "maybe_alert_budgets",
+    "refresh_budget_pause_flags",
     "tenant_budget_summary",
 ]

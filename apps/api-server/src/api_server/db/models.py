@@ -183,6 +183,17 @@ class Organization(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     tenant_budget_period_start_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tenant_budget_period_length_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Tenant-level auto-pause flag (Plan 11.1 task_11_1_06). The peer of
+    # ``projects.paused_by_budget``: set true by the consumption evaluator
+    # when the tenant reaches 100% of its tenant-wide budget for the active
+    # period, so the orchestrator's execution-start path refuses to enqueue
+    # NEW runs for this tenant (active runs are never killed). A manual
+    # override clears it; a new period auto-clears it. NOT NULL DEFAULT false
+    # so every tenant starts un-paused (no backfill).
+    tenant_paused_by_budget: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+
     # No ORM `memberships` relationship: tenant_id is NOT a formal FK
     # to organizations.id (the migration intentionally omits the
     # constraint so RLS policies cannot create circular dependencies

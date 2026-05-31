@@ -34,6 +34,7 @@ from api_server.routers.approvals import router as approvals_router
 from api_server.routers.assistant import router as assistant_router
 from api_server.routers.auth import router as auth_router
 from api_server.routers.backup import router as backup_router
+from api_server.routers.budget_pause import router as budget_pause_router
 from api_server.routers.conversations import (
     conversations_router,
     project_conversations_router,
@@ -209,6 +210,7 @@ def _register_routers(app: FastAPI) -> None:
         incoming_webhook_configs_router,
         assistant_router,
         backup_router,
+        budget_pause_router,
         ws_router,
     ):
         app.include_router(router)

@@ -23,6 +23,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+from api_server.budgets import budget_pause_block
 from api_server.db.domain import Agent, Project, Task
 from celery import Celery
 from sqlalchemy import and_, func, or_, select
@@ -176,6 +177,23 @@ class TaskDispatcher:
             # Re-check the live state: a stale `ready` event for a task
             # already dispatched (or cancelled) must be a no-op.
             if task is None or task.status != _READY:
+                return None
+
+            # Budget auto-pause (Plan 11.1 task_11_1_06): if the task's tenant
+            # or project has hit 100% of its budget for the active period, the
+            # START of a NEW execution is refused — the task stays `ready` (it
+            # is re-dispatched once the pause is overridden or a new period
+            # clears it). Active executions are NEVER touched. The orchestrator
+            # runs BYPASSRLS, so the guard carries an explicit tenant predicate.
+            block = await budget_pause_block(
+                session, tenant_id=task.tenant_id, project_id=task.project_id
+            )
+            if block is not None:
+                _log.info(
+                    "orchestrator.task_paused_by_budget",
+                    task_id=str(task_id),
+                    **block.as_log_fields(),
+                )
                 return None
 
             project = (
