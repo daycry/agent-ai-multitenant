@@ -26,6 +26,7 @@ from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
     Index,
+    Integer,
     LargeBinary,
     Numeric,
     String,
@@ -116,6 +117,14 @@ class ApiTokenScope(enum.StrEnum):
 # ---------------------------------------------------------------------------
 class Organization(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "organizations"
+    __table_args__ = (
+        # A configured tenant budget can never be negative (mirrors the
+        # projects.budget_amount CHECK). NULL stays valid (= no budget).
+        CheckConstraint(
+            "tenant_budget_amount IS NULL OR tenant_budget_amount >= 0",
+            name="ck_organizations_tenant_budget_non_negative",
+        ),
+    )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
@@ -149,6 +158,30 @@ class Organization(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     personal_assistant_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+
+    # --- Tenant-level budget (Plan 11.1 task_11_1_04; spec §28.7) ----------
+    # The tenant-wide spend cap, the peer of the project-level budget on
+    # ``Project`` (see db.domain.Project.budget_*). All NULLABLE with no
+    # server_default: a tenant has NO budget until one is explicitly
+    # configured (default state = "unbudgeted"). Cost is always canonical
+    # USD; the cap is denominated in ``tenant_budget_currency`` and converted
+    # to USD when the consumption evaluator (task_11_1_05) compares it.
+    #   - amount    : the cap. Numeric(14,2) -> Decimal end-to-end (no float
+    #                 rounding on currency). CHECK keeps it non-negative.
+    #   - currency  : ISO-4217 code the amount is denominated in.
+    #   - period    : a ``BudgetPeriod`` value (weekly/monthly/quarterly/
+    #                 yearly/custom) — the recurring window the cap applies to.
+    #   - period_start_day / period_length_days : ONLY meaningful for the
+    #                 ``custom`` period (day the cycle starts + its length in
+    #                 days); NULL for the fixed calendar periods. The
+    #                 ``budgets.period`` helper computes the active window.
+    tenant_budget_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=14, scale=2), nullable=True
+    )
+    tenant_budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    tenant_budget_period: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    tenant_budget_period_start_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tenant_budget_period_length_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # No ORM `memberships` relationship: tenant_id is NOT a formal FK
     # to organizations.id (the migration intentionally omits the

@@ -211,6 +211,90 @@ async def get_fx_source(session: AsyncSession) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Budget alert thresholds (Plan 11.1 task_11_1_04)
+# ---------------------------------------------------------------------------
+# The percentages-of-budget at which the consumption evaluator (task_11_1_05)
+# fires an alert via the Plan 10 notifier. PLATFORM-GLOBAL + configurable by a
+# System Admin (Plan 11.1 decision): the same thresholds apply to every tenant
+# and project, and a tenant cannot loosen them. Default [80, 90, 100]: warn at
+# 80% and 90%, then 100% is the auto-pause trigger (task_11_1_06). Stored as a
+# JSON array of ints. The 100% entry is what arms the auto-pause, so it is
+# always present in the effective list even if a System Admin drops it.
+BUDGET_ALERT_THRESHOLDS_KEY = "budget_alert_thresholds"
+DEFAULT_BUDGET_ALERT_THRESHOLDS: tuple[int, ...] = (80, 90, 100)
+
+# A threshold is a percentage of the budget. Below 1% is meaningless noise; we
+# allow above 100% (an over-budget escalation alert is legitimate).
+_BUDGET_THRESHOLD_MIN = 1
+_BUDGET_THRESHOLD_MAX = 1000
+# The 100% mark always stays in the effective list — it is the auto-pause arm.
+_BUDGET_PAUSE_THRESHOLD = 100
+
+
+class InvalidBudgetThresholdsError(ValueError):
+    """Raised when a proposed budget-alert-threshold list fails validation
+    (empty, a non-int entry, or a value outside the [1, 1000] range)."""
+
+
+def validate_budget_alert_thresholds(values: list[int]) -> list[int]:
+    """Validate + normalise a budget-alert-threshold list.
+
+    Returns the de-duplicated, ascending list with the mandatory 100% pause
+    arm guaranteed present. Raises :class:`InvalidBudgetThresholdsError` for an
+    empty list, a non-int (``bool`` is rejected too), or an out-of-range value.
+    """
+    if not values:
+        raise InvalidBudgetThresholdsError("at least one alert threshold is required")
+    cleaned: set[int] = set()
+    for v in values:
+        # bool is an int subclass — reject it so True/False can't sneak in.
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise InvalidBudgetThresholdsError(f"threshold {v!r} must be an integer")
+        if v < _BUDGET_THRESHOLD_MIN or v > _BUDGET_THRESHOLD_MAX:
+            raise InvalidBudgetThresholdsError(
+                f"threshold {v} must be between "
+                f"{_BUDGET_THRESHOLD_MIN} and {_BUDGET_THRESHOLD_MAX}"
+            )
+        cleaned.add(v)
+    cleaned.add(_BUDGET_PAUSE_THRESHOLD)  # auto-pause arm always present
+    return sorted(cleaned)
+
+
+async def get_budget_alert_thresholds(session: AsyncSession) -> list[int]:
+    """The effective budget-alert thresholds (ascending ints).
+
+    Reads the System-Admin override, falling back to the platform default
+    ``[80, 90, 100]``. Always normalised + guaranteed to include the 100% pause
+    arm; a stored value that somehow fails validation falls back to the default
+    rather than crashing the evaluator."""
+    value = await get_platform_setting(
+        session,
+        BUDGET_ALERT_THRESHOLDS_KEY,
+        default=list(DEFAULT_BUDGET_ALERT_THRESHOLDS),
+    )
+    try:
+        return validate_budget_alert_thresholds(list(value))
+    except (InvalidBudgetThresholdsError, TypeError):
+        return list(DEFAULT_BUDGET_ALERT_THRESHOLDS)
+
+
+async def set_budget_alert_thresholds(
+    session: AsyncSession,
+    values: list[int],
+    *,
+    actor: User,
+) -> list[int]:
+    """Persist the budget-alert thresholds (System Admin only).
+
+    Validates the list FIRST (raising :class:`InvalidBudgetThresholdsError`
+    before any write); ``set_platform_setting`` re-checks the actor is a System
+    Admin. Returns the normalised list actually stored."""
+    normalised = validate_budget_alert_thresholds(values)
+    await set_platform_setting(session, BUDGET_ALERT_THRESHOLDS_KEY, normalised, actor=actor)
+    return normalised
+
+
+# ---------------------------------------------------------------------------
 # Scheduled credential rotation (Plan 15 task_15_17)
 # ---------------------------------------------------------------------------
 # Live enable/disable lever for the periodic Vault credential-rotation job
