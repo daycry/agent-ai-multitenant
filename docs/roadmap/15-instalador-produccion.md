@@ -1,7 +1,8 @@
 ---
 plan_id: 15-instalador-produccion
 title: Instalador, Endurecimiento y Producción
-status: pending_approval
+status: in_progress
+started_at: 2026-05-31
 blocking_plan:
   [
     00-fundaciones,
@@ -35,18 +36,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo                              | Valor                                                                   |
-| ---------------------------------- | ----------------------------------------------------------------------- |
-| **ID del Plan**                    | `15-instalador-produccion`                                              |
-| **Estado**                         | `pending_approval`                                                      |
-| **Bloqueado por**                  | todas las fases anteriores (`00-fundaciones` … `14-evals-estadisticas`) |
-| **Tiempo estimado (calendario)**   | 4-5 semanas                                                             |
-| **Tiempo estimado (persona-días)** | 80-100                                                                  |
-| **Previsión de coste — humano**    | 32.000 € – 40.000 € (tarifa media 50 €/h)                               |
-| **Previsión de coste — IA**        | 150 € – 240 €                                                           |
-| **Aprobador propuesto**            | System Admin                                                            |
-| **Rama git**                       | `plan/15-instalador-produccion`                                         |
-| **Secciones del .docx**            | [22]                                                                    |
+| Campo                              | Valor                                                                                                                     |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **ID del Plan**                    | `15-instalador-produccion`                                                                                                |
+| **Estado**                         | `in_progress` (override humano del gate blocking_plan; 15_27 pentest externo + 15_29 release v1.0.0 reservados al humano) |
+| **Bloqueado por**                  | todas las fases anteriores (`00-fundaciones` … `14-evals-estadisticas`)                                                   |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                                                                                                               |
+| **Tiempo estimado (persona-días)** | 80-100                                                                                                                    |
+| **Previsión de coste — humano**    | 32.000 € – 40.000 € (tarifa media 50 €/h)                                                                                 |
+| **Previsión de coste — IA**        | 150 € – 240 €                                                                                                             |
+| **Aprobador propuesto**            | System Admin                                                                                                              |
+| **Rama git**                       | `plan/15-instalador-produccion`                                                                                           |
+| **Secciones del .docx**            | [22]                                                                                                                      |
 
 ---
 
