@@ -2,7 +2,7 @@
 title: Runbooks operativos
 docs_language: es
 audience: operador, system admin
-updated: 2026-05-29
+updated: 2026-05-31
 ---
 
 # 06-runbooks — Runbooks operativos
@@ -20,6 +20,8 @@ Orientados a quien mantiene el sistema corriendo en una sola máquina
 | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | [01-installation-from-scratch.md](./01-installation-from-scratch.md) | Instalar desde cero en una máquina virgen (wizard de 9 pasos o CLI desatendido)   |
 | [02-troubleshooting.md](./02-troubleshooting.md)                     | Diagnóstico y fix de fallos frecuentes tras instalar o en operación               |
+| [03-system-upgrade.md](./03-system-upgrade.md)                       | Actualizar una instalación en marcha a una versión nueva (imágenes + esquema)     |
+| [04-disaster-recovery.md](./04-disaster-recovery.md)                 | DR: punto de entrada canónico para restore completo o selectivo por tenant        |
 | [health-check.md](./health-check.md)                                 | Verificar que todos los servicios del stack están sanos                           |
 | [backups.md](./backups.md)                                           | Copia/restauración manual a nivel de volumen (procedimiento básico)               |
 | [restart-services.md](./restart-services.md)                         | Reiniciar el stack o un servicio concreto sin perder datos                        |

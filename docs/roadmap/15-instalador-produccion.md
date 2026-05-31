@@ -473,7 +473,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_22` — Runbook: DR completo + restore selectivo (consolidar de Fase 12)
 
-- [ ] **Título**: Runbook: DR completo + restore selectivo (consolidar de Fase 12)
+- [x] **Título**: Runbook: DR completo + restore selectivo (consolidar de Fase 12)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
