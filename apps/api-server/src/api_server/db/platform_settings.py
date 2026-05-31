@@ -323,6 +323,35 @@ async def get_cred_rotation_enabled(session: AsyncSession) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Acceptance-timeout escalation sweep (Plan 16 task_16_06)
+# ---------------------------------------------------------------------------
+# Live enable/disable lever for the acceptance-timeout escalation beat job
+# (workers.escalate_human_assignments). The beat task reads it at the top of
+# every run; OFF makes the run a no-op (no reassignment, no block) without
+# restarting Celery beat — mirroring the price-sync / fx-fetch / backup enable
+# levers. The CADENCE (every 10 min, default) is a separate operator-tunable
+# knob (WORKERS_HUMAN_ESCALATION_CRON read by the beat process at boot), NOT
+# this flag. Default ON: an unattended platform should keep human tasks moving
+# (escalate a forgotten assignment, block when escalation is exhausted).
+HUMAN_ESCALATION_ENABLED_KEY = "human_escalation_enabled"
+DEFAULT_HUMAN_ESCALATION_ENABLED = True
+
+
+async def get_human_escalation_enabled(session: AsyncSession) -> bool:
+    """Whether the acceptance-timeout escalation sweep is currently enabled.
+
+    Read by the ``workers.escalate_human_assignments`` beat task before it does
+    any work; when False the run is a no-op (no pending-acceptance assignment is
+    reassigned or blocked). A System Admin flips this from the admin panel — only
+    a System Admin may write a platform setting (``set_platform_setting``).
+    """
+    value = await get_platform_setting(
+        session, HUMAN_ESCALATION_ENABLED_KEY, default=DEFAULT_HUMAN_ESCALATION_ENABLED
+    )
+    return bool(value)
+
+
+# ---------------------------------------------------------------------------
 # Scheduled backup (Plan 12 task_12_01 / task_12_04)
 # ---------------------------------------------------------------------------
 # Live enable/disable lever for the daily backup job, flipped by a System Admin

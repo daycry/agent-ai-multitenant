@@ -181,7 +181,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_06` — Acceptance timeout con escalación automática
 
-- [ ] **Título**: Job programado (Celery Beat, cada 10 minutos) que detecta HumanTaskAssignments con estado pendiente de aceptación cuya antigüedad supera `acceptance_timeout_hours`. Reasigna al `escalation_target_user_id`. Si el escalation target tampoco acepta dentro del mismo timeout, transiciona la tarea a `blocked` y notifica al Tenant Admin.
+- [x] **Título**: Job programado (Celery Beat, cada 10 minutos) que detecta HumanTaskAssignments con estado pendiente de aceptación cuya antigüedad supera `acceptance_timeout_hours`. Reasigna al `escalation_target_user_id`. Si el escalation target tampoco acepta dentro del mismo timeout, transiciona la tarea a `blocked` y notifica al Tenant Admin.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

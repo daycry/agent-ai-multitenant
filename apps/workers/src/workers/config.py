@@ -547,6 +547,27 @@ class Settings(BaseSettings):
         "NEVER logged and NEVER in this config.",
     )
 
+    # ----- Acceptance-timeout escalation sweep (Plan 16 task_16_06) -----
+    # The escalation beat job (workers.escalate_human_assignments) sweeps the
+    # pending_acceptance HumanTaskAssignment rows whose age exceeds their Human
+    # Agent's acceptance_timeout_hours and reassigns/blocks them. Like the other
+    # beat jobs the cron is read by the beat PROCESS at boot and the live
+    # enable lever is a PLATFORM setting (`human_escalation_enabled`) a System
+    # Admin owns — NOT this env. Default every 10 minutes (Plan 16 task_16_06):
+    # frequent enough that a 24h acceptance window is enforced promptly, cheap
+    # enough (a partial-index scan of the open pending_acceptance rows) to run
+    # often. NOTE: a 5-field cron's finest granularity is per-minute; "*/10 * * *
+    # *" fires at minute 0,10,20,…,50 of every hour — the 10-minute cadence.
+    human_escalation_cron: str = Field(
+        default="*/10 * * * *",
+        description="Cron (minute hour day-of-month month day-of-week) for the "
+        "scheduled acceptance-timeout escalation sweep. Default every 10 minutes "
+        "(Plan 16 task_16_06). Operator-tunable; the beat process reads it at boot. "
+        "The live enable/disable lever is the `human_escalation_enabled` PLATFORM "
+        "setting (a System Admin flips it from the admin panel; it takes effect on "
+        "the next fire without a restart).",
+    )
+
     # ----- Misc -----
     environment: str = Field(
         default="dev", description="Tag emitted in logs: dev | staging | prod."
