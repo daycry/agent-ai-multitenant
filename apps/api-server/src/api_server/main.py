@@ -48,6 +48,7 @@ from api_server.routers.executions import router as executions_router
 from api_server.routers.guardrail_alerts import router as guardrail_alerts_router
 from api_server.routers.guardrail_events import router as guardrail_events_router
 from api_server.routers.human_agents import router as human_agents_router
+from api_server.routers.human_inbox import router as human_inbox_router
 from api_server.routers.incoming_webhook_configs import router as incoming_webhook_configs_router
 from api_server.routers.incoming_webhooks import router as incoming_webhooks_router
 from api_server.routers.internal_agent import router as internal_agent_router
@@ -168,6 +169,7 @@ def _register_routers(app: FastAPI) -> None:
         admin_router,
         agents_router,
         human_agents_router,
+        human_inbox_router,
         api_tokens_router,
         api_v1_router,
         api_v1_docs_router,

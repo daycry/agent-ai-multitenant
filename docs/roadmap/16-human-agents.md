@@ -223,7 +223,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_08` — Bandeja personal "Tareas asignadas a mí"
 
-- [ ] **Título**: Vista en el panel principal de cada User: lista de tareas asignadas activas con estado (assigned / accepted / in_progress / in_review), proyecto, plan, deadline. Botones de acción contextual: aceptar, rechazar (con justificación), marcar como completada, escalar al admin.
+- [x] **Título**: Vista en el panel principal de cada User: lista de tareas asignadas activas con estado (assigned / accepted / in*progress / in_review), proyecto, plan, deadline. Botones de acción contextual: aceptar, rechazar (con justificación), marcar como completada, escalar al admin. *(backend pytest verde vs DB real + @pytest.mark.cross*tenant; admin-panel typecheck/lint/build verde; e2e Playwright escritos NO ejecutados — pendiente verificación humana).*
 - **Tiempo estimado**: 14 h
 - **Complejidad**: l
 - **Rol sugerido**: frontend-dev + backend-dev
