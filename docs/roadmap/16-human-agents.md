@@ -240,7 +240,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_09` — Formulario de entrega con attachments y log de horas opcional
 
-- [ ] **Título**: Al marcar tarea como completada, modal con textarea de output, attachments (archivos, URLs, screenshots), y campo opcional de horas trabajadas. Crea HumanWorkSession y transiciona tarea a in_review.
+- [x] **Título**: Al marcar tarea como completada, modal con textarea de output, attachments (archivos, URLs, screenshots), y campo opcional de horas trabajadas. Crea HumanWorkSession y transiciona tarea a in*review. *(backend pytest verde vs DB real + @pytest.mark.cross*tenant; admin-panel typecheck/lint/build verde; e2e Playwright escritos NO ejecutados — pendiente verificación humana).*
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev

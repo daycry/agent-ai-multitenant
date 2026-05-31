@@ -3,15 +3,14 @@
 /**
  * Modal de acción contextual de la bandeja personal (Plan 16 task_16_08).
  *
- * Cubre las tres acciones que llevan texto:
+ * Cubre las dos acciones que llevan solo texto:
  *   - reject    — justificación OBLIGATORIA; tarea -> blocked.
  *   - escalate  — motivo opcional; tarea -> blocked + notifica al admin.
- *   - complete  — comentarios opcionales; tarea -> in_review.
  *
- * El modal POSTea al endpoint correspondiente con el cuerpo apropiado
- * ({ justification } / { comments }) y llama a onDone al terminar para que la
- * página refresque la lista. La acción "accept" (sin cuerpo) se resuelve en la
- * propia página, no aquí.
+ * El modal POSTea al endpoint correspondiente con { justification } y llama a
+ * onDone al terminar para que la página refresque la lista. La acción "accept"
+ * (sin cuerpo) se resuelve en la propia página; "complete" usa el formulario de
+ * entrega completo (submit-dialog.tsx, task_16_09).
  */
 
 import { useEffect, useState } from "react";
@@ -32,7 +31,7 @@ import { ApiError, apiFetch } from "@/lib/api";
 
 import type { InboxAssignment } from "./page";
 
-type DialogMode = "reject" | "escalate" | "complete";
+type DialogMode = "reject" | "escalate";
 
 interface ActionResult {
   assignment_id: string;
@@ -50,8 +49,8 @@ const COPY: Record<
     label: string;
     placeholder: string;
     required: boolean;
-    field: "justification" | "comments";
-    endpoint: "reject" | "escalate" | "complete";
+    field: "justification";
+    endpoint: "reject" | "escalate";
     confirmLabel: string;
     confirmVariant: "default" | "destructive";
   }
@@ -78,18 +77,6 @@ const COPY: Record<
     field: "justification",
     endpoint: "escalate",
     confirmLabel: "Escalar",
-    confirmVariant: "default",
-  },
-  complete: {
-    title: "Marcar como completada",
-    description:
-      "La tarea pasa a revisión. Puedes dejar una nota sobre el trabajo realizado (opcional). El formulario completo de entrega con adjuntos y horas llega más adelante.",
-    label: "Comentarios (opcional)",
-    placeholder: "Ej.: resuelto sin observaciones…",
-    required: false,
-    field: "comments",
-    endpoint: "complete",
-    confirmLabel: "Completar",
     confirmVariant: "default",
   },
 };

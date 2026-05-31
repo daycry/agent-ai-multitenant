@@ -45,6 +45,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
 
 import { InboxJustifyDialog } from "./justify-dialog";
+import { InboxSubmitDialog } from "./submit-dialog";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.human_inbox
@@ -237,7 +238,7 @@ function AssignmentCard({
   );
 }
 
-type DialogMode = "reject" | "escalate" | "complete";
+type DialogMode = "reject" | "escalate";
 
 // ---------------------------------------------------------------------------
 // Page
@@ -245,6 +246,9 @@ type DialogMode = "reject" | "escalate" | "complete";
 export default function InboxPage() {
   const queryClient = useQueryClient();
   const [dialog, setDialog] = useState<{ mode: DialogMode; item: InboxAssignment } | null>(null);
+  // The full delivery form (task_16_09) — its own modal, separate from the
+  // text-only reject/escalate justification dialog.
+  const [submit, setSubmit] = useState<{ item: InboxAssignment } | null>(null);
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
 
   const query = useQuery({
@@ -318,6 +322,17 @@ export default function InboxPage() {
         }}
       />
 
+      <InboxSubmitDialog
+        request={submit}
+        onOpenChange={(open) => {
+          if (!open) setSubmit(null);
+        }}
+        onDone={() => {
+          setSubmit(null);
+          refresh();
+        }}
+      />
+
       {query.isLoading && (
         <p className="text-muted-foreground text-sm" data-testid="inbox-loading">
           Cargando tus tareas…
@@ -349,7 +364,7 @@ export default function InboxPage() {
               actionError={actionErrors[item.assignment_id] ?? null}
               onAccept={(a) => actionMutation.mutate({ item: a, action: "accept" })}
               onReject={(a) => setDialog({ mode: "reject", item: a })}
-              onComplete={(a) => setDialog({ mode: "complete", item: a })}
+              onComplete={(a) => setSubmit({ item: a })}
               onEscalate={(a) => setDialog({ mode: "escalate", item: a })}
             />
           ))}

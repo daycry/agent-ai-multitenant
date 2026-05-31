@@ -48,6 +48,7 @@ from api_server.db.domain import (
     HumanAgentConfig,
     HumanTaskAssignment,
     HumanTaskAssignmentStatus,
+    HumanWorkSession,
     Plan,
     Project,
     Task,
@@ -61,6 +62,8 @@ from api_server.schemas.human_inbox import (
     InboxActionRequest,
     InboxActionResult,
     InboxAssignmentResponse,
+    InboxSubmitRequest,
+    InboxSubmitResult,
 )
 from api_server.task_state_machine import TaskTransitionError, transition_task_status
 
@@ -332,21 +335,32 @@ async def reject_assignment(
     return _result(assignment, task, InboxAction.REJECT)
 
 
-@router.post("/assignments/{assignment_id}/complete", response_model=InboxActionResult)
+@router.post("/assignments/{assignment_id}/complete", response_model=InboxSubmitResult)
 async def complete_assignment(
     assignment_id: UUID,
-    payload: InboxActionRequest,
+    payload: InboxSubmitRequest,
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
-) -> InboxActionResult:
-    """Mark an accepted assignment complete: Task ``in_progress`` -> ``in_review``.
+) -> InboxSubmitResult:
+    """Submit the delivery form for an accepted assignment (task_16_09).
 
-    The assignment stays ``accepted`` (it is the historical record of who did
-    the work); the Task moves toward review. The full delivery form (attachments
-    + logged hours + a ``HumanWorkSession`` row) lands in task_16_09 — this MVP
-    records the transition and an audit event with any free-form ``comments``.
-    Allowed only while the assignment is ``accepted`` (you complete a task you
-    have accepted)."""
+    The assignee marks the task complete with their deliverable — an output
+    text, attachments (files / URLs / screenshots, stored as references) and an
+    OPTIONAL hours-worked figure. This:
+
+      1. creates a :class:`~api_server.db.domain.HumanWorkSession` (task_16_03)
+         recording WHO did the work (the caller), WHEN (the task's ``started_at``
+         if known, else now() -> now()), the logged hours, the output text
+         (``comments``) and the attachment references (``output_files_attached``);
+      2. transitions the Task ``in_progress`` -> ``in_review`` via the §7.2 state
+         machine (human assignee) — the deliverable goes to review;
+      3. appends an audit event recording the submission.
+
+    The assignment row stays ``accepted`` (it is the historical record of WHO
+    the work landed on). Allowed only while the assignment is ``accepted`` (you
+    submit a task you have accepted). The work session is the auditable
+    replacement for an ``Execution`` on a human task.
+    """
     tenant_id = require_tenant_id(principal)
     assignment, task = await _load_my_assignment_or_404(
         session, assignment_id, principal, tenant_id
@@ -358,11 +372,35 @@ async def complete_assignment(
         )
     await _assert_human_assignee(session, assignment, tenant_id)
     _transition_or_409(task, TaskStatus.IN_REVIEW.value)
+
+    output_text = payload.output_text()
+    attachments = payload.usable_attachments()
+    now = datetime.now(UTC)
+    # The session spans from when the human started the task (set on accept,
+    # task_16_08) to the submit moment; fall back to a point-in-time session if
+    # started_at is unknown (older rows / direct accept without a started_at).
+    start_at = task.started_at or now
+    work_session = HumanWorkSession(
+        tenant_id=tenant_id,
+        task_id=task.id,
+        user_id=principal.user_id,
+        start_at=start_at,
+        end_at=now,
+        hours_logged=payload.hours_worked,
+        comments=output_text,
+        output_files_attached=[a.model_dump(mode="json", exclude_none=True) for a in attachments],
+    )
+    session.add(work_session)
     await session.flush()
-    extra: dict[str, object] = {}
-    comments = (payload.comments or "").strip()
-    if comments:
-        extra["comments"] = comments
+
+    extra: dict[str, object] = {
+        "work_session_id": str(work_session.id),
+        "attachments_count": len(attachments),
+    }
+    if output_text:
+        extra["output"] = output_text
+    if payload.hours_worked is not None:
+        extra["hours_worked"] = str(payload.hours_worked)
     await _record_action(
         session,
         tenant_id=tenant_id,
@@ -371,7 +409,15 @@ async def complete_assignment(
         action=InboxAction.COMPLETE,
         extra=extra,
     )
-    return _result(assignment, task, InboxAction.COMPLETE)
+    return InboxSubmitResult(
+        assignment_id=assignment.id,
+        task_id=task.id,
+        action=InboxAction.COMPLETE.value,
+        assignment_status=assignment.status,
+        task_status=task.status,
+        work_session_id=work_session.id,
+        attachments_count=len(attachments),
+    )
 
 
 @router.post("/assignments/{assignment_id}/escalate", response_model=InboxActionResult)
