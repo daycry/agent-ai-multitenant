@@ -316,7 +316,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_13` — Reinstalación con preservación de datos opcional
 
-- [ ] **Título**: Reinstalación con preservación de datos opcional
+- [x] **Título**: Reinstalación con preservación de datos opcional
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops

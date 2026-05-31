@@ -75,6 +75,12 @@ from installer_backend.install import (
     InstallOrchestrator,
     StepExecutor,
 )
+from installer_backend.reinstall import (
+    ReinstallAbortedError,
+    Reinstaller,
+    ReinstallRequest,
+    build_default_reinstaller,
+)
 from installer_backend.seams import (
     InstallerLifecycle,
     PrereqChecker,
@@ -503,6 +509,57 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Pide las confirmaciones por terminal en lugar de derivarlas de los flags.",
     )
+
+    reinstall = sub.add_parser(
+        "reinstall",
+        help=(
+            "Reinstala sobre un despliegue existente. Por defecto PRESERVA los "
+            "datos y reutiliza los secretos; --fresh borra todo (doble confirmación)."
+        ),
+    )
+    reinstall.add_argument(
+        "--deployment-name",
+        default="agentic-platform",
+        metavar="NAME",
+        help=(
+            "Nombre del despliegue (proyecto compose) a detectar/reinstalar. En "
+            "modo --fresh hay que teclearlo en --confirm-name para confirmar."
+        ),
+    )
+    reinstall.add_argument(
+        "--data-root",
+        default="/data/agent-platform",
+        metavar="PATH",
+        help="Raíz de datos a detectar; en modo --fresh es lo que se borraría.",
+    )
+    reinstall.add_argument(
+        "--fresh",
+        action="store_true",
+        help=(
+            "Reinstalación LIMPIA: borra los datos existentes y regenera todos los "
+            "secretos. Requiere doble confirmación (--confirm-name Y --yes). Sin "
+            "--fresh se PRESERVAN los datos y se reutilizan los secretos existentes."
+        ),
+    )
+    reinstall.add_argument(
+        "--confirm-name",
+        default="",
+        metavar="NAME",
+        help=(
+            "Primera confirmación de --fresh: teclea el nombre EXACTO del "
+            "despliegue. Debe coincidir con --deployment-name."
+        ),
+    )
+    reinstall.add_argument(
+        "--yes",
+        action="store_true",
+        help="Segunda confirmación de --fresh: confirma explícitamente el borrado.",
+    )
+    reinstall.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Pide las confirmaciones por terminal en lugar de derivarlas de los flags.",
+    )
     return parser
 
 
@@ -588,6 +645,57 @@ def run_uninstall(
     return ExitCode.OK
 
 
+def run_reinstall(
+    *,
+    deployment_name: str,
+    data_root: str,
+    fresh: bool,
+    confirm_name: str,
+    yes: bool,
+    interactive: bool = False,
+    reinstaller: Reinstaller | None = None,
+    out: TextIO | None = None,
+) -> ExitCode:
+    """Resolve + run the reinstall pre-install work; return the :class:`ExitCode`.
+
+    Detects an existing deployment and either preserves it (reusing the existing
+    secrets/Vault so the kept encrypted data is not orphaned), wipes it (FRESH,
+    gated by the same double confirmation as the uninstall), or — when nothing is
+    detected — proceeds as a first install. The FRESH wipe's confirmation source
+    mirrors the uninstall: a TTY when ``--interactive``, otherwise the flags
+    (:class:`FlagConfirmer` — ``--confirm-name`` must match AND ``--yes`` set).
+    ``reinstaller`` is injectable (tests pass one wired to scripted fakes); when
+    omitted a default stub-wired one is built. A failed FRESH confirmation — or a
+    PRESERVE that cannot reuse the existing secrets — maps to
+    :data:`ExitCode.ABORTED` with NOTHING removed.
+
+    Returns :data:`ExitCode.OK`; the actual install pipeline runs afterward with
+    the :class:`~installer_backend.reinstall.ReinstallResult` plumbed in (so a
+    PRESERVE feeds the reused secrets back into the regenerated config).
+    """
+
+    stream = out if out is not None else sys.stdout
+
+    if reinstaller is None:
+        confirmer: Confirmer
+        if interactive:
+            confirmer = InteractiveConfirmer()
+        else:
+            confirmer = FlagConfirmer(confirm_name_value=confirm_name, yes=yes)
+        reinstaller = build_default_reinstaller(stream, confirmer)
+
+    req = ReinstallRequest(
+        preserve=not fresh,
+        deployment_name=deployment_name,
+        data_root=data_root,
+    )
+    try:
+        reinstaller.run(req)
+    except ReinstallAbortedError as exc:
+        raise CliError(str(exc), ExitCode.ABORTED) from exc
+    return ExitCode.OK
+
+
 def main(argv: Sequence[str] | None = None, *, out: TextIO | None = None) -> int:
     """CLI entry point. Returns a process exit code (see :class:`ExitCode`).
 
@@ -613,6 +721,18 @@ def main(argv: Sequence[str] | None = None, *, out: TextIO | None = None) -> int
                     deployment_name=args.deployment_name,
                     data_root=args.data_root,
                     purge_data=args.purge_data,
+                    confirm_name=args.confirm_name,
+                    yes=args.yes,
+                    interactive=args.interactive,
+                    out=out,
+                )
+            )
+        if args.command == "reinstall":
+            return int(
+                run_reinstall(
+                    deployment_name=args.deployment_name,
+                    data_root=args.data_root,
+                    fresh=args.fresh,
                     confirm_name=args.confirm_name,
                     yes=args.yes,
                     interactive=args.interactive,
