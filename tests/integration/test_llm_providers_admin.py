@@ -471,8 +471,10 @@ async def test_delete_removes_row_and_secret(
 # ===========================================================================
 def _ollama_ok_transport() -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path.endswith("/api/tags")
-        return httpx.Response(200, json={"models": []})
+        # OpenAI-compatible list-models endpoint (base_url ends in /v1),
+        # matching the runtime OllamaProvider — not the native /api/tags.
+        assert request.url.path.endswith("/models")
+        return httpx.Response(200, json={"data": []})
 
     return httpx.MockTransport(handler)
 

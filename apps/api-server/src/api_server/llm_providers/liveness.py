@@ -7,10 +7,13 @@ response, not in the error message, not in logs.
 
 Per kind (the four ADR-0021 paths):
 
-  * ``ollama``        — GET ``{base_url}/api/tags`` (the native list-models
-                        endpoint Ollama always exposes), optional bearer.
-                        A 2xx is OK; a 401/403 is AUTH_ERROR; a connect
-                        failure is CONNECTION_ERROR.
+  * ``ollama``        — GET ``{base_url}/models`` (the OpenAI-compatible
+                        list-models endpoint; ``base_url`` already includes
+                        ``/v1`` — local ``http://localhost:11434/v1`` or cloud
+                        ``https://ollama.com/v1`` — matching how the shared-llm
+                        OllamaProvider talks to it), optional bearer. A 2xx is
+                        OK; a 401/403 is AUTH_ERROR; a connect failure is
+                        CONNECTION_ERROR.
   * ``azure_foundry`` — GET the APIM gateway base with the
                         ``Ocp-Apim-Subscription-Key`` header. A reachable
                         gateway that does not reject the key is OK; a
@@ -117,7 +120,11 @@ async def _probe_ollama(
     bearer = secret.get(SECRET_FIELD_BEARER_TOKEN)
     if bearer:
         headers["Authorization"] = f"Bearer {bearer}"
-    url = f"{base_url.rstrip('/')}/api/tags"
+    # OpenAI-compatible list-models endpoint (base_url already ends in /v1),
+    # consistent with shared_llm OllamaProvider.list_models — NOT the native
+    # /api/tags (which 404s when base_url is the /v1 OpenAI-compat base, e.g.
+    # cloud https://ollama.com/v1).
+    url = f"{base_url.rstrip('/')}/models"
     return await _probe_get(client, url, headers=headers, provider="Ollama")
 
 
