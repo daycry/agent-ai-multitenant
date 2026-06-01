@@ -1,7 +1,7 @@
 ---
 plan_id: 16-human-agents
 title: Human Agents y Workflows Mixtos Humano-IA
-status: in_progress
+status: pending_human_validation
 blocking_plan: [06-testing-revision-git, 10-asistente-personal, 11-guardrails-precios]
 started_at: 2026-05-31
 completed_at: null
