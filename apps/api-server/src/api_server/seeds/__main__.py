@@ -12,6 +12,7 @@ import structlog
 
 from api_server.db.session import get_admin_sessionmaker
 from api_server.logging import configure_logging
+from api_server.marketplace.seed import seed_marketplace_listings
 from api_server.seeds.builtin_agents import seed_builtin_agent_skills, seed_builtin_agents
 from api_server.seeds.builtin_approval_policies import seed_builtin_approval_policies
 from api_server.seeds.builtin_kb_categories import seed_builtin_kb_categories
@@ -65,6 +66,14 @@ async def main() -> None:
         # Project templates depend on teams (FK on projects.team_id).
         n_proj_templates = await seed_builtin_project_templates(session)
         n_policies = await seed_builtin_approval_policies(session)
+        # Plan 09.1 task_09_1_01: fill the official marketplace catalog so it
+        # is not empty on a fresh install. Publishes the VERIFIED + GLOBAL
+        # listings under the ``official-catalog`` source — the flagship
+        # Playwright tool (task_09_13) + a curated set of SKILL listings built
+        # from the platform's own convention docs. Idempotent (upsert by
+        # listing identity); writes the SKILL.md artifacts under the official
+        # catalog root the install LocalArtifactFetcher reads.
+        catalog_listings = await seed_marketplace_listings(session)
 
     log.info(
         "seed.completed",
@@ -81,6 +90,8 @@ async def main() -> None:
         catalog_chunks=sum(r.chunks_persisted for r in catalog),
         project_templates=n_proj_templates,
         approval_policies=n_policies,
+        marketplace_listings=catalog_listings.total,
+        marketplace_listings_created=catalog_listings.created,
     )
 
 
