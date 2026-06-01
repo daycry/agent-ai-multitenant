@@ -103,6 +103,15 @@ class ExecutionRequest:
     # bare run); a list — including ``[]`` — registers shell_exec, with the
     # empty list meaning deny-all (every command rejected).
     allowed_commands: list[str] | None = None
+    # The project's stack runtime (`projects.default_runtime_template`, Plan
+    # 06.16 task_06_16_03). The orchestrator threads it from the task's project;
+    # the worker forwards it so the runtime's `run_*` docker_command tools
+    # (`run_pytest`/`run_lint`/`run_typecheck`/`run_build`) resolve their
+    # RuntimeTemplate from the project stack — a PHP project with `php-phpunit`
+    # runs `run_pytest` there, not in `python-pytest`. `None` (the default, and
+    # what a project that pinned no stack carries) keeps each tool's own default
+    # runtime (backward-compatible — no behaviour change for Python projects).
+    default_runtime_template: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict — the Celery payload the orchestrator sends."""
@@ -115,6 +124,7 @@ class ExecutionRequest:
             "budgets": self.budgets,
             "allowed_tools": self.allowed_tools,
             "allowed_commands": self.allowed_commands,
+            "default_runtime_template": self.default_runtime_template,
         }
 
     @classmethod
@@ -129,6 +139,7 @@ class ExecutionRequest:
             budgets=raw.get("budgets"),
             allowed_tools=raw.get("allowed_tools"),
             allowed_commands=raw.get("allowed_commands"),
+            default_runtime_template=raw.get("default_runtime_template"),
         )
 
 
@@ -182,6 +193,12 @@ def _agent_spec(
     # empty list IS emitted: it registers a deny-all shell_exec.
     if request.allowed_commands is not None:
         spec["allowed_commands"] = request.allowed_commands
+    # Forward the project's stack runtime (task_06_16_03). Only emit the key
+    # when the project pinned a stack; `None` means "no key", which the runtime
+    # reads as "keep each `run_*` tool's own default runtime" (python-pytest) —
+    # backward-compatible for existing Python projects.
+    if request.default_runtime_template is not None:
+        spec["default_runtime_template"] = request.default_runtime_template
     return spec
 
 

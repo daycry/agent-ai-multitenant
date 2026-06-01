@@ -159,6 +159,108 @@ def group_tasks_by_runtime(
 
 
 # ---------------------------------------------------------------------------
+# task_06_16_03 — run_* runtime resolution by project stack
+# ---------------------------------------------------------------------------
+
+# The runtime the ``run_*`` docker_command tools fall back to when neither the
+# project nor the tool pins one. ``run_pytest`` ships with
+# ``implementation_ref='python-pytest'`` and the other three (``run_lint`` /
+# ``run_typecheck`` / ``run_build``) ship with no ``implementation_ref`` at
+# all — this constant is the single, backward-compatible default that keeps
+# existing Python projects running pytest in ``python-pytest`` exactly as
+# before Plan 06.16.
+DEFAULT_RUN_RUNTIME_ID = "python-pytest"
+
+
+class RuntimeResolutionError(ValueError):
+    """A ``run_*`` tool referenced a runtime template we don't ship.
+
+    Raised by :func:`resolve_run_runtime` when the resolved id (the
+    project's ``default_runtime_template`` or the tool's
+    ``implementation_ref``) is not in :mod:`shared_test_runtimes.catalog`.
+    A subclass of :class:`ValueError` so existing ``except ValueError``
+    boot-time handlers still catch it, while the message names the
+    offending id + the known set so the operator sees a *clear* error
+    instead of a bare ``KeyError`` crash.
+    """
+
+
+def resolve_run_runtime_id(
+    *,
+    project_default_runtime: str | None,
+    tool_default_runtime: str | None,
+) -> str:
+    """Pick the runtime template id a ``run_*`` tool should execute in.
+
+    Precedence (Plan 06.16 task_06_16_03):
+
+      1. ``project_default_runtime`` (``projects.default_runtime_template``)
+         when the project pins a stack — a PHP project with
+         ``php-phpunit`` runs its ``run_*`` there, not in ``python-pytest``.
+      2. the tool's own ``implementation_ref`` default when the project
+         pins nothing (NULL) — e.g. ``run_pytest`` → ``python-pytest``.
+      3. :data:`DEFAULT_RUN_RUNTIME_ID` as the final fallback for the
+         ``run_*`` tools that carry no ``implementation_ref`` at all
+         (``run_lint`` / ``run_typecheck`` / ``run_build``).
+
+    Empty strings are treated as "unset" (the chips/UI never sends a tidy
+    value). The returned id is NOT validated against the catalog here —
+    use :func:`resolve_run_runtime` when you need the resolved template.
+    """
+    for candidate in (project_default_runtime, tool_default_runtime):
+        if candidate and candidate.strip():
+            return candidate.strip()
+    return DEFAULT_RUN_RUNTIME_ID
+
+
+def resolve_run_runtime(
+    *,
+    project_default_runtime: str | None,
+    tool_default_runtime: str | None,
+) -> RuntimeTemplate:
+    """Resolve a ``run_*`` tool's :class:`RuntimeTemplate` from the stack.
+
+    Combines :func:`resolve_run_runtime_id` (precedence: project default →
+    tool default → ``python-pytest``) with the catalog lookup. An
+    unknown/invalid id surfaces as a :class:`RuntimeResolutionError` with
+    the known set spelled out — a clear error the operator can act on,
+    never a bare ``KeyError`` taking the boot path down.
+    """
+    runtime_id = resolve_run_runtime_id(
+        project_default_runtime=project_default_runtime,
+        tool_default_runtime=tool_default_runtime,
+    )
+    try:
+        return get_template(runtime_id)
+    except KeyError as exc:
+        # ``catalog.get`` already formats "unknown runtime template 'x';
+        # known: a, b, …" — reuse that message verbatim so the operator
+        # sees the same wording the rest of the platform uses.
+        raise RuntimeResolutionError(str(exc).strip("\"'")) from exc
+
+
+def resolve_run_runtime_image(
+    project_default_runtime: str | None,
+    tool_default_runtime: str | None,
+) -> str:
+    """Resolve a ``run_*`` tool's docker image from the project stack.
+
+    The ``(project_default, tool_default) → image`` adapter the worker
+    injects into the agent-runtime's ``tool_wiring.WiringContext`` as its
+    ``runtime_image_resolver`` (Plan 06.16 task_06_16_03). Keeping the
+    catalog lookup here means the agent-runtime never imports
+    :mod:`shared_test_runtimes`. Raises :class:`RuntimeResolutionError`
+    (a clear error) on an unknown/invalid runtime id.
+    """
+    template = resolve_run_runtime(
+        project_default_runtime=project_default_runtime,
+        tool_default_runtime=tool_default_runtime,
+    )
+    image: str = template.docker_image
+    return image
+
+
+# ---------------------------------------------------------------------------
 # task_06_06 — Auxiliary services (postgres-test, redis-test, …)
 # ---------------------------------------------------------------------------
 
@@ -701,7 +803,9 @@ __all__ = [
     "AuxServiceSpec",
     "DEFAULT_POSTGRES",
     "DEFAULT_REDIS",
+    "DEFAULT_RUN_RUNTIME_ID",
     "RuntimePlan",
+    "RuntimeResolutionError",
     "TestRuntimeResult",
     "TestRuntimeRunner",
     "TestRuntimeSpec",
@@ -710,6 +814,9 @@ __all__ = [
     "build_dind_proxy_run_kwargs",
     "default_aux_services",
     "group_tasks_by_runtime",
+    "resolve_run_runtime",
+    "resolve_run_runtime_id",
+    "resolve_run_runtime_image",
     # Re-exported for tests
     "DockerSocketLeakError",
 ]

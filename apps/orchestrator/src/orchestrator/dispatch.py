@@ -388,6 +388,17 @@ class TaskDispatcher:
         # is TEXT[] and may surface as a tuple/None depending on the driver.
         project_commands = getattr(project, "allowed_commands", None) if project else None
         request["allowed_commands"] = [str(c) for c in (project_commands or [])]
+
+        # Per-project stack runtime (Plan 06.16 task_06_16_03). Thread
+        # `projects.default_runtime_template` into the spec so the runtime's
+        # `run_*` docker_command tools resolve their RuntimeTemplate from the
+        # project stack (a PHP project with `php-phpunit` runs `run_pytest`
+        # there). Only emit the key when the project pinned a stack; NULL keeps
+        # each tool's own default runtime (backward-compatible). `_agent_spec`
+        # reads "no key" as "no override".
+        project_runtime = getattr(project, "default_runtime_template", None) if project else None
+        if project_runtime:
+            request["default_runtime_template"] = str(project_runtime)
         return _AiDispatch(request=request)
 
     async def _route_human(
