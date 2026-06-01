@@ -44,7 +44,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, ExternalLink, Share2, ShieldCheck, Store, Trash2 } from "lucide-react";
+import { Ban, ExternalLink, PackagePlus, Share2, ShieldCheck, Store, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
@@ -140,12 +140,22 @@ export default function MarketplaceAdminPage() {
         description="Explora el catálogo, gestiona lo instalado, tus listings privados y los recursos compartidos entre tenants."
         data-testid="marketplace-admin-header"
         actions={
-          <Button asChild variant="outline" size="sm" data-testid="marketplace-private-link">
-            <Link href="/admin/marketplace/private">
-              <Store className="mr-1 h-3.5 w-3.5" />
-              Privadas
-            </Link>
-          </Button>
+          <>
+            <Button asChild variant="outline" size="sm" data-testid="marketplace-private-link">
+              <Link href="/admin/marketplace/private">
+                <Store className="mr-1 h-3.5 w-3.5" />
+                Privadas
+              </Link>
+            </Button>
+            <RoleGuard min="tenant_admin">
+              <Button asChild size="sm" data-testid="marketplace-publish-cta">
+                <Link href="/admin/marketplace/private">
+                  <PackagePlus className="mr-1 h-3.5 w-3.5" />
+                  Publicar
+                </Link>
+              </Button>
+            </RoleGuard>
+          </>
         }
       />
 
@@ -204,72 +214,118 @@ function CatalogTab() {
   const listings = listingsQuery.data ?? [];
   if (listings.length === 0) {
     return (
-      <Card>
-        <CardContent className="py-10 text-center">
-          <p className="text-muted-foreground text-sm italic" data-testid="catalog-empty">
-            El catálogo está vacío.
-          </p>
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        <PublishCallout />
+        <Card>
+          <CardContent className="py-10 text-center">
+            <p className="text-muted-foreground text-sm italic" data-testid="catalog-empty">
+              El catálogo está vacío. Publica tu primera skill o tool interna para empezar.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
   return (
-    <ul className="space-y-3" data-testid="catalog-list">
-      {listings.map((listing) => {
-        const isPlaywright = listing.name === "playwright" && listing.kind === "tool";
-        return (
-          <li key={listing.id}>
-            <Card data-testid={`catalog-listing-${listing.id}`}>
-              <CardHeader className="flex flex-row items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-                    <span className="truncate">{listing.name}</span>
-                    <Badge variant="info" data-testid={`catalog-kind-${listing.id}`}>
-                      {listing.kind}
-                    </Badge>
-                    <Badge variant="muted">{listing.version}</Badge>
-                    <Badge
-                      variant={TRUST_BADGE[listing.trust_level] ?? "muted"}
-                      data-testid={`catalog-trust-${listing.id}`}
+    <div className="space-y-4">
+      <PublishCallout />
+      <ul className="space-y-3" data-testid="catalog-list">
+        {listings.map((listing) => {
+          const isPlaywright = listing.name === "playwright" && listing.kind === "tool";
+          return (
+            <li key={listing.id}>
+              <Card data-testid={`catalog-listing-${listing.id}`}>
+                <CardHeader className="flex flex-row items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                      <span className="truncate">{listing.name}</span>
+                      <Badge variant="info" data-testid={`catalog-kind-${listing.id}`}>
+                        {listing.kind}
+                      </Badge>
+                      <Badge variant="muted">{listing.version}</Badge>
+                      <Badge
+                        variant={TRUST_BADGE[listing.trust_level] ?? "muted"}
+                        data-testid={`catalog-trust-${listing.id}`}
+                      >
+                        {listing.trust_level}
+                      </Badge>
+                      {isPrivate(listing) ? (
+                        <Badge variant="warning" data-testid={`catalog-private-${listing.id}`}>
+                          privado
+                        </Badge>
+                      ) : (
+                        <Badge variant="default" data-testid={`catalog-global-${listing.id}`}>
+                          global
+                        </Badge>
+                      )}
+                    </CardTitle>
+                    {listing.description ? (
+                      <p className="text-muted-foreground mt-1 break-words text-xs">
+                        {listing.description}
+                      </p>
+                    ) : null}
+                  </div>
+                  {isPlaywright ? (
+                    <Button
+                      asChild
+                      variant="outline"
+                      size="sm"
+                      data-testid={`catalog-playwright-config-${listing.id}`}
                     >
-                      {listing.trust_level}
-                    </Badge>
-                    {isPrivate(listing) ? (
-                      <Badge variant="warning" data-testid={`catalog-private-${listing.id}`}>
-                        privado
-                      </Badge>
-                    ) : (
-                      <Badge variant="default" data-testid={`catalog-global-${listing.id}`}>
-                        global
-                      </Badge>
-                    )}
-                  </CardTitle>
-                  {listing.description ? (
-                    <p className="text-muted-foreground mt-1 break-words text-xs">
-                      {listing.description}
-                    </p>
+                      <Link href={`/admin/marketplace/listings/${listing.id}/playwright-config`}>
+                        <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                        Configurar
+                      </Link>
+                    </Button>
                   ) : null}
-                </div>
-                {isPlaywright ? (
-                  <Button
-                    asChild
-                    variant="outline"
-                    size="sm"
-                    data-testid={`catalog-playwright-config-${listing.id}`}
-                  >
-                    <Link href={`/admin/marketplace/listings/${listing.id}/playwright-config`}>
-                      <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                      Configurar
-                    </Link>
-                  </Button>
-                ) : null}
-              </CardHeader>
-            </Card>
-          </li>
-        );
-      })}
-    </ul>
+                </CardHeader>
+              </Card>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+// ===========================================================================
+// PublishCallout — a prominent, discoverable "publish your own" banner
+// ===========================================================================
+/**
+ * A tenant_admin-only callout that makes publishing OBVIOUS from the catalog
+ * itself: a short explainer plus a primary CTA to the private publish screen.
+ * Hidden for non-admins (the RoleGuard), since they cannot publish anyway.
+ */
+function PublishCallout() {
+  return (
+    <RoleGuard min="tenant_admin">
+      <Card
+        className="border-primary/30 from-primary/5 bg-gradient-to-r to-transparent"
+        data-testid="catalog-publish-callout"
+      >
+        <CardContent className="flex flex-col gap-3 py-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="bg-primary/10 text-primary flex h-9 w-9 shrink-0 items-center justify-center rounded-lg">
+              <PackagePlus className="h-5 w-5" />
+            </span>
+            <div className="space-y-0.5">
+              <p className="text-sm font-semibold">¿Tienes una skill o tool interna?</p>
+              <p className="text-muted-foreground text-xs">
+                Publícala como listing privado de tu tenant. Solo tu organización la verá; el
+                manifest se valida al publicar.
+              </p>
+            </div>
+          </div>
+          <Button asChild size="sm" data-testid="catalog-publish-cta">
+            <Link href="/admin/marketplace/private">
+              <PackagePlus className="mr-1 h-3.5 w-3.5" />
+              Publicar en el marketplace
+            </Link>
+          </Button>
+        </CardContent>
+      </Card>
+    </RoleGuard>
   );
 }
 
