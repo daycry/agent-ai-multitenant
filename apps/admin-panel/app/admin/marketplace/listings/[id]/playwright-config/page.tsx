@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
 
 // --------------------------------------------------------------------------
@@ -209,8 +210,7 @@ export default function PlaywrightConfigPage() {
               <CardTitle className="text-base">Screenshots</CardTitle>
             </CardHeader>
             <CardContent>
-              <select
-                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm"
+              <Select
                 value={config.screenshots}
                 onChange={(e) =>
                   setConfig((prev) => ({
@@ -225,7 +225,7 @@ export default function PlaywrightConfigPage() {
                     {SCREENSHOT_LABEL[mode]}
                   </option>
                 ))}
-              </select>
+              </Select>
             </CardContent>
           </Card>
 
@@ -235,8 +235,7 @@ export default function PlaywrightConfigPage() {
               <CardTitle className="text-base">Traces</CardTitle>
             </CardHeader>
             <CardContent>
-              <select
-                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm"
+              <Select
                 value={config.traces}
                 onChange={(e) =>
                   setConfig((prev) => ({ ...prev, traces: e.target.value as TraceMode }))
@@ -248,7 +247,7 @@ export default function PlaywrightConfigPage() {
                     {TRACE_LABEL[mode]}
                   </option>
                 ))}
-              </select>
+              </Select>
             </CardContent>
           </Card>
 

@@ -32,7 +32,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, BarChart3 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { SegmentedControl } from "@/components/shared/segmented-control";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { RoleGuard } from "@/components/ui/role-guard";
@@ -483,25 +485,25 @@ function RunsExplorer({
 
         {/* Pagination */}
         <div className="mt-4 flex items-center justify-between" data-testid="runs-pagination">
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setPage((p) => Math.max(0, p - 1))}
             disabled={page === 0}
-            className="bg-muted text-muted-foreground rounded-md px-3 py-1 text-sm disabled:opacity-40"
             data-testid="runs-prev"
           >
             Anterior
-          </button>
+          </Button>
           <span className="text-muted-foreground text-sm">Página {page + 1}</span>
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setPage((p) => p + 1)}
             disabled={(runs.data?.length ?? 0) < PAGE_SIZE}
-            className="bg-muted text-muted-foreground rounded-md px-3 py-1 text-sm disabled:opacity-40"
             data-testid="runs-next"
           >
             Siguiente
-          </button>
+          </Button>
         </div>
       </CardContent>
     </Card>
@@ -631,42 +633,22 @@ function StatsBody() {
     <div className="space-y-6" data-testid="tenant-stats-dashboard">
       {/* Window selector + display-currency toggle */}
       <div className="flex flex-wrap items-center gap-4">
-        <div className="flex items-center gap-2" data-testid="window-selector">
-          <span className="text-muted-foreground text-sm">Ventana:</span>
-          {WINDOW_OPTIONS.map((w) => (
-            <button
-              key={w}
-              type="button"
-              onClick={() => setWindowDays(w)}
-              data-testid={`window-${w}`}
-              className={
-                windowDays === w
-                  ? "bg-primary text-primary-foreground rounded-md px-3 py-1 text-sm"
-                  : "bg-muted text-muted-foreground rounded-md px-3 py-1 text-sm"
-              }
-            >
-              {w}d
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-2" data-testid="currency-selector">
-          <span className="text-muted-foreground text-sm">Moneda:</span>
-          {CURRENCY_OPTIONS.map((c) => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => setDisplayCurrency(c)}
-              data-testid={`currency-${c}`}
-              className={
-                displayCurrency === c
-                  ? "bg-primary text-primary-foreground rounded-md px-3 py-1 text-sm"
-                  : "bg-muted text-muted-foreground rounded-md px-3 py-1 text-sm"
-              }
-            >
-              {c}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          label="Ventana:"
+          value={windowDays}
+          onChange={setWindowDays}
+          options={WINDOW_OPTIONS.map((w) => ({ value: w, label: `${w}d` }))}
+          getOptionTestId={(w) => `window-${w}`}
+          data-testid="window-selector"
+        />
+        <SegmentedControl
+          label="Moneda:"
+          value={displayCurrency}
+          onChange={setDisplayCurrency}
+          options={CURRENCY_OPTIONS.map((c) => ({ value: c, label: c }))}
+          getOptionTestId={(c) => `currency-${c}`}
+          data-testid="currency-selector"
+        />
       </div>
 
       {/* Headline cards + trend */}

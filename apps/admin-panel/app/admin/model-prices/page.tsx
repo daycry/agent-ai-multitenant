@@ -43,9 +43,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Coins, History, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { StateBlock } from "@/components/shared/state-block";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogBody,
@@ -57,6 +59,15 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
+import { Select } from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useCurrentUser } from "@/lib/use-current-user";
 
@@ -358,9 +369,8 @@ export default function ModelPricesPage() {
           </div>
           <div className="space-y-1">
             <Label htmlFor="filter-modality">Modalidad</Label>
-            <select
+            <Select
               id="filter-modality"
-              className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm"
               value={modality}
               onChange={(e) => setModality(e.target.value as "" | Modality)}
               data-testid="filter-modality"
@@ -371,7 +381,7 @@ export default function ModelPricesPage() {
                   {m}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           {/* task_11_2_06 — filter by associated platform provider. Only
               the System Admin can read the providers list, so this select
@@ -379,9 +389,8 @@ export default function ModelPricesPage() {
           {isSystemAdmin ? (
             <div className="space-y-1">
               <Label htmlFor="filter-provider-id">Proveedor (plataforma)</Label>
-              <select
+              <Select
                 id="filter-provider-id"
-                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm"
                 value={providerId}
                 onChange={(e) => setProviderId(e.target.value)}
                 data-testid="filter-provider-id"
@@ -392,14 +401,12 @@ export default function ModelPricesPage() {
                     {p.display_name}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           ) : null}
           <div className="flex items-center gap-2 pb-2">
-            <input
+            <Checkbox
               id="filter-current-only"
-              type="checkbox"
-              className="h-4 w-4"
               checked={currentOnly}
               onChange={(e) => setCurrentOnly(e.target.checked)}
               data-testid="filter-current-only"
@@ -421,52 +428,49 @@ export default function ModelPricesPage() {
       {/* List */}
       {/* ---------------------------------------------------------------- */}
       <div className="mt-6">
-        {listQuery.isLoading ? (
-          <p className="text-muted-foreground text-sm" data-testid="prices-loading">
-            Cargando catálogo…
-          </p>
-        ) : listQuery.isError ? (
-          <p className="text-destructive text-sm" data-testid="prices-error">
-            {errorText(listQuery.error)}
-          </p>
-        ) : rows.length === 0 ? (
-          <Card>
-            <CardContent className="py-10 text-center">
-              <p className="text-muted-foreground text-sm italic" data-testid="prices-empty">
-                El catálogo está vacío para estos filtros.
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border" data-testid="prices-table">
-            <table className="w-full text-sm">
-              <thead className="bg-muted text-muted-foreground">
-                <tr className="text-left">
-                  <th className="px-3 py-2 font-medium">Familia</th>
-                  <th className="px-3 py-2 font-medium">Modelo</th>
-                  <th className="px-3 py-2 font-medium">Modalidad</th>
-                  <th className="px-3 py-2 font-medium">Proveedor</th>
-                  <th className="px-3 py-2 font-medium">Input</th>
-                  <th className="px-3 py-2 font-medium">Output</th>
-                  <th className="px-3 py-2 font-medium">Cache</th>
-                  <th className="px-3 py-2 font-medium">Unidad</th>
-                  <th className="px-3 py-2 font-medium">Fuente</th>
-                  <th className="px-3 py-2 font-medium">Vigencia</th>
-                  <th className="px-3 py-2 text-right font-medium">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
+        <StateBlock
+          isLoading={listQuery.isLoading}
+          isError={listQuery.isError}
+          error={listQuery.error}
+          isEmpty={rows.length === 0}
+          loadingLabel="Cargando catálogo…"
+          loadingTestId="prices-loading"
+          errorTitle="No se pudo cargar el catálogo"
+          errorTestId="prices-error"
+          emptyIcon={Coins}
+          emptyTitle="Catálogo vacío"
+          emptyDescription="El catálogo está vacío para estos filtros."
+          emptyTestId="prices-empty"
+        >
+          <div className="overflow-hidden rounded-xl border">
+            <Table data-testid="prices-table" className="text-sm">
+              <TableHeader className="bg-muted normal-case">
+                <TableRow>
+                  <TableHead className="px-3 py-2">Familia</TableHead>
+                  <TableHead className="px-3 py-2">Modelo</TableHead>
+                  <TableHead className="px-3 py-2">Modalidad</TableHead>
+                  <TableHead className="px-3 py-2">Proveedor</TableHead>
+                  <TableHead className="px-3 py-2">Input</TableHead>
+                  <TableHead className="px-3 py-2">Output</TableHead>
+                  <TableHead className="px-3 py-2">Cache</TableHead>
+                  <TableHead className="px-3 py-2">Unidad</TableHead>
+                  <TableHead className="px-3 py-2">Fuente</TableHead>
+                  <TableHead className="px-3 py-2">Vigencia</TableHead>
+                  <TableHead className="px-3 py-2 text-right">Acciones</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {rows.map((p) => {
                   const open = p.effective_to === null;
                   return (
-                    <tr key={p.id} className="border-t" data-testid={`price-row-${p.id}`}>
-                      <td className="px-3 py-2">{p.provider}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{p.model_id}</td>
-                      <td className="px-3 py-2">
+                    <TableRow key={p.id} data-testid={`price-row-${p.id}`}>
+                      <TableCell className="px-3 py-2">{p.provider}</TableCell>
+                      <TableCell className="px-3 py-2 font-mono text-xs">{p.model_id}</TableCell>
+                      <TableCell className="px-3 py-2">
                         <Badge variant="muted">{p.modality}</Badge>
-                      </td>
+                      </TableCell>
                       {/* task_11_2_06 — associated platform provider (read). */}
-                      <td className="px-3 py-2" data-testid={`price-provider-${p.id}`}>
+                      <TableCell className="px-3 py-2" data-testid={`price-provider-${p.id}`}>
                         {p.provider_id === null ? (
                           <span className="text-muted-foreground text-xs italic">sin asociar</span>
                         ) : (
@@ -474,19 +478,21 @@ export default function ModelPricesPage() {
                             {providerLabel.get(p.provider_id) ?? p.provider_id}
                           </Badge>
                         )}
-                      </td>
-                      <td className="px-3 py-2" data-testid={`price-input-${p.id}`}>
+                      </TableCell>
+                      <TableCell className="px-3 py-2" data-testid={`price-input-${p.id}`}>
                         {fmtUsd(p.input_price)}
-                      </td>
-                      <td className="px-3 py-2">{fmtUsd(p.output_price)}</td>
-                      <td className="px-3 py-2" data-testid={`price-cached-${p.id}`}>
+                      </TableCell>
+                      <TableCell className="px-3 py-2">{fmtUsd(p.output_price)}</TableCell>
+                      <TableCell className="px-3 py-2" data-testid={`price-cached-${p.id}`}>
                         {fmtUsd(p.cached_input_price)}
-                      </td>
-                      <td className="px-3 py-2 text-xs">{UNIT_LABEL[p.unit] ?? p.unit}</td>
-                      <td className="px-3 py-2">
+                      </TableCell>
+                      <TableCell className="px-3 py-2 text-xs">
+                        {UNIT_LABEL[p.unit] ?? p.unit}
+                      </TableCell>
+                      <TableCell className="px-3 py-2">
                         <Badge variant={SOURCE_BADGE[p.source] ?? "muted"}>{p.source}</Badge>
-                      </td>
-                      <td className="px-3 py-2 text-xs">
+                      </TableCell>
+                      <TableCell className="px-3 py-2 text-xs">
                         {open ? (
                           <Badge variant="success" data-testid={`price-current-${p.id}`}>
                             vigente
@@ -496,8 +502,8 @@ export default function ModelPricesPage() {
                             {fmtDate(p.effective_from)} → {fmtDate(p.effective_to)}
                           </span>
                         )}
-                      </td>
-                      <td className="px-3 py-2">
+                      </TableCell>
+                      <TableCell className="px-3 py-2">
                         <div className="flex items-center justify-end gap-1">
                           <Button
                             variant="ghost"
@@ -536,14 +542,14 @@ export default function ModelPricesPage() {
                             </Button>
                           </RoleGuard>
                         </div>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
-        )}
+        </StateBlock>
 
         {supersedeMutation.isError ? (
           <p className="text-destructive mt-3 text-xs" data-testid="price-supersede-error">
@@ -769,9 +775,7 @@ function SyncDiffDialog({ onClose, onApplied }: SyncDiffDialogProps) {
                       cambios y confirma explícitamente para aplicarlos.
                     </p>
                     <label className="flex items-center gap-2 text-xs">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4"
+                      <Checkbox
                         checked={confirmed}
                         onChange={(e) => setConfirmed(e.target.checked)}
                         data-testid="sync-confirm-checkbox"
@@ -909,9 +913,8 @@ function PriceFormDialog({ mode, price, onClose, onSaved }: PriceFormDialogProps
             </div>
             <div className="space-y-1">
               <Label htmlFor="form-modality">Modalidad</Label>
-              <select
+              <Select
                 id="form-modality"
-                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm disabled:opacity-50"
                 value={modality}
                 onChange={(e) => setModality(e.target.value as Modality)}
                 disabled={isEdit}
@@ -922,7 +925,7 @@ function PriceFormDialog({ mode, price, onClose, onSaved }: PriceFormDialogProps
                     {m}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           </div>
 
@@ -969,9 +972,8 @@ function PriceFormDialog({ mode, price, onClose, onSaved }: PriceFormDialogProps
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="space-y-1">
               <Label htmlFor="form-unit">Unidad</Label>
-              <select
+              <Select
                 id="form-unit"
-                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm"
                 value={unit}
                 onChange={(e) => setUnit(e.target.value as Unit)}
                 data-testid="form-unit"
@@ -981,7 +983,7 @@ function PriceFormDialog({ mode, price, onClose, onSaved }: PriceFormDialogProps
                     {UNIT_LABEL[u]}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div className="space-y-1">
               <Label htmlFor="form-context">Context window</Label>
@@ -998,9 +1000,8 @@ function PriceFormDialog({ mode, price, onClose, onSaved }: PriceFormDialogProps
             </div>
             <div className="space-y-1">
               <Label htmlFor="form-source">Fuente</Label>
-              <select
+              <Select
                 id="form-source"
-                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm"
                 value={source}
                 onChange={(e) => setSource(e.target.value as Source)}
                 data-testid="form-source"
@@ -1010,7 +1011,7 @@ function PriceFormDialog({ mode, price, onClose, onSaved }: PriceFormDialogProps
                     {s}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           </div>
 

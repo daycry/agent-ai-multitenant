@@ -45,6 +45,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
+import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
 
 // --------------------------------------------------------------------------
@@ -319,9 +320,8 @@ export default function PrivateMarketplacePage() {
           <CardContent className="space-y-4">
             <div className="space-y-1">
               <Label htmlFor="private-kind">Tipo</Label>
-              <select
+              <Select
                 id="private-kind"
-                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm"
                 value={kind}
                 onChange={(e) => setKind(e.target.value as ListingKind)}
                 data-testid="private-kind-select"
@@ -331,7 +331,7 @@ export default function PrivateMarketplacePage() {
                     {opt.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
 
             {/* Inline format help — what THIS kind's manifest needs. */}

@@ -53,6 +53,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
+import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError, apiFetch } from "@/lib/api";
 
@@ -539,9 +540,8 @@ function SharesTab() {
 
             <div className="space-y-1">
               <Label htmlFor="share-listing">Listing privado</Label>
-              <select
+              <Select
                 id="share-listing"
-                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm"
                 value={listingId}
                 onChange={(e) => setListingId(e.target.value)}
                 data-testid="share-listing-select"
@@ -552,7 +552,7 @@ function SharesTab() {
                     {listing.name} {listing.version}
                   </option>
                 ))}
-              </select>
+              </Select>
               {privateListings.length === 0 ? (
                 <p className="text-muted-foreground text-xs" data-testid="share-no-private">
                   No tienes listings privados que compartir. Publica uno en{" "}

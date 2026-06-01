@@ -99,7 +99,7 @@ empty-state,skeleton,table}.tsx` consistentes con las existentes. Sin cambiar el
 
 #### `task_ui_04` — Refresh batch 2 (resto de flujos)
 
-- [ ] **Título**: Igual que batch 1 para: marketplace (+private), comandos del proyecto, human inbox/gallery/
+- [x] **Título**: Igual que batch 1 para: marketplace (+private), comandos del proyecto, human inbox/gallery/
       submit, model-prices, guardrails, eval-quality, tenant-stats, approvals. Preservar `data-testid`/rutas/llamadas.
 - **Tests**: `npm run typecheck && lint && build` verde + grep de `data-testid` preservados
 
