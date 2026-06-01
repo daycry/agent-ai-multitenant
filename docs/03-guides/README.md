@@ -11,5 +11,6 @@ Cómo trabajar con el sistema. Una página por flujo concreto.
 | [run-demo-human-tests.md](./run-demo-human-tests.md)                       | Ejecutar los scripts demo de tests humanos (Plan 02 + Plan 04.5)        |
 | [api-publica-y-webhooks.md](./api-publica-y-webhooks.md)                   | Usar la API v1 (token + SDKs + curl) y registrar webhooks entrantes     |
 | [comandos-y-runtime-por-proyecto.md](./comandos-y-runtime-por-proyecto.md) | Autorizar comandos del stack (PHP/Node/.NET) + runtime por proyecto     |
+| [demo-webscorpo.md](./demo-webscorpo.md)                                   | Correr el seed del equipo WebScorpo (CI4) + KB completo y re-indexarlo  |
 | [design-tokens.md](./design-tokens.md)                                     | Tokens de diseño del frontend                                           |
 | [gotchas/](./gotchas/)                                                     | Trampas conocidas del toolchain (Docker, asyncpg, mypy, OTEL, Windows…) |

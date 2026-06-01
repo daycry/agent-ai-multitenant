@@ -111,7 +111,7 @@ config de comandos/runtime PHP, y un **KB completo** — uno **compartido por el
 
 #### `task_demo_ws_04` — Ejecutar/verificar + guía + changelog
 
-- [ ] **Título**: Ejecutar el seed contra la BD dev y verificar el resultado end-to-end; guía
+- [x] **Título**: Ejecutar el seed contra la BD dev y verificar el resultado end-to-end; guía
       `docs/03-guides/demo-webscorpo.md` (cómo correr el seed, qué crea, cómo usar el equipo + KB, cómo re-indexar
       embeddings cuando haya proveedor); changelog `docs/07-changelog/demo-webscorpo-team-kb.md`; fila en README.
 - **Tests**: `test -f docs/07-changelog/demo-webscorpo-team-kb.md && test -f docs/03-guides/demo-webscorpo.md`

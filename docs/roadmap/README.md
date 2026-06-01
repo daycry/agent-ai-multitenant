@@ -58,6 +58,16 @@ Cada archivo contiene:
 | 15    | [15-instalador-produccion.md](./15-instalador-produccion.md)                 | 4-5 sem  | todos      |
 | 16    | [16-human-agents.md](./16-human-agents.md)                                   | 4-5 sem  | 06, 10, 11 |
 
+### Seeds demostrativos (no entran en el gate de fases)
+
+Planes con `plan_id` descriptivo (no numerado) que **usan** la plataforma para
+materializar escenarios reales en lugar de construir features. No bloquean ni
+son bloqueados por las fases.
+
+| Plan                                                     | Qué materializa                                                                  | Construye sobre      |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------- |
+| [demo-webscorpo-team-kb.md](./demo-webscorpo-team-kb.md) | Equipo WebScorpo (CI4) de 10 agentes + proyecto + KB completo (equipo + por-rol) | 06.15, 06.16, 04, 16 |
+
 ## MVP Funcional
 
 Las fases 0-6 forman un MVP funcional. Total estimado: 21-27 semanas.
