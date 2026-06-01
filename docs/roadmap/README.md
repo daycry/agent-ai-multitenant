@@ -46,6 +46,7 @@ Cada archivo contiene:
 | 07    | [07-documentacion-visor.md](./07-documentacion-visor.md)                     | 3 sem    | 06         |
 | 08    | [08-sso-empresarial.md](./08-sso-empresarial.md)                             | 2-3 sem  | 00         |
 | 09    | [09-marketplace.md](./09-marketplace.md)                                     | 3-4 sem  | 05         |
+| 09.1  | [09.1-marketplace-seed-publish.md](./09.1-marketplace-seed-publish.md)       | 3-4 d    | 09         |
 | 10    | [10-asistente-personal.md](./10-asistente-personal.md)                       | 3-4 sem  | 06         |
 | 11    | [11-guardrails-precios.md](./11-guardrails-precios.md)                       | 3-4 sem  | 02         |
 | 11.1  | [11.1-budgets-fx.md](./11.1-budgets-fx.md)                                   | 4-6 d    | 11         |
