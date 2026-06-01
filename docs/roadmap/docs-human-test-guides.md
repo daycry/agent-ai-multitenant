@@ -1,7 +1,7 @@
 ---
 plan_id: docs-human-test-guides
 title: Guías de tests humanos para todos los planes (docs/03-guides/human-tests/)
-status: in_progress
+status: pending_human_validation
 blocking_plan: []
 started_at: 2026-06-01
 completed_at: null
