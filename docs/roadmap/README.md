@@ -43,6 +43,7 @@ Cada archivo contiene:
 | 06.13 | [06.13-kb-catalog-content.md](./06.13-kb-catalog-content.md)                 | 3-5 d    | 06.12      |
 | 06.14 | [06.14-hardening-auditoria.md](./06.14-hardening-auditoria.md)               | 8-12 d   | —          |
 | 06.15 | [06.15-agent-tools-assignment-ui.md](./06.15-agent-tools-assignment-ui.md)   | 4-6 d    | —          |
+| 06.16 | [06.16-polyglot-tool-catalog.md](./06.16-polyglot-tool-catalog.md)           | 4-6 d    | —          |
 | 07    | [07-documentacion-visor.md](./07-documentacion-visor.md)                     | 3 sem    | 06         |
 | 08    | [08-sso-empresarial.md](./08-sso-empresarial.md)                             | 2-3 sem  | 00         |
 | 09    | [09-marketplace.md](./09-marketplace.md)                                     | 3-4 sem  | 05         |
