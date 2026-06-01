@@ -24,22 +24,24 @@
      *   accent        #7c3aed  = hsl(263 83% 58%)   -- primary (violet)
      *   accent-light  #a78bfa  = hsl(255 91% 76%)   -- ring / sidebar-active
      */
-    --background: 240 28% 14%;
-    --foreground: 240 12% 92%;
-    --card: 240 28% 17%;
-    --card-foreground: 240 12% 92%;
-    --popover: 240 28% 17%;
-    --popover-foreground: 240 12% 92%;
+    --background: 240 28% 13%;
+    --foreground: 240 14% 93%;
+    --card: 240 27% 17%;
+    --card-foreground: 240 14% 93%;
+    --popover: 240 27% 17%;
+    --popover-foreground: 240 14% 93%;
 
-    /* --- Neutrals --- */
-    --muted: 240 30% 22%;
-    --muted-foreground: 240 10% 70%;
-    --border: 240 35% 27%;
-    --input: 240 35% 27%;
-    --secondary: 240 30% 22%;
-    --secondary-foreground: 240 12% 92%;
-    --accent: 240 30% 22%;
-    --accent-foreground: 240 12% 92%;
+    /* --- Neutrals ---
+     * Slightly softer borders + brighter muted text for better legibility
+     * while keeping AA contrast over the violet surfaces. */
+    --muted: 240 28% 21%;
+    --muted-foreground: 240 11% 72%;
+    --border: 240 32% 26%;
+    --input: 240 32% 26%;
+    --secondary: 240 28% 21%;
+    --secondary-foreground: 240 14% 93%;
+    --accent: 240 28% 21%;
+    --accent-foreground: 240 14% 93%;
 
     /* --- Brand: violet (#7c3aed) + lavender (#a78bfa) accent --- */
     --primary: 263 83% 58%;
@@ -88,6 +90,24 @@
     --gradient-to:   263 83% 58%;  /* violet (#7c3aed) */
 
     --radius: 0.625rem;
+
+    /* --- Elevation scale ---
+     * Tinted, violet-aware shadows so cards/popovers/dialogs read as
+     * layered surfaces on the dark theme (a plain black shadow disappears
+     * over #1a1a2e). Consumed via the Tailwind `shadow-*` extensions.
+     * The base `shadow-sm/md/lg` keep working untouched; these are the
+     * refined elevation tokens used by primitives that opt in. */
+    --shadow-color: 240 60% 4%;
+    --shadow-xs: 0 1px 2px 0 hsl(var(--shadow-color) / 0.28);
+    --shadow-sm:
+      0 1px 2px 0 hsl(var(--shadow-color) / 0.3),
+      0 1px 1px -1px hsl(var(--shadow-color) / 0.3);
+    --shadow-md:
+      0 4px 12px -2px hsl(var(--shadow-color) / 0.4),
+      0 2px 6px -2px hsl(var(--shadow-color) / 0.35);
+    --shadow-lg:
+      0 12px 32px -8px hsl(var(--shadow-color) / 0.5),
+      0 6px 14px -6px hsl(var(--shadow-color) / 0.4);
   }
 
   .dark {
@@ -146,8 +166,29 @@
     font-feature-settings:
       "rlig" 1,
       "calt" 1;
+    /* Refined typographic rhythm: comfortable default line-height and a
+     * touch of negative tracking on the violet dark theme reads crisper
+     * without affecting any utility-driven font sizing. */
+    line-height: 1.55;
+    letter-spacing: -0.006em;
+    text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Headings carry a slightly tighter rhythm for a more modern feel.
+   * Sizes stay utility-driven (text-*); we only set tracking + balance. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    letter-spacing: -0.018em;
+    text-wrap: balance;
+  }
+
+  /* Tabular numbers keep tables/metrics aligned. */
+  table {
+    font-variant-numeric: tabular-nums;
   }
 }
 

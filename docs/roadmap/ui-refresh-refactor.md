@@ -72,9 +72,9 @@ duplicación) y aplica la capa visual renovada + consistencia + accesibilidad a 
 
 #### `task_ui_01` — Refinar tokens + añadir primitivas
 
-- [ ] **Título**: Refinar `app/globals.css` + `tailwind.config.ts` (spacing/tipografía/radius/sombras + ajustes
+- [x] **Título**: Refinar `app/globals.css` + `tailwind.config.ts` (spacing/tipografía/radius/sombras + ajustes
       sutiles de paleta, manteniendo contraste AA y los `-soft`); añadir primitivas `components/ui/{checkbox,select,
-    empty-state,skeleton,table}.tsx` consistentes con las existentes. Sin cambiar el contrato de las primitivas
+  empty-state,skeleton,table}.tsx` consistentes con las existentes. Sin cambiar el contrato de las primitivas
       actuales.
 - **Tests**: `npm run typecheck && lint && build` verde
 
