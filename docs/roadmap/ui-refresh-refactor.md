@@ -1,7 +1,7 @@
 ---
 plan_id: ui-refresh-refactor
 title: Refresh visual moderado + refactor del admin-panel
-status: in_progress
+status: pending_human_validation
 blocking_plan: []
 started_at: 2026-06-01
 completed_at: null
