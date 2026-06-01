@@ -193,6 +193,65 @@ class GrantKBRequest(BaseModel):
     kb_id: UUID
 
 
+# ---------------------------------------------------------------------------
+# Assign tools to an agent (Plan 06.15 task_06_15_01)
+# ---------------------------------------------------------------------------
+class AgentToolAssignment(BaseModel):
+    """One entry in the declarative `PUT /agents/{id}/tools` payload.
+
+    `config_override` is an optional per-agent JSON blob layered on top of
+    the catalog Tool's defaults (mirrors `AgentTool.config_override`).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: UUID
+    config_override: dict[str, Any] | None = None
+
+
+class SetAgentToolsRequest(BaseModel):
+    """Payload for `PUT /agents/{id}/tools` — the full desired set.
+
+    The endpoint is declarative: the agent's `agent_tools` rows are
+    replaced wholesale with this list (an empty list clears all
+    assignments, restoring the backward-compatible "no per-agent
+    restriction" behaviour at enforcement time).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tools: list[AgentToolAssignment] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _no_duplicate_tool_ids(self) -> SetAgentToolsRequest:
+        seen: set[UUID] = set()
+        for entry in self.tools:
+            if entry.tool_id in seen:
+                raise ValueError(f"duplicate tool_id in payload: {entry.tool_id}")
+            seen.add(entry.tool_id)
+        return self
+
+
+class AgentToolResponse(BaseModel):
+    """One assigned Tool, projected to what the assignment UI needs.
+
+    `is_builtin` + `implementation_type` carry the derived "básica vs
+    avanzada" taxonomy (Plan 06.15 decision: no new column). The read
+    shape mirrors the read-only `agent-tools-diagnostic` panel.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    tool_id: UUID
+    name: str
+    description: str | None = None
+    category: str
+    implementation_type: str
+    security_level: str
+    is_builtin: bool
+    config_override: dict[str, Any] | None = None
+
+
 def to_agent_response(a: Agent) -> AgentResponse:
     """ORM -> DTO with the `model_config` rename baked in.
 
