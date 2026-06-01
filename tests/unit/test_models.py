@@ -45,6 +45,9 @@ def test_audit_action_known_set() -> None:
         "tenant.deleted",
         "membership.granted",
         "membership.revoked",
+        # SSO audit actions (Plan 08 task_08_01 / task_08_07).
+        "sso.login",
+        "sso.user_provisioned",
     }
     assert {a.value for a in m.AuditAction} == expected
 

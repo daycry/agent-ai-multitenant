@@ -203,15 +203,20 @@ def test_fk_cleanup_indexes_created_at_head(alembic_config, admin_pg_dsn: str) -
 
 
 def test_fk_cleanup_migration_is_reversible(alembic_config, admin_pg_dsn: str) -> None:
-    """`upgrade head` then `downgrade -1` drops exactly the two new
-    indexes and nothing else — the migration is cleanly reversible."""
+    """Downgrading *past* migration 0031 drops exactly the two new indexes —
+    the migration is cleanly reversible.
+
+    0031 is no longer the migration tip (dozens of migrations stack on top of
+    it), so `downgrade -1` would only undo the current head. We therefore
+    target the revision immediately *before* 0031 explicitly, which exercises
+    undoing 0031 (along with the rest of the top chain) and re-applying it."""
     command.upgrade(alembic_config, "head")
     assert _indexes(admin_pg_dsn) >= _FK_CLEANUP_INDEXES
 
-    command.downgrade(alembic_config, "-1")
+    command.downgrade(alembic_config, "0030_kb_categories_is_builtin")
     after = _indexes(admin_pg_dsn)
     leaked = _FK_CLEANUP_INDEXES & after
-    assert not leaked, f"downgrade -1 left the new indexes behind: {leaked}"
+    assert not leaked, f"downgrading past 0031 left the new indexes behind: {leaked}"
     # The sibling indexes from earlier migrations survive the downgrade.
     assert "ix_projects_tenant_id" in after
     assert "ix_review_sessions_plan_id" in after
