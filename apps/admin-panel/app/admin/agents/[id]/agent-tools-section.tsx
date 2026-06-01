@@ -45,6 +45,8 @@ import {
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -365,13 +367,17 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
             )}
 
             <div className="relative mb-3">
-              <Search className="text-muted-foreground absolute left-2 top-2.5 h-4 w-4" />
-              <input
+              <Search
+                className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
+                aria-hidden="true"
+              />
+              <Input
                 type="search"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Buscar tool por nombre, descripción o categoría…"
-                className="border-input focus-visible:ring-ring w-full rounded-md border bg-transparent py-2 pl-8 pr-3 text-sm focus-visible:outline-none focus-visible:ring-2"
+                aria-label="Buscar tool por nombre, descripción o categoría"
+                className="pl-9"
                 data-testid="agent-tools-search"
               />
             </div>
@@ -536,10 +542,9 @@ function ToolRow({
       className="hover:bg-muted/40 flex items-start gap-3 rounded border p-3 transition-colors"
       data-testid={`agent-tool-row-${tool.id}`}
     >
-      <input
+      <Checkbox
         id={inputId}
-        type="checkbox"
-        className="border-input text-primary focus-visible:ring-ring mt-0.5 h-4 w-4 rounded focus-visible:outline-none focus-visible:ring-2"
+        className="mt-0.5"
         checked={checked}
         disabled={!canEdit}
         onChange={() => onToggle(tool.id)}

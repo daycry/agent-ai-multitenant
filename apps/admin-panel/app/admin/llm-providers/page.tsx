@@ -56,9 +56,11 @@ import {
 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { StateBlock } from "@/components/shared/state-block";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogBody,
@@ -70,6 +72,15 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
+import { Select } from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { ApiError, apiFetch } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -243,49 +254,51 @@ function LlmProvidersContent() {
       </div>
 
       <div className="mt-4">
-        {listQuery.isLoading ? (
-          <p className="text-muted-foreground text-sm" data-testid="providers-loading">
-            Cargando proveedores…
-          </p>
-        ) : listQuery.isError ? (
-          <p className="text-destructive text-sm" data-testid="providers-error">
-            {errorText(listQuery.error)}
-          </p>
-        ) : rows.length === 0 ? (
-          <Card>
-            <CardContent className="py-10 text-center">
-              <p className="text-muted-foreground text-sm italic" data-testid="providers-empty">
-                No hay proveedores configurados. Crea el primero con &laquo;Nuevo proveedor&raquo;.
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border" data-testid="providers-table">
-            <table className="w-full text-sm">
-              <thead className="bg-muted text-muted-foreground">
-                <tr className="text-left">
-                  <th className="px-3 py-2 font-medium">Tipo</th>
-                  <th className="px-3 py-2 font-medium">Nombre</th>
-                  <th className="px-3 py-2 font-medium">Endpoint</th>
-                  <th className="px-3 py-2 font-medium">Credencial</th>
-                  <th className="px-3 py-2 font-medium">Estado</th>
-                  <th className="px-3 py-2 font-medium">Conexión</th>
-                  <th className="px-3 py-2 text-right font-medium">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
+        <StateBlock
+          isLoading={listQuery.isLoading}
+          isError={listQuery.isError}
+          error={listQuery.error}
+          isEmpty={rows.length === 0}
+          loadingLabel="Cargando proveedores…"
+          loadingTestId="providers-loading"
+          errorTestId="providers-error"
+          empty={
+            <Card>
+              <CardContent className="py-10 text-center">
+                <p className="text-muted-foreground text-sm italic" data-testid="providers-empty">
+                  No hay proveedores configurados. Crea el primero con &laquo;Nuevo
+                  proveedor&raquo;.
+                </p>
+              </CardContent>
+            </Card>
+          }
+        >
+          <div className="rounded-xl border" data-testid="providers-table">
+            <Table>
+              <TableHeader className="bg-muted">
+                <TableRow>
+                  <TableHead className="px-3">Tipo</TableHead>
+                  <TableHead className="px-3">Nombre</TableHead>
+                  <TableHead className="px-3">Endpoint</TableHead>
+                  <TableHead className="px-3">Credencial</TableHead>
+                  <TableHead className="px-3">Estado</TableHead>
+                  <TableHead className="px-3">Conexión</TableHead>
+                  <TableHead className="px-3 text-right">Acciones</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {rows.map((p) => {
                   const kindLabel = isKind(p.kind) ? KIND_LABEL[p.kind] : p.kind;
                   const result = testResults[p.id];
                   const isTesting = testMutation.isPending && testMutation.variables === p.id;
                   return (
-                    <tr key={p.id} className="border-t" data-testid={`provider-row-${p.id}`}>
-                      <td className="px-3 py-2">
+                    <TableRow key={p.id} data-testid={`provider-row-${p.id}`}>
+                      <TableCell className="px-3">
                         <Badge variant={KIND_BADGE[p.kind] ?? "muted"}>{kindLabel}</Badge>
-                      </td>
-                      <td className="px-3 py-2 font-medium">{p.display_name}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{p.base_url ?? "—"}</td>
-                      <td className="px-3 py-2" data-testid={`provider-credential-${p.id}`}>
+                      </TableCell>
+                      <TableCell className="px-3 font-medium">{p.display_name}</TableCell>
+                      <TableCell className="px-3 font-mono text-xs">{p.base_url ?? "—"}</TableCell>
+                      <TableCell className="px-3" data-testid={`provider-credential-${p.id}`}>
                         {p.has_credential ? (
                           <Badge variant="success">
                             <KeyRound className="mr-1 h-3 w-3" />
@@ -294,13 +307,13 @@ function LlmProvidersContent() {
                         ) : (
                           <Badge variant="muted">sin credencial</Badge>
                         )}
-                      </td>
-                      <td className="px-3 py-2">
+                      </TableCell>
+                      <TableCell className="px-3">
                         <button
                           type="button"
                           onClick={() => toggleMutation.mutate(p)}
                           disabled={toggleMutation.isPending}
-                          className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                          className="focus-visible:ring-ring focus-visible:ring-offset-background cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                           data-testid={`provider-toggle-${p.id}`}
                           aria-label={p.is_active ? "Desactivar proveedor" : "Activar proveedor"}
                           aria-pressed={p.is_active}
@@ -311,8 +324,8 @@ function LlmProvidersContent() {
                             <Badge variant="muted">inactivo</Badge>
                           )}
                         </button>
-                      </td>
-                      <td className="px-3 py-2" data-testid={`provider-test-cell-${p.id}`}>
+                      </TableCell>
+                      <TableCell className="px-3" data-testid={`provider-test-cell-${p.id}`}>
                         {isTesting ? (
                           <span className="text-muted-foreground text-xs">probando…</span>
                         ) : result ? (
@@ -332,8 +345,8 @@ function LlmProvidersContent() {
                         ) : (
                           <span className="text-muted-foreground text-xs">—</span>
                         )}
-                      </td>
-                      <td className="px-3 py-2">
+                      </TableCell>
+                      <TableCell className="px-3">
                         <div className="flex items-center justify-end gap-1">
                           <Button
                             variant="ghost"
@@ -376,14 +389,14 @@ function LlmProvidersContent() {
                             <Trash2 className="text-destructive h-3.5 w-3.5" />
                           </Button>
                         </div>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
-        )}
+        </StateBlock>
 
         {toggleMutation.isError ? (
           <p className="text-destructive mt-3 text-xs" data-testid="provider-toggle-error">
@@ -534,9 +547,8 @@ function ProviderFormDialog({ mode, provider, onClose, onSaved }: ProviderFormDi
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1">
               <Label htmlFor="form-kind">Tipo</Label>
-              <select
+              <Select
                 id="form-kind"
-                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm disabled:opacity-50"
                 value={kind}
                 onChange={(e) => setKind(e.target.value as ProviderKind)}
                 disabled={isEdit}
@@ -547,7 +559,7 @@ function ProviderFormDialog({ mode, provider, onClose, onSaved }: ProviderFormDi
                     {KIND_LABEL[k]}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div className="space-y-1">
               <Label htmlFor="form-display-name">Nombre</Label>
@@ -639,10 +651,8 @@ function ProviderFormDialog({ mode, provider, onClose, onSaved }: ProviderFormDi
           </div>
 
           <div className="flex items-center gap-2">
-            <input
+            <Checkbox
               id="form-is-active"
-              type="checkbox"
-              className="h-4 w-4"
               checked={isActive}
               onChange={(e) => setIsActive(e.target.checked)}
               data-testid="form-is-active"

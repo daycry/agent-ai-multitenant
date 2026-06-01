@@ -37,7 +37,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
-import { Spinner } from "@/components/ui/spinner";
+import { Select } from "@/components/ui/select";
+import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
 
 // --------------------------------------------------------------------------
@@ -110,22 +111,19 @@ export default function ProjectCommandsPage() {
         description="Autoriza qué comandos del stack pueden lanzar los agentes y elige el runtime de ejecución."
       />
 
-      {projectQuery.isLoading ? (
-        <div className="flex justify-center p-8" data-testid="project-commands-loading">
-          <Spinner />
-        </div>
-      ) : projectQuery.isError ? (
-        <Card className="mt-6">
-          <CardContent className="py-8">
-            <p className="text-danger-soft-foreground text-sm" data-testid="project-commands-error">
-              No se pudo cargar la configuración del proyecto:{" "}
-              {projectQuery.error?.body ?? projectQuery.error?.message ?? "error desconocido"}.
-            </p>
-          </CardContent>
-        </Card>
-      ) : projectQuery.data ? (
-        <CommandsEditor project={projectQuery.data} />
-      ) : null}
+      <StateBlock
+        className="mt-6"
+        isLoading={projectQuery.isLoading}
+        loadingSkeleton
+        skeletonRows={3}
+        loadingTestId="project-commands-loading"
+        isError={projectQuery.isError}
+        error={projectQuery.error}
+        errorTitle="No se pudo cargar la configuración del proyecto"
+        errorTestId="project-commands-error"
+      >
+        {projectQuery.data ? <CommandsEditor project={projectQuery.data} /> : null}
+      </StateBlock>
     </div>
   );
 }
@@ -343,23 +341,24 @@ function CommandsEditor({ project }: { project: Project }) {
                 </p>
               }
             >
-              <select
-                id="commands-runtime"
-                value={runtime}
-                onChange={(e) => {
-                  setRuntime(e.target.value);
-                  setSavedAt(null);
-                }}
-                className="border-input bg-background focus-visible:ring-ring w-full max-w-sm rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2"
-                data-testid="commands-runtime-select"
-              >
-                <option value="">— Sin runtime por defecto (defaults por-tool) —</option>
-                {RUNTIME_TEMPLATES.map((rt) => (
-                  <option key={rt} value={rt}>
-                    {rt}
-                  </option>
-                ))}
-              </select>
+              <div className="max-w-sm">
+                <Select
+                  id="commands-runtime"
+                  value={runtime}
+                  onChange={(e) => {
+                    setRuntime(e.target.value);
+                    setSavedAt(null);
+                  }}
+                  data-testid="commands-runtime-select"
+                >
+                  <option value="">— Sin runtime por defecto (defaults por-tool) —</option>
+                  {RUNTIME_TEMPLATES.map((rt) => (
+                    <option key={rt} value={rt}>
+                      {rt}
+                    </option>
+                  ))}
+                </Select>
+              </div>
             </RoleGuard>
           </div>
         </CardContent>

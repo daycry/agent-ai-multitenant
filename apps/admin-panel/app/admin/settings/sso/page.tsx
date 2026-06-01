@@ -49,9 +49,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
+import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
 
 // --------------------------------------------------------------------------
@@ -568,10 +570,10 @@ function SsoConfigDialog({
             {/* Template picker */}
             <div className="bg-muted/30 -mx-2 rounded-md border p-3">
               <Label htmlFor="sso-form-template">Plantilla de proveedor</Label>
-              <select
+              <Select
                 id="sso-form-template"
                 data-testid="sso-form-template"
-                className="border-input bg-background mt-1 h-10 w-full rounded-md border px-3 text-sm"
+                className="mt-1"
                 value={templateId}
                 onChange={(e) => applyTemplate(e.target.value)}
                 disabled={templatesQuery.isLoading}
@@ -586,7 +588,7 @@ function SsoConfigDialog({
                     {tpl.display_name}
                   </option>
                 ))}
-              </select>
+              </Select>
               <p className="text-muted-foreground mt-1.5 text-xs">
                 Pre-rellena issuer, scopes y mapeo de claims con valores verificados. Después puedes
                 ajustarlos manualmente.
@@ -692,11 +694,9 @@ function SsoConfigDialog({
 
             {/* Enabled */}
             <label className="flex items-center gap-2 text-sm" htmlFor="sso-form-enabled">
-              <input
+              <Checkbox
                 id="sso-form-enabled"
                 data-testid="sso-form-enabled"
-                type="checkbox"
-                className="h-4 w-4 rounded border"
                 checked={state.enabled}
                 onChange={(e) => setState({ ...state, enabled: e.target.checked })}
               />

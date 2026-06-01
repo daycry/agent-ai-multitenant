@@ -91,7 +91,7 @@ empty-state,skeleton,table}.tsx` consistentes con las existentes. Sin cambiar el
 
 #### `task_ui_03` — Refresh batch 1 (núcleo + nuevos)
 
-- [ ] **Título**: Aplicar la capa visual + estados consistentes + a11y + primitivas/componentes nuevos a:
+- [x] **Título**: Aplicar la capa visual + estados consistentes + a11y + primitivas/componentes nuevos a:
       dashboard, agents (+[id]), projects (+[id]), settings, /admin/llm-providers, sección Tools del agente.
       Migrar checkbox/select nativos a las primitivas. Preservar `data-testid`, rutas y llamadas. _(e2e existentes
       siguen verdes por selector)._

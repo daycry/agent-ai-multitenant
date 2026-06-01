@@ -34,9 +34,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Spinner } from "@/components/ui/spinner";
+import { Select } from "@/components/ui/select";
+import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
 
 import { AgentKbsSection } from "./agent-kbs-section";
@@ -165,11 +167,12 @@ export default function AgentHubPage() {
         }
       />
 
-      {isLoading && (
-        <div className="flex justify-center p-8" data-testid="agent-loading">
-          <Spinner />
-        </div>
-      )}
+      <StateBlock
+        isLoading={isLoading}
+        loadingSkeleton
+        skeletonRows={4}
+        loadingTestId="agent-loading"
+      />
 
       {isError && (
         <Card className="p-6" data-testid="agent-error">
@@ -333,11 +336,10 @@ function AgentEditDialog({
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="ae-role">Role</Label>
-              <select
+              <Select
                 id="ae-role"
                 value={role}
                 onChange={(e) => setRole(e.target.value)}
-                className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2"
                 data-testid="edit-agent-role"
               >
                 {ROLE_OPTIONS.map((r) => (
@@ -345,7 +347,7 @@ function AgentEditDialog({
                     {r}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           </div>
 
@@ -377,11 +379,10 @@ function AgentEditDialog({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="ae-scope">Memory scope</Label>
-              <select
+              <Select
                 id="ae-scope"
                 value={memoryScope}
                 onChange={(e) => setMemoryScope(e.target.value)}
-                className="border-input bg-background rounded-md border px-3 py-2 text-sm"
                 data-testid="edit-agent-memory-scope"
               >
                 {MEMORY_SCOPE_OPTIONS.map((o) => (
@@ -389,7 +390,7 @@ function AgentEditDialog({
                     {o.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="ae-tasks">Max concurrent tasks</Label>
@@ -404,9 +405,8 @@ function AgentEditDialog({
               />
             </div>
             <div className="flex items-end gap-2">
-              <input
+              <Checkbox
                 id="ae-review"
-                type="checkbox"
                 checked={reviewCap}
                 onChange={(e) => setReviewCap(e.target.checked)}
                 data-testid="edit-agent-review-cap"

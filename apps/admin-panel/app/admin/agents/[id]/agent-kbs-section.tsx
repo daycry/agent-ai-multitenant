@@ -32,7 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { KbCombobox } from "@/components/ui/kb-combobox";
-import { Spinner } from "@/components/ui/spinner";
+import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
 
 interface AgentKbRow {
@@ -90,61 +90,57 @@ export function AgentKbsSection({ agentId, isReadOnly }: AgentKbsSectionProps) {
       </CardHeader>
 
       <CardContent>
-        {isLoading && (
-          <div className="flex justify-center p-4">
-            <Spinner />
-          </div>
-        )}
-
-        {isError && (
-          <p className="text-danger-soft-foreground text-sm">
-            No se pudo cargar las KBs: {error?.message ?? "error desconocido"}.
-          </p>
-        )}
-
-        {data && data.length === 0 && (
-          <p className="text-muted-foreground text-sm" data-testid="agent-kbs-empty">
-            Este agente no tiene KBs propias. Las KBs de proyecto siguen siendo visibles en runtime
-            — éstas se añaden cuando el rol necesita documentación agnóstica de stack (e.g.
-            principios de diseño REST).
-          </p>
-        )}
-
-        {data && data.length > 0 && (
-          <ul className="space-y-2" data-testid="agent-kbs-list">
-            {data.map((row) => (
-              <li
-                key={row.kb_id}
-                className="flex items-start justify-between gap-3 rounded border p-3"
-                data-testid={`agent-kb-row-${row.kb_id}`}
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium text-sm">{row.name}</p>
-                  {row.description && (
-                    <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs">
-                      {row.description}
+        <StateBlock
+          isLoading={isLoading}
+          isError={isError}
+          error={error}
+          isEmpty={Boolean(data && data.length === 0)}
+          loadingLabel="Cargando KBs…"
+          errorTitle="No se pudo cargar las KBs"
+          empty={
+            <p className="text-muted-foreground text-sm" data-testid="agent-kbs-empty">
+              Este agente no tiene KBs propias. Las KBs de proyecto siguen siendo visibles en
+              runtime — éstas se añaden cuando el rol necesita documentación agnóstica de stack
+              (e.g. principios de diseño REST).
+            </p>
+          }
+        >
+          {data && data.length > 0 && (
+            <ul className="space-y-2" data-testid="agent-kbs-list">
+              {data.map((row) => (
+                <li
+                  key={row.kb_id}
+                  className="flex items-start justify-between gap-3 rounded border p-3"
+                  data-testid={`agent-kb-row-${row.kb_id}`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium text-sm">{row.name}</p>
+                    {row.description && (
+                      <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs">
+                        {row.description}
+                      </p>
+                    )}
+                    <p className="text-muted-foreground mt-1 font-mono text-xs">
+                      embedding: {row.embedding_model_id}
                     </p>
+                  </div>
+                  {!isReadOnly && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => revokeMutation.mutate(row.kb_id)}
+                      disabled={revokeMutation.isPending}
+                      data-testid={`agent-kb-revoke-${row.kb_id}`}
+                      title="Revocar grant"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
                   )}
-                  <p className="text-muted-foreground mt-1 font-mono text-xs">
-                    embedding: {row.embedding_model_id}
-                  </p>
-                </div>
-                {!isReadOnly && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => revokeMutation.mutate(row.kb_id)}
-                    disabled={revokeMutation.isPending}
-                    data-testid={`agent-kb-revoke-${row.kb_id}`}
-                    title="Revocar grant"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </StateBlock>
       </CardContent>
 
       <GrantKbDialog

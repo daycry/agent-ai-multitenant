@@ -50,7 +50,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
-import { Spinner } from "@/components/ui/spinner";
+import { Select } from "@/components/ui/select";
+import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
 
 type ProjectStatus = "active" | "paused" | "archived";
@@ -197,11 +198,12 @@ export default function ProjectHubPage() {
         }
       />
 
-      {isLoading && (
-        <div className="flex justify-center p-8" data-testid="project-loading">
-          <Spinner />
-        </div>
-      )}
+      <StateBlock
+        isLoading={isLoading}
+        loadingSkeleton
+        skeletonRows={4}
+        loadingTestId="project-loading"
+      />
 
       {isError && (
         <Card className="p-6" data-testid="project-error">
@@ -364,11 +366,10 @@ function ProjectEditDialog({
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="edit-status">Estado</Label>
-            <select
+            <Select
               id="edit-status"
               value={status}
               onChange={(e) => setStatus(e.target.value as ProjectStatus)}
-              className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2"
               data-testid="edit-project-status"
             >
               {STATUS_OPTIONS.map((o) => (
@@ -376,7 +377,7 @@ function ProjectEditDialog({
                   {o.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           {mutation.isError && (
             <p
