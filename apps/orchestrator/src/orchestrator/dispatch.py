@@ -24,6 +24,10 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+from api_server.agent_tools_enforcement import (
+    combine_tool_allowlists,
+    resolve_agent_tool_names,
+)
 from api_server.budgets import budget_pause_block
 from api_server.db.domain import (
     Agent,
@@ -340,22 +344,41 @@ class TaskDispatcher:
         task.status = _IN_PROGRESS
         task.assigned_agent_id = agent.id
         task.started_at = datetime.now(UTC)
-        return _AiDispatch(
-            request={
-                "tenant_id": str(task.tenant_id),
-                "task_id": str(task.id),
-                "agent_id": str(agent.id),
-                "task": {
-                    "id": str(task.id),
-                    "title": task.title,
-                    "description": task.description or "",
-                },
-                # The agent carries its ModelClient spec; the worker
-                # feeds it to the agent-runtime verbatim.
-                "model": dict(agent.model_config),
-                "budgets": None,
-            }
-        )
+
+        # Per-agent tool enforcement (Plan 06.15 task_06_15_02). When the
+        # agent has `agent_tools` rows its resolved toolset is restricted to
+        # those tool names; the worker forwards the allowlist into the task
+        # spec and the runtime's ToolRegistry rejects any tool outside it at
+        # call time. No rows → `resolve_agent_tool_names` returns None →
+        # `combine_tool_allowlists` returns None → no `allowed_tools` key is
+        # emitted, preserving the current unrestricted behaviour. The
+        # task-dispatch path carries no chat-mode allowlist (modes apply to
+        # the chat/conversation path), so the per-agent set stands alone
+        # here; `combine_tool_allowlists` intersects with a mode allowlist
+        # when one is present.
+        agent_tool_names = await resolve_agent_tool_names(session, agent.id)
+        allowed_tools = combine_tool_allowlists(agent_tool_names, None)
+
+        request: dict[str, Any] = {
+            "tenant_id": str(task.tenant_id),
+            "task_id": str(task.id),
+            "agent_id": str(agent.id),
+            "task": {
+                "id": str(task.id),
+                "title": task.title,
+                "description": task.description or "",
+            },
+            # The agent carries its ModelClient spec; the worker
+            # feeds it to the agent-runtime verbatim.
+            "model": dict(agent.model_config),
+            "budgets": None,
+        }
+        # Only emit the key when a restriction applies — `None` means "no
+        # key", which `ExecutionRequest.from_dict` / `_agent_spec` read as
+        # "no restriction". An empty list IS emitted (block every tool).
+        if allowed_tools is not None:
+            request["allowed_tools"] = allowed_tools
+        return _AiDispatch(request=request)
 
     async def _route_human(
         self, session: AsyncSession, task: Task, human_agent: Agent
