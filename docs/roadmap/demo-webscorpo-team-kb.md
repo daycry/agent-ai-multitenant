@@ -79,7 +79,7 @@ config de comandos/runtime PHP, y un **KB completo** — uno **compartido por el
 
 #### `task_demo_ws_01` — Generar el corpus KB (team-shared + por-agente)
 
-- [ ] **Título**: Generar el corpus markdown del KB de WebScorpo desde el análisis: 10 documentos team-shared +
+- [x] **Título**: Generar el corpus markdown del KB de WebScorpo desde el análisis: 10 documentos team-shared +
       un documento por cada uno de los 10 roles, bajo `scripts/webscorpo/kb/` (`team/` + `agents/<role>/`). Contenido
       fiel (arquitectura HMVC, Doctrine/BaseEntity/SLC, scripts composer, suites de test, CI/CD Azure, i18n EN/ES,
       hallazgos de seguridad, dependencias daycry/\*). Read-only sobre `C:/laragon/www/webscorpo/app` para precisar.
