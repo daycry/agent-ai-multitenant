@@ -107,7 +107,7 @@ empty-state,skeleton,table}.tsx` consistentes con las existentes. Sin cambiar el
 
 #### `task_ui_05` — Verificar + guía de convenciones UI + changelog
 
-- [ ] **Título**: Verificación final (`typecheck && lint && build`), confirmar que NINGÚN `data-testid` usado por
+- [x] **Título**: Verificación final (`typecheck && lint && build`), confirmar que NINGÚN `data-testid` usado por
       `e2e/*.spec.ts` desapareció (grep cruzado); guía `docs/03-guides/ui-conventions.md` (design-system, primitivas,
       componentes compartidos, estados, a11y, tokens); changelog `docs/07-changelog/ui-refresh-refactor.md`; fila en
       roadmap README.

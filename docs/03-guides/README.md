@@ -13,4 +13,5 @@ Cómo trabajar con el sistema. Una página por flujo concreto.
 | [comandos-y-runtime-por-proyecto.md](./comandos-y-runtime-por-proyecto.md) | Autorizar comandos del stack (PHP/Node/.NET) + runtime por proyecto     |
 | [demo-webscorpo.md](./demo-webscorpo.md)                                   | Correr el seed del equipo WebScorpo (CI4) + KB completo y re-indexarlo  |
 | [design-tokens.md](./design-tokens.md)                                     | Tokens de diseño del frontend                                           |
+| [ui-conventions.md](./ui-conventions.md)                                   | Design-system del admin-panel: primitivas, componentes, estados, a11y   |
 | [gotchas/](./gotchas/)                                                     | Trampas conocidas del toolchain (Docker, asyncpg, mypy, OTEL, Windows…) |

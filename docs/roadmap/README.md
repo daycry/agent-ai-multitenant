@@ -77,6 +77,16 @@ features ni código). No bloquean ni son bloqueados por las fases.
 | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | [docs-human-test-guides.md](./docs-human-test-guides.md) | Guías de tests humanos por plan en `docs/03-guides/human-tests/` (una por cada plan con bloque human) |
 
+### Planes de frontend (no entran en el gate de fases)
+
+Planes con `plan_id` descriptivo, **solo frontend** y
+**behavior-preserving** (no tocan backend, rutas, llamadas API ni
+`data-testid`). No bloquean ni son bloqueados por las fases.
+
+| Plan                                               | Qué produce                                                                                                                |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| [ui-refresh-refactor.md](./ui-refresh-refactor.md) | Refresh visual moderado + refactor del `admin-panel`: tokens refinados, primitivas y componentes compartidos nuevos, a11y. |
+
 ## MVP Funcional
 
 Las fases 0-6 forman un MVP funcional. Total estimado: 21-27 semanas.
