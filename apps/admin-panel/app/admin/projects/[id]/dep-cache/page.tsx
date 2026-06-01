@@ -25,9 +25,11 @@ import { Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
+import { DataTable, type DataTableColumn } from "@/components/shared/data-table";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 // Mirror del catálogo en shared_test_runtimes/catalog.py — el orden
 // matchea el de CATALOG (insertion order).
@@ -96,6 +98,59 @@ export default function DepCachePage() {
     },
   });
 
+  const columns: DataTableColumn<(typeof RUNTIMES)[number]>[] = [
+    {
+      key: "runtime",
+      header: "Runtime",
+      className: "font-mono",
+      cell: (rt) => rt.label,
+    },
+    {
+      key: "lock",
+      header: "Lock file",
+      className: "font-mono text-xs",
+      cell: (rt) => rt.lockFile,
+    },
+    {
+      key: "actions",
+      header: "Acciones",
+      cell: (rt) => {
+        const isLoading = invalidate.isPending && invalidate.variables === rt.id;
+        return (
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={isLoading}
+            onClick={() => invalidate.mutate(rt.id)}
+            data-testid={`invalidate-${rt.id}`}
+          >
+            <Trash2 className="mr-1 h-3 w-3" />
+            {isLoading ? "Invalidando..." : "Invalidar"}
+          </Button>
+        );
+      },
+    },
+    {
+      key: "result",
+      header: "Resultado",
+      cell: (rt) => {
+        const result = results[rt.id];
+        if (!result) return null;
+        return (
+          <span
+            className={cn(
+              "text-sm font-medium",
+              result.ok ? "text-success-soft-foreground" : "text-danger-soft-foreground",
+            )}
+            data-testid={`result-${rt.id}`}
+          >
+            {result.message}
+          </span>
+        );
+      },
+    },
+  ];
+
   return (
     <div className="container mx-auto px-4 py-6">
       <ProjectBreadcrumb projectId={projectId} current="Caché de dependencias" />
@@ -113,50 +168,13 @@ export default function DepCachePage() {
           <CardTitle>Runtimes con caché</CardTitle>
         </CardHeader>
         <CardContent>
-          <table className="w-full text-sm" data-testid="dep-cache-table">
-            <thead>
-              <tr className="border-b text-left text-muted-foreground">
-                <th className="py-2 pr-2">Runtime</th>
-                <th className="py-2 pr-2">Lock file</th>
-                <th className="py-2 pr-2">Acciones</th>
-                <th className="py-2">Resultado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {RUNTIMES.map((rt) => {
-                const result = results[rt.id];
-                const isLoading = invalidate.isPending && invalidate.variables === rt.id;
-                return (
-                  <tr key={rt.id} className="border-b" data-runtime={rt.id}>
-                    <td className="py-2 pr-2 font-mono">{rt.label}</td>
-                    <td className="py-2 pr-2 font-mono text-xs">{rt.lockFile}</td>
-                    <td className="py-2 pr-2">
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        disabled={isLoading}
-                        onClick={() => invalidate.mutate(rt.id)}
-                        data-testid={`invalidate-${rt.id}`}
-                      >
-                        <Trash2 className="mr-1 h-3 w-3" />
-                        {isLoading ? "Invalidando..." : "Invalidar"}
-                      </Button>
-                    </td>
-                    <td className="py-2">
-                      {result && (
-                        <span
-                          className={result.ok ? "text-green-600" : "text-red-600"}
-                          data-testid={`result-${rt.id}`}
-                        >
-                          {result.message}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <DataTable
+            data={RUNTIMES}
+            data-testid="dep-cache-table"
+            getRowKey={(rt) => rt.id}
+            rowProps={(rt) => ({ "data-runtime": rt.id })}
+            columns={columns}
+          />
         </CardContent>
       </Card>
     </div>
