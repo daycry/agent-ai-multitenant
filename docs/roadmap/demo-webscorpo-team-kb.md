@@ -100,7 +100,7 @@ config de comandos/runtime PHP, y un **KB completo** — uno **compartido por el
 
 #### `task_demo_ws_03` — KBs team-shared + por-agente + ingesta del corpus
 
-- [ ] **Título**: En el mismo seed: crear un KB `team_shared` (concedido al equipo/proyecto) con los 10 docs
+- [x] **Título**: En el mismo seed: crear un KB `team_shared` (concedido al equipo/proyecto) con los 10 docs
       compartidos + un KB `private` por agente con sus docs de rol; ingestar el corpus reutilizando el pipeline
       existente con degradación elegante del embedder (sin Ollama → documentos guardados, embeddings diferidos).
       Conceder los KBs (agent_knowledge_bases / default_kb_grants).

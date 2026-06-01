@@ -110,6 +110,35 @@ def agent_id(slug: str) -> UUID:
     return _id("agent", slug)
 
 
+def team_kb_id() -> UUID:
+    """UUID estable del KB ``team_shared`` (uno por equipo)."""
+    return _id("kb", f"team:{TEAM_SLUG}")
+
+
+def agent_kb_id(agent_slug: str) -> UUID:
+    """UUID estable del KB ``private`` de un agente (uno por rol)."""
+    return _id("kb", f"agent:{agent_slug}")
+
+
+def kb_document_id(kb_slug: str, doc_slug: str) -> UUID:
+    """UUID estable de un ``documents`` row dentro de un KB del seed."""
+    return _id("kbdoc", f"{kb_slug}:{doc_slug}")
+
+
+# =============================================================================
+# Corpus del KB (task_demo_ws_01) — markdown versionado bajo scripts/webscorpo/kb/
+# =============================================================================
+# Raíz del corpus: 10 docs team-shared en ``team/`` + un ``agents/<role>/
+# role-knowledge.md`` por agente. Generado del análisis en task_demo_ws_01.
+KB_CORPUS_DIR: Path = _SCRIPTS_DIR / "webscorpo" / "kb"
+_AGENT_DOC_NAME = "role-knowledge.md"
+# MIME + plantilla de storage key sintética (el corpus vive en el repo, no en
+# MinIO) — mismo patrón que ``catalog_ingestion`` para que la fila Document
+# quede bien formada y un re-index futuro sepa de dónde viene.
+_KB_MIME_TYPE = "text/markdown"
+_KB_STORAGE_KEY_TEMPLATE = "webscorpo/kb/{rel}"
+
+
 # =============================================================================
 # Roster del equipo (análisis §7) — 10 agentes especializados en el stack
 # =============================================================================
@@ -131,6 +160,16 @@ class WebScorpoAgent:
     @property
     def id(self) -> UUID:
         return agent_id(self.slug)
+
+    @property
+    def kb_role(self) -> str:
+        """Nombre del directorio del corpus por-rol (``agents/<kb_role>/``).
+
+        El roster usa slugs ``webscorpo-<role>``; el corpus de task_demo_ws_01
+        los guarda bajo ``agents/<role>/`` (sin el prefijo). Ej.:
+        ``webscorpo-auth-security`` -> ``auth-security``.
+        """
+        return self.slug.removeprefix("webscorpo-")
 
 
 # Conjuntos de tools reutilizables (slugs del catálogo built-in
@@ -428,6 +467,17 @@ WEBSCORPO_AGENTS: tuple[WebScorpoAgent, ...] = (
 # Upsert SQL — idempotente por id (uuid5)
 # =============================================================================
 @dataclass
+class KBIngestResult:
+    """Resultado de ingestar un KB (KB + N documentos + chunks)."""
+
+    slug: str  # "team" o "agent:<slug>"
+    kb_id: UUID
+    document_ids: dict[str, UUID] = field(default_factory=dict)  # doc_slug -> id
+    chunks_persisted: int = 0
+    embeddings_deferred: bool = False  # True si no había embedder alcanzable
+
+
+@dataclass
 class SeedResult:
     """Resumen de lo que el seed creó/actualizó (para logging + tests)."""
 
@@ -436,6 +486,11 @@ class SeedResult:
     project_id: UUID
     agent_ids: dict[str, UUID] = field(default_factory=dict)
     tool_assignments: dict[str, int] = field(default_factory=dict)
+    # task_demo_ws_03: KBs (team-shared + por-agente) + ingesta del corpus.
+    team_kb_id: UUID | None = None
+    agent_kb_ids: dict[str, UUID] = field(default_factory=dict)  # agent_slug -> kb_id
+    kb_documents: int = 0
+    embeddings_deferred: bool = False
 
 
 _UPSERT_ORG_SQL = """
@@ -537,14 +592,108 @@ _DELETE_STALE_AGENT_TOOLS_SQL = """
        AND tool_id <> ALL(CAST(:keep_ids AS uuid[]))
 """
 
+# --- KBs (task_demo_ws_03) — upsert idempotente por id (uuid5) ---------------
+_UPSERT_KB_SQL = """
+    INSERT INTO knowledge_bases
+        (id, tenant_id, name, description, embedding_model_id, is_builtin)
+    VALUES
+        (:id, :tenant_id, :name, :description, 'nomic-embed-text-v1.5', false)
+    ON CONFLICT (id) DO UPDATE SET
+        tenant_id = EXCLUDED.tenant_id,
+        name = EXCLUDED.name,
+        description = EXCLUDED.description,
+        is_builtin = false,
+        updated_at = now(),
+        deleted_at = NULL
+"""
 
-async def seed_webscorpo(session: object) -> SeedResult:
+_UPSERT_DOCUMENT_SQL = """
+    INSERT INTO documents (
+        id, tenant_id, kb_id, title, source_filename, source_mime_type,
+        source_storage_key, source_size_bytes, status, page_count, indexed_at
+    )
+    VALUES (
+        :id, :tenant_id, :kb_id, :title, :source_filename, :mime,
+        :storage_key, :size_bytes, 'indexed', 0, now()
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        tenant_id = EXCLUDED.tenant_id,
+        kb_id = EXCLUDED.kb_id,
+        title = EXCLUDED.title,
+        source_filename = EXCLUDED.source_filename,
+        source_storage_key = EXCLUDED.source_storage_key,
+        source_size_bytes = EXCLUDED.source_size_bytes,
+        status = 'indexed',
+        indexed_at = now(),
+        error_message = NULL,
+        updated_at = now(),
+        deleted_at = NULL
+"""
+
+# El hash del corpus de un documento (en cualquiera de sus chunks). Sirve de
+# token de idempotencia: si el .md no cambió, no re-troceamos/re-embebemos.
+_EXISTING_CORPUS_HASH_SQL = """
+    SELECT metadata->>'corpus_hash'
+      FROM chunks
+     WHERE document_id = :document_id
+     LIMIT 1
+"""
+
+_DELETE_CHUNKS_SQL = "DELETE FROM chunks WHERE document_id = :document_id"
+
+# Inserta un chunk. ``embedding`` puede ser NULL (degradación elegante sin
+# embedder); BM25/keyword sigue sirviendo el chunk hasta el re-index. El ``id``
+# es un default Python-side en el ORM, así que el INSERT crudo lo provee con un
+# uuid5 estable por (document_id, ordinal) — re-insertar no cambia el id.
+_INSERT_CHUNK_SQL = """
+    INSERT INTO chunks (
+        id, tenant_id, document_id, ordinal, content, embedding, bbox, metadata
+    )
+    VALUES (
+        :id, :tenant_id, :document_id, :ordinal, :content,
+        CAST(:embedding AS vector), NULL, CAST(:metadata AS jsonb)
+    )
+"""
+
+# Borra documentos obsoletos de un KB (si el corpus encoge entre versiones).
+_DELETE_STALE_DOCS_SQL = """
+    DELETE FROM documents
+     WHERE kb_id = :kb_id
+       AND id <> ALL(CAST(:keep_ids AS uuid[]))
+"""
+
+# Grant KB->proyecto (junction kb_projects). tenant_id desnormalizado.
+_UPSERT_KB_PROJECT_SQL = """
+    INSERT INTO kb_projects (kb_id, project_id, tenant_id)
+    VALUES (:kb_id, :project_id, :tenant_id)
+    ON CONFLICT (kb_id, project_id) DO NOTHING
+"""
+
+# Grant KB->agente (junction agent_knowledge_bases). tenant_id desnormalizado.
+_UPSERT_AGENT_KB_SQL = """
+    INSERT INTO agent_knowledge_bases (agent_id, kb_id, tenant_id)
+    VALUES (:agent_id, :kb_id, :tenant_id)
+    ON CONFLICT (agent_id, kb_id) DO NOTHING
+"""
+
+
+async def seed_webscorpo(
+    session: object,
+    *,
+    embedder: object | None = None,
+    embedder_ok: bool | None = None,
+) -> SeedResult:
     """Upserta el escenario WebScorpo completo. Idempotente.
 
     Caller debe pasar una ``AsyncSession`` ligada al engine admin
     (BYPASSRLS / migrations_user): el seed escribe en ``organizations`` y
     bajo el tenant de la plataforma (las tools built-in), lo que una
     sesión de tenant no puede hacer.
+
+    ``embedder`` / ``embedder_ok`` se pasan tal cual a
+    :func:`seed_webscorpo_kbs` (inyectable para los tests); por defecto
+    (``None``) la fase de KBs construye el ``OllamaEmbedder`` real y
+    comprueba su salud, degradando con elegancia si no está.
 
     Orden:
       1. ``ensure_platform_tenant`` + ``seed_builtin_tools`` — garantiza
@@ -553,6 +702,7 @@ async def seed_webscorpo(session: object) -> SeedResult:
       2. org Mediapro -> team WebScorpo -> 10 agentes -> membership.
       3. proyecto webscorpo (allowed_commands + php-phpunit + team).
       4. asignación de tools por agente (upsert + limpieza de obsoletas).
+      5. KBs (team-shared + por-agente) + ingesta del corpus.
     """
     from api_server.seeds.builtin_tools import _tool_id, seed_builtin_tools
     from api_server.seeds.platform import ensure_platform_tenant
@@ -656,6 +806,314 @@ async def seed_webscorpo(session: object) -> SeedResult:
         )
         result.tool_assignments[agent.slug] = len(keep_ids)
 
+    # --- 5. KBs (team-shared + por-agente) + ingesta del corpus ----------
+    await seed_webscorpo_kbs(session, result, embedder=embedder, embedder_ok=embedder_ok)
+
+    return result
+
+
+# =============================================================================
+# KBs + ingesta del corpus (task_demo_ws_03)
+# =============================================================================
+# Un KB **team_shared** con los 10 docs ``team/*.md``, concedido al proyecto
+# (kb_projects) y a TODOS los agentes del equipo (agent_knowledge_bases); y un
+# KB **private** por agente con su ``agents/<role>/role-knowledge.md``,
+# concedido sólo a ese agente. La ingesta reutiliza el pipeline de Plan 04
+# (chunker markdown de ``catalog_ingestion`` + ``Embedder`` Protocol) con
+# **degradación elegante**: si no hay embedder (Ollama) alcanzable, los
+# documentos + chunks se persisten con ``embedding = NULL`` y se difiere el
+# embedding al re-index, sin reventar el seed.
+
+
+def _frontmatter_title(corpus: str, fallback: str) -> str:
+    """Extrae ``title:`` del frontmatter YAML del corpus (o ``fallback``)."""
+    lines = corpus.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return fallback
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if line.startswith("title:"):
+            value = line.partition(":")[2].strip().strip('"').strip("'")
+            if value:
+                return value
+    return fallback
+
+
+def _corpus_hash(corpus: str) -> str:
+    """SHA-256 estable del corpus — token de idempotencia por documento."""
+    import hashlib
+
+    return hashlib.sha256(corpus.encode("utf-8")).hexdigest()
+
+
+async def _ingest_document(
+    session: object,
+    *,
+    embedder: object,
+    embedder_ok: bool,
+    tenant: UUID,
+    kb: UUID,
+    kb_slug: str,
+    doc_slug: str,
+    md_path: Path,
+) -> tuple[UUID, int, bool]:
+    """Upserta UN documento + sus chunks. Idempotente; degrada sin embedder.
+
+    Devuelve ``(document_id, n_chunks, embeddings_deferred)``. Reutiliza el
+    chunker markdown de ``catalog_ingestion`` y embebe vía el ``Embedder``
+    inyectado; ante ``EmbeddingError`` (o si el embedder no estaba alcanzable)
+    persiste ``embedding = NULL`` y marca el documento como diferido.
+    """
+    from api_server.ingestion.embeddings import EmbeddingError
+    from api_server.seeds.catalog_ingestion import chunk_markdown
+    from sqlalchemy import text
+
+    exec_ = session.execute  # type: ignore[attr-defined]
+    corpus = md_path.read_text(encoding="utf-8")
+    document_id = kb_document_id(kb_slug, doc_slug)
+    corpus_hash = _corpus_hash(corpus)
+    rel = md_path.relative_to(KB_CORPUS_DIR).as_posix()
+
+    # Fast-path idempotente: si los chunks ya llevan el hash actual, no
+    # re-troceamos/re-embebemos (mismo recurso que catalog_ingestion).
+    existing_hash = (
+        await exec_(text(_EXISTING_CORPUS_HASH_SQL), {"document_id": str(document_id)})
+    ).scalar_one_or_none()
+
+    # El documento (fila ``documents``) siempre se upserta (metadata barata).
+    await exec_(
+        text(_UPSERT_DOCUMENT_SQL),
+        {
+            "id": str(document_id),
+            "tenant_id": str(tenant),
+            "kb_id": str(kb),
+            "title": _frontmatter_title(corpus, fallback=md_path.stem),
+            "source_filename": md_path.name,
+            "mime": _KB_MIME_TYPE,
+            "storage_key": _KB_STORAGE_KEY_TEMPLATE.format(rel=rel),
+            "size_bytes": len(corpus.encode("utf-8")),
+        },
+    )
+
+    if existing_hash == corpus_hash:
+        # Corpus sin cambios -> conservamos los chunks (y sus embeddings).
+        count = int(
+            (
+                await exec_(
+                    text("SELECT count(*) FROM chunks WHERE document_id = :id"),
+                    {"id": str(document_id)},
+                )
+            ).scalar_one()
+        )
+        return document_id, count, False
+
+    chunk_texts = chunk_markdown(corpus)
+
+    # Embebe en un batch; degrada a NULL si el embedder falla / no está.
+    embeddings: list[list[float] | None]
+    deferred = False
+    if embedder_ok and chunk_texts:
+        try:
+            vectors = await embedder.embed(chunk_texts)  # type: ignore[attr-defined]
+            embeddings = list(vectors)
+        except EmbeddingError as exc:
+            print(f"    [embedder] no alcanzable ({exc}); embeddings diferidos.")
+            embeddings = [None] * len(chunk_texts)
+            deferred = True
+    else:
+        embeddings = [None] * len(chunk_texts)
+        deferred = not embedder_ok and bool(chunk_texts)
+
+    # Reemplazo atómico de chunks: borra los viejos, inserta el set nuevo.
+    await exec_(text(_DELETE_CHUNKS_SQL), {"document_id": str(document_id)})
+    for ordinal, (content, embedding) in enumerate(zip(chunk_texts, embeddings, strict=True)):
+        await exec_(
+            text(_INSERT_CHUNK_SQL),
+            {
+                "id": str(_id("chunk", f"{document_id}:{ordinal}")),
+                "tenant_id": str(tenant),
+                "document_id": str(document_id),
+                "ordinal": ordinal,
+                "content": content,
+                # pgvector acepta el literal "[...]"; NULL difiere el embedding.
+                "embedding": (
+                    "[" + ",".join(repr(float(x)) for x in embedding) + "]"
+                    if embedding is not None
+                    else None
+                ),
+                "metadata": _json_dumps(
+                    {"corpus_hash": corpus_hash, "source": "webscorpo", "slug": doc_slug}
+                ),
+            },
+        )
+    return document_id, len(chunk_texts), deferred
+
+
+def _json_dumps(obj: dict[str, object]) -> str:
+    import json
+
+    return json.dumps(obj)
+
+
+async def _make_embedder() -> tuple[object | None, bool]:
+    """Construye el ``OllamaEmbedder`` y comprueba si Ollama está alcanzable.
+
+    Degradación elegante: si la construcción falla o un ping rápido a Ollama
+    no responde, devolvemos ``(embedder_or_None, False)`` y el seed persiste
+    documentos sin embeddings (diferidos al re-index). Nunca revienta.
+    """
+    from api_server.ingestion.embeddings import EmbeddingError, OllamaEmbedder
+
+    try:
+        embedder = OllamaEmbedder()
+    except Exception as exc:  # — degradar ante cualquier fallo de wiring
+        print(f"    [embedder] no se pudo construir ({exc}); embeddings diferidos.")
+        return None, False
+
+    # Ping barato: embebe un texto trivial. Si falla, degradamos.
+    try:
+        await embedder.embed(["webscorpo embedder health-check"])
+    except EmbeddingError as exc:
+        print(f"    [embedder] Ollama no alcanzable ({exc}); embeddings diferidos.")
+        return embedder, False
+    return embedder, True
+
+
+async def seed_webscorpo_kbs(
+    session: object,
+    result: SeedResult,
+    *,
+    embedder: object | None = None,
+    embedder_ok: bool | None = None,
+) -> SeedResult:
+    """Crea/upserta el KB team-shared + los KBs por-agente e ingesta el corpus.
+
+    Idempotente (upsert por uuid5 estable). Degradación elegante del embedder.
+    Asume que ``seed_webscorpo`` ya creó tenant/equipo/agentes/proyecto (los
+    ids viven en ``result``). El caller posee la transacción.
+
+    El embedder es **inyectable** (mismo patrón que ``catalog_ingestion``): por
+    defecto construye el ``OllamaEmbedder`` real y comprueba su salud; los
+    tests pasan un fake determinista (o ``embedder_ok=False`` para ejercitar la
+    degradación). Cuando el caller inyecta el embedder, NO lo cerramos (lo
+    posee él).
+    """
+    from sqlalchemy import text
+
+    exec_ = session.execute  # type: ignore[attr-defined]
+    tid = result.tenant_id
+    team_dir = KB_CORPUS_DIR / "team"
+
+    own_embedder = embedder is None and embedder_ok is None
+    if own_embedder:
+        embedder, embedder_ok = await _make_embedder()
+    elif embedder_ok is None:
+        embedder_ok = embedder is not None
+    try:
+        # --- KB team_shared con los 10 docs team/*.md -------------------
+        tkb = team_kb_id()
+        await exec_(
+            text(_UPSERT_KB_SQL),
+            {
+                "id": str(tkb),
+                "tenant_id": str(tid),
+                "name": "WebScorpo — Conocimiento del equipo",
+                "description": (
+                    "KB compartido del equipo WebScorpo: overview + glosario, mapa "
+                    "de arquitectura HMVC, routing/filtros, data-model Doctrine/"
+                    "BaseEntity/SLC, estándares + toolchain (composer @ci/@quality/"
+                    "@fix/@test*/@mutation), estrategia de tests, runbook CI/CD "
+                    "Azure dual-region, política i18n EN/ES, baseline de seguridad y "
+                    "catálogo de dependencias daycry/*. Derivado del análisis."
+                ),
+            },
+        )
+        result.team_kb_id = tkb
+
+        team_doc_ids: list[str] = []
+        team_deferred = False
+        if team_dir.is_dir():
+            for md_path in sorted(team_dir.glob("*.md")):
+                doc_id, n_chunks, deferred = await _ingest_document(
+                    session,
+                    embedder=embedder,
+                    embedder_ok=embedder_ok,
+                    tenant=tid,
+                    kb=tkb,
+                    kb_slug="team",
+                    doc_slug=md_path.stem,
+                    md_path=md_path,
+                )
+                team_doc_ids.append(str(doc_id))
+                result.kb_documents += 1
+                team_deferred = team_deferred or deferred
+        # Limpia documentos obsoletos del KB del equipo.
+        await exec_(
+            text(_DELETE_STALE_DOCS_SQL),
+            {"kb_id": str(tkb), "keep_ids": team_doc_ids or [str(tkb)]},
+        )
+        result.embeddings_deferred = result.embeddings_deferred or team_deferred
+
+        # Grant del KB del equipo: al proyecto + a TODOS los agentes.
+        await exec_(
+            text(_UPSERT_KB_PROJECT_SQL),
+            {"kb_id": str(tkb), "project_id": str(result.project_id), "tenant_id": str(tid)},
+        )
+        for agent in WEBSCORPO_AGENTS:
+            await exec_(
+                text(_UPSERT_AGENT_KB_SQL),
+                {"agent_id": str(agent.id), "kb_id": str(tkb), "tenant_id": str(tid)},
+            )
+
+        # --- KB private por agente con su doc de rol --------------------
+        for agent in WEBSCORPO_AGENTS:
+            akb = agent_kb_id(agent.slug)
+            await exec_(
+                text(_UPSERT_KB_SQL),
+                {
+                    "id": str(akb),
+                    "tenant_id": str(tid),
+                    "name": f"WebScorpo — {agent.role_in_team}",
+                    "description": (
+                        f"KB privado del agente {agent.name} ({agent.role_in_team}): "
+                        "conocimiento específico de su rol en WebScorpo, derivado del "
+                        "análisis. Concedido sólo a este agente."
+                    ),
+                },
+            )
+            result.agent_kb_ids[agent.slug] = akb
+
+            role_md = KB_CORPUS_DIR / "agents" / agent.kb_role / _AGENT_DOC_NAME
+            agent_doc_ids: list[str] = []
+            if role_md.is_file():
+                doc_id, _n, deferred = await _ingest_document(
+                    session,
+                    embedder=embedder,
+                    embedder_ok=embedder_ok,
+                    tenant=tid,
+                    kb=akb,
+                    kb_slug=f"agent:{agent.slug}",
+                    doc_slug=agent.kb_role,
+                    md_path=role_md,
+                )
+                agent_doc_ids.append(str(doc_id))
+                result.kb_documents += 1
+                result.embeddings_deferred = result.embeddings_deferred or deferred
+            await exec_(
+                text(_DELETE_STALE_DOCS_SQL),
+                {"kb_id": str(akb), "keep_ids": agent_doc_ids or [str(akb)]},
+            )
+            # Grant del KB privado: sólo a su agente.
+            await exec_(
+                text(_UPSERT_AGENT_KB_SQL),
+                {"agent_id": str(agent.id), "kb_id": str(akb), "tenant_id": str(tid)},
+            )
+    finally:
+        if own_embedder and embedder is not None:
+            with contextlib.suppress(Exception):
+                await embedder.aclose()  # type: ignore[attr-defined]
+
     return result
 
 
@@ -699,6 +1157,14 @@ async def main() -> int:
         print(f"  agentes: {len(result.agent_ids)}")
         for slug, n_tools in result.tool_assignments.items():
             print(f"    - {slug}: {n_tools} tools")
+        print(f"  KB equipo: {result.team_kb_id}")
+        print(f"  KBs por-agente: {len(result.agent_kb_ids)}")
+        print(f"  documentos KB ingestados: {result.kb_documents}")
+        if result.embeddings_deferred:
+            print(
+                "  AVISO: sin embedder (Ollama) alcanzable -> embeddings diferidos."
+                " Re-indexa cuando haya proveedor configurado."
+            )
         print()
         print("  OK — idempotente: re-ejecutar no duplica nada.")
     finally:
