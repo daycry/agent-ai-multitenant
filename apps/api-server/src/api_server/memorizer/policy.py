@@ -83,4 +83,55 @@ def should_memorize(*, status: str, memory_scope: str | None) -> MemorizeDecisio
     return MemorizeDecision(memorise=True, reason="ok")
 
 
-__all__ = ["MemorizeDecision", "should_memorize"]
+def should_memorize_human_session(
+    *, task_status: str, memory_scope: str | None
+) -> MemorizeDecision:
+    """Return a :class:`MemorizeDecision` for one finished human work session.
+
+    The human equivalent of :func:`should_memorize` (Plan 16 task_16_15). A
+    :class:`~api_server.db.domain.HumanWorkSession` has no ``status`` of its
+    own — what matters is whether the TASK it belongs to reached ``done`` (the
+    human's deliverable was accepted, whether via ``auto_approve`` or a peer
+    reviewer's approval). A task still ``in_review`` / ``blocked`` / re-opened
+    is not a positive example to remember yet.
+
+    Args:
+        task_status: The :class:`~api_server.db.domain.TaskStatus` value of the
+            task the work session belongs to. Only ``done`` triggers
+            memorisation.
+        memory_scope: The human Agent's ``memory_scope`` column. NULL or any
+            value outside the four canonical :class:`MemoryScope` values opts
+            the human agent out (same rule as AI agents).
+
+    Examples
+    --------
+    >>> should_memorize_human_session(task_status="done", memory_scope="private").memorise
+    True
+    >>> should_memorize_human_session(task_status="in_review", memory_scope="private").memorise
+    False
+    >>> should_memorize_human_session(task_status="done", memory_scope=None).memorise
+    False
+    """
+    if task_status != "done":
+        return MemorizeDecision(
+            memorise=False,
+            reason=f"task.status={task_status!r} is not 'done'",
+        )
+    if memory_scope is None:
+        return MemorizeDecision(
+            memorise=False,
+            reason="agent.memory_scope is NULL",
+        )
+    if memory_scope not in _MEMORISABLE_SCOPES:
+        return MemorizeDecision(
+            memorise=False,
+            reason=f"agent.memory_scope={memory_scope!r} is not a canonical MemoryScope",
+        )
+    return MemorizeDecision(memorise=True, reason="ok")
+
+
+__all__ = [
+    "MemorizeDecision",
+    "should_memorize",
+    "should_memorize_human_session",
+]

@@ -56,6 +56,15 @@ _RESTORE_FULL_TASK = "workers.run_restore"
 _RESTORE_PER_TENANT_TASK = "workers.run_restore_per_tenant"
 _RESTORE_QUEUE = "privileged"
 
+# The human Memorizer task (Plan 16 task_16_15). When a human task reaches
+# `done` (auto_approve submit, or a peer reviewer's approval) the inbox/review
+# endpoint enqueues this by name so the Memorizer distils the HumanWorkSession
+# into MemoryEntries. The `workers.memorizer` module owns the implementation;
+# the api-server only PRODUCES it by name (clean app boundary, same as the
+# execution Memorizer trigger that lives in the workers package).
+_MEMORIZE_HUMAN_WS_TASK = "workers.memorize_human_work_session"
+_MEMORIZE_QUEUE = "default"
+
 
 @lru_cache(maxsize=1)
 def get_celery_client() -> Celery:
@@ -167,6 +176,37 @@ async def enqueue_event_dispatch(
     return True
 
 
+async def enqueue_memorize_human_work_session(work_session_id: UUID) -> bool:
+    """Hand a finished HumanWorkSession to the Memorizer (Plan 16 task_16_15).
+
+    Called by the inbox submit (``auto_approve``) and the peer-review approve
+    endpoints right after the Task reaches ``done`` — the human's deliverable
+    is final, so the Memorizer can distil it into MemoryEntries cited back at
+    this work session.
+
+    Best-effort: a broker failure is logged and swallowed (returns False) so the
+    human's delivery is never rolled back on a Memorizer-side outage — the
+    memory is a nice-to-have, not part of the delivery transaction.
+    ``send_task`` does blocking socket I/O, so we run it off the event loop
+    (same approach as :func:`enqueue_ingestion`).
+    """
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            _MEMORIZE_HUMAN_WS_TASK,
+            args=[str(work_session_id)],
+            queue=_MEMORIZE_QUEUE,
+        )
+    except Exception as exc:
+        _log.warning(
+            "memorize_human_ws.enqueue_failed",
+            work_session_id=str(work_session_id),
+            error=str(exc),
+        )
+        return False
+    return True
+
+
 async def enqueue_restore(
     backup_id: str,
     *,
@@ -266,6 +306,7 @@ def _read_restore_status(job_id: str) -> dict[str, Any]:
 __all__ = [
     "enqueue_event_dispatch",
     "enqueue_ingestion",
+    "enqueue_memorize_human_work_session",
     "enqueue_notification_send",
     "enqueue_restore",
     "get_celery_client",

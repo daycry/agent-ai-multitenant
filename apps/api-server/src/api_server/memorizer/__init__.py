@@ -16,14 +16,24 @@ this package stays free of Celery and Redis so the unit tests run in
 plain Python.
 """
 
-from api_server.memorizer.distillation import MemoryCandidate, distil_execution
+from api_server.memorizer.distillation import (
+    MemoryCandidate,
+    distil_execution,
+    distil_human_work_session,
+)
 from api_server.memorizer.persistence import persist_memory_candidates
-from api_server.memorizer.policy import MemorizeDecision, should_memorize
+from api_server.memorizer.policy import (
+    MemorizeDecision,
+    should_memorize,
+    should_memorize_human_session,
+)
 
 __all__ = [
     "MemorizeDecision",
     "MemoryCandidate",
     "distil_execution",
+    "distil_human_work_session",
     "persist_memory_candidates",
     "should_memorize",
+    "should_memorize_human_session",
 ]

@@ -152,6 +152,113 @@ async def distil_execution(
     return _parse_response(response.content)
 
 
+_HUMAN_SYSTEM_PROMPT = (
+    "You are the Memorizer of an agentic platform. A HUMAN agent just finished "
+    "a work session on a task. Extract a SHORT list of memories worth keeping "
+    "for future plans — especially DECISIONS the human made, the context they "
+    "made them in, and the outcome. Phrase semantic facts as reusable "
+    'knowledge (e.g. "<name> decided to <decision> in <context>, which led to '
+    '<outcome>"). Always answer with a JSON array (no prose, no markdown '
+    "fences). Each item is an object with exactly three keys:\n"
+    '  "content" — a single-paragraph fact (max 2000 chars). When a human name '
+    "is known, cite WHO made the decision.\n"
+    '  "type"    — "episodic" (a concrete event of this session) or "semantic" '
+    "(a generalised rule / decision rationale worth reusing).\n"
+    '  "tags"    — array of short string tags for filtering, e.g. '
+    '["legal-review", "brand"].\n'
+    "Return between 0 and 5 items. Return an empty array if the work session "
+    "produced nothing worth remembering."
+)
+
+
+def _human_user_prompt(
+    *, session: Mapping[str, Any], agent: Mapping[str, Any], user: Mapping[str, Any]
+) -> str:
+    """Compact human-readable summary of a finished :class:`HumanWorkSession`.
+
+    Unlike :func:`_user_prompt` (which works off an AI execution's steps_log),
+    a human session carries free-form ``comments`` (the human's notes / output)
+    plus optional ``hours_logged`` and a list of attached deliverables. We
+    surface WHO did the work so the LLM can cite the decision-maker.
+    """
+    task_title = session.get("task_title") or "(no title)"
+    agent_role = agent.get("role") or "(human agent)"
+    who = user.get("name") or "(an unnamed user)"
+    comments = (session.get("comments") or "")[:1500]
+    hours = session.get("hours_logged")
+    attachments = session.get("output_files_attached") or []
+    att_lines: list[str] = []
+    for att in attachments[:6]:
+        if isinstance(att, Mapping):
+            label = att.get("name") or att.get("url") or att.get("title") or att.get("type")
+            if label:
+                att_lines.append(f"  - {str(label)[:200]}")
+        elif isinstance(att, str) and att.strip():
+            att_lines.append(f"  - {att.strip()[:200]}")
+    att_block = "\n".join(att_lines) if att_lines else "  (no attachments)"
+    hours_line = f"Hours logged: {hours}\n" if hours is not None else ""
+
+    return (
+        f"Human worker: {who}\n"
+        f"Human agent role: {agent_role}\n"
+        f"Task: {task_title}\n"
+        f"{hours_line}"
+        f"Human's notes / output (truncated):\n{comments}\n\n"
+        f"Deliverables attached:\n{att_block}\n\n"
+        "Return the JSON array now."
+    )
+
+
+async def distil_human_work_session(
+    *,
+    session: Mapping[str, Any],
+    agent: Mapping[str, Any],
+    user: Mapping[str, Any],
+    llm: LLMProvider,
+    model: str | None = None,
+) -> list[MemoryCandidate]:
+    """Ask the LLM to extract memory candidates from a human work session.
+
+    The human equivalent of :func:`distil_execution` (which stays unchanged).
+    Where an AI execution carries a ``steps_log``, a human session carries the
+    human's free-form ``comments`` + attached deliverables; the prompt steers
+    the LLM toward capturing the DECISION the human made and its outcome, with
+    the worker's name so the memory can cite who decided what.
+
+    Args:
+        session: A dict-shaped view of the ``HumanWorkSession`` row (uses
+            ``comments``, ``hours_logged``, ``output_files_attached`` and the
+            optional ``task_title``).
+        agent: A dict-shaped view of the human ``Agent`` row (uses ``role``).
+        user: A dict-shaped view of the worker ``User`` (uses ``name`` for the
+            citation).
+        llm: any ``LLMProvider``. Tests inject a fake.
+        model: model id override; if None the provider picks its default.
+
+    Returns:
+        A list of 0..``MAX_CANDIDATES_PER_EXECUTION`` candidates.
+    """
+    messages: Sequence[Message] = [
+        Message(role="system", content=_HUMAN_SYSTEM_PROMPT),
+        Message(
+            role="user",
+            content=_human_user_prompt(session=session, agent=agent, user=user),
+        ),
+    ]
+    try:
+        response = await llm.complete(
+            messages,
+            model=model,
+            max_tokens=_DEFAULT_MAX_TOKENS,
+            temperature=0.2,
+        )
+    except Exception as exc:  # the LLM call failed — log and move on
+        logger.warning("memorizer.human_llm_call_failed", error=str(exc))
+        return []
+
+    return _parse_response(response.content)
+
+
 def _parse_response(text: str) -> list[MemoryCandidate]:
     """Best-effort JSON extraction.
 
@@ -207,4 +314,5 @@ __all__ = [
     "MAX_CONTENT_CHARS",
     "MemoryCandidate",
     "distil_execution",
+    "distil_human_work_session",
 ]

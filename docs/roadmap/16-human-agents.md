@@ -358,7 +358,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_15` — Memorizer adaptado a tareas humanas
 
-- [ ] **Título**: El Memorizer IA destila también las HumanWorkSessions, no solo Executions. Genera MemoryEntries útiles para futuros planes (ej. "X decisión la tomó Fulano en este contexto y resultó en Y").
+- [x] **Título**: El Memorizer IA destila también las HumanWorkSessions, no solo Executions. Genera MemoryEntries útiles para futuros planes (ej. "X decisión la tomó Fulano en este contexto y resultó en Y"). _(backend pytest verde vs DB real — test_memorizer_human.py, 8 tests + @pytest.mark.cross_tenant; migración 0075 reversible single head; memory_entries.source_human_work_session_id cita la HumanWorkSession (CHECK ck_memory_entries_single_source: Execution XOR HumanWorkSession); distil_human_work_session + should_memorize_human_session (gate task=done) reutilizan el pipeline §04.03 sin tocar distil_execution; el scope private del agente humano SÍ se atribuye al user trabajador (a diferencia del agente IA); trigger desde inbox submit auto_approve + peer-review approve vía celery_client.enqueue_memorize_human_work_session)._
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer + backend-dev

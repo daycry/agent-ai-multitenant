@@ -41,7 +41,10 @@ from api_server.auth.deps import (
     get_tenant_session,
     require_tenant_member,
 )
-from api_server.celery_client import enqueue_event_dispatch
+from api_server.celery_client import (
+    enqueue_event_dispatch,
+    enqueue_memorize_human_work_session,
+)
 from api_server.db.domain import (
     Agent,
     AgentType,
@@ -569,6 +572,13 @@ async def complete_assignment(
         action=InboxAction.COMPLETE,
         extra=extra,
     )
+    # task_16_15: under auto_approve the submit already took the task to `done`,
+    # so the human's deliverable is final — hand the work session to the
+    # Memorizer to distil into MemoryEntries. Under peer_human_reviewer the task
+    # is still `in_review`; the Memorizer fires later, on the reviewer's approve.
+    # Best-effort: a broker blip never rolls back the human's delivery.
+    if task.status == TaskStatus.DONE.value:
+        await enqueue_memorize_human_work_session(work_session.id)
     return InboxSubmitResult(
         assignment_id=assignment.id,
         task_id=task.id,
@@ -731,6 +741,27 @@ async def _latest_work_output(session: AsyncSession, task_id: UUID, tenant_id: U
     ).scalar_one_or_none()
 
 
+async def _latest_work_session_id(
+    session: AsyncSession, task_id: UUID, tenant_id: UUID
+) -> UUID | None:
+    """The submitter's most recent (finished) HumanWorkSession id for a task.
+
+    The Memorizer (task_16_15) distils THIS session — the deliverable a peer
+    reviewer just approved (`peer_human_reviewer` mode). Scoped on tenant +
+    task (RLS belt-and-braces)."""
+    return (
+        await session.execute(
+            select(HumanWorkSession.id)
+            .where(
+                HumanWorkSession.task_id == task_id,
+                HumanWorkSession.tenant_id == tenant_id,
+            )
+            .order_by(HumanWorkSession.end_at.desc().nulls_last(), HumanWorkSession.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
 async def _load_my_review_or_404(
     session: AsyncSession, assignment_id: UUID, principal: AuthPrincipal, tenant_id: UUID
 ) -> tuple[HumanTaskAssignment, Task]:
@@ -781,6 +812,13 @@ async def approve_review(
     )
     assignment.status = HumanTaskAssignmentStatus.ACCEPTED.value
     await session.flush()
+    # task_16_15: the reviewer approved — the task is now `done`, so the
+    # submitter's deliverable is final. Hand its work session to the Memorizer.
+    # Best-effort: a broker blip never rolls back the approved verdict.
+    if result.task_status == TaskStatus.DONE.value:
+        work_session_id = await _latest_work_session_id(session, task.id, tenant_id)
+        if work_session_id is not None:
+            await enqueue_memorize_human_work_session(work_session_id)
     return InboxReviewVerdictResult(
         assignment_id=assignment.id,
         task_id=task.id,
