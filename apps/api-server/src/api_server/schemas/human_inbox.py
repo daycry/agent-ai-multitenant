@@ -184,16 +184,86 @@ class InboxActionResult(BaseModel):
 
 
 class InboxSubmitResult(InboxActionResult):
-    """The outcome of the delivery-form submit (task_16_09).
+    """The outcome of the delivery-form submit (task_16_09 + task_16_11).
 
     Extends :class:`InboxActionResult` with the id of the
     :class:`~api_server.db.domain.HumanWorkSession` the submission created and a
     count of the deliverables that were recorded, so the UI can confirm the
     work session was persisted.
+
+    task_16_11 adds the review-mode outcome: ``review_mode`` is the project's
+    effective ``human_task_review_mode`` (``auto_approve`` -> ``task_status`` is
+    ``done``; ``peer_human_reviewer`` -> ``in_review``), and
+    ``review_assignment_id`` is the reviewer ``HumanTaskAssignment`` created
+    under peer review (``None`` under auto_approve, or when no reviewer Human
+    Agent could be resolved).
     """
 
     work_session_id: UUID
     attachments_count: int
+    review_mode: str
+    review_assignment_id: UUID | None = None
+
+
+# ---------------------------------------------------------------------------
+# Peer review (task_16_11) — the reviewer side of `peer_human_reviewer` mode
+# ---------------------------------------------------------------------------
+class InboxReviewRejectRequest(BaseModel):
+    """Body for ``POST /inbox/reviews/{id}/reject`` (task_16_11).
+
+    ``feedback_text`` is REQUIRED — the rework comments travel with the task
+    when it returns to ``backlog`` and are recorded in the audit trail.
+    """
+
+    model_config = _BASE_CONFIG
+
+    feedback_text: str | None = Field(default=None, max_length=20000)
+
+
+class InboxReviewAssignmentResponse(BaseModel):
+    """One of the caller's pending peer-review assignments (task_16_11).
+
+    The reviewer side of ``peer_human_reviewer`` mode: a ``pending_acceptance``
+    assignment whose Task is ``in_review``, folded with the Task / project /
+    plan context and the submitter's latest delivery output
+    (``submitted_output``) so the reviewer sees what to judge. ``retry_count`` is
+    the task's current rework count (how many times it has bounced back).
+    """
+
+    model_config = _BASE_CONFIG
+
+    assignment_id: UUID
+    task_id: UUID
+    human_agent_id: UUID | None
+    assignment_status: str
+    task_status: str
+    assigned_at: datetime
+
+    task_title: str
+    task_description: str | None
+    project_id: UUID
+    project_name: str | None
+    plan_id: UUID | None
+    plan_title: str | None
+
+    submitted_output: str | None
+    retry_count: int
+
+
+class InboxReviewVerdictResult(InboxActionResult):
+    """The outcome of a peer-review verdict (task_16_11).
+
+    Extends :class:`InboxActionResult` with the ``verdict`` the reviewer
+    returned (``approved`` / ``rejected``), the task's post-verdict
+    ``retry_count`` (incremented on reject) and ``escalated`` — True when a
+    rejection exhausted ``max_retries`` and the task was blocked for human
+    attention (§7.9). On approve ``task_status`` is ``done``; on reject it is
+    ``backlog`` (or ``blocked`` when escalated).
+    """
+
+    verdict: str
+    retry_count: int
+    escalated: bool
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +327,9 @@ __all__ = [
     "InboxAssignmentResponse",
     "InboxHistoryEntry",
     "InboxMetricsResponse",
+    "InboxReviewAssignmentResponse",
+    "InboxReviewRejectRequest",
+    "InboxReviewVerdictResult",
     "InboxSubmitRequest",
     "InboxSubmitResult",
     "SubmitAttachment",

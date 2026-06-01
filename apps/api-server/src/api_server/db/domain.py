@@ -190,6 +190,29 @@ class ProjectStatus(enum.StrEnum):
     ARCHIVED = "archived"
 
 
+class HumanTaskReviewMode(enum.StrEnum):
+    """How a human task's deliverable is reviewed once submitted (Plan 16
+    task_16_11), a project-level setting (``projects.human_task_review_mode``).
+
+    - ``AUTO_APPROVE`` (default): the submit path (task_16_09) takes the task
+      straight to ``done`` — no extra review step. The MVP default (Plan 16
+      Decisiones Clave): suitable for "firma"-style tasks where the act of
+      submitting IS the completion.
+    - ``PEER_HUMAN_REVIEWER``: the task stays ``in_review`` and a SECOND
+      :class:`HumanTaskAssignment` is created for another Human Agent (the
+      reviewer), who approves (-> ``done``) or rejects with feedback (-> back
+      to ``backlog`` with ``retry_count`` bumped; after ``max_retries`` the
+      §7.9 retry/escalation infra parks it in ``awaiting_human_approval``).
+
+    The ``ai_reviewer`` mode is explicitly out of scope this plan (Plan 16
+    Alcance); the DB CHECK ``ck_projects_human_task_review_mode`` rejects any
+    value outside these two.
+    """
+
+    AUTO_APPROVE = "auto_approve"
+    PEER_HUMAN_REVIEWER = "peer_human_reviewer"
+
+
 class BudgetPeriod(enum.StrEnum):
     WEEKLY = "weekly"
     MONTHLY = "monthly"
@@ -614,6 +637,13 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
             "budget_amount IS NULL OR budget_amount >= 0",
             name="ck_projects_budget_non_negative",
         ),
+        # human_task_review_mode value set (Plan 16 task_16_11). Mirrors the
+        # HumanTaskReviewMode StrEnum; DB-enforced by migration 0073, same
+        # shape as ck_agents_agent_type.
+        CheckConstraint(
+            "human_task_review_mode IN ('auto_approve', 'peer_human_reviewer')",
+            name="ck_projects_human_task_review_mode",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -678,6 +708,17 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     budget_period_start_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
     budget_period_length_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     paused_by_budget: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+
+    # --- Human-task review mode (Plan 16 task_16_11) ----------------------
+    # How a human task's deliverable is reviewed once submitted (task_16_09).
+    # Stored as the :class:`HumanTaskReviewMode` value (TEXT) — same
+    # string-backed-enum convention as `status`. DEFAULT 'auto_approve' so
+    # existing projects keep the MVP behaviour (submit -> in_review -> done,
+    # no extra review step). DB-constrained by ck_projects_human_task_review_mode.
+    human_task_review_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'auto_approve'")
+    )
+
     # Catalog marker -- when true the row is a template blueprint owned
     # by the platform tenant, visible cross-tenant via RLS but never the
     # target of writes from a tenant session.
@@ -1351,6 +1392,7 @@ __all__ = [
     "HumanAgentConfig",
     "HumanTaskAssignment",
     "HumanTaskAssignmentStatus",
+    "HumanTaskReviewMode",
     "HumanWorkSession",
     "MemoryScope",
     "Message",

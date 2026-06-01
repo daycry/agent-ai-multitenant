@@ -276,7 +276,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_11` — Modos de revisión `auto_approve` y `peer_human_reviewer`
 
-- [ ] **Título**: Implementar `project.human_task_review_mode` con dos modos: `auto_approve` (la tarea pasa a done al marcar completada sin paso de revisión adicional) y `peer_human_reviewer` (otro Human Agent revisa el output).
+- [x] **Título**: Implementar `project.human_task_review_mode` con dos modos: `auto_approve` (la tarea pasa a done al marcar completada sin paso de revisión adicional) y `peer_human_reviewer` (otro Human Agent revisa el output). _(backend pytest verde vs DB real — test_human_review_auto.py + test_human_review_peer.py, 9 tests + @pytest.mark.cross_tenant; migración 0073 reversible, single head; review.py reutiliza el state machine §7.2 + escalación §7.9 a blocked + task_blocked como el sweep de acceptance-timeout)._
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev

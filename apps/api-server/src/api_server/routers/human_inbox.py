@@ -48,6 +48,7 @@ from api_server.db.domain import (
     HumanAgentConfig,
     HumanTaskAssignment,
     HumanTaskAssignmentStatus,
+    HumanTaskReviewMode,
     HumanWorkSession,
     Plan,
     Project,
@@ -56,6 +57,18 @@ from api_server.db.domain import (
 )
 from api_server.db.human_metrics import compute_user_metrics
 from api_server.db.task_audit_repo import append_audit_event
+from api_server.human_agents.review import (
+    TASK_BLOCKED_EVENT as _REVIEW_TASK_BLOCKED_EVENT,
+)
+from api_server.human_agents.review import (
+    VERDICT_REJECTED as _REVIEW_VERDICT_REJECTED,
+)
+from api_server.human_agents.review import (
+    approve_peer_review,
+    reject_peer_review,
+    resolve_review_mode,
+    route_into_peer_review,
+)
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers._pagination import apply_pagination, limit_query, offset_query
 from api_server.schemas.human_inbox import (
@@ -65,6 +78,9 @@ from api_server.schemas.human_inbox import (
     InboxAssignmentResponse,
     InboxHistoryEntry,
     InboxMetricsResponse,
+    InboxReviewAssignmentResponse,
+    InboxReviewRejectRequest,
+    InboxReviewVerdictResult,
     InboxSubmitRequest,
     InboxSubmitResult,
 )
@@ -378,6 +394,15 @@ async def accept_assignment(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"assignment is '{assignment.status}', not 'pending_acceptance'",
         )
+    # The work-accept path is only valid while the Task is still
+    # ``assigned_to_human``. A peer-review assignment (task_16_11) is also a
+    # ``pending_acceptance`` row, but its Task is ``in_review`` — that one is
+    # acted on via the /reviews/* endpoints, NOT accepted as work here.
+    if task.status != TaskStatus.ASSIGNED_TO_HUMAN.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"task is '{task.status}', not 'assigned_to_human'",
+        )
     await _assert_human_assignee(session, assignment, tenant_id)
     _transition_or_409(task, TaskStatus.IN_PROGRESS.value)
     if task.started_at is None:
@@ -463,6 +488,19 @@ async def complete_assignment(
     the work landed on). Allowed only while the assignment is ``accepted`` (you
     submit a task you have accepted). The work session is the auditable
     replacement for an ``Execution`` on a human task.
+
+    Review mode (task_16_11)
+    ------------------------
+    After the work session is created the project's
+    ``human_task_review_mode`` decides what happens next:
+
+      * ``auto_approve`` (default): the task transitions straight ``in_review ->
+        done`` — no extra review step (``review_mode='auto_approve'`` in the
+        result, ``review_assignment_id=None``).
+      * ``peer_human_reviewer``: the task STAYS ``in_review`` and a SECOND
+        ``HumanTaskAssignment`` is created for another Human Agent (the task's
+        ``reviewer_agent_id``), who later approves/rejects via the review
+        endpoints below. The result carries that ``review_assignment_id``.
     """
     tenant_id = require_tenant_id(principal)
     assignment, task = await _load_my_assignment_or_404(
@@ -496,10 +534,29 @@ async def complete_assignment(
     session.add(work_session)
     await session.flush()
 
+    # task_16_11: apply the project's human-task review mode.
+    review_mode = await resolve_review_mode(
+        session, project_id=task.project_id, tenant_id=tenant_id
+    )
+    review_assignment_id: UUID | None = None
+    if review_mode is HumanTaskReviewMode.AUTO_APPROVE:
+        # No extra review step — the submit completes the task.
+        _transition_or_409(task, TaskStatus.DONE.value)
+        if task.completed_at is None:
+            task.completed_at = now
+    else:
+        # peer_human_reviewer — stay in_review, create the reviewer assignment.
+        routed = await route_into_peer_review(session, task=task, tenant_id=tenant_id)
+        review_assignment_id = routed.review_assignment_id
+    await session.flush()
+
     extra: dict[str, object] = {
         "work_session_id": str(work_session.id),
         "attachments_count": len(attachments),
+        "review_mode": review_mode.value,
     }
+    if review_assignment_id is not None:
+        extra["review_assignment_id"] = str(review_assignment_id)
     if output_text:
         extra["output"] = output_text
     if payload.hours_worked is not None:
@@ -520,6 +577,8 @@ async def complete_assignment(
         task_status=task.status,
         work_session_id=work_session.id,
         attachments_count=len(attachments),
+        review_mode=review_mode.value,
+        review_assignment_id=review_assignment_id,
     )
 
 
@@ -588,4 +647,209 @@ def _result(assignment: HumanTaskAssignment, task: Task, action: InboxAction) ->
         action=action.value,
         assignment_status=assignment.status,
         task_status=task.status,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Peer review (task_16_11) — the reviewer side of `peer_human_reviewer` mode
+# ---------------------------------------------------------------------------
+#: A reviewer assignment is the SECOND HumanTaskAssignment on a task created by
+#: route_into_peer_review when the submitter completes under peer_human_reviewer
+#: mode. It is identified by living on a task that is in `in_review` AND being
+#: the caller's own pending_acceptance assignment whose task is past in_progress
+#: (the submitter's row stays `accepted`, the reviewer's is `pending_acceptance`).
+
+
+@router.get("/reviews", response_model=list[InboxReviewAssignmentResponse])
+async def list_my_reviews(
+    limit: int = limit_query(),
+    offset: int = offset_query(),
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[InboxReviewAssignmentResponse]:
+    """List the CALLER's pending peer-review assignments (task_16_11).
+
+    These are the caller's OWN ``pending_acceptance`` assignments whose Task is
+    currently ``in_review`` — the reviewer side of ``peer_human_reviewer`` mode.
+    Folded with the Task / project / plan context + the submitter's latest
+    HumanWorkSession output so the reviewer sees what to judge. Scoped on
+    ``assigned_to_user_id == caller`` AND ``tenant_id`` (belt-and-braces over
+    RLS) so a user only ever sees reviews assigned to them.
+    """
+    tenant_id = require_tenant_id(principal)
+    stmt = (
+        select(HumanTaskAssignment, Task, Project.name, Plan.title)
+        .join(Task, Task.id == HumanTaskAssignment.task_id)
+        .join(Project, Project.id == Task.project_id)
+        .outerjoin(Plan, Plan.id == Task.plan_id)
+        .where(
+            HumanTaskAssignment.assigned_to_user_id == principal.user_id,
+            HumanTaskAssignment.tenant_id == tenant_id,
+            HumanTaskAssignment.status == HumanTaskAssignmentStatus.PENDING_ACCEPTANCE.value,
+            Task.status == TaskStatus.IN_REVIEW.value,
+        )
+        .order_by(HumanTaskAssignment.assigned_at.desc(), HumanTaskAssignment.id)
+    )
+    stmt = apply_pagination(stmt, limit=limit, offset=offset)
+    rows = (await session.execute(stmt)).all()
+    out: list[InboxReviewAssignmentResponse] = []
+    for assignment, task, project_name, plan_title in rows:
+        latest_output = await _latest_work_output(session, task.id, tenant_id)
+        out.append(
+            InboxReviewAssignmentResponse(
+                assignment_id=assignment.id,
+                task_id=task.id,
+                human_agent_id=assignment.human_agent_id,
+                assignment_status=assignment.status,
+                task_status=task.status,
+                assigned_at=assignment.assigned_at,
+                task_title=task.title,
+                task_description=task.description,
+                project_id=task.project_id,
+                project_name=project_name,
+                plan_id=task.plan_id,
+                plan_title=plan_title,
+                submitted_output=latest_output,
+                retry_count=task.retry_count,
+            )
+        )
+    return out
+
+
+async def _latest_work_output(session: AsyncSession, task_id: UUID, tenant_id: UUID) -> str | None:
+    """The submitter's most recent HumanWorkSession output text for a task."""
+    return (
+        await session.execute(
+            select(HumanWorkSession.comments)
+            .where(
+                HumanWorkSession.task_id == task_id,
+                HumanWorkSession.tenant_id == tenant_id,
+            )
+            .order_by(HumanWorkSession.end_at.desc().nulls_last(), HumanWorkSession.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _load_my_review_or_404(
+    session: AsyncSession, assignment_id: UUID, principal: AuthPrincipal, tenant_id: UUID
+) -> tuple[HumanTaskAssignment, Task]:
+    """Load the caller's OWN review assignment + its Task (in_review), or 404.
+
+    A review assignment is the caller's ``pending_acceptance`` row on a task
+    that is ``in_review``. Scoped on ``assigned_to_user_id == caller`` AND
+    ``tenant_id`` so another user's / another tenant's id is a clean 404. The
+    Task must be ``in_review`` (the verdict is only meaningful then) and the
+    assignment must be ``pending_acceptance`` (a reviewer rules once) — both
+    surface as 409 otherwise so the caller can tell apart "not yours" (404) from
+    "already ruled / wrong state" (409)."""
+    assignment, task = await _load_my_assignment_or_404(
+        session, assignment_id, principal, tenant_id
+    )
+    if assignment.status != HumanTaskAssignmentStatus.PENDING_ACCEPTANCE.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"review assignment is '{assignment.status}', not 'pending_acceptance'",
+        )
+    if task.status != TaskStatus.IN_REVIEW.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"task is '{task.status}', not 'in_review'",
+        )
+    await _assert_human_assignee(session, assignment, tenant_id)
+    return assignment, task
+
+
+@router.post("/reviews/{assignment_id}/approve", response_model=InboxReviewVerdictResult)
+async def approve_review(
+    assignment_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> InboxReviewVerdictResult:
+    """Peer reviewer approves: Task ``in_review -> done`` (task_16_11).
+
+    The reviewer assignment is marked ``accepted`` (the historical record that
+    this reviewer ruled) and the verdict (reviewer + ``approved``) is recorded
+    as an auditable ``peer_review_verdict`` event."""
+    tenant_id = require_tenant_id(principal)
+    assignment, task = await _load_my_review_or_404(session, assignment_id, principal, tenant_id)
+    result = await approve_peer_review(
+        session,
+        task=task,
+        tenant_id=tenant_id,
+        reviewer_user_id=principal.user_id,
+    )
+    assignment.status = HumanTaskAssignmentStatus.ACCEPTED.value
+    await session.flush()
+    return InboxReviewVerdictResult(
+        assignment_id=assignment.id,
+        task_id=task.id,
+        action=result.action,
+        assignment_status=assignment.status,
+        task_status=result.task_status,
+        verdict=result.action,
+        retry_count=result.retry_count,
+        escalated=result.escalated,
+    )
+
+
+@router.post("/reviews/{assignment_id}/reject", response_model=InboxReviewVerdictResult)
+async def reject_review(
+    assignment_id: UUID,
+    payload: InboxReviewRejectRequest,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> InboxReviewVerdictResult:
+    """Peer reviewer rejects with feedback (task_16_11 / §7.9 retry).
+
+    The Task goes back to ``backlog`` with ``retry_count`` bumped and the
+    ``feedback_text`` recorded as an auditable ``peer_review_verdict`` event
+    (the rework comments travel with the task). When the increment reaches
+    ``max_retries`` the task is escalated to ``blocked`` and a ``task_blocked``
+    notification fans out to the tenant admins (best-effort — the DB move is not
+    rolled back on a broker blip). The reviewer assignment is marked ``declined``
+    (this reviewer's verdict is recorded; a fresh review assignment is created
+    when the task is re-submitted)."""
+    tenant_id = require_tenant_id(principal)
+    feedback = (payload.feedback_text or "").strip()
+    if not feedback:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="feedback_text is required to reject a review",
+        )
+    assignment, task = await _load_my_review_or_404(session, assignment_id, principal, tenant_id)
+    result = await reject_peer_review(
+        session,
+        task=task,
+        tenant_id=tenant_id,
+        reviewer_user_id=principal.user_id,
+        feedback_text=feedback,
+    )
+    assignment.status = HumanTaskAssignmentStatus.DECLINED.value
+    await session.flush()
+    if result.escalated:
+        # Fan a task_blocked event out to the tenant's admins (best-effort —
+        # the DB move is committed regardless of broker health).
+        await enqueue_event_dispatch(
+            {
+                "event_type": _REVIEW_TASK_BLOCKED_EVENT,
+                "tenant_id": str(tenant_id),
+                "context": {
+                    "task_id": str(task.id),
+                    "task_title": task.title,
+                    "reason": "max_review_retries exhausted (peer review)",
+                    "retry_count": result.retry_count,
+                },
+                "locale": None,
+            }
+        )
+    return InboxReviewVerdictResult(
+        assignment_id=assignment.id,
+        task_id=task.id,
+        action=result.action,
+        assignment_status=assignment.status,
+        task_status=result.task_status,
+        verdict=_REVIEW_VERDICT_REJECTED,
+        retry_count=result.retry_count,
+        escalated=result.escalated,
     )

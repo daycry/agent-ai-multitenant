@@ -19,7 +19,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from api_server.db.domain import BudgetPeriod, Project, ProjectStatus
+from api_server.db.domain import BudgetPeriod, HumanTaskReviewMode, Project, ProjectStatus
 from api_server.mcp.config import validate_mcp_servers_payload
 
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
@@ -133,6 +133,10 @@ class ProjectCreateRequest(BaseModel):
     allowed_commands: list[str] = Field(default_factory=list)
     default_runtime_template: str | None = Field(default=None, min_length=1, max_length=64)
 
+    # Plan 16 task_16_11: how a human task's deliverable is reviewed once
+    # submitted. Default auto_approve (submit -> done, no extra review step).
+    human_task_review_mode: HumanTaskReviewMode = HumanTaskReviewMode.AUTO_APPROVE
+
     budget_amount: Decimal | None = Field(default=None, ge=0)
     budget_currency: str | None = Field(default=None, min_length=3, max_length=3)
     budget_period: BudgetPeriod | None = None
@@ -190,6 +194,9 @@ class ProjectUpdateRequest(BaseModel):
     # null` clears the runtime back to per-tool defaults.
     allowed_commands: list[str] | None = None
     default_runtime_template: str | None = Field(default=None, min_length=1, max_length=64)
+
+    # Plan 16 task_16_11. None = unchanged (PATCH-style partial update).
+    human_task_review_mode: HumanTaskReviewMode | None = None
 
     budget_amount: Decimal | None = Field(default=None, ge=0)
     budget_currency: str | None = Field(default=None, min_length=3, max_length=3)
@@ -267,6 +274,9 @@ class ProjectResponse(BaseModel):
     allowed_commands: list[str]
     default_runtime_template: str | None
 
+    # Plan 16 task_16_11.
+    human_task_review_mode: str
+
     budget_amount: Decimal | None
     budget_currency: str | None
     budget_period: str | None
@@ -296,6 +306,7 @@ def to_project_response(p: Project) -> ProjectResponse:
         secrets_vault_id=p.secrets_vault_id,
         allowed_commands=p.allowed_commands,
         default_runtime_template=p.default_runtime_template,
+        human_task_review_mode=p.human_task_review_mode,
         budget_amount=p.budget_amount,
         budget_currency=p.budget_currency,
         budget_period=p.budget_period,

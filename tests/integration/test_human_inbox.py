@@ -122,8 +122,13 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             carol,
             "tenant_user",
         )
+        # peer_human_reviewer so complete moves the task to in_review (task_16_11):
+        # this suite tests the task_16_08 inbox actions incl. the complete ->
+        # in_review transition; the auto_approve -> done path is covered by
+        # test_human_review_auto.
         await conn.execute(
-            "INSERT INTO projects (id, tenant_id, name) VALUES ($1, $2, $3), ($4, $5, $6)",
+            "INSERT INTO projects (id, tenant_id, name, human_task_review_mode) VALUES"
+            " ($1, $2, $3, 'peer_human_reviewer'), ($4, $5, $6, 'peer_human_reviewer')",
             project_a,
             tenant_a,
             "Proyecto A",
