@@ -89,7 +89,7 @@ config de comandos/runtime PHP, y un **KB completo** — uno **compartido por el
 
 #### `task_demo_ws_02` — Seed: tenant + equipo + 10 agentes + proyecto + tools
 
-- [ ] **Título**: `scripts/setup_webscorpo.py` (idempotente): tenant "Mediapro"; equipo "WebScorpo" con 10 agentes
+- [x] **Título**: `scripts/setup_webscorpo.py` (idempotente): tenant "Mediapro"; equipo "WebScorpo" con 10 agentes
       (roles del análisis); proyecto "webscorpo" con `allowed_commands` (php/composer/phpunit/pest/infection/npm) +
       `default_runtime_template=php-phpunit`; asignación de tools por agente (shell*exec + file/git a todos; run*\* a
       backend/dba/qa/devops). Patrón `_demo_common`.
