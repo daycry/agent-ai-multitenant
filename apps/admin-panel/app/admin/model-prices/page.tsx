@@ -58,6 +58,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useCurrentUser } from "@/lib/use-current-user";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.model_prices + db.model_prices enums.
@@ -79,11 +80,25 @@ interface ModelPrice {
   currency: string;
   context_window: number | null;
   source: string;
+  // task_11_2_06 — association to a configured platform provider
+  // (llm_providers.id). NULL when the price is not associated.
+  provider_id: string | null;
   effective_from: string;
   effective_to: string | null;
   updated_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// task_11_2_06 — the platform-global LLM providers (ADR 0028). Read from
+// the System-Admin /admin/llm-providers surface only to map provider_id ->
+// a human label + populate the "filter by provider" dropdown. Mirrors
+// api_server.schemas.llm_providers.LLMProviderResponse (secret-free).
+interface LlmProvider {
+  id: string;
+  kind: string;
+  display_name: string;
+  is_active: boolean;
 }
 
 // task_11_16 — dry-run diff + mandatory-confirmation apply.
@@ -193,10 +208,12 @@ function fmtDate(iso: string | null): string {
 // ===========================================================================
 export default function ModelPricesPage() {
   const queryClient = useQueryClient();
+  const { isSystemAdmin } = useCurrentUser();
 
   const [provider, setProvider] = useState("");
   const [modelId, setModelId] = useState("");
   const [modality, setModality] = useState<"" | Modality>("");
+  const [providerId, setProviderId] = useState("");
   const [currentOnly, setCurrentOnly] = useState(true);
 
   // Effective filter values (applied on submit so typing doesn't refetch
@@ -205,8 +222,28 @@ export default function ModelPricesPage() {
     provider: string;
     modelId: string;
     modality: "" | Modality;
+    providerId: string;
     currentOnly: boolean;
-  }>({ provider: "", modelId: "", modality: "", currentOnly: true });
+  }>({ provider: "", modelId: "", modality: "", providerId: "", currentOnly: true });
+
+  // task_11_2_06 — platform providers, read only when the viewer is a
+  // System Admin (the /admin/llm-providers surface is System-Admin only;
+  // a tenant user that can read the catalog must not 403 here). Used to map
+  // provider_id -> a label and to populate the "filter by provider" select.
+  const providersQuery = useQuery({
+    queryKey: ["llm-providers", "for-prices"],
+    queryFn: () => apiFetch<LlmProvider[]>("/admin/llm-providers"),
+    enabled: isSystemAdmin,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
+  const providers = useMemo(() => providersQuery.data ?? [], [providersQuery.data]);
+  const providerLabel = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of providers) map.set(p.id, p.display_name);
+    return map;
+  }, [providers]);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
@@ -226,6 +263,7 @@ export default function ModelPricesPage() {
       if (applied.provider) params.set("provider", applied.provider);
       if (applied.modelId) params.set("model_id", applied.modelId);
       if (applied.modality) params.set("modality", applied.modality);
+      if (applied.providerId) params.set("provider_id", applied.providerId);
       if (applied.currentOnly) params.set("current_only", "true");
       params.set("limit", "200");
       return apiFetch<ModelPrice[]>(`/model-prices?${params.toString()}`);
@@ -242,15 +280,22 @@ export default function ModelPricesPage() {
   });
 
   function applyFilters() {
-    setApplied({ provider: provider.trim(), modelId: modelId.trim(), modality, currentOnly });
+    setApplied({
+      provider: provider.trim(),
+      modelId: modelId.trim(),
+      modality,
+      providerId,
+      currentOnly,
+    });
   }
 
   function resetFilters() {
     setProvider("");
     setModelId("");
     setModality("");
+    setProviderId("");
     setCurrentOnly(true);
-    setApplied({ provider: "", modelId: "", modality: "", currentOnly: true });
+    setApplied({ provider: "", modelId: "", modality: "", providerId: "", currentOnly: true });
   }
 
   const rows = listQuery.data ?? [];
@@ -290,9 +335,9 @@ export default function ModelPricesPage() {
       {/* Filters */}
       {/* ---------------------------------------------------------------- */}
       <Card className="mt-6" data-testid="price-filters">
-        <CardContent className="grid grid-cols-1 gap-3 pt-5 sm:grid-cols-2 lg:grid-cols-5 lg:items-end">
+        <CardContent className="grid grid-cols-1 gap-3 pt-5 sm:grid-cols-2 lg:grid-cols-6 lg:items-end">
           <div className="space-y-1">
-            <Label htmlFor="filter-provider">Provider</Label>
+            <Label htmlFor="filter-provider">Familia (provider)</Label>
             <Input
               id="filter-provider"
               placeholder="anthropic"
@@ -328,6 +373,28 @@ export default function ModelPricesPage() {
               ))}
             </select>
           </div>
+          {/* task_11_2_06 — filter by associated platform provider. Only
+              the System Admin can read the providers list, so this select
+              is shown to them; a tenant reader still has the other filters. */}
+          {isSystemAdmin ? (
+            <div className="space-y-1">
+              <Label htmlFor="filter-provider-id">Proveedor (plataforma)</Label>
+              <select
+                id="filter-provider-id"
+                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm"
+                value={providerId}
+                onChange={(e) => setProviderId(e.target.value)}
+                data-testid="filter-provider-id"
+              >
+                <option value="">Todos</option>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.display_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
           <div className="flex items-center gap-2 pb-2">
             <input
               id="filter-current-only"
@@ -375,9 +442,10 @@ export default function ModelPricesPage() {
             <table className="w-full text-sm">
               <thead className="bg-muted text-muted-foreground">
                 <tr className="text-left">
-                  <th className="px-3 py-2 font-medium">Provider</th>
+                  <th className="px-3 py-2 font-medium">Familia</th>
                   <th className="px-3 py-2 font-medium">Modelo</th>
                   <th className="px-3 py-2 font-medium">Modalidad</th>
+                  <th className="px-3 py-2 font-medium">Proveedor</th>
                   <th className="px-3 py-2 font-medium">Input</th>
                   <th className="px-3 py-2 font-medium">Output</th>
                   <th className="px-3 py-2 font-medium">Cache</th>
@@ -396,6 +464,16 @@ export default function ModelPricesPage() {
                       <td className="px-3 py-2 font-mono text-xs">{p.model_id}</td>
                       <td className="px-3 py-2">
                         <Badge variant="muted">{p.modality}</Badge>
+                      </td>
+                      {/* task_11_2_06 — associated platform provider (read). */}
+                      <td className="px-3 py-2" data-testid={`price-provider-${p.id}`}>
+                        {p.provider_id === null ? (
+                          <span className="text-muted-foreground text-xs italic">sin asociar</span>
+                        ) : (
+                          <Badge variant="info">
+                            {providerLabel.get(p.provider_id) ?? p.provider_id}
+                          </Badge>
+                        )}
                       </td>
                       <td className="px-3 py-2" data-testid={`price-input-${p.id}`}>
                         {fmtUsd(p.input_price)}

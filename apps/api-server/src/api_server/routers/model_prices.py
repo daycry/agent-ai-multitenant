@@ -62,6 +62,7 @@ from api_server.auth.deps import (
     require_system_admin,
 )
 from api_server.config import get_settings
+from api_server.db.llm_providers import get_llm_provider
 from api_server.db.model_prices import ModelPrice, PriceModality
 from api_server.db.price_sync_audit import PriceSyncAudit, SyncTrigger
 from api_server.pricing.litellm_sync import (
@@ -113,6 +114,22 @@ async def _load_price(session: AsyncSession, price_id: UUID) -> ModelPrice:
     if price is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="model price not found")
     return price
+
+
+async def _assert_provider_exists(session: AsyncSession, provider_id: UUID) -> None:
+    """422 when ``provider_id`` does not reference an existing platform provider.
+
+    The association FK (task_11_2_06) is validated up-front so an unknown
+    provider id is a clean 422 — distinct from the 409 the duplicate-open-
+    period unique index raises — rather than an ambiguous IntegrityError.
+    ``llm_providers`` is platform-global (ADR 0028); this runs on the same
+    BYPASSRLS admin session the write endpoints already use.
+    """
+    if await get_llm_provider(session, provider_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="provider_id does not reference an existing llm_providers row",
+        )
 
 
 # ===========================================================================
@@ -167,6 +184,10 @@ async def list_prices(
         default=None,
         description="Filter by modality. 422 on an unknown value.",
     ),
+    provider_id: UUID | None = Query(
+        default=None,
+        description="Filter by associated platform provider (llm_providers.id). task_11_2_06.",
+    ),
     current_only: bool = Query(
         default=False,
         description="Only the open (current) priced periods (effective_to IS NULL).",
@@ -191,6 +212,8 @@ async def list_prices(
         stmt = stmt.where(ModelPrice.model_id == model_id)
     if modality is not None:
         stmt = stmt.where(ModelPrice.modality == modality.value)
+    if provider_id is not None:
+        stmt = stmt.where(ModelPrice.provider_id == provider_id)
     if current_only:
         stmt = stmt.where(ModelPrice.effective_to.is_(None))
     stmt = stmt.order_by(
@@ -239,6 +262,8 @@ async def create_price(
     System Admin. RBAC: ``require_system_admin`` (a tenant caller is 403);
     BYPASSRLS admin session.
     """
+    if payload.provider_id is not None:
+        await _assert_provider_exists(session, payload.provider_id)
     price = ModelPrice(
         provider=payload.provider,
         model_id=payload.model_id,
@@ -249,6 +274,7 @@ async def create_price(
         unit=payload.unit.value,
         context_window=payload.context_window,
         source=payload.source.value,
+        provider_id=payload.provider_id,
         updated_by=principal.user_id,
     )
     session.add(price)
@@ -296,6 +322,11 @@ async def update_price(
     # (unit / source) must persist as their plain string value — the column
     # type — so coerce a StrEnum instance to its value before assigning.
     fields = payload.model_dump(exclude_unset=True)
+    # Associating with a provider (a non-NULL provider_id present on the
+    # wire) must reference an existing platform provider — clean 422 if not.
+    # ``provider_id: null`` (present, NULL) clears the association and is fine.
+    if "provider_id" in fields and fields["provider_id"] is not None:
+        await _assert_provider_exists(session, fields["provider_id"])
     for name, value in fields.items():
         setattr(price, name, value.value if isinstance(value, enum.Enum) else value)
     price.updated_by = principal.user_id
