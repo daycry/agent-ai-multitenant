@@ -1,7 +1,7 @@
 ---
 plan_id: demo-webscorpo-team-kb
 title: Demo/seed — equipo WebScorpo (CI4) con KB completo (equipo + por-agente)
-status: in_progress
+status: pending_human_validation
 blocking_plan: []
 started_at: 2026-06-01
 completed_at: null
