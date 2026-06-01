@@ -82,7 +82,7 @@ resultado esperado), y actualiza el índice.
 
 #### `task_htg_04` — Guías 06.15, 06.16, demo-webscorpo
 
-- [ ] **Título**: Crear las guías de 06.15-agent-tools-assignment-ui, 06.16-polyglot-tool-catalog, demo-webscorpo-team-kb (incl. cómo correr `scripts/setup_webscorpo.py`).
+- [x] **Título**: Crear las guías de 06.15-agent-tools-assignment-ui, 06.16-polyglot-tool-catalog, demo-webscorpo-team-kb (incl. cómo correr `scripts/setup_webscorpo.py`).
 - **Tests**: `test -f` de las 3 guías + pre-commit prettier verde
 
 ### Fase B — Completitud + índice
