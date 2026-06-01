@@ -121,6 +121,29 @@ _MODE_TO_MODALITY: dict[str, PriceModality] = {
 # Documentation pseudo-entries the feed ships that are not real models.
 _SKIP_KEYS = frozenset({"sample_spec"})
 
+# Typed skip reason for a feed entry whose ``litellm_provider`` family is not in
+# the active allowlist (plan price-sync-active-providers, task_psa_01). A stable
+# code so the summary / audit can count "skipped because the family is not an
+# active provider" without parsing prose.
+SKIP_FAMILY_NOT_ACTIVE = "family_not_active"
+
+# Map a configured provider ``kind`` (ADR 0021 closed catalogue) to the set of
+# LiteLLM ``litellm_provider`` families its models appear under in the community
+# feed (ADR 0028). The price sync derives the allowed families from the ACTIVE
+# ``llm_providers`` rows by unioning the families of each active provider's kind.
+# A constant, ADR-tracked mapping: extend it deliberately, never silently.
+#   - claude_sdk    → anthropic
+#   - azure_foundry → azure, azure_ai, openai (Azure AI Foundry fronts OpenAI
+#                     models; LiteLLM lists them under azure / azure_ai / openai)
+#   - copilot       → openai, anthropic (GitHub Copilot brokers both families)
+#   - ollama        → ollama
+KIND_TO_LITELLM_FAMILIES: dict[str, frozenset[str]] = {
+    "claude_sdk": frozenset({"anthropic"}),
+    "azure_foundry": frozenset({"azure", "azure_ai", "openai"}),
+    "copilot": frozenset({"openai", "anthropic"}),
+    "ollama": frozenset({"ollama"}),
+}
+
 
 # =============================================================================
 # Fetch seam (injectable; tests feed a fixture, no real network)
@@ -665,12 +688,25 @@ def _coerce_context_window(raw: dict[str, Any]) -> int | None:
     return None
 
 
-def parse_feed(payload: dict[str, Any]) -> tuple[list[MappedPrice], list[SkippedEntry]]:
+def parse_feed(
+    payload: dict[str, Any],
+    *,
+    allowed_families: frozenset[str] | None = None,
+) -> tuple[list[MappedPrice], list[SkippedEntry]]:
     """Map every feed entry; collect the unmappable ones as typed skips.
 
     Pure: no DB, no network. A malformed entry never aborts the parse — it
     is captured as a :class:`SkippedEntry` with its reason so the run keeps
     going and the summary records what was dropped.
+
+    ``allowed_families`` (plan price-sync-active-providers, task_psa_01) is the
+    LiteLLM-family allowlist the sync derives from the active providers. When
+    given, a successfully-mapped entry whose ``provider`` (family) is NOT in the
+    allowlist is dropped — captured as a typed skip
+    (``reason = family_not_active``) rather than mapped. ``allowed_families``
+    being ``None`` disables the filter (backward-compatible: every mappable
+    entry is kept); an EMPTY frozenset keeps NOTHING (every family is
+    out-of-scope).
     """
     mapped: list[MappedPrice] = []
     skipped: list[SkippedEntry] = []
@@ -678,10 +714,62 @@ def parse_feed(payload: dict[str, Any]) -> tuple[list[MappedPrice], list[Skipped
         if model_key in _SKIP_KEYS:
             continue
         try:
-            mapped.append(map_entry(model_key, raw))
+            entry = map_entry(model_key, raw)
         except ValueError as exc:
             skipped.append(SkippedEntry(model_key=model_key, reason=str(exc)))
+            continue
+        if allowed_families is not None and entry.provider not in allowed_families:
+            skipped.append(SkippedEntry(model_key=model_key, reason=SKIP_FAMILY_NOT_ACTIVE))
+            continue
+        mapped.append(entry)
     return mapped, skipped
+
+
+# =============================================================================
+# Active-family resolver (plan price-sync-active-providers, task_psa_01)
+# =============================================================================
+def families_for_kinds(kinds: list[str]) -> frozenset[str]:
+    """Union the LiteLLM families of a list of provider ``kind`` strings (pure).
+
+    Each kind maps to its families via :data:`KIND_TO_LITELLM_FAMILIES`; an
+    unknown kind contributes nothing (never crashes). The result is the union of
+    every recognised kind's families — the allowlist the sync filters against.
+    """
+    families: set[str] = set()
+    for kind in kinds:
+        families |= KIND_TO_LITELLM_FAMILIES.get(kind, frozenset())
+    return frozenset(families)
+
+
+async def active_litellm_families(session: AsyncSession) -> frozenset[str]:
+    """The LiteLLM families the price sync may import — derived per-sync.
+
+    Resolves the allowlist of ``litellm_provider`` families the catalog sync is
+    allowed to add (plan price-sync-active-providers, task_psa_01):
+
+      1. if a System-Admin override (``price_sync.allowed_families``) is set, it
+         WINS verbatim (including an explicit empty allowlist);
+      2. otherwise it is DERIVED from the ACTIVE ``llm_providers`` rows: the
+         union of each active provider's kind→families (ADR 0028 map). No
+         fallback to the closed catalogue — 0 active providers ⇒ EMPTY set, so
+         the sync imports nothing.
+
+    Runs on the System-Admin (BYPASSRLS) admin session the sync endpoints /
+    worker already own (``llm_providers`` is platform-global, no tenant_id).
+    """
+    # Lazy imports keep this module's import graph free of the db layer at load
+    # time (mirrors the worker's lazy api_server imports).
+    from api_server.db.llm_providers import list_llm_providers
+    from api_server.db.platform_settings import (
+        get_price_sync_allowed_families_override,
+    )
+
+    override = await get_price_sync_allowed_families_override(session)
+    if override is not None:
+        return override
+
+    active = await list_llm_providers(session, active_only=True)
+    return families_for_kinds([p.kind for p in active])
 
 
 # =============================================================================
@@ -805,6 +893,7 @@ async def compute_sync_diff(
     session: AsyncSession,
     *,
     fetcher: PriceFeedFetcher,
+    allowed_families: frozenset[str] | None = None,
 ) -> SyncDiff:
     """Compute a per-model diff of the feed vs the catalog — NO writes (task_11_16).
 
@@ -816,9 +905,15 @@ async def compute_sync_diff(
     (discontinued candidates — flagged, never deleted here). Malformed feed
     entries are captured as typed skips. This function NEVER mutates the DB,
     so the UI can show the diff before the human confirms the apply.
+
+    ``allowed_families`` (plan price-sync-active-providers, task_psa_01) is the
+    family allowlist derived from the active providers: feed entries of an
+    out-of-scope family are dropped as ``family_not_active`` skips (never
+    ``added``), and any open catalog row of an out-of-scope family — like a row
+    the feed dropped — is emitted as ``removed``. ``None`` disables the filter.
     """
     payload = await fetcher.fetch()
-    mapped, skipped = parse_feed(payload)
+    mapped, skipped = parse_feed(payload, allowed_families=allowed_families)
 
     diff = SyncDiff(skipped=skipped, fetched=len(mapped))
 
@@ -895,6 +990,7 @@ async def sync_prices_from_litellm(
     actor_id: UUID | None = None,
     confirm_large_increases: bool = False,
     overwrite_manual: bool = False,
+    allowed_families: frozenset[str] | None = None,
 ) -> SyncSummary:
     """Refresh the catalog from the LiteLLM feed; return a typed summary.
 
@@ -910,9 +1006,17 @@ async def sync_prices_from_litellm(
     crash. The caller commits the session (the endpoint's admin-session
     dependency does so on exit); on a feed/transport error this raises
     :class:`PriceFeedError` before any write.
-    """
+
+    ``allowed_families`` (plan price-sync-active-providers, task_psa_01) filters
+    the sync to the families of the ACTIVE providers: a feed entry of an
+    out-of-scope family is skipped (``family_not_active``, NOT added), and any
+    open catalog period of an out-of-scope family is CLOSED — treated as
+    discontinued (its row + history + snapshots survive, never hard-deleted) and
+    counted under ``discontinued``. ``None`` disables the filter
+    (backward-compatible: the old unfiltered behaviour). An EMPTY frozenset adds
+    nothing and closes every open period (no active provider ⇒ sync nothing)."""
     payload = await fetcher.fetch()
-    mapped, skipped = parse_feed(payload)
+    mapped, skipped = parse_feed(payload, allowed_families=allowed_families)
 
     summary = SyncSummary(fetched=len(mapped), skipped=skipped)
     now = datetime.now(tz=UTC)
@@ -946,6 +1050,20 @@ async def sync_prices_from_litellm(
         await session.flush()  # release the partial-unique open-period slot
         session.add(_new_row(candidate, actor_id=actor_id))
         summary.updated += 1
+
+    # Close the open periods of any family that is NOT in the allowlist — their
+    # provider kind is no longer an active provider, so the model is out of
+    # scope. Discontinued (row + history kept), never hard-deleted.
+    if allowed_families is not None:
+        closed = await close_out_of_scope_families(
+            session,
+            allowed_families,
+            actor_id=actor_id,
+            overwrite_manual=overwrite_manual,
+            now=now,
+        )
+        summary.discontinued_models = closed
+        summary.discontinued = len(closed)
 
     await session.flush()
     return summary
@@ -984,6 +1102,7 @@ async def apply_sync_from_litellm(
     confirm: bool = False,
     overwrite_manual: bool = False,
     discontinue_missing: bool = False,
+    allowed_families: frozenset[str] | None = None,
 ) -> SyncSummary:
     """Apply the feed — but REJECT the whole apply on an unconfirmed >10% rise.
 
@@ -1004,10 +1123,19 @@ async def apply_sync_from_litellm(
     ``overwrite_manual`` is also set (a deliberate manual price is not dropped
     just because the community feed omits the model).
 
+    ``allowed_families`` (plan price-sync-active-providers, task_psa_01) filters
+    to the active providers' families: a feed entry of an out-of-scope family is
+    a ``family_not_active`` skip (never added), and any open catalog period of an
+    out-of-scope family is CLOSED (treated as discontinued — row + history kept,
+    never hard-deleted). This runs independently of ``discontinue_missing``:
+    out-of-allowlist families are always closed when ``allowed_families`` is set,
+    while ``discontinue_missing`` additionally closes in-allowlist models the
+    feed dropped. ``None`` disables the family filter (backward-compatible).
+
     A feed / parse failure raises :class:`PriceFeedError`. The caller commits.
     """
     payload = await fetcher.fetch()
-    mapped, skipped = parse_feed(payload)
+    mapped, skipped = parse_feed(payload, allowed_families=allowed_families)
 
     if not confirm:
         pending = await _pending_large_increases(session, mapped)
@@ -1040,16 +1168,32 @@ async def apply_sync_from_litellm(
         session.add(_new_row(candidate, actor_id=actor_id))
         summary.updated += 1
 
+    # Close discontinued / out-of-scope open periods. Both helpers close an open
+    # period (never delete); we de-duplicate by key so a row out-of-scope AND
+    # feed-dropped is counted once.
+    discontinued: dict[tuple[str, str, str], DiscontinuedModel] = {}
+    if allowed_families is not None:
+        for d in await close_out_of_scope_families(
+            session,
+            allowed_families,
+            actor_id=actor_id,
+            overwrite_manual=overwrite_manual,
+            now=now,
+        ):
+            discontinued[(d.provider, d.model_id, d.modality)] = d
     if discontinue_missing:
-        dropped = await discontinue_dropped_models(
+        for d in await discontinue_dropped_models(
             session,
             mapped,
             actor_id=actor_id,
             overwrite_manual=overwrite_manual,
             now=now,
-        )
-        summary.discontinued_models = dropped
-        summary.discontinued = len(dropped)
+        ):
+            discontinued[(d.provider, d.model_id, d.modality)] = d
+    if allowed_families is not None or discontinue_missing:
+        closed = sorted(discontinued.values(), key=attrgetter("provider", "model_id", "modality"))
+        summary.discontinued_models = closed
+        summary.discontinued = len(closed)
 
     await session.flush()
     return summary
@@ -1108,9 +1252,63 @@ async def discontinue_dropped_models(
     return discontinued
 
 
+async def close_out_of_scope_families(
+    session: AsyncSession,
+    allowed_families: frozenset[str],
+    *,
+    actor_id: UUID | None = None,
+    overwrite_manual: bool = False,
+    now: datetime | None = None,
+) -> list[DiscontinuedModel]:
+    """Close (flag) the open catalog periods whose family left the allowlist.
+
+    Plan price-sync-active-providers (task_psa_01). A catalog model with an OPEN
+    period whose ``provider`` (LiteLLM family) is NOT in ``allowed_families`` is
+    now out-of-scope (its provider kind is no longer an active provider, or was
+    removed from the override). It is treated exactly like a discontinued model:
+    its open period is CLOSED (``effective_to = now``) so it stops being the
+    current price, but the row is **NEVER deleted** — its closed-period history
+    and the per-call price snapshots that reference it must survive (auditing /
+    invoices). Manual rows (``source = manual``) are left untouched unless
+    ``overwrite_manual`` is set, mirroring :func:`discontinue_dropped_models`.
+
+    An EMPTY ``allowed_families`` closes every open period (every family is
+    out-of-scope). Returns the typed list it closed (deterministically ordered).
+    Distinct from :func:`discontinue_dropped_models`, which closes rows the feed
+    DROPPED; this closes rows whose family is NOT ALLOWED at all, so in-allowlist
+    models the feed still lists are never touched here.
+    """
+    stamp = now or datetime.now(tz=UTC)
+    open_rows = await _open_catalog_rows(session)
+
+    closed: list[DiscontinuedModel] = []
+    for row in open_rows:
+        if row.provider in allowed_families:
+            continue
+        if row.source == PriceSource.MANUAL.value and not overwrite_manual:
+            continue
+        row.effective_to = stamp
+        row.updated_by = actor_id
+        session.add(row)
+        closed.append(
+            DiscontinuedModel(
+                provider=row.provider,
+                model_id=row.model_id,
+                modality=row.modality,
+            )
+        )
+
+    closed.sort(key=attrgetter("provider", "model_id", "modality"))
+    if closed:
+        await session.flush()
+    return closed
+
+
 __all__ = [
     "DEFAULT_LITELLM_FEED_URL",
+    "KIND_TO_LITELLM_FAMILIES",
     "LARGE_INCREASE_THRESHOLD",
+    "SKIP_FAMILY_NOT_ACTIVE",
     "DiffStatus",
     "DiscontinuedModel",
     "HttpxPriceFeedFetcher",
@@ -1127,10 +1325,13 @@ __all__ = [
     "StaticPriceFeedFetcher",
     "SyncDiff",
     "SyncSummary",
+    "active_litellm_families",
     "apply_sync_from_litellm",
     "classify_models",
+    "close_out_of_scope_families",
     "compute_sync_diff",
     "discontinue_dropped_models",
+    "families_for_kinds",
     "map_entry",
     "parse_feed",
     "sync_prices_from_litellm",

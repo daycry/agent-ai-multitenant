@@ -75,7 +75,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
-            "TRUNCATE model_prices, user_org_memberships, organizations, users"
+            "TRUNCATE model_prices, llm_providers, user_org_memberships, organizations, users"
             " RESTART IDENTITY CASCADE"
         )
         await conn.execute(
@@ -114,6 +114,26 @@ async def _seed(dsn: str) -> dict[str, UUID]:
     finally:
         await conn.close()
     return ids
+
+
+async def _seed_active_providers(dsn: str, kinds: tuple[str, ...]) -> None:
+    """Insert one ACTIVE platform provider per kind (BYPASSRLS migrations user).
+
+    The diff/apply endpoints scope the sync to the active providers' families
+    (plan price-sync-active-providers), so the endpoint tests seed the kinds
+    whose families (ADR 0028) cover the fixture feed (anthropic + openai)."""
+    conn = await asyncpg.connect(dsn)
+    try:
+        for kind in kinds:
+            await conn.execute(
+                "INSERT INTO llm_providers (id, kind, display_name, is_active)"
+                " VALUES ($1, $2, $3, true)",
+                uuid4(),
+                kind,
+                f"{kind} (test)",
+            )
+    finally:
+        await conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +561,10 @@ async def test_endpoint_diff_then_apply_confirmation_flow(
     configured_app, admin_session_factory, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seeded = await _seed(migrations_pg_dsn)
+    # The endpoints scope the sync to the active providers' families; seed
+    # claude_sdk (→ anthropic) + azure_foundry (→ azure/azure_ai/openai) so the
+    # fixture feed's anthropic + openai entries are both in scope.
+    await _seed_active_providers(migrations_pg_dsn, ("claude_sdk", "azure_foundry"))
     token = await _mint_token(seeded["sysadmin"], None, is_system_admin=True)
     headers = {"Authorization": f"Bearer {token}"}
 

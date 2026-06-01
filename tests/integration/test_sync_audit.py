@@ -81,9 +81,22 @@ async def _seed(dsn: str) -> dict[str, UUID]:
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
-            "TRUNCATE price_sync_audit, model_prices, platform_settings,"
+            "TRUNCATE price_sync_audit, model_prices, llm_providers, platform_settings,"
             " user_org_memberships, organizations, users RESTART IDENTITY CASCADE"
         )
+        # The sync endpoints scope to the active providers' families (plan
+        # price-sync-active-providers). Seed claude_sdk (→ anthropic) +
+        # azure_foundry (→ azure/azure_ai/openai) so the fixture feed's
+        # anthropic + openai entries are in scope (the malformed entry is still
+        # the only skip).
+        for kind in ("claude_sdk", "azure_foundry"):
+            await conn.execute(
+                "INSERT INTO llm_providers (id, kind, display_name, is_active)"
+                " VALUES ($1, $2, $3, true)",
+                uuid4(),
+                kind,
+                f"{kind} (test)",
+            )
         await conn.execute(
             "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3), ($4, $5, $6)",
             ids["tenant_a"],

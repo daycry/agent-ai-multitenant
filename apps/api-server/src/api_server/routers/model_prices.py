@@ -69,6 +69,7 @@ from api_server.pricing.litellm_sync import (
     HttpxPriceFeedFetcher,
     LargeIncreaseNotConfirmedError,
     PriceFeedError,
+    active_litellm_families,
     apply_sync_from_litellm,
     compute_sync_diff,
     sync_prices_from_litellm,
@@ -404,6 +405,11 @@ async def sync_prices(
     settings = get_settings()
     url = req.url or settings.litellm_price_feed_url
 
+    # plan price-sync-active-providers (task_psa_01): only the families of the
+    # ACTIVE llm_providers are synced (System-Admin override wins; 0 active ⇒
+    # empty ⇒ nothing imported + every catalog family closed as out-of-scope).
+    allowed_families = await active_litellm_families(session)
+
     async with httpx.AsyncClient() as client:
         fetcher = HttpxPriceFeedFetcher(client=client, url=url)
         try:
@@ -413,6 +419,7 @@ async def sync_prices(
                 actor_id=principal.user_id,
                 confirm_large_increases=req.confirm_large_increases,
                 overwrite_manual=req.overwrite_manual,
+                allowed_families=allowed_families,
             )
         except (PriceFeedError, httpx.HTTPError) as exc:
             raise HTTPException(
@@ -466,10 +473,17 @@ async def sync_prices_diff(
     settings = get_settings()
     url = req.url or settings.litellm_price_feed_url
 
+    # Same active-family scope as the apply (task_psa_01): the dry-run diff must
+    # reflect what the apply would actually do — out-of-scope feed entries are
+    # skipped (never ``added``) and out-of-scope catalog rows show as ``removed``.
+    allowed_families = await active_litellm_families(session)
+
     async with httpx.AsyncClient() as client:
         fetcher = HttpxPriceFeedFetcher(client=client, url=url)
         try:
-            diff = await compute_sync_diff(session, fetcher=fetcher)
+            diff = await compute_sync_diff(
+                session, fetcher=fetcher, allowed_families=allowed_families
+            )
         except (PriceFeedError, httpx.HTTPError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -512,6 +526,10 @@ async def sync_prices_apply(
     settings = get_settings()
     url = req.url or settings.litellm_price_feed_url
 
+    # task_psa_01: only the active providers' families are applied (override
+    # wins; 0 active ⇒ empty ⇒ nothing added + every catalog family closed).
+    allowed_families = await active_litellm_families(session)
+
     async with httpx.AsyncClient() as client:
         fetcher = HttpxPriceFeedFetcher(client=client, url=url)
         try:
@@ -522,6 +540,7 @@ async def sync_prices_apply(
                 confirm=req.confirm,
                 overwrite_manual=req.overwrite_manual,
                 discontinue_missing=req.discontinue_missing,
+                allowed_families=allowed_families,
             )
             # task_11_19: audit the applied change in the SAME transaction. A
             # rejected apply (an unconfirmed >10% rise) raises below BEFORE any

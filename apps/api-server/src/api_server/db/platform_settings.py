@@ -158,6 +158,45 @@ async def get_price_sync_enabled(session: AsyncSession) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Price-sync family allowlist override (plan price-sync-active-providers,
+# task_psa_01)
+# ---------------------------------------------------------------------------
+# The price sync normally derives the LiteLLM families it imports from the
+# ACTIVE ``llm_providers`` rows (ADR 0028 kind→family map). This OPTIONAL
+# System-Admin override pins an explicit allowlist instead: when set (a list of
+# family strings), it WINS over the derived set; when unset (the default), the
+# resolver falls back to the families of the active providers. The value is read
+# live by the resolver so a change takes effect on the next sync without a
+# restart. An empty list ``[]`` is a meaningful override — it pins the allowlist
+# to EMPTY (sync nothing), distinct from "unset" (derive from active providers).
+PRICE_SYNC_ALLOWED_FAMILIES_KEY = "price_sync.allowed_families"
+
+
+async def get_price_sync_allowed_families_override(
+    session: AsyncSession,
+) -> frozenset[str] | None:
+    """The System-Admin family-allowlist override, or ``None`` when unset.
+
+    Returns ``None`` when the setting has never been written (the resolver then
+    derives the allowlist from the active ``llm_providers``). When written it is
+    a list of family strings; this normalises it to a ``frozenset`` of trimmed,
+    non-empty, lower-cased family names. A stored value that is not a list (or
+    is empty after cleaning) still returns a frozenset — an empty override is
+    deliberately meaningful (pin the allowlist to EMPTY)."""
+    value = await get_platform_setting(session, PRICE_SYNC_ALLOWED_FAMILIES_KEY, default=None)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list | tuple | set | frozenset):
+        return None
+    families = {
+        str(item).strip().lower() for item in value if isinstance(item, str) and str(item).strip()
+    }
+    return frozenset(families)
+
+
+# ---------------------------------------------------------------------------
 # Scheduled exchange-rates fetch (Plan 11.1 task_11_1_02)
 # ---------------------------------------------------------------------------
 # Live enable/disable lever for the daily FX-fetcher job

@@ -68,7 +68,7 @@ trae modelos `ollama`; si no hay ninguno activo, no trae nada. Sin fallback al c
 
 #### `task_psa_01` — Resolver de familias activas + filtro en el sync + endpoint
 
-- [ ] **Título**: Mapa kind→familias + resolver `active_litellm_families(session)` (query `llm_providers` activos +
+- [x] **Título**: Mapa kind→familias + resolver `active_litellm_families(session)` (query `llm_providers` activos +
       override `platform_settings`); añadir `allowed_families` a `sync_prices_from_litellm`/`compute_sync_diff`/
       `apply_sync_from_litellm` (omitir entradas fuera del allowlist; cerrar periodo de familias fuera en re-sync;
       vacío ⇒ nada); el endpoint `/admin/model-prices/sync` calcula el allowlist y lo pasa.
