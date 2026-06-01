@@ -1,9 +1,10 @@
-"""Built-in tool catalog (task_01_11).
+"""Built-in tool catalog (task_01_11; shell_exec added task_06_16_02).
 
-Eighteen tool definitions covering file ops, git, code runtime, HTTP
-and notifications. NONE of these are executable in Plan 01 -- the
-platform records the metadata and rejects invocations with 501 Not
-Implemented until Plan 02 wires the workers + runtime templates.
+Nineteen tool definitions covering file ops, git, code runtime, HTTP,
+notifications and one shell command. NONE of these are executable in
+Plan 01 -- the platform records the metadata and rejects invocations
+with 501 Not Implemented until Plan 02 wires the workers + runtime
+templates.
 
 `implementation_type` choices reflect the eventual execution path:
 
@@ -60,7 +61,7 @@ def _obj(props: dict[str, Any], required: list[str] | None = None) -> dict[str, 
 
 
 # ---------------------------------------------------------------------------
-# Catalog -- 18 tools
+# Catalog -- 19 tools
 # ---------------------------------------------------------------------------
 BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     # ----- File / Project -----
@@ -397,6 +398,46 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         _obj({"sent": {"type": "boolean"}, "channel": {"type": "string"}}, ["sent", "channel"]),
         implementation_ref="api_server.tools.send_notification",
         rate_limit_per_minute=20,
+    ),
+    # ----- Stack command (task_06_16_02) -----
+    # `shell_exec` is a BASIC builtin (is_builtin=true) but `privileged`:
+    # the security level is an orthogonal axis (ADR 0044). It runs ONLY
+    # binaries in the project's `allowed_commands` allowlist (deny-by-
+    # default; empty list = nothing runs). The runtime instantiates a
+    # per-project `ShellExecTool(allowed_commands=…)` (Plan 06.16 wiring).
+    BuiltinTool(
+        "shell-exec",
+        "shell_exec",
+        "Ejecuta un comando del stack del proyecto, restringido a la allowlist del proyecto "
+        "(deny-by-default). El comando se parsea como argv (shlex) y corre con timeout, sin shell.",
+        "command",
+        "builtin",
+        "privileged",
+        120,
+        _obj(
+            {
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "Comando completo a ejecutar; su primer token (basename) debe estar en "
+                        "la allowlist del proyecto. Ej.: 'composer install' o 'vendor/bin/phpunit'."
+                    ),
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Directorio de trabajo relativo al workspace (opcional).",
+                },
+            },
+            ["command"],
+        ),
+        _obj(
+            {
+                "exit_code": {"type": "integer"},
+                "stdout": {"type": "string"},
+                "stderr": {"type": "string"},
+            },
+            ["exit_code"],
+        ),
     ),
 )
 

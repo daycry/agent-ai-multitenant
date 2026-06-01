@@ -95,6 +95,14 @@ class ExecutionRequest:
     # call time. We keep ``None`` distinct from ``[]`` so the "block every
     # tool" discussion mode is expressible.
     allowed_tools: list[str] | None = None
+    # The project's shell-command allowlist (`projects.allowed_commands`,
+    # Plan 06.16 task_06_16_02). The orchestrator threads it from the task's
+    # project; the worker forwards it into the spec so the runtime can build a
+    # per-project `shell_exec` bound to exactly these program basenames
+    # (deny-by-default). ``None`` = no key (shell_exec not registered, e.g. a
+    # bare run); a list — including ``[]`` — registers shell_exec, with the
+    # empty list meaning deny-all (every command rejected).
+    allowed_commands: list[str] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict — the Celery payload the orchestrator sends."""
@@ -106,6 +114,7 @@ class ExecutionRequest:
             "model": self.model,
             "budgets": self.budgets,
             "allowed_tools": self.allowed_tools,
+            "allowed_commands": self.allowed_commands,
         }
 
     @classmethod
@@ -119,6 +128,7 @@ class ExecutionRequest:
             model=raw["model"],
             budgets=raw.get("budgets"),
             allowed_tools=raw.get("allowed_tools"),
+            allowed_commands=raw.get("allowed_commands"),
         )
 
 
@@ -167,6 +177,11 @@ def _agent_spec(
     # restriction". An empty list IS emitted (block every tool).
     if request.allowed_tools is not None:
         spec["allowed_tools"] = request.allowed_tools
+    # Forward the project's shell-command allowlist (task_06_16_02). Only emit
+    # the key when set — `None` means "no key" (shell_exec not registered). An
+    # empty list IS emitted: it registers a deny-all shell_exec.
+    if request.allowed_commands is not None:
+        spec["allowed_commands"] = request.allowed_commands
     return spec
 
 

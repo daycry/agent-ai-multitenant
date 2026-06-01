@@ -378,6 +378,16 @@ class TaskDispatcher:
         # "no restriction". An empty list IS emitted (block every tool).
         if allowed_tools is not None:
             request["allowed_tools"] = allowed_tools
+
+        # Per-project shell-command allowlist (Plan 06.16 task_06_16_02). Thread
+        # `projects.allowed_commands` into the spec so the runtime can build a
+        # per-project `shell_exec` bound to exactly these program basenames
+        # (deny-by-default). A real project always carries the column (default
+        # `[]`), so the key is always emitted; an empty list registers a
+        # deny-all shell_exec. We coerce to a plain list of strings — the column
+        # is TEXT[] and may surface as a tuple/None depending on the driver.
+        project_commands = getattr(project, "allowed_commands", None) if project else None
+        request["allowed_commands"] = [str(c) for c in (project_commands or [])]
         return _AiDispatch(request=request)
 
     async def _route_human(

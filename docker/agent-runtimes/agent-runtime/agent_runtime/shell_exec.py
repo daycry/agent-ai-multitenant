@@ -64,6 +64,22 @@ class ShellExecTool:
             )
         return argv
 
+    def _resolve_cwd(self, args: dict[str, object]) -> str | ToolResult:
+        """The working directory: the workspace, or an optional `cwd`
+        relative to it. A `cwd` that escapes the workspace is rejected so
+        the command cannot run outside the task sandbox.
+        """
+        cwd = args.get("cwd")
+        if cwd is None or (isinstance(cwd, str) and not cwd.strip()):
+            return self.workspace
+        if not isinstance(cwd, str):
+            return ToolResult(ok=False, error="shell_exec 'cwd' must be a string")
+        root = Path(self.workspace).resolve()
+        target = (root / cwd).resolve()
+        if target != root and root not in target.parents:
+            return ToolResult(ok=False, error=f"cwd escapes the workspace: {cwd}")
+        return str(target)
+
     def __call__(self, args: dict[str, object]) -> ToolResult:
         resolved = self._resolve_argv(args)
         if isinstance(resolved, ToolResult):
@@ -71,13 +87,17 @@ class ShellExecTool:
         argv = resolved
         program = Path(argv[0]).name
 
+        cwd = self._resolve_cwd(args)
+        if isinstance(cwd, ToolResult):
+            return cwd
+
         try:
             proc = subprocess.run(
                 argv,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_s,
-                cwd=self.workspace,
+                cwd=cwd,
                 check=False,
             )
         except subprocess.TimeoutExpired:

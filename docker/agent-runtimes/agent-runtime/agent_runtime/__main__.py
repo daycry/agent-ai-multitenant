@@ -78,12 +78,31 @@ def run_task(spec: dict[str, Any]) -> int:
     from agent_runtime.graph import AgentDeps, run_agent
     from agent_runtime.model import model_from_spec
     from agent_runtime.safeguards import Budgets
+    from agent_runtime.shell_exec import ShellExecTool
     from agent_runtime.tools import default_registry
 
     task = spec["task"]
     # The worker passes the project's human_approval_policy here; with a
     # policy the loop gates sensitive tool calls (task_02_33).
     policy = spec.get("approval_policy")
+
+    registry = default_registry()
+
+    # `shell_exec` is wired per project (task_06_16_02). The worker forwards
+    # the project's `allowed_commands` allowlist here; we register a
+    # `ShellExecTool` bound to it so the agent can run STACK commands
+    # (`php`, `composer`, `vendor/bin/phpunit`, `npm`, …) — but ONLY those
+    # binaries (deny-by-default). The key is always present from the worker:
+    # an empty list registers a deny-all shell_exec (every command rejected),
+    # which is the safe default for a project that authorised nothing. When
+    # the key is absent (a bare run / older payload) shell_exec is simply
+    # not registered.
+    allowed_commands = spec.get("allowed_commands")
+    if allowed_commands is not None:
+        registry.register(
+            "shell_exec",
+            ShellExecTool(allowed_commands=frozenset(allowed_commands)),
+        )
 
     # The active chat mode's tool whitelist (task_06_14_07). The worker
     # forwards `ChatModeConfig.allowed_tools` here; when present, the
@@ -92,7 +111,6 @@ def run_task(spec: dict[str, Any]) -> int:
     # (the `discussion` mode). We must distinguish "key missing" from
     # "key present but empty", so we read with a sentinel rather than a
     # falsy default.
-    registry = default_registry()
     allowed_tools = spec.get("allowed_tools", _NO_ALLOWLIST)
     if allowed_tools is not _NO_ALLOWLIST:
         registry.set_allowed_tools(allowed_tools)
