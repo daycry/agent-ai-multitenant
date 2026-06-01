@@ -40,6 +40,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
 
 import { AgentKbsSection } from "./agent-kbs-section";
+import { AgentToolsSection } from "./agent-tools-section";
 
 interface Agent {
   id: string;
@@ -213,6 +214,13 @@ export default function AgentHubPage() {
       {agent && (
         <div className="mt-4">
           <AgentKbsSection agentId={agent.id} isReadOnly={isReadOnly} />
+        </div>
+      )}
+
+      {/* Plan 06.15: tools assigned to this agent (básicas / avanzadas) */}
+      {agent && (
+        <div className="mt-4">
+          <AgentToolsSection agentId={agent.id} isReadOnly={isReadOnly} />
         </div>
       )}
 
