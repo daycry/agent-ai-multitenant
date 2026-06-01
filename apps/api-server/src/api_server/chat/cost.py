@@ -127,6 +127,159 @@ def _coerce_hours(raw: Any, default: Decimal) -> Decimal:
 
 
 # ===========================================================================
+# Human-agent plan estimate (Plan 16 task_16_13)
+# ===========================================================================
+@dataclass(frozen=True)
+class HumanAgentEstimateInput:
+    """The planning-estimate inputs of ONE assignable Human Agent.
+
+    Sourced from a tenant's :class:`~api_server.db.domain.HumanAgentConfig`
+    (Plan 16 task_16_02): the tarifa (``hourly_rate`` + ``currency``) and the
+    two expected-time figures the PM uses to size a human task. ``None`` rates /
+    times fall back to the platform defaults at estimate time (see
+    :func:`compute_human_agent_plan_estimate`), so a half-configured Human Agent
+    never crashes the estimate — it just costs the default rate / time.
+    """
+
+    agent_id: str
+    name: str
+    hourly_rate: Decimal | None = None
+    currency: str = "EUR"
+    expected_response_time_hours: int | None = None
+    expected_execution_time_hours: int | None = None
+
+
+@dataclass(frozen=True)
+class TaskHumanAgentEstimate:
+    """Per-(human-)task estimate for a task assigned to a Human Agent.
+
+    ``duration_hours`` is the wall-clock the PM should budget — the human's
+    ``expected_response_time_hours`` (time to pick the task up) PLUS the
+    ``expected_execution_time_hours`` (time to do the work). ``cost`` is the
+    chargeable part only: ``hourly_rate * expected_execution_time_hours``
+    (response time is wait, not paid work).
+    """
+
+    task_id: str
+    title: str
+    human_agent_id: str
+    response_hours: Decimal
+    execution_hours: Decimal
+    duration_hours: Decimal
+    hourly_rate: Decimal
+    currency: str
+    cost: Decimal
+
+
+@dataclass(frozen=True)
+class HumanAgentPlanEstimate:
+    """Aggregate of every human-agent-assigned task in a plan spec.
+
+    Snapshot shape for ``plans.specification.estimates.human_agents`` + the
+    rows the planning chat surfaces. Sums the per-task durations and costs;
+    ``currency`` is the dominant tenant currency (the first non-empty one seen,
+    EUR otherwise — mixing currencies in one plan is a Plan 11 ``exchange_rates``
+    concern, not this layer's). Tasks NOT assigned to a Human Agent are ignored
+    here (they ride the generic ``compute_human_cost`` / ``compute_ai_cost``
+    paths unchanged).
+    """
+
+    currency: str
+    total_duration_hours: Decimal
+    total_cost: Decimal
+    task_count: int
+    tasks: tuple[TaskHumanAgentEstimate, ...] = field(default_factory=tuple)
+
+
+def compute_human_agent_plan_estimate(
+    specification: dict[str, Any] | None,
+    human_agents: dict[str, HumanAgentEstimateInput],
+    *,
+    default_hourly_rate: Decimal = DEFAULT_HOURLY_RATE_EUR,
+    default_response_hours: Decimal = DEFAULT_TASK_HOURS,
+    default_execution_hours: Decimal = DEFAULT_TASK_HOURS,
+) -> HumanAgentPlanEstimate:
+    """Estimate duration + cost of the tasks a plan assigns to Human Agents.
+
+    Mirrors :func:`compute_human_cost` (same DB-agnostic, pure-function shape)
+    but for the *planning* estimate of Plan 16 task_16_13: a plan task may name
+    a Human Agent via ``task['human_agent_id']`` exactly like an AI task names
+    its ``model`` / agent. For each such task we look the agent up in
+    ``human_agents`` (the gallery the planning context exposes) and compute:
+
+      - ``duration_hours = expected_response_time_hours
+                           + expected_execution_time_hours``  (wall-clock to
+        budget — the human's pick-up wait plus their work time); and
+      - ``cost = hourly_rate * expected_execution_time_hours``  (chargeable
+        work only — waiting to accept is not paid).
+
+    A task whose ``human_agent_id`` is missing OR is not in ``human_agents`` is
+    skipped (it is not a recognised human-agent assignment). A recognised agent
+    with a ``None`` rate / time falls back to the platform defaults so the
+    estimate is always well-defined.
+
+    AI-agent assignment + estimation behaviour is untouched: this function only
+    ever LOOKS at tasks carrying a ``human_agent_id``.
+    """
+    tasks_raw = (specification or {}).get("tasks") or []
+
+    rows: list[TaskHumanAgentEstimate] = []
+    total_duration = Decimal("0")
+    total_cost = Decimal("0")
+    currency = "EUR"
+    currency_seen = False
+
+    for task in tasks_raw:
+        if not isinstance(task, dict):
+            continue
+        agent_id = task.get("human_agent_id")
+        if not agent_id:
+            continue
+        agent = human_agents.get(str(agent_id))
+        if agent is None:
+            continue
+
+        tid = str(task.get("id") or "")
+        title = str(task.get("title") or "")
+        response_hours = _coerce_hours(agent.expected_response_time_hours, default_response_hours)
+        execution_hours = _coerce_hours(
+            agent.expected_execution_time_hours, default_execution_hours
+        )
+        duration_hours = _q3(response_hours + execution_hours)
+        rate = agent.hourly_rate if agent.hourly_rate is not None else default_hourly_rate
+        rate = Decimal(rate)
+        cost = _q2(rate * execution_hours)
+
+        if not currency_seen:
+            currency = agent.currency or "EUR"
+            currency_seen = True
+
+        rows.append(
+            TaskHumanAgentEstimate(
+                task_id=tid,
+                title=title,
+                human_agent_id=str(agent_id),
+                response_hours=response_hours,
+                execution_hours=execution_hours,
+                duration_hours=duration_hours,
+                hourly_rate=_q2(rate),
+                currency=agent.currency or "EUR",
+                cost=cost,
+            )
+        )
+        total_duration += duration_hours
+        total_cost += cost
+
+    return HumanAgentPlanEstimate(
+        currency=currency,
+        total_duration_hours=_q3(total_duration),
+        total_cost=_q2(total_cost),
+        task_count=len(rows),
+        tasks=tuple(rows),
+    )
+
+
+# ===========================================================================
 # AI cost (task_03_23)
 # ===========================================================================
 @dataclass(frozen=True)
@@ -374,11 +527,15 @@ __all__ = [
     "DEFAULT_TASK_HOURS",
     "AICostBreakdown",
     "ComplexityTokenEstimate",
+    "HumanAgentEstimateInput",
+    "HumanAgentPlanEstimate",
     "HumanCostBreakdown",
     "ModelPrice",
     "PriceCatalog",
     "TaskAICost",
+    "TaskHumanAgentEstimate",
     "TaskHumanCost",
     "compute_ai_cost",
+    "compute_human_agent_plan_estimate",
     "compute_human_cost",
 ]

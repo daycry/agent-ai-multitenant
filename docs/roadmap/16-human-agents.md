@@ -324,7 +324,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_13` — Asignación de tareas a Human Agents desde chat de planning
 
-- [ ] **Título**: El PM agente durante el chat de planning ve los Human Agents del tenant en la galería y puede asignarles tareas igual que a agentes IA. La estimación del plan integra `expected_response_time + expected_execution_time + hourly_rate * expected_execution_time` por cada tarea humana.
+- [x] **Título**: El PM agente durante el chat de planning ve los Human Agents del tenant en la galería y puede asignarles tareas igual que a agentes IA. La estimación del plan integra `expected_response_time + expected_execution_time + hourly_rate * expected_execution_time` por cada tarea humana. _(backend pytest verde vs DB real — test_planning_human_agents.py, 4 tests + @pytest.mark.cross_tenant; sin migración (sólo lectura de human_agent_config / human_task_assignments existentes); planning_context expone la galería del tenant (rate + tiempos esperados + carga + flag overloaded, RLS) y chat/cost.py añade compute_human_agent_plan_estimate (duración = response+execution; coste = rate\*execution); comportamiento IA/coste genérico humano sin cambios)._
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer + backend-dev
