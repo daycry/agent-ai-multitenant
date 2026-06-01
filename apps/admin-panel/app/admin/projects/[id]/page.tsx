@@ -28,6 +28,7 @@ import {
   MessageSquare,
   Pencil,
   Plug,
+  Terminal,
   Trash2,
   Webhook,
   Workflow,
@@ -122,6 +123,12 @@ const SUBSECTIONS = [
     label: "Tools por agente",
     description: "Diagnóstico read-only de tools wired a cada agente.",
     Icon: Bot,
+  },
+  {
+    key: "commands",
+    label: "Comandos & runtime",
+    description: "Comandos autorizados (shell_exec) + runtime por defecto del stack.",
+    Icon: Terminal,
   },
   {
     key: "dep-cache",
