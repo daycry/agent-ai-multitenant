@@ -47,6 +47,8 @@ Cada archivo contiene:
 | 09    | [09-marketplace.md](./09-marketplace.md)                                     | 3-4 sem  | 05         |
 | 10    | [10-asistente-personal.md](./10-asistente-personal.md)                       | 3-4 sem  | 06         |
 | 11    | [11-guardrails-precios.md](./11-guardrails-precios.md)                       | 3-4 sem  | 02         |
+| 11.1  | [11.1-budgets-fx.md](./11.1-budgets-fx.md)                                   | 4-6 d    | 11         |
+| 11.2  | [11.2-llm-provider-admin-ui.md](./11.2-llm-provider-admin-ui.md)             | 4-6 d    | —          |
 | 12    | [12-backup-restore.md](./12-backup-restore.md)                               | 2-3 sem  | 00         |
 | 13    | [13-api-publica-webhooks.md](./13-api-publica-webhooks.md)                   | 3-4 sem  | 01         |
 | 14    | [14-evals-estadisticas.md](./14-evals-estadisticas.md)                       | 3-4 sem  | 06         |

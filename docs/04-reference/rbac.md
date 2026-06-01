@@ -2,7 +2,7 @@
 title: RBAC — Matriz de roles por endpoint
 audience: backend-dev, architect, security
 phase: 06.8-rbac-enforcement
-updated: 2026-05-28
+updated: 2026-06-01
 ---
 
 # RBAC — Matriz de roles por endpoint
@@ -74,6 +74,64 @@ endpoints que devuelven el contexto del propio usuario.
 | `/admin/tenants/{id}`  | GET,PUT,DEL | `system_admin` |
 | `/admin/users`         | GET         | `system_admin` |
 | `/admin/system-health` | GET         | `system_admin` |
+
+### Platform-global configuration — `system_admin` (ADR 0028)
+
+Los proveedores LLM y el catálogo de precios son **platform-global**: no
+tienen `tenant_id`, no llevan RLS y se gestionan **sólo** por
+`system_admin` desde los endpoints `/admin/*`, que corren sobre el engine
+BYPASSRLS (`get_admin_session`). Un `tenant_admin` NO los crea ni edita —
+sólo elige qué modelo asigna a cada agente (`POST /agents`). Las
+credenciales viven **sólo en Vault** (`platform/llm/<provider_id>`); la
+API nunca las devuelve (write-only).
+
+#### `llm_providers.py` (Plan 11.2)
+
+| Endpoint                         | Método | Rol mínimo     |
+| -------------------------------- | ------ | -------------- |
+| `/admin/llm-providers`           | GET    | `system_admin` |
+| `/admin/llm-providers`           | POST   | `system_admin` |
+| `/admin/llm-providers/{id}`      | GET    | `system_admin` |
+| `/admin/llm-providers/{id}`      | PUT    | `system_admin` |
+| `/admin/llm-providers/{id}`      | DELETE | `system_admin` |
+| `/admin/llm-providers/{id}/test` | POST   | `system_admin` |
+
+> `POST` recibe la credencial como `SecretStr` y la escribe en Vault; la
+> BD guarda sólo `secret_vault_path`. `PUT` rota la credencial si se
+> envía. `DELETE` borra también el secreto de Vault. `/test` hace un
+> liveness probe clasificado leyendo el secreto de Vault, sin echo-arlo.
+
+#### `copilot_device_flow.py` — Device Flow de GitHub Copilot (Plan 11.2)
+
+| Endpoint                               | Método | Rol mínimo     |
+| -------------------------------------- | ------ | -------------- |
+| `/admin/llm/copilot/device-flow/start` | POST   | `system_admin` |
+| `/admin/llm/copilot/device-flow/poll`  | POST   | `system_admin` |
+
+> `start` devuelve `user_code` + `verification_uri`; `poll` acuña el token
+> OAuth al autorizar y lo escribe en Vault del provider — el token nunca
+> aparece en una respuesta.
+
+#### `model_prices.py` (catálogo global — Plan 11, asociación a provider en 11.2)
+
+| Endpoint                   | Método | Rol mínimo     |
+| -------------------------- | ------ | -------------- |
+| `/model-prices`            | GET    | `tenant_user`  |
+| `/model-prices/current`    | GET    | `tenant_user`  |
+| `/model-prices/{id}`       | GET    | `tenant_user`  |
+| `/admin/model-prices`      | GET    | `system_admin` |
+| `/admin/model-prices`      | POST   | `system_admin` |
+| `/admin/model-prices/{id}` | PATCH  | `system_admin` |
+| `/admin/model-prices/{id}` | DELETE | `system_admin` |
+| `/admin/model-prices/sync` | POST   | `system_admin` |
+
+> El catálogo de lectura (`/model-prices`) es read-open para cualquier
+> member (RLS de lectura global, espeja `exchange_rates`); las mutaciones
+> y el sync son `system_admin`. Desde Plan 11.2 `GET /admin/model-prices`
+> acepta `?provider_id=<uuid>` (filtrar por provider) y `POST`/`PATCH`
+> aceptan `provider_id` (FK nullable a `llm_providers`).
+>
+> Los endpoints `/admin/auth-providers` (auth providers globales, ADR 0028) siguen **pendientes del Plan 08** (SSO empresarial).
 
 ### `projects.py`
 
