@@ -341,7 +341,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_14` — Tools del asistente personal: `tenant_human_workload`, `tenant_human_assignments_pending`
 
-- [ ] **Título**: Implementar las dos tools en el asistente personal. Respuestas a queries tipo "¿cuántas tareas tiene Fulano esta semana?", "¿qué tareas humanas están en cola sin aceptar desde hace más de 24h?". Respetan RBAC del admin.
+- [x] **Título**: Implementar las dos tools en el asistente personal. Respuestas a queries tipo "¿cuántas tareas tiene Fulano esta semana?", "¿qué tareas humanas están en cola sin aceptar desde hace más de 24h?". Respetan RBAC del admin. _(backend pytest verde vs DB real — test_assistant_human_tools.py, 7 tests + 2× @pytest.mark.cross_tenant; sin migración (sólo lectura de human_task_assignments / human_work_sessions / users existentes); tenant_human_workload cuenta asignaciones abiertas (pending+accepted) + sesiones de la semana ISO, resuelve al usuario sólo entre miembros del tenant del admin (RLS); tenant_human_assignments_pending lista pending_acceptance > N h (24h por defecto); ambas registradas en ASSISTANT_TOOLS + DEFAULT_ENABLED_TOOLS)._
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer + backend-dev
