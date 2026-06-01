@@ -72,7 +72,7 @@ resultado esperado), y actualiza el índice.
 
 #### `task_htg_02` — Guías 10, 11, 11.2, 12
 
-- [ ] **Título**: Crear las guías de 10-asistente-personal, 11-guardrails-precios, 11.2-llm-provider-admin-ui, 12-backup-restore.
+- [x] **Título**: Crear las guías de 10-asistente-personal, 11-guardrails-precios, 11.2-llm-provider-admin-ui, 12-backup-restore.
 - **Tests**: `test -f` de las 4 guías + pre-commit prettier verde
 
 #### `task_htg_03` — Guías 13, 14, 15, 16
