@@ -33,6 +33,35 @@ _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 # (api-routers-validation-6). 64 KiB is generous for config.
 _MAX_JSON_CONFIG_BYTES = 65536
 
+# Plan 06.16 task_06_16_01: the per-project shell_exec allowlist. We cap
+# the count + each entry's length and normalise (strip + drop blanks +
+# de-dup, preserving order) so the deny-by-default allowlist stays a tidy
+# list of program basenames the operator picked from the UI presets/chips
+# — not a free-form dumping ground.
+_MAX_ALLOWED_COMMANDS = 100
+_MAX_COMMAND_LENGTH = 128
+
+
+def _normalise_allowed_commands(value: list[str]) -> list[str]:
+    """Strip + drop blanks + de-dup (order-preserving), enforcing caps."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in value:
+        cmd = raw.strip()
+        if not cmd:
+            continue
+        if len(cmd) > _MAX_COMMAND_LENGTH:
+            raise ValueError(
+                f"allowed_commands entry too long ({len(cmd)} chars); " f"max {_MAX_COMMAND_LENGTH}"
+            )
+        if cmd in seen:
+            continue
+        seen.add(cmd)
+        out.append(cmd)
+    if len(out) > _MAX_ALLOWED_COMMANDS:
+        raise ValueError(f"too many allowed_commands ({len(out)}); max {_MAX_ALLOWED_COMMANDS}")
+    return out
+
 
 def _check_json_config_size(value: Any, field_name: str) -> None:
     """Reject a free-form JSON config blob over `_MAX_JSON_CONFIG_BYTES`.
@@ -99,6 +128,11 @@ class ProjectCreateRequest(BaseModel):
     human_approval_policy: dict[str, Any] | None = None
     secrets_vault_id: UUID | None = None
 
+    # Plan 06.16 task_06_16_01: shell_exec allowlist (deny-by-default —
+    # empty list runs nothing) + the stack's default runtime template.
+    allowed_commands: list[str] = Field(default_factory=list)
+    default_runtime_template: str | None = Field(default=None, min_length=1, max_length=64)
+
     budget_amount: Decimal | None = Field(default=None, ge=0)
     budget_currency: str | None = Field(default=None, min_length=3, max_length=3)
     budget_period: BudgetPeriod | None = None
@@ -109,6 +143,11 @@ class ProjectCreateRequest(BaseModel):
     @classmethod
     def _validate_mcp_servers(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return validate_mcp_servers_payload(value)
+
+    @field_validator("allowed_commands", mode="after")
+    @classmethod
+    def _validate_allowed_commands(cls, value: list[str]) -> list[str]:
+        return _normalise_allowed_commands(value)
 
     @field_validator(
         "rag_knowledge_bases",
@@ -145,6 +184,13 @@ class ProjectUpdateRequest(BaseModel):
     human_approval_policy: dict[str, Any] | None = None
     secrets_vault_id: UUID | None = None
 
+    # Plan 06.16 task_06_16_01. None = unchanged (PATCH-style partial
+    # update — `apply_partial_update` uses `exclude_unset`). An explicit
+    # `[]` clears the allowlist back to deny-all; `default_runtime_template:
+    # null` clears the runtime back to per-tool defaults.
+    allowed_commands: list[str] | None = None
+    default_runtime_template: str | None = Field(default=None, min_length=1, max_length=64)
+
     budget_amount: Decimal | None = Field(default=None, ge=0)
     budget_currency: str | None = Field(default=None, min_length=3, max_length=3)
     budget_period: BudgetPeriod | None = None
@@ -159,6 +205,13 @@ class ProjectUpdateRequest(BaseModel):
         if value is None:
             return None
         return validate_mcp_servers_payload(value)
+
+    @field_validator("allowed_commands", mode="after")
+    @classmethod
+    def _validate_allowed_commands(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return _normalise_allowed_commands(value)
 
     @field_validator(
         "rag_knowledge_bases",
@@ -210,6 +263,10 @@ class ProjectResponse(BaseModel):
     human_approval_policy: dict[str, Any] | None
     secrets_vault_id: UUID | None
 
+    # Plan 06.16 task_06_16_01.
+    allowed_commands: list[str]
+    default_runtime_template: str | None
+
     budget_amount: Decimal | None
     budget_currency: str | None
     budget_period: str | None
@@ -237,6 +294,8 @@ def to_project_response(p: Project) -> ProjectResponse:
         repository_config=p.repository_config,
         human_approval_policy=p.human_approval_policy,
         secrets_vault_id=p.secrets_vault_id,
+        allowed_commands=p.allowed_commands,
+        default_runtime_template=p.default_runtime_template,
         budget_amount=p.budget_amount,
         budget_currency=p.budget_currency,
         budget_period=p.budget_period,

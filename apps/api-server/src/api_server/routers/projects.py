@@ -185,6 +185,8 @@ async def create_project(
         repository_config=payload.repository_config,
         human_approval_policy=payload.human_approval_policy,
         secrets_vault_id=payload.secrets_vault_id,
+        allowed_commands=payload.allowed_commands,
+        default_runtime_template=payload.default_runtime_template,
         budget_amount=payload.budget_amount,
         budget_currency=payload.budget_currency,
         budget_period=(payload.budget_period.value if payload.budget_period is not None else None),

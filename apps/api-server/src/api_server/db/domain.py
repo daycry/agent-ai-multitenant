@@ -649,6 +649,20 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     repository_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     human_approval_policy: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
+    # Plan 06.16 task_06_16_01: polyglot tool catalog. `allowed_commands`
+    # is the per-project deny-by-default allowlist of program *basenames*
+    # (`php`, `composer`, `vendor/bin/phpunit`, `pest`, `npm`, …) the
+    # `shell_exec` builtin may run; empty `[]` = nothing runs (deny-all).
+    # TEXT[] (not JSONB) — membership-only semantics, same shape as
+    # `default_kb_grants`. `default_runtime_template` names the stack's
+    # runtime template id (`php-phpunit`, `node-jest`, …) the `run_*`
+    # tools resolve against; NULL = keep each tool's current default
+    # (backward-compatible).
+    allowed_commands: Mapped[list[str]] = mapped_column(
+        ARRAY(String), nullable=False, server_default=text("'{}'::text[]")
+    )
+    default_runtime_template: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # Soft-FK to the Vault entry that holds the project's secrets. Vault
     # is an external system so no DB-level FK.
     secrets_vault_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
