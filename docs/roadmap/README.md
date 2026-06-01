@@ -68,6 +68,15 @@ son bloqueados por las fases.
 | -------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------- |
 | [demo-webscorpo-team-kb.md](./demo-webscorpo-team-kb.md) | Equipo WebScorpo (CI4) de 10 agentes + proyecto + KB completo (equipo + por-rol) | 06.15, 06.16, 04, 16 |
 
+### Planes documentales (no entran en el gate de fases)
+
+Planes con `plan_id` descriptivo que producen **solo documentación** (no
+features ni código). No bloquean ni son bloqueados por las fases.
+
+| Plan                                                     | Qué produce                                                                                           |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| [docs-human-test-guides.md](./docs-human-test-guides.md) | Guías de tests humanos por plan en `docs/03-guides/human-tests/` (una por cada plan con bloque human) |
+
 ## MVP Funcional
 
 Las fases 0-6 forman un MVP funcional. Total estimado: 21-27 semanas.

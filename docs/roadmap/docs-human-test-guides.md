@@ -94,7 +94,7 @@ resultado esperado), y actualiza el índice.
 
 #### `task_htg_06` — Índice + changelog
 
-- [ ] **Título**: Actualizar `docs/03-guides/human-tests/README.md` (todas las filas nuevas, ordenadas) + crear changelog `docs/07-changelog/docs-human-test-guides.md` + fila en `docs/roadmap/README.md`.
+- [x] **Título**: Actualizar `docs/03-guides/human-tests/README.md` (todas las filas nuevas, ordenadas) + crear changelog `docs/07-changelog/docs-human-test-guides.md` + fila en `docs/roadmap/README.md`.
 - **Tests**: README contiene las nuevas filas; `test -f` del changelog
 
 ## Tests humanos del Plan
