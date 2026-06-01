@@ -155,6 +155,18 @@ API nunca las devuelve (write-only).
 | `/agents/{src}/fork`   | POST   | `tenant_admin` |
 | `/agents/{fork}/diff`  | GET    | `tenant_user`  |
 | `/agents/{fork}/merge` | POST   | `tenant_admin` |
+| `/agents/{id}/tools`   | GET    | `tenant_user`  |
+| `/agents/{id}/tools`   | PUT    | `tenant_admin` |
+
+> `GET /agents/{id}/tools` lista las tools asignadas vía la junction
+> `agent_tools` (incluye `is_builtin` + `implementation_type` para la
+> taxonomía derivada básica/avanzada). `PUT` reemplaza el conjunto
+> entero (declarativo). Scope (Plan 06.15, ADR 0044): built-in
+> asignable a cualquier agente; custom sólo del propio tenant (cross-
+> tenant → 422); MCP sólo si el proyecto del agente declara ese MCP
+> server (→ 422). Un agente `global_builtin` rechaza la escritura con
+> 403 (forkéalo y asigna sobre el fork). Sin filas ⇒ sin restricción
+> por agente (backward-compatible).
 
 ### `teams.py`
 
