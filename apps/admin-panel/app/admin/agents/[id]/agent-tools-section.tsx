@@ -31,8 +31,9 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Wrench } from "lucide-react";
+import { ScanSearch, Wrench } from "lucide-react";
 
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -71,6 +72,14 @@ interface AgentToolsSectionProps {
   agentId: string;
   /** Read-only when the agent is `global_builtin` (platform-managed). */
   isReadOnly: boolean;
+  /**
+   * Project of a `project_local` agent (Plan 06.15 task_06_15_04). When
+   * present we surface a link to the read-only project diagnostic
+   * (`/admin/projects/{id}/agent-tools-diagnostic`) so an operator can
+   * verify "why does agent X see tool Y" right after assigning. Global
+   * agents (`null`) have no project diagnostic and the link is hidden.
+   */
+  projectId?: string | null;
 }
 
 // Badge maps mirror the agent-tools-diagnostic panel for visual parity.
@@ -93,7 +102,7 @@ function isBasic(tool: { is_builtin: boolean; implementation_type: string }): bo
   return tool.is_builtin && tool.implementation_type === "builtin";
 }
 
-export function AgentToolsSection({ agentId, isReadOnly }: AgentToolsSectionProps) {
+export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentToolsSectionProps) {
   const queryClient = useQueryClient();
   const { isTenantAdmin, isLoading: roleLoading } = useCurrentUser();
 
@@ -199,29 +208,45 @@ export function AgentToolsSection({ agentId, isReadOnly }: AgentToolsSectionProp
             comportamiento por defecto (sin restricción por agente).
           </p>
         </div>
-        {canEdit && (
-          <div className="flex shrink-0 items-center gap-2">
-            {dirty && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={reset}
-                disabled={saveMutation.isPending}
-                data-testid="agent-tools-reset"
-              >
-                Descartar
-              </Button>
-            )}
+        <div className="flex shrink-0 items-center gap-2">
+          {projectId && (
             <Button
+              asChild
+              variant="outline"
               size="sm"
-              onClick={() => saveMutation.mutate(Array.from(selected))}
-              disabled={!dirty || saveMutation.isPending}
-              data-testid="agent-tools-save"
+              title="Verificación read-only: qué tools ve cada agente del proyecto."
+              data-testid="agent-tools-diagnostic-link"
             >
-              {saveMutation.isPending ? "Guardando…" : "Guardar"}
+              <Link href={`/admin/projects/${projectId}/agent-tools-diagnostic`}>
+                <ScanSearch className="mr-1 h-4 w-4" />
+                Diagnóstico
+              </Link>
             </Button>
-          </div>
-        )}
+          )}
+          {canEdit && (
+            <>
+              {dirty && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={reset}
+                  disabled={saveMutation.isPending}
+                  data-testid="agent-tools-reset"
+                >
+                  Descartar
+                </Button>
+              )}
+              <Button
+                size="sm"
+                onClick={() => saveMutation.mutate(Array.from(selected))}
+                disabled={!dirty || saveMutation.isPending}
+                data-testid="agent-tools-save"
+              >
+                {saveMutation.isPending ? "Guardando…" : "Guardar"}
+              </Button>
+            </>
+          )}
+        </div>
       </CardHeader>
 
       <CardContent>

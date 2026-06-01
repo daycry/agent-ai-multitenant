@@ -220,7 +220,11 @@ export default function AgentHubPage() {
       {/* Plan 06.15: tools assigned to this agent (básicas / avanzadas) */}
       {agent && (
         <div className="mt-4">
-          <AgentToolsSection agentId={agent.id} isReadOnly={isReadOnly} />
+          <AgentToolsSection
+            agentId={agent.id}
+            isReadOnly={isReadOnly}
+            projectId={agent.project_id}
+          />
         </div>
       )}
 
