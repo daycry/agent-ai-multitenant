@@ -89,7 +89,7 @@ resultado esperado), y actualiza el índice.
 
 #### `task_htg_05` — Guías 00, 01, 03, 06.10, 06.11, 06.13
 
-- [ ] **Título**: Crear las guías de los planes completed que aún no la tienen (00-fundaciones, 01-dominio-minimo, 03-chat-planning-aprobacion, 06.10-kb-categories, 06.11-kb-ingestion-fixes, 06.13-kb-catalog-content).
+- [x] **Título**: Crear las guías de los planes completed que aún no la tienen (00-fundaciones, 01-dominio-minimo, 03-chat-planning-aprobacion, 06.10-kb-categories, 06.11-kb-ingestion-fixes, 06.13-kb-catalog-content).
 - **Tests**: `test -f` de las 6 guías + pre-commit prettier verde
 
 #### `task_htg_06` — Índice + changelog
