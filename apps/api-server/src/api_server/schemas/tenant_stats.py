@@ -159,6 +159,16 @@ class ConsumptionSummaryResponse(BaseModel):
     total_tokens_output: int
     total_tokens_cached: int
     costliest_run: CostliestRun | None
+    # Cost segmentation (Plan 16 task_16_12): AI cost (from executions) vs human
+    # cost (rate * hours from human_work_sessions). ``accumulated_cost_usd`` is
+    # AI-only (the executions roll-up, unchanged). ``ai_cost_usd`` mirrors it for
+    # symmetry; ``human_cost_usd`` is the canonical-USD human cost over the same
+    # window; ``total_cost_usd`` is their sum; ``human_hours_logged`` is the raw
+    # hours summed for the card. All canonical USD.
+    ai_cost_usd: Decimal
+    human_cost_usd: Decimal
+    total_cost_usd: Decimal
+    human_hours_logged: Decimal
 
 
 # =============================================================================

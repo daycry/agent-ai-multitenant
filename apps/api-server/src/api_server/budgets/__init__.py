@@ -27,6 +27,7 @@ from api_server.budgets.consumption import (
     maybe_alert_budgets,
     tenant_budget_summary,
 )
+from api_server.budgets.human_cost import HumanCostScope, compute_human_cost_usd
 from api_server.budgets.pause import (
     BUDGET_PAUSE_OVERRIDE_ACTION,
     BudgetPauseBlock,
@@ -52,10 +53,12 @@ __all__ = [
     "BudgetPauseRefresh",
     "BudgetPeriodWindow",
     "CeleryBudgetAlertDispatcher",
+    "HumanCostScope",
     "InvalidBudgetPeriodError",
     "budget_pause_block",
     "clear_budget_pause",
     "compute_budget_consumption",
+    "compute_human_cost_usd",
     "current_budget_period",
     "evaluate_budget_alerts",
     "maybe_alert_budgets",

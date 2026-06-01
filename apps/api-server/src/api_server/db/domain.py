@@ -719,6 +719,18 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
         String(32), nullable=False, server_default=text("'auto_approve'")
     )
 
+    # --- Budget: fold human cost in? (Plan 16 task_16_12) -----------------
+    # Human cost (rate * hours from human_work_sessions) is ALWAYS imputed to
+    # the plan/project + segmented in the 13.7 dashboard. This flag decides
+    # whether it ALSO counts toward this project's BUDGET (consumption +
+    # threshold alerts + auto-pause). DEFAULT false = current behaviour (only
+    # the canonical-USD AI cost counts); true folds the project's human cost
+    # (converted to USD) into the consumption the evaluator compares vs the
+    # cap. DB column added by migration 0074.
+    budget_includes_human_cost: Mapped[bool] = mapped_column(
+        nullable=False, server_default=text("false")
+    )
+
     # Catalog marker -- when true the row is a template blueprint owned
     # by the platform tenant, visible cross-tenant via RLS but never the
     # target of writes from a tenant session.

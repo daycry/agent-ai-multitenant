@@ -65,6 +65,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
+from api_server.budgets.human_cost import compute_human_cost_usd
 from api_server.db.domain import Agent, Execution, Plan, Task
 from api_server.db.exchange_rates import CANONICAL_CURRENCY
 from api_server.db.models import Organization
@@ -305,7 +306,14 @@ async def tenant_consumption_summary(
     tenant_id = require_tenant_id(principal)
     since = datetime.now(tz=UTC) - timedelta(days=window_days)
     base = _exec_filters(tenant_id=tenant_id, since=since, agent_id=agent_id, plan_id=plan_id)
-    return await _compute_consumption(session, base, window_days=window_days)
+    return await _compute_consumption(
+        session,
+        base,
+        window_days=window_days,
+        tenant_id=tenant_id,
+        since=since,
+        plan_id=plan_id,
+    )
 
 
 async def _compute_consumption(
@@ -313,11 +321,19 @@ async def _compute_consumption(
     base: list[ColumnElement[bool]],
     *,
     window_days: int,
+    tenant_id: UUID,
+    since: datetime,
+    plan_id: UUID | None = None,
 ) -> ConsumptionSummaryResponse:
     """Compute the consumption summary for ``base`` (tenant-scoped filters).
 
     Shared by the JSON ``/consumption`` endpoint and the export's PDF/HTML
-    summary block so the two never drift.
+    summary block so the two never drift. ``accumulated_cost_usd`` is the AI
+    cost (the executions roll-up, unchanged); the human cost (Plan 16
+    task_16_12: rate * hours from human_work_sessions) is computed over the SAME
+    window so the card / export can SEGMENT AI vs human and show the combined
+    total. The human roll-up is tenant-scoped (RLS) over the window and narrowed
+    to ``plan_id`` when the consumption query is (so the two halves agree).
     """
     headline = (
         await session.execute(
@@ -340,6 +356,16 @@ async def _compute_consumption(
 
     costliest = await _costliest_run(session, base)
 
+    # Human cost over the same window (segmentation, task_16_12). Canonical USD.
+    human = await compute_human_cost_usd(
+        session,
+        tenant_id=tenant_id,
+        plan_id=plan_id,
+        window_start=since.date(),
+    )
+    ai_cost = accumulated
+    human_cost = _quantize_cost(human.human_cost_usd)
+
     return ConsumptionSummaryResponse(
         window_days=window_days,
         run_count=run_count,
@@ -352,6 +378,10 @@ async def _compute_consumption(
         # freezes the cached PRICE, not the count). Reported as 0, not faked.
         total_tokens_cached=0,
         costliest_run=costliest,
+        ai_cost_usd=ai_cost,
+        human_cost_usd=human_cost,
+        total_cost_usd=_quantize_cost(ai_cost + human_cost),
+        human_hours_logged=human.hours_logged,
     )
 
 
@@ -487,7 +517,14 @@ async def export_execution_runs(
 
     # The PDF/HTML report embeds a consumption summary; CSV/XLSX are raw rows.
     consumption = (
-        await _compute_consumption(session, filters, window_days=window_days)
+        await _compute_consumption(
+            session,
+            filters,
+            window_days=window_days,
+            tenant_id=tenant_id,
+            since=since,
+            plan_id=plan_id,
+        )
         if fmt is ExportFormat.PDF
         else None
     )

@@ -299,7 +299,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_12` — Coste humano integrado en plan, project budget y dashboard
 
-- [ ] **Título**: Imputar coste humano (hourly_rate \* horas) al plan y al proyecto. Campo `Project.budget_includes_human_cost` (default false): si true, el coste humano suma al budget; si false, solo coste AI cuenta. Actualizar dashboard 13.7 para segmentar AI cost vs Human cost.
+- [x] **Título**: Imputar coste humano (hourly*rate \* horas) al plan y al proyecto. Campo `Project.budget_includes_human_cost` (default false): si true, el coste humano suma al budget; si false, solo coste AI cuenta. Actualizar dashboard 13.7 para segmentar AI cost vs Human cost. *(backend pytest verde vs DB real — test*human_cost.py + test_human_budget_inclusion.py, 7 tests + @pytest.mark.cross_tenant; migración 0074 reversible single head; budgets/human_cost.py imputa rate\*horas→USD (FX, fallback DEFAULT_HOURLY_RATE_EUR), consumption.py pliega coste humano sólo si budget_includes_human_cost; /tenant-stats/consumption + admin-panel tenant-stats segmentan IA vs Humano; admin-panel typecheck/lint/build verde).*
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + frontend-dev

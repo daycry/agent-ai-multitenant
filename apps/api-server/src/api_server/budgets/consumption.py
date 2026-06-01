@@ -45,6 +45,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.budgets.human_cost import compute_human_cost_usd
 from api_server.budgets.period import BudgetPeriodWindow, current_budget_period
 from api_server.db.budget_alert_state import BudgetAlertState, BudgetScope
 from api_server.db.domain import Execution, Project, Task
@@ -76,6 +77,14 @@ class BudgetConsumption:
     ``percent_used`` is ``spend_usd / budget_usd * 100`` (``None`` when the
     budget is unknown / zero). ``crossed_thresholds`` are the configured
     thresholds the percent used currently meets-or-exceeds (ascending).
+
+    ``spend_usd`` is the TOTAL that the thresholds / auto-pause compare against
+    the cap. It is ``ai_spend_usd + human_spend_usd``, where ``human_spend_usd``
+    is the project's human cost FOLDED INTO the budget only when the scope opted
+    in via ``projects.budget_includes_human_cost`` (Plan 16 task_16_12) — 0
+    otherwise, so by default ``spend_usd == ai_spend_usd`` (unchanged
+    behaviour). ``ai_spend_usd`` / ``human_spend_usd`` are surfaced separately
+    so the dashboard / assistant can segment the two.
     """
 
     scope: BudgetScope
@@ -87,6 +96,8 @@ class BudgetConsumption:
     budget_currency: str
     budget_usd: Decimal | None
     spend_usd: Decimal
+    ai_spend_usd: Decimal
+    human_spend_usd: Decimal
     percent_used: Decimal | None
     crossed_thresholds: tuple[int, ...]
 
@@ -256,12 +267,22 @@ async def _consumption_for_scope(
     length_days: int | None,
     on_date: date,
     thresholds: list[int],
+    human_cost_project_ids: frozenset[UUID],
 ) -> BudgetConsumption | None:
     """Build the consumption snapshot for one scope (tenant or one project).
 
     Returns None when the budget config is malformed (an unknown period); a
     malformed config is logged and skipped rather than crashing the whole
-    evaluation (the other scopes still evaluate)."""
+    evaluation (the other scopes still evaluate).
+
+    Human cost (Plan 16 task_16_12) is FOLDED into ``spend_usd`` only for the
+    opted-in projects in ``human_cost_project_ids``:
+      - PROJECT scope: the project's own human cost iff it is in the set;
+      - TENANT scope: the SUM of the human cost of every opted-in project (a
+        tenant budget that includes human cost counts the human spend of the
+        projects that opted in, never the AI-only projects' human spend).
+    When nothing is folded ``human_spend_usd`` is 0 and ``spend_usd`` equals
+    the AI spend (unchanged behaviour)."""
     try:
         window = current_budget_period(
             period, start_day=start_day, length_days=length_days, on_date=on_date
@@ -277,9 +298,18 @@ async def _consumption_for_scope(
         )
         return None
 
-    spend_usd = await _spend_usd_in_window(
+    ai_spend_usd = await _spend_usd_in_window(
         session, tenant_id=tenant_id, window=window, project_id=project_id
     )
+    human_spend_usd = await _folded_human_cost(
+        session,
+        tenant_id=tenant_id,
+        scope=scope,
+        project_id=project_id,
+        window=window,
+        human_cost_project_ids=human_cost_project_ids,
+    )
+    spend_usd = ai_spend_usd + human_spend_usd
     budget_usd = await _budget_usd(session, amount=amount, currency=currency, on_date=window.start)
     percent = _percent_used(spend_usd, budget_usd)
     return BudgetConsumption(
@@ -292,9 +322,52 @@ async def _consumption_for_scope(
         budget_currency=currency.upper(),
         budget_usd=budget_usd,
         spend_usd=spend_usd,
+        ai_spend_usd=ai_spend_usd,
+        human_spend_usd=human_spend_usd,
         percent_used=percent,
         crossed_thresholds=_crossed(percent, thresholds),
     )
+
+
+async def _folded_human_cost(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    scope: BudgetScope,
+    project_id: UUID | None,
+    window: BudgetPeriodWindow,
+    human_cost_project_ids: frozenset[UUID],
+) -> Decimal:
+    """The human cost (USD) to fold into this scope's budget for the window.
+
+    PROJECT scope: the project's own human cost iff it opted in. TENANT scope:
+    the sum of every opted-in project's human cost. Zero when nothing opted in
+    (the default — AI-only budget)."""
+    if not human_cost_project_ids:
+        return Decimal("0")
+    if scope is BudgetScope.PROJECT:
+        if project_id is None or project_id not in human_cost_project_ids:
+            return Decimal("0")
+        scoped = await compute_human_cost_usd(
+            session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            window_start=window.start,
+            window_end=window.end,
+        )
+        return scoped.human_cost_usd
+    # TENANT scope: sum across the opted-in projects.
+    total = Decimal("0")
+    for pid in human_cost_project_ids:
+        scoped = await compute_human_cost_usd(
+            session,
+            tenant_id=tenant_id,
+            project_id=pid,
+            window_start=window.start,
+            window_end=window.end,
+        )
+        total += scoped.human_cost_usd
+    return total
 
 
 async def compute_budget_consumption(
@@ -316,6 +389,11 @@ async def compute_budget_consumption(
     if thresholds is None:
         thresholds = await get_budget_alert_thresholds(session)
 
+    # The set of projects that fold human cost into the budget (Plan 16
+    # task_16_12). Computed once: the PROJECT scope folds its own when present,
+    # the TENANT scope folds the sum across the set.
+    human_cost_project_ids = await _human_cost_project_ids(session, tenant_id=tenant_id)
+
     consumptions: list[BudgetConsumption] = []
 
     # --- Tenant-wide budget (organizations; RLS → only this tenant's row) ---
@@ -336,6 +414,7 @@ async def compute_budget_consumption(
             length_days=org.tenant_budget_period_length_days,
             on_date=on_date,
             thresholds=thresholds,
+            human_cost_project_ids=human_cost_project_ids,
         )
         if snap is not None:
             consumptions.append(snap)
@@ -370,11 +449,34 @@ async def compute_budget_consumption(
             length_days=project.budget_period_length_days,
             on_date=on_date,
             thresholds=thresholds,
+            human_cost_project_ids=human_cost_project_ids,
         )
         if snap is not None:
             consumptions.append(snap)
 
     return consumptions
+
+
+async def _human_cost_project_ids(session: AsyncSession, *, tenant_id: UUID) -> frozenset[UUID]:
+    """The live projects of the tenant that opted into folding human cost.
+
+    Tenant-scoped (RLS) + defence-in-depth ``tenant_id ==``. A project folds its
+    human cost into the budget when ``budget_includes_human_cost`` is true (Plan
+    16 task_16_12); the default (false) keeps the AI-only budget."""
+    rows = (
+        (
+            await session.execute(
+                select(Project.id).where(
+                    Project.tenant_id == tenant_id,
+                    Project.deleted_at.is_(None),
+                    Project.budget_includes_human_cost.is_(True),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return frozenset(rows)
 
 
 def _has_budget(amount: Decimal | None, currency: str | None, period: str | None) -> bool:
@@ -600,6 +702,10 @@ def _consumption_to_dict(
         "budget_currency": consumption.budget_currency,
         "budget_usd": (str(consumption.budget_usd) if consumption.budget_usd is not None else None),
         "spend_usd": str(consumption.spend_usd),
+        # Segmentation (Plan 16 task_16_12): AI vs human spend that make up
+        # spend_usd. human_spend_usd is 0 unless the scope folds human cost.
+        "ai_spend_usd": str(consumption.ai_spend_usd),
+        "human_spend_usd": str(consumption.human_spend_usd),
         "percent_used": (
             float(consumption.percent_used) if consumption.percent_used is not None else None
         ),

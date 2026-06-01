@@ -101,6 +101,12 @@ interface ConsumptionSummary {
   total_tokens_output: number;
   total_tokens_cached: number;
   costliest_run: CostliestRun | null;
+  // Cost segmentation (Plan 16 task_16_12): AI cost (executions) vs human cost
+  // (rate * hours from human_work_sessions), and their combined total. All USD.
+  ai_cost_usd: string;
+  human_cost_usd: string;
+  total_cost_usd: string;
+  human_hours_logged: string;
 }
 
 interface ExecutionRunRow {
@@ -503,6 +509,82 @@ function RunsExplorer({
 }
 
 // ---------------------------------------------------------------------------
+// Cost segmentation: AI cost vs Human cost (Plan 16 task_16_12)
+// ---------------------------------------------------------------------------
+function CostSegmentation({ cons }: { cons: ConsumptionSummary }) {
+  const ai = Number(cons.ai_cost_usd);
+  const human = Number(cons.human_cost_usd);
+  const total = ai + human;
+  // Guard division by zero — an empty window shows a flat, neutral bar.
+  const aiPct = total > 0 ? Math.round((ai / total) * 100) : 0;
+  const humanPct = total > 0 ? 100 - aiPct : 0;
+
+  return (
+    <Card className="mt-4">
+      <CardContent className="pt-5" data-testid="cost-segmentation">
+        <p className="text-muted-foreground mb-3 text-xs uppercase tracking-wider">
+          Segmentación de coste: IA vs Humano
+        </p>
+
+        {/* Stacked bar */}
+        <div
+          className="bg-muted flex h-3 w-full overflow-hidden rounded-full"
+          role="img"
+          aria-label={`Coste IA ${aiPct}%, coste humano ${humanPct}%`}
+        >
+          <div
+            className="bg-primary h-full"
+            style={{ width: `${aiPct}%` }}
+            data-testid="cost-bar-ai"
+          />
+          <div
+            className="bg-info h-full"
+            style={{ width: `${humanPct}%` }}
+            data-testid="cost-bar-human"
+          />
+        </div>
+
+        {/* Legend + figures */}
+        <div className="mt-4 grid gap-4 sm:grid-cols-3">
+          <div className="flex items-center gap-2">
+            <span className="bg-primary h-3 w-3 shrink-0 rounded-sm" aria-hidden="true" />
+            <div>
+              <p className="text-muted-foreground text-xs">Coste IA</p>
+              <p className="text-lg font-semibold tabular-nums" data-testid="ai-cost">
+                ${cons.ai_cost_usd}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="bg-info h-3 w-3 shrink-0 rounded-sm" aria-hidden="true" />
+            <div>
+              <p className="text-muted-foreground text-xs">Coste humano</p>
+              <p className="text-lg font-semibold tabular-nums" data-testid="human-cost">
+                ${cons.human_cost_usd}
+              </p>
+              <p className="text-muted-foreground text-xs" data-testid="human-hours">
+                {cons.human_hours_logged} h registradas
+              </p>
+            </div>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs">Coste total</p>
+            <p className="text-lg font-semibold tabular-nums" data-testid="segment-total-cost">
+              ${cons.total_cost_usd}
+            </p>
+          </div>
+        </div>
+
+        <p className="text-muted-foreground mt-3 text-xs">
+          El coste IA proviene de las executions; el coste humano es tarifa × horas de las sesiones
+          de trabajo (human_work_sessions), convertido a USD. Ambos en USD canónico.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Body
 // ---------------------------------------------------------------------------
 function StatsBody() {
@@ -624,11 +706,7 @@ function StatsBody() {
         ) : (
           <>
             <div className="grid gap-4 md:grid-cols-4" data-testid="consumption-summary">
-              <StatCard
-                label="Coste acumulado"
-                value={`$${cons.accumulated_cost_usd}`}
-                testid="accumulated-cost"
-              />
+              <StatCard label="Coste total" value={`$${cons.total_cost_usd}`} testid="total-cost" />
               <StatCard label="Runs" value={cons.run_count} testid="consumption-runs" />
               <StatCard
                 label="Tokens (in/out/cached)"
@@ -637,6 +715,9 @@ function StatsBody() {
                 span
               />
             </div>
+
+            {/* Cost segmentation: AI vs Human (Plan 16 task_16_12) */}
+            <CostSegmentation cons={cons} />
             {cons.costliest_run ? (
               <Card className="mt-4">
                 <CardContent className="pt-5" data-testid="costliest-run">
