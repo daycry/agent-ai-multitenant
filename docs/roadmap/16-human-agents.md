@@ -377,7 +377,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_16` — Documentación: ADR, guías de Human Agents, runbook, changelog
 
-- [ ] **Título**: ADR sobre el modelo agent_type, guía de creación y configuración de Human Agents en /docs/03-guides/human-agents.md, runbook de uso en /docs/06-runbooks/, entrada en changelog.
+- [x] **Título**: ADR sobre el modelo agent*type, guía de creación y configuración de Human Agents en /docs/03-guides/human-agents.md, runbook de uso en /docs/06-runbooks/, entrada en changelog. *(ADR 0046 sobre el modelo agent*type ai/human + diseño Human-Agent (modos de revisión, coste, asignación, alternativas); guía docs/03-guides/human-agents.md; runbook docs/06-runbooks/human-tasks-operations.md; changelog docs/07-changelog/16-human-agents.md resumiendo Plan 16 completo (16_01..16_16, migraciones 0066-0069/0073-0075, e2e escritos-no-ejecutados, tests humanos pendientes); fila Plan 16 ya presente en docs/roadmap/README.md; sin cambios de código ni del frontmatter status — lo cierra el orquestador tras el gate full-plan).*
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: technical-writer
