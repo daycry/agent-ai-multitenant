@@ -67,7 +67,7 @@ resultado esperado), y actualiza el índice.
 
 #### `task_htg_01` — Guías 07, 08, 09, 09.1
 
-- [ ] **Título**: Crear `docs/03-guides/human-tests/{07-documentacion-visor,08-sso-empresarial,09-marketplace,09.1-marketplace-seed-publish}.md` desde sus bloques de tests humanos, formato de las existentes.
+- [x] **Título**: Crear `docs/03-guides/human-tests/{07-documentacion-visor,08-sso-empresarial,09-marketplace,09.1-marketplace-seed-publish}.md` desde sus bloques de tests humanos, formato de las existentes.
 - **Tests**: `test -f` de las 4 guías + pre-commit prettier verde
 
 #### `task_htg_02` — Guías 10, 11, 11.2, 12
