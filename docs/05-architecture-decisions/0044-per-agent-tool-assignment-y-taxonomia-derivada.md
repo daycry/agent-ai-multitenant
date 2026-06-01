@@ -43,13 +43,14 @@ La taxonomía se calcula a partir de columnas que **ya existen** en
 `Tool`:
 
 ```
-básica   = is_builtin == true
-avanzada = is_builtin == false                  (tool custom del tenant)
-           OR implementation_type ∈ {mcp_tool,  (ejecutores externos)
-                                      http_endpoint,
-                                      python_function,
-                                      docker_command}
+básica   = is_builtin == true     (CUALQUIER implementation_type:
+                                    builtin, docker_command, http_endpoint, …)
+avanzada = is_builtin == false    (tool custom del tenant + tools MCP)
 ```
+
+El único criterio es `is_builtin`. El `implementation_type` NO entra en la
+dicotomía (sería un bug: `run_pytest` es `is_builtin=true` con
+`implementation_type=docker_command` y es **básica**).
 
 - Las **básicas** son las 18 tools `builtin` seedeadas en
   `PLATFORM_TENANT_ID` (`builtin_tools.py`): file (`read_file`,
@@ -57,9 +58,11 @@ avanzada = is_builtin == false                  (tool custom del tenant)
   (`run_pytest`, `run_lint`, `run_typecheck`…), git, network y
   orquestación. Son `is_builtin=true` y asignables a **cualquier**
   agente de cualquier tenant.
-- Las **avanzadas** son todo lo demás: tools custom de un tenant
-  (`is_builtin=false`) y/o tools que pasan por un ejecutor externo
-  (`mcp_tool`, `http_endpoint`, `python_function`, `docker_command`).
+- Las **avanzadas** son todo lo que NO es de plataforma: tools custom
+  creadas por un tenant (`is_builtin=false`) y las tools MCP descubiertas
+  de los MCP servers del proyecto. El `implementation_type` es ortogonal:
+  una básica de plataforma también puede usar un ejecutor externo (p. ej.
+  `run_pytest` es `docker_command` y **sigue siendo básica**).
 
 `security_level` (`safe` / `sandboxed` / `privileged`) es un eje
 **ortogonal**: una básica puede ser `sandboxed` (`write_file`) y una

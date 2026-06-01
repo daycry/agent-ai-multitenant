@@ -2,38 +2,45 @@
 
 /**
  * Sub-sección "Tools del agente" del detalle de agente
- * (Plan 06.15 task_06_15_03).
+ * (Plan 06.15 task_06_15_03; UX-friendly pass Plan 06.15 gate).
  *
  * Sigue el patrón de `<AgentKbsSection>` (Plan 06.9): TanStack-Query
  * para leer/escribir, RoleGuard implícito vía `isReadOnly`, estados
  * vacío/cargando/error, layout shadcn/ui consistente.
  *
- * Dos pestañas con la taxonomía DERIVADA (Plan 06.15 — sin columna
- * nueva en `Tool`):
- *   - BÁSICAS   : tools con `is_builtin = true`.
- *   - AVANZADAS : `is_builtin = false` (custom) o `implementation_type`
- *                 ∈ {mcp_tool, http_endpoint, python_function,
- *                    docker_command}.
+ * Dos pestañas con la taxonomía DERIVADA (Plan 06.15 / ADR 0044 — sin
+ * columna nueva en `Tool`):
+ *   - BÁSICAS   : tools de plataforma → `is_builtin = true` (cualquier
+ *                 `implementation_type`: builtin, docker_command, …).
+ *   - AVANZADAS : `is_builtin = false` → custom del tenant + MCP.
+ * El `implementation_type` y el `security_level` son SOLO badges
+ * informativos, NO el criterio de clasificación.
  *
- * Cada fila: nombre + descripción + badge de `security_level` + badge
- * de `implementation_type` + un checkbox. La selección se guarda
- * declarativamente con `PUT /agents/{id}/tools` (set completo). Una
- * lista vacía limpia todas las asignaciones → comportamiento
- * backward-compatible (sin restricción por agente) en el runtime.
+ * UX: dentro de cada pestaña las tools se agrupan por categoría con
+ * etiquetas humanas + icono + "seleccionar todo" por grupo; buscador;
+ * badge de seguridad con tooltip en lenguaje llano. La selección se
+ * guarda declarativamente con `PUT /agents/{id}/tools` (set completo).
+ * Lista vacía → backward-compatible (sin restricción por agente).
  *
- * Read-only para agentes `global_builtin` (los gestiona la plataforma —
- * el backend rechazaría con 403) y para usuarios no `tenant_admin`.
- *
- * Endpoints consumidos:
- *   - GET /tools                  catálogo (builtins + custom del tenant)
- *   - GET /agents/{id}/tools      asignaciones actuales
- *   - PUT /agents/{id}/tools      set declarativo {tools: [{tool_id}]}
+ * Read-only para agentes `global_builtin` y para usuarios no `tenant_admin`.
  */
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ScanSearch, Wrench } from "lucide-react";
+import {
+  Bell,
+  BookOpen,
+  FileText,
+  GitBranch,
+  Globe,
+  type LucideIcon,
+  ScanSearch,
+  Search,
+  Terminal,
+  TerminalSquare,
+  Wrench,
+} from "lucide-react";
 
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -73,22 +80,60 @@ interface AgentToolsSectionProps {
   /** Read-only when the agent is `global_builtin` (platform-managed). */
   isReadOnly: boolean;
   /**
-   * Project of a `project_local` agent (Plan 06.15 task_06_15_04). When
-   * present we surface a link to the read-only project diagnostic
-   * (`/admin/projects/{id}/agent-tools-diagnostic`) so an operator can
-   * verify "why does agent X see tool Y" right after assigning. Global
-   * agents (`null`) have no project diagnostic and the link is hidden.
+   * Project of a `project_local` agent (task_06_15_04). When present we
+   * surface a link to the read-only project diagnostic so an operator can
+   * verify "why does agent X see tool Y" right after assigning.
    */
   projectId?: string | null;
 }
 
-// Badge maps mirror the agent-tools-diagnostic panel for visual parity.
-const IMPL_BADGE: Record<string, BadgeVariant> = {
-  builtin: "muted",
-  mcp_tool: "success",
-  http_endpoint: "info",
-  python_function: "warning",
-  docker_command: "danger",
+// ---------------------------------------------------------------------------
+// Human-friendly labels (no raw enums in the UI — Plan 06.15 UX requirement)
+// ---------------------------------------------------------------------------
+const CATEGORY_LABEL: Record<string, string> = {
+  file: "Archivos",
+  git: "Git",
+  runtime: "Ejecución / Tests",
+  network: "Red",
+  knowledge: "Conocimiento",
+  notification: "Notificaciones",
+  command: "Comandos shell",
+  shell: "Comandos shell",
+};
+
+const CATEGORY_ICON: Record<string, LucideIcon> = {
+  file: FileText,
+  git: GitBranch,
+  runtime: TerminalSquare,
+  network: Globe,
+  knowledge: BookOpen,
+  notification: Bell,
+  command: Terminal,
+  shell: Terminal,
+};
+
+// Order categories sensibly; unknown ones fall to the end (alpha).
+const CATEGORY_ORDER = [
+  "command",
+  "shell",
+  "runtime",
+  "file",
+  "git",
+  "network",
+  "knowledge",
+  "notification",
+];
+
+const SECURITY_LABEL: Record<string, string> = {
+  safe: "Segura",
+  sandboxed: "Aislada",
+  privileged: "Privilegiada",
+};
+
+const SECURITY_HELP: Record<string, string> = {
+  safe: "Solo lectura / sin efectos secundarios — sin riesgo.",
+  sandboxed: "Modifica dentro del sandbox de la tarea (worktree/contenedor efímero).",
+  privileged: "Capacidad potente (p. ej. ejecutar comandos): asígnala con criterio.",
 };
 
 const SECURITY_BADGE: Record<string, BadgeVariant> = {
@@ -97,9 +142,37 @@ const SECURITY_BADGE: Record<string, BadgeVariant> = {
   privileged: "danger",
 };
 
-/** Derived taxonomy: básica = builtin; todo lo demás es avanzada. */
-function isBasic(tool: { is_builtin: boolean; implementation_type: string }): boolean {
-  return tool.is_builtin && tool.implementation_type === "builtin";
+const IMPL_LABEL: Record<string, string> = {
+  builtin: "Nativa",
+  mcp_tool: "MCP",
+  http_endpoint: "HTTP",
+  python_function: "Python",
+  docker_command: "Contenedor",
+};
+
+const IMPL_BADGE: Record<string, BadgeVariant> = {
+  builtin: "muted",
+  mcp_tool: "success",
+  http_endpoint: "info",
+  python_function: "warning",
+  docker_command: "info",
+};
+
+function categoryLabel(cat: string): string {
+  return CATEGORY_LABEL[cat] ?? cat.charAt(0).toUpperCase() + cat.slice(1);
+}
+
+function categoryRank(cat: string): number {
+  const i = CATEGORY_ORDER.indexOf(cat);
+  return i === -1 ? CATEGORY_ORDER.length : i;
+}
+
+/**
+ * Derived taxonomy (ADR 0044): básica = tool de plataforma (`is_builtin`),
+ * con CUALQUIER `implementation_type`. Avanzada = todo lo demás (custom + MCP).
+ */
+function isBasic(tool: { is_builtin: boolean }): boolean {
+  return tool.is_builtin;
 }
 
 export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentToolsSectionProps) {
@@ -127,15 +200,13 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [dirty, setDirty] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   const assignedIds = useMemo(
     () => (assignedQuery.data ?? []).map((r) => r.tool_id).sort(),
     [assignedQuery.data],
   );
 
-  // Reseed the local selection whenever the server set changes (initial
-  // load or after a successful save invalidates the query). Resetting
-  // `dirty` keeps the Save button disabled until the user edits again.
   useEffect(() => {
     if (assignedQuery.data) {
       setSelected(new Set(assignedIds));
@@ -161,10 +232,19 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
   const toggle = (toolId: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(toolId)) {
-        next.delete(toolId);
-      } else {
-        next.add(toolId);
+      if (next.has(toolId)) next.delete(toolId);
+      else next.add(toolId);
+      return next;
+    });
+    setDirty(true);
+  };
+
+  const toggleMany = (toolIds: string[], on: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of toolIds) {
+        if (on) next.add(id);
+        else next.delete(id);
       }
       return next;
     });
@@ -185,14 +265,24 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
     "error desconocido";
 
   const catalog = useMemo(() => catalogQuery.data ?? [], [catalogQuery.data]);
-  const basicTools = useMemo(
-    () => catalog.filter((t) => isBasic(t)).sort((a, b) => a.name.localeCompare(b.name)),
-    [catalog],
+
+  const q = query.trim().toLowerCase();
+  const matches = useMemo(
+    () =>
+      catalog.filter(
+        (t) =>
+          q === "" ||
+          t.name.toLowerCase().includes(q) ||
+          (t.description ?? "").toLowerCase().includes(q) ||
+          categoryLabel(t.category).toLowerCase().includes(q),
+      ),
+    [catalog, q],
   );
-  const advancedTools = useMemo(
-    () => catalog.filter((t) => !isBasic(t)).sort((a, b) => a.name.localeCompare(b.name)),
-    [catalog],
-  );
+  const basicTools = useMemo(() => matches.filter(isBasic), [matches]);
+  const advancedTools = useMemo(() => matches.filter((t) => !isBasic(t)), [matches]);
+
+  const totalBasic = useMemo(() => catalog.filter(isBasic).length, [catalog]);
+  const totalAdvanced = useMemo(() => catalog.filter((t) => !isBasic(t)).length, [catalog]);
 
   return (
     <Card data-testid="agent-tools-section">
@@ -204,8 +294,9 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
             </span>
           </CardTitle>
           <p className="text-muted-foreground mt-1 text-xs">
-            Marca las tools que este agente puede usar. Sin ninguna marcada, el agente conserva el
+            Marca las tools que este agente puede usar. Sin ninguna marcada, conserva el
             comportamiento por defecto (sin restricción por agente).
+            <span className="ml-1 font-medium">{selected.size} seleccionadas.</span>
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -272,34 +363,57 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                 {saveError}
               </p>
             )}
+
+            <div className="relative mb-3">
+              <Search className="text-muted-foreground absolute left-2 top-2.5 h-4 w-4" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Buscar tool por nombre, descripción o categoría…"
+                className="border-input focus-visible:ring-ring w-full rounded-md border bg-transparent py-2 pl-8 pr-3 text-sm focus-visible:outline-none focus-visible:ring-2"
+                data-testid="agent-tools-search"
+              />
+            </div>
+
             <Tabs defaultValue="basic">
               <TabsList data-testid="agent-tools-tabs">
                 <TabsTrigger value="basic" data-testid="agent-tools-tab-basic">
-                  Básicas ({basicTools.length})
+                  Básicas ({totalBasic})
                 </TabsTrigger>
                 <TabsTrigger value="advanced" data-testid="agent-tools-tab-advanced">
-                  Avanzadas ({advancedTools.length})
+                  Avanzadas ({totalAdvanced})
                 </TabsTrigger>
               </TabsList>
 
               <TabsContent value="basic">
-                <ToolList
+                <GroupedToolList
                   tools={basicTools}
                   selected={selected}
                   canEdit={canEdit}
                   onToggle={toggle}
-                  emptyMessage="No hay tools básicas (builtin) en el catálogo."
+                  onToggleMany={toggleMany}
+                  emptyMessage={
+                    q
+                      ? "Ninguna tool básica coincide con la búsqueda."
+                      : "No hay tools básicas (de plataforma) en el catálogo."
+                  }
                   testidPrefix="basic"
                 />
               </TabsContent>
 
               <TabsContent value="advanced">
-                <ToolList
+                <GroupedToolList
                   tools={advancedTools}
                   selected={selected}
                   canEdit={canEdit}
                   onToggle={toggle}
-                  emptyMessage="No hay tools avanzadas (custom · MCP · ejecutores). Crea una en el catálogo /tools o configura un MCP server en el proyecto."
+                  onToggleMany={toggleMany}
+                  emptyMessage={
+                    q
+                      ? "Ninguna tool avanzada coincide con la búsqueda."
+                      : "No hay tools avanzadas (custom · MCP). Crea una en el catálogo /tools o configura un MCP server en el proyecto."
+                  }
                   testidPrefix="advanced"
                 />
               </TabsContent>
@@ -312,13 +426,14 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
 }
 
 // ---------------------------------------------------------------------------
-// One tab's list of selectable tools
+// A tab's tools, grouped by category (friendly header + per-group select-all)
 // ---------------------------------------------------------------------------
-function ToolList({
+function GroupedToolList({
   tools,
   selected,
   canEdit,
   onToggle,
+  onToggleMany,
   emptyMessage,
   testidPrefix,
 }: {
@@ -326,9 +441,25 @@ function ToolList({
   selected: Set<string>;
   canEdit: boolean;
   onToggle: (toolId: string) => void;
+  onToggleMany: (toolIds: string[], on: boolean) => void;
   emptyMessage: string;
   testidPrefix: string;
 }) {
+  const groups = useMemo(() => {
+    const byCat = new Map<string, CatalogTool[]>();
+    for (const t of tools) {
+      const arr = byCat.get(t.category) ?? [];
+      arr.push(t);
+      byCat.set(t.category, arr);
+    }
+    return Array.from(byCat.entries())
+      .map(([cat, items]) => ({
+        cat,
+        items: items.sort((a, b) => a.name.localeCompare(b.name)),
+      }))
+      .sort((a, b) => categoryRank(a.cat) - categoryRank(b.cat) || a.cat.localeCompare(b.cat));
+  }, [tools]);
+
   if (tools.length === 0) {
     return (
       <p
@@ -341,43 +472,93 @@ function ToolList({
   }
 
   return (
-    <ul className="space-y-2" data-testid={`agent-tools-${testidPrefix}-list`}>
-      {tools.map((tool) => {
-        const checked = selected.has(tool.id);
-        const implVariant = IMPL_BADGE[tool.implementation_type] ?? "muted";
-        const secVariant = SECURITY_BADGE[tool.security_level] ?? "muted";
-        const inputId = `agent-tool-${tool.id}`;
+    <div className="space-y-4" data-testid={`agent-tools-${testidPrefix}-list`}>
+      {groups.map(({ cat, items }) => {
+        const Icon = CATEGORY_ICON[cat] ?? Wrench;
+        const ids = items.map((t) => t.id);
+        const selectedCount = ids.filter((id) => selected.has(id)).length;
+        const allOn = selectedCount === ids.length;
         return (
-          <li
-            key={tool.id}
-            className="flex items-start gap-3 rounded border p-3"
-            data-testid={`agent-tool-row-${tool.id}`}
-          >
-            <input
-              id={inputId}
-              type="checkbox"
-              className="border-input text-primary focus-visible:ring-ring mt-0.5 h-4 w-4 rounded focus-visible:outline-none focus-visible:ring-2"
-              checked={checked}
-              disabled={!canEdit}
-              onChange={() => onToggle(tool.id)}
-              data-testid={`agent-tool-checkbox-${tool.id}`}
-            />
-            <label htmlFor={inputId} className="min-w-0 flex-1 cursor-pointer">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-mono text-sm font-medium">{tool.name}</span>
-                <Badge variant={secVariant}>{tool.security_level}</Badge>
-                <Badge variant={implVariant}>{tool.implementation_type}</Badge>
-                <span className="text-muted-foreground text-xs">{tool.category}</span>
-              </div>
-              {tool.description && (
-                <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs">
-                  {tool.description}
-                </p>
+          <section key={cat} data-testid={`agent-tools-group-${cat}`}>
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <h4 className="text-muted-foreground inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide">
+                <Icon className="h-3.5 w-3.5" />
+                {categoryLabel(cat)}
+                <span className="text-muted-foreground/70 font-normal normal-case">
+                  ({selectedCount}/{ids.length})
+                </span>
+              </h4>
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={() => onToggleMany(ids, !allOn)}
+                  className="text-primary text-xs hover:underline"
+                  data-testid={`agent-tools-group-toggle-${cat}`}
+                >
+                  {allOn ? "Quitar todas" : "Seleccionar todas"}
+                </button>
               )}
-            </label>
-          </li>
+            </div>
+            <ul className="space-y-2">
+              {items.map((tool) => (
+                <ToolRow
+                  key={tool.id}
+                  tool={tool}
+                  checked={selected.has(tool.id)}
+                  canEdit={canEdit}
+                  onToggle={onToggle}
+                />
+              ))}
+            </ul>
+          </section>
         );
       })}
-    </ul>
+    </div>
+  );
+}
+
+function ToolRow({
+  tool,
+  checked,
+  canEdit,
+  onToggle,
+}: {
+  tool: CatalogTool;
+  checked: boolean;
+  canEdit: boolean;
+  onToggle: (toolId: string) => void;
+}) {
+  const secVariant = SECURITY_BADGE[tool.security_level] ?? "muted";
+  const implVariant = IMPL_BADGE[tool.implementation_type] ?? "muted";
+  const inputId = `agent-tool-${tool.id}`;
+  return (
+    <li
+      className="hover:bg-muted/40 flex items-start gap-3 rounded border p-3 transition-colors"
+      data-testid={`agent-tool-row-${tool.id}`}
+    >
+      <input
+        id={inputId}
+        type="checkbox"
+        className="border-input text-primary focus-visible:ring-ring mt-0.5 h-4 w-4 rounded focus-visible:outline-none focus-visible:ring-2"
+        checked={checked}
+        disabled={!canEdit}
+        onChange={() => onToggle(tool.id)}
+        data-testid={`agent-tool-checkbox-${tool.id}`}
+      />
+      <label htmlFor={inputId} className="min-w-0 flex-1 cursor-pointer">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium">{tool.name}</span>
+          <Badge variant={secVariant} title={SECURITY_HELP[tool.security_level] ?? ""}>
+            {SECURITY_LABEL[tool.security_level] ?? tool.security_level}
+          </Badge>
+          <Badge variant={implVariant}>
+            {IMPL_LABEL[tool.implementation_type] ?? tool.implementation_type}
+          </Badge>
+        </div>
+        {tool.description && (
+          <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs">{tool.description}</p>
+        )}
+      </label>
+    </li>
   );
 }
