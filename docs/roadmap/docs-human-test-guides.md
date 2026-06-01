@@ -77,7 +77,7 @@ resultado esperado), y actualiza el índice.
 
 #### `task_htg_03` — Guías 13, 14, 15, 16
 
-- [ ] **Título**: Crear las guías de 13-api-publica-webhooks, 14-evals-estadisticas, 15-instalador-produccion, 16-human-agents.
+- [x] **Título**: Crear las guías de 13-api-publica-webhooks, 14-evals-estadisticas, 15-instalador-produccion, 16-human-agents.
 - **Tests**: `test -f` de las 4 guías + pre-commit prettier verde
 
 #### `task_htg_04` — Guías 06.15, 06.16, demo-webscorpo
