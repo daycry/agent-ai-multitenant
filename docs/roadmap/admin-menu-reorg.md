@@ -1,7 +1,7 @@
 ---
 plan_id: admin-menu-reorg
 title: Reorganización del menú admin (grupos/submenús + ámbito + header moderno)
-status: in_progress
+status: pending_human_validation
 blocking_plan: []
 started_at: 2026-06-02
 completed_at: null
