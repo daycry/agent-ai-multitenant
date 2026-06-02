@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -10,20 +10,26 @@ import {
   BookOpen,
   Bot,
   Brain,
+  Briefcase,
+  ChevronDown,
   Coins,
   Cpu,
   DatabaseBackup,
   FileText,
   FolderKanban,
   Gauge,
+  HelpCircle,
   Inbox,
+  KeyRound,
   LayoutDashboard,
   LayoutGrid,
   Library,
   ListChecks,
+  Server,
   Settings,
   ShieldAlert,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Store,
   UserRound,
@@ -46,83 +52,117 @@ interface NavItem {
   systemAdminOnly?: boolean;
 }
 
-const NAV: NavItem[] = [
-  { href: "/admin/dashboard", label: "Dashboard", Icon: LayoutDashboard },
-  { href: "/admin/inbox", label: "Mis tareas", Icon: ListChecks },
-  { href: "/admin/agents", label: "Agentes", Icon: Bot },
-  { href: "/admin/human-agents", label: "Agentes humanos", Icon: UserRound, adminOnly: true },
-  { href: "/admin/teams", label: "Equipos", Icon: Users },
-  { href: "/admin/projects", label: "Proyectos", Icon: FolderKanban },
-  { href: "/admin/board", label: "Tablero", Icon: LayoutGrid },
-  { href: "/admin/approvals", label: "Aprobaciones", Icon: BellRing },
+interface NavGroup {
+  /** Identificador estable: clave de localStorage + `data-testid`. */
+  id: string;
+  label: string;
+  Icon: typeof LayoutDashboard;
+  items: NavItem[];
+  /** Ámbito del grupo entero (RBAC + ADR 0028). */
+  adminOnly?: boolean;
+  systemAdminOnly?: boolean;
+}
+
+/**
+ * Navegación en 5 grupos colapsables (Plan admin-menu-reorg task_menu_01).
+ *
+ * El orden y el ámbito son fijos (ver docs/03-guides/ui-conventions.md →
+ * "Navegación del panel"). El ámbito de grupo (`adminOnly`/`systemAdminOnly`)
+ * decide qué grupos ve cada rol; el gating por ítem se conserva además del de
+ * grupo. La barrera real sigue siendo el backend — esto es UX.
+ *
+ * Las rutas (`href`) y los `data-testid` derivados (`nav-${último-segmento}`)
+ * NO cambian: los e2e dependen de ellos.
+ */
+const NAV_GROUPS: NavGroup[] = [
   {
-    href: "/admin/approval-policy",
-    label: "Validación humana",
-    Icon: ShieldCheck,
+    id: "trabajo",
+    label: "Trabajo",
+    Icon: Briefcase,
+    items: [
+      { href: "/admin/dashboard", label: "Dashboard", Icon: LayoutDashboard },
+      { href: "/admin/inbox", label: "Mis tareas", Icon: ListChecks },
+      { href: "/admin/board", label: "Tablero", Icon: LayoutGrid },
+      { href: "/admin/approvals", label: "Aprobaciones", Icon: BellRing },
+      { href: "/admin/notifications/inbox", label: "Bandeja", Icon: Inbox },
+    ],
+  },
+  {
+    id: "recursos",
+    label: "Recursos",
+    Icon: Library,
     adminOnly: true,
-  },
-  { href: "/admin/memories", label: "Memorias", Icon: Brain },
-  { href: "/admin/knowledge-bases", label: "Knowledge Bases", Icon: Library },
-  { href: "/admin/marketplace", label: "Marketplace", Icon: Store, adminOnly: true },
-  {
-    href: "/admin/model-prices",
-    label: "Modelos & Precios",
-    Icon: Coins,
-    systemAdminOnly: true,
-  },
-  {
-    href: "/admin/llm-providers",
-    label: "Proveedores LLM",
-    Icon: Cpu,
-    systemAdminOnly: true,
+    items: [
+      { href: "/admin/agents", label: "Agentes", Icon: Bot },
+      { href: "/admin/human-agents", label: "Agentes humanos", Icon: UserRound, adminOnly: true },
+      { href: "/admin/teams", label: "Equipos", Icon: Users },
+      { href: "/admin/projects", label: "Proyectos", Icon: FolderKanban },
+      { href: "/admin/knowledge-bases", label: "Knowledge Bases", Icon: Library },
+      { href: "/admin/memories", label: "Memorias", Icon: Brain },
+      { href: "/admin/documents", label: "Documentos", Icon: FileText },
+    ],
   },
   {
-    href: "/admin/backup",
-    label: "Backups",
-    Icon: DatabaseBackup,
-    systemAdminOnly: true,
-  },
-  {
-    href: "/admin/backup/destinations",
-    label: "Destinos backup",
-    Icon: DatabaseBackup,
-    systemAdminOnly: true,
-  },
-  {
-    href: "/admin/backup/restore",
-    label: "Restaurar backup",
-    Icon: DatabaseBackup,
-    systemAdminOnly: true,
-  },
-  {
-    href: "/admin/guardrails",
-    label: "Guardrails",
-    Icon: ShieldAlert,
+    id: "config-tenant",
+    label: "Configuración del tenant",
+    Icon: SlidersHorizontal,
     adminOnly: true,
+    items: [
+      { href: "/admin/guardrails", label: "Guardrails", Icon: ShieldAlert, adminOnly: true },
+      {
+        href: "/admin/approval-policy",
+        label: "Validación humana",
+        Icon: ShieldCheck,
+        adminOnly: true,
+      },
+      { href: "/admin/notifications", label: "Notificaciones", Icon: Bell, adminOnly: true },
+      { href: "/admin/eval-quality", label: "Calidad (Evals)", Icon: Gauge, adminOnly: true },
+      { href: "/admin/tenant-stats", label: "Estadísticas", Icon: BarChart3, adminOnly: true },
+      { href: "/admin/marketplace", label: "Marketplace", Icon: Store, adminOnly: true },
+      { href: "/admin/settings", label: "Settings", Icon: Settings, adminOnly: true },
+    ],
   },
   {
-    href: "/admin/eval-quality",
-    label: "Calidad (Evals)",
-    Icon: Gauge,
-    adminOnly: true,
+    id: "plataforma",
+    label: "Plataforma",
+    Icon: Server,
+    systemAdminOnly: true,
+    items: [
+      { href: "/admin/llm-providers", label: "Proveedores LLM", Icon: Cpu, systemAdminOnly: true },
+      {
+        href: "/admin/model-prices",
+        label: "Modelos & Precios",
+        Icon: Coins,
+        systemAdminOnly: true,
+      },
+      // SSO recolocado de "Ajustes del tenant" → "Plataforma" (ADR 0028).
+      // La ruta NO cambia (/admin/settings/sso); el backend de SSO sigue
+      // siendo per-tenant (ADR 0031) — aquí solo cambia el sitio en el menú.
+      { href: "/admin/settings/sso", label: "Auth/SSO", Icon: KeyRound, systemAdminOnly: true },
+      { href: "/admin/backup", label: "Backups", Icon: DatabaseBackup, systemAdminOnly: true },
+      {
+        href: "/admin/backup/destinations",
+        label: "Destinos backup",
+        Icon: DatabaseBackup,
+        systemAdminOnly: true,
+      },
+      {
+        href: "/admin/backup/restore",
+        label: "Restaurar backup",
+        Icon: DatabaseBackup,
+        systemAdminOnly: true,
+      },
+    ],
   },
   {
-    href: "/admin/tenant-stats",
-    label: "Estadísticas",
-    Icon: BarChart3,
-    adminOnly: true,
+    id: "ayuda",
+    label: "Ayuda",
+    Icon: HelpCircle,
+    items: [{ href: "/admin/docs", label: "Documentación", Icon: BookOpen }],
   },
-  {
-    href: "/admin/notifications",
-    label: "Notificaciones",
-    Icon: Bell,
-    adminOnly: true,
-  },
-  { href: "/admin/notifications/inbox", label: "Bandeja", Icon: Inbox },
-  { href: "/admin/documents", label: "Documentos", Icon: FileText },
-  { href: "/admin/docs", label: "Documentación", Icon: BookOpen },
-  { href: "/admin/settings", label: "Settings", Icon: Settings, adminOnly: true },
 ];
+
+const LS_KEY_PREFIX = "agentic.nav.group.";
 
 export function AdminShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -194,11 +234,22 @@ function SidebarContent({
   // Plan 06.8 task_06_8_08: ocultar items admin-only para tenant_user.
   // El check del backend sigue siendo la fuente de verdad — esto es UX.
   const { isTenantAdmin, isSystemAdmin } = useCurrentUser();
-  const visibleNav = NAV.filter((item) => {
+
+  const itemVisible = (item: NavItem) => {
     if (item.systemAdminOnly) return isSystemAdmin;
     if (item.adminOnly) return isTenantAdmin;
     return true;
-  });
+  };
+  const groupVisible = (group: NavGroup) => {
+    if (group.systemAdminOnly) return isSystemAdmin;
+    if (group.adminOnly) return isTenantAdmin;
+    return true;
+  };
+
+  // Grupos visibles por ámbito, con sus ítems ya filtrados por gating de ítem.
+  const visibleGroups = NAV_GROUPS.filter(groupVisible)
+    .map((group) => ({ ...group, items: group.items.filter(itemVisible) }))
+    .filter((group) => group.items.length > 0);
 
   return (
     <>
@@ -230,12 +281,84 @@ function SidebarContent({
         )}
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 py-4" data-testid="sidebar-nav">
-        <p className="text-sidebar-muted-foreground mb-2 px-3 text-xs font-semibold uppercase tracking-wider">
-          Workspace
-        </p>
-        <ul className="flex flex-col gap-1">
-          {visibleNav.map(({ href, label, Icon }) => {
+      <nav className="scrollbar-thin flex-1 overflow-y-auto px-3 py-4" data-testid="sidebar-nav">
+        <ul className="flex flex-col gap-2">
+          {visibleGroups.map((group) => (
+            <NavGroupBlock
+              key={group.id}
+              group={group}
+              isActive={isActive}
+              onItemClick={onItemClick}
+            />
+          ))}
+        </ul>
+      </nav>
+    </>
+  );
+}
+
+function NavGroupBlock({
+  group,
+  isActive,
+  onItemClick,
+}: {
+  group: NavGroup;
+  isActive: (href: string) => boolean;
+  onItemClick: () => void;
+}) {
+  const hasActiveItem = group.items.some((item) => isActive(item.href));
+  // El grupo arranca abierto si contiene la ruta activa; tras montar se
+  // reconcilia con la preferencia persistida en localStorage (si existe).
+  const [open, setOpen] = useState(hasActiveItem);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // El grupo con la ruta activa siempre se auto-expande al cargar.
+    if (hasActiveItem) {
+      setOpen(true);
+      return;
+    }
+    const stored = window.localStorage.getItem(LS_KEY_PREFIX + group.id);
+    if (stored !== null) setOpen(stored === "1");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group.id, hasActiveItem]);
+
+  const toggle = () => {
+    setOpen((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(LS_KEY_PREFIX + group.id, next ? "1" : "0");
+      }
+      return next;
+    });
+  };
+
+  const { Icon } = group;
+
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        data-testid={`nav-group-${group.id}`}
+        className={cn(
+          "text-sidebar-muted-foreground hover:text-sidebar-foreground",
+          "flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-semibold uppercase tracking-wider",
+          "transition-colors",
+        )}
+      >
+        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className="flex-1 text-left">{group.label}</span>
+        <ChevronDown
+          aria-hidden="true"
+          className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open ? "" : "-rotate-90")}
+        />
+      </button>
+
+      {open && (
+        <ul className="mt-1 flex flex-col gap-1">
+          {group.items.map(({ href, label, Icon: ItemIcon }) => {
             const active = isActive(href);
             return (
               <li key={href}>
@@ -259,14 +382,14 @@ function SidebarContent({
                       className="bg-brand-gradient absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r"
                     />
                   )}
-                  <Icon className="h-4 w-4 shrink-0" />
+                  <ItemIcon className="h-4 w-4 shrink-0" />
                   <span>{label}</span>
                 </Link>
               </li>
             );
           })}
         </ul>
-      </nav>
-    </>
+      )}
+    </li>
   );
 }

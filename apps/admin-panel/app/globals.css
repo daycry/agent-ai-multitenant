@@ -211,6 +211,35 @@
     background-clip: text;
     color: transparent;
   }
+
+  /*
+   * Scrollbar fina tematizada (Plan admin-menu-reorg task_menu_01).
+   *
+   * Utilidad reutilizable para cualquier contenedor con scroll interno
+   * (la usa el `<nav>` del sidebar cuando los grupos desbordan). En
+   * Firefox usa `scrollbar-width: thin` + `scrollbar-color`; en
+   * Chromium/WebKit pinta un thumb fino y redondeado sobre track
+   * transparente. Todo cableado a tokens del tema para que tracke
+   * el tema oscuro violeta sin valores crudos.
+   */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--sidebar-border)) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--sidebar-border));
+    border-radius: 9999px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--sidebar-muted-foreground));
+  }
 }
 
 /* Indeterminate progress bar (top of the admin shell while there's any

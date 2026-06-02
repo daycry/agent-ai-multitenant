@@ -68,7 +68,7 @@ moderna** en el sidebar; (4) **header moderno** que muestre el tenant actual + e
 
 #### `task_menu_01` — Nav en grupos con submenús colapsables + scope + scrollbar moderna
 
-- [ ] **Título**: Reestructurar el NAV de admin-shell.tsx en los 5 grupos con submenús **colapsables** (estado en
+- [x] **Título**: Reestructurar el NAV de admin-shell.tsx en los 5 grupos con submenús **colapsables** (estado en
       localStorage; ítem activo abre su grupo); gating por grupo/ítem (systemAdminOnly/adminOnly) coherente con ADR
       0028 — mover la entrada SSO a **Plataforma** (systemAdminOnly). Scrollbar moderna del sidebar (utilidad
       reutilizable). Preservar todas las rutas + `data-testid` (añadir testids de grupo, no quitar los existentes).
