@@ -1,7 +1,7 @@
 ---
 adr_id: "0047"
 title: "Auth providers (SSO OIDC/SAML) platform-global + acceso por membership + administración de usuarios"
-status: proposed
+status: accepted
 date: 2026-06-02
 authors: [system_architect]
 supersedes: ["0031"]
@@ -12,7 +12,7 @@ docs_language: es
 
 # ADR 0047 — Auth/SSO platform-global + acceso por membership
 
-> **Estado: `proposed`** — pendiente del visto bueno del operador antes de tocar el código de auth.
+> **Estado: `accepted`** (aprobado por el operador 2026-06-02; rutas viejas per-tenant se retiran, sin redirección).
 > **Supersede** la parte per-tenant de **ADR 0031**; **re-alinea** con **ADR 0028**.
 
 ## Contexto
