@@ -43,7 +43,7 @@ moderna** en el sidebar; (4) **header moderno** que muestre el tenant actual + e
   **Plataforma** (System Admin: Proveedores LLM, Modelos & Precios, **Auth/SSO**, Backups +destinos/restaurar) ·
   **Ayuda** (Documentación).
 - **Ámbito**: `Plataforma` solo visible al System Admin (systemAdminOnly); `Configuración del tenant` al
-  tenant_admin (adminOnly). CORRECCIÓN: la entrada **SSO** pasa de _Ajustes del tenant_ al grupo **Plataforma**
+  tenant*admin (adminOnly). CORRECCIÓN: la entrada **SSO** pasa de \_Ajustes del tenant* al grupo **Plataforma**
   (systemAdminOnly) — coherente con ADR 0028 (auth providers platform-global). Revisar que cada ítem tenga el flag
   correcto. (Si el backend de SSO resultara per-tenant y no global, NO cambiarlo aquí — solo colocar el menú y
   dejar nota; el re-scope de auth sería otro plan.)
@@ -78,7 +78,7 @@ moderna** en el sidebar; (4) **header moderno** que muestre el tenant actual + e
 
 #### `task_menu_02` — Header con tenant actual + usuario
 
-- [ ] **Título**: admin-header.tsx muestra el **tenant actual** (nombre/pill) + el **usuario** (avatar inicial +
+- [x] **Título**: admin-header.tsx muestra el **tenant actual** (nombre/pill) + el **usuario** (avatar inicial +
       nombre + menú perfil/logout), integrando el TenantPicker (System Admin). Moderno, accesible; preservar el
       logout + `data-testid` existentes.
 - **Tests**: `npm run typecheck && lint && build` verde
