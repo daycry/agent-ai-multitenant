@@ -75,7 +75,7 @@ refleja.
 
 #### `task_doc_01` — architecture-overview + glossary + tech-stack + conventions + Mermaid
 
-- [ ] **Título**: Reescribir `docs/context/architecture-overview.md` (sistema final end-to-end + topología) con
+- [x] **Título**: Reescribir `docs/context/architecture-overview.md` (sistema final end-to-end + topología) con
       diagramas Mermaid (componentes, flujo de un plan, multi-tenancy); actualizar `glossary.md` (todos los términos
       nuevos), `tech-stack.md`, `conventions.md`. Cross-link a los ADRs/guías relevantes.
 - **Tests**: `test -f` + los 4 ficheros mencionan los subsistemas nuevos; bloques Mermaid presentes

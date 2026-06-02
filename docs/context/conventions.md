@@ -1,4 +1,15 @@
+---
+title: Convenciones de Código y Commits
+last_updated: 2026-06-02
+status: published
+docs_language: es
+---
+
 # Convenciones de Código y Commits
+
+Convenciones vigentes del repo. Visión transversal en
+[`architecture-overview.md`](architecture-overview.md); stack en
+[`tech-stack.md`](tech-stack.md).
 
 ## Python
 
@@ -80,16 +91,21 @@ from app.domain.agent import Agent
 
 ### Alembic
 
-- Cada migración tiene `upgrade()` y `downgrade()` simétricos.
+- Cada migración tiene `upgrade()` y `downgrade()` simétricos; se prueba **up/down/up** antes de mergear (reversibilidad obligatoria).
+- **Single head**: cada plan encadena sus revisiones sobre la cabeza única vigente; no se crean ramas de migración paralelas.
+- **`revision` ≤ 32 caracteres**: `alembic_version.version_num` es `varchar(32)`; un id largo (p.ej. `20260601_0072_projects_command_config`) **rompe el upgrade**. Usar el id corto (`0072_projects_command_config`) como `revision` aunque el fichero lleve el prefijo de fecha. Ver gotcha `alembic-revision-id-length` en `docs/03-guides/gotchas/`.
 - Migraciones NO transaccionales para operaciones que crean índices (`CREATE INDEX CONCURRENTLY`).
 - Cambios destructivos (DROP COLUMN, RENAME TABLE) en dos releases con feature flag.
+- Toda tabla tenant-scoped nace con `tenant_id UUID NOT NULL` + RLS (`tenant_isolation FOR ALL`). El catálogo global usa platform tenant + bandera `is_builtin` + `_builtin_read FOR SELECT` (ADR 0029); los catálogos sin tenant (`model_prices`, `exchange_rates`) usan lectura global `FOR SELECT USING (true)`.
 - Migración mensual automática para crear nuevas particiones de tablas particionadas.
 
 ## Git
 
 ### Commits
 
-Convención: **Conventional Commits** con trailers obligatorios.
+Convención: **Conventional Commits** con trailers obligatorios. Los commits de
+tareas de agentes llevan `Plan-Id` / `Task-Id` / `Execution-Id`; los commits
+generados por Claude Code añaden además `Co-Authored-By`.
 
 ```
 feat(users): implement POST /users endpoint
@@ -100,8 +116,11 @@ Returns 201 with the new user's id in the body.
 Plan-Id: 01H7K-implementar-auth-oauth
 Task-Id: task_xyz123
 Execution-Id: exec_abc456
-Generated-By: agent-backend-dev-senior
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 ```
+
+Para planes documentales o de tooling sin `Execution-Id` real basta
+`Plan-Id` + `Task-Id` (+ `Co-Authored-By`).
 
 Tipos permitidos: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `perf`, `build`, `ci`.
 
@@ -163,9 +182,10 @@ status: published
 
 - Headers jerárquicos: H1 = título único, H2 = secciones, H3 = subsecciones. No saltar niveles.
 - Bloques de código con language tag obligatorio.
-- Diagramas con Mermaid embebido.
+- Diagramas con Mermaid embebido (bloques ` ```mermaid `).
 - Enlaces internos relativos (`./02-architecture.md`), no absolutos.
 - Cada documento abre con párrafo de 2-3 líneas que lo resume.
+- **prettier siempre _scoped_ a los ficheros tocados** (`pre-commit run prettier --files <archivos>`). El hook repo-wide (`--all-files`) **crashea en Windows** por libuv (`UV_HANDLE_CLOSING`); ver gotcha `prettier-all-files-libuv-windows` en `docs/03-guides/gotchas/`.
 
 ### ADRs
 

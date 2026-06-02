@@ -1,4 +1,15 @@
+---
+title: Stack Tecnológico Detallado
+last_updated: 2026-06-02
+status: published
+docs_language: es
+---
+
 # Stack Tecnológico Detallado
+
+Stack del sistema final. Visión transversal en
+[`architecture-overview.md`](architecture-overview.md); decisiones en
+[`../05-architecture-decisions/`](../05-architecture-decisions/).
 
 ## Backend
 
@@ -25,6 +36,21 @@
 | Antivirus            | ClamAV               | latest  | Para uploads a KBs                  |
 | Ingestión docs       | Docling              | latest  | IBM, vía docling-serve              |
 
+## Paquetes compartidos (`packages/`)
+
+| Paquete                | Rol                                                                      | ADR  |
+| ---------------------- | ------------------------------------------------------------------------ | ---- |
+| `shared-domain`        | Modelos Pydantic compartidos                                             | —    |
+| `shared-db`            | SQLAlchemy 2.x async + Alembic + RLS helpers                             | 0001 |
+| `shared-auth`          | JWT + sesiones Redis + RBAC (Casbin) + SSO/MFA                           | 0031 |
+| `shared-llm`           | Capa async `LLMProvider` (Claude SDK / Copilot / Azure Foundry / Ollama) | 0021 |
+| `shared-mcp`           | Cliente MCP genérico (`stdio`/`sse`/`streamable_http`) + catálogo        | 0025 |
+| `shared-guardrails`    | Motor declarativo puro en 4 hook points + 3 capas                        | 0035 |
+| `shared-test-runtimes` | Catálogo de runtime templates por stack + TestReport canónico            | 0012 |
+
+Monorepo con `apps/` + `packages/` (ADR 0004). El catálogo de proveedores LLM
+es **cerrado**: LiteLLM retirado (ADR 0021); un quinto proveedor exige ADR.
+
 ## Frontend
 
 | Capa            | Tecnología                     | Versión          |
@@ -43,14 +69,19 @@
 
 ## Workers y Runtimes
 
-| Worker           | Imagen base                   | Recursos default       |
-| ---------------- | ----------------------------- | ---------------------- |
-| worker-default   | python:3.12-slim + Celery     | 1 CPU / 2 GB RAM       |
-| worker-heavy     | python:3.12-slim + Celery     | 4 CPU / 8 GB RAM       |
-| worker-gpu       | nvidia/cuda:12.6 + Python     | 2 CPU / 8 GB RAM + GPU |
-| worker-ingestion | python:3.12 + Celery          | 2 CPU / 4 GB RAM       |
-| worker-test      | python:3.12-slim + Docker SDK | 1 CPU / 2 GB RAM       |
-| worker-review    | python:3.12-slim + Docker SDK | 1 CPU / 2 GB RAM       |
+| Worker            | Imagen base                   | Recursos default       |
+| ----------------- | ----------------------------- | ---------------------- |
+| worker-default    | python:3.12-slim + Celery     | 1 CPU / 2 GB RAM       |
+| worker-heavy      | python:3.12-slim + Celery     | 4 CPU / 8 GB RAM       |
+| worker-gpu        | nvidia/cuda:12.6 + Python     | 2 CPU / 8 GB RAM + GPU |
+| worker-ingestion  | python:3.12 + Celery          | 2 CPU / 4 GB RAM       |
+| worker-test       | python:3.12-slim + Docker SDK | 1 CPU / 2 GB RAM       |
+| worker-review     | python:3.12-slim + Docker SDK | 1 CPU / 2 GB RAM       |
+| worker-privileged | python:3.12-slim + Docker SDK | 1 CPU / 2 GB RAM (off) |
+
+> Los runtimes no confiables (`agent-runtime`, `test-runtime`, `review-runtime`)
+> llevan la allowlist seccomp estricta `agent-runtime.json` + AppArmor; los
+> servicios confiables usan el seccomp por defecto de Docker (ADR 0040).
 
 ## Runtime Templates (sección 14)
 
@@ -106,16 +137,31 @@
 
 ## Auth y Seguridad
 
-| Capa             | Tecnología             |
-| ---------------- | ---------------------- |
-| JWT signing      | jose o pyjwt           |
-| Password hashing | argon2-cffi            |
-| OAuth/OIDC       | authlib                |
-| SAML             | python3-saml           |
-| MFA TOTP         | pyotp                  |
-| MFA WebAuthn     | webauthn (py_webauthn) |
-| RBAC             | Casbin                 |
-| RLS              | PostgreSQL nativo      |
+| Capa              | Tecnología                                       |
+| ----------------- | ------------------------------------------------ |
+| JWT signing       | jose o pyjwt                                     |
+| Password hashing  | argon2-cffi                                      |
+| OAuth/OIDC        | authlib                                          |
+| SAML              | python3-saml                                     |
+| MFA TOTP          | pyotp                                            |
+| MFA WebAuthn      | webauthn (py_webauthn)                           |
+| RBAC              | Casbin                                           |
+| RLS               | PostgreSQL nativo                                |
+| SCIM              | provisioning/deprovisioning automático           |
+| Firma artefactos  | Ed25519 (`cryptography`) — marketplace           |
+| Cifrado at-rest   | Fernet (webhook secrets) · AES-256-GCM (backups) |
+| Análisis estático | Bandit + semgrep (lazy) — install gated          |
+
+## Catálogos globales y datos transversales
+
+| Tabla / dato           | Ámbito                            | Notas                                            | ADR  |
+| ---------------------- | --------------------------------- | ------------------------------------------------ | ---- |
+| `llm_providers`        | platform-global                   | sin RLS, solo BYPASSRLS; cred en Vault           | 0028 |
+| `model_prices`         | platform-global                   | USD-canónico, vigencia, snapshot por llamada     | 0035 |
+| `exchange_rates`       | platform-global                   | ECB diario; conversión solo de visualización     | 0043 |
+| `marketplace_listings` | híbrido (`tenant_id` NULL=global) | trust tiers; shares cross-tenant                 | 0032 |
+| `guardrail_events`     | tenant (RLS)                      | append-only, detalle enmascarado                 | 0035 |
+| `eval_*` / golden      | tenant (RLS)                      | cross-tenant stats solo System Admin (BYPASSRLS) | 0038 |
 
 ## Notificaciones (sección 17)
 
