@@ -421,6 +421,32 @@ provider y `POST`/`PATCH /admin/model-prices` aceptan `provider_id`
 (validado contra una fila real). No se reconstruyó el catálogo ni el sync
 desde LiteLLM — la asociación es puramente aditiva.
 
+### Sync de precios acotado a las familias de proveedores activos (plan `price-sync-active-providers`)
+
+El sync de `/admin/model-prices` desde el feed comunitario de LiteLLM ya **no
+importa los ~2000 modelos sin filtrar**: solo trae las familias
+`litellm_provider` de los `llm_providers` con `is_active=true`. Las familias se
+derivan de los kinds activos vía el mapa constante `KIND_TO_LITELLM_FAMILIES`
+(`api_server.pricing.litellm_sync`), espejo del catálogo cerrado de ADR 0021:
+
+| `kind`          | Familias `litellm_provider`   |
+| --------------- | ----------------------------- |
+| `claude_sdk`    | `anthropic`                   |
+| `azure_foundry` | `azure`, `azure_ai`, `openai` |
+| `copilot`       | `openai`, `anthropic`         |
+| `ollama`        | `ollama`                      |
+
+Reglas: el `allowed_families` se calcula por-sync (unión de los kinds activos),
+con un override opcional `price_sync.allowed_families` en `platform_settings`
+(System Admin) que manda si está presente; **sin fallback** (0 proveedores
+activos ⇒ el sync no añade nada y trata todo el catálogo como fuera de ámbito);
+y **no destructivo** — las familias que salen del allowlist **cierran su periodo
+abierto** (descontinuadas), nunca se borran, preservando el histórico y los
+snapshots de coste. Las entradas del feed fuera del allowlist se cuentan como
+omitidas (`reason = family_not_active`). La pantalla `/admin/model-prices`
+muestra el ámbito ("Sincronizando solo: …") y avisa cuando no hay proveedores
+activos.
+
 ### Cableado del runtime (precedencia DB > env)
 
 `api_server.llm_providers.factory_resolver.resolve_provider_config(kind)`

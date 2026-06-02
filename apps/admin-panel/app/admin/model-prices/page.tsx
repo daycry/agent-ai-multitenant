@@ -39,8 +39,9 @@
  */
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Coins, History, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Coins, History, Info, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { StateBlock } from "@/components/shared/state-block";
@@ -111,6 +112,34 @@ interface LlmProvider {
   display_name: string;
   is_active: boolean;
 }
+
+// plan price-sync-active-providers (task_psa_02) — map a configured provider
+// `kind` (ADR 0021 closed catalogue) to the LiteLLM `litellm_provider` families
+// its models appear under (ADR 0028). MUST stay in lockstep with the backend
+// `KIND_TO_LITELLM_FAMILIES` (api_server.pricing.litellm_sync): the price sync
+// derives the families it imports from the union of the ACTIVE providers' kinds.
+// This is only a UI hint of the scope — the backend is the source of truth (and
+// a System-Admin `price_sync.allowed_families` override can pin a different set).
+const KIND_TO_LITELLM_FAMILIES: Record<string, string[]> = {
+  claude_sdk: ["anthropic"],
+  azure_foundry: ["azure", "azure_ai", "openai"],
+  copilot: ["openai", "anthropic"],
+  ollama: ["ollama"],
+};
+
+/** Union the LiteLLM families of the ACTIVE providers (sorted, de-duplicated). */
+function activeFamilies(providers: LlmProvider[]): string[] {
+  const families = new Set<string>();
+  for (const p of providers) {
+    if (!p.is_active) continue;
+    for (const fam of KIND_TO_LITELLM_FAMILIES[p.kind] ?? []) families.add(fam);
+  }
+  return [...families].sort();
+}
+
+// The typed skip reason the backend stamps on a feed entry whose family is not
+// an active provider (api_server.pricing.litellm_sync.SKIP_FAMILY_NOT_ACTIVE).
+const SKIP_FAMILY_NOT_ACTIVE = "family_not_active";
 
 // task_11_16 — dry-run diff + mandatory-confirmation apply.
 // Mirror api_server.schemas.price_sync.{PriceSyncDiffResponse,PriceDiffRowResponse}.
@@ -256,6 +285,12 @@ export default function ModelPricesPage() {
     return map;
   }, [providers]);
 
+  // plan price-sync-active-providers (task_psa_02) — the LiteLLM families the
+  // sync will actually import, derived from the ACTIVE providers (ADR 0028 map).
+  // An empty set means no active provider → the sync imports nothing.
+  const syncFamilies = useMemo(() => activeFamilies(providers), [providers]);
+  const hasActiveProviders = syncFamilies.length > 0;
+
   const [createOpen, setCreateOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<ModelPrice | null>(null);
@@ -341,6 +376,47 @@ export default function ModelPricesPage() {
           </RoleGuard>
         }
       />
+
+      {/* ---------------------------------------------------------------- */}
+      {/* Sync scope notice — plan price-sync-active-providers (task_psa_02) */}
+      {/* The price sync ONLY imports the LiteLLM families of the ACTIVE     */}
+      {/* providers (ADR 0028). With no active provider there is nothing to  */}
+      {/* sync. System-Admin only (the providers list is System-Admin only;  */}
+      {/* a tenant reader never sees this and cannot trigger the sync).      */}
+      {/* ---------------------------------------------------------------- */}
+      {isSystemAdmin && !providersQuery.isLoading ? (
+        hasActiveProviders ? (
+          <div
+            className="border-border bg-muted/40 text-muted-foreground mt-6 flex items-start gap-2 rounded-lg border p-3 text-sm"
+            data-testid="sync-scope-notice"
+          >
+            <Info className="text-primary mt-0.5 h-4 w-4 shrink-0" />
+            <p>
+              Sincronizando solo:{" "}
+              <span className="text-foreground font-medium" data-testid="sync-scope-families">
+                {syncFamilies.join(", ")}
+              </span>{" "}
+              <span className="text-xs">
+                (familias de los proveedores LLM activos — ADR 0028). El resto del feed se omite.
+              </span>
+            </p>
+          </div>
+        ) : (
+          <div
+            className="border-warning/40 bg-warning/5 mt-6 flex items-start gap-2 rounded-lg border p-3 text-sm"
+            data-testid="sync-scope-empty"
+          >
+            <AlertTriangle className="text-warning mt-0.5 h-4 w-4 shrink-0" />
+            <p className="text-foreground">
+              No hay proveedores LLM activos; nada que sincronizar. Activa al menos un proveedor en{" "}
+              <Link href="/admin/llm-providers" className="text-primary underline">
+                /admin/llm-providers
+              </Link>{" "}
+              para que el sync de precios traiga sus familias.
+            </p>
+          </div>
+        )
+      ) : null}
 
       {/* ---------------------------------------------------------------- */}
       {/* Filters */}
@@ -587,6 +663,7 @@ export default function ModelPricesPage() {
 
       {syncOpen ? (
         <SyncDiffDialog
+          syncFamilies={syncFamilies}
           onClose={() => setSyncOpen(false)}
           onApplied={() => {
             setSyncOpen(false);
@@ -613,9 +690,12 @@ export default function ModelPricesPage() {
 interface SyncDiffDialogProps {
   onClose: () => void;
   onApplied: () => void;
+  // plan price-sync-active-providers (task_psa_02) — the active families the
+  // sync is scoped to (derived from the active providers), shown in the dialog.
+  syncFamilies: string[];
 }
 
-function SyncDiffDialog({ onClose, onApplied }: SyncDiffDialogProps) {
+function SyncDiffDialog({ onClose, onApplied, syncFamilies }: SyncDiffDialogProps) {
   const [confirmed, setConfirmed] = useState(false);
 
   const diffQuery = useQuery({
@@ -635,6 +715,11 @@ function SyncDiffDialog({ onClose, onApplied }: SyncDiffDialogProps) {
   });
 
   const diff = diffQuery.data;
+  // plan price-sync-active-providers (task_psa_02) — how many feed entries the
+  // backend skipped because their family is not an active provider.
+  const familyNotActiveSkipped = diff
+    ? diff.skipped.filter((s) => s.reason === SKIP_FAMILY_NOT_ACTIVE).length
+    : 0;
   const needsConfirm = diff?.has_large_increase ?? false;
   // A change actually exists when something is added / updated / increased.
   const hasChanges = diff ? diff.added + diff.updated + diff.increased > 0 : false;
@@ -655,6 +740,21 @@ function SyncDiffDialog({ onClose, onApplied }: SyncDiffDialogProps) {
             precio &gt;10% exige confirmación explícita.
           </p>
 
+          {/* plan price-sync-active-providers (task_psa_02) — the sync is scoped
+              to the families of the ACTIVE providers (ADR 0028). With none
+              active, the apply imports nothing. */}
+          {syncFamilies.length > 0 ? (
+            <p className="text-muted-foreground mt-2 text-xs" data-testid="sync-dialog-scope">
+              Sincronizando solo:{" "}
+              <span className="text-foreground font-medium">{syncFamilies.join(", ")}</span>{" "}
+              (familias de los proveedores LLM activos). El resto del feed se omite.
+            </p>
+          ) : (
+            <p className="text-warning mt-2 text-xs" data-testid="sync-dialog-scope-empty">
+              No hay proveedores LLM activos; el sync no traerá nada.
+            </p>
+          )}
+
           {diffQuery.isLoading ? (
             <p className="text-muted-foreground mt-3 text-sm" data-testid="sync-loading">
               Calculando diff…
@@ -674,6 +774,13 @@ function SyncDiffDialog({ onClose, onApplied }: SyncDiffDialogProps) {
                 <Badge variant="danger">{diff.increased} subidas &gt;10%</Badge>
                 <Badge variant="warning">{diff.removed} descontinuados</Badge>
                 <Badge variant="muted">{diff.unchanged} sin cambios</Badge>
+                {/* plan price-sync-active-providers (task_psa_02) — feed entries
+                    dropped because their family is not an active provider. */}
+                {familyNotActiveSkipped > 0 ? (
+                  <Badge variant="muted" data-testid="sync-skipped-family">
+                    {familyNotActiveSkipped} fuera de familias activas
+                  </Badge>
+                ) : null}
               </div>
 
               {hasChanges ? (

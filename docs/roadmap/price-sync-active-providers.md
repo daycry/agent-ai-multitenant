@@ -79,7 +79,7 @@ trae modelos `ollama`; si no hay ninguno activo, no trae nada. Sin fallback al c
 
 #### `task_psa_02` — UI del ámbito + changelog
 
-- [ ] **Título**: `/admin/model-prices` muestra "Sincronizando solo: <familias activas>" + aviso si no hay
+- [x] **Título**: `/admin/model-prices` muestra "Sincronizando solo: <familias activas>" + aviso si no hay
       proveedores activos; el resultado del sync indica cuántos se omitieron por familia-no-activa. Changelog
       `docs/07-changelog/price-sync-active-providers.md`; nota en ADR 0028; fila en roadmap README.
 - **Tests**: admin-panel `typecheck && lint && build` verde; `test -f` changelog

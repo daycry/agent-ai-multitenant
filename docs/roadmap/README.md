@@ -87,6 +87,16 @@ Planes con `plan_id` descriptivo, **solo frontend** y
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | [ui-refresh-refactor.md](./ui-refresh-refactor.md) | Refresh visual moderado + refactor del `admin-panel`: tokens refinados, primitivas y componentes compartidos nuevos, a11y. |
 
+### Planes correctivos (no entran en el gate de fases)
+
+Planes con `plan_id` descriptivo que **corrigen** un comportamiento reportado por
+el operador sobre features ya construidas. No bloquean ni son bloqueados por las
+fases.
+
+| Plan                                                               | Qué corrige                                                                                                                                                            |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [price-sync-active-providers.md](./price-sync-active-providers.md) | El sync de precios LiteLLM ahora solo importa las familias de los `llm_providers` activos (ADR 0028); 0 activos ⇒ nada; fuera del allowlist cierra periodo (no borra). |
+
 ## MVP Funcional
 
 Las fases 0-6 forman un MVP funcional. Total estimado: 21-27 semanas.
