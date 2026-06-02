@@ -95,9 +95,10 @@ Planes con `plan_id` descriptivo que **corrigen** un comportamiento reportado po
 el operador sobre features ya construidas. No bloquean ni son bloqueados por las
 fases.
 
-| Plan                                                               | Qué corrige                                                                                                                                                            |
-| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [price-sync-active-providers.md](./price-sync-active-providers.md) | El sync de precios LiteLLM ahora solo importa las familias de los `llm_providers` activos (ADR 0028); 0 activos ⇒ nada; fuera del allowlist cierra periodo (no borra). |
+| Plan                                                               | Qué corrige                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [price-sync-active-providers.md](./price-sync-active-providers.md) | El sync de precios LiteLLM ahora solo importa las familias de los `llm_providers` activos (ADR 0028); 0 activos ⇒ nada; fuera del allowlist cierra periodo (no borra).                                                                     |
+| [sso-global-user-admin.md](./sso-global-user-admin.md)             | Re-arquitectura de auth a **platform-global** (ADR 0047, supersede la parte per-tenant de 0031): login por provider, acceso por membership (0 ⇒ pantalla "sin acceso"), `/admin/users`, providers en `/login`; password/MFA/SCIM intactos. |
 
 ## MVP Funcional
 

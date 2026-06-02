@@ -97,7 +97,7 @@ Ver **ADR 0047** para el diseño completo. Resumen de lo que entra:
 
 #### `task_sso_06` — Aceptar ADR 0047 + docs SSO + changelog + RBAC
 
-- [ ] **Título**: ADR 0047 → `accepted`; actualizar docs de SSO (guías/runbook/reference) al modelo global;
+- [x] **Título**: ADR 0047 → `accepted`; actualizar docs de SSO (guías/runbook/reference) al modelo global;
       `docs/04-reference/rbac.md` (auth-providers global system_admin + /admin/users); changelog
       `docs/07-changelog/sso-global-user-admin.md`; fila en roadmap README.
 - **Tests**: `test -f` changelog + docs SSO mencionan el modelo global

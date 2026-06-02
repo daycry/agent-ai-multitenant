@@ -2,7 +2,7 @@
 title: RBAC — Matriz de roles por endpoint
 audience: backend-dev, architect, security
 phase: cross-cutting
-updated: 2026-06-02
+updated: 2026-06-03
 ---
 
 # RBAC — Matriz de roles por endpoint
@@ -68,12 +68,28 @@ endpoints que devuelven el contexto del propio usuario.
 
 ### `admin.py` — system_admin
 
-| Endpoint               | Método      | Rol mínimo     |
-| ---------------------- | ----------- | -------------- |
-| `/admin/tenants`       | GET, POST   | `system_admin` |
-| `/admin/tenants/{id}`  | GET,PUT,DEL | `system_admin` |
-| `/admin/users`         | GET         | `system_admin` |
-| `/admin/system-health` | GET         | `system_admin` |
+| Endpoint                                   | Método      | Rol mínimo     |
+| ------------------------------------------ | ----------- | -------------- |
+| `/admin/tenants`                           | GET, POST   | `system_admin` |
+| `/admin/tenants/{id}`                      | GET,PUT,DEL | `system_admin` |
+| `/admin/users`                             | GET         | `system_admin` |
+| `/admin/users/{user_id}/memberships`       | GET, POST   | `system_admin` |
+| `/admin/users/{user_id}/memberships/{mid}` | PATCH, DEL  | `system_admin` |
+| `/admin/system-health`                     | GET         | `system_admin` |
+
+> **Administración de usuarios y acceso por membership (ADR 0047).** Tras
+> re-arquitecturar auth a platform-global, el acceso de un usuario a un
+> tenant lo concede **exclusivamente** una `UserOrganizationMembership`
+> que asigna el System Admin desde `/admin/users` (no hay claiming por
+> email-domain ni `default_tenant_id`; deny-by-default). `POST` asigna
+> usuario↔tenant+rol (revive una membership previamente revocada en vez de
+> chocar con el `UNIQUE(user_id, tenant_id)`); `PATCH` cambia rol y/o
+> `is_active` (desactivar quita acceso sin borrar); `DELETE` revoca
+> (soft-delete + `is_active=false`). Corren sobre el engine BYPASSRLS
+> (`get_admin_session`) porque el System Admin actúa cross-tenant; cada
+> mutación deja `audit_log` con el `tenant_id` afectado. El `role` de la
+> membership se limita a roles **per-tenant** (`tenant_admin` /
+> `tenant_user` / `system_operator`) — nunca otorga `system_admin`.
 
 ### Platform-global configuration — `system_admin` (ADR 0028)
 
@@ -131,7 +147,12 @@ API nunca las devuelve (write-only).
 > acepta `?provider_id=<uuid>` (filtrar por provider) y `POST`/`PATCH`
 > aceptan `provider_id` (FK nullable a `llm_providers`).
 >
-> Los endpoints `/admin/auth-providers` (auth providers globales, ADR 0028) siguen **pendientes del Plan 08** (SSO empresarial).
+> Los **auth providers** (OIDC/SAML) son platform-global desde **ADR 0047**
+> (supersede la parte per-tenant de ADR 0031, re-alinea con 0028): la
+> config vive en `sso_configurations` global y se gestiona vía
+> `/auth/sso/config` + `/auth/sso/saml/config` (ver la sección SSO de esta
+> matriz y [auth-sso.md](./auth-sso.md)); la administración de usuarios y su
+> acceso por membership está en `/admin/users/{id}/memberships`.
 
 ### `projects.py`
 
@@ -424,29 +445,68 @@ catálogo oficial) corre sobre el engine BYPASSRLS.
 | `/marketplace/shares/{id}`           | DELETE | `tenant_admin` |
 | `/admin/marketplace/*`               | GET    | `system_admin` |
 
-### `auth/api-tokens`, SSO, MFA, SCIM (Plan 08 / Plan 13)
+### `auth/api-tokens`, SSO, MFA, SCIM (Plan 08 / Plan 13 / ADR 0047)
 
 Contratos completos en [auth-sso.md](./auth-sso.md) (SSO/MFA/SCIM) y
-[public-api.md](./public-api.md) (tokens). Resumen de gates:
+[public-api.md](./public-api.md) (tokens). **Auth providers
+platform-global desde ADR 0047** (supersede la parte per-tenant de ADR
+0031): login global **por provider** (no por tenant), callback OIDC + ACS
+SAML **globales**, lista pública de providers para el `/login`, y
+resolución de tenant **por membership** después del login. Resumen de
+gates:
 
-| Router / Endpoint                            | Método            | Rol mínimo                       |
-| -------------------------------------------- | ----------------- | -------------------------------- |
-| `/auth/api-tokens`                           | GET, POST         | `tenant_admin`                   |
-| `/auth/api-tokens/{id}`                      | DELETE            | `tenant_admin`                   |
-| `/auth/sso/{tenant_id}/oidc/login`           | GET               | anon (inicio del flujo)          |
-| `/auth/sso/oidc/callback`                    | GET               | anon (callback del IdP)          |
-| `/auth/sso/{tenant_id}/saml/login`/`/acs`    | GET, POST         | anon (flujo SAML)                |
-| `/auth/sso/config`, `/auth/sso/saml/config`  | GET               | `tenant_member`                  |
-| `/auth/sso/config`, `/auth/sso/saml/config`  | POST,PUT,DEL      | `tenant_admin`                   |
-| `/auth/mfa/totp*`, `/auth/mfa/webauthn*`     | GET/POST/DEL      | `tenant_member` (gestión propia) |
-| `/auth/mfa/totp/verify`, `/webauthn/login/*` | POST              | anon (segundo factor en login)   |
-| `/scim/v2/Users*`                            | \*                | token SCIM (`Bearer`)            |
-| `/auth/sso/scim/tokens`                      | GET, POST, DELETE | `tenant_admin`                   |
+| Router / Endpoint                            | Método            | Rol mínimo                         |
+| -------------------------------------------- | ----------------- | ---------------------------------- |
+| `/auth/api-tokens`                           | GET, POST         | `tenant_admin`                     |
+| `/auth/api-tokens/{id}`                      | DELETE            | `tenant_admin`                     |
+| `/auth/sso/providers`                        | GET               | anon (lista pública, sin secretos) |
+| `/auth/sso/{provider_id}/oidc/login`         | GET               | anon (inicio del flujo)            |
+| `/auth/sso/oidc/callback`                    | GET               | anon (callback del IdP)            |
+| `/auth/sso/{provider_id}/saml/login`         | GET               | anon (inicio del flujo SAML)       |
+| `/auth/sso/saml/acs`                         | POST              | anon (ACS global del IdP)          |
+| `/auth/discover?email=`                      | GET               | anon (login discovery)             |
+| `/auth/session/resolve`                      | GET               | principal (post-login)             |
+| `/auth/session/select-tenant`                | POST              | principal (tenant-picker)          |
+| `/auth/sso/config`, `/auth/sso/saml/config`  | GET               | `tenant_member`                    |
+| `/auth/sso/config`, `/auth/sso/saml/config`  | POST,PUT,DEL      | `tenant_admin`                     |
+| `/auth/mfa/totp*`, `/auth/mfa/webauthn*`     | GET/POST/DEL      | `tenant_member` (gestión propia)   |
+| `/auth/mfa/totp/verify`, `/webauthn/login/*` | POST              | anon (segundo factor en login)     |
+| `/scim/v2/Users*`                            | \*                | token SCIM (`Bearer`)              |
+| `/auth/sso/scim/tokens`                      | GET, POST, DELETE | `tenant_admin`                     |
 
+> **Rutas viejas retiradas (ADR 0047).** Las rutas per-tenant
+> `/auth/sso/{tenant_id}/oidc|saml/login` y `/auth/sso/{tenant_id}/saml/acs`
+> **se retiran sin redirección** (decisión del operador). El login es ahora
+> por `provider_id` global y el ACS SAML es único para toda la plataforma.
+>
+> **`/auth/sso/providers` es público y NO expone secretos.** Devuelve solo
+> `id` / `kind` / `display_name` / `button_label` / `login_url` de cada
+> provider habilitado, para que `/login` pinte un botón de marca por
+> provider. El `client_secret` OIDC y la clave privada SP siguen cifrados
+> en reposo (Fernet `sso_encryption_key` / Vault) y **nunca** se devuelven.
+>
+> **Resolución por membership.** Tanto el login local (`/auth/login`) como
+> el SSO acuñan primero una sesión de **identidad sin tenant**. El cliente
+> llama a `/auth/session/resolve`: **0 memberships activas** →
+> `state="no_access"` (pantalla "sin permisos, contacta al administrador",
+> sin token de tenant); **1** → `state="single"` (token tenant-scoped
+> directo); **>1** → `state="multiple"` (tenant-picker →
+> `/auth/session/select-tenant`, que re-valida la membership antes de
+> acuñar el token). Un `system_admin` sin memberships no se trata distinto
+> aquí: su poder cross-tenant viene del override `X-Tenant-Id` + BYPASSRLS.
+>
 > La gestión MFA del propio usuario es `tenant_member`; los pasos de
 > `verify`/`login` son anónimos porque ocurren **durante** el login
-> (aún sin sesión completa). SCIM se autentica por su propio token Bearer
-> (no JWT de usuario).
+> (aún sin sesión completa). MFA (TOTP/WebAuthn) y SCIM **siguen
+> funcionando sin cambios** (ortogonales al scope del provider): SCIM
+> per-tenant se autentica por su propio token Bearer (no JWT de usuario).
+>
+> **CRUD de config SSO** (`/auth/sso/config`, `/auth/sso/saml/config`): el
+> gate sigue siendo `tenant_admin` en código (la superficie System Admin
+> del admin-panel vive bajo el grupo **Plataforma**); la tabla
+> `sso_configurations` es **platform-global** (sin RLS / `tenant_id`) y hay
+> a lo sumo **una** config por `provider` para toda la plataforma (un
+> segundo `POST` → 409).
 
 ### Webhooks entrantes (Plan 13)
 

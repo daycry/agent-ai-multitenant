@@ -1,5 +1,23 @@
 # Plan 08 — tests humanos
 
+> **⚠️ Modelo superseded por ADR 0047 (auth platform-global).** Esta guía
+> describe el SSO **per-tenant** original del Plan 08 (config en
+> `/admin/settings/sso` por tenant, login con tenant en la URL, JIT que
+> crea membership + mapea grupos). El plan **`sso-global-user-admin`**
+> (ADR 0047) re-arquitecturó auth a **platform-global**: los providers se
+> configuran **una vez** (System Admin), el login es **por provider** (sin
+> tenant en la URL), el acceso a un tenant lo concede una **membership** que
+> asigna el admin en `/admin/users`, y un usuario sin memberships ve la
+> pantalla **"sin permisos, contacta al administrador"**. Las rutas viejas
+> `/auth/sso/{tenant_id}/...` están **retiradas**. Para el modelo vigente,
+> los procedimientos y los tests humanos actuales ver el
+> [runbook SSO global](../../06-runbooks/sso-global-auth.md), la
+> [referencia auth-sso](../../04-reference/auth-sso.md) y el bloque de tests
+> humanos del plan en
+> [`docs/roadmap/sso-global-user-admin.md`](../../roadmap/sso-global-user-admin.md).
+> El **login por contraseña + MFA (TOTP/WebAuthn) + SCIM siguen funcionando
+> igual** y los pasos de MFA/SCIM de abajo siguen siendo válidos.
+
 Esta guía cubre los **3 tests humanos** del Plan 08 (SSO Empresarial y
 Auth Avanzada). Validan, contra integraciones reales, lo que los tests
 automáticos solo cubren con mocks/fixtures: un **login OIDC con un IdP
