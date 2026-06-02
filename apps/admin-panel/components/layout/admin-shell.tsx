@@ -128,6 +128,9 @@ const NAV_GROUPS: NavGroup[] = [
     Icon: Server,
     systemAdminOnly: true,
     items: [
+      // Administración de usuarios global (ADR 0047): listar usuarios y
+      // gestionar sus memberships (usuario↔tenant + rol). Solo System Admin.
+      { href: "/admin/users", label: "Usuarios", Icon: Users, systemAdminOnly: true },
       { href: "/admin/llm-providers", label: "Proveedores LLM", Icon: Cpu, systemAdminOnly: true },
       {
         href: "/admin/model-prices",

@@ -79,7 +79,7 @@ Ver **ADR 0047** para el diseño completo. Resumen de lo que entra:
 
 #### `task_sso_04` — `/admin/users` (UI + endpoints de memberships)
 
-- [ ] **Título**: Endpoints System Admin para listar usuarios + asignar/quitar membership (usuario↔tenant+rol) +
+- [x] **Título**: Endpoints System Admin para listar usuarios + asignar/quitar membership (usuario↔tenant+rol) +
       activar/desactivar; UI `/admin/users` (lista + asignación de tenants/roles). Reusa `UserOrganizationMembership` + `GET /admin/users`.
 - **Tests**: `pytest tests/integration/test_admin_user_memberships.py -v` (asignar/quitar; RBAC system_admin)
 
