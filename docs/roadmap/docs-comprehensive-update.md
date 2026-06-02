@@ -93,7 +93,7 @@ refleja.
 
 #### `task_doc_03` — Gotchas nuevos + índices de carpeta + visor
 
-- [ ] **Título**: Añadir los gotchas (prettier/libuv `--all-files`; alembic rev-id ≤32; MinIO xl-meta volumen) a
+- [x] **Título**: Añadir los gotchas (prettier/libuv `--all-files`; alembic rev-id ≤32; MinIO xl-meta volumen) a
       `docs/03-guides/gotchas/` (síntoma + causa + fix, sin duplicar) + actualizar su README/índice; revisar
       READMEs/índices de las 7 carpetas (sin enlaces rotos); confirmar que el visor `/admin/docs` recoge las
       categorías/nuevos docs (lee la carpeta).

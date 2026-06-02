@@ -47,6 +47,9 @@ el problema ya esté documentado.
 - [docling-mcp-no-public-image.md](./docling-mcp-no-public-image.md)
   — `ghcr.io/docling-project/docling-mcp` no existe; el dev compose
   lo deja comentado.
+- [minio-dev-volume-xl-meta-version.md](./minio-dev-volume-xl-meta-version.md)
+  — `decodeXLHeaders: Unknown xl meta version N`: el volumen dev lo
+  escribió una build más nueva; recrear el volumen o subir el pin.
 
 ### postgres / asyncpg / sqlalchemy
 
@@ -60,6 +63,9 @@ el problema ya esté documentado.
   — `SET LOCAL x = $1` falla; usar `set_config('x', $1, true)`.
 - [asyncpg-no-multistatement.md](./asyncpg-no-multistatement.md)
   — `op.execute` no acepta múltiples sentencias separadas por `;`.
+- [alembic-revision-id-32-chars.md](./alembic-revision-id-32-chars.md)
+  — `alembic_version.version_num` es `varchar(32)`: un revision id > 32
+  chars revienta con `StringDataRightTruncationError`.
 
 ### pre-commit / mypy / ruff
 
@@ -73,6 +79,10 @@ el problema ya esté documentado.
 - [precommit-mixed-line-ending-vs-gitattributes.md](./precommit-mixed-line-ending-vs-gitattributes.md)
   — `mixed-line-ending --fix=lf` no respeta `.gitattributes`; hay que
   excluir `.ps1` / `.cmd` / `.bat` del hook.
+- [prettier-all-files-libuv-windows.md](./prettier-all-files-libuv-windows.md)
+  — `prettier --all-files` crashea en Windows por libuv
+  (`UV_HANDLE_CLOSING`, exit 3221226505); usar prettier _scoped_
+  (`--files <cambiados>`).
 
 ### opentelemetry
 
