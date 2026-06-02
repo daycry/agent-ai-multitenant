@@ -353,6 +353,34 @@ LOGIN_METHOD_SSO = "sso"
 LOGIN_METHOD_PASSWORD = "password"
 
 
+class PublicProviderResponse(BaseModel):
+    """A single enabled global auth provider, as shown on the public /login.
+
+    Returned by the PUBLIC (unauthenticated) ``GET /auth/sso/providers``
+    endpoint (ADR 0047). It exposes ONLY what the login page needs to
+    render a branded button and start the flow — never a secret:
+
+      * ``id`` — the global ``sso_configurations`` row id, used to address
+        the per-provider login route.
+      * ``kind`` — ``oidc`` / ``saml``; the UI picks the brand icon from it.
+      * ``display_name`` — the operator-set human label (may be ``None``).
+      * ``button_label`` — the configurable login-button text (``None`` →
+        the UI falls back to a kind-derived default).
+      * ``login_url`` — the relative URL that starts this provider's flow.
+
+    There is deliberately NO client_secret / SP-private-key field on this
+    model: the public endpoint can never leak a credential.
+    """
+
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    kind: str
+    display_name: str | None
+    button_label: str | None
+    login_url: str
+
+
 class LoginDiscoveryResponse(BaseModel):
     """Which login method to use for an email — never reveals account existence.
 
@@ -384,6 +412,7 @@ __all__ = [
     "IdPMetadataParseRequest",
     "IdPMetadataParseResponse",
     "OIDCTemplateResponse",
+    "PublicProviderResponse",
     "SAMLConfigResponse",
     "SAMLConfigUpsertRequest",
     "SPMetadataResponse",

@@ -2,9 +2,9 @@
 
 The OIDC authorization-code flow spans two HTTP requests:
 
-  1. ``GET /auth/sso/{tenant_id}/oidc/login`` mints a random ``state``
-     and ``nonce``, stashes them (plus the tenant they belong to) here,
-     and redirects the browser to the IdP.
+  1. ``GET /auth/sso/{provider_id}/oidc/login`` mints a random ``state``
+     and ``nonce``, stashes them (plus the global provider they belong
+     to) here, and redirects the browser to the IdP.
   2. ``GET /auth/sso/oidc/callback?...&state=...`` looks the ``state``
      back up. A missing/expired/mismatched ``state`` is a CSRF attempt
      (or a stale tab) → the callback 400s. The stored ``nonce`` is then
@@ -18,9 +18,12 @@ value the IdP echoes back) sidesteps that and gives us single-use
 semantics for free — the callback deletes the key on consumption, so a
 captured ``state`` cannot be replayed.
 
-The record carries the ``tenant_id`` from the login URL so the callback
-(which has no tenant in its path) resolves the right tenant's SSO
-config — and cannot be tricked into using another tenant's.
+The record carries the ``provider_id`` that started the flow (ADR 0047:
+auth providers are platform-global, so the flow is keyed by the global
+provider, not a tenant). The callback (which has no provider in its
+path) resolves the right global SSO config from it and asserts the
+enabled global config still matches — a captured ``state`` can never be
+steered onto a different provider.
 """
 
 from __future__ import annotations
@@ -54,9 +57,14 @@ def new_token() -> str:
 
 @dataclass(frozen=True)
 class LoginState:
-    """The server-side half of an in-flight OIDC login."""
+    """The server-side half of an in-flight OIDC login.
 
-    tenant_id: UUID
+    Carries the global ``provider_id`` (the ``sso_configurations`` row id)
+    that started the flow (ADR 0047) so the callback resolves the same
+    provider it began with — never a different one.
+    """
+
+    provider_id: UUID
     nonce: str
     redirect_uri: str
 
@@ -69,7 +77,7 @@ class OIDCStateStore:
 
     async def create(self, state: str, login_state: LoginState, *, ttl_seconds: int) -> None:
         payload = {
-            "tenant_id": str(login_state.tenant_id),
+            "provider_id": str(login_state.provider_id),
             "nonce": login_state.nonce,
             "redirect_uri": login_state.redirect_uri,
         }
@@ -86,7 +94,7 @@ class OIDCStateStore:
             return None
         data = json.loads(raw)
         return LoginState(
-            tenant_id=UUID(data["tenant_id"]),
+            provider_id=UUID(data["provider_id"]),
             nonce=data["nonce"],
             redirect_uri=data["redirect_uri"],
         )
@@ -96,24 +104,25 @@ class OIDCStateStore:
 class SAMLLoginState:
     """The server-side half of an in-flight SP-initiated SAML login.
 
-    Carries the ``tenant_id`` (the ACS endpoint has no tenant in its
-    path, like the OIDC callback) and the ``request_id`` of the
-    AuthnRequest, so the ACS can assert the response's ``InResponseTo``
-    matches — the SAML analogue of the OIDC ``state``/``nonce`` guard.
+    Carries the global ``provider_id`` (the ``sso_configurations`` row id;
+    the ACS endpoint has no provider in its path, like the OIDC callback)
+    and the ``request_id`` of the AuthnRequest, so the ACS can assert the
+    response's ``InResponseTo`` matches — the SAML analogue of the OIDC
+    ``state``/``nonce`` guard.
     """
 
-    tenant_id: UUID
+    provider_id: UUID
     request_id: str
 
 
 class SAMLRelayStateStore:
     """Redis-backed, single-use store keyed by the SAML ``RelayState``.
 
-    SP-initiated logins stash the tenant + AuthnRequest id here keyed by
-    a random RelayState the IdP echoes back to the ACS. IdP-initiated
-    (unsolicited) responses carry no known RelayState, so the ACS simply
-    finds nothing — that is expected and the caller falls back to the
-    tenant resolved another way.
+    SP-initiated logins stash the global provider + AuthnRequest id here
+    keyed by a random RelayState the IdP echoes back to the ACS.
+    IdP-initiated (unsolicited) responses carry no known RelayState, so
+    the ACS simply finds nothing — that is expected and the caller falls
+    back to the single enabled global SAML provider.
     """
 
     def __init__(self, redis: Redis) -> None:
@@ -123,7 +132,7 @@ class SAMLRelayStateStore:
         self, relay_state: str, login_state: SAMLLoginState, *, ttl_seconds: int
     ) -> None:
         payload = {
-            "tenant_id": str(login_state.tenant_id),
+            "provider_id": str(login_state.provider_id),
             "request_id": login_state.request_id,
         }
         await self._redis.set(_saml_key(relay_state), json.dumps(payload), ex=ttl_seconds)
@@ -139,7 +148,7 @@ class SAMLRelayStateStore:
             return None
         data = json.loads(raw)
         return SAMLLoginState(
-            tenant_id=UUID(data["tenant_id"]),
+            provider_id=UUID(data["provider_id"]),
             request_id=data["request_id"],
         )
 

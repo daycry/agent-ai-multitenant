@@ -1,28 +1,45 @@
-"""`/auth/sso/*` endpoints — generic OIDC login (Plan 08 task_08_01).
+"""`/auth/sso/*` endpoints — GLOBAL OIDC / SAML login (ADR 0047).
+
+Auth providers are **platform-global** (ADR 0047, supersedes the
+per-tenant part of ADR 0031): one OIDC + one SAML config for the whole
+platform, configured by ``system_admin``, serving every tenant. Login is
+keyed by the global **provider id**, never a tenant; the old per-tenant
+``/auth/sso/{tenant_id}/…`` login routes are RETIRED (no redirect).
 
 SSO is **added alongside** the existing email+password login
 (``routers/auth.py``); it does not replace or touch it. A successful
-OIDC callback issues a session EXACTLY like local login — a server-side
-Redis session (:class:`SessionStore`) plus a JWT (:func:`encode_jwt`) —
-so logout/revocation and every downstream `get_principal` check behave
-identically regardless of how the user authenticated. There is no
-stateless-JWT-after-OIDC path (Plan 08 "Decisiones Clave").
+OIDC callback / SAML ACS issues a session EXACTLY like local login — a
+server-side Redis session (:class:`SessionStore`) plus a JWT
+(:func:`encode_jwt`) — so logout/revocation and every downstream
+`get_principal` check behave identically regardless of how the user
+authenticated. There is no stateless-JWT-after-SSO path.
 
-Two endpoints:
+The issued session proves **identity** only — a GLOBAL user WITHOUT an
+active tenant (``tenant_id = None``, exactly like the password
+pre-tenant session). Tenant access is granted by
+``UserOrganizationMembership`` that the admin assigns AFTER login; the
+post-login resolution (0 → "no access" screen, 1 → enter, >1 → picker)
+is task_sso_03.
 
-  * ``GET /auth/sso/{tenant_id}/oidc/login`` — resolve the tenant's
-    enabled OIDC config, mint ``state`` + ``nonce``, store them
-    server-side, and 307-redirect the browser to the IdP.
+Endpoints:
+
+  * ``GET /auth/sso/providers`` — PUBLIC: the enabled global providers
+    (id / kind / display_name / button_label / login_url) for the login
+    page. No secrets.
+  * ``GET /auth/sso/{provider_id}/oidc/login`` — resolve THAT global OIDC
+    provider, mint ``state`` + ``nonce`` (the state carries the
+    provider), store them server-side, 307-redirect to the IdP.
   * ``GET /auth/sso/oidc/callback`` — validate ``state`` (single-use,
-    from Redis) → recover the tenant, exchange the ``code``, verify the
-    ID token (signature + iss/aud/nonce), fetch userinfo, JIT-provision
-    the user (role ``tenant_user`` on first login), then mint the
-    session + JWT.
+    from Redis) → recover the provider, exchange the ``code``, verify the
+    ID token (signature + iss/aud/nonce), fetch userinfo, provision the
+    global identity, then mint the identity session + JWT.
+  * ``GET /auth/sso/{provider_id}/saml/login`` + the GLOBAL
+    ``POST /auth/sso/saml/acs`` — the SAML analogue; the RelayState
+    carries the provider for the SP-initiated leg.
 
-Multi-tenancy: the config read runs on the app role (NOBYPASSRLS) with
-``app.tenant_id`` bound to the tenant from the login URL / state record,
-so PostgreSQL RLS guarantees tenant A's SSO config can never be resolved
-for tenant B even if an attacker forges identifiers.
+The provider reads run on the BYPASSRLS admin engine: the global
+``sso_configurations`` table has no RLS / ``tenant_id`` (ADR 0047), so a
+provider is resolved by its global id, never by a tenant.
 """
 
 from __future__ import annotations
@@ -33,7 +50,7 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
@@ -47,7 +64,6 @@ from api_server.auth.deps import (
 )
 from api_server.auth.jwt import encode_jwt
 from api_server.auth.sessions import SessionStore
-from api_server.auth.sso.group_mapping import resolve_role_from_groups
 from api_server.auth.sso.oidc import OIDCError, OIDCFlow, ResolvedOIDCConfig
 from api_server.auth.sso.saml import (
     DEFAULT_NAME_ID_FORMAT,
@@ -80,7 +96,6 @@ from api_server.db.models import (
     SSOConfiguration,
     SSOProvider,
     User,
-    UserOrganizationMembership,
 )
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 from api_server.routers._helpers import require_tenant_id
@@ -94,6 +109,7 @@ from api_server.schemas.sso import (
     IdPMetadataParseResponse,
     LoginDiscoveryResponse,
     OIDCTemplateResponse,
+    PublicProviderResponse,
     SAMLConfigResponse,
     SAMLConfigUpsertRequest,
     SPMetadataResponse,
@@ -126,15 +142,16 @@ _CALLBACK_PATH = "/auth/sso/oidc/callback"
 # The SP's own SAML EntityID (the value the IdP knows this SP by) — a
 # stable URN derived from the public base URL.
 _SP_ENTITY_PATH = "/auth/sso/saml/metadata"
-# Per-tenant ACS path; `{tenant_id}` is substituted. A per-tenant ACS
-# URL lets the IdP-initiated (unsolicited) Response reach the right
-# tenant's config even though the POST carries no RelayState we minted.
-_SAML_ACS_PATH_TEMPLATE = "/auth/sso/{tenant_id}/saml/acs"
+# GLOBAL ACS path (ADR 0047): auth providers are platform-global, so there
+# is ONE SP identity (entityID + ACS) for the whole platform. An
+# IdP-initiated (unsolicited) Response reaches the single enabled global
+# SAML config; an SP-initiated one correlates on the RelayState we minted.
+_SAML_ACS_PATH = "/auth/sso/saml/acs"
 
-# The login-flow entry points login discovery points the UI at. Auth
-# providers are platform-global (ADR 0047), so the path is keyed by the
-# global provider id, not a tenant. The route shape is finalised in
-# task_sso_02; these match the `oidc_login` / `saml_login` routes below.
+# The login-flow entry points login discovery + the public providers list
+# point the UI at. Auth providers are platform-global (ADR 0047), so the
+# path is keyed by the global provider id, not a tenant; these match the
+# `oidc_login` / `saml_login` routes below.
 _OIDC_LOGIN_PATH_TEMPLATE = "/auth/sso/{provider_id}/oidc/login"
 _SAML_LOGIN_PATH_TEMPLATE = "/auth/sso/{provider_id}/saml/login"
 
@@ -200,6 +217,50 @@ async def _load_enabled_oidc_config() -> SSOConfiguration | None:
         return result.scalar_one_or_none()
 
 
+async def _load_enabled_provider_by_id(provider_id: UUID, *, kind: str) -> SSOConfiguration | None:
+    """Load the enabled, non-deleted global config with ``provider_id`` of ``kind``.
+
+    The login routes are addressed by the global provider id (ADR 0047),
+    so this resolves THAT specific row, asserting it is enabled, of the
+    expected ``kind`` (``oidc`` / ``saml``), and not soft-deleted. Runs on
+    the BYPASSRLS admin engine (the System Admin surface; the table has no
+    RLS / ``tenant_id``). A mismatch (unknown id, disabled, wrong kind)
+    returns ``None`` so the caller can answer with a single uniform 404 —
+    never revealing whether some other provider exists.
+    """
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        result = await session.execute(
+            select(SSOConfiguration).where(
+                SSOConfiguration.id == provider_id,
+                SSOConfiguration.provider == kind,
+                SSOConfiguration.enabled.is_(True),
+                SSOConfiguration.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+async def _load_enabled_providers() -> list[SSOConfiguration]:
+    """Load every enabled, non-deleted global provider (ADR 0047).
+
+    Backs the PUBLIC ``GET /auth/sso/providers`` list. Reads on the
+    BYPASSRLS admin engine; ordered by ``created_at`` for a stable button
+    order on the login page.
+    """
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        result = await session.execute(
+            select(SSOConfiguration)
+            .where(
+                SSOConfiguration.enabled.is_(True),
+                SSOConfiguration.deleted_at.is_(None),
+            )
+            .order_by(SSOConfiguration.created_at)
+        )
+        return list(result.scalars().all())
+
+
 def _resolve_config(row: SSOConfiguration) -> ResolvedOIDCConfig:
     """Turn a DB row into a flow config with the client secret resolved."""
     try:
@@ -258,13 +319,14 @@ def _sp_entity_id() -> str:
     return f"{base}{_SP_ENTITY_PATH}"
 
 
-def _saml_acs_url(tenant_id: str) -> str:
+def _saml_acs_url() -> str:
+    """The single, GLOBAL ACS URL the IdP POSTs the SAMLResponse to (ADR 0047)."""
     base = get_settings().sso_redirect_base_url.rstrip("/")
-    return f"{base}{_SAML_ACS_PATH_TEMPLATE.format(tenant_id=tenant_id)}"
+    return f"{base}{_SAML_ACS_PATH}"
 
 
-def _resolve_saml_config(row: SSOConfiguration, *, tenant_id: str) -> ResolvedSAMLConfig:
-    """Turn a SAML DB row into a flow config.
+def _resolve_saml_config(row: SSOConfiguration) -> ResolvedSAMLConfig:
+    """Turn a global SAML DB row into a flow config (ADR 0047).
 
     The per-provider CHECK constraint guarantees a `saml` row has
     entity_id + sso_url + x509_cert; narrow for mypy and fail loud (500)
@@ -278,7 +340,7 @@ def _resolve_saml_config(row: SSOConfiguration, *, tenant_id: str) -> ResolvedSA
     if row.idp_entity_id is None or row.idp_sso_url is None or row.idp_x509_cert is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="SSO is misconfigured for this tenant",
+            detail="SSO is misconfigured",
         )
     try:
         sp_private_key = resolve_sp_private_key(
@@ -289,14 +351,14 @@ def _resolve_saml_config(row: SSOConfiguration, *, tenant_id: str) -> ResolvedSA
     except SSOSecretError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="SSO is misconfigured for this tenant",
+            detail="SSO is misconfigured",
         ) from exc
     config = ResolvedSAMLConfig(
         idp_entity_id=row.idp_entity_id,
         idp_sso_url=row.idp_sso_url,
         idp_x509_cert=row.idp_x509_cert,
         sp_entity_id=_sp_entity_id(),
-        sp_acs_url=_saml_acs_url(tenant_id),
+        sp_acs_url=_saml_acs_url(),
         name_id_format=row.name_id_format or DEFAULT_NAME_ID_FORMAT,
         attribute_mappings={str(k): str(v) for k, v in (row.attribute_mappings or {}).items()},
         sp_x509_cert=row.sp_x509_cert,
@@ -311,7 +373,7 @@ def _resolve_saml_config(row: SSOConfiguration, *, tenant_id: str) -> ResolvedSA
     except SAMLConfigError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="SSO is misconfigured for this tenant",
+            detail="SSO is misconfigured",
         ) from exc
     return config
 
@@ -417,31 +479,76 @@ async def discover_login(
     )
 
 
+# ===========================================================================
+# PUBLIC providers list (ADR 0047 task_sso_02) — GET /auth/sso/providers
+#
+# Unauthenticated. Lists the enabled GLOBAL providers so the /login page
+# can render a branded button + the relative URL that starts each flow.
+# Exposes NO secret: only id / kind / display_name / button_label /
+# login_url cross this boundary (the response model has no secret field).
+# ===========================================================================
+@router.get("/providers", response_model=list[PublicProviderResponse])
+async def list_public_providers() -> list[PublicProviderResponse]:
+    """Public: the enabled global auth providers for the login page.
+
+    No tenant, no auth, no secrets. Each entry carries the relative
+    ``login_url`` (``/auth/sso/{id}/oidc|saml/login``) the browser hits to
+    start the flow. A provider whose kind is neither ``oidc`` nor ``saml``
+    is skipped defensively (the column is constrained to those two).
+    """
+    rows = await _load_enabled_providers()
+    out: list[PublicProviderResponse] = []
+    for row in rows:
+        if row.provider == SSOProvider.OIDC.value:
+            login_url = _OIDC_LOGIN_PATH_TEMPLATE.format(provider_id=row.id)
+        elif row.provider == SSOProvider.SAML.value:
+            login_url = _SAML_LOGIN_PATH_TEMPLATE.format(provider_id=row.id)
+        else:  # pragma: no cover - provider column is constrained to oidc/saml
+            continue
+        out.append(
+            PublicProviderResponse(
+                id=row.id,
+                kind=row.provider,
+                display_name=row.display_name,
+                button_label=row.button_label,
+                login_url=login_url,
+            )
+        )
+    return out
+
+
 # ---------------------------------------------------------------------------
-# GET /auth/sso/{tenant_id}/oidc/login
+# GET /auth/sso/{provider_id}/oidc/login  (ADR 0047: by provider, not tenant)
 # ---------------------------------------------------------------------------
-@router.get("/{tenant_id}/oidc/login")
+@router.get("/{provider_id}/oidc/login")
 async def oidc_login(
-    tenant_id: str,
+    provider_id: str,
     flow: OIDCFlow = Depends(get_oidc_flow),
     state_store: OIDCStateStore = Depends(get_oidc_state_store),
 ) -> RedirectResponse:
-    """Begin the OIDC login: redirect the browser to the tenant's IdP."""
-    try:
-        tenant_uuid = UUID(tenant_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invalid tenant id",
-        ) from exc
+    """Begin the OIDC login: redirect the browser to the global IdP.
 
-    config_row = await _load_enabled_oidc_config()
-    if config_row is None:
-        # No enabled global OIDC config — same response either way so we
-        # don't reveal whether the platform has OIDC SSO at all.
+    Addressed by the GLOBAL provider id (ADR 0047), not a tenant. The
+    issued session (after the callback) proves IDENTITY only — tenant
+    access is resolved by membership AFTER login (task_sso_03).
+    """
+    try:
+        provider_uuid = UUID(provider_id)
+    except ValueError as exc:
+        # A non-UUID provider segment can never match a real provider; a
+        # uniform 404 avoids revealing the route shape vs. a 400.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="no enabled OIDC configuration",
+            detail="unknown OIDC provider",
+        ) from exc
+
+    config_row = await _load_enabled_provider_by_id(provider_uuid, kind=SSOProvider.OIDC.value)
+    if config_row is None:
+        # Unknown / disabled / wrong-kind provider — same response either
+        # way so we don't reveal which providers exist.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="unknown OIDC provider",
         )
 
     config = _resolve_config(config_row)
@@ -464,7 +571,7 @@ async def oidc_login(
 
     await state_store.create(
         state,
-        LoginState(tenant_id=tenant_uuid, nonce=nonce, redirect_uri=redirect_uri),
+        LoginState(provider_id=config_row.id, nonce=nonce, redirect_uri=redirect_uri),
         ttl_seconds=get_settings().sso_login_state_ttl_seconds,
     )
     return RedirectResponse(url=authorize_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
@@ -481,7 +588,13 @@ async def oidc_callback(
     state_store: OIDCStateStore = Depends(get_oidc_state_store),
     sessions: SessionStore = Depends(get_session_store),
 ) -> LoginResponse:
-    """Complete the OIDC login and mint a session exactly like local login."""
+    """Complete the OIDC login and mint an IDENTITY session (ADR 0047).
+
+    The single-use ``state`` carries the global provider that started the
+    flow; we resolve THAT provider, assert it is still the enabled config,
+    exchange the code, and mint a tenant-less identity session. Tenant
+    access is resolved by membership AFTER login (task_sso_03).
+    """
     login_state = await state_store.consume(state)
     if login_state is None:
         # Unknown/expired/replayed state — anti-CSRF tripwire.
@@ -490,9 +603,14 @@ async def oidc_callback(
             detail="invalid or expired login state",
         )
 
-    config_row = await _load_enabled_oidc_config()
+    # Resolve the SAME provider the flow started with (from the state),
+    # asserting it is still enabled + OIDC. A captured state can never be
+    # steered onto a different provider this way.
+    config_row = await _load_enabled_provider_by_id(
+        login_state.provider_id, kind=SSOProvider.OIDC.value
+    )
     if config_row is None:
-        # The global config was disabled/removed mid-flight.
+        # The provider was disabled/removed mid-flight.
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="SSO configuration is no longer available",
@@ -519,18 +637,8 @@ async def oidc_callback(
             detail="OIDC authentication failed",
         ) from exc
 
-    user_id = await _jit_provision_user(
-        login_state.tenant_id,
-        email=userinfo.email,
-        full_name=userinfo.full_name,
-        groups=userinfo.groups,
-        group_role_mappings={
-            str(k): str(v) for k, v in (config_row.group_role_mappings or {}).items()
-        },
-    )
-    assert user_id is not None  # provisioning always returns a live user id
-
-    return await _issue_session(sessions, user_id=user_id, tenant_uuid=login_state.tenant_id)
+    user_id = await _provision_identity(email=userinfo.email, full_name=userinfo.full_name)
+    return await _issue_identity_session(sessions, user_id=user_id)
 
 
 # ===========================================================================
@@ -550,33 +658,36 @@ def _require_saml_available() -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /auth/sso/{tenant_id}/saml/login  (SP-initiated -> AuthnRequest)
+# GET /auth/sso/{provider_id}/saml/login  (SP-initiated -> AuthnRequest)
 # ---------------------------------------------------------------------------
-@router.get("/{tenant_id}/saml/login")
+@router.get("/{provider_id}/saml/login")
 async def saml_login(
-    tenant_id: str,
+    provider_id: str,
     relay_store: SAMLRelayStateStore = Depends(get_saml_relay_state_store),
 ) -> RedirectResponse:
-    """Begin an SP-initiated SAML login: redirect the browser to the IdP."""
+    """Begin an SP-initiated SAML login: redirect the browser to the IdP.
+
+    Addressed by the GLOBAL provider id (ADR 0047), not a tenant.
+    """
     _require_saml_available()
     try:
-        tenant_uuid = UUID(tenant_id)
+        provider_uuid = UUID(provider_id)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invalid tenant id",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="unknown SAML provider",
         ) from exc
 
-    config_row = await _load_enabled_saml_config()
+    config_row = await _load_enabled_provider_by_id(provider_uuid, kind=SSOProvider.SAML.value)
     if config_row is None:
-        # No enabled global SAML config — same response either way so we
-        # don't reveal whether the platform has SAML SSO at all.
+        # Unknown / disabled / wrong-kind provider — same response either
+        # way so we don't reveal which providers exist.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="no enabled SAML configuration",
+            detail="unknown SAML provider",
         )
 
-    config = _resolve_saml_config(config_row, tenant_id=tenant_id)
+    config = _resolve_saml_config(config_row)
 
     # RelayState is the SAML analogue of the OIDC `state`: a random,
     # single-use token the IdP echoes back to the ACS so we recover the
@@ -592,12 +703,12 @@ async def saml_login(
     except SAMLError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="could not build the SAML request for this tenant",
+            detail="could not build the SAML request",
         ) from exc
 
     # The AuthnRequest id is embedded in the redirect URL's SAMLRequest;
     # python3-saml exposes it via `get_last_request_id`, but to avoid
-    # re-parsing we correlate purely on RelayState + tenant. The ACS
+    # re-parsing we correlate purely on RelayState + provider. The ACS
     # passes request_id=None when no in-flight state is found (covers
     # IdP-initiated), so the strict InResponseTo check is opt-in here:
     # we store the relay state with an empty request id and let the ACS
@@ -605,18 +716,17 @@ async def saml_login(
     # tracking once SP signing lands.)
     await relay_store.create(
         relay_state,
-        SAMLLoginState(tenant_id=tenant_uuid, request_id=""),
+        SAMLLoginState(provider_id=config_row.id, request_id=""),
         ttl_seconds=get_settings().sso_login_state_ttl_seconds,
     )
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
 
 
 # ---------------------------------------------------------------------------
-# POST /auth/sso/{tenant_id}/saml/acs  (Assertion Consumer Service)
+# POST /auth/sso/saml/acs  (GLOBAL Assertion Consumer Service — ADR 0047)
 # ---------------------------------------------------------------------------
-@router.post("/{tenant_id}/saml/acs", response_model=LoginResponse)
+@router.post("/saml/acs", response_model=LoginResponse)
 async def saml_acs(
-    tenant_id: str,
     # The SAML spec names these form fields `SAMLResponse` / `RelayState`
     # (CamelCase, fixed by the binding). We accept those on the wire via
     # `alias` while keeping snake_case Python parameter names.
@@ -625,49 +735,47 @@ async def saml_acs(
     relay_store: SAMLRelayStateStore = Depends(get_saml_relay_state_store),
     sessions: SessionStore = Depends(get_session_store),
 ) -> LoginResponse:
-    """Consume a SAML ``SAMLResponse`` and mint a session like local login.
+    """Consume a SAML ``SAMLResponse`` and mint an IDENTITY session (ADR 0047).
 
-    Handles BOTH bindings of arrival:
+    The ACS is GLOBAL (one SP identity for the platform). Handles BOTH
+    bindings of arrival:
 
       * SP-initiated — the browser was first sent to the IdP by
-        ``/saml/login``; the IdP POSTs back here with the RelayState we
-        minted, which we consume single-use and use to recover the
-        AuthnRequest id for the ``InResponseTo`` correlation.
+        ``/{provider_id}/saml/login``; the IdP POSTs back here with the
+        RelayState we minted, which we consume single-use to recover the
+        provider that started the flow + the AuthnRequest id for the
+        ``InResponseTo`` correlation.
       * IdP-initiated (unsolicited) — the user started at the IdP; there
-        is no RelayState we created, so correlation is skipped. The
-        tenant is taken from the per-tenant ACS URL path instead.
+        is no RelayState we created, so correlation is skipped and the
+        provider is the single enabled global SAML config.
+
+    The issued session proves IDENTITY only — tenant access is resolved by
+    membership AFTER login (task_sso_03).
     """
     _require_saml_available()
-    try:
-        UUID(tenant_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invalid tenant id",
-        ) from exc
 
-    config_row = await _load_enabled_saml_config()
+    # Recover any SP-initiated state (single-use). Absent for
+    # IdP-initiated logins — that's expected, not an error.
+    request_id: str | None = None
+    provider_id: UUID | None = None
+    if relay_state:
+        login_state = await relay_store.consume(relay_state)
+        if login_state is not None:
+            provider_id = login_state.provider_id
+            request_id = login_state.request_id or None
+
+    # Resolve the provider: from the state (SP-initiated) or the single
+    # enabled global SAML config (IdP-initiated).
+    if provider_id is not None:
+        config_row = await _load_enabled_provider_by_id(provider_id, kind=SSOProvider.SAML.value)
+    else:
+        config_row = await _load_enabled_saml_config()
     if config_row is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="SAML configuration is no longer available",
         )
-    config = _resolve_saml_config(config_row, tenant_id=tenant_id)
-
-    # Recover any SP-initiated state (single-use). Absent for
-    # IdP-initiated logins — that's expected, not an error.
-    request_id: str | None = None
-    if relay_state:
-        login_state = await relay_store.consume(relay_state)
-        if login_state is not None:
-            # Cross-tenant guard: a RelayState minted for tenant A must
-            # not be replayed against tenant B's ACS.
-            if str(login_state.tenant_id) != tenant_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="SAML relay state does not match this tenant",
-                )
-            request_id = login_state.request_id or None
+    config = _resolve_saml_config(config_row)
 
     post_data = {"SAMLResponse": saml_response}
     if relay_state is not None:
@@ -687,27 +795,18 @@ async def saml_acs(
             detail="SAML authentication failed",
         ) from exc
 
-    tenant_uuid = UUID(tenant_id)
-    user_id = await _jit_provision_user(
-        tenant_uuid,
-        email=userinfo.email,
-        full_name=userinfo.full_name,
-        groups=userinfo.groups,
-        group_role_mappings={
-            str(k): str(v) for k, v in (config_row.group_role_mappings or {}).items()
-        },
-    )
-    return await _issue_session(sessions, user_id=user_id, tenant_uuid=tenant_uuid)
+    user_id = await _provision_identity(email=userinfo.email, full_name=userinfo.full_name)
+    return await _issue_identity_session(sessions, user_id=user_id)
 
 
-async def _issue_session(
-    sessions: SessionStore, *, user_id: UUID, tenant_uuid: UUID
-) -> LoginResponse:
-    """Mint a Redis session + JWT — identical shape to local login.
+async def _issue_identity_session(sessions: SessionStore, *, user_id: UUID) -> LoginResponse:
+    """Mint a tenant-less IDENTITY session + JWT (ADR 0047).
 
-    Shared by the OIDC callback and the SAML ACS so both auth methods
-    end on exactly the same session model (logout/revocation stay
-    uniform across local / OIDC / SAML).
+    Shared by the OIDC callback and the SAML ACS. The session proves the
+    GLOBAL user identity WITHOUT an active tenant — exactly like the
+    password-login pre-tenant session in ``routers/auth.py`` (``tenant_id
+    = None``). Tenant access is resolved by membership AFTER login
+    (task_sso_03); logout/revocation stay uniform across local/OIDC/SAML.
     """
     settings = get_settings()
     session_id = uuid7()
@@ -715,168 +814,74 @@ async def _issue_session(
     await sessions.create(
         session_id,
         user_id=user_id,
-        tenant_id=tenant_uuid,
+        tenant_id=None,
         ttl_seconds=ttl_seconds,
     )
     token = encode_jwt(
         user_id=user_id,
         session_id=session_id,
-        tenant_id=tenant_uuid,
+        tenant_id=None,
         is_system_admin=False,
     )
     return LoginResponse(access_token=token, token_type="bearer", expires_in=ttl_seconds)
 
 
-async def _bind_tenant(session: AsyncSession, tenant_uuid: UUID) -> None:
-    """Bind ``app.tenant_id`` for the current transaction so RLS scopes
-    every tenant-scoped read/write to ``tenant_uuid``.
+async def _provision_identity(*, email: str, full_name: str | None) -> UUID:
+    """Provision the GLOBAL user identity at SSO login (ADR 0047).
 
-    Idempotent and cheap; called again after a rollback because the
-    ``set_config(..., is_local=true)`` binding is scoped to the
-    transaction that a rollback tears down.
-    """
-    await session.execute(
-        text("SELECT set_config('app.tenant_id', :tid, true)"),
-        {"tid": str(tenant_uuid)},
-    )
+    Auth providers are platform-global and access to a tenant is granted
+    EXCLUSIVELY by ``UserOrganizationMembership`` that the admin assigns
+    AFTER login (no claiming, no JIT membership — ADR 0047). So this only
+    establishes the global user identity; it deliberately creates NO
+    tenant membership and reads NO IdP groups. Tenant resolution (0 → "no
+    access" screen, 1 → enter, >1 → picker) is task_sso_03.
 
-
-async def _jit_provision_user(
-    tenant_uuid: UUID,
-    *,
-    email: str,
-    full_name: str | None,
-    groups: list[str] | None = None,
-    group_role_mappings: dict[str, str] | None = None,
-) -> UUID:
-    """Just-In-Time provisioning at first SSO login (Plan 08 task_08_07).
-
-    Policy (shared by the OIDC callback and the SAML ACS):
+    Policy:
 
       * **Link by verified email, never duplicate.** The IdP asserts the
         email; we normalise it to lower-case (matching local
-        register/login) and look the user up. An existing local OR
-        SSO user with that email is REUSED — we never create a second
-        row for the same identity.
-      * **First SSO login creates the user** with no usable local
-        password (the ``_SSO_PASSWORD_SENTINEL`` hash that no plaintext
-        can produce) and ``is_sso_provisioned = true`` so local login
-        rejects it cleanly (see ``routers/auth.py``).
-      * **Active membership in the SSO config's tenant.** The role is
-        derived from the IdP groups via the tenant's
-        ``group_role_mappings`` (task_08_11): the highest-privilege
-        per-tenant role any asserted group maps to, defaulting to
-        ``tenant_user`` when nothing maps. A group can NEVER grant a
-        platform role (``system_admin`` / ``system_operator``). On EVERY
-        login the existing membership's role is re-synced to the mapped
-        role so an IdP group change takes effect on the next login —
-        EXCEPT we never downgrade a manually-elevated ``tenant_admin``
-        when the mapping resolves to the bare default and the tenant has
-        no group mapping configured at all (so a tenant that never opted
-        into group mapping keeps the old "JIT default, admin promotes
-        manually" behaviour untouched). The membership is created/updated
-        under ``app.tenant_id`` bound to ``tenant_uuid``, so it can only
-        ever land in THIS tenant.
+        register/login) and look the user up. An existing local OR SSO
+        user with that email is REUSED — never a second row for the same
+        identity.
+      * **First SSO login creates the user** with no usable local password
+        (the ``_SSO_PASSWORD_SENTINEL`` hash that no plaintext can produce)
+        and ``is_sso_provisioned = true`` so local login rejects it
+        cleanly (see ``routers/auth.py`` — password login stays intact).
       * **Idempotent under concurrency.** Two simultaneous first-logins
-        race on the ``users.email`` unique index and on the
-        ``uq_membership_user_tenant`` unique index; both races are caught
-        and resolved by re-reading the winning row, so neither the user
-        nor the membership is ever duplicated.
+        race on the ``users.email`` unique index; the race is caught and
+        resolved by re-reading the winning row, so the user is never
+        duplicated.
 
-    Returns the (existing or freshly created) user's id.
+    The ``users`` table is NOT tenant-scoped (no RLS), so this needs no
+    ``app.tenant_id`` binding. Returns the (existing or freshly created)
+    user's id.
     """
-    mappings = group_role_mappings or {}
-    mapped_role = resolve_role_from_groups(groups or [], mappings)
     normalized_email = email.strip().lower()
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session, session.begin():
-        # `users` is NOT tenant-scoped (no RLS), so the lookup needs no
-        # app.tenant_id binding. Membership IS tenant-scoped, so bind
-        # app.tenant_id before touching it.
-        await _bind_tenant(session, tenant_uuid)
-
         existing = await session.execute(select(User).where(User.email == normalized_email))
         user = existing.scalar_one_or_none()
-        if user is None:
-            user = User(
-                id=uuid7(),
-                email=normalized_email,
-                password_hash=_SSO_PASSWORD_SENTINEL,
-                full_name=full_name,
-                is_system_admin=False,
-                is_sso_provisioned=True,
-            )
-            session.add(user)
-            try:
-                await session.flush()
-            except IntegrityError:
-                # Race: another concurrent SSO login created the same
-                # user between our SELECT and INSERT. Re-read the winner
-                # (the unique email index guarantees exactly one) and
-                # proceed — no duplicate user row.
-                await session.rollback()
-                await _bind_tenant(session, tenant_uuid)
-                existing = await session.execute(select(User).where(User.email == normalized_email))
-                user = existing.scalar_one()
-
-        # Ensure an active membership in this tenant. The query runs under
-        # app.tenant_id == tenant_uuid, so it only ever sees / writes a
-        # membership for THIS tenant.
-        membership_q = await session.execute(
-            select(UserOrganizationMembership).where(
-                UserOrganizationMembership.user_id == user.id,
-                UserOrganizationMembership.tenant_id == tenant_uuid,
-            )
+        if user is not None:
+            return user.id
+        user = User(
+            id=uuid7(),
+            email=normalized_email,
+            password_hash=_SSO_PASSWORD_SENTINEL,
+            full_name=full_name,
+            is_system_admin=False,
+            is_sso_provisioned=True,
         )
-        membership = membership_q.scalar_one_or_none()
-        if membership is None:
-            session.add(
-                UserOrganizationMembership(
-                    id=uuid7(),
-                    tenant_id=tenant_uuid,
-                    user_id=user.id,
-                    role=mapped_role,
-                    is_active=True,
-                )
-            )
-            try:
-                await session.flush()
-            except IntegrityError:
-                # Race: a concurrent first-login created the membership
-                # (uq_membership_user_tenant). The user already exists, so
-                # the work is done — swallow and return the same user id.
-                await session.rollback()
-                return user.id
-        else:
-            _sync_membership_role(membership, mapped_role=mapped_role, has_mappings=bool(mappings))
+        session.add(user)
+        try:
+            await session.flush()
+        except IntegrityError:
+            # Race: another concurrent SSO login created the same user
+            # between our SELECT and INSERT. Re-read the winner (the
+            # unique email index guarantees exactly one) and proceed.
+            await session.rollback()
+            existing = await session.execute(select(User).where(User.email == normalized_email))
+            user = existing.scalar_one()
         return user.id
-
-
-def _sync_membership_role(
-    membership: UserOrganizationMembership, *, mapped_role: str, has_mappings: bool
-) -> None:
-    """Re-sync an existing membership's role from the IdP group mapping.
-
-    Behaviour split by whether the tenant configured ANY group mapping:
-
-      * **No mapping configured** (``has_mappings`` False): leave the role
-        untouched. ``mapped_role`` is just the bare default here, and a
-        tenant that never opted into group mapping must keep the legacy
-        flow where the JIT default sticks and a Tenant Admin promotes
-        manually — we must not clobber a manual ``tenant_admin``.
-      * **Mapping configured** (``has_mappings`` True): the IdP is the
-        source of truth, so set the role to ``mapped_role`` on every
-        login (an IdP group change — grant OR revoke — takes effect next
-        login). ``mapped_role`` is already a safe per-tenant role
-        (``resolve_role_from_groups`` never returns a platform role), so
-        this can never escalate to ``system_admin`` / ``system_operator``.
-
-    The membership's ``is_active`` flag is deliberately left untouched: a
-    deactivated membership (e.g. a SCIM deprovision, task_08_08) stays
-    deactivated — role mapping governs the role, not access revocation.
-    """
-    if has_mappings and membership.role != mapped_role:
-        membership.role = mapped_role
 
 
 # ===========================================================================
@@ -1136,10 +1141,11 @@ async def delete_sso_config(
 # the response only reports whether one is set + which store holds it).
 #
 # Helper endpoints:
-#   GET  /auth/sso/{tenant_id}/saml/metadata-url — the SP EntityID + ACS
-#        URL the operator registers at the IdP.
-#   POST /auth/sso/saml/parse-metadata           — parse pasted IdP
-#        metadata XML to pre-fill the form (no xmlsec needed).
+#   GET  /auth/sso/saml/sp-metadata    — the SP EntityID + the GLOBAL ACS
+#        URL the operator registers at the IdP (ADR 0047: one SP identity
+#        for the whole platform).
+#   POST /auth/sso/saml/parse-metadata — parse pasted IdP metadata XML to
+#        pre-fill the form (no xmlsec needed).
 # ===========================================================================
 def _to_saml_response(row: SSOConfiguration) -> SAMLConfigResponse:
     """Project a SAML DB row to the UI shape WITHOUT the SP private key.
@@ -1230,38 +1236,16 @@ def _validate_saml_crypto_invariant(row: SSOConfiguration) -> None:
 
 @router.get("/saml/sp-metadata", response_model=SPMetadataResponse)
 async def get_saml_sp_metadata(
-    principal: AuthPrincipal = Depends(require_tenant_member),
-) -> SPMetadataResponse:
-    """The SP EntityID + the CALLER's per-tenant ACS URL to register at the IdP.
-
-    Tenant-implicit: the tenant is taken from the authenticated principal
-    (so the UI never needs to know its own tenant UUID). Derived purely
-    from the configured public base URL + that tenant id; needs no native
-    crypto. Gated to tenant members so anonymous callers can't enumerate it.
-    """
-    tenant_id = require_tenant_id(principal)
-    return SPMetadataResponse(sp_entity_id=_sp_entity_id(), acs_url=_saml_acs_url(str(tenant_id)))
-
-
-@router.get("/{tenant_id}/saml/metadata-url", response_model=SPMetadataResponse)
-async def get_saml_sp_metadata_url(
-    tenant_id: str,
     _principal: AuthPrincipal = Depends(require_tenant_member),
 ) -> SPMetadataResponse:
-    """The SP EntityID + per-tenant ACS URL for an explicit tenant id.
+    """The SP EntityID + the GLOBAL ACS URL to register at the IdP (ADR 0047).
 
-    The explicit-tenant variant (used by superadmins acting on a specific
-    tenant). Read-only and derived purely from the configured public base
-    URL + the tenant id; gated to tenant members. Needs no native crypto.
+    The SP identity (entityID + ACS) is platform-global now: one value for
+    the whole platform, derived purely from the configured public base
+    URL; needs no native crypto. Gated to tenant members so anonymous
+    callers can't enumerate it.
     """
-    try:
-        UUID(tenant_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invalid tenant id",
-        ) from exc
-    return SPMetadataResponse(sp_entity_id=_sp_entity_id(), acs_url=_saml_acs_url(tenant_id))
+    return SPMetadataResponse(sp_entity_id=_sp_entity_id(), acs_url=_saml_acs_url())
 
 
 @router.post("/saml/parse-metadata", response_model=IdPMetadataParseResponse)

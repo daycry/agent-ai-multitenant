@@ -5,16 +5,18 @@ generic OIDC flow of Phase A (:mod:`api_server.auth.sso.oidc`). A SAML
 login ends exactly like both of those: a server-side Redis session plus
 a JWT — no stateless-JWT-after-SAML path.
 
-The flow, end to end:
+The flow, end to end (auth providers are platform-global — ADR 0047):
 
-  1. **SP-initiated login** — ``GET /auth/sso/{tenant_id}/saml/login``
+  1. **SP-initiated login** — ``GET /auth/sso/{provider_id}/saml/login``
      builds a SAML ``AuthnRequest`` and 302-redirects the browser to the
-     tenant IdP's SSO URL (HTTP-Redirect binding).
-  2. **Assertion Consumer Service (ACS)** — ``POST /auth/sso/saml/acs``
-     receives the IdP's ``SAMLResponse`` (HTTP-POST binding), verifies
-     its XML signature against the IdP's x509 cert, validates conditions
-     (audience, NotOnOrAfter, ...), then extracts the NameID + attributes.
-  3. **JIT** — resolve/create the local user, mint the session + JWT.
+     global IdP's SSO URL (HTTP-Redirect binding).
+  2. **Assertion Consumer Service (ACS)** — the GLOBAL
+     ``POST /auth/sso/saml/acs`` receives the IdP's ``SAMLResponse``
+     (HTTP-POST binding), verifies its XML signature against the IdP's
+     x509 cert, validates conditions (audience, NotOnOrAfter, ...), then
+     extracts the NameID + attributes.
+  3. **Identity** — resolve/create the global user, mint an identity
+     session + JWT (tenant access is by membership, resolved after login).
 
 **IdP-initiated** login is the same ACS endpoint receiving an unsolicited
 ``SAMLResponse`` (no in-flight ``RelayState`` / request id to correlate);
@@ -115,7 +117,7 @@ def saml_available() -> bool:
 
 @dataclass(frozen=True)
 class ResolvedSAMLConfig:
-    """A per-tenant SAML config, ready to feed the flow.
+    """A resolved global SAML config, ready to feed the flow (ADR 0047).
 
     Built by the router from a ``sso_configurations`` row. The flow never
     touches the DB — it only sees this plain dataclass.

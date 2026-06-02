@@ -62,7 +62,7 @@ Ver **ADR 0047** para el diseño completo. Resumen de lo que entra:
 
 #### `task_sso_02` — Rutas de login por provider + callback/ACS global + endpoint público de providers
 
-- [ ] **Título**: `/auth/sso/{provider_id}/oidc|saml/login` (por provider, no tenant); callback OIDC + ACS SAML
+- [x] **Título**: `/auth/sso/{provider_id}/oidc|saml/login` (por provider, no tenant); callback OIDC + ACS SAML
       globales (state/RelayState lleva el provider); `GET /auth/sso/providers` PÚBLICO (id/kind/display_name/
       button_label/login_url, SIN secretos). Sesión emitida sin tenant activo.
 - **Tests**: `pytest tests/integration/test_sso_global_login.py -v` (login por provider; providers públicos sin secretos)
