@@ -73,9 +73,10 @@ son bloqueados por las fases.
 Planes con `plan_id` descriptivo que producen **solo documentación** (no
 features ni código). No bloquean ni son bloqueados por las fases.
 
-| Plan                                                     | Qué produce                                                                                           |
-| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| [docs-human-test-guides.md](./docs-human-test-guides.md) | Guías de tests humanos por plan en `docs/03-guides/human-tests/` (una por cada plan con bloque human) |
+| Plan                                                           | Qué produce                                                                                                                                                    |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [docs-human-test-guides.md](./docs-human-test-guides.md)       | Guías de tests humanos por plan en `docs/03-guides/human-tests/` (una por cada plan con bloque human)                                                          |
+| [docs-comprehensive-update.md](./docs-comprehensive-update.md) | Pasada integral de la capa transversal (`docs/context/`, overview, referencia), diagramas Mermaid del sistema final, gotchas nuevos, coherencia + cross-links. |
 
 ### Planes de frontend (no entran en el gate de fases)
 

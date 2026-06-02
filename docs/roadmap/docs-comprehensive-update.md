@@ -103,7 +103,7 @@ refleja.
 
 #### `task_doc_04` — Changelog + verificación final de enlaces
 
-- [ ] **Título**: Changelog `docs/07-changelog/docs-comprehensive-update.md`; fila en roadmap README; verificación
+- [x] **Título**: Changelog `docs/07-changelog/docs-comprehensive-update.md`; fila en roadmap README; verificación
       global de enlaces internos de `docs/` (sin rotos) + prettier scoped sobre los docs tocados.
 - **Tests**: `test -f` changelog; verificación de enlaces internos `docs/**/*.md` sin rotos
 
