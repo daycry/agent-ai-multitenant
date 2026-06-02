@@ -158,6 +158,239 @@ async def get_price_sync_enabled(session: AsyncSession) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Price-sync family allowlist override (plan price-sync-active-providers,
+# task_psa_01)
+# ---------------------------------------------------------------------------
+# The price sync normally derives the LiteLLM families it imports from the
+# ACTIVE ``llm_providers`` rows (ADR 0028 kind→family map). This OPTIONAL
+# System-Admin override pins an explicit allowlist instead: when set (a list of
+# family strings), it WINS over the derived set; when unset (the default), the
+# resolver falls back to the families of the active providers. The value is read
+# live by the resolver so a change takes effect on the next sync without a
+# restart. An empty list ``[]`` is a meaningful override — it pins the allowlist
+# to EMPTY (sync nothing), distinct from "unset" (derive from active providers).
+PRICE_SYNC_ALLOWED_FAMILIES_KEY = "price_sync.allowed_families"
+
+
+async def get_price_sync_allowed_families_override(
+    session: AsyncSession,
+) -> frozenset[str] | None:
+    """The System-Admin family-allowlist override, or ``None`` when unset.
+
+    Returns ``None`` when the setting has never been written (the resolver then
+    derives the allowlist from the active ``llm_providers``). When written it is
+    a list of family strings; this normalises it to a ``frozenset`` of trimmed,
+    non-empty, lower-cased family names. A stored value that is not a list (or
+    is empty after cleaning) still returns a frozenset — an empty override is
+    deliberately meaningful (pin the allowlist to EMPTY)."""
+    value = await get_platform_setting(session, PRICE_SYNC_ALLOWED_FAMILIES_KEY, default=None)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list | tuple | set | frozenset):
+        return None
+    families = {
+        str(item).strip().lower() for item in value if isinstance(item, str) and str(item).strip()
+    }
+    return frozenset(families)
+
+
+# ---------------------------------------------------------------------------
+# Scheduled exchange-rates fetch (Plan 11.1 task_11_1_02)
+# ---------------------------------------------------------------------------
+# Live enable/disable lever for the daily FX-fetcher job
+# (workers.fetch_exchange_rates). The beat task reads it at the top of every
+# run; OFF makes the run a no-op (no feed fetch, no catalog write) without
+# restarting Celery beat — mirroring the price-sync / backup enable levers. The
+# CADENCE (cron) is a separate operator-tunable knob (WORKERS_FX_FETCH_CRON read
+# by the beat process at boot), NOT this flag. Default ON: an unattended
+# platform should keep its display-currency rates fresh (USD stays canonical).
+FX_FETCH_ENABLED_KEY = "fx_fetch_enabled"
+DEFAULT_FX_FETCH_ENABLED = True
+
+# The FX rate SOURCE the fetcher uses, selectable by a System Admin from the
+# admin panel (Plan 11.1 decision: "fuente por defecto ECB, configurable por
+# System Admin"). Read live by the FX-fetcher beat task so a change takes effect
+# on the next fire without a restart. Only ECB is wired today; the key is a
+# free-form string so a future source (e.g. a paid feed) needs no schema change,
+# and an unknown value falls back to ECB rather than crashing the run.
+FX_SOURCE_KEY = "fx_source"
+DEFAULT_FX_SOURCE = "ecb"
+# The FX sources the fetcher knows how to fetch. Kept in lockstep with
+# workers.fx_fetcher.FX_FETCHER_SOURCES (the two packages deliberately do not
+# import one another at module load).
+FX_SOURCES = ("ecb",)
+
+
+async def get_fx_fetch_enabled(session: AsyncSession) -> bool:
+    """Whether the scheduled exchange-rates fetch is currently enabled.
+
+    Read by the ``workers.fetch_exchange_rates`` beat task before it does any
+    work; when False the run is a no-op (it never fetches the feed or writes the
+    catalog). A System Admin flips this from the admin panel — only a System
+    Admin may write a platform setting (``set_platform_setting``).
+    """
+    value = await get_platform_setting(
+        session, FX_FETCH_ENABLED_KEY, default=DEFAULT_FX_FETCH_ENABLED
+    )
+    return bool(value)
+
+
+async def get_fx_source(session: AsyncSession) -> str:
+    """The configured FX rate source (default ECB).
+
+    Read live by the FX-fetcher beat task so a System-Admin source change from
+    the admin panel takes effect on the next run. An unknown / unset value
+    falls back to the default ECB source (the fetcher never crashes on a typo).
+    """
+    value = await get_platform_setting(session, FX_SOURCE_KEY, default=DEFAULT_FX_SOURCE)
+    source = str(value).strip().lower()
+    return source if source in FX_SOURCES else DEFAULT_FX_SOURCE
+
+
+# ---------------------------------------------------------------------------
+# Budget alert thresholds (Plan 11.1 task_11_1_04)
+# ---------------------------------------------------------------------------
+# The percentages-of-budget at which the consumption evaluator (task_11_1_05)
+# fires an alert via the Plan 10 notifier. PLATFORM-GLOBAL + configurable by a
+# System Admin (Plan 11.1 decision): the same thresholds apply to every tenant
+# and project, and a tenant cannot loosen them. Default [80, 90, 100]: warn at
+# 80% and 90%, then 100% is the auto-pause trigger (task_11_1_06). Stored as a
+# JSON array of ints. The 100% entry is what arms the auto-pause, so it is
+# always present in the effective list even if a System Admin drops it.
+BUDGET_ALERT_THRESHOLDS_KEY = "budget_alert_thresholds"
+DEFAULT_BUDGET_ALERT_THRESHOLDS: tuple[int, ...] = (80, 90, 100)
+
+# A threshold is a percentage of the budget. Below 1% is meaningless noise; we
+# allow above 100% (an over-budget escalation alert is legitimate).
+_BUDGET_THRESHOLD_MIN = 1
+_BUDGET_THRESHOLD_MAX = 1000
+# The 100% mark always stays in the effective list — it is the auto-pause arm.
+_BUDGET_PAUSE_THRESHOLD = 100
+
+
+class InvalidBudgetThresholdsError(ValueError):
+    """Raised when a proposed budget-alert-threshold list fails validation
+    (empty, a non-int entry, or a value outside the [1, 1000] range)."""
+
+
+def validate_budget_alert_thresholds(values: list[int]) -> list[int]:
+    """Validate + normalise a budget-alert-threshold list.
+
+    Returns the de-duplicated, ascending list with the mandatory 100% pause
+    arm guaranteed present. Raises :class:`InvalidBudgetThresholdsError` for an
+    empty list, a non-int (``bool`` is rejected too), or an out-of-range value.
+    """
+    if not values:
+        raise InvalidBudgetThresholdsError("at least one alert threshold is required")
+    cleaned: set[int] = set()
+    for v in values:
+        # bool is an int subclass — reject it so True/False can't sneak in.
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise InvalidBudgetThresholdsError(f"threshold {v!r} must be an integer")
+        if v < _BUDGET_THRESHOLD_MIN or v > _BUDGET_THRESHOLD_MAX:
+            raise InvalidBudgetThresholdsError(
+                f"threshold {v} must be between "
+                f"{_BUDGET_THRESHOLD_MIN} and {_BUDGET_THRESHOLD_MAX}"
+            )
+        cleaned.add(v)
+    cleaned.add(_BUDGET_PAUSE_THRESHOLD)  # auto-pause arm always present
+    return sorted(cleaned)
+
+
+async def get_budget_alert_thresholds(session: AsyncSession) -> list[int]:
+    """The effective budget-alert thresholds (ascending ints).
+
+    Reads the System-Admin override, falling back to the platform default
+    ``[80, 90, 100]``. Always normalised + guaranteed to include the 100% pause
+    arm; a stored value that somehow fails validation falls back to the default
+    rather than crashing the evaluator."""
+    value = await get_platform_setting(
+        session,
+        BUDGET_ALERT_THRESHOLDS_KEY,
+        default=list(DEFAULT_BUDGET_ALERT_THRESHOLDS),
+    )
+    try:
+        return validate_budget_alert_thresholds(list(value))
+    except (InvalidBudgetThresholdsError, TypeError):
+        return list(DEFAULT_BUDGET_ALERT_THRESHOLDS)
+
+
+async def set_budget_alert_thresholds(
+    session: AsyncSession,
+    values: list[int],
+    *,
+    actor: User,
+) -> list[int]:
+    """Persist the budget-alert thresholds (System Admin only).
+
+    Validates the list FIRST (raising :class:`InvalidBudgetThresholdsError`
+    before any write); ``set_platform_setting`` re-checks the actor is a System
+    Admin. Returns the normalised list actually stored."""
+    normalised = validate_budget_alert_thresholds(values)
+    await set_platform_setting(session, BUDGET_ALERT_THRESHOLDS_KEY, normalised, actor=actor)
+    return normalised
+
+
+# ---------------------------------------------------------------------------
+# Scheduled credential rotation (Plan 15 task_15_17)
+# ---------------------------------------------------------------------------
+# Live enable/disable lever for the periodic Vault credential-rotation job
+# (workers.rotate_credentials). The beat task reads it at the top of every run;
+# OFF makes the run a no-op (no Vault writes, no lease churn) without restarting
+# Celery beat — mirroring the price-sync / backup enable levers. The CADENCE
+# (cron) is a separate operator-tunable knob (WORKERS_CRED_ROTATION_CRON read by
+# the beat process at boot), NOT this flag. Default ON: an unattended production
+# platform should keep its static secrets fresh + its dynamic leases short-lived.
+CRED_ROTATION_ENABLED_KEY = "cred_rotation_enabled"
+DEFAULT_CRED_ROTATION_ENABLED = True
+
+
+async def get_cred_rotation_enabled(session: AsyncSession) -> bool:
+    """Whether the scheduled credential-rotation job is currently enabled.
+
+    Read by the ``workers.rotate_credentials`` beat task before it does any
+    work; when False the run is a no-op (no Vault writes, no lease renewal). A
+    System Admin flips this from the admin panel — only a System Admin may write
+    a platform setting (``set_platform_setting``).
+    """
+    value = await get_platform_setting(
+        session, CRED_ROTATION_ENABLED_KEY, default=DEFAULT_CRED_ROTATION_ENABLED
+    )
+    return bool(value)
+
+
+# ---------------------------------------------------------------------------
+# Acceptance-timeout escalation sweep (Plan 16 task_16_06)
+# ---------------------------------------------------------------------------
+# Live enable/disable lever for the acceptance-timeout escalation beat job
+# (workers.escalate_human_assignments). The beat task reads it at the top of
+# every run; OFF makes the run a no-op (no reassignment, no block) without
+# restarting Celery beat — mirroring the price-sync / fx-fetch / backup enable
+# levers. The CADENCE (every 10 min, default) is a separate operator-tunable
+# knob (WORKERS_HUMAN_ESCALATION_CRON read by the beat process at boot), NOT
+# this flag. Default ON: an unattended platform should keep human tasks moving
+# (escalate a forgotten assignment, block when escalation is exhausted).
+HUMAN_ESCALATION_ENABLED_KEY = "human_escalation_enabled"
+DEFAULT_HUMAN_ESCALATION_ENABLED = True
+
+
+async def get_human_escalation_enabled(session: AsyncSession) -> bool:
+    """Whether the acceptance-timeout escalation sweep is currently enabled.
+
+    Read by the ``workers.escalate_human_assignments`` beat task before it does
+    any work; when False the run is a no-op (no pending-acceptance assignment is
+    reassigned or blocked). A System Admin flips this from the admin panel — only
+    a System Admin may write a platform setting (``set_platform_setting``).
+    """
+    value = await get_platform_setting(
+        session, HUMAN_ESCALATION_ENABLED_KEY, default=DEFAULT_HUMAN_ESCALATION_ENABLED
+    )
+    return bool(value)
+
+
+# ---------------------------------------------------------------------------
 # Scheduled backup (Plan 12 task_12_01 / task_12_04)
 # ---------------------------------------------------------------------------
 # Live enable/disable lever for the daily backup job, flipped by a System Admin

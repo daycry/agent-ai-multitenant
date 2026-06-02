@@ -1,0 +1,56 @@
+# Bootstrap compose for the TEMPORARY installer (Plan 15 Fase A).
+#
+# This file is intentionally SEPARATE from docker/docker-compose.yml: the
+# installer is a self-destructing, throwaway container that runs ONLY during
+# first-time provisioning. It is NOT wired into the runtime stack.
+#
+# Bring it up on a fresh host:
+#   docker compose -f apps/installer/docker-compose.installer.yml up -d --build
+# then open the wizard at http://localhost:3100. When the wizard finishes
+# (step 9 → "Listo"), the installer requests its own teardown (the
+# self-destruct seam wired in task 15_06) and you run:
+#   docker compose -f apps/installer/docker-compose.installer.yml down
+#
+# In Phase B the backend mounts the host docker socket / data dir to actually
+# provision the stack; Phase A serves only the wizard shell + its API, so no
+# host mounts are declared here yet.
+
+name: agentic-platform-installer
+
+services:
+  installer-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      INSTALLER_HOST: 0.0.0.0
+      INSTALLER_PORT: 8080
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; urllib.request.urlopen('http://localhost:8080/healthz'); sys.exit(0)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: "no"
+
+  installer-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # The wizard talks to the backend over the host (browser-side fetch), so
+      # it points at the published backend port, not the compose service name.
+      NEXT_PUBLIC_INSTALLER_API: http://localhost:8080
+    ports:
+      - "3100:3100"
+    depends_on:
+      installer-backend:
+        condition: service_healthy
+    restart: "no"

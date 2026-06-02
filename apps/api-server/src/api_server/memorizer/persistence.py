@@ -68,6 +68,7 @@ async def persist_memory_candidates(
     team_id: UUID | None = None,
     project_id: UUID | None = None,
     source_execution_id: UUID | None = None,
+    source_human_work_session_id: UUID | None = None,
     extra_metadata: Mapping[str, Any] | None = None,
 ) -> list[MemoryEntry]:
     """Write `candidates` as `MemoryEntry` rows and return them.
@@ -83,7 +84,10 @@ async def persist_memory_candidates(
         user_id / team_id / project_id: Owner pointers. The one
             required by `scope` must be set.
         source_execution_id: Back-link to the `Execution` we
-            distilled from (NULL on human-curated memories).
+            distilled from (NULL on human-curated / human-session memories).
+        source_human_work_session_id: Back-link to the `HumanWorkSession`
+            we distilled from (Plan 16 task_16_15). Mutually exclusive with
+            `source_execution_id` (DB CHECK ck_memory_entries_single_source).
         extra_metadata: Anything to merge into each row's `metadata`
             JSONB (e.g. distillation model id, cost in USD). Tags
             stay on the candidate side; this column carries the
@@ -94,6 +98,15 @@ async def persist_memory_candidates(
     """
     if not candidates:
         return []
+
+    # A memory cites at most one source — Execution XOR HumanWorkSession. The
+    # DB CHECK (ck_memory_entries_single_source) is the final arbiter; fail
+    # early with a clear error before we open a transaction.
+    if source_execution_id is not None and source_human_work_session_id is not None:
+        raise ValueError(
+            "a memory cites at most one source: pass source_execution_id OR "
+            "source_human_work_session_id, not both"
+        )
 
     owner = _owner_kwargs(scope, user_id=user_id, team_id=team_id, project_id=project_id)
     metadata_base: dict[str, Any] = dict(extra_metadata or {})
@@ -107,6 +120,7 @@ async def persist_memory_candidates(
             content=cand.content,
             agent_id=agent_id,
             source_execution_id=source_execution_id,
+            source_human_work_session_id=source_human_work_session_id,
             tags=list(cand.tags),
             metadata_={**metadata_base, "tags": list(cand.tags)},
             **owner,
@@ -120,6 +134,9 @@ async def persist_memory_candidates(
         scope=scope,
         count=len(rows),
         source_execution_id=str(source_execution_id) if source_execution_id else None,
+        source_human_work_session_id=(
+            str(source_human_work_session_id) if source_human_work_session_id else None
+        ),
     )
     return rows
 

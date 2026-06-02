@@ -34,9 +34,13 @@ from api_server.routers.approvals import router as approvals_router
 from api_server.routers.assistant import router as assistant_router
 from api_server.routers.auth import router as auth_router
 from api_server.routers.backup import router as backup_router
+from api_server.routers.budget_pause import router as budget_pause_router
 from api_server.routers.conversations import (
     conversations_router,
     project_conversations_router,
+)
+from api_server.routers.copilot_device_flow import (
+    admin_router as copilot_device_flow_admin_router,
 )
 from api_server.routers.cross_tenant_stats import router as cross_tenant_stats_router
 from api_server.routers.dep_cache import router as dep_cache_router
@@ -46,6 +50,8 @@ from api_server.routers.evals import router as evals_router
 from api_server.routers.executions import router as executions_router
 from api_server.routers.guardrail_alerts import router as guardrail_alerts_router
 from api_server.routers.guardrail_events import router as guardrail_events_router
+from api_server.routers.human_agents import router as human_agents_router
+from api_server.routers.human_inbox import router as human_inbox_router
 from api_server.routers.incoming_webhook_configs import router as incoming_webhook_configs_router
 from api_server.routers.incoming_webhooks import router as incoming_webhooks_router
 from api_server.routers.internal_agent import router as internal_agent_router
@@ -57,6 +63,7 @@ from api_server.routers.knowledge_bases import (
 from api_server.routers.knowledge_bases import (
     router as knowledge_bases_router,
 )
+from api_server.routers.llm_providers import admin_router as llm_providers_admin_router
 from api_server.routers.marketplace import admin_router as marketplace_admin_router
 from api_server.routers.marketplace import router as marketplace_router
 from api_server.routers.mcp import router as mcp_router
@@ -165,6 +172,8 @@ def _register_routers(app: FastAPI) -> None:
         mfa_router,
         admin_router,
         agents_router,
+        human_agents_router,
+        human_inbox_router,
         api_tokens_router,
         api_v1_router,
         api_v1_docs_router,
@@ -195,6 +204,8 @@ def _register_routers(app: FastAPI) -> None:
         marketplace_admin_router,
         model_prices_router,
         model_prices_admin_router,
+        llm_providers_admin_router,
+        copilot_device_flow_admin_router,
         mcp_router,
         mcp_catalog_router,
         tools_diagnostic_router,
@@ -209,6 +220,7 @@ def _register_routers(app: FastAPI) -> None:
         incoming_webhook_configs_router,
         assistant_router,
         backup_router,
+        budget_pause_router,
         ws_router,
     ):
         app.include_router(router)

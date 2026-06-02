@@ -49,10 +49,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
+import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
+import {
+  isDefaultRedirectBase,
+  redirectBaseFromUrl,
+  SSO_REDIRECT_BASE_DEFAULT,
+} from "@/lib/sso-redirect-base";
 
 // --------------------------------------------------------------------------
 // Types — mirror api_server.schemas.sso
@@ -291,6 +298,12 @@ function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolea
     }
   }
 
+  // The callback URL is built from `sso_redirect_base_url`; if it still
+  // carries the backend default placeholder, warn the operator to set the
+  // real public base before wiring up the IdP (ADR 0047 §6).
+  const isPlaceholder = !loading && isDefaultRedirectBase(url);
+  const base = redirectBaseFromUrl(url);
+
   return (
     <Card className="mt-6" data-testid="sso-callback-card">
       <CardHeader>
@@ -298,7 +311,8 @@ function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolea
       </CardHeader>
       <CardContent>
         <p className="text-muted-foreground mb-2 text-sm">
-          Registra esta URL en la lista de redirect URIs permitidas de tu proveedor de identidad.
+          Esta URL es <strong>global</strong> (una sola para toda la plataforma). Regístrala en la
+          lista de redirect URIs permitidas de tu proveedor de identidad.
         </p>
         <div className="flex items-center gap-2">
           <code
@@ -320,6 +334,24 @@ function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolea
             {copied ? "Copiado" : "Copiar"}
           </Button>
         </div>
+        {base !== null && !loading ? (
+          <p className="text-muted-foreground mt-2 text-xs" data-testid="sso-redirect-base">
+            Base pública configurada: <span className="font-mono">{base}</span>
+          </p>
+        ) : null}
+        {isPlaceholder ? (
+          <p
+            className="border-warning/40 bg-warning/10 text-warning-foreground mt-2 rounded-md border px-3 py-2 text-xs"
+            data-testid="sso-redirect-base-warning"
+            role="alert"
+          >
+            Sigue usando la base por defecto{" "}
+            <span className="font-mono">{SSO_REDIRECT_BASE_DEFAULT}</span> (un marcador de posición,
+            ni siquiera coincide con el api-server de desarrollo). Configura{" "}
+            <span className="font-mono">SSO_REDIRECT_BASE_URL</span> con tu URL pública antes de
+            registrar la callback en el IdP.
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -568,10 +600,10 @@ function SsoConfigDialog({
             {/* Template picker */}
             <div className="bg-muted/30 -mx-2 rounded-md border p-3">
               <Label htmlFor="sso-form-template">Plantilla de proveedor</Label>
-              <select
+              <Select
                 id="sso-form-template"
                 data-testid="sso-form-template"
-                className="border-input bg-background mt-1 h-10 w-full rounded-md border px-3 text-sm"
+                className="mt-1"
                 value={templateId}
                 onChange={(e) => applyTemplate(e.target.value)}
                 disabled={templatesQuery.isLoading}
@@ -586,7 +618,7 @@ function SsoConfigDialog({
                     {tpl.display_name}
                   </option>
                 ))}
-              </select>
+              </Select>
               <p className="text-muted-foreground mt-1.5 text-xs">
                 Pre-rellena issuer, scopes y mapeo de claims con valores verificados. Después puedes
                 ajustarlos manualmente.
@@ -692,11 +724,9 @@ function SsoConfigDialog({
 
             {/* Enabled */}
             <label className="flex items-center gap-2 text-sm" htmlFor="sso-form-enabled">
-              <input
+              <Checkbox
                 id="sso-form-enabled"
                 data-testid="sso-form-enabled"
-                type="checkbox"
-                className="h-4 w-4 rounded border"
                 checked={state.enabled}
                 onChange={(e) => setState({ ...state, enabled: e.target.checked })}
               />

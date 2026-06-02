@@ -11,22 +11,42 @@ constraints (see the plan) make tenant isolation + RBAC non-negotiable:
   * Tools are READ-ONLY: they only ``SELECT``. The assistant cannot mutate
     state through them.
 
-``tenant_budget_status`` is a typed placeholder: the budget engine lands
-in Plan 11 (§28.7). Rather than fabricate numbers, it returns a structured
-``available: false`` result the UI/LLM can render as "not available yet".
+``tenant_budget_status`` returns the tenant's REAL budget consumption
+(Plan 11.1 task_11_1_05): the tenant-wide + per-project spend vs budget in
+canonical USD, with the percent used, the active period and a status. When no
+budget is configured it returns a structured ``available: false`` result the
+UI/LLM can render honestly (rather than fabricating numbers).
+
+``tenant_human_workload`` / ``tenant_human_assignments_pending`` (Plan 16
+task_16_14) answer the Human-Agents operational questions — "how many tasks
+does user X have this week?" and "which human tasks are unaccepted for > N
+hours?". Both run on the SAME tenant-scoped RLS session, so they too can only
+ever see this tenant's :class:`HumanTaskAssignment` / :class:`HumanWorkSession`
+rows; a user named in ``tenant_human_workload`` is resolved through the
+tenant's ``user_org_memberships`` (RLS-scoped), so the asking admin can never
+probe a user outside their tenant.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.db.domain import Plan, Project, Task
+from api_server.db.domain import (
+    HumanTaskAssignment,
+    HumanTaskAssignmentStatus,
+    HumanWorkSession,
+    Plan,
+    Project,
+    Task,
+)
+from api_server.db.models import User, UserOrganizationMembership
 
 # Tasks still "in the team's hands" — terminal statuses excluded so the
 # recent-activity / status views focus on outstanding work.
@@ -136,19 +156,233 @@ async def _tenant_recent_activity(
     return {"active_task_count": int(total_active or 0), "recent": items}
 
 
-async def _tenant_budget_status(_ctx: AssistantToolContext, **_: Any) -> dict[str, Any]:
-    """Typed placeholder — the budget engine lands in Plan 11 (§28.7).
+async def _tenant_budget_status(ctx: AssistantToolContext, **_: Any) -> dict[str, Any]:
+    """Real tenant/project budget status (Plan 11.1 task_11_1_05).
 
-    Returns a structured "not available yet" result rather than fake
-    numbers, so the LLM / UI can say so honestly.
+    Sums the canonical-USD spend of the current budget period per scope (the
+    tenant-wide budget + each project with one), compares it against the
+    USD-converted cap, and returns the percent used, the active period and a
+    coarse status. Runs on the caller's tenant-scoped RLS session, so only this
+    tenant's budgets / spend are ever seen. When no budget is configured
+    anywhere, returns a structured ``available: false`` result (an honest "no
+    budget", never fabricated numbers)."""
+    from api_server.budgets import tenant_budget_summary
+
+    return await tenant_budget_summary(ctx.session, tenant_id=ctx.tenant_id)
+
+
+# ---------------------------------------------------------------------------
+# Human Agents tools (Plan 16 task_16_14)
+# ---------------------------------------------------------------------------
+# Open assignment states that count toward a user's live human-task load — the
+# task is on the user's plate but not finished (pending_acceptance = awaiting
+# accept; accepted = working). reassigned/declined/expired are closed and so
+# excluded (mirrors planning_context._OPEN_ASSIGNMENT_STATES).
+_OPEN_ASSIGNMENT_STATES: frozenset[str] = frozenset(
+    {
+        HumanTaskAssignmentStatus.PENDING_ACCEPTANCE.value,
+        HumanTaskAssignmentStatus.ACCEPTED.value,
+    }
+)
+
+# Default acceptance-age threshold for "pending too long" — mirrors the default
+# ``human_agent_config.acceptance_timeout_hours`` (Plan 16 Decisiones Clave: 24h).
+_DEFAULT_PENDING_THRESHOLD_HOURS = 24
+
+# How many pending assignments / matched users a single call returns at most,
+# so a chatty model can't pull an unbounded result set.
+_MAX_PENDING_RESULTS = 200
+_MAX_USER_MATCHES = 25
+
+
+def _iso_week_start(now: datetime) -> datetime:
+    """Monday 00:00 UTC of ``now``'s ISO week — the "this week" lower bound.
+
+    Mirrors :func:`api_server.budgets.period._weekly_window` (Monday-anchored
+    ISO week) so the assistant's "this week" matches the weekly budget window.
     """
+    midnight = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight - timedelta(days=midnight.weekday())
+
+
+async def _resolve_tenant_user(
+    ctx: AssistantToolContext, query: str
+) -> tuple[UUID | None, list[dict[str, str]]]:
+    """Resolve a free-text user reference to ONE tenant user, RBAC-safe.
+
+    The admin names a user by id, email or (full) name. We only ever look at
+    users who are MEMBERS of the asking admin's tenant — the
+    ``user_org_memberships`` join is itself RLS-scoped to ``ctx.tenant_id``, so
+    a name/email belonging to a user outside the tenant resolves to nothing
+    (never leaking that the user exists elsewhere). Returns ``(user_id,
+    matches)``: ``user_id`` is set only on an unambiguous single match;
+    ``matches`` always carries the candidate list (capped) so the caller can
+    report "no match" / "ambiguous" honestly.
+    """
+    needle = query.strip()
+    membership = UserOrganizationMembership
+    stmt = (
+        select(User.id, User.email, User.full_name)
+        .join(membership, membership.user_id == User.id)
+        .where(
+            membership.tenant_id == ctx.tenant_id,
+            membership.is_active.is_(True),
+            membership.deleted_at.is_(None),
+            User.deleted_at.is_(None),
+        )
+    )
+    # Try an exact id match first (the model may echo back an id we returned).
+    parsed_id: UUID | None = None
+    try:
+        parsed_id = UUID(needle)
+    except (ValueError, AttributeError):
+        parsed_id = None
+    if parsed_id is not None:
+        stmt = stmt.where(User.id == parsed_id)
+    else:
+        like = f"%{needle}%"
+        stmt = stmt.where(
+            or_(
+                func.lower(User.email) == needle.lower(),
+                func.lower(User.full_name) == needle.lower(),
+                User.email.ilike(like),
+                User.full_name.ilike(like),
+            )
+        )
+    rows = (await ctx.session.execute(stmt.order_by(User.email).limit(_MAX_USER_MATCHES + 1))).all()
+    matches = [
+        {"id": str(uid), "email": email, "full_name": full_name or ""}
+        for uid, email, full_name in rows[:_MAX_USER_MATCHES]
+    ]
+    resolved = matches[0]["id"] if len(rows) == 1 else None
+    return (UUID(resolved) if resolved is not None else None), matches
+
+
+async def _tenant_human_workload(
+    ctx: AssistantToolContext, *, user: str, **_: Any
+) -> dict[str, Any]:
+    """How much human-task work a tenant user has this (ISO) week.
+
+    Resolves ``user`` (id / email / name) to ONE member of the asking admin's
+    tenant, then counts that user's OPEN human-task assignments
+    (pending_acceptance + accepted) and the work sessions they STARTED this
+    week. RLS scopes both counts to the tenant, and the user is resolved only
+    among tenant members, so a cross-tenant user is never reachable. Returns a
+    typed ``resolved: false`` (with the candidate list) when the reference is
+    empty / unknown / ambiguous, so the assistant answers honestly instead of
+    fabricating a number."""
+    needle = (user or "").strip()
+    if not needle:
+        return {"resolved": False, "reason": "empty_query", "matches": []}
+
+    user_id, matches = await _resolve_tenant_user(ctx, needle)
+    if user_id is None:
+        reason = "ambiguous" if len(matches) > 1 else "not_found"
+        return {"resolved": False, "reason": reason, "matches": matches}
+
+    week_start = _iso_week_start(datetime.now(UTC))
+
+    # Open assignments currently on this user (not time-bounded — "what is on
+    # their plate right now"), split by status for a useful breakdown.
+    assign_rows = (
+        await ctx.session.execute(
+            select(HumanTaskAssignment.status, func.count())
+            .where(
+                HumanTaskAssignment.assigned_to_user_id == user_id,
+                HumanTaskAssignment.status.in_(_OPEN_ASSIGNMENT_STATES),
+            )
+            .group_by(HumanTaskAssignment.status)
+        )
+    ).all()
+    by_status = {status_: int(count) for status_, count in assign_rows}
+    open_assignments = sum(by_status.values())
+
+    # Distinct tasks the user assigned work to this week + the sessions started
+    # this week (the "this week" slice the question asks for).
+    ws_row = (
+        await ctx.session.execute(
+            select(
+                func.count(),
+                func.count(func.distinct(HumanWorkSession.task_id)),
+            ).where(
+                HumanWorkSession.user_id == user_id,
+                HumanWorkSession.start_at >= week_start,
+            )
+        )
+    ).one()
+    work_sessions_this_week = int(ws_row[0] or 0)
+    tasks_worked_this_week = int(ws_row[1] or 0)
+
+    matched = matches[0]
     return {
-        "available": False,
-        "reason": "budget_engine_not_implemented",
-        "message": (
-            "El motor de presupuesto se implementa en el Plan 11; "
-            "todavía no hay cifras de presupuesto disponibles."
-        ),
+        "resolved": True,
+        "user": matched,
+        "week_start": week_start.isoformat(),
+        "open_assignments": open_assignments,
+        "open_assignments_by_status": by_status,
+        "work_sessions_this_week": work_sessions_this_week,
+        "tasks_worked_this_week": tasks_worked_this_week,
+    }
+
+
+async def _tenant_human_assignments_pending(
+    ctx: AssistantToolContext, *, older_than_hours: int = _DEFAULT_PENDING_THRESHOLD_HOURS, **_: Any
+) -> dict[str, Any]:
+    """Human task assignments still awaiting acceptance for longer than N hours.
+
+    Lists the tenant's ``pending_acceptance`` :class:`HumanTaskAssignment` rows
+    whose ``assigned_at`` is older than ``older_than_hours`` (default 24h — the
+    default acceptance timeout). RLS scopes every row to the asking admin's
+    tenant, so out-of-tenant assignments are never returned. Joins the Task for
+    a human-readable title and the assigned user's email so the assistant can
+    name names. Ordered oldest-first (the most overdue first)."""
+    threshold_hours = max(0, int(older_than_hours))
+    cutoff = datetime.now(UTC) - timedelta(hours=threshold_hours)
+
+    stmt = (
+        select(
+            HumanTaskAssignment.id,
+            HumanTaskAssignment.task_id,
+            HumanTaskAssignment.assigned_to_user_id,
+            HumanTaskAssignment.assigned_at,
+            Task.title,
+            Task.project_id,
+            User.email,
+            User.full_name,
+        )
+        .join(Task, Task.id == HumanTaskAssignment.task_id)
+        .outerjoin(User, User.id == HumanTaskAssignment.assigned_to_user_id)
+        .where(
+            HumanTaskAssignment.status == HumanTaskAssignmentStatus.PENDING_ACCEPTANCE.value,
+            HumanTaskAssignment.assigned_at < cutoff,
+        )
+        .order_by(HumanTaskAssignment.assigned_at)
+        .limit(_MAX_PENDING_RESULTS)
+    )
+    rows = (await ctx.session.execute(stmt)).all()
+    now = datetime.now(UTC)
+    items: list[dict[str, Any]] = []
+    for aid, task_id, user_id, assigned_at, title, project_id, email, full_name in rows:
+        pending_hours = (
+            (now - assigned_at).total_seconds() / 3600.0 if assigned_at is not None else None
+        )
+        items.append(
+            {
+                "assignment_id": str(aid),
+                "task_id": str(task_id),
+                "task_title": title,
+                "project_id": str(project_id),
+                "assigned_to_user_id": (str(user_id) if user_id is not None else None),
+                "assigned_to_email": email,
+                "assigned_to_name": full_name,
+                "assigned_at": assigned_at.isoformat() if assigned_at is not None else None,
+                "pending_hours": (round(pending_hours, 2) if pending_hours is not None else None),
+            }
+        )
+    return {
+        "older_than_hours": threshold_hours,
+        "count": len(items),
+        "assignments": items,
     }
 
 
@@ -216,11 +450,64 @@ ASSISTANT_TOOLS: dict[str, ToolEntry] = {
         schema={
             "name": "tenant_budget_status",
             "description": (
-                "Estado de presupuesto del tenant. NOTA: el motor de "
-                "presupuesto se implementa en el Plan 11; de momento "
-                "devuelve un marcador 'no disponible'."
+                "Estado real de presupuesto del tenant y sus proyectos: gasto "
+                "en USD del periodo actual, porcentaje del presupuesto, periodo "
+                "y estado. Si no hay presupuesto configurado, lo indica."
             ),
             "parameters": {"type": "object", "properties": {}},
+        },
+    ),
+    "tenant_human_workload": ToolEntry(
+        impl=_tenant_human_workload,
+        schema={
+            "name": "tenant_human_workload",
+            "description": (
+                "Carga de trabajo de un usuario humano del tenant esta semana: "
+                "cuántas tareas humanas tiene asignadas activas "
+                "(pendientes de aceptar + aceptadas) y cuántas sesiones de "
+                "trabajo ha iniciado esta semana. Identifica al usuario por "
+                "nombre, email o id; si no hay coincidencia o es ambigua, lo "
+                "indica con la lista de candidatos."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user": {
+                        "type": "string",
+                        "description": (
+                            "Nombre, email o id del usuario humano del tenant "
+                            "cuya carga se consulta."
+                        ),
+                    }
+                },
+                "required": ["user"],
+            },
+        },
+    ),
+    "tenant_human_assignments_pending": ToolEntry(
+        impl=_tenant_human_assignments_pending,
+        schema={
+            "name": "tenant_human_assignments_pending",
+            "description": (
+                "Tareas humanas asignadas que siguen pendientes de aceptación "
+                "desde hace más de N horas (por defecto 24h, el timeout de "
+                "aceptación). Devuelve la lista ordenada de la más antigua a la "
+                "más reciente con la tarea, el usuario asignado y las horas que "
+                "lleva pendiente."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "older_than_hours": {
+                        "type": "integer",
+                        "description": (
+                            "Umbral en horas de antigüedad de la asignación sin "
+                            "aceptar (por defecto 24)."
+                        ),
+                        "minimum": 0,
+                    }
+                },
+            },
         },
     ),
 }

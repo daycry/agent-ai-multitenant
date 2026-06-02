@@ -11,10 +11,12 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ShieldCheck } from "lucide-react";
+import { Check, ShieldCheck, X } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { StateBlock } from "@/components/shared/state-block";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -54,32 +56,27 @@ export default function ApprovalsPage() {
         </Badge>
       </div>
 
-      {query.isLoading && <p className="text-muted-foreground text-sm">Cargando solicitudes…</p>}
-
-      {query.isError && (
-        <Card className="border-destructive p-4" data-testid="approvals-error">
-          <p className="text-destructive text-sm">
-            No se pudieron cargar las solicitudes:{" "}
-            {query.error instanceof ApiError ? query.error.body : String(query.error)}
-          </p>
-        </Card>
-      )}
-
-      {query.data && pending.length === 0 && (
-        <Card className="p-8 text-center" data-testid="approvals-empty">
-          <p className="text-muted-foreground text-sm">
-            No hay solicitudes de aprobación pendientes.
-          </p>
-        </Card>
-      )}
-
-      <ul className="space-y-3" data-testid="approvals-list">
-        {pending.map((request) => (
-          <li key={request.id}>
-            <ApprovalCard request={request} />
-          </li>
-        ))}
-      </ul>
+      <StateBlock
+        isLoading={query.isLoading}
+        isError={query.isError}
+        error={query.error}
+        isEmpty={Boolean(query.data) && pending.length === 0}
+        loadingLabel="Cargando solicitudes…"
+        errorTitle="No se pudieron cargar las solicitudes"
+        errorTestId="approvals-error"
+        emptyIcon={ShieldCheck}
+        emptyTitle="Sin aprobaciones pendientes"
+        emptyDescription="No hay solicitudes de aprobación pendientes."
+        emptyTestId="approvals-empty"
+      >
+        <ul className="space-y-3" data-testid="approvals-list">
+          {pending.map((request) => (
+            <li key={request.id}>
+              <ApprovalCard request={request} />
+            </li>
+          ))}
+        </ul>
+      </StateBlock>
     </div>
   );
 }
@@ -142,30 +139,24 @@ function ApprovalCard({ request }: { request: ApprovalRequest }) {
         )}
 
         <div className="flex gap-2">
-          <button
-            type="button"
+          <Button
             data-testid={`approve-${request.id}`}
             disabled={resolve.isPending}
             onClick={() => resolve.mutate(true)}
-            className={cn(
-              "bg-primary text-primary-foreground rounded-md px-4 py-2 text-sm font-medium",
-              "transition-opacity hover:opacity-90 disabled:opacity-50",
-            )}
           >
+            <Check className="mr-1.5 h-4 w-4" />
             Aprobar
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="outline"
             data-testid={`reject-${request.id}`}
             disabled={resolve.isPending}
             onClick={() => resolve.mutate(false)}
-            className={cn(
-              "bg-danger-soft text-danger-soft-foreground rounded-md px-4 py-2 text-sm font-medium",
-              "transition-opacity hover:opacity-90 disabled:opacity-50",
-            )}
+            className="text-danger-soft-foreground hover:bg-danger-soft"
           >
+            <X className="mr-1.5 h-4 w-4" />
             Rechazar
-          </button>
+          </Button>
         </div>
       </CardContent>
     </Card>

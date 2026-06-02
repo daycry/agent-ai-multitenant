@@ -43,6 +43,8 @@ DEFAULT_ENABLED_TOOLS: tuple[str, ...] = (
     "tenant_plans_summary",
     "tenant_recent_activity",
     "tenant_budget_status",
+    "tenant_human_workload",
+    "tenant_human_assignments_pending",
 )
 
 _DEFAULT_NAME = "Asistente"

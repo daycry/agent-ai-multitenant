@@ -13,18 +13,41 @@ mirar en la UI, criterios de pass/fail.
 
 ## Índice
 
-| Plan                                  | Tests humanos                     | Guía                                                                       |
-| ------------------------------------- | --------------------------------- | -------------------------------------------------------------------------- |
-| Plan 02 — Ejecución de agentes        | 5 (`human_02_01..05`)             | [`02-ejecucion-agentes.md`](./02-ejecucion-agentes.md)                     |
-| Plan 04 — Memoria, RAG, KBs           | 5 (`human_04_01..05`)             | [`04-memoria-rag-kbs.md`](./04-memoria-rag-kbs.md)                         |
-| Plan 04.5 — Agent-runtime integration | 2 demos                           | [`04.5-agent-runtime-integration.md`](./04.5-agent-runtime-integration.md) |
-| Plan 05 — MCP y Tools avanzadas       | 3 (`human_05_01..03`)             | [`05-mcp-tools-avanzadas.md`](./05-mcp-tools-avanzadas.md)                 |
-| Plan 06 — Testing + Git ciclo         | 12 (`human_06_01..12`)            | [`06-testing-revision-git.md`](./06-testing-revision-git.md)               |
-| Plan 06.5 — Orchestrator wiring       | 0 propios (reusa los del Plan 06) | — (ver nota abajo)                                                         |
-| Plan 06.6 — Admin UI gaps             | 2 (`human_06_6_01..02`)           | [`06.6-admin-ui-gaps.md`](./06.6-admin-ui-gaps.md)                         |
-| Plan 06.7 — Memory dedup              | 2 (`human_06_7_01..02`)           | [`06.7-memory-dedup.md`](./06.7-memory-dedup.md)                           |
-| Plan 06.8 — RBAC enforcement          | 4 (`human_06_8_01..04`)           | [`06.8-rbac-enforcement.md`](./06.8-rbac-enforcement.md)                   |
-| **Plan 06.9 — Agent-scoped KBs**      | 4 (`human_06_9_01..04`)           | [`06.9-agent-scoped-kbs.md`](./06.9-agent-scoped-kbs.md)                   |
+| Plan                                    | Tests humanos                     | Guía                                                                           |
+| --------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------ |
+| Plan 00 — Fundaciones                   | 5 (`human_00_01..05`)             | [`00-fundaciones.md`](./00-fundaciones.md)                                     |
+| Plan 01 — Dominio mínimo                | 4 (`human_01_01..04`)             | [`01-dominio-minimo.md`](./01-dominio-minimo.md)                               |
+| Plan 02 — Ejecución de agentes          | 5 (`human_02_01..05`)             | [`02-ejecucion-agentes.md`](./02-ejecucion-agentes.md)                         |
+| Plan 03 — Chat, planning y aprobación   | 5 (`human_03_01..05`)             | [`03-chat-planning-aprobacion.md`](./03-chat-planning-aprobacion.md)           |
+| Plan 04 — Memoria, RAG, KBs             | 5 (`human_04_01..05`)             | [`04-memoria-rag-kbs.md`](./04-memoria-rag-kbs.md)                             |
+| Plan 04.5 — Agent-runtime integration   | 2 demos                           | [`04.5-agent-runtime-integration.md`](./04.5-agent-runtime-integration.md)     |
+| Plan 05 — MCP y Tools avanzadas         | 3 (`human_05_01..03`)             | [`05-mcp-tools-avanzadas.md`](./05-mcp-tools-avanzadas.md)                     |
+| Plan 06 — Testing + Git ciclo           | 12 (`human_06_01..12`)            | [`06-testing-revision-git.md`](./06-testing-revision-git.md)                   |
+| Plan 06.5 — Orchestrator wiring         | 0 propios (reusa los del Plan 06) | — (ver nota abajo)                                                             |
+| Plan 06.6 — Admin UI gaps               | 2 (`human_06_6_01..02`)           | [`06.6-admin-ui-gaps.md`](./06.6-admin-ui-gaps.md)                             |
+| Plan 06.7 — Memory dedup                | 2 (`human_06_7_01..02`)           | [`06.7-memory-dedup.md`](./06.7-memory-dedup.md)                               |
+| Plan 06.8 — RBAC enforcement            | 4 (`human_06_8_01..04`)           | [`06.8-rbac-enforcement.md`](./06.8-rbac-enforcement.md)                       |
+| Plan 06.9 — Agent-scoped KBs            | 4 (`human_06_9_01..04`)           | [`06.9-agent-scoped-kbs.md`](./06.9-agent-scoped-kbs.md)                       |
+| Plan 06.10 — KB categories              | 4 (`human_06_10_01..04`)          | [`06.10-kb-categories.md`](./06.10-kb-categories.md)                           |
+| Plan 06.11 — KB ingestion fixes         | 4 (`human_06_11_01..04`)          | [`06.11-kb-ingestion-fixes.md`](./06.11-kb-ingestion-fixes.md)                 |
+| Plan 06.12 — Global catalog consistency | 3 (`human_06_12_01..03`)          | [`06.12-global-catalog-consistency.md`](./06.12-global-catalog-consistency.md) |
+| Plan 06.13 — KB catalog content         | 2 (`human_06_13_01..02`)          | [`06.13-kb-catalog-content.md`](./06.13-kb-catalog-content.md)                 |
+| Plan 06.14 — Hardening + auditoría      | 16 (`human_06_14_01..16`)         | [`06.14-hardening-auditoria.md`](./06.14-hardening-auditoria.md)               |
+| Plan 06.15 — Agent tools assignment UI  | 2 (`human_06_15_01..02`)          | [`06.15-agent-tools-assignment-ui.md`](./06.15-agent-tools-assignment-ui.md)   |
+| Plan 06.16 — Polyglot tool catalog      | 1 (`human_06_16_01`)              | [`06.16-polyglot-tool-catalog.md`](./06.16-polyglot-tool-catalog.md)           |
+| Plan 07 — Documentación + visor         | 4 (`human_07_01..04`)             | [`07-documentacion-visor.md`](./07-documentacion-visor.md)                     |
+| Plan 08 — SSO empresarial               | 3 (`human_08_01..03`)             | [`08-sso-empresarial.md`](./08-sso-empresarial.md)                             |
+| Plan 09 — Marketplace                   | 4 (`human_09_01..04`)             | [`09-marketplace.md`](./09-marketplace.md)                                     |
+| Plan 09.1 — Marketplace seed + publish  | 1 (`human_09_1_01`)               | [`09.1-marketplace-seed-publish.md`](./09.1-marketplace-seed-publish.md)       |
+| Plan 10 — Asistente personal            | 4 (`human_10_01..04`)             | [`10-asistente-personal.md`](./10-asistente-personal.md)                       |
+| Plan 11 — Guardrails + precios          | 4 (`human_11_01..04`)             | [`11-guardrails-precios.md`](./11-guardrails-precios.md)                       |
+| Plan 11.2 — LLM provider admin UI       | 3 (`human_11_2_01..03`)           | [`11.2-llm-provider-admin-ui.md`](./11.2-llm-provider-admin-ui.md)             |
+| Plan 12 — Backup + restore              | 4 (`human_12_01..04`)             | [`12-backup-restore.md`](./12-backup-restore.md)                               |
+| Plan 13 — API pública + webhooks        | 4 (`human_13_01..04`)             | [`13-api-publica-webhooks.md`](./13-api-publica-webhooks.md)                   |
+| Plan 14 — Evals + estadísticas          | 4 (`human_14_01..04`)             | [`14-evals-estadisticas.md`](./14-evals-estadisticas.md)                       |
+| Plan 15 — Instalador + producción       | 5 (`human_15_01..05`)             | [`15-instalador-produccion.md`](./15-instalador-produccion.md)                 |
+| Plan 16 — Human agents                  | 6 (`human_16_01..06`)             | [`16-human-agents.md`](./16-human-agents.md)                                   |
+| Seed demo-webscorpo-team-kb             | 1 (`human_demo_ws_01`)            | [`demo-webscorpo-team-kb.md`](./demo-webscorpo-team-kb.md)                     |
 
 > El antiguo `docs/03-guides/run-demo-human-tests.md` acumulaba los
 > Plans 02 / 04 / 04.5 en un único documento. La migración a la

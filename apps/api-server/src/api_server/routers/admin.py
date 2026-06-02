@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
 
+from api_server.auth.admin_hardening import require_hardened_system_admin
 from api_server.auth.audit import write_audit_log
 from api_server.auth.deps import (
     AuthPrincipal,
@@ -32,9 +33,17 @@ from api_server.auth.deps import (
     require_system_admin,
 )
 from api_server.config import get_settings
-from api_server.db.models import AuditAction, Organization, User
+from api_server.db.models import (
+    AuditAction,
+    Organization,
+    User,
+    UserOrganizationMembership,
+)
 from api_server.logging import get_logger
 from api_server.schemas.admin import (
+    MembershipCreateRequest,
+    MembershipResponse,
+    MembershipUpdateRequest,
     ServiceHealth,
     SystemHealthResponse,
     TenantCreateRequest,
@@ -61,7 +70,18 @@ _PROBE_TIMEOUT_S = 10.0
 
 _logger = get_logger(__name__)
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+# The admin-hardening gate (Plan 15 task_15_18) is wired at the ROUTER level
+# so it applies to every `/admin/*` route without touching each handler. In
+# staging/prod it enforces mandatory MFA + IP allowlist + a short session TTL;
+# in dev it is a pass-through. It composes `require_system_admin`, so the
+# per-route `Depends(require_system_admin)` still gives handlers the principal
+# (FastAPI dedups the shared dependency) while the router-level dependency adds
+# the hardening checks.
+router = APIRouter(
+    prefix="/admin",
+    tags=["admin"],
+    dependencies=[Depends(require_hardened_system_admin)],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +257,229 @@ async def list_users(
         )
         for u in result.scalars().all()
     ]
+
+
+# ---------------------------------------------------------------------------
+# /admin/users/{user_id}/memberships — manage tenant access (ADR 0047)
+#
+# Tenant access is granted EXCLUSIVELY by ``UserOrganizationMembership``
+# the System Admin assigns here (no email-domain claiming, no auto-create).
+# These run on the BYPASSRLS admin engine: memberships are tenant-scoped
+# rows, but a System Admin acts across tenants, so we read/write them
+# directly (the audit row carries the affected ``tenant_id``).
+# ---------------------------------------------------------------------------
+def _to_membership_response(m: UserOrganizationMembership, org: Organization) -> MembershipResponse:
+    return MembershipResponse(
+        id=m.id,
+        user_id=m.user_id,
+        tenant_id=m.tenant_id,
+        tenant_name=org.name,
+        tenant_slug=org.slug,
+        role=m.role,
+        is_active=m.is_active,
+        created_at=m.created_at,
+        updated_at=m.updated_at,
+    )
+
+
+async def _get_user_or_404(session: AsyncSession, user_id: UUID) -> User:
+    result = await session.execute(
+        select(User).where(User.id == user_id, User.deleted_at.is_(None))
+    )
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+    return user
+
+
+@router.get("/users/{user_id}/memberships", response_model=list[MembershipResponse])
+async def list_user_memberships(
+    user_id: UUID,
+    _: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> list[MembershipResponse]:
+    """All of a user's tenant memberships (active + inactive), each joined
+    to its live tenant. Soft-deleted memberships and tenants are excluded."""
+    await _get_user_or_404(session, user_id)
+    result = await session.execute(
+        select(UserOrganizationMembership, Organization)
+        .join(Organization, Organization.id == UserOrganizationMembership.tenant_id)
+        .where(
+            UserOrganizationMembership.user_id == user_id,
+            UserOrganizationMembership.deleted_at.is_(None),
+            Organization.deleted_at.is_(None),
+        )
+        .order_by(Organization.name)
+    )
+    return [_to_membership_response(m, org) for m, org in result.all()]
+
+
+@router.post(
+    "/users/{user_id}/memberships",
+    response_model=MembershipResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def assign_user_membership(
+    user_id: UUID,
+    payload: MembershipCreateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> MembershipResponse:
+    """Grant a user access to a tenant with a role. Re-assigning a tenant
+    the user was previously revoked from (soft-deleted membership) revives
+    the row rather than colliding with the (user_id, tenant_id) unique
+    constraint."""
+    await _get_user_or_404(session, user_id)
+    org = await _get_tenant_or_404(session, payload.tenant_id)
+    if org.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="tenant not found")
+
+    # Look for any existing row (including soft-deleted) for this pair —
+    # the unique constraint is on (user_id, tenant_id) regardless of state.
+    existing_result = await session.execute(
+        select(UserOrganizationMembership).where(
+            UserOrganizationMembership.user_id == user_id,
+            UserOrganizationMembership.tenant_id == payload.tenant_id,
+        )
+    )
+    membership = existing_result.scalar_one_or_none()
+
+    if membership is not None and membership.deleted_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="user already has a membership in this tenant",
+        )
+
+    if membership is not None:
+        # Revive a previously revoked (soft-deleted) membership.
+        membership.deleted_at = None
+        membership.role = payload.role
+        membership.is_active = True
+    else:
+        membership = UserOrganizationMembership(
+            id=uuid7(),
+            tenant_id=payload.tenant_id,
+            user_id=user_id,
+            role=payload.role,
+            is_active=True,
+        )
+        session.add(membership)
+
+    await session.flush()
+
+    await write_audit_log(
+        session,
+        action=AuditAction.MEMBERSHIP_GRANTED.value,
+        actor_user_id=principal.user_id,
+        tenant_id=payload.tenant_id,
+        resource_type="membership",
+        resource_id=membership.id,
+        changes={"user_id": str(user_id), "role": payload.role},
+        ip_address=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+
+    await session.refresh(membership)
+    return _to_membership_response(membership, org)
+
+
+async def _get_membership_or_404(
+    session: AsyncSession, user_id: UUID, membership_id: UUID
+) -> tuple[UserOrganizationMembership, Organization]:
+    result = await session.execute(
+        select(UserOrganizationMembership, Organization)
+        .join(Organization, Organization.id == UserOrganizationMembership.tenant_id)
+        .where(
+            UserOrganizationMembership.id == membership_id,
+            UserOrganizationMembership.user_id == user_id,
+            UserOrganizationMembership.deleted_at.is_(None),
+        )
+    )
+    row = result.first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="membership not found")
+    return row[0], row[1]
+
+
+@router.patch(
+    "/users/{user_id}/memberships/{membership_id}",
+    response_model=MembershipResponse,
+)
+async def update_user_membership(
+    user_id: UUID,
+    membership_id: UUID,
+    payload: MembershipUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> MembershipResponse:
+    """Change a membership's role and/or activate/deactivate it. A
+    deactivated membership grants no tenant access (the post-login
+    resolver only counts ``is_active`` rows)."""
+    if payload.role is None and payload.is_active is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="nothing to update (provide role and/or is_active)",
+        )
+    membership, org = await _get_membership_or_404(session, user_id, membership_id)
+
+    changes: dict[str, object] = {}
+    if payload.role is not None and payload.role != membership.role:
+        changes["role"] = {"from": membership.role, "to": payload.role}
+        membership.role = payload.role
+    if payload.is_active is not None and payload.is_active != membership.is_active:
+        changes["is_active"] = {"from": membership.is_active, "to": payload.is_active}
+        membership.is_active = payload.is_active
+
+    if changes:
+        await write_audit_log(
+            session,
+            action=AuditAction.MEMBERSHIP_GRANTED.value,
+            actor_user_id=principal.user_id,
+            tenant_id=membership.tenant_id,
+            resource_type="membership",
+            resource_id=membership.id,
+            changes={"user_id": str(user_id), **changes},
+            ip_address=get_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+        )
+
+    await session.flush()
+    await session.refresh(membership)
+    return _to_membership_response(membership, org)
+
+
+@router.delete(
+    "/users/{user_id}/memberships/{membership_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def revoke_user_membership(
+    user_id: UUID,
+    membership_id: UUID,
+    request: Request,
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> None:
+    """Revoke a user's tenant access (soft-delete the membership). After
+    this the user can no longer resolve/enter that tenant."""
+    membership, _org = await _get_membership_or_404(session, user_id, membership_id)
+
+    membership.deleted_at = datetime.now(tz=UTC)
+    membership.is_active = False
+
+    await write_audit_log(
+        session,
+        action=AuditAction.MEMBERSHIP_REVOKED.value,
+        actor_user_id=principal.user_id,
+        tenant_id=membership.tenant_id,
+        resource_type="membership",
+        resource_id=membership.id,
+        changes={"user_id": str(user_id)},
+        ip_address=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    await session.flush()
 
 
 # ---------------------------------------------------------------------------

@@ -375,14 +375,15 @@ async def test_read_tools_never_return_other_tenant_data(
 
 
 # ===========================================================================
-# Budget placeholder
+# Budget status — no budget configured (Plan 11.1 task_11_1_05)
 # ===========================================================================
 @pytest.mark.asyncio
-async def test_budget_tool_returns_typed_placeholder(
+async def test_budget_tool_reports_no_budget_when_unconfigured(
     configured_app, migrations_pg_dsn: str
 ) -> None:
-    """``tenant_budget_status`` returns a typed 'not available yet' stub
-    (the budget engine is Plan 11), not fabricated numbers."""
+    """``tenant_budget_status`` returns a typed 'no budget configured' result
+    when the tenant (and its projects) have no budget set — an honest answer,
+    not fabricated numbers. (The budget engine is now real — Plan 11.1.)"""
     seeded = await _seed(migrations_pg_dsn)
 
     from api_server.assistant.tools import AssistantToolContext, run_assistant_tool
@@ -404,8 +405,7 @@ async def test_budget_tool_returns_typed_placeholder(
         budget = await run_assistant_tool("tenant_budget_status", ctx)
 
     assert budget["available"] is False
-    assert budget["reason"] == "budget_engine_not_implemented"
-    assert "Plan 11" in budget["message"]
+    assert budget["reason"] == "no_budget_configured"
 
 
 # ===========================================================================

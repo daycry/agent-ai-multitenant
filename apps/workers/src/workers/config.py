@@ -97,13 +97,22 @@ class Settings(BaseSettings):
     )
     seccomp_profile_path: str = Field(
         default="",
-        description="Path to a custom seccomp JSON profile. Empty = rely on "
-        "Docker's built-in default-deny (SCMP_ACT_ERRNO) profile.",
+        description="Path to a custom seccomp JSON profile for the untrusted "
+        "agent/test runtime. Empty = rely on Docker's built-in default-deny "
+        "(SCMP_ACT_ERRNO) profile. The platform ships a STRICTER hand-tightened "
+        "profile at docker/seccomp/agent-runtime.json (Plan 15 task_15_15); "
+        "point WORKERS_SECCOMP_PROFILE at its in-container path to pin it. The "
+        "worker forwards the file CONTENT to the daemon (isolation.py).",
     )
     apparmor_profile: str = Field(
         default="",
-        description="AppArmor profile name to pin. Empty = Docker's automatic "
-        "docker-default profile where the host kernel supports AppArmor.",
+        description="AppArmor profile NAME to pin for the untrusted agent/test "
+        "runtime (forwarded as security_opt apparmor=<name> by isolation.py). "
+        "Empty = Docker's automatic docker-default profile where the host kernel "
+        "supports AppArmor. The platform ships a STRICTER hand-written profile at "
+        "docker/apparmor/agent-runtime.profile (Plan 15 task_15_16); load it on "
+        "the host with apparmor_parser and set WORKERS_APPARMOR_PROFILE="
+        "agent-runtime to pin it.",
     )
 
     # ----- Test-runtime aux services + DinD proxy hardening (Plan 06.14
@@ -180,6 +189,28 @@ class Settings(BaseSettings):
         description="URL of the community LiteLLM price JSON consumed strictly as a "
         "DATA FEED (ADR 0021) by the scheduled sync — never a provider runtime. "
         "Point at an internal mirror to avoid egress.",
+    )
+
+    # ----- Scheduled exchange-rates fetch (Plan 11.1 task_11_1_02) -----
+    # The FX-fetcher beat job downloads the daily reference rates from the
+    # configured source (ECB by default) and upserts `exchange_rates` (a global
+    # catalog; ADR USD-canonical). The CRON cadence is read by the beat process
+    # at boot — change it (and restart beat) to alter the cadence. The live
+    # enable/disable lever + the SOURCE selection are PLATFORM settings a System
+    # Admin owns (`fx_fetch_enabled` / `fx_source`); these envs are only the
+    # boot-time defaults + the per-source feed URL. Best-effort: a fetch failure
+    # logs + alerts (a platform-scoped ops signal) but never crashes beat.
+    fx_fetch_cron: str = Field(
+        default="0 6 * * *",
+        description="Cron (minute hour day-of-month month day-of-week) for the "
+        "scheduled exchange-rates fetch. Default daily at 06:00 UTC (Plan 11.1). "
+        "Operator-tunable; the beat process reads it at boot.",
+    )
+    ecb_fx_feed_url: str = Field(
+        default="https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml",
+        description="URL of the ECB daily reference-rates XML feed (the default "
+        "FX source). ECB publishes rates vs EUR; the fetcher converts them to "
+        "vs-USD via the USD rate. Point at an internal mirror to avoid egress.",
     )
 
     # ----- Backup engine (Plan 12 task_12_01) -----
@@ -456,6 +487,85 @@ class Settings(BaseSettings):
         description="The captured docker volume that holds object storage (MinIO). "
         "A per-tenant restore re-extracts ONLY the tenant's `<tenant_id>/` key "
         "prefix from this volume's tar, never the whole volume.",
+    )
+
+    # ----- Vault dynamic-secret credential rotation (Plan 15 task_15_17) -----
+    # Automatic credential rotation has two halves (Plan 15 Fase C):
+    #   1. SHORT-TTL DYNAMIC DB CREDS — the Vault database secrets engine mints a
+    #      throwaway Postgres role per lease; a service holds creds only for
+    #      `cred_rotation_db_ttl_s`, after which the lease (and the role) expires.
+    #   2. PERIODIC ROTATION JOB — a Celery beat task (CONFIGURABLE cadence) that
+    #      rotates the STATIC secrets (MinIO/JWT/…) and renews/revokes leases.
+    # Like price-sync / backup, the cron is read by the beat PROCESS at boot and
+    # the live enable lever is a PLATFORM setting a System Admin owns — NOT this
+    # env. The Vault client sits behind a seam (mocked in tests); nothing here is
+    # a secret (the Vault token + minted creds never live in config).
+    cred_rotation_cron: str = Field(
+        default="0 2 * * 0",
+        description="Cron (minute hour day-of-month month day-of-week) for the "
+        "scheduled credential-rotation job. Default weekly Sunday 02:00 UTC — "
+        "rotation is heavier than a price sync, so it runs less often. "
+        "Operator-tunable; the beat process reads it at boot. The live "
+        "enable/disable lever is the `cred_rotation_enabled` PLATFORM setting.",
+    )
+    cred_rotation_db_role: str = Field(
+        default="platform-app",
+        description="Name of the Vault database-secrets-engine ROLE that mints "
+        "short-TTL dynamic Postgres credentials. The role's creation statements "
+        "grant exactly the platform app privileges; each lease is a throwaway DB "
+        "role Vault revokes on expiry. NOT a secret.",
+    )
+    cred_rotation_db_mount: str = Field(
+        default="database",
+        description="Mount point of the Vault database secrets engine (the "
+        "`vault secrets enable database` path). NOT a secret.",
+    )
+    cred_rotation_db_connection: str = Field(
+        default="platform-postgres",
+        description="Name of the Vault database-engine CONNECTION the role is "
+        "bound to (the configured Postgres connection Vault dials to create/drop "
+        "the dynamic roles). NOT a secret — the connection's admin DSN is a Vault "
+        "secret resolved server-side, never here.",
+    )
+    cred_rotation_db_ttl_s: int = Field(
+        default=3600,
+        description="Default TTL (seconds) of a minted dynamic DB credential "
+        "lease. SHORT by design (default 1h) so a leaked credential self-expires. "
+        "Operator-tunable.",
+    )
+    cred_rotation_db_max_ttl_s: int = Field(
+        default=86400,
+        description="Maximum TTL (seconds) a dynamic DB credential lease can be "
+        "renewed up to before Vault forces a fresh issue. Default 24h.",
+    )
+    cred_rotation_static_secrets: list[str] = Field(
+        default_factory=lambda: ["minio", "jwt"],
+        description="Logical names of the STATIC secrets the rotation job rotates "
+        "in place each cycle (the MinIO access/secret key + the JWT signing key, "
+        "per Plan 15). Each maps to a KV v2 path under the platform mount; the "
+        "rotated VALUES are high-entropy material generated + written by Vault, "
+        "NEVER logged and NEVER in this config.",
+    )
+
+    # ----- Acceptance-timeout escalation sweep (Plan 16 task_16_06) -----
+    # The escalation beat job (workers.escalate_human_assignments) sweeps the
+    # pending_acceptance HumanTaskAssignment rows whose age exceeds their Human
+    # Agent's acceptance_timeout_hours and reassigns/blocks them. Like the other
+    # beat jobs the cron is read by the beat PROCESS at boot and the live
+    # enable lever is a PLATFORM setting (`human_escalation_enabled`) a System
+    # Admin owns — NOT this env. Default every 10 minutes (Plan 16 task_16_06):
+    # frequent enough that a 24h acceptance window is enforced promptly, cheap
+    # enough (a partial-index scan of the open pending_acceptance rows) to run
+    # often. NOTE: a 5-field cron's finest granularity is per-minute; "*/10 * * *
+    # *" fires at minute 0,10,20,…,50 of every hour — the 10-minute cadence.
+    human_escalation_cron: str = Field(
+        default="*/10 * * * *",
+        description="Cron (minute hour day-of-month month day-of-week) for the "
+        "scheduled acceptance-timeout escalation sweep. Default every 10 minutes "
+        "(Plan 16 task_16_06). Operator-tunable; the beat process reads it at boot. "
+        "The live enable/disable lever is the `human_escalation_enabled` PLATFORM "
+        "setting (a System Admin flips it from the admin panel; it takes effect on "
+        "the next fire without a restart).",
     )
 
     # ----- Misc -----

@@ -76,6 +76,7 @@ async def _sync_model_prices(settings: Settings) -> dict[str, Any]:
         HttpxPriceFeedFetcher,
         PriceFeedError,
         StaticPriceFeedFetcher,
+        active_litellm_families,
         sync_prices_from_litellm,
     )
     from api_server.pricing.sync_audit import write_sync_audit
@@ -101,12 +102,18 @@ async def _sync_model_prices(settings: Settings) -> dict[str, Any]:
                 client=client, url=settings.litellm_price_feed_url
             )
             async with sessionmaker() as db, db.begin():
+                # plan price-sync-active-providers (task_psa_01): the scheduled
+                # sync respects the active providers' families exactly like the
+                # manual endpoint (System-Admin override wins; 0 active ⇒ empty
+                # ⇒ nothing imported + every catalog family closed out-of-scope).
+                allowed_families = await active_litellm_families(db)
                 # confirm_large_increases=False: a >10% rise is DEFERRED (held
                 # for manual confirm), not auto-applied — even scheduled.
                 summary = await sync_prices_from_litellm(
                     db,
                     fetcher=fetcher,
                     confirm_large_increases=False,
+                    allowed_families=allowed_families,
                 )
                 # task_11_19: a scheduled sync leaves the SAME immutable audit
                 # trail as a manual one — attributed to the "scheduler" (no

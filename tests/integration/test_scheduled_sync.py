@@ -69,12 +69,37 @@ def migrated_db(alembic_config, migrations_pg_dsn: str):
     async def _truncate() -> None:
         conn = await asyncpg.connect(migrations_pg_dsn)
         try:
-            await conn.execute("TRUNCATE model_prices, platform_settings RESTART IDENTITY CASCADE")
+            await conn.execute(
+                "TRUNCATE model_prices, llm_providers, platform_settings"
+                " RESTART IDENTITY CASCADE"
+            )
         finally:
             await conn.close()
 
     asyncio.run(_truncate())
     return migrations_pg_dsn
+
+
+async def _seed_active_providers(dsn: str, kinds: tuple[str, ...]) -> None:
+    """Insert one ACTIVE platform provider per kind (BYPASSRLS migrations user).
+
+    The scheduled sync scopes to the active providers' families (plan
+    price-sync-active-providers), so a run that should import the fixture feed
+    must seed the provider kinds whose families (ADR 0028) cover it."""
+    from uuid import uuid4
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        for kind in kinds:
+            await conn.execute(
+                "INSERT INTO llm_providers (id, kind, display_name, is_active)"
+                " VALUES ($1, $2, $3, true)",
+                uuid4(),
+                kind,
+                f"{kind} (test)",
+            )
+    finally:
+        await conn.close()
 
 
 def _worker_settings(admin_database_url: str, *, cron: str = "0 4 * * *"):
@@ -178,6 +203,8 @@ async def test_scheduled_run_applies_safe_changes(
     from api_server.db.model_prices import ModelPrice
     from workers.price_sync import _sync_model_prices
 
+    # Scope: claude_sdk (→ anthropic) + azure_foundry (→ openai) cover the feed.
+    await _seed_active_providers(migrated_db, ("claude_sdk", "azure_foundry"))
     _patch_fetcher(monkeypatch, _feed())
     settings = _worker_settings(admin_database_url)
 
@@ -219,6 +246,8 @@ async def test_scheduled_run_holds_large_increase_for_manual_confirm(
     from api_server.db.model_prices import ModelPrice
     from workers.price_sync import _sync_model_prices
 
+    # Scope: claude_sdk (→ anthropic) + azure_foundry (→ openai) cover the feed.
+    await _seed_active_providers(migrated_db, ("claude_sdk", "azure_foundry"))
     settings = _worker_settings(admin_database_url)
 
     # First scheduled run seeds the catalog.

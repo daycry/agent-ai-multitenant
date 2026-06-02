@@ -2,7 +2,7 @@
 title: Marketplace de skills y tools — Referencia de endpoints y seguridad
 audience: backend-dev, architect, security
 phase: 09-marketplace
-updated: 2026-05-30
+updated: 2026-06-01
 ---
 
 # Marketplace de skills y tools — Referencia
@@ -40,6 +40,23 @@ nivel solo decide cuántas puertas impone el install. Resuelto por
 
 Solo `verified` va firmado por el equipo de plataforma. Un listing privado de
 un tenant es siempre `community` (derivado en servidor, nunca del wire).
+
+## Seed del catálogo oficial (Plan 09.1)
+
+El catálogo **de arranque** lo siembra la plataforma con el loader
+`seed_marketplace_listings` (`marketplace/seed.py`), cableado en el runner de
+seeds (`seeds/__main__.py`). Estos listings son **`verified` + globales**
+(`tenant_id NULL`) bajo la fuente `official-catalog`: la tool **Playwright**
+(vía `seed_playwright_listing`) + las skills de convenciones de stack derivadas
+de los docs de la plataforma (FastAPI, React/Next.js, PHP/Symfony, PostgreSQL,
+diseño de APIs REST). El seed es **idempotente** (upsert por
+`(fuente, tenant_id=NULL, nombre, versión)` — re-seed no duplica) y corre sobre
+la sesión publicadora **BYPASSRLS** (las filas globales no las puede escribir
+una sesión de tenant). Sin migración: un listing es una fila + `manifest`
+JSONB, los SKILL.md son datos del seed. La guía de operador
+[`../03-guides/publicar-en-marketplace.md`](../03-guides/publicar-en-marketplace.md)
+cubre el flujo de publicación privada y la diferencia oficial (verified/global)
+vs. tenant (community/privado).
 
 ## Garantías de seguridad transversales
 

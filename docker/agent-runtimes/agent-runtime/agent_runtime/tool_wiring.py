@@ -54,8 +54,12 @@ class ToolSpec:
 
       * http_endpoint:  {url_template, method, static_headers, static_query, timeout_s}
       * python_function: {code, timeout_s}
-      * docker_command:  {image, command_template, timeout_s, mem_limit_bytes,
-                           pids_limit, network_mode, static_env}
+      * docker_command:  {image | runtime_template, command_template, timeout_s,
+                           mem_limit_bytes, pids_limit, network_mode, static_env}
+                          — `image` names the image directly (Plan 05 shape);
+                          `runtime_template` (the run_* tools' implementation_ref,
+                          e.g. python-pytest) resolves through the worker-injected
+                          runtime resolver, honouring the project stack (06.16).
       * builtin:        ignored (already registered)
       * mcp_tool:       ignored (registered by mcp_tools.register_mcp_server)
     """
@@ -63,6 +67,14 @@ class ToolSpec:
     name: str
     implementation_type: str
     config: dict[str, Any] = field(default_factory=dict)
+
+
+# A runtime resolver maps (project_default_runtime, tool_default_runtime) → a
+# docker image reference. The agent-runtime deliberately does NOT depend on
+# `shared_test_runtimes`; the worker injects a resolver backed by
+# `workers.test_runtime.resolve_run_runtime` so the precedence (project stack →
+# tool default → python-pytest) and the catalog lookup live in one place.
+RuntimeImageResolver = Callable[[str | None, str | None], str]
 
 
 @dataclass(frozen=True)
@@ -75,10 +87,23 @@ class WiringContext:
       hashable).
     * `vault_resolver`: optional, for future per-Tool Vault auth. Not
       consumed by the three executors of Plan 05; here as the seam.
+    * `project_default_runtime`: the project's
+      ``projects.default_runtime_template`` (Plan 06.16 task_06_16_03).
+      ``None`` (a project that pinned no stack) keeps each ``run_*``
+      docker_command tool's own default runtime. A value (e.g.
+      ``php-phpunit``) makes those tools resolve their RuntimeTemplate
+      from the project stack instead.
+    * `runtime_image_resolver`: maps a ``(project_default, tool_default)``
+      pair to a docker image. Injected by the worker (which owns the
+      runtime catalog) so the agent-runtime stays decoupled from
+      ``shared_test_runtimes``. ``None`` ⇒ ``docker_command`` tools must
+      carry an explicit ``image`` in their config (the Plan 05 shape).
     """
 
     allowed_domains: frozenset[str] = frozenset()
     vault_resolver: Any | None = None
+    project_default_runtime: str | None = None
+    runtime_image_resolver: RuntimeImageResolver | None = None
 
 
 # A builder maps (spec, ctx) → (tool_name, ToolFn). Returning None
@@ -112,11 +137,47 @@ def _build_python_function(spec: ToolSpec, _ctx: WiringContext) -> tuple[str, To
     return spec.name, inner
 
 
-def _build_docker_command(spec: ToolSpec, _ctx: WiringContext) -> tuple[str, ToolFn]:
+def _resolve_docker_image(spec: ToolSpec, ctx: WiringContext) -> str:
+    """Pick the docker image a ``docker_command`` tool launches in.
+
+    Two shapes are supported (Plan 06.16 task_06_16_03):
+
+      * **Explicit image** (the Plan 05 shape): ``config['image']`` names
+        the image directly. Used unchanged — backward-compatible.
+      * **Runtime-template image** (the ``run_*`` tools): the tool carries
+        a ``config['runtime_template']`` (its ``implementation_ref``, e.g.
+        ``python-pytest``) instead of a hard image. We resolve the image
+        through ``ctx.runtime_image_resolver``, giving the project's
+        ``default_runtime_template`` precedence over the tool default
+        (and ``python-pytest`` as the final fallback the resolver owns).
+        This is what makes a PHP project's ``run_pytest`` execute in
+        ``php-phpunit`` rather than ``python-pytest``.
+
+    An unknown/invalid runtime id surfaces as the resolver's clear error
+    (``RuntimeResolutionError``), not a crash. A ``docker_command`` tool
+    with neither an explicit image nor a resolver is a config error the
+    operator must see at boot.
+    """
+    image = spec.config.get("image")
+    if image:
+        return str(image)
+    tool_runtime = spec.config.get("runtime_template")
+    if ctx.runtime_image_resolver is not None and (tool_runtime or ctx.project_default_runtime):
+        return ctx.runtime_image_resolver(
+            ctx.project_default_runtime,
+            str(tool_runtime) if tool_runtime else None,
+        )
+    raise ValueError(
+        f"Tool {spec.name!r}: docker_command needs an explicit `image` or a "
+        f"`runtime_template` + a runtime resolver (Plan 06.16). Got neither."
+    )
+
+
+def _build_docker_command(spec: ToolSpec, ctx: WiringContext) -> tuple[str, ToolFn]:
     inner = build_docker_command_tool(
         DockerCommandToolSpec(
             name=spec.name,
-            image=str(spec.config["image"]),
+            image=_resolve_docker_image(spec, ctx),
             command_template=list(spec.config.get("command_template") or []),
             timeout_s=float(spec.config.get("timeout_s", 30.0)),
             mem_limit_bytes=int(spec.config.get("mem_limit_bytes", 256 * 1024 * 1024)),
@@ -180,6 +241,7 @@ def register_tool_specs(
 
 
 __all__ = [
+    "RuntimeImageResolver",
     "ToolSpec",
     "WiringContext",
     "register_tool_specs",

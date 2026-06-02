@@ -152,6 +152,18 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.PRIORITY,
         default_channel_types=("in_app", "telegram"),
     ),
+    # Plan 16 task_16_05 — a human task was routed to a concrete User: the
+    # orchestrator created a HumanTaskAssignment and moved the task to
+    # assigned_to_human (NO runtime container). Time-sensitive (the user has
+    # acceptance_timeout_hours to accept before escalation, task_16_06), so it
+    # rides the priority lane, fanning out to the user's in-app + telegram
+    # channels by default. The context carries task_title / project_name /
+    # assigned_to (the human-readable assignee).
+    "human_task_assigned": EventSpec(
+        "human_task_assigned",
+        lane=NotificationLane.PRIORITY,
+        default_channel_types=("in_app", "telegram"),
+    ),
     "review_escalated": EventSpec(
         "review_escalated",
         lane=NotificationLane.PRIORITY,
@@ -185,6 +197,30 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
     # rides the priority lane, fanning out to in-app + email by default.
     "agent_outlier_alert": EventSpec(
         "agent_outlier_alert",
+        lane=NotificationLane.PRIORITY,
+        default_channel_types=("in_app", "email"),
+    ),
+    # Plan 15 task_15_17 — the scheduled Vault credential-rotation cycle FAILED
+    # (a static-secret rotation, a dynamic-credential issue, or a lease
+    # renew/revoke did not complete). A platform-scoped (tenant_id=None) ops
+    # signal a System Admin acts on; the rotation engine keeps the system up on
+    # its current credentials but must alert. Rides the priority lane, fanning
+    # out to in-app + email by default. The payload carries NO credential value
+    # (only the audit's secret-free names / lease-ids / counts).
+    "credential_rotation_failed": EventSpec(
+        "credential_rotation_failed",
+        lane=NotificationLane.PRIORITY,
+        default_channel_types=("in_app", "email"),
+    ),
+    # Plan 11.1 task_11_1_02 — the scheduled exchange-rates fetch FAILED (the
+    # source feed could not be fetched/parsed, or lacked a USD anchor). A
+    # platform-scoped (tenant_id=None) ops signal a System Admin acts on; the
+    # catalog keeps its last good rates (conversion falls back to the most-recent
+    # prior rate) but the staleness must be surfaced. Rides the priority lane,
+    # fanning out to in-app + email by default. The payload carries only the
+    # source name + the non-leaky error string.
+    "fx_fetch_failed": EventSpec(
+        "fx_fetch_failed",
         lane=NotificationLane.PRIORITY,
         default_channel_types=("in_app", "email"),
     ),

@@ -14,8 +14,9 @@ import { useQuery } from "@tanstack/react-query";
 import { FileText, FolderKanban } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { StateBlock } from "@/components/shared/state-block";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 
 interface Project {
   id: string;
@@ -42,39 +43,33 @@ export default function DocumentsIndexPage() {
         description="Los documentos viven dentro de Knowledge Bases de cada proyecto. Selecciona un proyecto para ver sus KBs."
       />
 
-      {isLoading && (
-        <p className="text-muted-foreground text-sm" data-testid="documents-loading">
-          Cargando proyectos…
-        </p>
-      )}
-
-      {isError && (
-        <Card className="p-4" data-testid="documents-error">
-          <p className="text-danger-soft-foreground text-sm">
-            No se pudieron cargar los proyectos:{" "}
-            {error instanceof ApiError ? error.body : String(error)}
-          </p>
-        </Card>
-      )}
-
-      {data && data.length === 0 && (
-        <Card className="p-8 text-center" data-testid="documents-empty">
-          <p className="text-muted-foreground text-sm">
-            Este tenant aún no tiene proyectos. Crea uno desde{" "}
-            <Link href="/admin/projects/new" className="text-primary underline">
-              /admin/projects/new
-            </Link>{" "}
-            para empezar.
-          </p>
-        </Card>
-      )}
-
-      {data && data.length > 0 && (
+      <StateBlock
+        isLoading={isLoading}
+        isError={isError}
+        error={error}
+        isEmpty={Boolean(data && data.length === 0)}
+        loadingLabel="Cargando proyectos…"
+        loadingTestId="documents-loading"
+        errorTitle="No se pudieron cargar los proyectos"
+        errorTestId="documents-error"
+        emptyTestId="documents-empty"
+        empty={
+          <Card className="p-8 text-center">
+            <p className="text-muted-foreground text-sm">
+              Este tenant aún no tiene proyectos. Crea uno desde{" "}
+              <Link href="/admin/projects/new" className="text-primary underline">
+                /admin/projects/new
+              </Link>{" "}
+              para empezar.
+            </p>
+          </Card>
+        }
+      >
         <div
           className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
           data-testid="documents-projects-grid"
         >
-          {data.map((project) => (
+          {(data ?? []).map((project) => (
             <Link
               key={project.id}
               href={`/admin/projects/${project.id}/knowledge-bases`}
@@ -98,7 +93,7 @@ export default function DocumentsIndexPage() {
             </Link>
           ))}
         </div>
-      )}
+      </StateBlock>
     </div>
   );
 }

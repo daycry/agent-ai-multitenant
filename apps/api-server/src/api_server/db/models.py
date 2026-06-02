@@ -26,6 +26,7 @@ from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
     Index,
+    Integer,
     LargeBinary,
     Numeric,
     String,
@@ -116,6 +117,14 @@ class ApiTokenScope(enum.StrEnum):
 # ---------------------------------------------------------------------------
 class Organization(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "organizations"
+    __table_args__ = (
+        # A configured tenant budget can never be negative (mirrors the
+        # projects.budget_amount CHECK). NULL stays valid (= no budget).
+        CheckConstraint(
+            "tenant_budget_amount IS NULL OR tenant_budget_amount >= 0",
+            name="ck_organizations_tenant_budget_non_negative",
+        ),
+    )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
@@ -129,6 +138,17 @@ class Organization(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     )
     hourly_rate_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
 
+    # Per-tenant DISPLAY currency (Plan 11.1 task_11_1_01). Cost is always
+    # stored/computed in canonical USD (executions.total_cost_usd); this is
+    # purely how a tenant's dashboards *show* that cost, converted on the
+    # fly with the FX rate of each execution's date (api_server.fx). NOT
+    # NULL with a server_default of 'EUR' (the platform's primary operating
+    # currency) so every tenant has a well-defined display currency without
+    # a per-row backfill. Set to 'USD' to disable conversion (USD identity).
+    display_currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, server_default=text("'EUR'")
+    )
+
     # Per-tenant gate for the conversational personal assistant (Plan 10
     # task_10_14). DEFAULT false: the feature is opt-in. When false, every
     # Tenant Admin of this tenant is denied (403) — the assistant simply
@@ -136,6 +156,41 @@ class Organization(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     # (name/avatar/tone/language/system_prompt/enabled-tools) lives in
     # ``tenant_settings`` under the ``assistant`` category, not here.
     personal_assistant_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+
+    # --- Tenant-level budget (Plan 11.1 task_11_1_04; spec §28.7) ----------
+    # The tenant-wide spend cap, the peer of the project-level budget on
+    # ``Project`` (see db.domain.Project.budget_*). All NULLABLE with no
+    # server_default: a tenant has NO budget until one is explicitly
+    # configured (default state = "unbudgeted"). Cost is always canonical
+    # USD; the cap is denominated in ``tenant_budget_currency`` and converted
+    # to USD when the consumption evaluator (task_11_1_05) compares it.
+    #   - amount    : the cap. Numeric(14,2) -> Decimal end-to-end (no float
+    #                 rounding on currency). CHECK keeps it non-negative.
+    #   - currency  : ISO-4217 code the amount is denominated in.
+    #   - period    : a ``BudgetPeriod`` value (weekly/monthly/quarterly/
+    #                 yearly/custom) — the recurring window the cap applies to.
+    #   - period_start_day / period_length_days : ONLY meaningful for the
+    #                 ``custom`` period (day the cycle starts + its length in
+    #                 days); NULL for the fixed calendar periods. The
+    #                 ``budgets.period`` helper computes the active window.
+    tenant_budget_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=14, scale=2), nullable=True
+    )
+    tenant_budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    tenant_budget_period: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    tenant_budget_period_start_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tenant_budget_period_length_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Tenant-level auto-pause flag (Plan 11.1 task_11_1_06). The peer of
+    # ``projects.paused_by_budget``: set true by the consumption evaluator
+    # when the tenant reaches 100% of its tenant-wide budget for the active
+    # period, so the orchestrator's execution-start path refuses to enqueue
+    # NEW runs for this tenant (active runs are never killed). A manual
+    # override clears it; a new period auto-clears it. NOT NULL DEFAULT false
+    # so every tenant starts un-paused (no backfill).
+    tenant_paused_by_budget: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
 
@@ -349,19 +404,23 @@ class TenantSetting(Base):
 # ---------------------------------------------------------------------------
 # SSOConfiguration — per-tenant enterprise SSO config (Plan 08 task_08_01)
 # ---------------------------------------------------------------------------
-class SSOConfiguration(
-    Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDeleteMixin
-):
-    """Per-tenant OIDC (and, later, SAML) provider configuration.
+class SSOConfiguration(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
+    """Platform-global OIDC / SAML provider configuration (ADR 0047).
 
-    Multi-tenancy: tenant-scoped via :class:`TenantScopedMixin` + RLS
-    (`tenant_isolation` policy in the migration). Tenant A's row is
-    invisible to a session bound to tenant B — the database refuses to
-    return it, so an OIDC login can never resolve another tenant's IdP.
+    Tenancy decision (ADR 0047, supersedes the per-tenant part of ADR
+    0031, re-aligns with ADR 0028): auth providers are **platform-global**
+    — configured ONCE by ``system_admin`` and serving every tenant. The
+    table therefore carries **no ``tenant_id``** and has **no RLS policy**:
+    access to a tenant is granted by ``UserOrganizationMembership`` AFTER
+    login, not by which tenant owns the provider. The config identity is
+    per ``provider``/kind (one ``oidc`` row + one ``saml`` row for the
+    whole platform), enforced by ``uq_sso_config_provider``. Reads run on
+    the BYPASSRLS admin engine (the System Admin surface); no tenant /
+    ``app_user`` path ever resolves a provider by tenant.
 
     Secret handling (CLAUDE.md principle: no plaintext secrets in the
-    DB). The OIDC ``client_secret`` is stored in EXACTLY ONE of two
-    forms, never both, never in clear text:
+    DB) — UNCHANGED by the global re-scope. The OIDC ``client_secret`` is
+    stored in EXACTLY ONE of two forms, never both, never in clear text:
 
       * ``client_secret_ref``: a Vault pointer (``vault:<mount>/data/...``)
         resolved at login time through the same VaultResolver the MCP
@@ -379,18 +438,24 @@ class SSOConfiguration(
 
     __tablename__ = "sso_configurations"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "provider", name="uq_sso_config_tenant_provider"),
+        # Global identity: one enabled config per provider/kind for the
+        # whole platform (ADR 0047). Replaces the per-tenant
+        # uq_sso_config_tenant_provider.
+        UniqueConstraint("provider", name="uq_sso_config_provider"),
         Index(
-            "ix_sso_configurations_tenant_enabled",
-            "tenant_id",
+            "ix_sso_configurations_enabled",
+            "provider",
             "enabled",
             postgresql_where=text("deleted_at IS NULL"),
         ),
     )
 
     provider: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'oidc'"))
-    # Human-friendly label shown in the tenant's login picker.
+    # Human-friendly label shown in the login picker.
     display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Login-button text shown on the public /login page (ADR 0047). NULL
+    # falls back to a kind-derived default in the UI.
+    button_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
     # --- OIDC discovery + client identity (NULL on a `saml` row) ---
@@ -493,7 +558,7 @@ class SSOConfiguration(
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
-            f"SSOConfiguration(id={self.id!r}, tenant={self.tenant_id!r}, "
+            f"SSOConfiguration(id={self.id!r}, "
             f"provider={self.provider!r}, enabled={self.enabled!r})"
         )
 

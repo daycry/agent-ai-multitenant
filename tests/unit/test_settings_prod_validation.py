@@ -27,6 +27,10 @@ _API_REAL = {
     "review_url_signing_secret": "y" * 48,
     # SSO client-secret encryption key (Plan 08 task_08_01) — also guarded.
     "sso_encryption_key": "w" * 48,
+    # Notification (Plan 10) + incoming-webhook (Plan 13) payload encryption
+    # keys — both guarded against dev defaults in staging/prod.
+    "notification_encryption_key": "n" * 48,
+    "incoming_webhook_encryption_key": "i" * 48,
     "minio_secret_key": "z" * 48,
     "minio_access_key": "prod-access-key",
     "database_url": "postgresql+asyncpg://app_user:S3cr3tP@db/agentic",

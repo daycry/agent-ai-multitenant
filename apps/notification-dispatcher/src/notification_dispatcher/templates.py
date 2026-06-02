@@ -238,6 +238,25 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "before work can continue."
         ),
     ),
+    # --- human_task_assigned (Plan 16 task_16_05) --------------------------
+    # The context carries task_title / project_name / assigned_to (the
+    # human-readable assignee name). All keys tolerate a missing value.
+    ("human_task_assigned", "es"): TemplateSource(
+        subject="Tarea asignada: {{ task_title | default('(sin título)') }}",
+        body=(
+            "Se te ha asignado la tarea «{{ task_title | default('(sin título)') }}» "
+            "en el proyecto «{{ project_name | default('(sin proyecto)') }}». "
+            "Acéptala desde tu bandeja antes de que expire el plazo de aceptación."
+        ),
+    ),
+    ("human_task_assigned", "en"): TemplateSource(
+        subject="Task assigned: {{ task_title | default('(untitled)') }}",
+        body=(
+            "You have been assigned the task \"{{ task_title | default('(untitled)') }}\" "
+            "in project \"{{ project_name | default('(no project)') }}\". "
+            "Accept it from your inbox before the acceptance window expires."
+        ),
+    ),
     # --- review_escalated --------------------------------------------------
     ("review_escalated", "es"): TemplateSource(
         subject="Revisión escalada: {{ task_title | default('(sin título)') }}",
@@ -255,21 +274,38 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "{{ retries | default('several') }} retries."
         ),
     ),
-    # --- budget_alert ------------------------------------------------------
+    # --- budget_alert (Plan 11.1 task_11_1_05) -----------------------------
+    # Scope-aware: ``scope`` is 'tenant' or 'project'; ``plan_name`` carries the
+    # human label (the tenant or the project name). ``percent_used`` is the
+    # real percent of budget; ``spent`` is the canonical-USD spend. All keys
+    # tolerate a missing value (ChainableUndefined → '') so a partial context
+    # still renders.
     ("budget_alert", "es"): TemplateSource(
-        subject="Alerta de presupuesto: {{ plan_name | default('(sin nombre)') }}",
+        subject=(
+            "Alerta de presupuesto ({{ threshold | default('?') }}%): "
+            "{{ plan_name | default('(sin nombre)') }}"
+        ),
         body=(
-            "El plan «{{ plan_name | default('(sin nombre)') }}» "
-            "ha cruzado el umbral de presupuesto "
-            "({{ threshold | default('?') }}%). "
+            "El presupuesto "
+            "{% if scope == 'project' %}del proyecto «{{ project_name | "
+            "default(plan_name) | default('(sin nombre)') }}»"
+            "{% else %}del tenant{% endif %} "
+            "ha cruzado el umbral del {{ threshold | default('?') }}% "
+            "({{ percent_used | default('?') }}% usado). "
             "Gasto actual: {{ spent | default('?') }}."
         ),
     ),
     ("budget_alert", "en"): TemplateSource(
-        subject="Budget alert: {{ plan_name | default('(unnamed)') }}",
+        subject=(
+            "Budget alert ({{ threshold | default('?') }}%): "
+            "{{ plan_name | default('(unnamed)') }}"
+        ),
         body=(
-            "Plan \"{{ plan_name | default('(unnamed)') }}\" "
-            "crossed a budget threshold ({{ threshold | default('?') }}%). "
+            "The "
+            "{% if scope == 'project' %}project \"{{ project_name | "
+            "default(plan_name) | default('(unnamed)') }}\"{% else %}tenant{% endif %} "
+            "budget crossed the {{ threshold | default('?') }}% threshold "
+            "({{ percent_used | default('?') }}% used). "
             "Current spend: {{ spent | default('?') }}."
         ),
     ),
@@ -340,6 +376,57 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "\"{{ agent_name | default('(unnamed)') }}\" "
             "({{ agent_role | default('?') }}) at {{ value | default('?') }} "
             "vs bound {{ bound | default('?') }}."
+        ),
+    ),
+    # --- credential_rotation_failed (Plan 15 task_15_17) -------------------
+    # Platform-scoped ops alert. The context is the rotation audit's
+    # secret-free log fields (status / static_secrets / new_lease_id / error) —
+    # NEVER a credential value, so the template can only ever render names +
+    # lease-ids + the non-leaky error string.
+    ("credential_rotation_failed", "es"): TemplateSource(
+        subject="Fallo en la rotación automática de credenciales",
+        body=(
+            "La rotación automática de credenciales (Vault) ha fallado a las "
+            "{{ rotated_at | default('(desconocido)') }} con estado "
+            "{{ status | default('failed') }}. Motivo: "
+            "{{ error | default('(sin detalle)') }}. El sistema sigue operativo "
+            "con las credenciales actuales; revisa Vault y el runbook de "
+            "rotación de credenciales."
+        ),
+    ),
+    ("credential_rotation_failed", "en"): TemplateSource(
+        subject="Automatic credential rotation failed",
+        body=(
+            "Automatic credential rotation (Vault) failed at "
+            "{{ rotated_at | default('(unknown)') }} with status "
+            "{{ status | default('failed') }}. Reason: "
+            "{{ error | default('(no detail)') }}. The system stays up on its "
+            "current credentials; check Vault and the credential-rotation "
+            "runbook."
+        ),
+    ),
+    # --- fx_fetch_failed (Plan 11.1 task_11_1_02) --------------------------
+    # Platform-scoped ops alert. The context carries only the source name + the
+    # non-leaky error string — the catalog keeps its last good rates, so the
+    # message points the System Admin at the staleness, not a credential.
+    ("fx_fetch_failed", "es"): TemplateSource(
+        subject="Fallo al actualizar los tipos de cambio",
+        body=(
+            "La descarga diaria de tipos de cambio (fuente "
+            "{{ source | default('ecb') }}) ha fallado. Motivo: "
+            "{{ error | default('(sin detalle)') }}. El catálogo conserva los "
+            "últimos tipos válidos (la conversión usa el más reciente anterior); "
+            "revisa la fuente de tipos de cambio."
+        ),
+    ),
+    ("fx_fetch_failed", "en"): TemplateSource(
+        subject="Exchange-rates update failed",
+        body=(
+            "The daily exchange-rates fetch (source "
+            "{{ source | default('ecb') }}) failed. Reason: "
+            "{{ error | default('(no detail)') }}. The catalog keeps its last "
+            "good rates (conversion falls back to the most-recent prior rate); "
+            "check the exchange-rates source."
         ),
     ),
 }

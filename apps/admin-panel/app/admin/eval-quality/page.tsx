@@ -28,6 +28,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, Gauge } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { SegmentedControl } from "@/components/shared/segmented-control";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
@@ -274,24 +275,14 @@ function DashboardBody() {
   return (
     <div className="space-y-6" data-testid="quality-dashboard">
       {/* Window selector */}
-      <div className="flex items-center gap-2" data-testid="window-selector">
-        <span className="text-muted-foreground text-sm">Ventana:</span>
-        {WINDOW_OPTIONS.map((w) => (
-          <button
-            key={w}
-            type="button"
-            onClick={() => setWindowDays(w)}
-            data-testid={`window-${w}`}
-            className={
-              windowDays === w
-                ? "bg-primary text-primary-foreground rounded-md px-3 py-1 text-sm"
-                : "bg-muted text-muted-foreground rounded-md px-3 py-1 text-sm"
-            }
-          >
-            {w}d
-          </button>
-        ))}
-      </div>
+      <SegmentedControl
+        label="Ventana:"
+        value={windowDays}
+        onChange={setWindowDays}
+        options={WINDOW_OPTIONS.map((w) => ({ value: w, label: `${w}d` }))}
+        getOptionTestId={(w) => `window-${w}`}
+        data-testid="window-selector"
+      />
 
       {/* Headline cards + trend */}
       <div className="grid gap-4 md:grid-cols-4">

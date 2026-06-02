@@ -142,6 +142,37 @@ class Settings(BaseSettings):
         description="Seconds a WebAuthn registration/authentication challenge stays valid.",
     )
 
+    # ----- Admin-panel hardening (Plan 15 task_15_18) -----
+    # The System-Admin surface (`/admin/*`) is the highest-value target on
+    # the platform, so production hardens it beyond a normal session. All
+    # three knobs are ONLY enforced when `environment` is staging/prod
+    # (dev stays usable without MFA, an allowlist, or a 15-minute clock).
+    #
+    # 1. MANDATORY MFA — an admin without an enrolled+confirmed second
+    #    factor (TOTP/WebAuthn, Plan 08) is locked out of `/admin/*` (a
+    #    forced-enrollment gate). Toggleable for break-glass scenarios.
+    admin_require_mfa: bool = Field(
+        default=True,
+        description="Require an enrolled+confirmed MFA factor for /admin/* (staging/prod only).",
+    )
+    # 2. IP ALLOWLIST — admin access restricted to these CIDRs (reuses the
+    #    api-token allowlist CIDR semantics: each entry is a network,
+    #    `strict=False`, so a bare host is a /32). An EMPTY list means "no
+    #    network restriction" (the operator opted out); a non-empty list
+    #    rejects every source IP outside it with 403.
+    admin_ip_allowlist: list[str] = Field(
+        default_factory=list,
+        description="CIDRs allowed to reach /admin/* (empty = any). Staging/prod only.",
+    )
+    # 3. SHORT SESSIONS — an admin request on a session older than this many
+    #    minutes is rejected (401), forcing re-authentication. Independent of
+    #    the JWT/session TTL: a regular user's session can live longer; the
+    #    admin surface clamps to this short window.
+    admin_session_ttl_minutes: int = Field(
+        default=15,
+        description="Max age (minutes) of a session for /admin/* access (staging/prod only).",
+    )
+
     # ----- Redis (sessions, rate limit) -----
     redis_url: str = Field(
         default="redis://localhost:6379/0",

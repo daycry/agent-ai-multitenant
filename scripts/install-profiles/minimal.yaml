@@ -1,0 +1,56 @@
+# =============================================================================
+# Perfil de instalación: MINIMAL  (Plan 15 — task_15_11)
+# =============================================================================
+# Un `install.yaml` completo que el CLI desatendido acepta:
+#   ./scripts/install.sh --config scripts/install-profiles/minimal.yaml
+# (equivale a `python -m installer_backend.cli install --config <fichero>`).
+#
+# Pensado para la MÁQUINA MÁS PEQUEÑA viable / evaluación / pruebas:
+#   - Recursos mínimos: 1 worker, 2 GiB por worker.
+#   - SIN GPU.
+#   - UN solo proveedor LLM habilitado (Ollama local) — el catálogo cerrado
+#     ADR-0021 exige >= 1 proveedor.
+#
+# SECRETOS — IMPORTANTE
+# ---------------------
+# Los valores `*_secret_key`, `*oauth_token*` y `api_key` de ESTE fichero son
+# MARCADORES de ejemplo (placeholders). Antes de un install real, SUSTITÚYELOS
+# por secretos de alta entropía propios y NO comitees el fichero resultante.
+# El instalador escribe los secretos generados en Vault y los muestra UNA vez.
+# -----------------------------------------------------------------------------
+
+# Paso 2 — sistema: dominio + entorno.
+system:
+  domain: agentic.example.com
+  environment: production
+
+# Paso 3 — recursos / GPU: lo mínimo para arrancar el stack.
+resources:
+  worker_replicas: 1
+  worker_memory_gib: 2
+  gpu_enabled: false
+
+# Paso 4 — almacenamiento: raíz de datos + bucket de MinIO.
+storage:
+  data_root: /data/agent-platform
+  minio_bucket: agentic-platform
+  minio_access_key: CHANGE_ME_minio_access
+  minio_secret_key: CHANGE_ME_minio_secret_placeholder_value
+
+# Paso 5 — proveedores LLM (catálogo cerrado ADR-0021).
+# Mínimo: un único proveedor local (Ollama) habilitado.
+providers:
+  ollama:
+    enabled: true
+    endpoint: http://ollama:11434
+
+# Paso 6 — tenant inicial + usuario administrador.
+tenant:
+  tenant_name: Acme
+  admin_email: admin@acme.com
+
+# Puertos publicados en el host (por defecto el compose canónico).
+ports:
+  admin_panel: 3000
+  api_server: 8000
+  minio_console: 9001

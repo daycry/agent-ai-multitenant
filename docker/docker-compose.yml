@@ -21,6 +21,33 @@ x-logging: &default-logging
       max-size: "10m"
       max-file: "5"
 
+# Hardening baseline for the TRUSTED long-lived platform services (Plan 15
+# task_15_15/16, revised). These are first-party / official images (postgres,
+# redis, minio, vault, clamav, docling, api-server, workers, ...); their threat
+# model (CLAUDE.md principle 2) does NOT call for a hand-rolled syscall
+# allowlist — that is reserved for the UNTRUSTED agent/test/review runtimes.
+# So the trusted services get:
+#   * no-new-privileges:true — no setuid/file-cap privilege gain.
+#   * Docker's DEFAULT seccomp profile (by NOT overriding it) — the battle-
+#     tested ~350-syscall allowlist that denies the dangerous syscalls
+#     (mount, ptrace, kexec, bpf, init_module, reboot, swapon, pivot_root,
+#     keyctl, ...) while actually running these images. A hand-rolled
+#     default-deny profile here SIGSEGV'd the Go services (vault/minio) and
+#     broke postgres (signalfd/shmget) — net negative for trusted services.
+#   * apparmor=agentic-default — host MAC confinement (loaded via
+#     `apparmor_parser -r -W docker/apparmor/agentic-default.profile`; see
+#     docs/06-runbooks/apparmor-profiles.md; a no-op where AppArmor is absent).
+# The UNTRUSTED agent/test runtime sandbox DOES use the STRICT default-deny
+# docker/seccomp/agent-runtime.json + docker/apparmor/agent-runtime.profile,
+# applied by the worker at launch (workers.isolation), where it matters most.
+# Profiles validated in tests/security/test_seccomp_profiles.py +
+# test_apparmor.py; kernel enforcement confirmed on Linux (see
+# internal-pentest-methodology.md §5).
+x-seccomp: &default-seccomp
+  security_opt:
+    - no-new-privileges:true
+    - apparmor=agentic-default
+
 services:
   # ---------------------------------------------------------------------------
   # PostgreSQL 16 + pgvector (vector store lives in the same DB).
@@ -50,7 +77,7 @@ services:
       retries: 5
       start_period: 30s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
   # ---------------------------------------------------------------------------
   # Redis 7 — sessions (server-side), Celery broker, rate-limit counters.
@@ -79,7 +106,7 @@ services:
       retries: 5
       start_period: 10s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
   # ---------------------------------------------------------------------------
   # MinIO — S3-compatible object storage. The web console runs on 9001.
@@ -103,7 +130,7 @@ services:
       retries: 5
       start_period: 30s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
   # ---------------------------------------------------------------------------
   # HashiCorp Vault in server mode with file backend.
@@ -139,7 +166,7 @@ services:
       retries: 10
       start_period: 30s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
   # ---------------------------------------------------------------------------
   # ClamAV — antivirus scanning for user-uploaded files (RAG ingestion,
@@ -159,7 +186,7 @@ services:
       retries: 5
       start_period: 120s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
   # ---------------------------------------------------------------------------
   # docling-serve — IBM's open-source document parser (Plan 04 task_04_10).
@@ -184,7 +211,7 @@ services:
       retries: 5
       start_period: 60s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
   # ---------------------------------------------------------------------------
   # docling-mcp — MCP-protocol surface of Docling (Plan 04 task_04_21).
@@ -236,7 +263,7 @@ services:
     networks:
       - agentic-net
       - agentic-agents
-    <<: [*default-restart, *default-logging]
+    <<: [*default-restart, *default-logging, *default-seccomp]
 
 volumes:
   postgres_data:

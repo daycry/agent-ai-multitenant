@@ -29,10 +29,14 @@ is computed under the caller's RLS scope with a defence-in-depth
 is a TENANT dashboard — cross-tenant comparison is a separate, System-Admin-only
 surface (task_14_15).
 
-Costs are CANONICAL USD. The tenant-currency display toggle the plan mentions
-depends on the FX / display-currency system (exchange_rates), which has no
-numbered task and was not built (Plan 11 scope gap); USD is the only currency
-surfaced here. Cached-token counts are not captured per step yet (the price
+Costs are CANONICAL USD. The runs explorer ALSO drives the tenant-currency
+DISPLAY toggle (Plan 11.1 task_11_1_03): when the caller's display currency is
+not USD (the tenant's ``Organization.display_currency``, overridable per request
+with the ``display_currency`` query param), each row additionally carries its
+USD cost converted with the FX rate of that run's OWN date plus the applied rate
+for traceability (``api_server.fx`` / the global ``exchange_rates`` catalog). The
+stored USD is never changed — conversion is presentation only, computed on the
+fly per row. Cached-token counts are not captured per step yet (the price
 snapshot freezes the cached *price*, not the count) so cached tokens report 0 —
 never fabricated.
 """
@@ -61,7 +65,11 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
+from api_server.budgets.human_cost import compute_human_cost_usd
 from api_server.db.domain import Agent, Execution, Plan, Task
+from api_server.db.exchange_rates import CANONICAL_CURRENCY
+from api_server.db.models import Organization
+from api_server.fx import convert_from_usd_with_rate, resolve_rates_for_dates
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers._pagination import apply_pagination, limit_query, offset_query
 from api_server.schemas.tenant_stats import (
@@ -298,7 +306,14 @@ async def tenant_consumption_summary(
     tenant_id = require_tenant_id(principal)
     since = datetime.now(tz=UTC) - timedelta(days=window_days)
     base = _exec_filters(tenant_id=tenant_id, since=since, agent_id=agent_id, plan_id=plan_id)
-    return await _compute_consumption(session, base, window_days=window_days)
+    return await _compute_consumption(
+        session,
+        base,
+        window_days=window_days,
+        tenant_id=tenant_id,
+        since=since,
+        plan_id=plan_id,
+    )
 
 
 async def _compute_consumption(
@@ -306,11 +321,19 @@ async def _compute_consumption(
     base: list[ColumnElement[bool]],
     *,
     window_days: int,
+    tenant_id: UUID,
+    since: datetime,
+    plan_id: UUID | None = None,
 ) -> ConsumptionSummaryResponse:
     """Compute the consumption summary for ``base`` (tenant-scoped filters).
 
     Shared by the JSON ``/consumption`` endpoint and the export's PDF/HTML
-    summary block so the two never drift.
+    summary block so the two never drift. ``accumulated_cost_usd`` is the AI
+    cost (the executions roll-up, unchanged); the human cost (Plan 16
+    task_16_12: rate * hours from human_work_sessions) is computed over the SAME
+    window so the card / export can SEGMENT AI vs human and show the combined
+    total. The human roll-up is tenant-scoped (RLS) over the window and narrowed
+    to ``plan_id`` when the consumption query is (so the two halves agree).
     """
     headline = (
         await session.execute(
@@ -333,6 +356,16 @@ async def _compute_consumption(
 
     costliest = await _costliest_run(session, base)
 
+    # Human cost over the same window (segmentation, task_16_12). Canonical USD.
+    human = await compute_human_cost_usd(
+        session,
+        tenant_id=tenant_id,
+        plan_id=plan_id,
+        window_start=since.date(),
+    )
+    ai_cost = accumulated
+    human_cost = _quantize_cost(human.human_cost_usd)
+
     return ConsumptionSummaryResponse(
         window_days=window_days,
         run_count=run_count,
@@ -345,6 +378,10 @@ async def _compute_consumption(
         # freezes the cached PRICE, not the count). Reported as 0, not faked.
         total_tokens_cached=0,
         costliest_run=costliest,
+        ai_cost_usd=ai_cost,
+        human_cost_usd=human_cost,
+        total_cost_usd=_quantize_cost(ai_cost + human_cost),
+        human_hours_logged=human.hours_logged,
     )
 
 
@@ -369,6 +406,16 @@ async def list_execution_runs(
     min_cost: Decimal | None = Query(
         default=None, ge=0, description="Minimum total cost USD threshold."
     ),
+    display_currency: str | None = Query(
+        default=None,
+        max_length=3,
+        description=(
+            "Override the tenant's display currency for this request (ISO-4217, "
+            "e.g. EUR). Defaults to the tenant's Organization.display_currency. "
+            "When not USD, each row also carries its cost converted at the run's "
+            "date plus the applied rate. USD costs are never changed."
+        ),
+    ),
 ) -> list[ExecutionRunRow]:
     """List this tenant's executions, newest first, paginated + filtered. tenant_admin.
 
@@ -376,6 +423,12 @@ async def list_execution_runs(
     the run's last model call, the verdict (terminal status), the owning task's
     retry count and the duration. Filterable by time window / agent / role /
     plan / task / verdict / model / min-cost. Tenant-scoped (RLS); canonical USD.
+
+    Currency toggle (Plan 11.1): when the effective display currency (the
+    ``display_currency`` query override, else the tenant's
+    ``Organization.display_currency``) is not USD, every row additionally
+    carries ``display_cost`` / ``applied_rate`` / ``applied_rate_date`` computed
+    with the FX rate of that run's OWN date. The stored USD is never changed.
     """
     tenant_id = require_tenant_id(principal)
     since = datetime.now(tz=UTC) - timedelta(days=window_days)
@@ -390,7 +443,11 @@ async def list_execution_runs(
         model=model,
         min_cost=min_cost,
     )
-    return await _fetch_runs(session, filters, limit=limit, offset=offset)
+    target_currency = await _resolve_display_currency(
+        session, tenant_id=tenant_id, override=display_currency
+    )
+    rows = await _fetch_runs(session, filters, limit=limit, offset=offset)
+    return await _apply_display_currency(session, rows, target_currency)
 
 
 # ===========================================================================
@@ -460,7 +517,14 @@ async def export_execution_runs(
 
     # The PDF/HTML report embeds a consumption summary; CSV/XLSX are raw rows.
     consumption = (
-        await _compute_consumption(session, filters, window_days=window_days)
+        await _compute_consumption(
+            session,
+            filters,
+            window_days=window_days,
+            tenant_id=tenant_id,
+            since=since,
+            plan_id=plan_id,
+        )
         if fmt is ExportFormat.PDF
         else None
     )
@@ -559,6 +623,63 @@ async def _fetch_runs(
             duration,
         ) in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Display-currency toggle (Plan 11.1 task_11_1_03) — USD canonical, FX display
+# only, converted per row at each run's OWN date.
+# ---------------------------------------------------------------------------
+async def _resolve_display_currency(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    override: str | None,
+) -> str:
+    """The effective ISO-4217 display currency for the request (upper-cased).
+
+    The ``display_currency`` query override wins when present; otherwise the
+    tenant's ``Organization.display_currency`` (default EUR). Falls back to USD
+    (the canonical currency, i.e. no conversion) when the tenant row cannot be
+    read. Always returns an upper-cased code so the FX lookup is case-stable.
+    """
+    if override is not None and override.strip():
+        return override.strip().upper()
+    stored = await session.scalar(
+        select(Organization.display_currency).where(Organization.id == tenant_id)
+    )
+    return (stored or CANONICAL_CURRENCY).strip().upper()
+
+
+async def _apply_display_currency(
+    session: AsyncSession,
+    rows: list[ExecutionRunRow],
+    target_currency: str,
+) -> list[ExecutionRunRow]:
+    """Annotate ``rows`` in place with the per-row display conversion.
+
+    No-op (USD canonical) when ``target_currency`` is USD — the rows stay
+    USD-only and the display fields remain ``None``. Otherwise the FX rate for
+    each run's OWN date is resolved in a SINGLE query (no N+1), and each row's
+    USD cost is converted at its date. A run whose date has no rate on or before
+    it keeps ``None`` display fields (the UI falls back to the USD figure).
+    """
+    if not rows or target_currency == CANONICAL_CURRENCY:
+        return rows
+
+    run_dates = {row.created_at.date() for row in rows}
+    rates = await resolve_rates_for_dates(session, target_currency, run_dates)
+
+    for row in rows:
+        rate_row = rates.get(row.created_at.date())
+        if rate_row is None:
+            # No rate on or before this run's date — leave the display fields
+            # None; the UI falls back to the canonical USD figure.
+            continue
+        row.display_currency = target_currency
+        row.display_cost = convert_from_usd_with_rate(row.total_cost_usd, rate_row.rate_vs_usd)
+        row.applied_rate = rate_row.rate_vs_usd
+        row.applied_rate_date = rate_row.as_of_date
+    return rows
 
 
 # ---------------------------------------------------------------------------

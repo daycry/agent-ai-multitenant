@@ -299,6 +299,9 @@ def test_task_status_values() -> None:
     assert {s.value for s in d.TaskStatus} == {
         "backlog",
         "ready",
+        # Plan 16 §7.2 — tarea asignada a un Human Agent, pendiente de
+        # aceptación por el User asignado (task_16_04).
+        "assigned_to_human",
         "in_progress",
         # ADR 0020 — tarea aparcada esperando decisión humana.
         "awaiting_human_approval",

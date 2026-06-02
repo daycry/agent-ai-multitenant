@@ -13,9 +13,10 @@ import {
 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { StateBlock } from "@/components/shared/state-block";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 
 interface ServiceHealth {
   name: string;
@@ -171,46 +172,46 @@ export default function DashboardPage() {
       <section>
         <h2 className="mb-3 text-base font-semibold tracking-tight">Salud de servicios</h2>
 
-        {health.isLoading && <p className="text-muted-foreground text-sm">Loading services…</p>}
-
-        {health.isError && (
-          <Card className="border-destructive p-4" data-testid="dashboard-error">
-            <p className="text-destructive text-sm">
-              Could not load services:{" "}
-              {health.error instanceof ApiError ? health.error.body : String(health.error)}
-            </p>
-          </Card>
-        )}
-
-        {health.data && (
-          <div
-            className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
-            data-testid="services-grid"
-          >
-            {health.data.services.map((service) => (
-              <Card
-                key={service.name}
-                data-testid={`service-${service.name}`}
-                className="flex h-full flex-col items-center justify-center gap-2 p-5 text-center"
-              >
-                <StatusIcon status={service.status} className="h-7 w-7" />
-                <CardTitle className="text-base capitalize">{service.name}</CardTitle>
-                <span
-                  className={cn(
-                    "rounded px-2 py-0.5 text-xs font-medium",
-                    statusClasses[service.status] ?? "bg-muted text-muted-foreground",
-                  )}
-                  data-testid={`service-${service.name}-status`}
+        <StateBlock
+          isLoading={health.isLoading}
+          isError={health.isError}
+          error={health.error}
+          loadingLabel="Loading services…"
+          loadingSkeleton
+          skeletonRows={5}
+          errorTitle="Could not load services"
+          errorTestId="dashboard-error"
+        >
+          {health.data && (
+            <div
+              className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
+              data-testid="services-grid"
+            >
+              {health.data.services.map((service) => (
+                <Card
+                  key={service.name}
+                  data-testid={`service-${service.name}`}
+                  className="flex h-full flex-col items-center justify-center gap-2 p-5 text-center"
                 >
-                  {service.status}
-                </span>
-                {service.detail && (
-                  <p className="text-muted-foreground text-xs">{service.detail}</p>
-                )}
-              </Card>
-            ))}
-          </div>
-        )}
+                  <StatusIcon status={service.status} className="h-7 w-7" />
+                  <CardTitle className="text-base capitalize">{service.name}</CardTitle>
+                  <span
+                    className={cn(
+                      "rounded px-2 py-0.5 text-xs font-medium",
+                      statusClasses[service.status] ?? "bg-muted text-muted-foreground",
+                    )}
+                    data-testid={`service-${service.name}-status`}
+                  >
+                    {service.status}
+                  </span>
+                  {service.detail && (
+                    <p className="text-muted-foreground text-xs">{service.detail}</p>
+                  )}
+                </Card>
+              ))}
+            </div>
+          )}
+        </StateBlock>
       </section>
     </div>
   );

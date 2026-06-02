@@ -1,9 +1,9 @@
 ---
 plan_id: 16-human-agents
 title: Human Agents y Workflows Mixtos Humano-IA
-status: pending_approval
+status: pending_human_validation
 blocking_plan: [06-testing-revision-git, 10-asistente-personal, 11-guardrails-precios]
-started_at: null
+started_at: 2026-05-31
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 85-100
@@ -18,18 +18,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo                              | Valor                                                                       |
-| ---------------------------------- | --------------------------------------------------------------------------- |
-| **ID del Plan**                    | `16-human-agents`                                                           |
-| **Estado**                         | `pending_approval`                                                          |
-| **Bloqueado por**                  | `06-testing-revision-git`, `10-asistente-personal`, `11-guardrails-precios` |
-| **Tiempo estimado (calendario)**   | 4-5 semanas                                                                 |
-| **Tiempo estimado (persona-días)** | 85-100                                                                      |
-| **Previsión de coste — humano**    | 34.000 € – 40.000 € (tarifa media 50 €/h)                                   |
-| **Previsión de coste — IA**        | 100 € – 180 €                                                               |
-| **Aprobador propuesto**            | System Admin                                                                |
-| **Rama git**                       | `plan/16-human-agents`                                                      |
-| **Secciones del .docx**            | [3.1.3, 5.8, 7.2, 13.6, 17, 28.7.2]                                         |
+| Campo                              | Valor                                                                                     |
+| ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| **ID del Plan**                    | `16-human-agents`                                                                         |
+| **Estado**                         | `in_progress` (override humano del gate blocking_plan: 10/11 en pending_human_validation) |
+| **Bloqueado por**                  | `06-testing-revision-git`, `10-asistente-personal`, `11-guardrails-precios`               |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                                                                               |
+| **Tiempo estimado (persona-días)** | 85-100                                                                                    |
+| **Previsión de coste — humano**    | 34.000 € – 40.000 € (tarifa media 50 €/h)                                                 |
+| **Previsión de coste — IA**        | 100 € – 180 €                                                                             |
+| **Aprobador propuesto**            | System Admin                                                                              |
+| **Rama git**                       | `plan/16-human-agents`                                                                    |
+| **Secciones del .docx**            | [3.1.3, 5.8, 7.2, 13.6, 17, 28.7.2]                                                       |
 
 ---
 
@@ -94,7 +94,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_01` — Añadir `agent_type` enum a entidad Agent + migración Alembic
 
-- [ ] **Título**: Añadir `agent_type` enum (ai/human, default ai) a entidad Agent. Migración Alembic reversible. Validar que agentes existentes quedan con `agent_type=ai`.
+- [x] **Título**: Añadir `agent_type` enum (ai/human, default ai) a entidad Agent. Migración Alembic reversible. Validar que agentes existentes quedan con `agent_type=ai`.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -111,7 +111,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_02` — Tabla `human_agent_config` con campos específicos del modelo humano
 
-- [ ] **Título**: Tabla `human_agent_config` con `agent_id` (FK), `assignment_mode`, `assigned_user_id` (FK User), `hourly_rate`, `hourly_rate_currency`, `notification_channels` JSONB, `acceptance_timeout_hours`, `escalation_target_user_id` (FK User), `expected_response_time_hours`, `expected_execution_time_hours`.
+- [x] **Título**: Tabla `human_agent_config` con `agent_id` (FK), `assignment_mode`, `assigned_user_id` (FK User), `hourly_rate`, `hourly_rate_currency`, `notification_channels` JSONB, `acceptance_timeout_hours`, `escalation_target_user_id` (FK User), `expected_response_time_hours`, `expected_execution_time_hours`.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -128,7 +128,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_03` — Tabla `human_work_sessions` para trazabilidad de tareas humanas
 
-- [ ] **Título**: Tabla `human_work_sessions` con `task_id`, `user_id`, `start_at`, `end_at`, `hours_logged`, `comments`, `output_files_attached` JSONB, `tenant_id`. Reemplaza el rol de Executions para tareas con agent_type=human.
+- [x] **Título**: Tabla `human_work_sessions` con `task_id`, `user_id`, `start_at`, `end_at`, `hours_logged`, `comments`, `output_files_attached` JSONB, `tenant_id`. Reemplaza el rol de Executions para tareas con agent_type=human.
 - **Tiempo estimado**: 5 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -147,7 +147,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_04` — Extender state machine de Task con estados de tareas humanas
 
-- [ ] **Título**: Añadir transiciones `ready → assigned_to_human`, `assigned_to_human → in_progress`, `assigned_to_human → assigned_to_human (reasignación)`, `assigned_to_human → blocked` al state machine del Servicio de Dominio. Validar que solo aplican si `assignee.agent_type=human`.
+- [x] **Título**: Añadir transiciones `ready → assigned_to_human`, `assigned_to_human → in_progress`, `assigned_to_human → assigned_to_human (reasignación)`, `assigned_to_human → blocked` al state machine del Servicio de Dominio. Validar que solo aplican si `assignee.agent_type=human`.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -164,7 +164,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_05` — Orchestrator: ruta de tareas humanas (no solicita pool de runtime)
 
-- [ ] **Título**: Cuando `assignee.agent_type=human`, el orchestrator NO solicita contenedor del pool. En su lugar crea `HumanTaskAssignment` con `task_id`, `human_agent_id`, `assigned_to_user_id` (resuelto desde `human_agent_config.assigned_user_id`), `assigned_at`. Transiciona la tarea a `assigned_to_human`.
+- [x] **Título**: Cuando `assignee.agent_type=human`, el orchestrator NO solicita contenedor del pool. En su lugar crea `HumanTaskAssignment` con `task_id`, `human_agent_id`, `assigned_to_user_id` (resuelto desde `human_agent_config.assigned_user_id`), `assigned_at`. Transiciona la tarea a `assigned_to_human`.
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -181,7 +181,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_06` — Acceptance timeout con escalación automática
 
-- [ ] **Título**: Job programado (Celery Beat, cada 10 minutos) que detecta HumanTaskAssignments con estado pendiente de aceptación cuya antigüedad supera `acceptance_timeout_hours`. Reasigna al `escalation_target_user_id`. Si el escalation target tampoco acepta dentro del mismo timeout, transiciona la tarea a `blocked` y notifica al Tenant Admin.
+- [x] **Título**: Job programado (Celery Beat, cada 10 minutos) que detecta HumanTaskAssignments con estado pendiente de aceptación cuya antigüedad supera `acceptance_timeout_hours`. Reasigna al `escalation_target_user_id`. Si el escalation target tampoco acepta dentro del mismo timeout, transiciona la tarea a `blocked` y notifica al Tenant Admin.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -200,7 +200,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_07` — Galería de Human Agents en panel del tenant
 
-- [ ] **Título**: Página en panel admin del tenant que lista Human Agents existentes y permite crear nuevos. Formulario con todos los campos de `human_agent_config`. Catálogo de plantillas globales con botón "clonar y forkar al tenant".
+- [x] **Título**: Página en panel admin del tenant que lista Human Agents existentes y permite crear nuevos. Formulario con todos los campos de `human_agent_config`. Catálogo de plantillas globales con botón "clonar y forkar al tenant". _(backend pytest verde vs DB real + @pytest.mark.cross_tenant; admin-panel typecheck/lint/build verde; e2e Playwright escritos NO ejecutados — pendiente verificación humana)._
 - **Tiempo estimado**: 12 h
 - **Complejidad**: l
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -223,7 +223,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_08` — Bandeja personal "Tareas asignadas a mí"
 
-- [ ] **Título**: Vista en el panel principal de cada User: lista de tareas asignadas activas con estado (assigned / accepted / in_progress / in_review), proyecto, plan, deadline. Botones de acción contextual: aceptar, rechazar (con justificación), marcar como completada, escalar al admin.
+- [x] **Título**: Vista en el panel principal de cada User: lista de tareas asignadas activas con estado (assigned / accepted / in*progress / in_review), proyecto, plan, deadline. Botones de acción contextual: aceptar, rechazar (con justificación), marcar como completada, escalar al admin. *(backend pytest verde vs DB real + @pytest.mark.cross*tenant; admin-panel typecheck/lint/build verde; e2e Playwright escritos NO ejecutados — pendiente verificación humana).*
 - **Tiempo estimado**: 14 h
 - **Complejidad**: l
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -240,7 +240,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_09` — Formulario de entrega con attachments y log de horas opcional
 
-- [ ] **Título**: Al marcar tarea como completada, modal con textarea de output, attachments (archivos, URLs, screenshots), y campo opcional de horas trabajadas. Crea HumanWorkSession y transiciona tarea a in_review.
+- [x] **Título**: Al marcar tarea como completada, modal con textarea de output, attachments (archivos, URLs, screenshots), y campo opcional de horas trabajadas. Crea HumanWorkSession y transiciona tarea a in*review. *(backend pytest verde vs DB real + @pytest.mark.cross*tenant; admin-panel typecheck/lint/build verde; e2e Playwright escritos NO ejecutados — pendiente verificación humana).*
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -257,7 +257,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_10` — Histórico personal con métricas de performance
 
-- [ ] **Título**: Pestaña "Histórico" en la bandeja personal: tareas pasadas con tiempo medio de aceptación, tiempo medio de ejecución, % de tareas aprobadas a la primera. Las métricas alimentan estimaciones futuras del PM agente.
+- [x] **Título**: Pestaña "Histórico" en la bandeja personal: tareas pasadas con tiempo medio de aceptación, tiempo medio de ejecución, % de tareas aprobadas a la primera. Las métricas alimentan estimaciones futuras del PM agente. _(backend pytest verde vs DB real + @pytest.mark.cross_tenant; admin-panel typecheck/lint/build verde; e2e Playwright escrito NO ejecutado — pendiente verificación humana)._
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -276,7 +276,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_11` — Modos de revisión `auto_approve` y `peer_human_reviewer`
 
-- [ ] **Título**: Implementar `project.human_task_review_mode` con dos modos: `auto_approve` (la tarea pasa a done al marcar completada sin paso de revisión adicional) y `peer_human_reviewer` (otro Human Agent revisa el output).
+- [x] **Título**: Implementar `project.human_task_review_mode` con dos modos: `auto_approve` (la tarea pasa a done al marcar completada sin paso de revisión adicional) y `peer_human_reviewer` (otro Human Agent revisa el output). _(backend pytest verde vs DB real — test_human_review_auto.py + test_human_review_peer.py, 9 tests + @pytest.mark.cross_tenant; migración 0073 reversible, single head; review.py reutiliza el state machine §7.2 + escalación §7.9 a blocked + task_blocked como el sweep de acceptance-timeout)._
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -299,7 +299,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_12` — Coste humano integrado en plan, project budget y dashboard
 
-- [ ] **Título**: Imputar coste humano (hourly_rate \* horas) al plan y al proyecto. Campo `Project.budget_includes_human_cost` (default false): si true, el coste humano suma al budget; si false, solo coste AI cuenta. Actualizar dashboard 13.7 para segmentar AI cost vs Human cost.
+- [x] **Título**: Imputar coste humano (hourly*rate \* horas) al plan y al proyecto. Campo `Project.budget_includes_human_cost` (default false): si true, el coste humano suma al budget; si false, solo coste AI cuenta. Actualizar dashboard 13.7 para segmentar AI cost vs Human cost. *(backend pytest verde vs DB real — test*human_cost.py + test_human_budget_inclusion.py, 7 tests + @pytest.mark.cross_tenant; migración 0074 reversible single head; budgets/human_cost.py imputa rate\*horas→USD (FX, fallback DEFAULT_HOURLY_RATE_EUR), consumption.py pliega coste humano sólo si budget_includes_human_cost; /tenant-stats/consumption + admin-panel tenant-stats segmentan IA vs Humano; admin-panel typecheck/lint/build verde).*
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + frontend-dev
@@ -324,7 +324,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_13` — Asignación de tareas a Human Agents desde chat de planning
 
-- [ ] **Título**: El PM agente durante el chat de planning ve los Human Agents del tenant en la galería y puede asignarles tareas igual que a agentes IA. La estimación del plan integra `expected_response_time + expected_execution_time + hourly_rate * expected_execution_time` por cada tarea humana.
+- [x] **Título**: El PM agente durante el chat de planning ve los Human Agents del tenant en la galería y puede asignarles tareas igual que a agentes IA. La estimación del plan integra `expected_response_time + expected_execution_time + hourly_rate * expected_execution_time` por cada tarea humana. _(backend pytest verde vs DB real — test_planning_human_agents.py, 4 tests + @pytest.mark.cross_tenant; sin migración (sólo lectura de human_agent_config / human_task_assignments existentes); planning_context expone la galería del tenant (rate + tiempos esperados + carga + flag overloaded, RLS) y chat/cost.py añade compute_human_agent_plan_estimate (duración = response+execution; coste = rate\*execution); comportamiento IA/coste genérico humano sin cambios)._
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer + backend-dev
@@ -341,7 +341,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_14` — Tools del asistente personal: `tenant_human_workload`, `tenant_human_assignments_pending`
 
-- [ ] **Título**: Implementar las dos tools en el asistente personal. Respuestas a queries tipo "¿cuántas tareas tiene Fulano esta semana?", "¿qué tareas humanas están en cola sin aceptar desde hace más de 24h?". Respetan RBAC del admin.
+- [x] **Título**: Implementar las dos tools en el asistente personal. Respuestas a queries tipo "¿cuántas tareas tiene Fulano esta semana?", "¿qué tareas humanas están en cola sin aceptar desde hace más de 24h?". Respetan RBAC del admin. _(backend pytest verde vs DB real — test_assistant_human_tools.py, 7 tests + 2× @pytest.mark.cross_tenant; sin migración (sólo lectura de human_task_assignments / human_work_sessions / users existentes); tenant_human_workload cuenta asignaciones abiertas (pending+accepted) + sesiones de la semana ISO, resuelve al usuario sólo entre miembros del tenant del admin (RLS); tenant_human_assignments_pending lista pending_acceptance > N h (24h por defecto); ambas registradas en ASSISTANT_TOOLS + DEFAULT_ENABLED_TOOLS)._
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer + backend-dev
@@ -358,7 +358,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_15` — Memorizer adaptado a tareas humanas
 
-- [ ] **Título**: El Memorizer IA destila también las HumanWorkSessions, no solo Executions. Genera MemoryEntries útiles para futuros planes (ej. "X decisión la tomó Fulano en este contexto y resultó en Y").
+- [x] **Título**: El Memorizer IA destila también las HumanWorkSessions, no solo Executions. Genera MemoryEntries útiles para futuros planes (ej. "X decisión la tomó Fulano en este contexto y resultó en Y"). _(backend pytest verde vs DB real — test_memorizer_human.py, 8 tests + @pytest.mark.cross_tenant; migración 0075 reversible single head; memory_entries.source_human_work_session_id cita la HumanWorkSession (CHECK ck_memory_entries_single_source: Execution XOR HumanWorkSession); distil_human_work_session + should_memorize_human_session (gate task=done) reutilizan el pipeline §04.03 sin tocar distil_execution; el scope private del agente humano SÍ se atribuye al user trabajador (a diferencia del agente IA); trigger desde inbox submit auto_approve + peer-review approve vía celery_client.enqueue_memorize_human_work_session)._
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: ai-engineer + backend-dev
@@ -377,7 +377,7 @@ Hasta esta fase, todas las tareas las ejecutan agentes IA. Muchos casos reales r
 
 #### `task_16_16` — Documentación: ADR, guías de Human Agents, runbook, changelog
 
-- [ ] **Título**: ADR sobre el modelo agent_type, guía de creación y configuración de Human Agents en /docs/03-guides/human-agents.md, runbook de uso en /docs/06-runbooks/, entrada en changelog.
+- [x] **Título**: ADR sobre el modelo agent*type, guía de creación y configuración de Human Agents en /docs/03-guides/human-agents.md, runbook de uso en /docs/06-runbooks/, entrada en changelog. *(ADR 0046 sobre el modelo agent*type ai/human + diseño Human-Agent (modos de revisión, coste, asignación, alternativas); guía docs/03-guides/human-agents.md; runbook docs/06-runbooks/human-tasks-operations.md; changelog docs/07-changelog/16-human-agents.md resumiendo Plan 16 completo (16_01..16_16, migraciones 0066-0069/0073-0075, e2e escritos-no-ejecutados, tests humanos pendientes); fila Plan 16 ya presente en docs/roadmap/README.md; sin cambios de código ni del frontmatter status — lo cierra el orquestador tras el gate full-plan).*
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: technical-writer

@@ -42,16 +42,63 @@ Cada archivo contiene:
 | 06.12 | [06.12-global-catalog-consistency.md](./06.12-global-catalog-consistency.md) | 2-3 d    | 06.11      |
 | 06.13 | [06.13-kb-catalog-content.md](./06.13-kb-catalog-content.md)                 | 3-5 d    | 06.12      |
 | 06.14 | [06.14-hardening-auditoria.md](./06.14-hardening-auditoria.md)               | 8-12 d   | —          |
+| 06.15 | [06.15-agent-tools-assignment-ui.md](./06.15-agent-tools-assignment-ui.md)   | 4-6 d    | —          |
+| 06.16 | [06.16-polyglot-tool-catalog.md](./06.16-polyglot-tool-catalog.md)           | 4-6 d    | —          |
 | 07    | [07-documentacion-visor.md](./07-documentacion-visor.md)                     | 3 sem    | 06         |
 | 08    | [08-sso-empresarial.md](./08-sso-empresarial.md)                             | 2-3 sem  | 00         |
 | 09    | [09-marketplace.md](./09-marketplace.md)                                     | 3-4 sem  | 05         |
+| 09.1  | [09.1-marketplace-seed-publish.md](./09.1-marketplace-seed-publish.md)       | 3-4 d    | 09         |
 | 10    | [10-asistente-personal.md](./10-asistente-personal.md)                       | 3-4 sem  | 06         |
 | 11    | [11-guardrails-precios.md](./11-guardrails-precios.md)                       | 3-4 sem  | 02         |
+| 11.1  | [11.1-budgets-fx.md](./11.1-budgets-fx.md)                                   | 4-6 d    | 11         |
+| 11.2  | [11.2-llm-provider-admin-ui.md](./11.2-llm-provider-admin-ui.md)             | 4-6 d    | —          |
 | 12    | [12-backup-restore.md](./12-backup-restore.md)                               | 2-3 sem  | 00         |
 | 13    | [13-api-publica-webhooks.md](./13-api-publica-webhooks.md)                   | 3-4 sem  | 01         |
 | 14    | [14-evals-estadisticas.md](./14-evals-estadisticas.md)                       | 3-4 sem  | 06         |
 | 15    | [15-instalador-produccion.md](./15-instalador-produccion.md)                 | 4-5 sem  | todos      |
 | 16    | [16-human-agents.md](./16-human-agents.md)                                   | 4-5 sem  | 06, 10, 11 |
+
+### Seeds demostrativos (no entran en el gate de fases)
+
+Planes con `plan_id` descriptivo (no numerado) que **usan** la plataforma para
+materializar escenarios reales en lugar de construir features. No bloquean ni
+son bloqueados por las fases.
+
+| Plan                                                     | Qué materializa                                                                  | Construye sobre      |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------- |
+| [demo-webscorpo-team-kb.md](./demo-webscorpo-team-kb.md) | Equipo WebScorpo (CI4) de 10 agentes + proyecto + KB completo (equipo + por-rol) | 06.15, 06.16, 04, 16 |
+
+### Planes documentales (no entran en el gate de fases)
+
+Planes con `plan_id` descriptivo que producen **solo documentación** (no
+features ni código). No bloquean ni son bloqueados por las fases.
+
+| Plan                                                           | Qué produce                                                                                                                                                    |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [docs-human-test-guides.md](./docs-human-test-guides.md)       | Guías de tests humanos por plan en `docs/03-guides/human-tests/` (una por cada plan con bloque human)                                                          |
+| [docs-comprehensive-update.md](./docs-comprehensive-update.md) | Pasada integral de la capa transversal (`docs/context/`, overview, referencia), diagramas Mermaid del sistema final, gotchas nuevos, coherencia + cross-links. |
+
+### Planes de frontend (no entran en el gate de fases)
+
+Planes con `plan_id` descriptivo, **solo frontend** y
+**behavior-preserving** (no tocan backend, rutas, llamadas API ni
+`data-testid`). No bloquean ni son bloqueados por las fases.
+
+| Plan                                               | Qué produce                                                                                                                                                             |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [ui-refresh-refactor.md](./ui-refresh-refactor.md) | Refresh visual moderado + refactor del `admin-panel`: tokens refinados, primitivas y componentes compartidos nuevos, a11y.                                              |
+| [admin-menu-reorg.md](./admin-menu-reorg.md)       | Menú del `admin-panel` en 5 grupos con submenús colapsables + ámbito (Plataforma=System Admin, SSO movido ahí) + scrollbar y header modernos (tenant actual + usuario). |
+
+### Planes correctivos (no entran en el gate de fases)
+
+Planes con `plan_id` descriptivo que **corrigen** un comportamiento reportado por
+el operador sobre features ya construidas. No bloquean ni son bloqueados por las
+fases.
+
+| Plan                                                               | Qué corrige                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [price-sync-active-providers.md](./price-sync-active-providers.md) | El sync de precios LiteLLM ahora solo importa las familias de los `llm_providers` activos (ADR 0028); 0 activos ⇒ nada; fuera del allowlist cierra periodo (no borra).                                                                     |
+| [sso-global-user-admin.md](./sso-global-user-admin.md)             | Re-arquitectura de auth a **platform-global** (ADR 0047, supersede la parte per-tenant de 0031): login por provider, acceso por membership (0 ⇒ pantalla "sin acceso"), `/admin/users`, providers en `/login`; password/MFA/SCIM intactos. |
 
 ## MVP Funcional
 

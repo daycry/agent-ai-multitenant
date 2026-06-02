@@ -3,11 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Plus } from "lucide-react";
+import { Bot, Home, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
-import { Home } from "lucide-react";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,7 +24,10 @@ import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { ProjectCombobox } from "@/components/ui/project-combobox";
 import { RoleGuard } from "@/components/ui/role-guard";
+import { Select } from "@/components/ui/select";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useLang, type Lang } from "@/lib/lang-context";
 
@@ -79,7 +81,7 @@ function AgentList({
   lang: Lang;
 }) {
   if (agents.length === 0) {
-    return <p className="text-muted-foreground py-8 text-center text-sm">{emptyText}</p>;
+    return <EmptyState className="mt-2" icon={Bot} title="Sin agentes" description={emptyText} />;
   }
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="agents-grid">
@@ -179,57 +181,53 @@ export default function AgentsCatalogPage() {
         }}
       />
 
-      {isLoading && (
-        <p className="text-muted-foreground text-sm" data-testid="agents-loading">
-          Cargando agentes…
-        </p>
-      )}
+      <StateBlock
+        isLoading={isLoading}
+        isError={isError}
+        error={error}
+        loadingLabel="Cargando agentes…"
+        loadingTestId="agents-loading"
+        errorTitle="Could not load agents"
+        errorTestId="agents-error"
+      >
+        {data && (
+          <Tabs defaultValue="builtin" data-testid="agents-tabs">
+            <TabsList>
+              <TabsTrigger value="builtin" data-testid="tab-builtin">
+                Built-in ({builtins.length})
+              </TabsTrigger>
+              <TabsTrigger value="template" data-testid="tab-template">
+                Plantillas del Tenant ({tenantTemplates.length})
+              </TabsTrigger>
+              <TabsTrigger value="local" data-testid="tab-local">
+                Locales del Proyecto ({projectLocal.length})
+              </TabsTrigger>
+            </TabsList>
 
-      {isError && (
-        <Card className="border-destructive p-4" data-testid="agents-error">
-          <p className="text-destructive text-sm">
-            Could not load agents: {error instanceof ApiError ? error.body : String(error)}
-          </p>
-        </Card>
-      )}
-
-      {data && (
-        <Tabs defaultValue="builtin" data-testid="agents-tabs">
-          <TabsList>
-            <TabsTrigger value="builtin" data-testid="tab-builtin">
-              Built-in ({builtins.length})
-            </TabsTrigger>
-            <TabsTrigger value="template" data-testid="tab-template">
-              Plantillas del Tenant ({tenantTemplates.length})
-            </TabsTrigger>
-            <TabsTrigger value="local" data-testid="tab-local">
-              Locales del Proyecto ({projectLocal.length})
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="builtin">
-            <AgentList
-              agents={builtins}
-              lang={lang}
-              emptyText="No hay built-ins seedeados. Corre python -m api_server.seeds."
-            />
-          </TabsContent>
-          <TabsContent value="template">
-            <AgentList
-              agents={tenantTemplates}
-              lang={lang}
-              emptyText="Tu tenant aún no tiene plantillas de agente propias."
-            />
-          </TabsContent>
-          <TabsContent value="local">
-            <AgentList
-              agents={projectLocal}
-              lang={lang}
-              emptyText="No hay agentes locales de proyecto. Forkea uno desde un built-in o plantilla."
-            />
-          </TabsContent>
-        </Tabs>
-      )}
+            <TabsContent value="builtin">
+              <AgentList
+                agents={builtins}
+                lang={lang}
+                emptyText="No hay built-ins seedeados. Corre python -m api_server.seeds."
+              />
+            </TabsContent>
+            <TabsContent value="template">
+              <AgentList
+                agents={tenantTemplates}
+                lang={lang}
+                emptyText="Tu tenant aún no tiene plantillas de agente propias."
+              />
+            </TabsContent>
+            <TabsContent value="local">
+              <AgentList
+                agents={projectLocal}
+                lang={lang}
+                emptyText="No hay agentes locales de proyecto. Forkea uno desde un built-in o plantilla."
+              />
+            </TabsContent>
+          </Tabs>
+        )}
+      </StateBlock>
     </div>
   );
 }
@@ -326,11 +324,10 @@ function NewAgentDialog({
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="na-role">Role</Label>
-              <select
+              <Select
                 id="na-role"
                 value={role}
                 onChange={(e) => setRole(e.target.value)}
-                className="border-input bg-background rounded-md border px-3 py-2 text-sm"
                 data-testid="new-agent-role"
               >
                 {ROLE_OPTIONS.map((r) => (
@@ -338,7 +335,7 @@ function NewAgentDialog({
                     {r}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           </div>
 

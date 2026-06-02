@@ -1,8 +1,8 @@
 ---
 title: RBAC — Matriz de roles por endpoint
 audience: backend-dev, architect, security
-phase: 06.8-rbac-enforcement
-updated: 2026-05-28
+phase: cross-cutting
+updated: 2026-06-03
 ---
 
 # RBAC — Matriz de roles por endpoint
@@ -68,12 +68,91 @@ endpoints que devuelven el contexto del propio usuario.
 
 ### `admin.py` — system_admin
 
-| Endpoint               | Método      | Rol mínimo     |
-| ---------------------- | ----------- | -------------- |
-| `/admin/tenants`       | GET, POST   | `system_admin` |
-| `/admin/tenants/{id}`  | GET,PUT,DEL | `system_admin` |
-| `/admin/users`         | GET         | `system_admin` |
-| `/admin/system-health` | GET         | `system_admin` |
+| Endpoint                                   | Método      | Rol mínimo     |
+| ------------------------------------------ | ----------- | -------------- |
+| `/admin/tenants`                           | GET, POST   | `system_admin` |
+| `/admin/tenants/{id}`                      | GET,PUT,DEL | `system_admin` |
+| `/admin/users`                             | GET         | `system_admin` |
+| `/admin/users/{user_id}/memberships`       | GET, POST   | `system_admin` |
+| `/admin/users/{user_id}/memberships/{mid}` | PATCH, DEL  | `system_admin` |
+| `/admin/system-health`                     | GET         | `system_admin` |
+
+> **Administración de usuarios y acceso por membership (ADR 0047).** Tras
+> re-arquitecturar auth a platform-global, el acceso de un usuario a un
+> tenant lo concede **exclusivamente** una `UserOrganizationMembership`
+> que asigna el System Admin desde `/admin/users` (no hay claiming por
+> email-domain ni `default_tenant_id`; deny-by-default). `POST` asigna
+> usuario↔tenant+rol (revive una membership previamente revocada en vez de
+> chocar con el `UNIQUE(user_id, tenant_id)`); `PATCH` cambia rol y/o
+> `is_active` (desactivar quita acceso sin borrar); `DELETE` revoca
+> (soft-delete + `is_active=false`). Corren sobre el engine BYPASSRLS
+> (`get_admin_session`) porque el System Admin actúa cross-tenant; cada
+> mutación deja `audit_log` con el `tenant_id` afectado. El `role` de la
+> membership se limita a roles **per-tenant** (`tenant_admin` /
+> `tenant_user` / `system_operator`) — nunca otorga `system_admin`.
+
+### Platform-global configuration — `system_admin` (ADR 0028)
+
+Los proveedores LLM y el catálogo de precios son **platform-global**: no
+tienen `tenant_id`, no llevan RLS y se gestionan **sólo** por
+`system_admin` desde los endpoints `/admin/*`, que corren sobre el engine
+BYPASSRLS (`get_admin_session`). Un `tenant_admin` NO los crea ni edita —
+sólo elige qué modelo asigna a cada agente (`POST /agents`). Las
+credenciales viven **sólo en Vault** (`platform/llm/<provider_id>`); la
+API nunca las devuelve (write-only).
+
+#### `llm_providers.py` (Plan 11.2)
+
+| Endpoint                         | Método | Rol mínimo     |
+| -------------------------------- | ------ | -------------- |
+| `/admin/llm-providers`           | GET    | `system_admin` |
+| `/admin/llm-providers`           | POST   | `system_admin` |
+| `/admin/llm-providers/{id}`      | GET    | `system_admin` |
+| `/admin/llm-providers/{id}`      | PUT    | `system_admin` |
+| `/admin/llm-providers/{id}`      | DELETE | `system_admin` |
+| `/admin/llm-providers/{id}/test` | POST   | `system_admin` |
+
+> `POST` recibe la credencial como `SecretStr` y la escribe en Vault; la
+> BD guarda sólo `secret_vault_path`. `PUT` rota la credencial si se
+> envía. `DELETE` borra también el secreto de Vault. `/test` hace un
+> liveness probe clasificado leyendo el secreto de Vault, sin echo-arlo.
+
+#### `copilot_device_flow.py` — Device Flow de GitHub Copilot (Plan 11.2)
+
+| Endpoint                               | Método | Rol mínimo     |
+| -------------------------------------- | ------ | -------------- |
+| `/admin/llm/copilot/device-flow/start` | POST   | `system_admin` |
+| `/admin/llm/copilot/device-flow/poll`  | POST   | `system_admin` |
+
+> `start` devuelve `user_code` + `verification_uri`; `poll` acuña el token
+> OAuth al autorizar y lo escribe en Vault del provider — el token nunca
+> aparece en una respuesta.
+
+#### `model_prices.py` (catálogo global — Plan 11, asociación a provider en 11.2)
+
+| Endpoint                   | Método | Rol mínimo     |
+| -------------------------- | ------ | -------------- |
+| `/model-prices`            | GET    | `tenant_user`  |
+| `/model-prices/current`    | GET    | `tenant_user`  |
+| `/model-prices/{id}`       | GET    | `tenant_user`  |
+| `/admin/model-prices`      | GET    | `system_admin` |
+| `/admin/model-prices`      | POST   | `system_admin` |
+| `/admin/model-prices/{id}` | PATCH  | `system_admin` |
+| `/admin/model-prices/{id}` | DELETE | `system_admin` |
+| `/admin/model-prices/sync` | POST   | `system_admin` |
+
+> El catálogo de lectura (`/model-prices`) es read-open para cualquier
+> member (RLS de lectura global, espeja `exchange_rates`); las mutaciones
+> y el sync son `system_admin`. Desde Plan 11.2 `GET /admin/model-prices`
+> acepta `?provider_id=<uuid>` (filtrar por provider) y `POST`/`PATCH`
+> aceptan `provider_id` (FK nullable a `llm_providers`).
+>
+> Los **auth providers** (OIDC/SAML) son platform-global desde **ADR 0047**
+> (supersede la parte per-tenant de ADR 0031, re-alinea con 0028): la
+> config vive en `sso_configurations` global y se gestiona vía
+> `/auth/sso/config` + `/auth/sso/saml/config` (ver la sección SSO de esta
+> matriz y [auth-sso.md](./auth-sso.md)); la administración de usuarios y su
+> acceso por membership está en `/admin/users/{id}/memberships`.
 
 ### `projects.py`
 
@@ -97,6 +176,18 @@ endpoints que devuelven el contexto del propio usuario.
 | `/agents/{src}/fork`   | POST   | `tenant_admin` |
 | `/agents/{fork}/diff`  | GET    | `tenant_user`  |
 | `/agents/{fork}/merge` | POST   | `tenant_admin` |
+| `/agents/{id}/tools`   | GET    | `tenant_user`  |
+| `/agents/{id}/tools`   | PUT    | `tenant_admin` |
+
+> `GET /agents/{id}/tools` lista las tools asignadas vía la junction
+> `agent_tools` (incluye `is_builtin` + `implementation_type` para la
+> taxonomía derivada básica/avanzada). `PUT` reemplaza el conjunto
+> entero (declarativo). Scope (Plan 06.15, ADR 0044): built-in
+> asignable a cualquier agente; custom sólo del propio tenant (cross-
+> tenant → 422); MCP sólo si el proyecto del agente declara ese MCP
+> server (→ 422). Un agente `global_builtin` rechaza la escritura con
+> 403 (forkéalo y asigna sobre el fork). Sin filas ⇒ sin restricción
+> por agente (backward-compatible).
 
 ### `teams.py`
 
@@ -292,6 +383,236 @@ ya tiene la identidad del tenant en su `--env` al spawn.
 | `/internal/agent/memory-store`     | POST   | `X-Agent-Auth` |
 | `/internal/agent/promote-to-kb`    | POST   | `X-Agent-Auth` |
 | `/internal/agent/rag-search`       | POST   | `X-Agent-Auth` |
+
+### `human_agents.py` — Human Agents (Plan 16)
+
+| Endpoint                         | Método | Rol mínimo     |
+| -------------------------------- | ------ | -------------- |
+| `/human-agents`                  | GET    | `tenant_user`  |
+| `/human-agents/templates`        | GET    | `tenant_user`  |
+| `/human-agents/assignable-users` | GET    | `tenant_user`  |
+| `/human-agents/{id}`             | GET    | `tenant_user`  |
+| `/human-agents`                  | POST   | `tenant_admin` |
+| `/human-agents/{id}`             | PUT    | `tenant_admin` |
+| `/human-agents/{id}`             | DELETE | `tenant_admin` |
+| `/human-agents/{id}/fork`        | POST   | `tenant_admin` |
+
+> Crear / editar / forkear un Human Agent (quién es, su `assigned_user_id`,
+> rate, timeout de aceptación) es config → admin. Listar y resolver los
+> usuarios asignables es lectura → cualquier member.
+
+### `human_inbox.py` — bandeja del Human Agent (Plan 16)
+
+Cualquier member usa su propia bandeja (`require_tenant_member`); el
+handler valida que el assignment es del propio usuario.
+
+| Endpoint                           | Método | Rol mínimo    |
+| ---------------------------------- | ------ | ------------- |
+| `/inbox/assignments`               | GET    | `tenant_user` |
+| `/inbox/history`                   | GET    | `tenant_user` |
+| `/inbox/metrics`                   | GET    | `tenant_user` |
+| `/inbox/assignments/{id}/accept`   | POST   | `tenant_user` |
+| `/inbox/assignments/{id}/reject`   | POST   | `tenant_user` |
+| `/inbox/assignments/{id}/complete` | POST   | `tenant_user` |
+| `/inbox/assignments/{id}/escalate` | POST   | `tenant_user` |
+| `/inbox/reviews`                   | GET    | `tenant_user` |
+| `/inbox/reviews/{id}/approve`      | POST   | `tenant_user` |
+| `/inbox/reviews/{id}/reject`       | POST   | `tenant_user` |
+
+> `complete` envía el entregable: en `auto_approve` la tarea va a `done`;
+> en `peer_human_reviewer` queda `in_review` y se crea un assignment de
+> revisión para otro Human Agent (los endpoints `/inbox/reviews/*`). Ver
+> [referencia del modelo](./domain-model.md#human-agents-plan-16) +
+> [runbook de tareas humanas](../06-runbooks/human-tasks-operations.md).
+
+### `marketplace.py` (Plan 09)
+
+Detalle de trust tiers + consentimiento en
+[marketplace.md](./marketplace.md). `/admin/marketplace/*` (curado del
+catálogo oficial) corre sobre el engine BYPASSRLS.
+
+| Endpoint                             | Método | Rol mínimo     |
+| ------------------------------------ | ------ | -------------- |
+| `/marketplace/listings`              | GET    | `tenant_user`  |
+| `/marketplace/listings/{id}`         | GET    | `tenant_user`  |
+| `/marketplace/private/listings`      | POST   | `tenant_admin` |
+| `/marketplace/private/listings/{id}` | PUT    | `tenant_admin` |
+| `/marketplace/private/listings/{id}` | DELETE | `tenant_admin` |
+| `/marketplace/installations`         | GET    | `tenant_user`  |
+| `/marketplace/listings/{id}/install` | POST   | `tenant_admin` |
+| `/marketplace/installations/{id}`    | DELETE | `tenant_admin` |
+| `/marketplace/shares`                | GET    | `tenant_admin` |
+| `/marketplace/shares/{id}`           | DELETE | `tenant_admin` |
+| `/admin/marketplace/*`               | GET    | `system_admin` |
+
+### `auth/api-tokens`, SSO, MFA, SCIM (Plan 08 / Plan 13 / ADR 0047)
+
+Contratos completos en [auth-sso.md](./auth-sso.md) (SSO/MFA/SCIM) y
+[public-api.md](./public-api.md) (tokens). **Auth providers
+platform-global desde ADR 0047** (supersede la parte per-tenant de ADR
+0031): login global **por provider** (no por tenant), callback OIDC + ACS
+SAML **globales**, lista pública de providers para el `/login`, y
+resolución de tenant **por membership** después del login. Resumen de
+gates:
+
+| Router / Endpoint                            | Método            | Rol mínimo                         |
+| -------------------------------------------- | ----------------- | ---------------------------------- |
+| `/auth/api-tokens`                           | GET, POST         | `tenant_admin`                     |
+| `/auth/api-tokens/{id}`                      | DELETE            | `tenant_admin`                     |
+| `/auth/sso/providers`                        | GET               | anon (lista pública, sin secretos) |
+| `/auth/sso/{provider_id}/oidc/login`         | GET               | anon (inicio del flujo)            |
+| `/auth/sso/oidc/callback`                    | GET               | anon (callback del IdP)            |
+| `/auth/sso/{provider_id}/saml/login`         | GET               | anon (inicio del flujo SAML)       |
+| `/auth/sso/saml/acs`                         | POST              | anon (ACS global del IdP)          |
+| `/auth/discover?email=`                      | GET               | anon (login discovery)             |
+| `/auth/session/resolve`                      | GET               | principal (post-login)             |
+| `/auth/session/select-tenant`                | POST              | principal (tenant-picker)          |
+| `/auth/sso/config`, `/auth/sso/saml/config`  | GET               | `tenant_member`                    |
+| `/auth/sso/config`, `/auth/sso/saml/config`  | POST,PUT,DEL      | `tenant_admin`                     |
+| `/auth/mfa/totp*`, `/auth/mfa/webauthn*`     | GET/POST/DEL      | `tenant_member` (gestión propia)   |
+| `/auth/mfa/totp/verify`, `/webauthn/login/*` | POST              | anon (segundo factor en login)     |
+| `/scim/v2/Users*`                            | \*                | token SCIM (`Bearer`)              |
+| `/auth/sso/scim/tokens`                      | GET, POST, DELETE | `tenant_admin`                     |
+
+> **Rutas viejas retiradas (ADR 0047).** Las rutas per-tenant
+> `/auth/sso/{tenant_id}/oidc|saml/login` y `/auth/sso/{tenant_id}/saml/acs`
+> **se retiran sin redirección** (decisión del operador). El login es ahora
+> por `provider_id` global y el ACS SAML es único para toda la plataforma.
+>
+> **`/auth/sso/providers` es público y NO expone secretos.** Devuelve solo
+> `id` / `kind` / `display_name` / `button_label` / `login_url` de cada
+> provider habilitado, para que `/login` pinte un botón de marca por
+> provider. El `client_secret` OIDC y la clave privada SP siguen cifrados
+> en reposo (Fernet `sso_encryption_key` / Vault) y **nunca** se devuelven.
+>
+> **Resolución por membership.** Tanto el login local (`/auth/login`) como
+> el SSO acuñan primero una sesión de **identidad sin tenant**. El cliente
+> llama a `/auth/session/resolve`: **0 memberships activas** →
+> `state="no_access"` (pantalla "sin permisos, contacta al administrador",
+> sin token de tenant); **1** → `state="single"` (token tenant-scoped
+> directo); **>1** → `state="multiple"` (tenant-picker →
+> `/auth/session/select-tenant`, que re-valida la membership antes de
+> acuñar el token). Un `system_admin` sin memberships no se trata distinto
+> aquí: su poder cross-tenant viene del override `X-Tenant-Id` + BYPASSRLS.
+>
+> La gestión MFA del propio usuario es `tenant_member`; los pasos de
+> `verify`/`login` son anónimos porque ocurren **durante** el login
+> (aún sin sesión completa). MFA (TOTP/WebAuthn) y SCIM **siguen
+> funcionando sin cambios** (ortogonales al scope del provider): SCIM
+> per-tenant se autentica por su propio token Bearer (no JWT de usuario).
+>
+> **CRUD de config SSO** (`/auth/sso/config`, `/auth/sso/saml/config`): el
+> gate sigue siendo `tenant_admin` en código (la superficie System Admin
+> del admin-panel vive bajo el grupo **Plataforma**); la tabla
+> `sso_configurations` es **platform-global** (sin RLS / `tenant_id`) y hay
+> a lo sumo **una** config por `provider` para toda la plataforma (un
+> segundo `POST` → 409).
+
+### Webhooks entrantes (Plan 13)
+
+| Endpoint                                               | Método      | Auth / Rol           |
+| ------------------------------------------------------ | ----------- | -------------------- |
+| `/projects/{id}/incoming-webhooks`                     | GET, POST   | `tenant_admin`       |
+| `/projects/{id}/incoming-webhooks/{cfg}`               | PUT, DELETE | `tenant_admin`       |
+| `/projects/{id}/incoming-webhooks/{cfg}/rotate-secret` | POST        | `tenant_admin`       |
+| `/webhooks/incoming/{origin}/{config_id}`              | POST        | firma HMAC (sin JWT) |
+
+> El endpoint público de recepción (`/webhooks/incoming/...`) se valida
+> por firma HMAC del proveedor externo, igual que `review.py`. La
+> **configuración** de los webhooks es admin.
+
+### `guardrail_alerts.py` / `guardrail_events.py` (Plan 11)
+
+| Endpoint                       | Método           | Rol mínimo     |
+| ------------------------------ | ---------------- | -------------- |
+| `/guardrails/alert-rules`      | GET, POST        | `tenant_admin` |
+| `/guardrails/alert-rules/{id}` | GET,PATCH,DELETE | `tenant_admin` |
+| `/guardrails/events`           | GET              | `tenant_admin` |
+| `/guardrails/dashboard`        | GET              | `tenant_admin` |
+
+### `budget_pause.py` (Plan 11)
+
+| Endpoint         | Método | Rol mínimo     |
+| ---------------- | ------ | -------------- |
+| `/budgets/pause` | GET    | `tenant_admin` |
+| `/budgets/pause` | POST   | `tenant_admin` |
+
+### `evals.py` / `eval_quality.py` (Plan 14)
+
+Todos los recursos de evals (datasets, criteria, items, runs, dashboard)
+son `tenant_admin`. Detalle en [evals-stats.md](./evals-stats.md).
+
+| Endpoint                                                             | Método | Rol mínimo     |
+| -------------------------------------------------------------------- | ------ | -------------- |
+| `/eval-datasets`, `/eval-criteria`, `/eval-dataset-items` (+`/{id}`) | \*     | `tenant_admin` |
+| `/eval-runs/{id}`, `/eval-runs/diff`, `/eval-quality/*`              | GET    | `tenant_admin` |
+
+### `tenant_stats.py` / `cross_tenant_stats.py` (Plan 14)
+
+| Endpoint                    | Método | Rol mínimo     |
+| --------------------------- | ------ | -------------- |
+| `/tenant-stats/dashboard`   | GET    | `tenant_admin` |
+| `/tenant-stats/consumption` | GET    | `tenant_admin` |
+| `/tenant-stats/runs`        | GET    | `tenant_admin` |
+| `/tenant-stats/runs/export` | GET    | `tenant_admin` |
+| `/admin/cross-tenant-stats` | GET    | `system_admin` |
+
+> El dashboard agregado por tenant es `tenant_admin`; el cross-tenant
+> (todas las orgs) corre sobre BYPASSRLS y es `system_admin`.
+
+### `notifications.py` / `assistant.py` (Plan 10)
+
+| Endpoint                                 | Método          | Rol mínimo                 |
+| ---------------------------------------- | --------------- | -------------------------- |
+| `/notifications/platform/channel-types`  | GET             | `tenant_member`            |
+| `/notifications/platform/channel-types`  | PUT             | `system_admin`             |
+| `/notifications/channels` (+`/{id}`)     | GET             | `tenant_member`            |
+| `/notifications/channels` (+`/{id}`)     | POST,PUT,DELETE | `tenant_admin`             |
+| `/notifications/preferences`             | GET             | `tenant_member`            |
+| `/notifications/preferences` (+`/{id}`)  | PUT, DELETE     | `tenant_admin`             |
+| `/notifications/logs`, `/logs/*/read`    | GET, POST       | `tenant_member`            |
+| `/assistant/chat`, `/assistant/identity` | \*              | `require_assistant_access` |
+
+> `require_assistant_access` gobierna el acceso al asistente personal
+> (habilitado por tenant). Las preferencias y canales propios son lectura
+> de member; crearlos/editarlos es admin.
+
+### `backup.py` (Plan 12)
+
+| Endpoint                                | Método           | Rol mínimo                                        |
+| --------------------------------------- | ---------------- | ------------------------------------------------- |
+| `/admin/backup/schedule`                | GET              | `tenant_member`                                   |
+| `/admin/backup/schedule`                | PUT              | `system_admin`                                    |
+| `/admin/backup/destinations` (+`/test`) | GET / PUT / POST | `tenant_member` (GET) · `system_admin` (mutación) |
+| `/admin/backup/restore/*`               | \*               | `system_admin`                                    |
+
+> Restaurar es estrictamente `system_admin` (corre sobre BYPASSRLS). Ver
+> [backup-restore.md](./backup-restore.md) +
+> [runbooks de DR](../06-runbooks/dr-full-restore.md).
+
+### `docs_viewer.py` — visor de docs por proyecto (Plan 15)
+
+El visor lee el árbol `docs/` del repo del proyecto (no muta nada).
+
+| Endpoint                               | Método | Rol mínimo      |
+| -------------------------------------- | ------ | --------------- |
+| `/projects/{id}/docs/tree`             | GET    | `tenant_member` |
+| `/projects/{id}/docs/content`          | GET    | `tenant_member` |
+| `/projects/{id}/docs/diff`             | GET    | `tenant_member` |
+| `/projects/{id}/docs/search`           | GET    | `tenant_member` |
+| `/projects/{id}/docs/semantic-search`  | GET    | `tenant_member` |
+| `/projects/{id}/docs/export/{zip,pdf}` | GET    | `tenant_member` |
+
+> El System Admin tiene además su propio visor en el admin-panel
+> (`/admin/docs`), que renderiza esta misma carpeta `docs/` desde el
+> repositorio del sistema — se actualiza solo al cambiar los `.md`.
+
+### API pública v1 (`api_v1/`) — auth por token de scope (Plan 13)
+
+Los endpoints `/api/v1/*` **no** usan los roles de tenant: se autentican
+por **API token** con scope `read` o `write` (`require_scope`), no por
+JWT de usuario. Contrato completo + lista de recursos en
+[public-api.md](./public-api.md).
 
 ## Cómo regenerar el audit
 

@@ -25,6 +25,7 @@ so a stale sid lingering in the set is harmless (revoking it is a no-op).
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Awaitable
 from typing import cast
 from uuid import UUID
@@ -58,9 +59,15 @@ class SessionStore:
         tenant_id: UUID | None,
         ttl_seconds: int,
     ) -> None:
+        # ``created_at`` (epoch seconds) lets the admin-hardening gate
+        # (Plan 15 task_15_18) enforce a SHORT max session age for the
+        # System-Admin surface independently of the JWT/session TTL — the
+        # session can outlive 15 minutes for a regular user but an admin
+        # request on a session older than the admin TTL is rejected.
         payload = {
             "user_id": str(user_id),
             "tenant_id": str(tenant_id) if tenant_id else None,
+            "created_at": int(time.time()),
         }
         await self._redis.set(_key(sid), json.dumps(payload), ex=ttl_seconds)
         # Index the session under (user, tenant) so SCIM deprovisioning can
@@ -76,11 +83,11 @@ class SessionStore:
             # expires no sooner than the longest session it tracks.
             await self._redis.expire(index_key, ttl_seconds)
 
-    async def get(self, sid: UUID) -> dict[str, str | None] | None:
+    async def get(self, sid: UUID) -> dict[str, str | int | None] | None:
         raw = await self._redis.get(_key(sid))
         if raw is None:
             return None
-        parsed: dict[str, str | None] = json.loads(raw)
+        parsed: dict[str, str | int | None] = json.loads(raw)
         return parsed
 
     async def revoke(self, sid: UUID) -> None:
@@ -94,7 +101,9 @@ class SessionStore:
             if user_raw and tenant_raw:
                 await cast(
                     "Awaitable[int]",
-                    self._redis.srem(_user_index_key(UUID(user_raw), UUID(tenant_raw)), str(sid)),
+                    self._redis.srem(
+                        _user_index_key(UUID(str(user_raw)), UUID(str(tenant_raw))), str(sid)
+                    ),
                 )
         await self._redis.delete(_key(sid))
 

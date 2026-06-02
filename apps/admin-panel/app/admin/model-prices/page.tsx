@@ -39,13 +39,16 @@
  */
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Coins, History, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Coins, History, Info, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { StateBlock } from "@/components/shared/state-block";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogBody,
@@ -57,7 +60,17 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
+import { Select } from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useCurrentUser } from "@/lib/use-current-user";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.model_prices + db.model_prices enums.
@@ -79,12 +92,54 @@ interface ModelPrice {
   currency: string;
   context_window: number | null;
   source: string;
+  // task_11_2_06 — association to a configured platform provider
+  // (llm_providers.id). NULL when the price is not associated.
+  provider_id: string | null;
   effective_from: string;
   effective_to: string | null;
   updated_by: string | null;
   created_at: string;
   updated_at: string;
 }
+
+// task_11_2_06 — the platform-global LLM providers (ADR 0028). Read from
+// the System-Admin /admin/llm-providers surface only to map provider_id ->
+// a human label + populate the "filter by provider" dropdown. Mirrors
+// api_server.schemas.llm_providers.LLMProviderResponse (secret-free).
+interface LlmProvider {
+  id: string;
+  kind: string;
+  display_name: string;
+  is_active: boolean;
+}
+
+// plan price-sync-active-providers (task_psa_02) — map a configured provider
+// `kind` (ADR 0021 closed catalogue) to the LiteLLM `litellm_provider` families
+// its models appear under (ADR 0028). MUST stay in lockstep with the backend
+// `KIND_TO_LITELLM_FAMILIES` (api_server.pricing.litellm_sync): the price sync
+// derives the families it imports from the union of the ACTIVE providers' kinds.
+// This is only a UI hint of the scope — the backend is the source of truth (and
+// a System-Admin `price_sync.allowed_families` override can pin a different set).
+const KIND_TO_LITELLM_FAMILIES: Record<string, string[]> = {
+  claude_sdk: ["anthropic"],
+  azure_foundry: ["azure", "azure_ai", "openai"],
+  copilot: ["openai", "anthropic"],
+  ollama: ["ollama"],
+};
+
+/** Union the LiteLLM families of the ACTIVE providers (sorted, de-duplicated). */
+function activeFamilies(providers: LlmProvider[]): string[] {
+  const families = new Set<string>();
+  for (const p of providers) {
+    if (!p.is_active) continue;
+    for (const fam of KIND_TO_LITELLM_FAMILIES[p.kind] ?? []) families.add(fam);
+  }
+  return [...families].sort();
+}
+
+// The typed skip reason the backend stamps on a feed entry whose family is not
+// an active provider (api_server.pricing.litellm_sync.SKIP_FAMILY_NOT_ACTIVE).
+const SKIP_FAMILY_NOT_ACTIVE = "family_not_active";
 
 // task_11_16 — dry-run diff + mandatory-confirmation apply.
 // Mirror api_server.schemas.price_sync.{PriceSyncDiffResponse,PriceDiffRowResponse}.
@@ -193,10 +248,12 @@ function fmtDate(iso: string | null): string {
 // ===========================================================================
 export default function ModelPricesPage() {
   const queryClient = useQueryClient();
+  const { isSystemAdmin } = useCurrentUser();
 
   const [provider, setProvider] = useState("");
   const [modelId, setModelId] = useState("");
   const [modality, setModality] = useState<"" | Modality>("");
+  const [providerId, setProviderId] = useState("");
   const [currentOnly, setCurrentOnly] = useState(true);
 
   // Effective filter values (applied on submit so typing doesn't refetch
@@ -205,8 +262,34 @@ export default function ModelPricesPage() {
     provider: string;
     modelId: string;
     modality: "" | Modality;
+    providerId: string;
     currentOnly: boolean;
-  }>({ provider: "", modelId: "", modality: "", currentOnly: true });
+  }>({ provider: "", modelId: "", modality: "", providerId: "", currentOnly: true });
+
+  // task_11_2_06 — platform providers, read only when the viewer is a
+  // System Admin (the /admin/llm-providers surface is System-Admin only;
+  // a tenant user that can read the catalog must not 403 here). Used to map
+  // provider_id -> a label and to populate the "filter by provider" select.
+  const providersQuery = useQuery({
+    queryKey: ["llm-providers", "for-prices"],
+    queryFn: () => apiFetch<LlmProvider[]>("/admin/llm-providers"),
+    enabled: isSystemAdmin,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
+  const providers = useMemo(() => providersQuery.data ?? [], [providersQuery.data]);
+  const providerLabel = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of providers) map.set(p.id, p.display_name);
+    return map;
+  }, [providers]);
+
+  // plan price-sync-active-providers (task_psa_02) — the LiteLLM families the
+  // sync will actually import, derived from the ACTIVE providers (ADR 0028 map).
+  // An empty set means no active provider → the sync imports nothing.
+  const syncFamilies = useMemo(() => activeFamilies(providers), [providers]);
+  const hasActiveProviders = syncFamilies.length > 0;
 
   const [createOpen, setCreateOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
@@ -226,6 +309,7 @@ export default function ModelPricesPage() {
       if (applied.provider) params.set("provider", applied.provider);
       if (applied.modelId) params.set("model_id", applied.modelId);
       if (applied.modality) params.set("modality", applied.modality);
+      if (applied.providerId) params.set("provider_id", applied.providerId);
       if (applied.currentOnly) params.set("current_only", "true");
       params.set("limit", "200");
       return apiFetch<ModelPrice[]>(`/model-prices?${params.toString()}`);
@@ -242,15 +326,22 @@ export default function ModelPricesPage() {
   });
 
   function applyFilters() {
-    setApplied({ provider: provider.trim(), modelId: modelId.trim(), modality, currentOnly });
+    setApplied({
+      provider: provider.trim(),
+      modelId: modelId.trim(),
+      modality,
+      providerId,
+      currentOnly,
+    });
   }
 
   function resetFilters() {
     setProvider("");
     setModelId("");
     setModality("");
+    setProviderId("");
     setCurrentOnly(true);
-    setApplied({ provider: "", modelId: "", modality: "", currentOnly: true });
+    setApplied({ provider: "", modelId: "", modality: "", providerId: "", currentOnly: true });
   }
 
   const rows = listQuery.data ?? [];
@@ -287,12 +378,53 @@ export default function ModelPricesPage() {
       />
 
       {/* ---------------------------------------------------------------- */}
+      {/* Sync scope notice — plan price-sync-active-providers (task_psa_02) */}
+      {/* The price sync ONLY imports the LiteLLM families of the ACTIVE     */}
+      {/* providers (ADR 0028). With no active provider there is nothing to  */}
+      {/* sync. System-Admin only (the providers list is System-Admin only;  */}
+      {/* a tenant reader never sees this and cannot trigger the sync).      */}
+      {/* ---------------------------------------------------------------- */}
+      {isSystemAdmin && !providersQuery.isLoading ? (
+        hasActiveProviders ? (
+          <div
+            className="border-border bg-muted/40 text-muted-foreground mt-6 flex items-start gap-2 rounded-lg border p-3 text-sm"
+            data-testid="sync-scope-notice"
+          >
+            <Info className="text-primary mt-0.5 h-4 w-4 shrink-0" />
+            <p>
+              Sincronizando solo:{" "}
+              <span className="text-foreground font-medium" data-testid="sync-scope-families">
+                {syncFamilies.join(", ")}
+              </span>{" "}
+              <span className="text-xs">
+                (familias de los proveedores LLM activos — ADR 0028). El resto del feed se omite.
+              </span>
+            </p>
+          </div>
+        ) : (
+          <div
+            className="border-warning/40 bg-warning/5 mt-6 flex items-start gap-2 rounded-lg border p-3 text-sm"
+            data-testid="sync-scope-empty"
+          >
+            <AlertTriangle className="text-warning mt-0.5 h-4 w-4 shrink-0" />
+            <p className="text-foreground">
+              No hay proveedores LLM activos; nada que sincronizar. Activa al menos un proveedor en{" "}
+              <Link href="/admin/llm-providers" className="text-primary underline">
+                /admin/llm-providers
+              </Link>{" "}
+              para que el sync de precios traiga sus familias.
+            </p>
+          </div>
+        )
+      ) : null}
+
+      {/* ---------------------------------------------------------------- */}
       {/* Filters */}
       {/* ---------------------------------------------------------------- */}
       <Card className="mt-6" data-testid="price-filters">
-        <CardContent className="grid grid-cols-1 gap-3 pt-5 sm:grid-cols-2 lg:grid-cols-5 lg:items-end">
+        <CardContent className="grid grid-cols-1 gap-3 pt-5 sm:grid-cols-2 lg:grid-cols-6 lg:items-end">
           <div className="space-y-1">
-            <Label htmlFor="filter-provider">Provider</Label>
+            <Label htmlFor="filter-provider">Familia (provider)</Label>
             <Input
               id="filter-provider"
               placeholder="anthropic"
@@ -313,9 +445,8 @@ export default function ModelPricesPage() {
           </div>
           <div className="space-y-1">
             <Label htmlFor="filter-modality">Modalidad</Label>
-            <select
+            <Select
               id="filter-modality"
-              className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm"
               value={modality}
               onChange={(e) => setModality(e.target.value as "" | Modality)}
               data-testid="filter-modality"
@@ -326,13 +457,32 @@ export default function ModelPricesPage() {
                   {m}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
+          {/* task_11_2_06 — filter by associated platform provider. Only
+              the System Admin can read the providers list, so this select
+              is shown to them; a tenant reader still has the other filters. */}
+          {isSystemAdmin ? (
+            <div className="space-y-1">
+              <Label htmlFor="filter-provider-id">Proveedor (plataforma)</Label>
+              <Select
+                id="filter-provider-id"
+                value={providerId}
+                onChange={(e) => setProviderId(e.target.value)}
+                data-testid="filter-provider-id"
+              >
+                <option value="">Todos</option>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.display_name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          ) : null}
           <div className="flex items-center gap-2 pb-2">
-            <input
+            <Checkbox
               id="filter-current-only"
-              type="checkbox"
-              className="h-4 w-4"
               checked={currentOnly}
               onChange={(e) => setCurrentOnly(e.target.checked)}
               data-testid="filter-current-only"
@@ -354,61 +504,71 @@ export default function ModelPricesPage() {
       {/* List */}
       {/* ---------------------------------------------------------------- */}
       <div className="mt-6">
-        {listQuery.isLoading ? (
-          <p className="text-muted-foreground text-sm" data-testid="prices-loading">
-            Cargando catálogo…
-          </p>
-        ) : listQuery.isError ? (
-          <p className="text-destructive text-sm" data-testid="prices-error">
-            {errorText(listQuery.error)}
-          </p>
-        ) : rows.length === 0 ? (
-          <Card>
-            <CardContent className="py-10 text-center">
-              <p className="text-muted-foreground text-sm italic" data-testid="prices-empty">
-                El catálogo está vacío para estos filtros.
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border" data-testid="prices-table">
-            <table className="w-full text-sm">
-              <thead className="bg-muted text-muted-foreground">
-                <tr className="text-left">
-                  <th className="px-3 py-2 font-medium">Provider</th>
-                  <th className="px-3 py-2 font-medium">Modelo</th>
-                  <th className="px-3 py-2 font-medium">Modalidad</th>
-                  <th className="px-3 py-2 font-medium">Input</th>
-                  <th className="px-3 py-2 font-medium">Output</th>
-                  <th className="px-3 py-2 font-medium">Cache</th>
-                  <th className="px-3 py-2 font-medium">Unidad</th>
-                  <th className="px-3 py-2 font-medium">Fuente</th>
-                  <th className="px-3 py-2 font-medium">Vigencia</th>
-                  <th className="px-3 py-2 text-right font-medium">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
+        <StateBlock
+          isLoading={listQuery.isLoading}
+          isError={listQuery.isError}
+          error={listQuery.error}
+          isEmpty={rows.length === 0}
+          loadingLabel="Cargando catálogo…"
+          loadingTestId="prices-loading"
+          errorTitle="No se pudo cargar el catálogo"
+          errorTestId="prices-error"
+          emptyIcon={Coins}
+          emptyTitle="Catálogo vacío"
+          emptyDescription="El catálogo está vacío para estos filtros."
+          emptyTestId="prices-empty"
+        >
+          <div className="overflow-hidden rounded-xl border">
+            <Table data-testid="prices-table" className="text-sm">
+              <TableHeader className="bg-muted normal-case">
+                <TableRow>
+                  <TableHead className="px-3 py-2">Familia</TableHead>
+                  <TableHead className="px-3 py-2">Modelo</TableHead>
+                  <TableHead className="px-3 py-2">Modalidad</TableHead>
+                  <TableHead className="px-3 py-2">Proveedor</TableHead>
+                  <TableHead className="px-3 py-2">Input</TableHead>
+                  <TableHead className="px-3 py-2">Output</TableHead>
+                  <TableHead className="px-3 py-2">Cache</TableHead>
+                  <TableHead className="px-3 py-2">Unidad</TableHead>
+                  <TableHead className="px-3 py-2">Fuente</TableHead>
+                  <TableHead className="px-3 py-2">Vigencia</TableHead>
+                  <TableHead className="px-3 py-2 text-right">Acciones</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {rows.map((p) => {
                   const open = p.effective_to === null;
                   return (
-                    <tr key={p.id} className="border-t" data-testid={`price-row-${p.id}`}>
-                      <td className="px-3 py-2">{p.provider}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{p.model_id}</td>
-                      <td className="px-3 py-2">
+                    <TableRow key={p.id} data-testid={`price-row-${p.id}`}>
+                      <TableCell className="px-3 py-2">{p.provider}</TableCell>
+                      <TableCell className="px-3 py-2 font-mono text-xs">{p.model_id}</TableCell>
+                      <TableCell className="px-3 py-2">
                         <Badge variant="muted">{p.modality}</Badge>
-                      </td>
-                      <td className="px-3 py-2" data-testid={`price-input-${p.id}`}>
+                      </TableCell>
+                      {/* task_11_2_06 — associated platform provider (read). */}
+                      <TableCell className="px-3 py-2" data-testid={`price-provider-${p.id}`}>
+                        {p.provider_id === null ? (
+                          <span className="text-muted-foreground text-xs italic">sin asociar</span>
+                        ) : (
+                          <Badge variant="info">
+                            {providerLabel.get(p.provider_id) ?? p.provider_id}
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="px-3 py-2" data-testid={`price-input-${p.id}`}>
                         {fmtUsd(p.input_price)}
-                      </td>
-                      <td className="px-3 py-2">{fmtUsd(p.output_price)}</td>
-                      <td className="px-3 py-2" data-testid={`price-cached-${p.id}`}>
+                      </TableCell>
+                      <TableCell className="px-3 py-2">{fmtUsd(p.output_price)}</TableCell>
+                      <TableCell className="px-3 py-2" data-testid={`price-cached-${p.id}`}>
                         {fmtUsd(p.cached_input_price)}
-                      </td>
-                      <td className="px-3 py-2 text-xs">{UNIT_LABEL[p.unit] ?? p.unit}</td>
-                      <td className="px-3 py-2">
+                      </TableCell>
+                      <TableCell className="px-3 py-2 text-xs">
+                        {UNIT_LABEL[p.unit] ?? p.unit}
+                      </TableCell>
+                      <TableCell className="px-3 py-2">
                         <Badge variant={SOURCE_BADGE[p.source] ?? "muted"}>{p.source}</Badge>
-                      </td>
-                      <td className="px-3 py-2 text-xs">
+                      </TableCell>
+                      <TableCell className="px-3 py-2 text-xs">
                         {open ? (
                           <Badge variant="success" data-testid={`price-current-${p.id}`}>
                             vigente
@@ -418,8 +578,8 @@ export default function ModelPricesPage() {
                             {fmtDate(p.effective_from)} → {fmtDate(p.effective_to)}
                           </span>
                         )}
-                      </td>
-                      <td className="px-3 py-2">
+                      </TableCell>
+                      <TableCell className="px-3 py-2">
                         <div className="flex items-center justify-end gap-1">
                           <Button
                             variant="ghost"
@@ -458,14 +618,14 @@ export default function ModelPricesPage() {
                             </Button>
                           </RoleGuard>
                         </div>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
-        )}
+        </StateBlock>
 
         {supersedeMutation.isError ? (
           <p className="text-destructive mt-3 text-xs" data-testid="price-supersede-error">
@@ -503,6 +663,7 @@ export default function ModelPricesPage() {
 
       {syncOpen ? (
         <SyncDiffDialog
+          syncFamilies={syncFamilies}
           onClose={() => setSyncOpen(false)}
           onApplied={() => {
             setSyncOpen(false);
@@ -529,9 +690,12 @@ export default function ModelPricesPage() {
 interface SyncDiffDialogProps {
   onClose: () => void;
   onApplied: () => void;
+  // plan price-sync-active-providers (task_psa_02) — the active families the
+  // sync is scoped to (derived from the active providers), shown in the dialog.
+  syncFamilies: string[];
 }
 
-function SyncDiffDialog({ onClose, onApplied }: SyncDiffDialogProps) {
+function SyncDiffDialog({ onClose, onApplied, syncFamilies }: SyncDiffDialogProps) {
   const [confirmed, setConfirmed] = useState(false);
 
   const diffQuery = useQuery({
@@ -551,6 +715,11 @@ function SyncDiffDialog({ onClose, onApplied }: SyncDiffDialogProps) {
   });
 
   const diff = diffQuery.data;
+  // plan price-sync-active-providers (task_psa_02) — how many feed entries the
+  // backend skipped because their family is not an active provider.
+  const familyNotActiveSkipped = diff
+    ? diff.skipped.filter((s) => s.reason === SKIP_FAMILY_NOT_ACTIVE).length
+    : 0;
   const needsConfirm = diff?.has_large_increase ?? false;
   // A change actually exists when something is added / updated / increased.
   const hasChanges = diff ? diff.added + diff.updated + diff.increased > 0 : false;
@@ -571,6 +740,21 @@ function SyncDiffDialog({ onClose, onApplied }: SyncDiffDialogProps) {
             precio &gt;10% exige confirmación explícita.
           </p>
 
+          {/* plan price-sync-active-providers (task_psa_02) — the sync is scoped
+              to the families of the ACTIVE providers (ADR 0028). With none
+              active, the apply imports nothing. */}
+          {syncFamilies.length > 0 ? (
+            <p className="text-muted-foreground mt-2 text-xs" data-testid="sync-dialog-scope">
+              Sincronizando solo:{" "}
+              <span className="text-foreground font-medium">{syncFamilies.join(", ")}</span>{" "}
+              (familias de los proveedores LLM activos). El resto del feed se omite.
+            </p>
+          ) : (
+            <p className="text-warning mt-2 text-xs" data-testid="sync-dialog-scope-empty">
+              No hay proveedores LLM activos; el sync no traerá nada.
+            </p>
+          )}
+
           {diffQuery.isLoading ? (
             <p className="text-muted-foreground mt-3 text-sm" data-testid="sync-loading">
               Calculando diff…
@@ -590,6 +774,13 @@ function SyncDiffDialog({ onClose, onApplied }: SyncDiffDialogProps) {
                 <Badge variant="danger">{diff.increased} subidas &gt;10%</Badge>
                 <Badge variant="warning">{diff.removed} descontinuados</Badge>
                 <Badge variant="muted">{diff.unchanged} sin cambios</Badge>
+                {/* plan price-sync-active-providers (task_psa_02) — feed entries
+                    dropped because their family is not an active provider. */}
+                {familyNotActiveSkipped > 0 ? (
+                  <Badge variant="muted" data-testid="sync-skipped-family">
+                    {familyNotActiveSkipped} fuera de familias activas
+                  </Badge>
+                ) : null}
               </div>
 
               {hasChanges ? (
@@ -691,9 +882,7 @@ function SyncDiffDialog({ onClose, onApplied }: SyncDiffDialogProps) {
                       cambios y confirma explícitamente para aplicarlos.
                     </p>
                     <label className="flex items-center gap-2 text-xs">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4"
+                      <Checkbox
                         checked={confirmed}
                         onChange={(e) => setConfirmed(e.target.checked)}
                         data-testid="sync-confirm-checkbox"
@@ -831,9 +1020,8 @@ function PriceFormDialog({ mode, price, onClose, onSaved }: PriceFormDialogProps
             </div>
             <div className="space-y-1">
               <Label htmlFor="form-modality">Modalidad</Label>
-              <select
+              <Select
                 id="form-modality"
-                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm disabled:opacity-50"
                 value={modality}
                 onChange={(e) => setModality(e.target.value as Modality)}
                 disabled={isEdit}
@@ -844,7 +1032,7 @@ function PriceFormDialog({ mode, price, onClose, onSaved }: PriceFormDialogProps
                     {m}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           </div>
 
@@ -891,9 +1079,8 @@ function PriceFormDialog({ mode, price, onClose, onSaved }: PriceFormDialogProps
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="space-y-1">
               <Label htmlFor="form-unit">Unidad</Label>
-              <select
+              <Select
                 id="form-unit"
-                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm"
                 value={unit}
                 onChange={(e) => setUnit(e.target.value as Unit)}
                 data-testid="form-unit"
@@ -903,7 +1090,7 @@ function PriceFormDialog({ mode, price, onClose, onSaved }: PriceFormDialogProps
                     {UNIT_LABEL[u]}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div className="space-y-1">
               <Label htmlFor="form-context">Context window</Label>
@@ -920,9 +1107,8 @@ function PriceFormDialog({ mode, price, onClose, onSaved }: PriceFormDialogProps
             </div>
             <div className="space-y-1">
               <Label htmlFor="form-source">Fuente</Label>
-              <select
+              <Select
                 id="form-source"
-                className="border-input bg-background flex h-10 w-full rounded-md border px-3 py-2 text-sm"
                 value={source}
                 onChange={(e) => setSource(e.target.value as Source)}
                 data-testid="form-source"
@@ -932,7 +1118,7 @@ function PriceFormDialog({ mode, price, onClose, onSaved }: PriceFormDialogProps
                     {s}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           </div>
 

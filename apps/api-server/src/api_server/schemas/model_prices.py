@@ -79,6 +79,12 @@ class ModelPriceResponse(BaseModel):
     currency: str
     context_window: int | None
     source: str
+    # Association to a configured platform provider (task_11_2_06). NULL
+    # when the price is not (yet) associated — the LiteLLM sync only knows
+    # the free-form ``provider`` family string, not the platform provider
+    # row. A System Admin associates it explicitly; the UI surfaces it
+    # (read) and filters by it.
+    provider_id: UUID | None
     effective_from: datetime
     effective_to: datetime | None
     updated_by: UUID | None
@@ -123,6 +129,14 @@ class ModelPriceCreateRequest(BaseModel):
     unit: PriceUnit = PriceUnit.PER_1M_TOKENS
     context_window: int | None = Field(default=None, gt=0)
     source: PriceSource = PriceSource.MANUAL
+    # Optional association to a configured platform provider
+    # (``llm_providers.id``, task_11_2_06). NULL == unassociated. The FK is
+    # validated at the DB; an unknown id surfaces as a clean 422 at the
+    # router. Not a secret (only a row id).
+    provider_id: UUID | None = Field(
+        default=None,
+        description="Optional llm_providers.id this price is served by; NULL if unassociated.",
+    )
 
 
 # =============================================================================
@@ -147,6 +161,11 @@ class ModelPriceUpdateRequest(BaseModel):
     unit: PriceUnit | None = None
     context_window: int | None = Field(default=None, gt=0)
     source: PriceSource | None = None
+    # Associate / disassociate the price with a platform provider
+    # (task_11_2_06). Sending ``provider_id: null`` explicitly clears the
+    # association (``exclude_unset`` distinguishes "omitted" from "set to
+    # NULL"); omitting it leaves the association unchanged.
+    provider_id: UUID | None = Field(default=None)
 
     def has_changes(self) -> bool:
         """True when at least one field was supplied on the wire."""

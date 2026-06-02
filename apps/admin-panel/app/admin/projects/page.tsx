@@ -5,11 +5,12 @@ import { useQuery } from "@tanstack/react-query";
 import { FolderKanban, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { StateBlock } from "@/components/shared/state-block";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 
 interface Project {
   id: string;
@@ -52,63 +53,62 @@ export default function ProjectsListPage() {
         }
       />
 
-      {isLoading && <p className="text-muted-foreground text-sm">Cargando proyectos…</p>}
-
-      {isError && (
-        <Card className="border-destructive p-4">
-          <p className="text-destructive text-sm">
-            Could not load projects: {error instanceof ApiError ? error.body : String(error)}
-          </p>
-        </Card>
-      )}
-
-      {data && data.length === 0 && (
-        <Card className="p-8 text-center" data-testid="projects-empty">
-          <p className="text-muted-foreground mb-4 text-sm">
-            Este tenant aún no tiene proyectos. Empieza desde una plantilla.
-          </p>
-          <RoleGuard min="tenant_admin">
-            <Button asChild>
-              <Link href="/admin/projects/new">Crear el primero</Link>
-            </Button>
-          </RoleGuard>
-        </Card>
-      )}
-
-      {data && data.length > 0 && (
-        <div
-          className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
-          data-testid="projects-grid"
-        >
-          {data.map((project) => (
-            <Link
-              key={project.id}
-              href={`/admin/projects/${project.id}`}
-              data-testid={`project-link-${project.id}`}
-              className="block"
-            >
-              <Card
-                data-testid={`project-${project.id}`}
-                className="hover:border-primary/40 cursor-pointer transition-colors"
+      <StateBlock
+        isLoading={isLoading}
+        isError={isError}
+        error={error}
+        isEmpty={Boolean(data && data.length === 0)}
+        loadingLabel="Cargando proyectos…"
+        errorTitle="Could not load projects"
+        emptyIcon={FolderKanban}
+        empty={
+          <Card className="p-8 text-center" data-testid="projects-empty">
+            <p className="text-muted-foreground mb-4 text-sm">
+              Este tenant aún no tiene proyectos. Empieza desde una plantilla.
+            </p>
+            <RoleGuard min="tenant_admin">
+              <Button asChild>
+                <Link href="/admin/projects/new">Crear el primero</Link>
+              </Button>
+            </RoleGuard>
+          </Card>
+        }
+      >
+        {data && data.length > 0 && (
+          <div
+            className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+            data-testid="projects-grid"
+          >
+            {data.map((project) => (
+              <Link
+                key={project.id}
+                href={`/admin/projects/${project.id}`}
+                data-testid={`project-link-${project.id}`}
+                className="block"
               >
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-base">{project.name}</CardTitle>
-                  <Badge variant={STATUS_VARIANT[project.status] ?? "muted"}>
-                    {project.status}
-                  </Badge>
-                </CardHeader>
-                <CardContent>
-                  {project.description ? (
-                    <p className="text-muted-foreground text-sm">{project.description}</p>
-                  ) : (
-                    <p className="text-muted-foreground text-xs italic">Sin descripción.</p>
-                  )}
-                </CardContent>
-              </Card>
-            </Link>
-          ))}
-        </div>
-      )}
+                <Card
+                  data-testid={`project-${project.id}`}
+                  className="hover:border-primary/40 cursor-pointer transition-colors"
+                >
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-base">{project.name}</CardTitle>
+                    <Badge variant={STATUS_VARIANT[project.status] ?? "muted"}>
+                      {project.status}
+                    </Badge>
+                  </CardHeader>
+                  <CardContent>
+                    {project.description ? (
+                      <p className="text-muted-foreground text-sm">{project.description}</p>
+                    ) : (
+                      <p className="text-muted-foreground text-xs italic">Sin descripción.</p>
+                    )}
+                  </CardContent>
+                </Card>
+              </Link>
+            ))}
+          </div>
+        )}
+      </StateBlock>
     </div>
   );
 }

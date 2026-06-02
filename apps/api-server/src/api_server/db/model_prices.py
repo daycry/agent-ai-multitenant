@@ -254,6 +254,21 @@ class ModelPrice(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         nullable=True,
     )
 
+    # Association to a configured platform provider (Plan 11.2 task_11_2_06).
+    # Nullable: the LiteLLM sync (the catalog's main feed) only knows the
+    # free-form ``provider`` family string ("anthropic", "openai", ...), not
+    # which platform-global ``llm_providers`` row serves the model, so a
+    # price may not (yet) be associated. ON DELETE SET NULL keeps the price +
+    # its effective-dated history intact when a System Admin deletes a
+    # provider config (the price outlives the provider row) — mirrors the
+    # ``updated_by`` nullable-FK / SET NULL pattern. No tenant_id either:
+    # ``llm_providers`` is platform-global too (ADR 0028).
+    provider_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("llm_providers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
             f"ModelPrice(provider={self.provider!r}, model_id={self.model_id!r}, "

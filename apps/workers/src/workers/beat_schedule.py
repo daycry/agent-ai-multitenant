@@ -73,6 +73,18 @@ PRICE_SYNC_BEAT_ENTRY = "sync-model-prices"
 # constant-not-hardcoded-string discipline as the price-sync entry.
 BACKUP_BEAT_ENTRY = "run-daily-backup"
 
+# Plan 15 task_15_17: the scheduled credential-rotation entry name. Same
+# constant-not-hardcoded-string discipline as the price-sync / backup entries.
+CRED_ROTATION_BEAT_ENTRY = "rotate-credentials"
+
+# Plan 11.1 task_11_1_02: the scheduled exchange-rates-fetcher entry name. Same
+# constant-not-hardcoded-string discipline as the price-sync / backup entries.
+FX_FETCH_BEAT_ENTRY = "fetch-exchange-rates"
+
+# Plan 16 task_16_06: the scheduled acceptance-timeout escalation sweep entry
+# name. Same constant-not-hardcoded-string discipline as the entries above.
+HUMAN_ESCALATION_BEAT_ENTRY = "escalate-human-assignments"
+
 
 def _parse_cron(expr: str) -> crontab:
     """Parse a 5-field cron string (minute hour dom month dow) to a crontab.
@@ -118,5 +130,37 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
         "task": "workers.run_daily_backup",
         "schedule": _parse_cron(cfg.backup_cron),
         "options": {"queue": "privileged"},
+    }
+    # Plan 15 task_15_17: Vault credential rotation on a CONFIGURABLE cadence
+    # (WORKERS_CRED_ROTATION_CRON, default weekly Sunday 02:00). Pinned to the
+    # `privileged` queue — it touches the platform's secrets/Vault, the lane
+    # drained by a worker with the tighter security profile. Its live
+    # enable/disable is the `cred_rotation_enabled` platform setting a System
+    # Admin owns.
+    sched[CRED_ROTATION_BEAT_ENTRY] = {
+        "task": "workers.rotate_credentials",
+        "schedule": _parse_cron(cfg.cred_rotation_cron),
+        "options": {"queue": "privileged"},
+    }
+    # Plan 11.1 task_11_1_02: daily exchange-rates fetch on a CONFIGURABLE
+    # cadence (WORKERS_FX_FETCH_CRON, default 06:00 UTC). Pinned to the `default`
+    # queue — a cheap HTTP fetch + a handful of global-catalog upserts, no infra
+    # side-effects. Its live enable/disable + the SOURCE selection are the
+    # `fx_fetch_enabled` / `fx_source` platform settings a System Admin owns.
+    sched[FX_FETCH_BEAT_ENTRY] = {
+        "task": "workers.fetch_exchange_rates",
+        "schedule": _parse_cron(cfg.fx_fetch_cron),
+        "options": {"queue": "default"},
+    }
+    # Plan 16 task_16_06: acceptance-timeout escalation sweep on a CONFIGURABLE
+    # cadence (WORKERS_HUMAN_ESCALATION_CRON, default every 10 minutes). Pinned
+    # to the `default` queue — a cheap partial-index scan of the open
+    # pending_acceptance rows + a handful of reassign/block writes, no infra
+    # side-effects. Its live enable/disable is the `human_escalation_enabled`
+    # platform setting a System Admin owns.
+    sched[HUMAN_ESCALATION_BEAT_ENTRY] = {
+        "task": "workers.escalate_human_assignments",
+        "schedule": _parse_cron(cfg.human_escalation_cron),
+        "options": {"queue": "default"},
     }
     return sched

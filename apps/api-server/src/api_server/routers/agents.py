@@ -25,7 +25,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import (
@@ -34,7 +34,14 @@ from api_server.auth.deps import (
     require_tenant_admin,
     require_tenant_member,
 )
-from api_server.db.domain import Agent, AgentScope, Project
+from api_server.db.domain import (
+    Agent,
+    AgentScope,
+    AgentTool,
+    Project,
+    Tool,
+    ToolImplementationType,
+)
 from api_server.db.knowledge import AgentKnowledgeBase, KnowledgeBase
 from api_server.routers._helpers import (
     apply_partial_update,
@@ -54,8 +61,10 @@ from api_server.schemas.agents import (
     AgentForkRequest,
     AgentMergeRequest,
     AgentResponse,
+    AgentToolResponse,
     AgentUpdateRequest,
     GrantKBRequest,
+    SetAgentToolsRequest,
     to_agent_response,
 )
 
@@ -607,3 +616,224 @@ async def revoke_kb_from_agent(
     if existing is not None:
         await session.delete(existing)
         await session.flush()
+
+
+# ---------------------------------------------------------------------------
+# Plan 06.15: agent ↔ tool assignment
+# ---------------------------------------------------------------------------
+#
+# Two endpoints on top of /agents/{id}/tools backed by the `agent_tools`
+# M:N junction. Same gate pattern as the KB grants (tenant_admin for the
+# write, tenant_member for the read) and the same global_builtin reject
+# (those are platform-managed; fork first).
+#
+# The write is declarative: `PUT` replaces the agent's whole set in one
+# transaction. An empty list clears all rows, which at enforcement time
+# (Plan 06.15 task_06_15_02) restores the backward-compatible "no
+# per-agent restriction" behaviour.
+#
+# Scope validation (Plan 06.15 decision):
+#   * built-in tools (is_builtin)              -> assignable to any agent.
+#   * custom tools (is_builtin=false)          -> only from the agent's
+#       tenant. RLS already hides cross-tenant rows, so a lookup that
+#       finds nothing is surfaced as a clean 422 (not a 404 — the body
+#       carries an invalid tool_id, not a bad path).
+#   * MCP tools (implementation_type=mcp_tool) -> only if the agent's
+#       project declares that MCP server (matched by the server-name
+#       prefix of `implementation_ref`). No project / no server -> 422.
+
+
+async def _load_writable_agent_for_tools(
+    session: AsyncSession,
+    agent_id: UUID,
+    principal: AuthPrincipal,
+) -> Agent:
+    """Load an agent for tool assignment; reject `global_builtin` (403).
+
+    Mirrors `_load_writable_agent_for_kb`: built-ins are platform-managed
+    and off-limits to tenant admins — fork first, assign on the fork.
+    """
+    agent = await get_writable_or_404(
+        session, Agent, agent_id, principal, not_found_detail="agent not found"
+    )
+    if agent.scope == AgentScope.GLOBAL_BUILTIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "cannot assign tools to a global_builtin agent; "
+                "fork it first and assign on the fork"
+            ),
+        )
+    return agent
+
+
+def _mcp_server_name(implementation_ref: str | None) -> str | None:
+    """Extract the MCP server name from a tool's `implementation_ref`.
+
+    MCP tools are namespaced `<server>.<tool>` (see the MCP server-name
+    pattern in `mcp.config`). The server name is the prefix before the
+    first dot; a ref with no dot is treated as the server name itself.
+    """
+    if not implementation_ref:
+        return None
+    return implementation_ref.split(".", 1)[0]
+
+
+@router.get("/{agent_id}/tools", response_model=list[AgentToolResponse])
+async def list_agent_tools(
+    agent_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[AgentToolResponse]:
+    """List the tools assigned to this agent via the `agent_tools` junction.
+
+    Read shape mirrors the read-only `agent-tools-diagnostic` panel plus
+    `is_builtin` (the básica/avanzada taxonomy) and the per-agent
+    `config_override`. An agent with no rows returns ``[]`` (which at
+    enforcement time means "no per-agent restriction").
+    """
+    # Surface 404 on a hidden/missing agent instead of an empty list — an
+    # invisible agent would otherwise look like "no assignments" to the UI.
+    agent_q = await session.execute(
+        select(Agent).where(Agent.id == agent_id, Agent.deleted_at.is_(None))
+    )
+    if agent_q.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent not found")
+
+    rows = await session.execute(
+        select(AgentTool.config_override, Tool)
+        .join(Tool, Tool.id == AgentTool.tool_id)
+        .where(
+            AgentTool.agent_id == agent_id,
+            Tool.deleted_at.is_(None),
+        )
+        .order_by(Tool.name, Tool.id)
+    )
+    return [
+        AgentToolResponse(
+            tool_id=tool.id,
+            name=tool.name,
+            description=tool.description,
+            category=tool.category,
+            implementation_type=tool.implementation_type,
+            security_level=tool.security_level,
+            is_builtin=tool.is_builtin,
+            config_override=config_override,
+        )
+        for config_override, tool in rows.all()
+    ]
+
+
+@router.put("/{agent_id}/tools", response_model=list[AgentToolResponse])
+async def set_agent_tools(
+    agent_id: UUID,
+    payload: SetAgentToolsRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[AgentToolResponse]:
+    """Declaratively replace the agent's tool assignments (tenant_admin).
+
+    The desired set is validated for scope, then the agent's existing
+    `agent_tools` rows are deleted and the new set inserted in the same
+    request transaction. Returns the resulting assignments.
+    """
+    require_tenant_id(principal)
+    agent = await _load_writable_agent_for_tools(session, agent_id, principal)
+
+    requested = {entry.tool_id: entry.config_override for entry in payload.tools}
+
+    # Load every requested Tool in one query. RLS scopes the result to
+    # platform built-ins + the caller's tenant, so a cross-tenant custom
+    # tool simply won't appear here — caught by the "missing" check below.
+    tools_by_id: dict[UUID, Tool] = {}
+    if requested:
+        tool_rows = await session.execute(
+            select(Tool).where(
+                Tool.id.in_(requested.keys()),
+                Tool.deleted_at.is_(None),
+            )
+        )
+        tools_by_id = {tool.id: tool for tool in tool_rows.scalars().all()}
+
+    # Any id we couldn't load is either non-existent or a custom tool from
+    # another tenant (hidden by RLS). Both are an invalid declarative set.
+    missing = [tool_id for tool_id in requested if tool_id not in tools_by_id]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "unknown or non-assignable tool_id(s): "
+                + ", ".join(str(tool_id) for tool_id in missing)
+            ),
+        )
+
+    # MCP tools require the agent's project to declare the matching server.
+    mcp_tools = [
+        tool
+        for tool in tools_by_id.values()
+        if tool.implementation_type == ToolImplementationType.MCP_TOOL.value
+    ]
+    if mcp_tools:
+        project_server_names = await _agent_project_mcp_server_names(session, agent)
+        for tool in mcp_tools:
+            server = _mcp_server_name(tool.implementation_ref)
+            if server is None or server not in project_server_names:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        f"MCP tool {tool.name!r} requires MCP server {server!r} "
+                        "on the agent's project; not declared"
+                    ),
+                )
+
+    # Replace the set transactionally: delete the old rows, insert new.
+    await session.execute(delete(AgentTool).where(AgentTool.agent_id == agent_id))
+    for tool_id, config_override in requested.items():
+        session.add(
+            AgentTool(
+                agent_id=agent_id,
+                tool_id=tool_id,
+                config_override=config_override,
+            )
+        )
+    await session.flush()
+
+    return [
+        AgentToolResponse(
+            tool_id=tool.id,
+            name=tool.name,
+            description=tool.description,
+            category=tool.category,
+            implementation_type=tool.implementation_type,
+            security_level=tool.security_level,
+            is_builtin=tool.is_builtin,
+            config_override=requested[tool.id],
+        )
+        for tool in sorted(tools_by_id.values(), key=lambda t: (t.name, str(t.id)))
+    ]
+
+
+async def _agent_project_mcp_server_names(
+    session: AsyncSession,
+    agent: Agent,
+) -> set[str]:
+    """Return the set of MCP server names declared on the agent's project.
+
+    A non-`project_local` agent (template) has no project, hence no MCP
+    servers — returns an empty set, which makes every MCP tool fail the
+    scope check (you cannot assign MCP tools to a template agent).
+    """
+    if agent.project_id is None:
+        return set()
+    project_q = await session.execute(
+        select(Project).where(Project.id == agent.project_id, Project.deleted_at.is_(None))
+    )
+    project = project_q.scalar_one_or_none()
+    if project is None:
+        return set()
+    names: set[str] = set()
+    for entry in project.mcp_servers or []:
+        name = entry.get("name")
+        if isinstance(name, str):
+            names.add(name)
+    return names

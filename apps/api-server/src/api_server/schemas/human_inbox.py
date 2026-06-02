@@ -1,0 +1,336 @@
+"""Pydantic schemas for the personal inbox (Plan 16 task_16_08).
+
+The inbox is the "Tareas asignadas a mí" tray: the CALLER user's OWN active
+:class:`~api_server.db.domain.HumanTaskAssignment` rows folded with the Task /
+project / plan context they need to act on, plus the four contextual actions
+(accept, reject-with-justification, mark complete, escalate to admin).
+
+A user sees and acts ONLY on their own assignments — the router filters every
+read/write on ``assigned_to_user_id == principal.user_id`` ON TOP of RLS, so a
+forged cross-tenant or someone-else's assignment id resolves to 404 (task_16_08
+NON-NEGOTIABLE multi-tenancy + per-user scoping).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal
+from enum import StrEnum
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+_BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+
+class InboxAction(StrEnum):
+    """The four contextual actions the assignee can take on a task.
+
+    - ``ACCEPT``: ``pending_acceptance`` assignment -> ``accepted``; Task
+      ``assigned_to_human -> in_progress`` (§7.2, human assignee).
+    - ``REJECT``: the assignee declines with a justification; the assignment
+      goes ``declined`` and the Task ``assigned_to_human -> blocked`` so a
+      Tenant Admin can re-route it (the justification is audited).
+    - ``COMPLETE``: the assignee submits the delivery form (output text +
+      attachments + optional logged hours, task_16_09); a HumanWorkSession is
+      created and the Task moves ``in_progress -> in_review``.
+    - ``ESCALATE``: the assignee hands the task to the Tenant Admin without
+      doing it; the assignment goes ``declined``, the Task moves to ``blocked``
+      and a ``task_blocked`` notification fans out to the tenant's admins.
+    """
+
+    ACCEPT = "accept"
+    REJECT = "reject"
+    COMPLETE = "complete"
+    ESCALATE = "escalate"
+
+
+class InboxActionRequest(BaseModel):
+    """Body for an inbox action.
+
+    ``justification`` is REQUIRED for ``reject`` (the plan calls for a reason)
+    and optional for the rest. ``comments`` carries the assignee's free-form
+    note on ``complete`` (the lightweight precursor to the task_16_09 form).
+    """
+
+    model_config = _BASE_CONFIG
+
+    justification: str | None = Field(default=None, max_length=4000)
+    comments: str | None = Field(default=None, max_length=4000)
+
+
+class AttachmentKind(StrEnum):
+    """The kind of deliverable a human attached to a submission (task_16_09).
+
+    - ``FILE``: an uploaded artefact, referenced by ``ref`` (e.g. an object-store
+      key / path). The MVP stores only the *reference*, not the bytes.
+    - ``URL``: an external link (a PR, a doc, a screenshot host).
+    - ``SCREENSHOT``: a captured image, referenced by ``ref`` like a file.
+    """
+
+    FILE = "file"
+    URL = "url"
+    SCREENSHOT = "screenshot"
+
+
+class SubmitAttachment(BaseModel):
+    """One deliverable descriptor stored in ``output_files_attached`` (JSONB).
+
+    The shape is intentionally light: a ``kind`` plus a human ``label`` plus
+    EITHER a ``url`` (for ``url`` kind) OR a ``ref`` (an object-store key / path
+    for ``file`` / ``screenshot`` kinds). The MVP does NOT upload bytes here —
+    it records references the assignee provides — so the schema stays
+    migration-free and the storage backend can evolve independently.
+    """
+
+    model_config = _BASE_CONFIG
+
+    kind: AttachmentKind
+    label: str = Field(min_length=1, max_length=300)
+    url: str | None = Field(default=None, max_length=2000)
+    ref: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("url", "ref", mode="after")
+    @classmethod
+    def _blank_to_none(cls, value: str | None) -> str | None:
+        """An empty/whitespace string is treated as absent."""
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    def has_target(self) -> bool:
+        """A usable attachment names at least a ``url`` or a ``ref``."""
+        return bool(self.url) or bool(self.ref)
+
+
+class InboxSubmitRequest(BaseModel):
+    """Delivery form body for ``POST /inbox/assignments/{id}/complete`` (task_16_09).
+
+    The assignee marks an accepted task complete with their deliverable:
+
+    - ``output`` — the free-form output text (what they did / the result). Maps
+      to the ``HumanWorkSession.comments`` column. Optional but the form
+      encourages it; the modal disables submit until there is output OR an
+      attachment.
+    - ``attachments`` — files / URLs / screenshots (references), stored in
+      ``HumanWorkSession.output_files_attached`` (JSONB).
+    - ``hours_worked`` — OPTIONAL logged hours. Feeds coste humano (Fase D);
+      ``None`` means the human did not log hours. Non-negative, 2 decimals.
+
+    Backwards-compatible with the task_16_08 lightweight body: a caller posting
+    just ``{ "comments": "…" }`` still works — ``comments`` is accepted as an
+    alias-of-last-resort for ``output`` when ``output`` is absent.
+    """
+
+    model_config = _BASE_CONFIG
+
+    output: str | None = Field(default=None, max_length=20000)
+    comments: str | None = Field(default=None, max_length=20000)
+    attachments: list[SubmitAttachment] = Field(default_factory=list, max_length=50)
+    hours_worked: Decimal | None = Field(default=None, ge=0, max_digits=8, decimal_places=2)
+
+    def output_text(self) -> str | None:
+        """The effective output text — ``output`` if set, else ``comments``."""
+        for candidate in (self.output, self.comments):
+            if candidate is not None and candidate.strip():
+                return candidate.strip()
+        return None
+
+    def usable_attachments(self) -> list[SubmitAttachment]:
+        """Attachments that actually point at something (url or ref present)."""
+        return [a for a in self.attachments if a.has_target()]
+
+
+class InboxAssignmentResponse(BaseModel):
+    """One of the caller's active assignments, with the context to act on it.
+
+    ``task_status`` is the live Task §7.2 status (assigned_to_human / in_progress
+    / in_review); ``assignment_status`` is the accept-cycle status
+    (pending_acceptance / accepted). ``acceptance_deadline`` is the moment the
+    acceptance window lapses for a ``pending_acceptance`` row (assigned_at +
+    the Human Agent's acceptance_timeout_hours) — the inbox's actionable
+    "deadline"; ``None`` once the task is accepted.
+    """
+
+    model_config = _BASE_CONFIG
+
+    assignment_id: UUID
+    task_id: UUID
+    human_agent_id: UUID | None
+    assignment_status: str
+    task_status: str
+    assigned_at: datetime
+    acceptance_deadline: datetime | None
+
+    task_title: str
+    task_description: str | None
+    project_id: UUID
+    project_name: str | None
+    plan_id: UUID | None
+    plan_title: str | None
+
+
+class InboxActionResult(BaseModel):
+    """The outcome of an inbox action — the new assignment + task status."""
+
+    model_config = _BASE_CONFIG
+
+    assignment_id: UUID
+    task_id: UUID
+    action: str
+    assignment_status: str
+    task_status: str
+
+
+class InboxSubmitResult(InboxActionResult):
+    """The outcome of the delivery-form submit (task_16_09 + task_16_11).
+
+    Extends :class:`InboxActionResult` with the id of the
+    :class:`~api_server.db.domain.HumanWorkSession` the submission created and a
+    count of the deliverables that were recorded, so the UI can confirm the
+    work session was persisted.
+
+    task_16_11 adds the review-mode outcome: ``review_mode`` is the project's
+    effective ``human_task_review_mode`` (``auto_approve`` -> ``task_status`` is
+    ``done``; ``peer_human_reviewer`` -> ``in_review``), and
+    ``review_assignment_id`` is the reviewer ``HumanTaskAssignment`` created
+    under peer review (``None`` under auto_approve, or when no reviewer Human
+    Agent could be resolved).
+    """
+
+    work_session_id: UUID
+    attachments_count: int
+    review_mode: str
+    review_assignment_id: UUID | None = None
+
+
+# ---------------------------------------------------------------------------
+# Peer review (task_16_11) — the reviewer side of `peer_human_reviewer` mode
+# ---------------------------------------------------------------------------
+class InboxReviewRejectRequest(BaseModel):
+    """Body for ``POST /inbox/reviews/{id}/reject`` (task_16_11).
+
+    ``feedback_text`` is REQUIRED — the rework comments travel with the task
+    when it returns to ``backlog`` and are recorded in the audit trail.
+    """
+
+    model_config = _BASE_CONFIG
+
+    feedback_text: str | None = Field(default=None, max_length=20000)
+
+
+class InboxReviewAssignmentResponse(BaseModel):
+    """One of the caller's pending peer-review assignments (task_16_11).
+
+    The reviewer side of ``peer_human_reviewer`` mode: a ``pending_acceptance``
+    assignment whose Task is ``in_review``, folded with the Task / project /
+    plan context and the submitter's latest delivery output
+    (``submitted_output``) so the reviewer sees what to judge. ``retry_count`` is
+    the task's current rework count (how many times it has bounced back).
+    """
+
+    model_config = _BASE_CONFIG
+
+    assignment_id: UUID
+    task_id: UUID
+    human_agent_id: UUID | None
+    assignment_status: str
+    task_status: str
+    assigned_at: datetime
+
+    task_title: str
+    task_description: str | None
+    project_id: UUID
+    project_name: str | None
+    plan_id: UUID | None
+    plan_title: str | None
+
+    submitted_output: str | None
+    retry_count: int
+
+
+class InboxReviewVerdictResult(InboxActionResult):
+    """The outcome of a peer-review verdict (task_16_11).
+
+    Extends :class:`InboxActionResult` with the ``verdict`` the reviewer
+    returned (``approved`` / ``rejected``), the task's post-verdict
+    ``retry_count`` (incremented on reject) and ``escalated`` — True when a
+    rejection exhausted ``max_retries`` and the task was blocked for human
+    attention (§7.9). On approve ``task_status`` is ``done``; on reject it is
+    ``backlog`` (or ``blocked`` when escalated).
+    """
+
+    verdict: str
+    retry_count: int
+    escalated: bool
+
+
+# ---------------------------------------------------------------------------
+# Histórico + métricas personales (task_16_10)
+# ---------------------------------------------------------------------------
+class InboxHistoryEntry(BaseModel):
+    """One past task the caller worked on — the "Histórico" tab row (task_16_10).
+
+    A history entry is a closed :class:`~api_server.db.domain.HumanWorkSession`
+    the caller authored, folded with the Task / project / plan context. Where
+    the active inbox shows ``pending_acceptance`` / ``accepted`` rows, the
+    history shows the deliverables the user submitted — with the logged hours,
+    the output note, the attachment count and the work window — so the user can
+    review what they delivered and when.
+    """
+
+    model_config = _BASE_CONFIG
+
+    work_session_id: UUID
+    task_id: UUID
+    task_title: str
+    task_status: str
+    project_id: UUID
+    project_name: str | None
+    plan_id: UUID | None
+    plan_title: str | None
+
+    start_at: datetime
+    end_at: datetime | None
+    hours_logged: Decimal | None
+    comments: str | None
+    attachments_count: int
+
+
+class InboxMetricsResponse(BaseModel):
+    """The caller's own human-task performance metrics (task_16_10).
+
+    Mirrors :class:`~api_server.db.human_metrics.HumanUserMetrics`. Time figures
+    are in **seconds** (the UI formats them); means / rates are ``None`` when
+    there is nothing to average (empty history) — distinct from a real ``0.0``
+    — so the panel can render "sin datos aún". These same numbers feed future PM
+    estimates (task_16_13), which is why they are exposed queryably.
+    """
+
+    model_config = _BASE_CONFIG
+
+    tasks_worked: int
+    work_sessions_completed: int
+    assignments_accepted: int
+    mean_acceptance_time_seconds: float | None
+    mean_execution_time_seconds: float | None
+    first_try_approval_rate: float | None
+    mean_hours_logged: float | None
+
+
+__all__ = [
+    "AttachmentKind",
+    "InboxAction",
+    "InboxActionRequest",
+    "InboxActionResult",
+    "InboxAssignmentResponse",
+    "InboxHistoryEntry",
+    "InboxMetricsResponse",
+    "InboxReviewAssignmentResponse",
+    "InboxReviewRejectRequest",
+    "InboxReviewVerdictResult",
+    "InboxSubmitRequest",
+    "InboxSubmitResult",
+    "SubmitAttachment",
+]

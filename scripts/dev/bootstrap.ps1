@@ -48,7 +48,7 @@ Write-Host "==> Installing requirements-dev.txt" -ForegroundColor Cyan
 
 # 5) Install each app/ package editable, so `from <pkg> import ...` works
 #    and pytest can discover modules. New apps must be added here.
-$AppPackages = @("apps/api-server", "apps/watchdog")
+$AppPackages = @("apps/api-server", "apps/watchdog", "apps/installer/backend")
 foreach ($pkg in $AppPackages) {
     $pkgPath = Join-Path $RepoRoot $pkg
     if (Test-Path (Join-Path $pkgPath "pyproject.toml")) {

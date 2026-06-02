@@ -1,7 +1,8 @@
 ---
 plan_id: 15-instalador-produccion
 title: Instalador, Endurecimiento y Producción
-status: pending_approval
+status: in_progress
+started_at: 2026-05-31
 blocking_plan:
   [
     00-fundaciones,
@@ -20,7 +21,6 @@ blocking_plan:
     13-api-publica-webhooks,
     14-evals-estadisticas,
   ]
-started_at: null
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 80-100
@@ -35,18 +35,18 @@ docs_language: es
 
 ## Cabecera
 
-| Campo                              | Valor                                                                   |
-| ---------------------------------- | ----------------------------------------------------------------------- |
-| **ID del Plan**                    | `15-instalador-produccion`                                              |
-| **Estado**                         | `pending_approval`                                                      |
-| **Bloqueado por**                  | todas las fases anteriores (`00-fundaciones` … `14-evals-estadisticas`) |
-| **Tiempo estimado (calendario)**   | 4-5 semanas                                                             |
-| **Tiempo estimado (persona-días)** | 80-100                                                                  |
-| **Previsión de coste — humano**    | 32.000 € – 40.000 € (tarifa media 50 €/h)                               |
-| **Previsión de coste — IA**        | 150 € – 240 €                                                           |
-| **Aprobador propuesto**            | System Admin                                                            |
-| **Rama git**                       | `plan/15-instalador-produccion`                                         |
-| **Secciones del .docx**            | [22]                                                                    |
+| Campo                              | Valor                                                                                                                                                                                       |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ID del Plan**                    | `15-instalador-produccion`                                                                                                                                                                  |
+| **Estado**                         | `in_progress` — 27/29 tareas construibles completas + verdes; restan SOLO las 2 reservadas al humano: 15_27 pentest externo + 15_29 release v1.0.0 (override humano del gate blocking_plan) |
+| **Bloqueado por**                  | todas las fases anteriores (`00-fundaciones` … `14-evals-estadisticas`)                                                                                                                     |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                                                                                                                                                                                 |
+| **Tiempo estimado (persona-días)** | 80-100                                                                                                                                                                                      |
+| **Previsión de coste — humano**    | 32.000 € – 40.000 € (tarifa media 50 €/h)                                                                                                                                                   |
+| **Previsión de coste — IA**        | 150 € – 240 €                                                                                                                                                                               |
+| **Aprobador propuesto**            | System Admin                                                                                                                                                                                |
+| **Rama git**                       | `plan/15-instalador-produccion`                                                                                                                                                             |
+| **Secciones del .docx**            | [22]                                                                                                                                                                                        |
 
 ---
 
@@ -110,7 +110,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_01` — Contenedor installer (Next.js + FastAPI mínimo) que sirve UI temporal
 
-- [ ] **Título**: Contenedor installer (Next.js + FastAPI mínimo) que sirve UI temporal
+- [x] **Título**: Contenedor installer (Next.js + FastAPI mínimo) que sirve UI temporal
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
 - **Rol sugerido**: frontend-dev + backend-dev
@@ -127,7 +127,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_02` — Paso 1: Validación de prerequisitos (Docker, Compose, RAM, disco, GPU)
 
-- [ ] **Título**: Paso 1: Validación de prerequisitos (Docker, Compose, RAM, disco, GPU)
+- [x] **Título**: Paso 1: Validación de prerequisitos (Docker, Compose, RAM, disco, GPU)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -144,7 +144,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_03` — Pasos 2-6: Captura de config (sistema, recursos, almacenamiento, providers LLM, tenant inicial)
 
-- [ ] **Título**: Pasos 2-6: Captura de config (sistema, recursos, almacenamiento, providers LLM, tenant inicial)
+- [x] **Título**: Pasos 2-6: Captura de config (sistema, recursos, almacenamiento, providers LLM, tenant inicial)
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: frontend-dev
@@ -161,7 +161,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_04` — Paso 7: Resumen y confirmación con preview de recursos
 
-- [ ] **Título**: Paso 7: Resumen y confirmación con preview de recursos
+- [x] **Título**: Paso 7: Resumen y confirmación con preview de recursos
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: frontend-dev
@@ -178,7 +178,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_05` — Paso 8: Instalación con progress + logs en tiempo real
 
-- [ ] **Título**: Paso 8: Instalación con progress + logs en tiempo real
+- [x] **Título**: Paso 8: Instalación con progress + logs en tiempo real
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -195,7 +195,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_06` — Paso 9: Confirmación con credenciales mostradas UNA vez + autodestrucción del installer
 
-- [ ] **Título**: Paso 9: Confirmación con credenciales mostradas UNA vez + autodestrucción del installer
+- [x] **Título**: Paso 9: Confirmación con credenciales mostradas UNA vez + autodestrucción del installer
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -214,7 +214,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_07` — Generador de docker-compose.yml según opciones del wizard
 
-- [ ] **Título**: Generador de docker-compose.yml según opciones del wizard
+- [x] **Título**: Generador de docker-compose.yml según opciones del wizard
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -231,7 +231,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_08` — Generador de .env, config/global.yaml, estructura /data/agent-platform/
 
-- [ ] **Título**: Generador de .env, config/global.yaml, estructura /data/agent-platform/
+- [x] **Título**: Generador de .env, config/global.yaml, estructura /data/agent-platform/
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -248,7 +248,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_09` — Bootstrap del Vault: init + unseal + KV v2 + políticas iniciales
 
-- [ ] **Título**: Bootstrap del Vault: init + unseal + KV v2 + políticas iniciales
+- [x] **Título**: Bootstrap del Vault: init + unseal + KV v2 + políticas iniciales
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: security + devops
@@ -265,7 +265,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_10` — Modo CLI desatendido: install.sh --config install.yaml
 
-- [ ] **Título**: Modo CLI desatendido: install.sh --config install.yaml
+- [x] **Título**: Modo CLI desatendido: install.sh --config install.yaml
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -282,7 +282,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_11` — Plantillas YAML por perfil (minimal, recommended, gpu)
 
-- [ ] **Título**: Plantillas YAML por perfil (minimal, recommended, gpu)
+- [x] **Título**: Plantillas YAML por perfil (minimal, recommended, gpu)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: devops
@@ -299,7 +299,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_12` — Script uninstall.sh con doble confirmación
 
-- [ ] **Título**: Script uninstall.sh con doble confirmación
+- [x] **Título**: Script uninstall.sh con doble confirmación
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: devops
@@ -316,7 +316,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_13` — Reinstalación con preservación de datos opcional
 
-- [ ] **Título**: Reinstalación con preservación de datos opcional
+- [x] **Título**: Reinstalación con preservación de datos opcional
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: devops
@@ -335,7 +335,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_14` — Pentest interno: enumeración de superficie + escalada de privilegios + escapes de contenedor
 
-- [ ] **Título**: Pentest interno: enumeración de superficie + escalada de privilegios + escapes de contenedor
+- [x] **Título**: Pentest interno: enumeración de superficie + escalada de privilegios + escapes de contenedor
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: security
@@ -352,7 +352,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_15` — Endurecimiento seccomp con perfiles validados por contenedor
 
-- [ ] **Título**: Endurecimiento seccomp con perfiles validados por contenedor
+- [x] **Título**: Endurecimiento seccomp con perfiles validados por contenedor
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: security + devops
@@ -369,7 +369,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_16` — AppArmor profiles aplicados a contenedores
 
-- [ ] **Título**: AppArmor profiles aplicados a contenedores
+- [x] **Título**: AppArmor profiles aplicados a contenedores
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: security + devops
@@ -386,7 +386,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_17` — Rotación automática de credenciales con Vault dynamic secrets
 
-- [ ] **Título**: Rotación automática de credenciales con Vault dynamic secrets
+- [x] **Título**: Rotación automática de credenciales con Vault dynamic secrets
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: security + devops
@@ -403,7 +403,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_18` — Hardening del panel admin: MFA obligatorio, IP allowlist, sesiones cortas (15 min)
 
-- [ ] **Título**: Hardening del panel admin: MFA obligatorio, IP allowlist, sesiones cortas (15 min)
+- [x] **Título**: Hardening del panel admin: MFA obligatorio, IP allowlist, sesiones cortas (15 min)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: security + backend-dev
@@ -422,7 +422,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_19` — Runbook: instalación desde cero
 
-- [ ] **Título**: Runbook: instalación desde cero
+- [x] **Título**: Runbook: instalación desde cero
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
@@ -439,7 +439,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_20` — Runbook: troubleshooting común
 
-- [ ] **Título**: Runbook: troubleshooting común
+- [x] **Título**: Runbook: troubleshooting común
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: technical-writer
@@ -456,7 +456,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_21` — Runbook: upgrade del sistema
 
-- [ ] **Título**: Runbook: upgrade del sistema
+- [x] **Título**: Runbook: upgrade del sistema
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
@@ -473,7 +473,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_22` — Runbook: DR completo + restore selectivo (consolidar de Fase 12)
 
-- [ ] **Título**: Runbook: DR completo + restore selectivo (consolidar de Fase 12)
+- [x] **Título**: Runbook: DR completo + restore selectivo (consolidar de Fase 12)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer
@@ -490,7 +490,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_23` — Runbook: rotación de unseal keys + rotación de credenciales
 
-- [ ] **Título**: Runbook: rotación de unseal keys + rotación de credenciales
+- [x] **Título**: Runbook: rotación de unseal keys + rotación de credenciales
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer + security
@@ -507,7 +507,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_24` — Runbook: gestión de capacity (escalar workers, etc.)
 
-- [ ] **Título**: Runbook: gestión de capacity (escalar workers, etc.)
+- [x] **Título**: Runbook: gestión de capacity (escalar workers, etc.)
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer + devops
@@ -524,7 +524,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_25` — Documentación pública + portal de desarrollador (API reference, SDKs, tutoriales)
 
-- [ ] **Título**: Documentación pública + portal de desarrollador (API reference, SDKs, tutoriales)
+- [x] **Título**: Documentación pública + portal de desarrollador (API reference, SDKs, tutoriales)
 - **Tiempo estimado**: 16 h
 - **Complejidad**: l
 - **Rol sugerido**: technical-writer
@@ -541,7 +541,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_26` — Smoke tests post-deploy automáticos completos
 
-- [ ] **Título**: Smoke tests post-deploy automáticos completos
+- [x] **Título**: Smoke tests post-deploy automáticos completos
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: devops + qa
@@ -577,7 +577,7 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 
 #### `task_15_28` — Documentación final + ADRs + changelog del plan
 
-- [ ] **Título**: Documentación final + ADRs + changelog del plan
+- [x] **Título**: Documentación final + ADRs + changelog del plan
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: technical-writer

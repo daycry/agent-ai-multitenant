@@ -75,6 +75,22 @@ class AgentType(enum.StrEnum):
     HUMAN = "human"
 
 
+class AssignmentMode(enum.StrEnum):
+    """How a human agent's tasks are routed to actual people (Plan 16).
+
+    - ``SPECIFIC_USER``: tasks go to one fixed :class:`User`
+      (``human_agent_config.assigned_user_id``). The ONLY mode in the MVP
+      (Plan 16 Decisiones Clave) — a DB CHECK constrains the column to it.
+    - ``ROLE_QUEUE`` / ``TEAM_POOL``: queue- and team-based routing. Modelled
+      here for forward-compatibility but explicitly out of scope this plan;
+      the CHECK rejects them until a later plan lifts the constraint.
+    """
+
+    SPECIFIC_USER = "specific_user"
+    ROLE_QUEUE = "role_queue"
+    TEAM_POOL = "team_pool"
+
+
 class AgentScope(enum.StrEnum):
     """Where an agent lives in the linked-vs-forked taxonomy (spec §5.7.5).
 
@@ -174,6 +190,29 @@ class ProjectStatus(enum.StrEnum):
     ARCHIVED = "archived"
 
 
+class HumanTaskReviewMode(enum.StrEnum):
+    """How a human task's deliverable is reviewed once submitted (Plan 16
+    task_16_11), a project-level setting (``projects.human_task_review_mode``).
+
+    - ``AUTO_APPROVE`` (default): the submit path (task_16_09) takes the task
+      straight to ``done`` — no extra review step. The MVP default (Plan 16
+      Decisiones Clave): suitable for "firma"-style tasks where the act of
+      submitting IS the completion.
+    - ``PEER_HUMAN_REVIEWER``: the task stays ``in_review`` and a SECOND
+      :class:`HumanTaskAssignment` is created for another Human Agent (the
+      reviewer), who approves (-> ``done``) or rejects with feedback (-> back
+      to ``backlog`` with ``retry_count`` bumped; after ``max_retries`` the
+      §7.9 retry/escalation infra parks it in ``awaiting_human_approval``).
+
+    The ``ai_reviewer`` mode is explicitly out of scope this plan (Plan 16
+    Alcance); the DB CHECK ``ck_projects_human_task_review_mode`` rejects any
+    value outside these two.
+    """
+
+    AUTO_APPROVE = "auto_approve"
+    PEER_HUMAN_REVIEWER = "peer_human_reviewer"
+
+
 class BudgetPeriod(enum.StrEnum):
     WEEKLY = "weekly"
     MONTHLY = "monthly"
@@ -216,6 +255,14 @@ class PlanStatus(enum.StrEnum):
 class TaskStatus(enum.StrEnum):
     BACKLOG = "backlog"
     READY = "ready"
+    # La tarea ha sido asignada a un Human Agent (agent_type=human) y
+    # espera que el User asignado la acepte (Plan 16 §7.2 / task_16_04).
+    # Solo alcanzable desde `ready` y SOLO para tareas cuyo agente asignado
+    # es humano — el orchestrator (task_16_05) la fija al rutear una tarea
+    # humana en lugar de pedir contenedor. Desde aquí: `in_progress` (el
+    # humano acepta), `assigned_to_human` (reasignación) o `blocked`
+    # (escalación agotada, task_16_06).
+    ASSIGNED_TO_HUMAN = "assigned_to_human"
     IN_PROGRESS = "in_progress"
     # La tarea está aparcada esperando una decisión humana sobre una
     # acción sensible (ADR 0020). El agente queda libre; al aprobar la
@@ -275,6 +322,33 @@ class ApprovalRequestStatus(enum.StrEnum):
     TIMED_OUT = "timed_out"
 
 
+class HumanTaskAssignmentStatus(enum.StrEnum):
+    """Lifecycle of one :class:`HumanTaskAssignment` (Plan 16 task_16_05).
+
+    The assignment row tracks WHO a human task is currently with and where
+    that person is in the accept/work cycle — distinct from, but kept in step
+    with, the Task's own §7.2 status (an ``assigned_to_human`` Task has a
+    ``pending_acceptance`` assignment; the Task moves to ``in_progress`` when
+    the assignment moves to ``accepted``).
+
+    - ``PENDING_ACCEPTANCE``: freshly created by the orchestrator (task_16_05)
+      — the assigned user has been notified and has up to
+      ``acceptance_timeout_hours`` to accept before escalation (task_16_06).
+    - ``ACCEPTED``: the user accepted; work has started.
+    - ``REASSIGNED``: superseded by a newer assignment (the acceptance-timeout
+      escalation hands the task to the ``escalation_target_user_id``,
+      task_16_06). The superseding row is a fresh ``pending_acceptance`` one.
+    - ``DECLINED``: the user explicitly rejected the task (Fase C inbox).
+    - ``EXPIRED``: the acceptance window lapsed with no decision (task_16_06).
+    """
+
+    PENDING_ACCEPTANCE = "pending_acceptance"
+    ACCEPTED = "accepted"
+    REASSIGNED = "reassigned"
+    DECLINED = "declined"
+    EXPIRED = "expired"
+
+
 # =============================================================================
 # Agent
 # =============================================================================
@@ -298,12 +372,24 @@ class Agent(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDe
             "     AND project_id IS NULL)",
             name="ck_agents_scope_project_consistency",
         ),
+        # agent_type enum value set (Plan 16 task_16_01). The column itself
+        # ships with the domain-minimum migration (0002) as String(16) NOT
+        # NULL DEFAULT 'ai'; migration 0066 adds this CHECK so the DB enforces
+        # the AgentType value set (ai|human) instead of accepting any text.
+        CheckConstraint(
+            "agent_type IN ('ai', 'human')",
+            name="ck_agents_agent_type",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # AI vs human agent (Plan 16). Values are the :class:`AgentType` StrEnum
+    # (ai|human) stored as TEXT — same string-backed-enum convention as
+    # `scope`/`AgentScope`. Existing rows default to 'ai' (no behaviour change
+    # for AI agents). DB-enforced by ck_agents_agent_type (migration 0066).
     agent_type: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'ai'"))
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
@@ -551,6 +637,13 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
             "budget_amount IS NULL OR budget_amount >= 0",
             name="ck_projects_budget_non_negative",
         ),
+        # human_task_review_mode value set (Plan 16 task_16_11). Mirrors the
+        # HumanTaskReviewMode StrEnum; DB-enforced by migration 0073, same
+        # shape as ck_agents_agent_type.
+        CheckConstraint(
+            "human_task_review_mode IN ('auto_approve', 'peer_human_reviewer')",
+            name="ck_projects_human_task_review_mode",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -586,6 +679,20 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     repository_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     human_approval_policy: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
+    # Plan 06.16 task_06_16_01: polyglot tool catalog. `allowed_commands`
+    # is the per-project deny-by-default allowlist of program *basenames*
+    # (`php`, `composer`, `vendor/bin/phpunit`, `pest`, `npm`, …) the
+    # `shell_exec` builtin may run; empty `[]` = nothing runs (deny-all).
+    # TEXT[] (not JSONB) — membership-only semantics, same shape as
+    # `default_kb_grants`. `default_runtime_template` names the stack's
+    # runtime template id (`php-phpunit`, `node-jest`, …) the `run_*`
+    # tools resolve against; NULL = keep each tool's current default
+    # (backward-compatible).
+    allowed_commands: Mapped[list[str]] = mapped_column(
+        ARRAY(String), nullable=False, server_default=text("'{}'::text[]")
+    )
+    default_runtime_template: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # Soft-FK to the Vault entry that holds the project's secrets. Vault
     # is an external system so no DB-level FK.
     secrets_vault_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
@@ -601,6 +708,29 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     budget_period_start_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
     budget_period_length_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     paused_by_budget: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+
+    # --- Human-task review mode (Plan 16 task_16_11) ----------------------
+    # How a human task's deliverable is reviewed once submitted (task_16_09).
+    # Stored as the :class:`HumanTaskReviewMode` value (TEXT) — same
+    # string-backed-enum convention as `status`. DEFAULT 'auto_approve' so
+    # existing projects keep the MVP behaviour (submit -> in_review -> done,
+    # no extra review step). DB-constrained by ck_projects_human_task_review_mode.
+    human_task_review_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'auto_approve'")
+    )
+
+    # --- Budget: fold human cost in? (Plan 16 task_16_12) -----------------
+    # Human cost (rate * hours from human_work_sessions) is ALWAYS imputed to
+    # the plan/project + segmented in the 13.7 dashboard. This flag decides
+    # whether it ALSO counts toward this project's BUDGET (consumption +
+    # threshold alerts + auto-pause). DEFAULT false = current behaviour (only
+    # the canonical-USD AI cost counts); true folds the project's human cost
+    # (converted to USD) into the consumption the evaluator compares vs the
+    # cap. DB column added by migration 0074.
+    budget_includes_human_cost: Mapped[bool] = mapped_column(
+        nullable=False, server_default=text("false")
+    )
+
     # Catalog marker -- when true the row is a template blueprint owned
     # by the platform tenant, visible cross-tenant via RLS but never the
     # target of writes from a tenant session.
@@ -951,6 +1081,309 @@ class ApprovalRequest(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMix
     )
 
 
+# =============================================================================
+# HumanAgentConfig (the human-specific fields of an agent_type=human Agent)
+# =============================================================================
+class HumanAgentConfig(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """Human-specific configuration of a human agent (Plan 16 task_16_02).
+
+    Plan 16 Decisiones Clave: ``agent_type`` extends the EXISTING Agent
+    entity rather than introducing a separate one. The columns that are
+    meaningless for an AI agent (who the human is, their rate, how to reach
+    them, the acceptance timeout / escalation target) live here, one row per
+    ``agent_type='human'`` agent, instead of widening the ``agents`` table
+    with a dozen always-NULL-for-AI columns. The ``agent_id`` FK is UNIQUE so
+    the relationship is strictly 1:1.
+
+    Tenant-owned: the row carries ``tenant_id`` (TenantScopedMixin) and the DB
+    enforces isolation with the SAME RLS policy shape as ``agents``
+    (``{table}_tenant_isolation`` FOR ALL, ``tenant_id = NULLIF(
+    current_setting('app.tenant_id', true), '')::uuid``). The
+    ``assigned_user_id`` is intrinsically a tenant concept — a global Human
+    Agent template MUST be forked to the tenant before it can name a User
+    (Plan 16 Decisiones Clave), which is why this table is never global.
+
+    MVP constrains ``assignment_mode`` to ``specific_user`` at the DB level
+    (``ck_human_agent_config_assignment_mode``); the :class:`AssignmentMode`
+    enum models the future ``role_queue`` / ``team_pool`` modes but the CHECK
+    rejects them this plan.
+    """
+
+    __tablename__ = "human_agent_config"
+    __table_args__ = (
+        # 1:1 with the human agent — at most one config row per agent.
+        UniqueConstraint("agent_id", name="uq_human_agent_config_agent"),
+        Index("ix_human_agent_config_tenant_id", "tenant_id"),
+        Index("ix_human_agent_config_assigned_user", "assigned_user_id"),
+        # MVP: only specific_user. Model the enum, constrain the column.
+        CheckConstraint(
+            "assignment_mode = 'specific_user'",
+            name="ck_human_agent_config_assignment_mode",
+        ),
+        # A non-negative rate when present (NULL = no rate configured).
+        CheckConstraint(
+            "hourly_rate IS NULL OR hourly_rate >= 0",
+            name="ck_human_agent_config_hourly_rate_non_negative",
+        ),
+        # Timeouts / expected times are positive when present.
+        CheckConstraint(
+            "acceptance_timeout_hours > 0",
+            name="ck_human_agent_config_acceptance_timeout_positive",
+        ),
+    )
+
+    # The human agent this config belongs to (agent_type='human'). UNIQUE via
+    # __table_args__; CASCADE so deleting the agent removes its config.
+    agent_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # MVP: specific_user. Stored as the :class:`AssignmentMode` value (TEXT) —
+    # same string-backed-enum convention as agent_type/scope. DB-constrained
+    # to 'specific_user' by ck_human_agent_config_assignment_mode.
+    assignment_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'specific_user'")
+    )
+
+    # The concrete User this human agent resolves to (assignment_mode=
+    # specific_user). SET NULL so the config survives a user deletion (the
+    # orchestrator then surfaces an unassigned human agent). Nullable so a
+    # config can be created before the User is picked.
+    assigned_user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Cost inputs: rate + ISO-4217 currency (mirrors organizations.hourly_rate
+    # / hourly_rate_currency, migration 0019). Coste humano = rate * horas
+    # (imputed in Plan 16 Fase D). NULL = no rate configured yet.
+    hourly_rate: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=10, scale=2), nullable=True
+    )
+    hourly_rate_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+
+    # Preferred notification channels for the assigned user — a JSONB list of
+    # channel identifiers (e.g. ["email", "in_app"]). JSONB so the shape can
+    # evolve migration-free.
+    notification_channels: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
+    # How long the assigned user has to accept before escalation (Plan 16
+    # Decisiones Clave: 24h default). Acceptance-timeout job lands in Fase B.
+    acceptance_timeout_hours: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("24")
+    )
+
+    # Who the task escalates to if the assigned user does not accept in time.
+    # SET NULL so the config survives that user's deletion.
+    escalation_target_user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Planning estimates the PM agent uses (Plan 16 Fase E). NULL = unknown.
+    expected_response_time_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expected_execution_time_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"HumanAgentConfig(id={self.id!r}, agent_id={self.agent_id!r},"
+            f" assigned_user_id={self.assigned_user_id!r})"
+        )
+
+
+# =============================================================================
+# HumanWorkSession (the Execution-equivalent audit trail for human tasks)
+# =============================================================================
+class HumanWorkSession(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """One session of a human working on a task (Plan 16 task_16_03).
+
+    Plan 16 Decisiones Clave: ``HumanWorkSession`` replaces ``Execution`` for
+    ``agent_type='human'`` tasks. Where an AI task records a row in
+    :class:`Execution` per run of the agent loop, a human task records a row
+    here per work session — who did the work (``user_id``), when (``start_at``
+    / ``end_at``), how many hours it took (``hours_logged``), free-form
+    ``comments``, and the deliverables the human attached
+    (``output_files_attached``). Like :class:`Execution`, sessions are NOT
+    soft-deleted — they are an immutable audit record of what a human did; a
+    task can have several.
+
+    Tenant-owned: the row carries ``tenant_id`` (TenantScopedMixin) and the DB
+    enforces isolation with the SAME RLS policy shape as ``executions``
+    (``{table}_tenant_isolation`` FOR ALL, ``tenant_id = NULLIF(
+    current_setting('app.tenant_id', true), '')::uuid``). A work session is
+    intrinsically tenant-scoped (it references a ``users`` row, which is
+    tenant-owned), so this table is never global.
+    """
+
+    __tablename__ = "human_work_sessions"
+    __table_args__ = (
+        Index("ix_human_work_sessions_tenant_id", "tenant_id"),
+        # Audit-trail read path: "the sessions of this task" (mirrors
+        # ix_executions_task_id, the Execution table this replaces).
+        Index("ix_human_work_sessions_task_id", "task_id"),
+        # Logged hours non-negative when present (NULL = not logged).
+        CheckConstraint(
+            "hours_logged IS NULL OR hours_logged >= 0",
+            name="ck_human_work_sessions_hours_non_negative",
+        ),
+        # A finished session cannot end before it started.
+        CheckConstraint(
+            "end_at IS NULL OR end_at >= start_at",
+            name="ck_human_work_sessions_end_after_start",
+        ),
+    )
+
+    # The human task this session belongs to. CASCADE so deleting the task
+    # removes its sessions (mirrors executions.task_id).
+    task_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # The human who worked. SET NULL so the audit record survives a user
+    # deletion (the session stays, the attribution is lost — same trade-off
+    # executions.agent_id makes for a deleted agent). Nullable for that reason.
+    user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # When the session began. Defaults to now() so a freshly-created session
+    # is timestamped without the caller having to set it.
+    start_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    # When the session finished. NULL while the human is still working.
+    end_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    # Optional logged hours; feeds coste humano = rate * hours (Plan 16 Fase
+    # D). NULL = the human did not log hours for this session.
+    hours_logged: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=8, scale=2), nullable=True
+    )
+
+    # The human's free-form notes / output text for this session.
+    comments: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Deliverables the human attached — a JSONB list of attachment descriptors
+    # (files, URLs, screenshots). JSONB so the shape can evolve migration-free.
+    output_files_attached: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"HumanWorkSession(id={self.id!r}, task_id={self.task_id!r},"
+            f" user_id={self.user_id!r})"
+        )
+
+
+# =============================================================================
+# HumanTaskAssignment (who a human task is currently with + accept cycle)
+# =============================================================================
+class HumanTaskAssignment(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """One assignment of a human task to a concrete User (Plan 16 task_16_05).
+
+    When the orchestrator routes a ``ready`` task whose assignee Agent is
+    ``agent_type='human'`` it does NOT request a runtime container from the
+    pool (the AI path). Instead it creates one of these rows — recording the
+    human Agent (``human_agent_id``) and the concrete User the work landed on
+    (``assigned_to_user_id``, resolved from
+    ``human_agent_config.assigned_user_id``) — and transitions the Task to
+    ``assigned_to_human`` via the §7.2 state machine (task_16_04). The
+    acceptance-timeout job (task_16_06) reads the ``pending_acceptance`` rows
+    and, on expiry, creates a fresh assignment for the
+    ``escalation_target_user_id`` (marking this one ``reassigned``).
+
+    Tenant-owned: the row carries ``tenant_id`` (TenantScopedMixin) and the DB
+    enforces isolation with the SAME RLS policy shape as ``human_work_sessions``
+    / ``agents`` (``{table}_tenant_isolation`` FOR ALL, ``tenant_id = NULLIF(
+    current_setting('app.tenant_id', true), '')::uuid``). An assignment is
+    intrinsically tenant-scoped (it names a tenant ``users`` row and a tenant
+    ``agents`` row), so this table is never global.
+
+    Assignments are an append-only audit-style trail (no soft-delete): a task
+    may accrue several rows over its life (initial assignment, escalation
+    reassignment, …); ``status`` records each one's outcome.
+    """
+
+    __tablename__ = "human_task_assignments"
+    __table_args__ = (
+        Index("ix_human_task_assignments_tenant_id", "tenant_id"),
+        # Read path: "the assignments of this task" (detail view / audit) and
+        # "the live assignments of this user" (the personal inbox, Fase C).
+        Index("ix_human_task_assignments_task_id", "task_id"),
+        Index("ix_human_task_assignments_assigned_user", "assigned_to_user_id"),
+        # The acceptance-timeout sweep (task_16_06) scans the open
+        # pending_acceptance rows by age — a partial index keeps that scan
+        # cheap as accepted/expired rows accumulate.
+        Index(
+            "ix_human_task_assignments_pending",
+            "assigned_at",
+            postgresql_where=text("status = 'pending_acceptance'"),
+        ),
+        # The DB enforces the HumanTaskAssignmentStatus value set (mirrors the
+        # ck_agents_agent_type CHECK shape).
+        CheckConstraint(
+            "status IN ('pending_acceptance', 'accepted', 'reassigned'," " 'declined', 'expired')",
+            name="ck_human_task_assignments_status",
+        ),
+    )
+
+    # The human task this assignment is for. CASCADE so deleting the task
+    # removes its assignments (mirrors human_work_sessions.task_id).
+    task_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # The human Agent (agent_type='human') the task is assigned to. SET NULL so
+    # the assignment record survives the agent's (soft) removal.
+    human_agent_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("agents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # The concrete User the work landed on (resolved from
+    # human_agent_config.assigned_user_id). SET NULL so the record survives a
+    # user deletion (same trade-off human_work_sessions.user_id makes).
+    assigned_to_user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # When the assignment was created. Defaults to now() so a freshly-created
+    # row is timestamped; the acceptance-timeout sweep ages off this column.
+    assigned_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    # Where this assignment is in the accept/work cycle. Stored as the
+    # :class:`HumanTaskAssignmentStatus` value (TEXT) — same string-backed-enum
+    # convention as agent_type/scope. DB-constrained by
+    # ck_human_task_assignments_status.
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'pending_acceptance'")
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"HumanTaskAssignment(id={self.id!r}, task_id={self.task_id!r},"
+            f" assigned_to_user_id={self.assigned_to_user_id!r}, status={self.status!r})"
+        )
+
+
 __all__ = [
     "Agent",
     "AgentRole",
@@ -960,6 +1393,7 @@ __all__ = [
     "AgentTool",
     "AgentType",
     "ApprovalPolicyTemplate",
+    "AssignmentMode",
     "ApprovalRequest",
     "ApprovalRequestStatus",
     "BudgetPeriod",
@@ -967,6 +1401,11 @@ __all__ = [
     "Conversation",
     "Execution",
     "ExecutionStatus",
+    "HumanAgentConfig",
+    "HumanTaskAssignment",
+    "HumanTaskAssignmentStatus",
+    "HumanTaskReviewMode",
+    "HumanWorkSession",
     "MemoryScope",
     "Message",
     "MessageAuthorKind",

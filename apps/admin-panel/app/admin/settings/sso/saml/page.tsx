@@ -53,6 +53,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { ApiError, apiFetch } from "@/lib/api";
+import {
+  isDefaultRedirectBase,
+  redirectBaseFromUrl,
+  SSO_REDIRECT_BASE_DEFAULT,
+} from "@/lib/sso-redirect-base";
 
 // --------------------------------------------------------------------------
 // Types — mirror api_server.schemas.sso (SAML half)
@@ -312,6 +317,14 @@ export default function SamlConfigPage() {
 // SP metadata card — EntityID + ACS URL to register at the IdP
 // --------------------------------------------------------------------------
 function SpMetadataCard({ metadata, loading }: { metadata: SpMetadata | null; loading: boolean }) {
+  // The SP EntityID + ACS URL are both built from `sso_redirect_base_url`;
+  // if the ACS still carries the backend default placeholder, warn the
+  // operator to set the real public base before wiring up the IdP
+  // (ADR 0047 §6). The SP identity (entityID + ACS) is platform-global.
+  const acsUrl = loading ? null : (metadata?.acs_url ?? null);
+  const isPlaceholder = !loading && isDefaultRedirectBase(acsUrl);
+  const base = redirectBaseFromUrl(acsUrl);
+
   return (
     <Card className="mt-6" data-testid="saml-sp-metadata-card">
       <CardHeader>
@@ -319,7 +332,8 @@ function SpMetadataCard({ metadata, loading }: { metadata: SpMetadata | null; lo
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-muted-foreground text-sm">
-          Registra estos valores en tu proveedor de identidad SAML: la <strong>Entity ID</strong>{" "}
+          Estos valores son <strong>globales</strong> (una sola identidad de SP para toda la
+          plataforma). Regístralos en tu proveedor de identidad SAML: la <strong>Entity ID</strong>{" "}
           del SP y la <strong>URL de ACS</strong> (Assertion Consumer Service) a la que el IdP
           enviará la respuesta.
         </p>
@@ -328,11 +342,25 @@ function SpMetadataCard({ metadata, loading }: { metadata: SpMetadata | null; lo
           value={loading ? null : (metadata?.sp_entity_id ?? null)}
           testid="saml-sp-entity-id"
         />
-        <CopyRow
-          label="ACS URL"
-          value={loading ? null : (metadata?.acs_url ?? null)}
-          testid="saml-acs-url"
-        />
+        <CopyRow label="ACS URL" value={acsUrl} testid="saml-acs-url" />
+        {base !== null && !loading ? (
+          <p className="text-muted-foreground text-xs" data-testid="saml-redirect-base">
+            Base pública configurada: <span className="font-mono">{base}</span>
+          </p>
+        ) : null}
+        {isPlaceholder ? (
+          <p
+            className="border-warning/40 bg-warning/10 text-warning-foreground rounded-md border px-3 py-2 text-xs"
+            data-testid="saml-redirect-base-warning"
+            role="alert"
+          >
+            Sigue usando la base por defecto{" "}
+            <span className="font-mono">{SSO_REDIRECT_BASE_DEFAULT}</span> (un marcador de posición,
+            ni siquiera coincide con el api-server de desarrollo). Configura{" "}
+            <span className="font-mono">SSO_REDIRECT_BASE_URL</span> con tu URL pública antes de
+            registrar el ACS en el IdP.
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   );

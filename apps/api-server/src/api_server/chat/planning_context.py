@@ -21,15 +21,27 @@ The returned dict is what the chat endpoint passes as
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.chat.cost import HumanAgentEstimateInput
 from api_server.db.conversation import Conversation, Message
 from api_server.db.conversation_compression import load_context_window
-from api_server.db.domain import Plan, Project, Task
+from api_server.db.domain import (
+    Agent,
+    AgentScope,
+    AgentType,
+    HumanAgentConfig,
+    HumanTaskAssignment,
+    HumanTaskAssignmentStatus,
+    Plan,
+    Project,
+    Task,
+)
 
 # Statuses we consider "still in the team's hands" for the kanban
 # summary. Terminal statuses (done / cancelled) are filtered out so the
@@ -60,6 +72,51 @@ class PriorPlanSummary:
     status: str
 
 
+# A Human Agent with this many or more live (pending_acceptance / accepted)
+# assignments is flagged ``overloaded`` so the planning chat can warn before
+# the PM puts another task on its critical path (Plan 16 task_16_13 optional
+# alert). Cheap: it rides the same workload count we already load per agent.
+HUMAN_AGENT_OVERLOAD_THRESHOLD = 3
+
+
+@dataclass(frozen=True)
+class HumanAgentOption:
+    """One assignable Human Agent the PM sees in the planning gallery.
+
+    Folds the tenant's :class:`~api_server.db.domain.Agent`
+    (``agent_type='human'``) with its 1:1
+    :class:`~api_server.db.domain.HumanAgentConfig` planning inputs (rate +
+    expected times) AND a live workload count (open ``pending_acceptance`` /
+    ``accepted`` assignments). The PM can assign a plan task to one of these
+    exactly like an AI agent; the estimate then sizes the task from these
+    figures (:func:`~api_server.chat.cost.compute_human_agent_plan_estimate`).
+    """
+
+    agent_id: str
+    name: str
+    role: str
+    assigned_user_id: str | None
+    hourly_rate: Decimal | None
+    currency: str
+    expected_response_time_hours: int | None
+    expected_execution_time_hours: int | None
+    #: Open assignments (pending_acceptance + accepted) currently on this agent.
+    active_assignment_count: int
+    #: True when ``active_assignment_count`` >= HUMAN_AGENT_OVERLOAD_THRESHOLD.
+    overloaded: bool
+
+    def as_estimate_input(self) -> HumanAgentEstimateInput:
+        """The pure-function estimate input this option carries (task_16_13)."""
+        return HumanAgentEstimateInput(
+            agent_id=self.agent_id,
+            name=self.name,
+            hourly_rate=self.hourly_rate,
+            currency=self.currency,
+            expected_response_time_hours=self.expected_response_time_hours,
+            expected_execution_time_hours=self.expected_execution_time_hours,
+        )
+
+
 @dataclass(frozen=True)
 class PlanningContext:
     """The full payload the sub-graph reads.
@@ -73,6 +130,10 @@ class PlanningContext:
     chat_messages: tuple[dict[str, Any], ...]
     kanban: KanbanSummary
     prior_plans: tuple[PriorPlanSummary, ...]
+    # The tenant's assignable Human Agents (the gallery) — the PM picks from
+    # these to assign a plan task to a human exactly like to an AI agent
+    # (Plan 16 task_16_13). Empty when the tenant has no Human Agents.
+    human_agents: tuple[HumanAgentOption, ...] = ()
     # Plan 04 fills these in. Kept here so the sub-graph contract is
     # already shaped for them and the planning prompts can reference
     # the fields when they exist.
@@ -104,7 +165,32 @@ class PlanningContext:
             "has_approval_policy": self.has_approval_policy,
             "has_repository_config": self.has_repository_config,
             "team_id": self.team_id,
+            "human_agents": [
+                {
+                    "agent_id": h.agent_id,
+                    "name": h.name,
+                    "role": h.role,
+                    "assigned_user_id": h.assigned_user_id,
+                    "hourly_rate": str(h.hourly_rate) if h.hourly_rate is not None else None,
+                    "currency": h.currency,
+                    "expected_response_time_hours": h.expected_response_time_hours,
+                    "expected_execution_time_hours": h.expected_execution_time_hours,
+                    "active_assignment_count": h.active_assignment_count,
+                    "overloaded": h.overloaded,
+                }
+                for h in self.human_agents
+            ],
         }
+
+    def human_agent_estimate_inputs(self) -> dict[str, HumanAgentEstimateInput]:
+        """The ``{agent_id: HumanAgentEstimateInput}`` map the cost layer wants.
+
+        Handed straight to
+        :func:`~api_server.chat.cost.compute_human_agent_plan_estimate` so the
+        plan estimate sizes each human-agent-assigned task from the agent's
+        configured rate + expected times (Plan 16 task_16_13).
+        """
+        return {h.agent_id: h.as_estimate_input() for h in self.human_agents}
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +219,7 @@ async def build_planning_context(
         session, conversation.project_id, titles_cap=kanban_titles_per_status
     )
     prior_plans = await _load_prior_plans(session, conversation.project_id, limit=prior_plans_limit)
+    human_agents = await _load_human_agents(session)
 
     return PlanningContext(
         project_id=str(project.id),
@@ -140,6 +227,7 @@ async def build_planning_context(
         chat_messages=chat_messages,
         kanban=kanban,
         prior_plans=prior_plans,
+        human_agents=human_agents,
         memory_snippets=(),
         kb_documents=(),
         has_approval_policy=project.human_approval_policy is not None,
@@ -233,8 +321,78 @@ async def _load_prior_plans(
     )
 
 
+# Open assignment states that count toward a Human Agent's live workload — the
+# task is on the human's plate but not yet finished (pending_acceptance =
+# awaiting accept; accepted = working). reassigned/declined/expired are closed.
+_OPEN_ASSIGNMENT_STATES: frozenset[str] = frozenset(
+    {
+        HumanTaskAssignmentStatus.PENDING_ACCEPTANCE.value,
+        HumanTaskAssignmentStatus.ACCEPTED.value,
+    }
+)
+
+
+async def _load_human_agents(session: AsyncSession) -> tuple[HumanAgentOption, ...]:
+    """Load the tenant's assignable Human Agents (the planning gallery).
+
+    The PM picks from these to assign a plan task to a human exactly like to an
+    AI agent (Plan 16 task_16_13). Returns the tenant's own Human Agents (NOT
+    the global ``global_builtin`` templates — those carry no config and cannot
+    be assigned until forked, mirroring ``GET /human-agents``), each folded with
+    its :class:`HumanAgentConfig` planning inputs and a live workload count.
+
+    RLS scopes every row to the caller's tenant; the workload count is a
+    correlated sub-select of OPEN (pending_acceptance / accepted) assignments on
+    the same agent, so it too is tenant-scoped. The optional overload flag
+    (task_16_13) is derived from that count — cheap, no extra round-trip.
+    """
+    workload_sq = (
+        select(func.count())
+        .select_from(HumanTaskAssignment)
+        .where(
+            HumanTaskAssignment.human_agent_id == Agent.id,
+            HumanTaskAssignment.status.in_(_OPEN_ASSIGNMENT_STATES),
+        )
+        .correlate(Agent)
+        .scalar_subquery()
+    )
+    stmt = (
+        select(Agent, HumanAgentConfig, workload_sq.label("active_assignments"))
+        .join(HumanAgentConfig, HumanAgentConfig.agent_id == Agent.id)
+        .where(
+            Agent.agent_type == AgentType.HUMAN.value,
+            Agent.scope != AgentScope.GLOBAL_BUILTIN.value,
+            Agent.deleted_at.is_(None),
+        )
+        .order_by(Agent.name, Agent.id)
+    )
+    rows = (await session.execute(stmt)).all()
+    options: list[HumanAgentOption] = []
+    for agent, config, active in rows:
+        count = int(active or 0)
+        options.append(
+            HumanAgentOption(
+                agent_id=str(agent.id),
+                name=agent.name,
+                role=agent.role,
+                assigned_user_id=(
+                    str(config.assigned_user_id) if config.assigned_user_id is not None else None
+                ),
+                hourly_rate=config.hourly_rate,
+                currency=config.hourly_rate_currency or "EUR",
+                expected_response_time_hours=config.expected_response_time_hours,
+                expected_execution_time_hours=config.expected_execution_time_hours,
+                active_assignment_count=count,
+                overloaded=count >= HUMAN_AGENT_OVERLOAD_THRESHOLD,
+            )
+        )
+    return tuple(options)
+
+
 __all__ = [
     "ACTIVE_TASK_STATUSES",
+    "HUMAN_AGENT_OVERLOAD_THRESHOLD",
+    "HumanAgentOption",
     "KanbanSummary",
     "PlanningContext",
     "PriorPlanSummary",

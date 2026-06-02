@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { type FormEvent, useState } from "react";
 import { Sparkles } from "lucide-react";
 
+import { ProviderButtons } from "@/components/login/provider-buttons";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
 import { setToken } from "@/lib/auth";
+import { resolveAndRoute } from "@/lib/session";
 
 interface LoginResponse {
   access_token: string;
@@ -35,8 +37,13 @@ export default function LoginPage() {
         method: "POST",
         body: { email, password },
       });
+      // The login token proves IDENTITY only (no tenant yet). Resolve the
+      // user's memberships to decide where to land: enter the tenant
+      // directly (single), pick one (multiple) or the no-access screen
+      // (none) — ADR 0047 / task_sso_03.
       setToken(data.access_token);
-      router.push("/admin/dashboard");
+      const next = await resolveAndRoute();
+      router.push(next);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setError("Invalid email or password.");
@@ -69,7 +76,14 @@ export default function LoginPage() {
         <CardHeader>
           <CardTitle>Sign in</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-5">
+          {/* Branded SSO buttons for the enabled GLOBAL providers (ADR
+              0047), with an "or with email" divider. Added ALONGSIDE the
+              password form below — never a gate in front of it; if no
+              provider is enabled this renders nothing (no divider) and the
+              password form stands alone. */}
+          <ProviderButtons />
+
           <form onSubmit={onSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="email">Email</Label>

@@ -185,6 +185,9 @@ async def create_project(
         repository_config=payload.repository_config,
         human_approval_policy=payload.human_approval_policy,
         secrets_vault_id=payload.secrets_vault_id,
+        allowed_commands=payload.allowed_commands,
+        default_runtime_template=payload.default_runtime_template,
+        human_task_review_mode=payload.human_task_review_mode.value,
         budget_amount=payload.budget_amount,
         budget_currency=payload.budget_currency,
         budget_period=(payload.budget_period.value if payload.budget_period is not None else None),
@@ -235,7 +238,11 @@ async def update_project(
     if "team_id" in payload.model_fields_set and payload.team_id is not None:
         await _verify_team_visible(session, payload.team_id)
 
-    apply_partial_update(project, payload, enum_fields=("status", "budget_period"))
+    apply_partial_update(
+        project,
+        payload,
+        enum_fields=("status", "budget_period", "human_task_review_mode"),
+    )
 
     await session.flush()
     await session.refresh(project)

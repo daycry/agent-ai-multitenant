@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { StateBlock } from "@/components/shared/state-block";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
 
@@ -82,30 +83,26 @@ export default function SettingsIndexPage() {
         description="Configuración del tenant — agrupada por categoría."
       />
 
-      {isLoading && (
-        <p className="text-muted-foreground text-sm" data-testid="settings-loading">
-          Cargando registry…
-        </p>
-      )}
-
-      {isError && (
-        <Card className="p-4" data-testid="settings-error">
-          <p className="text-danger-soft-foreground text-sm">
-            No se pudo cargar el registry: {error?.message ?? "error desconocido"}.
-          </p>
-        </Card>
-      )}
-
-      {data && (
-        <div
-          className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
-          data-testid="settings-categories-grid"
-        >
-          {Object.entries(data.categories).map(([category, def]) => (
-            <CategoryCard key={category} category={category} def={def} />
-          ))}
-        </div>
-      )}
+      <StateBlock
+        isLoading={isLoading}
+        isError={isError}
+        error={error}
+        loadingLabel="Cargando registry…"
+        loadingTestId="settings-loading"
+        errorTitle="No se pudo cargar el registry"
+        errorTestId="settings-error"
+      >
+        {data && (
+          <div
+            className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+            data-testid="settings-categories-grid"
+          >
+            {Object.entries(data.categories).map(([category, def]) => (
+              <CategoryCard key={category} category={category} def={def} />
+            ))}
+          </div>
+        )}
+      </StateBlock>
     </div>
   );
 }

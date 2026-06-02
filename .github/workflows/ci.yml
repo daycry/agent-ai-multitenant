@@ -38,6 +38,10 @@ jobs:
           # notification-dispatcher Celery service (Plan 10 task_10_02) —
           # install editable so its imports resolve in mypy + pytest.
           python -m pip install -e "apps/notification-dispatcher[dev]"
+          # installer bootstrap backend (Plan 15) — its tests live in tests/
+          # (test_installer_prereq.py / test_installer_backend.py) so it must
+          # be importable in pytest + the mypy hook.
+          python -m pip install -e "apps/installer/backend[dev]"
           # shared-llm is a path dep of agent-runtime (ADR 0021); install
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
@@ -159,6 +163,10 @@ jobs:
           # notification-dispatcher Celery service (Plan 10 task_10_02) —
           # install editable so its imports resolve in mypy + pytest.
           python -m pip install -e "apps/notification-dispatcher[dev]"
+          # installer bootstrap backend (Plan 15) — its tests live in tests/
+          # (test_installer_prereq.py / test_installer_backend.py) so it must
+          # be importable in pytest + the mypy hook.
+          python -m pip install -e "apps/installer/backend[dev]"
           # shared-llm is a path dep of agent-runtime (ADR 0021); install
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
@@ -224,6 +232,10 @@ jobs:
           # notification-dispatcher Celery service (Plan 10 task_10_02) —
           # install editable so its imports resolve in mypy + pytest.
           python -m pip install -e "apps/notification-dispatcher[dev]"
+          # installer bootstrap backend (Plan 15) — its tests live in tests/
+          # (test_installer_prereq.py / test_installer_backend.py) so it must
+          # be importable in pytest + the mypy hook.
+          python -m pip install -e "apps/installer/backend[dev]"
           # shared-llm is a path dep of agent-runtime (ADR 0021); install
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
@@ -266,6 +278,23 @@ jobs:
             pytest tests/integration -v
           else
             echo "No integration tests yet."
+          fi
+
+      # Migration tests (Plan 16 task_16_01 onward) live in tests/migrations/
+      # and reuse the integration DB fixtures (throwaway PG + Alembic), so they
+      # need the same stack + env as the integration suite. Run them explicitly
+      # — testpaths=["tests"] discovers the dir locally, but CI invokes pytest
+      # per-directory, so this dir needs its own step to be exercised in CI.
+      - name: pytest tests/migrations
+        if: steps.detect.outputs.has_compose == 'true'
+        env:
+          TEST_PG_PORT: "15432"
+          TEST_REDIS_URL: redis://localhost:6379/15
+        run: |
+          if find tests/migrations -type f -name "test_*.py" | grep -q .; then
+            pytest tests/migrations -v
+          else
+            echo "No migration tests yet."
           fi
 
       - name: Stack logs on failure

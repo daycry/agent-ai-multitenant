@@ -53,3 +53,60 @@ class UserResponse(BaseModel):
     full_name: str | None
     is_system_admin: bool
     is_active: bool
+
+
+# ---------------------------------------------------------------------------
+# Post-login tenant resolution by membership (ADR 0047, task_sso_03)
+# ---------------------------------------------------------------------------
+# After a successful login (SSO OR password) the session proves IDENTITY
+# only — no active tenant. The client calls GET /auth/session/resolve to
+# learn which tenant(s) the user may enter, derived EXCLUSIVELY from their
+# ACTIVE `UserOrganizationMembership` rows (no email-domain claiming, no
+# auto-created membership). The typed `state` drives the UI:
+#
+#   - "no_access" → the "sin permisos, contacta al administrador" screen
+#                   (the session stays valid; the user just has no tenant).
+#   - "single"    → exactly one tenant; the response carries a freshly
+#                   minted TENANT-SCOPED token so the client enters directly.
+#   - "multiple"  → the tenant-picker lets the user choose; the client then
+#                   POSTs /auth/session/select-tenant to activate one.
+
+# Typed resolution states (string literals so the JSON is self-describing
+# and the admin-panel can switch on them without a magic number).
+RESOLUTION_STATE_NO_ACCESS = "no_access"
+RESOLUTION_STATE_SINGLE = "single"
+RESOLUTION_STATE_MULTIPLE = "multiple"
+
+
+class ResolvedMembership(BaseModel):
+    """One tenant the authenticated user may enter (active membership)."""
+
+    tenant_id: UUID
+    tenant_name: str
+    role: str
+
+
+class SessionResolutionResponse(BaseModel):
+    """Typed post-login tenant resolution (ADR 0047, task_sso_03).
+
+    `state` is one of `no_access` / `single` / `multiple`. `memberships`
+    lists every ACTIVE tenant membership (empty iff `no_access`). For the
+    `single` state ONLY, `access_token` carries a tenant-scoped JWT minting
+    the active tenant so the client can enter without a second round-trip;
+    for the other states it is `None` and the client either shows the
+    no-access screen or the picker.
+    """
+
+    state: str
+    memberships: list[ResolvedMembership]
+    access_token: str | None = None
+    token_type: str | None = None
+    expires_in: int | None = Field(
+        default=None, description="Seconds until the JWT expires (only when access_token is set)."
+    )
+
+
+class SelectTenantRequest(BaseModel):
+    """Payload for POST /auth/session/select-tenant — the picker's choice."""
+
+    tenant_id: UUID

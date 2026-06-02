@@ -90,6 +90,22 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
             "user_id",
             postgresql_where=text("user_id IS NOT NULL AND deleted_at IS NULL"),
         ),
+        # Read path: "the memories distilled from this human work session"
+        # (Plan 16 task_16_15). Partial — only set on human-distilled rows.
+        Index(
+            "ix_memory_entries_source_hws",
+            "source_human_work_session_id",
+            postgresql_where=text(
+                "source_human_work_session_id IS NOT NULL AND deleted_at IS NULL"
+            ),
+        ),
+        # A memory cites at most ONE source — an Execution XOR a
+        # HumanWorkSession (or neither, for human-curated entries). Plan 16
+        # task_16_15: forbid both being set so the citation is unambiguous.
+        CheckConstraint(
+            "source_execution_id IS NULL OR source_human_work_session_id IS NULL",
+            name="ck_memory_entries_single_source",
+        ),
         CheckConstraint(
             "(scope = 'private' AND user_id IS NOT NULL)"
             " OR (scope = 'team_shared' AND team_id IS NOT NULL)"
@@ -138,10 +154,21 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
     )
 
     # Back-link to the Execution this memory was distilled from. NULL
-    # when the entry came from `memory_store` (human-curated).
+    # when the entry came from `memory_store` (human-curated) or from a
+    # human work session (see source_human_work_session_id).
     source_execution_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("executions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Back-link to the HumanWorkSession this memory was distilled from (Plan 16
+    # task_16_15). NULL for AI-distilled / human-curated memories. SET NULL so
+    # dropping the work session keeps the memory (only the citation is lost).
+    # Mutually exclusive with source_execution_id (ck_memory_entries_single_source).
+    source_human_work_session_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("human_work_sessions.id", ondelete="SET NULL"),
         nullable=True,
     )
 

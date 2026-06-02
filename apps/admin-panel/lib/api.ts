@@ -14,6 +14,19 @@ import { getTenantId } from "@/lib/tenant-storage";
 // with NEXT_PUBLIC_API_URL=... when needed.
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
 
+/**
+ * Absolute URL on the api-server for a relative `path`.
+ *
+ * `apiFetch` is for JSON round-trips; this helper is for the cases where
+ * the BROWSER itself must navigate to the api-server — e.g. the SSO login
+ * routes (`/auth/sso/{id}/oidc|saml/login`) reply with a 307/302 redirect
+ * to the IdP, so the login button does a full-page navigation here rather
+ * than an XHR. `path` is expected to be server-relative (leading `/`).
+ */
+export function apiUrl(path: string): string {
+  return `${API_URL}${path}`;
+}
+
 export class ApiError extends Error {
   status: number;
   body: string;

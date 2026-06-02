@@ -5,10 +5,11 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { StateBlock } from "@/components/shared/state-block";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 
 interface TeamMember {
   agent_id: string;
@@ -41,33 +42,30 @@ export default function TeamsListPage() {
         description="Plantillas built-in y equipos propios del tenant."
       />
 
-      {isLoading && (
-        <p className="text-muted-foreground text-sm" data-testid="teams-loading">
-          Cargando equipos…
-        </p>
-      )}
-
-      {isError && (
-        <Card className="border-destructive p-4" data-testid="teams-error">
-          <p className="text-destructive text-sm">
-            Could not load teams: {error instanceof ApiError ? error.body : String(error)}
-          </p>
-        </Card>
-      )}
-
-      {data && data.length === 0 && (
-        <p className="text-muted-foreground py-8 text-center text-sm">
-          No hay equipos visibles. Si esperabas built-ins, corre{" "}
-          <code className="bg-muted rounded px-1 py-0.5 text-xs">python -m api_server.seeds</code>.
-        </p>
-      )}
-
-      {data && data.length > 0 && (
+      <StateBlock
+        isLoading={isLoading}
+        isError={isError}
+        error={error}
+        isEmpty={Boolean(data && data.length === 0)}
+        loadingLabel="Cargando equipos…"
+        loadingTestId="teams-loading"
+        errorTitle="Could not load teams"
+        errorTestId="teams-error"
+        emptyIcon={Users}
+        emptyTitle="No hay equipos visibles"
+        emptyDescription={
+          <>
+            Si esperabas built-ins, corre{" "}
+            <code className="bg-muted rounded px-1 py-0.5 text-xs">python -m api_server.seeds</code>
+            .
+          </>
+        }
+      >
         <div
           className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
           data-testid="teams-grid"
         >
-          {data.map((team) => (
+          {(data ?? []).map((team) => (
             <Card key={team.id} data-testid={`team-${team.id}`}>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-base">{team.name}</CardTitle>
@@ -94,7 +92,7 @@ export default function TeamsListPage() {
             </Card>
           ))}
         </div>
-      )}
+      </StateBlock>
     </div>
   );
 }

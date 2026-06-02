@@ -114,6 +114,10 @@ $env:API_SERVER_DATABASE_URL       = "postgresql+asyncpg://app_user:changeme-app
 $env:API_SERVER_ADMIN_DATABASE_URL = "postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform"
 $env:API_SERVER_REDIS_URL          = "redis://localhost:6379/0"
 $env:API_SERVER_JWT_SECRET         = "dev-only-jwt-secret-change-me"
+# Wire the dev Vault (compose service, healthy on :8200) so secret-backed
+# features work locally: LLM provider credentials (Plan 11.2), MCP server
+# auth_ref (ADR 0025), etc. vault_url already defaults to localhost:8200.
+$env:API_SERVER_VAULT_TOKEN        = "dev-root-token"
 
 Remove-Item $ApiLog, $ApiErr -ErrorAction SilentlyContinue
 Write-Host "==> Starting api-server on http://127.0.0.1:$ApiPort (logs: $ApiLog)" -ForegroundColor Cyan

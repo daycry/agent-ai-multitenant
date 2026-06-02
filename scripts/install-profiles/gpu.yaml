@@ -1,0 +1,58 @@
+# =============================================================================
+# Perfil de instalación: GPU  (Plan 15 — task_15_11)
+# =============================================================================
+# Un `install.yaml` completo que el CLI desatendido acepta:
+#   ./scripts/install.sh --config scripts/install-profiles/gpu.yaml
+# (equivale a `python -m installer_backend.cli install --config <fichero>`).
+#
+# Pensado para una máquina con GPU NVIDIA dedicada a inferencia LOCAL:
+#   - Recursos amplios: 6 workers, 16 GiB por worker.
+#   - GPU HABILITADA: el generador de compose añade el servicio `ollama` con
+#     reserva NVIDIA (perfil `gpu`) — `docker compose --profile gpu up`.
+#   - Proveedor LLM local (Ollama sobre la GPU) habilitado; se puede añadir un
+#     proveedor empresarial si se desea redundancia.
+#
+# SECRETOS — IMPORTANTE
+# ---------------------
+# Los valores `*_secret_key`, `*oauth_token*` y `api_key` de ESTE fichero son
+# MARCADORES de ejemplo (placeholders). Antes de un install real, SUSTITÚYELOS
+# por secretos de alta entropía propios y NO comitees el fichero resultante.
+# El instalador escribe los secretos generados en Vault y los muestra UNA vez.
+# -----------------------------------------------------------------------------
+
+# Paso 2 — sistema: dominio + entorno.
+system:
+  domain: agentic.example.com
+  environment: production
+
+# Paso 3 — recursos / GPU: dimensionado amplio + GPU habilitada.
+resources:
+  worker_replicas: 6
+  worker_memory_gib: 16
+  gpu_enabled: true
+
+# Paso 4 — almacenamiento: raíz de datos + bucket de MinIO.
+storage:
+  data_root: /data/agent-platform
+  minio_bucket: agentic-platform
+  minio_access_key: CHANGE_ME_minio_access
+  minio_secret_key: CHANGE_ME_minio_secret_placeholder_value
+
+# Paso 5 — proveedores LLM (catálogo cerrado ADR-0021).
+# GPU: Ollama local sobre la GPU. El endpoint apunta al servicio `ollama` que el
+# generador de compose añade (perfil `gpu`) con la reserva del dispositivo NVIDIA.
+providers:
+  ollama:
+    enabled: true
+    endpoint: http://ollama:11434
+
+# Paso 6 — tenant inicial + usuario administrador.
+tenant:
+  tenant_name: Acme
+  admin_email: admin@acme.com
+
+# Puertos publicados en el host (por defecto el compose canónico).
+ports:
+  admin_panel: 3000
+  api_server: 8000
+  minio_console: 9001
