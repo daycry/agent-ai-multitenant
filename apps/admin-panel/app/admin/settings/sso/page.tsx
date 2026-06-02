@@ -55,6 +55,11 @@ import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
+import {
+  isDefaultRedirectBase,
+  redirectBaseFromUrl,
+  SSO_REDIRECT_BASE_DEFAULT,
+} from "@/lib/sso-redirect-base";
 
 // --------------------------------------------------------------------------
 // Types — mirror api_server.schemas.sso
@@ -293,6 +298,12 @@ function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolea
     }
   }
 
+  // The callback URL is built from `sso_redirect_base_url`; if it still
+  // carries the backend default placeholder, warn the operator to set the
+  // real public base before wiring up the IdP (ADR 0047 §6).
+  const isPlaceholder = !loading && isDefaultRedirectBase(url);
+  const base = redirectBaseFromUrl(url);
+
   return (
     <Card className="mt-6" data-testid="sso-callback-card">
       <CardHeader>
@@ -300,7 +311,8 @@ function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolea
       </CardHeader>
       <CardContent>
         <p className="text-muted-foreground mb-2 text-sm">
-          Registra esta URL en la lista de redirect URIs permitidas de tu proveedor de identidad.
+          Esta URL es <strong>global</strong> (una sola para toda la plataforma). Regístrala en la
+          lista de redirect URIs permitidas de tu proveedor de identidad.
         </p>
         <div className="flex items-center gap-2">
           <code
@@ -322,6 +334,24 @@ function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolea
             {copied ? "Copiado" : "Copiar"}
           </Button>
         </div>
+        {base !== null && !loading ? (
+          <p className="text-muted-foreground mt-2 text-xs" data-testid="sso-redirect-base">
+            Base pública configurada: <span className="font-mono">{base}</span>
+          </p>
+        ) : null}
+        {isPlaceholder ? (
+          <p
+            className="border-warning/40 bg-warning/10 text-warning-foreground mt-2 rounded-md border px-3 py-2 text-xs"
+            data-testid="sso-redirect-base-warning"
+            role="alert"
+          >
+            Sigue usando la base por defecto{" "}
+            <span className="font-mono">{SSO_REDIRECT_BASE_DEFAULT}</span> (un marcador de posición,
+            ni siquiera coincide con el api-server de desarrollo). Configura{" "}
+            <span className="font-mono">SSO_REDIRECT_BASE_URL</span> con tu URL pública antes de
+            registrar la callback en el IdP.
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   );

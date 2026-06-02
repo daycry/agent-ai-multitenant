@@ -87,7 +87,7 @@ Ver **ADR 0047** para el diseño completo. Resumen de lo que entra:
 
 #### `task_sso_05` — Botones de provider en /login (marca) + callback en modal
 
-- [ ] **Título**: `/login` muestra un botón por provider habilitado (estilo de marca oficial por `kind`,
+- [x] **Título**: `/login` muestra un botón por provider habilitado (estilo de marca oficial por `kind`,
       `button_label` configurable, icono prefijado) + password. Modal de config SSO muestra callback/ACS/SP-entity/
       metadata informativo + copiar + base configurada (aviso si default). _(typecheck/lint/build verde; e2e escritos
       NO ejecutados)._ Usar frontend-design para la calidad de marca.

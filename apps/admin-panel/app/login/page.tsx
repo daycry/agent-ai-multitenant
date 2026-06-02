@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { type FormEvent, useState } from "react";
 import { Sparkles } from "lucide-react";
 
+import { ProviderButtons } from "@/components/login/provider-buttons";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -75,7 +76,14 @@ export default function LoginPage() {
         <CardHeader>
           <CardTitle>Sign in</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-5">
+          {/* Branded SSO buttons for the enabled GLOBAL providers (ADR
+              0047), with an "or with email" divider. Added ALONGSIDE the
+              password form below — never a gate in front of it; if no
+              provider is enabled this renders nothing (no divider) and the
+              password form stands alone. */}
+          <ProviderButtons />
+
           <form onSubmit={onSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="email">Email</Label>
