@@ -57,10 +57,9 @@ from uuid6 import uuid7
 
 from api_server.auth.deps import (
     AuthPrincipal,
+    get_admin_session,
     get_session_store,
-    get_tenant_session,
-    require_tenant_admin,
-    require_tenant_member,
+    require_system_admin,
 )
 from api_server.auth.jwt import encode_jwt
 from api_server.auth.sessions import SessionStore
@@ -98,7 +97,6 @@ from api_server.db.models import (
     User,
 )
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
-from api_server.routers._helpers import require_tenant_id
 from api_server.routers.mcp import get_vault_resolver
 from api_server.schemas.auth import LoginResponse
 from api_server.schemas.sso import (
@@ -885,14 +883,17 @@ async def _provision_identity(*, email: str, full_name: str | None) -> UUID:
 
 
 # ===========================================================================
-# Per-tenant OIDC config CRUD (Plan 08 task_08_03) — the Tenant-Admin UI.
+# Platform-global OIDC config CRUD (ADR 0047) — the System Admin UI.
 #
-# RBAC: reads need an active tenant membership (`require_tenant_member`),
-# writes need `tenant_admin` (`require_tenant_admin`). RLS: every query
-# runs on the tenant-scoped session, so tenant A's config is invisible to
-# B at the database level — a forged config id from another tenant simply
-# 404s. Secrets are NEVER echoed back: the response carries only
-# `has_client_secret` + `client_secret_source`.
+# Auth providers are platform-global now (ADR 0047, supersedes the
+# per-tenant part of ADR 0031): there is ONE oidc config for the whole
+# platform, managed EXCLUSIVELY by `system_admin`. RBAC: every endpoint is
+# gated to `require_system_admin` (a non-system-admin caller — even a
+# tenant_admin — is 403) and runs on the BYPASSRLS admin session
+# (`get_admin_session`); the table has no RLS / `tenant_id`, so a provider
+# is identified by `provider`/kind, never by a tenant. Secrets are NEVER
+# echoed back: the response carries only `has_client_secret` +
+# `client_secret_source`.
 # ===========================================================================
 def _to_response(row: SSOConfiguration) -> SSOConfigResponse:
     """Project a DB row to the UI shape WITHOUT the secret value.
@@ -959,12 +960,12 @@ def _apply_secret(
 
 @router.get("/oidc/templates", response_model=list[OIDCTemplateResponse])
 async def list_oidc_templates(
-    _principal: AuthPrincipal = Depends(require_tenant_member),
+    _principal: AuthPrincipal = Depends(require_system_admin),
 ) -> list[OIDCTemplateResponse]:
     """The per-IdP OIDC templates the UI offers in its provider picker.
 
-    Read-only and not tenant-specific (the registry is platform data),
-    but gated to tenant members so anonymous callers can't enumerate it.
+    Read-only platform data, gated to System Admin (the only role that
+    manages the global SSO config — ADR 0047).
     """
     return [
         OIDCTemplateResponse(
@@ -982,7 +983,7 @@ async def list_oidc_templates(
 
 @router.get("/oidc/callback-url", response_model=CallbackUrlResponse)
 async def get_oidc_callback_url(
-    _principal: AuthPrincipal = Depends(require_tenant_member),
+    _principal: AuthPrincipal = Depends(require_system_admin),
 ) -> CallbackUrlResponse:
     """The redirect/callback URL the operator must register at the IdP."""
     return CallbackUrlResponse(callback_url=_callback_redirect_uri())
@@ -990,13 +991,14 @@ async def get_oidc_callback_url(
 
 @router.get("/config", response_model=list[SSOConfigResponse])
 async def list_sso_configs(
-    _principal: AuthPrincipal = Depends(require_tenant_member),
-    session: AsyncSession = Depends(get_tenant_session),
+    _principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
 ) -> list[SSOConfigResponse]:
-    """List this tenant's (non-deleted) SSO configs — never the secret.
+    """List the platform-global (non-deleted) OIDC config — never the secret.
 
-    RLS scopes the read to the active tenant, so this only ever returns
-    the caller's own rows (0 or 1 OIDC config, per the unique constraint).
+    The table is global (ADR 0047): at most one OIDC config for the whole
+    platform (`uq_sso_config_provider`), read on the BYPASSRLS admin
+    session.
     """
     result = await session.execute(
         select(SSOConfiguration)
@@ -1012,17 +1014,14 @@ async def list_sso_configs(
 @router.post("/config", response_model=SSOConfigResponse, status_code=status.HTTP_201_CREATED)
 async def create_sso_config(
     payload: SSOConfigUpsertRequest,
-    principal: AuthPrincipal = Depends(require_tenant_admin),
-    session: AsyncSession = Depends(get_tenant_session),
+    _principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
 ) -> SSOConfigResponse:
-    """Create the platform-global OIDC config (ADR 0047). tenant_admin only.
+    """Create the platform-global OIDC config (ADR 0047). system_admin only.
 
     There is one OIDC config for the whole platform (DB unique constraint
-    on ``provider``); a second create returns 409. The System Admin
-    surface / RBAC is finalised in task_sso_04.
+    on ``provider``); a second create returns 409.
     """
-    require_tenant_id(principal)
-
     # Block a duplicate before the DB raises, so the client gets a clean
     # 409 instead of a 500 from the IntegrityError. A soft-deleted row
     # still occupies the unique slot, so this also covers "re-create after
@@ -1071,15 +1070,14 @@ async def create_sso_config(
 async def update_sso_config(
     config_id: UUID,
     payload: SSOConfigUpsertRequest,
-    principal: AuthPrincipal = Depends(require_tenant_admin),
-    session: AsyncSession = Depends(get_tenant_session),
+    _principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
 ) -> SSOConfigResponse:
-    """Edit the tenant's OIDC config. tenant_admin only.
+    """Edit the platform-global OIDC config. system_admin only.
 
-    Omitting both secret fields keeps the previously stored secret. A
-    config id from another tenant 404s (RLS + tenant filter).
+    Omitting both secret fields keeps the previously stored secret. An
+    unknown config id 404s.
     """
-    require_tenant_id(principal)
     result = await session.execute(
         select(SSOConfiguration).where(
             SSOConfiguration.id == config_id,
@@ -1110,11 +1108,10 @@ async def update_sso_config(
 @router.delete("/config/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_sso_config(
     config_id: UUID,
-    principal: AuthPrincipal = Depends(require_tenant_admin),
-    session: AsyncSession = Depends(get_tenant_session),
+    _principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
 ) -> None:
-    """Soft-delete the tenant's OIDC config. tenant_admin only."""
-    require_tenant_id(principal)
+    """Soft-delete the platform-global OIDC config. system_admin only."""
     result = await session.execute(
         select(SSOConfiguration).where(
             SSOConfiguration.id == config_id,
@@ -1132,11 +1129,12 @@ async def delete_sso_config(
 
 
 # ===========================================================================
-# Per-tenant SAML config CRUD (Plan 08 task_08_06) — the Tenant-Admin UI.
+# Platform-global SAML config CRUD (ADR 0047) — the System Admin UI.
 #
 # Mirrors the OIDC CRUD above for the SAML provider, with the SAME RBAC
-# (read = tenant member, write = tenant_admin), the SAME RLS scoping
-# (a forged config id from another tenant 404s at the DB), and the SAME
+# (`require_system_admin` on every endpoint — a non-system-admin caller is
+# 403), the SAME global scoping (one SAML config for the whole platform,
+# read/written on the BYPASSRLS admin session), and the SAME
 # never-echo-the-secret rule (the SP PRIVATE key never crosses the wire;
 # the response only reports whether one is set + which store holds it).
 #
@@ -1236,14 +1234,14 @@ def _validate_saml_crypto_invariant(row: SSOConfiguration) -> None:
 
 @router.get("/saml/sp-metadata", response_model=SPMetadataResponse)
 async def get_saml_sp_metadata(
-    _principal: AuthPrincipal = Depends(require_tenant_member),
+    _principal: AuthPrincipal = Depends(require_system_admin),
 ) -> SPMetadataResponse:
     """The SP EntityID + the GLOBAL ACS URL to register at the IdP (ADR 0047).
 
     The SP identity (entityID + ACS) is platform-global now: one value for
     the whole platform, derived purely from the configured public base
-    URL; needs no native crypto. Gated to tenant members so anonymous
-    callers can't enumerate it.
+    URL; needs no native crypto. Gated to System Admin (the role that
+    manages the global SSO config).
     """
     return SPMetadataResponse(sp_entity_id=_sp_entity_id(), acs_url=_saml_acs_url())
 
@@ -1251,13 +1249,13 @@ async def get_saml_sp_metadata(
 @router.post("/saml/parse-metadata", response_model=IdPMetadataParseResponse)
 async def parse_saml_idp_metadata(
     payload: IdPMetadataParseRequest,
-    _principal: AuthPrincipal = Depends(require_tenant_member),
+    _principal: AuthPrincipal = Depends(require_system_admin),
 ) -> IdPMetadataParseResponse:
     """Parse pasted/uploaded IdP metadata XML to pre-fill the SAML form.
 
     Pure XML parsing (hardened against XXE) — needs NO native ``xmlsec``,
     so it works on every node. A malformed or non-IdP document yields a
-    422 with a generic message. Gated to tenant members.
+    422 with a generic message. Gated to System Admin.
     """
     try:
         parsed = parse_idp_metadata(payload.metadata_xml)
@@ -1276,13 +1274,14 @@ async def parse_saml_idp_metadata(
 
 @router.get("/saml/config", response_model=list[SAMLConfigResponse])
 async def list_saml_configs(
-    _principal: AuthPrincipal = Depends(require_tenant_member),
-    session: AsyncSession = Depends(get_tenant_session),
+    _principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
 ) -> list[SAMLConfigResponse]:
-    """List this tenant's (non-deleted) SAML configs — never the SP key.
+    """List the platform-global (non-deleted) SAML config — never the SP key.
 
-    RLS scopes the read to the active tenant (0 or 1 SAML config, per the
-    unique constraint on ``tenant_id, provider``).
+    The table is global (ADR 0047): at most one SAML config for the whole
+    platform (`uq_sso_config_provider`), read on the BYPASSRLS admin
+    session.
     """
     result = await session.execute(
         select(SSOConfiguration)
@@ -1298,17 +1297,14 @@ async def list_saml_configs(
 @router.post("/saml/config", response_model=SAMLConfigResponse, status_code=status.HTTP_201_CREATED)
 async def create_saml_config(
     payload: SAMLConfigUpsertRequest,
-    principal: AuthPrincipal = Depends(require_tenant_admin),
-    session: AsyncSession = Depends(get_tenant_session),
+    _principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
 ) -> SAMLConfigResponse:
-    """Create the platform-global SAML config (ADR 0047). tenant_admin only.
+    """Create the platform-global SAML config (ADR 0047). system_admin only.
 
     One SAML config for the whole platform (DB unique constraint on
-    ``provider``); a second create returns 409. The System Admin surface /
-    RBAC is finalised in task_sso_04.
+    ``provider``); a second create returns 409.
     """
-    require_tenant_id(principal)
-
     existing = await session.execute(
         select(SSOConfiguration).where(
             SSOConfiguration.provider == SSOProvider.SAML.value,
@@ -1357,15 +1353,14 @@ async def create_saml_config(
 async def update_saml_config(
     config_id: UUID,
     payload: SAMLConfigUpsertRequest,
-    principal: AuthPrincipal = Depends(require_tenant_admin),
-    session: AsyncSession = Depends(get_tenant_session),
+    _principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
 ) -> SAMLConfigResponse:
-    """Edit the tenant's SAML config. tenant_admin only.
+    """Edit the platform-global SAML config. system_admin only.
 
-    Omitting both SP-key fields keeps the previously stored key. A config
-    id from another tenant 404s (RLS + provider filter).
+    Omitting both SP-key fields keeps the previously stored key. An
+    unknown config id (or one of the wrong kind) 404s.
     """
-    require_tenant_id(principal)
     result = await session.execute(
         select(SSOConfiguration).where(
             SSOConfiguration.id == config_id,
@@ -1404,11 +1399,10 @@ async def update_saml_config(
 @router.delete("/saml/config/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_saml_config(
     config_id: UUID,
-    principal: AuthPrincipal = Depends(require_tenant_admin),
-    session: AsyncSession = Depends(get_tenant_session),
+    _principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
 ) -> None:
-    """Soft-delete the tenant's SAML config. tenant_admin only."""
-    require_tenant_id(principal)
+    """Soft-delete the platform-global SAML config. system_admin only."""
     result = await session.execute(
         select(SSOConfiguration).where(
             SSOConfiguration.id == config_id,

@@ -1,11 +1,17 @@
-"""SAML XML signature + encryption config tests (Plan 08 task_08_05).
+"""SAML XML signature + encryption config tests (ADR 0047 — global SAML).
 
-task_08_04 covered the security-critical *inbound* direction (verify the
-IdP's assertion signature). task_08_05 adds the *outbound* / optional
-crypto an enterprise IdP often demands — SP ``AuthnRequest`` signing and
-(optional) assertion / NameID encryption — plus the per-config security
-policy flags, with the SP private key stored encrypted at rest (never
-plaintext), reusing the OIDC Fernet/Vault mechanism.
+Covers the security-critical *inbound* direction (verify the IdP's
+assertion signature) and the *outbound* / optional crypto an enterprise
+IdP often demands — SP ``AuthnRequest`` signing and (optional) assertion /
+NameID encryption — plus the security policy flags, with the SP private
+key stored encrypted at rest (never plaintext), reusing the OIDC
+Fernet/Vault mechanism.
+
+Reworked to the platform-global SAML model (ADR 0047): one global SAML
+config (no ``tenant_id``), login addressed by the global provider id, and
+the single GLOBAL ACS ``POST /auth/sso/saml/acs``. The old per-tenant SP
+signing isolation test is replaced by a single global SP-signing test
+(the SP key/flags are now one platform-wide config).
 
 Two test surfaces:
 
@@ -69,6 +75,8 @@ _IDP_ENTITY_ID = "https://saml-idp.example.test/metadata"
 _IDP_SSO_URL = "https://saml-idp.example.test/sso"
 # Must match what the router computes from API_SERVER_SSO_REDIRECT_BASE_URL.
 _SP_ENTITY_ID = "http://testserver/auth/sso/saml/metadata"
+# GLOBAL ACS (ADR 0047) — one SP identity for the whole platform; no tenant.
+_SP_ACS_URL = "http://testserver/auth/sso/saml/acs"
 _NAME_ID = "Signer@Acme.test"
 
 
@@ -115,9 +123,12 @@ def _saml_time(delta_minutes: int = 0) -> str:
     return (datetime.now(tz=UTC) + timedelta(minutes=delta_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _build_signed_response(*, tenant_id: UUID, name_id: str = _NAME_ID) -> str:
-    """Build a SAML Response with an IdP-signed assertion, base64-encoded."""
-    acs_url = f"http://testserver/auth/sso/{tenant_id}/saml/acs"
+def _build_signed_response(*, name_id: str = _NAME_ID) -> str:
+    """Build a SAML Response with an IdP-signed assertion, base64-encoded.
+
+    Targets the GLOBAL ACS (ADR 0047): the Recipient + Destination are the
+    single platform ACS URL, no tenant in the path."""
+    acs_url = _SP_ACS_URL
     response_id = "_" + uuid4().hex
     assertion_id = "_" + uuid4().hex
     not_before = _saml_time(-5)
@@ -184,47 +195,33 @@ Destination="{acs_url}">
 
 
 # ---------------------------------------------------------------------------
-# DB seed helpers
+# DB seed helpers — the table is GLOBAL now (no tenant_id column).
 # ---------------------------------------------------------------------------
-async def _seed_tenant(dsn: str, *, slug: str) -> UUID:
-    tenant = uuid4()
-    conn = await asyncpg.connect(dsn)
-    try:
-        await conn.execute(
-            "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)",
-            tenant,
-            slug.title(),
-            slug,
-        )
-    finally:
-        await conn.close()
-    return tenant
-
-
-async def _seed_saml_config(
+async def _seed_global_saml(
     dsn: str,
     *,
-    tenant_id: UUID,
     enabled: bool = True,
     authn_requests_signed: bool = False,
     sp_cert_body: str | None = None,
     sp_private_key_encrypted: str | None = None,
-) -> None:
-    """Insert a `saml` row. SP key columns default to NULL (no SP crypto)."""
+) -> UUID:
+    """Insert the global `saml` row. Returns its provider id.
+
+    SP key columns default to NULL (no SP crypto)."""
+    config_id = uuid4()
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
             """
             INSERT INTO sso_configurations
-                (id, tenant_id, provider, display_name, enabled,
+                (id, provider, display_name, enabled,
                  idp_entity_id, idp_sso_url, idp_x509_cert,
                  name_id_format, attribute_mappings,
                  sp_x509_cert, sp_private_key_encrypted, authn_requests_signed)
-            VALUES ($1, $2, 'saml', 'Acme SAML', $3, $4, $5, $6, $7, $8::jsonb,
-                    $9, $10, $11)
+            VALUES ($1, 'saml', 'Acme SAML', $2, $3, $4, $5, $6, $7::jsonb,
+                    $8, $9, $10)
             """,
-            uuid4(),
-            tenant_id,
+            config_id,
             enabled,
             _IDP_ENTITY_ID,
             _IDP_SSO_URL,
@@ -237,6 +234,7 @@ async def _seed_saml_config(
         )
     finally:
         await conn.close()
+    return config_id
 
 
 async def _truncate_all(dsn: str) -> None:
@@ -503,10 +501,8 @@ async def test_signed_authn_request_carries_signature(
     redirect URL carries a `Signature` + `SigAlg` — the AuthnRequest was
     signed with the SP private key."""
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_saml_config(
+    provider_id = await _seed_global_saml(
         migrations_pg_dsn,
-        tenant_id=tenant,
         authn_requests_signed=True,
         sp_cert_body=_SP_CERT_BODY,
         sp_private_key_encrypted=_encrypt_sp_key(),
@@ -516,7 +512,7 @@ async def test_signed_authn_request_carries_signature(
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
-        resp = await client.get(f"/auth/sso/{tenant}/saml/login")
+        resp = await client.get(f"/auth/sso/{provider_id}/saml/login")
     assert resp.status_code == 302, resp.text
     params = dict(httpx.URL(resp.headers["location"]).params)
     assert "SAMLRequest" in params
@@ -529,12 +525,10 @@ async def test_signed_authn_request_carries_signature(
 @pytest.mark.asyncio
 async def test_correctly_signed_assertion_accepted(configured_app, migrations_pg_dsn: str) -> None:
     """A correctly IdP-signed assertion is accepted: 200 + a live session
-    even when the tenant additionally signs its own AuthnRequests."""
+    even when the platform additionally signs its own AuthnRequests."""
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_saml_config(
+    await _seed_global_saml(
         migrations_pg_dsn,
-        tenant_id=tenant,
         authn_requests_signed=True,
         sp_cert_body=_SP_CERT_BODY,
         sp_private_key_encrypted=_encrypt_sp_key(),
@@ -545,9 +539,9 @@ async def test_correctly_signed_assertion_accepted(configured_app, migrations_pg
         base_url="http://testserver",
     ) as client:
         # IdP-initiated form keeps the test focused on signature validation.
-        saml_response = _build_signed_response(tenant_id=tenant)
+        saml_response = _build_signed_response()
         resp = await client.post(
-            f"/auth/sso/{tenant}/saml/acs",
+            "/auth/sso/saml/acs",
             data={"SAMLResponse": saml_response},
         )
         assert resp.status_code == 200, resp.text
@@ -563,10 +557,8 @@ async def test_correctly_signed_assertion_accepted(configured_app, migrations_pg
 async def test_tampered_assertion_rejected(configured_app, migrations_pg_dsn: str) -> None:
     """A tampered signed assertion breaks the signature → 400."""
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_saml_config(
+    await _seed_global_saml(
         migrations_pg_dsn,
-        tenant_id=tenant,
         authn_requests_signed=True,
         sp_cert_body=_SP_CERT_BODY,
         sp_private_key_encrypted=_encrypt_sp_key(),
@@ -576,12 +568,12 @@ async def test_tampered_assertion_rejected(configured_app, migrations_pg_dsn: st
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
-        saml_response = _build_signed_response(tenant_id=tenant)
+        saml_response = _build_signed_response()
         raw = base64.b64decode(saml_response).decode("utf-8")
         tampered = raw.replace("Signer Person", "Attacker Person")
         tampered_b64 = base64.b64encode(tampered.encode("utf-8")).decode("ascii")
         resp = await client.post(
-            f"/auth/sso/{tenant}/saml/acs",
+            "/auth/sso/saml/acs",
             data={"SAMLResponse": tampered_b64},
         )
     assert resp.status_code == 400, resp.text
@@ -592,10 +584,9 @@ async def test_tampered_assertion_rejected(configured_app, migrations_pg_dsn: st
 async def test_unsigned_assertion_rejected(configured_app, migrations_pg_dsn: str) -> None:
     """An assertion with NO signature is rejected (wantAssertionsSigned)."""
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_saml_config(migrations_pg_dsn, tenant_id=tenant)
+    await _seed_global_saml(migrations_pg_dsn)
 
-    acs_url = f"http://testserver/auth/sso/{tenant}/saml/acs"
+    acs_url = _SP_ACS_URL
     not_before = _saml_time(-5)
     not_on_or_after = _saml_time(5)
     # A well-formed but UNSIGNED Response — no ds:Signature anywhere.
@@ -639,46 +630,47 @@ urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport\
         base_url="http://testserver",
     ) as client:
         resp = await client.post(
-            f"/auth/sso/{tenant}/saml/acs",
+            "/auth/sso/saml/acs",
             data={"SAMLResponse": unsigned_b64},
         )
     assert resp.status_code == 400, resp.text
 
 
 # ---------------------------------------------------------------------------
-# Cross-tenant isolation: tenant A's SP-signing config never bleeds into B
+# Global SP-signing toggle: the platform-wide SP key/flags drive whether the
+# AuthnRequest is signed. (The old per-tenant SP-signing isolation test is
+# gone — there is one platform-global SAML config now, ADR 0047.)
 # ---------------------------------------------------------------------------
-@pytest.mark.cross_tenant
 @pytest.mark.asyncio
-async def test_sp_signing_config_isolated_per_tenant(
+async def test_global_sp_signing_drives_authn_request_signature(
     configured_app, migrations_pg_dsn: str
 ) -> None:
-    """Tenant A signs its AuthnRequests (SP key set); tenant B does not.
-    B's login must succeed WITHOUT a Signature (its own config, not A's),
-    proving the SP key/flags resolve under RLS per tenant — A's never
-    leak into B's request."""
+    """With the global SAML config's SP key set + authn_requests_signed, the
+    SP-initiated redirect carries a Signature; with no SP crypto it does
+    not. The SP key/flags are now a single platform-wide config."""
+    # Signing config -> Signature present.
     await _truncate_all(migrations_pg_dsn)
-    tenant_a = await _seed_tenant(migrations_pg_dsn, slug="alpha")
-    tenant_b = await _seed_tenant(migrations_pg_dsn, slug="bravo")
-    await _seed_saml_config(
+    signing_id = await _seed_global_saml(
         migrations_pg_dsn,
-        tenant_id=tenant_a,
         authn_requests_signed=True,
         sp_cert_body=_SP_CERT_BODY,
         sp_private_key_encrypted=_encrypt_sp_key(),
     )
-    await _seed_saml_config(migrations_pg_dsn, tenant_id=tenant_b)  # no SP crypto
-
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
-        a = await client.get(f"/auth/sso/{tenant_a}/saml/login")
-        b = await client.get(f"/auth/sso/{tenant_b}/saml/login")
+        signed = await client.get(f"/auth/sso/{signing_id}/saml/login")
+    assert signed.status_code == 302, signed.text
+    assert "Signature" in dict(httpx.URL(signed.headers["location"]).params)
 
-    assert a.status_code == 302, a.text
-    assert b.status_code == 302, b.text
-    a_params = dict(httpx.URL(a.headers["location"]).params)
-    b_params = dict(httpx.URL(b.headers["location"]).params)
-    assert "Signature" in a_params  # A signs
-    assert "Signature" not in b_params  # B does not — A's key did not leak
+    # No SP crypto -> no Signature.
+    await _truncate_all(migrations_pg_dsn)
+    plain_id = await _seed_global_saml(migrations_pg_dsn)
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://testserver",
+    ) as client:
+        plain = await client.get(f"/auth/sso/{plain_id}/saml/login")
+    assert plain.status_code == 302, plain.text
+    assert "Signature" not in dict(httpx.URL(plain.headers["location"]).params)

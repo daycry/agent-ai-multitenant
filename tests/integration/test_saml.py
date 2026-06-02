@@ -1,29 +1,39 @@
-"""Integration tests for the SAML 2.0 SSO flow (Plan 08 task_08_04).
+"""Integration tests for the GLOBAL SAML 2.0 SSO flow (ADR 0047).
+
+Auth providers are platform-global now (ADR 0047, supersedes the
+per-tenant part of ADR 0031): SAML login is addressed by the global
+**provider id** (``GET /auth/sso/{provider_id}/saml/login``) and the ACS
+is the single GLOBAL ``POST /auth/sso/saml/acs`` (one SP identity for the
+whole platform). The issued session proves IDENTITY only — a freshly
+provisioned global user has NO tenant and NO membership (access is granted
+by admin-assigned membership AFTER login — task_sso_03).
 
 No real IdP: a self-signed in-test RSA key pair plays the IdP. The test
 builds a SAML ``Response`` XML, signs the assertion with the IdP private
 key via ``python3-saml``'s own ``add_sign`` (the exact mechanism a real
-IdP uses), base64-encodes it, and POSTs it to the api-server's ACS — so
-the whole SP-side validation (signature against the IdP cert, audience,
-time conditions, NameID/attribute extraction) runs end-to-end offline.
+IdP uses), base64-encodes it, and POSTs it to the api-server's GLOBAL
+ACS — so the whole SP-side validation (signature against the IdP cert,
+audience, time conditions, NameID/attribute extraction) runs end-to-end
+offline.
 
 Coverage:
 
-  * SP-initiated: ``/saml/login`` 302-redirects to the IdP SSO URL with a
-    ``SAMLRequest`` + ``RelayState``.
-  * ACS happy path → JIT-creates the user + an active membership, mints a
-    live Redis session + a JWT that ``get_principal`` accepts.
+  * SP-initiated: ``/{provider_id}/saml/login`` 302-redirects to the IdP
+    SSO URL with a ``SAMLRequest`` + ``RelayState``.
+  * ACS happy path → JIT-creates the global user, mints a live Redis
+    session + a JWT that ``get_principal`` accepts — with NO active tenant
+    and NO membership (ADR 0047).
   * ACS for an EXISTING user → looked up, not duplicated.
-  * IdP-initiated (unsolicited, no RelayState) → also succeeds.
-  * tampered/unsigned assertion → 400.
-  * disabled config → login 404; missing config → login 404; ACS against
-    a tenant with no SAML config → 400.
-  * cross-tenant isolation (@pytest.mark.cross_tenant): tenant A's SAML
-    config never resolves for tenant B; a RelayState minted for A cannot
-    be replayed against B's ACS.
+  * IdP-initiated (unsolicited, no RelayState) → also succeeds against the
+    single enabled global SAML config.
+  * tampered/garbage/unsigned assertion → 400.
+  * disabled / unknown provider → login 404; ACS with no global config →
+    400.
   * import-guard: when ``python3-saml`` is unavailable, both endpoints
-    return 501 (the assertion-processing path is then BLOCKED-ON-XMLSEC,
-    but on this image xmlsec IS present so the full path runs).
+    return 501.
+  * @pytest.mark.cross_tenant: a RelayState carries the PROVIDER that
+    started the flow; a RelayState minted for provider A cannot be steered
+    onto a different PROVIDER B (the analogue of the old per-tenant guard).
 
 Pre-condition: postgres (15432) + redis (6379) from docker-compose are
 healthy; the session fixtures create a throwaway DB and flush Redis 15.
@@ -65,17 +75,13 @@ _IDP_ENTITY_ID = "https://saml-idp.example.test/metadata"
 _IDP_SSO_URL = "https://saml-idp.example.test/sso"
 # Must match what the router computes from API_SERVER_SSO_REDIRECT_BASE_URL.
 _SP_ENTITY_ID = "http://testserver/auth/sso/saml/metadata"
+# GLOBAL ACS (ADR 0047) — one SP identity for the whole platform; no tenant.
+_SP_ACS_URL = "http://testserver/auth/sso/saml/acs"
 _NAME_ID = "Worker@Acme.test"  # mixed case -> flow lowercases it
 
 
 def _gen_key_and_cert() -> tuple[str, str, str]:
-    """Return (private_key_pem, cert_pem, cert_body) for the fake IdP.
-
-    * ``cert_pem`` is the full PEM (header + footer) — what ``add_sign``
-      needs to load the signing cert.
-    * ``cert_body`` is the base64 body only — the form a SAML config's
-      ``idp_x509_cert`` column carries and ``python3-saml`` reads back.
-    """
+    """Return (private_key_pem, cert_pem, cert_body) for the fake IdP."""
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "saml-idp.test")])
     cert = (
@@ -110,15 +116,16 @@ def _saml_time(delta_minutes: int = 0) -> str:
     return (datetime.now(tz=UTC) + timedelta(minutes=delta_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _build_signed_response(*, tenant_id: UUID, name_id: str = _NAME_ID) -> str:
+def _build_signed_response(*, name_id: str = _NAME_ID) -> str:
     """Build a SAML Response with a signed assertion, base64-encoded.
 
-    The assertion is signed with the IdP private key using
-    ``python3-saml``'s own ``add_sign`` — exactly what a real IdP does —
-    so the SP-side signature verification (against the IdP cert in the
-    tenant config) passes.
+    Targets the GLOBAL ACS (ADR 0047): the Recipient + Destination are the
+    single platform ACS URL, no tenant in the path. The assertion is signed
+    with the IdP private key using ``python3-saml``'s own ``add_sign`` —
+    exactly what a real IdP does — so the SP-side signature verification
+    (against the IdP cert in the global config) passes.
     """
-    acs_url = f"http://testserver/auth/sso/{tenant_id}/saml/acs"
+    acs_url = _SP_ACS_URL
     response_id = "_" + uuid4().hex
     assertion_id = "_" + uuid4().hex
     not_before = _saml_time(-5)
@@ -189,36 +196,22 @@ Destination="{acs_url}">
 
 
 # ---------------------------------------------------------------------------
-# DB seed helpers
+# DB seed helpers — the table is GLOBAL now (no tenant_id column).
 # ---------------------------------------------------------------------------
-async def _seed_tenant(dsn: str, *, slug: str) -> UUID:
-    tenant = uuid4()
-    conn = await asyncpg.connect(dsn)
-    try:
-        await conn.execute(
-            "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)",
-            tenant,
-            slug.title(),
-            slug,
-        )
-    finally:
-        await conn.close()
-    return tenant
-
-
-async def _seed_saml_config(dsn: str, *, tenant_id: UUID, enabled: bool = True) -> None:
+async def _seed_global_saml(dsn: str, *, enabled: bool = True) -> UUID:
+    """Insert the single global SAML config. Returns its provider id."""
+    config_id = uuid4()
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
             """
             INSERT INTO sso_configurations
-                (id, tenant_id, provider, display_name, enabled,
+                (id, provider, display_name, enabled,
                  idp_entity_id, idp_sso_url, idp_x509_cert,
                  name_id_format, attribute_mappings)
-            VALUES ($1, $2, 'saml', 'Acme SAML', $3, $4, $5, $6, $7, $8::jsonb)
+            VALUES ($1, 'saml', 'Acme SAML', $2, $3, $4, $5, $6, $7::jsonb)
             """,
-            uuid4(),
-            tenant_id,
+            config_id,
             enabled,
             _IDP_ENTITY_ID,
             _IDP_SSO_URL,
@@ -228,6 +221,7 @@ async def _seed_saml_config(dsn: str, *, tenant_id: UUID, enabled: bool = True) 
         )
     finally:
         await conn.close()
+    return config_id
 
 
 async def _count_users_with_email(dsn: str, email: str) -> int:
@@ -295,9 +289,9 @@ def configured_app(
         get_settings.cache_clear()
 
 
-async def _login_relay_state(client: AsyncClient, tenant_id: UUID) -> str:
-    """Hit /saml/login and return the RelayState the IdP would echo back."""
-    resp = await client.get(f"/auth/sso/{tenant_id}/saml/login")
+async def _login_relay_state(client: AsyncClient, provider_id: UUID) -> str:
+    """Hit /{provider_id}/saml/login and return the RelayState the IdP echoes."""
+    resp = await client.get(f"/auth/sso/{provider_id}/saml/login")
     assert resp.status_code == 302, resp.text
     location = resp.headers["location"]
     params = dict(httpx.URL(location).params)
@@ -310,14 +304,13 @@ async def _login_relay_state(client: AsyncClient, tenant_id: UUID) -> str:
 @pytest.mark.asyncio
 async def test_login_redirects_to_idp(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_saml_config(migrations_pg_dsn, tenant_id=tenant)
+    provider_id = await _seed_global_saml(migrations_pg_dsn)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
-        resp = await client.get(f"/auth/sso/{tenant}/saml/login")
+        resp = await client.get(f"/auth/sso/{provider_id}/saml/login")
     assert resp.status_code == 302, resp.text
     location = resp.headers["location"]
     assert location.startswith(_IDP_SSO_URL)
@@ -327,25 +320,26 @@ async def test_login_redirects_to_idp(configured_app, migrations_pg_dsn: str) ->
 
 
 # ---------------------------------------------------------------------------
-# ACS happy path — SP-initiated, JIT provisioning  (BLOCKED-ON-XMLSEC: this
-# whole assertion-validation path needs the native xmlsec backend; it is
-# present in the Docker/CI image and on this dev host)
+# ACS happy path — SP-initiated, JIT provisioning of the GLOBAL identity
+# (BLOCKED-ON-XMLSEC: this whole assertion-validation path needs the native
+# xmlsec backend; it is present in the Docker/CI image and on this dev host)
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_acs_creates_user_session_and_jwt(configured_app, migrations_pg_dsn: str) -> None:
+    """ACS mints an IDENTITY session: the JIT user has NO active tenant and
+    NO membership (ADR 0047 — access is granted by admin assignment)."""
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_saml_config(migrations_pg_dsn, tenant_id=tenant)
+    provider_id = await _seed_global_saml(migrations_pg_dsn)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
-        relay_state = await _login_relay_state(client, tenant)
-        saml_response = _build_signed_response(tenant_id=tenant)
+        relay_state = await _login_relay_state(client, provider_id)
+        saml_response = _build_signed_response()
 
         resp = await client.post(
-            f"/auth/sso/{tenant}/saml/acs",
+            "/auth/sso/saml/acs",
             data={"SAMLResponse": saml_response, "RelayState": relay_state},
         )
         assert resp.status_code == 200, resp.text
@@ -359,9 +353,9 @@ async def test_acs_creates_user_session_and_jwt(configured_app, migrations_pg_ds
         assert me.status_code == 200, me.text
         me_body = me.json()
         assert me_body["email"] == "worker@acme.test"
-        assert me_body["active_tenant_id"] == str(tenant)
-        roles = [m["role"] for m in me_body["memberships"] if m["tenant_id"] == str(tenant)]
-        assert roles == ["tenant_user"]
+        # Identity session: no active tenant, no membership (ADR 0047).
+        assert me_body["active_tenant_id"] is None
+        assert me_body["memberships"] == []
 
     assert await _count_users_with_email(migrations_pg_dsn, "worker@acme.test") == 1
 
@@ -369,18 +363,17 @@ async def test_acs_creates_user_session_and_jwt(configured_app, migrations_pg_ds
 @pytest.mark.asyncio
 async def test_second_acs_reuses_existing_user(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_saml_config(migrations_pg_dsn, tenant_id=tenant)
+    provider_id = await _seed_global_saml(migrations_pg_dsn)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
         for _ in range(2):
-            relay_state = await _login_relay_state(client, tenant)
-            saml_response = _build_signed_response(tenant_id=tenant)
+            relay_state = await _login_relay_state(client, provider_id)
+            saml_response = _build_signed_response()
             resp = await client.post(
-                f"/auth/sso/{tenant}/saml/acs",
+                "/auth/sso/saml/acs",
                 data={"SAMLResponse": saml_response, "RelayState": relay_state},
             )
             assert resp.status_code == 200, resp.text
@@ -389,22 +382,22 @@ async def test_second_acs_reuses_existing_user(configured_app, migrations_pg_dsn
 
 
 # ---------------------------------------------------------------------------
-# IdP-initiated (unsolicited) — no RelayState we minted
+# IdP-initiated (unsolicited) — no RelayState we minted; resolves to the
+# single enabled global SAML config.
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_acs_idp_initiated_no_relay_state(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_saml_config(migrations_pg_dsn, tenant_id=tenant)
+    await _seed_global_saml(migrations_pg_dsn)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
-        saml_response = _build_signed_response(tenant_id=tenant)
+        saml_response = _build_signed_response()
         # No RelayState at all — pure IdP-initiated.
         resp = await client.post(
-            f"/auth/sso/{tenant}/saml/acs",
+            "/auth/sso/saml/acs",
             data={"SAMLResponse": saml_response},
         )
         assert resp.status_code == 200, resp.text
@@ -417,20 +410,19 @@ async def test_acs_idp_initiated_no_relay_state(configured_app, migrations_pg_ds
 @pytest.mark.asyncio
 async def test_acs_tampered_response_is_400(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_saml_config(migrations_pg_dsn, tenant_id=tenant)
+    await _seed_global_saml(migrations_pg_dsn)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
-        saml_response = _build_signed_response(tenant_id=tenant)
+        saml_response = _build_signed_response()
         # Flip a chunk of the base64 to break the signature.
         raw = base64.b64decode(saml_response).decode("utf-8")
         tampered = raw.replace("Worker Person", "Attacker Person")
         tampered_b64 = base64.b64encode(tampered.encode("utf-8")).decode("ascii")
         resp = await client.post(
-            f"/auth/sso/{tenant}/saml/acs",
+            "/auth/sso/saml/acs",
             data={"SAMLResponse": tampered_b64},
         )
     assert resp.status_code == 400, resp.text
@@ -440,62 +432,59 @@ async def test_acs_tampered_response_is_400(configured_app, migrations_pg_dsn: s
 @pytest.mark.asyncio
 async def test_acs_garbage_response_is_400(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_saml_config(migrations_pg_dsn, tenant_id=tenant)
+    await _seed_global_saml(migrations_pg_dsn)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
         resp = await client.post(
-            f"/auth/sso/{tenant}/saml/acs",
+            "/auth/sso/saml/acs",
             data={"SAMLResponse": base64.b64encode(b"<not-saml/>").decode("ascii")},
         )
     assert resp.status_code == 400, resp.text
 
 
 # ---------------------------------------------------------------------------
-# disabled / missing config
+# disabled / unknown provider; missing global config
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_login_disabled_config_is_404(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_saml_config(migrations_pg_dsn, tenant_id=tenant, enabled=False)
+    provider_id = await _seed_global_saml(migrations_pg_dsn, enabled=False)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
-        resp = await client.get(f"/auth/sso/{tenant}/saml/login")
+        resp = await client.get(f"/auth/sso/{provider_id}/saml/login")
     assert resp.status_code == 404, resp.text
 
 
 @pytest.mark.asyncio
-async def test_login_missing_config_is_404(configured_app, migrations_pg_dsn: str) -> None:
+async def test_login_unknown_provider_is_404(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")  # no SAML config
+    await _seed_global_saml(migrations_pg_dsn)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
-        resp = await client.get(f"/auth/sso/{tenant}/saml/login")
+        resp = await client.get(f"/auth/sso/{uuid4()}/saml/login")
     assert resp.status_code == 404, resp.text
 
 
 @pytest.mark.asyncio
 async def test_acs_missing_config_is_400(configured_app, migrations_pg_dsn: str) -> None:
-    await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")  # no SAML config
+    await _truncate_all(migrations_pg_dsn)  # no SAML config at all
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
         resp = await client.post(
-            f"/auth/sso/{tenant}/saml/acs",
-            data={"SAMLResponse": _build_signed_response(tenant_id=tenant)},
+            "/auth/sso/saml/acs",
+            data={"SAMLResponse": _build_signed_response()},
         )
     assert resp.status_code == 400, resp.text
 
@@ -511,8 +500,7 @@ async def test_login_returns_501_when_saml_unavailable(
     reports SAML unavailable (501). We simulate the missing native dep by
     forcing the import-guard to report unavailable."""
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_saml_config(migrations_pg_dsn, tenant_id=tenant)
+    provider_id = await _seed_global_saml(migrations_pg_dsn)
 
     import api_server.routers.sso as sso_router
 
@@ -522,9 +510,9 @@ async def test_login_returns_501_when_saml_unavailable(
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
-        login = await client.get(f"/auth/sso/{tenant}/saml/login")
+        login = await client.get(f"/auth/sso/{provider_id}/saml/login")
         acs = await client.post(
-            f"/auth/sso/{tenant}/saml/acs",
+            "/auth/sso/saml/acs",
             data={"SAMLResponse": "irrelevant"},
         )
     assert login.status_code == 501, login.text
@@ -561,54 +549,54 @@ def test_saml_unavailable_error_from_import_guard(monkeypatch: pytest.MonkeyPatc
 
 
 # ---------------------------------------------------------------------------
-# Cross-tenant isolation
+# Provider-scoped RelayState (ADR 0047): the analogue of the old
+# per-tenant guard. The RelayState carries the PROVIDER that started the
+# flow; the ACS recovers THAT provider from the state we minted, so a
+# captured RelayState is pinned to its originating provider and cannot be
+# steered onto a different one. (The global unique-on-provider constraint
+# allows at most one enabled SAML config, so "another provider" is modelled
+# by replacing the config with a fresh id after the state was minted.)
 # ---------------------------------------------------------------------------
+async def _delete_saml_config(dsn: str, config_id: UUID) -> None:
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute("DELETE FROM sso_configurations WHERE id = $1", config_id)
+    finally:
+        await conn.close()
+
+
 @pytest.mark.cross_tenant
 @pytest.mark.asyncio
-async def test_tenant_a_config_does_not_resolve_for_tenant_b(
+async def test_relay_state_is_pinned_to_its_provider(
     configured_app, migrations_pg_dsn: str
 ) -> None:
-    """Tenant A has an enabled SAML config; tenant B does not. Tenant B's
-    login URL must NOT find A's config — RLS scopes the lookup."""
+    """A RelayState minted by provider A's /login is bound to A's provider
+    id. If A is then removed and a DIFFERENT global SAML provider (B) is
+    enabled in its place, replaying A's RelayState resolves the now-gone
+    provider A (from the stored state) — NOT B — so the ACS rejects it
+    (400). This proves the captured state cannot be steered onto another
+    provider, the global analogue of the old per-tenant RelayState guard."""
     await _truncate_all(migrations_pg_dsn)
-    tenant_a = await _seed_tenant(migrations_pg_dsn, slug="alpha")
-    tenant_b = await _seed_tenant(migrations_pg_dsn, slug="bravo")
-    await _seed_saml_config(migrations_pg_dsn, tenant_id=tenant_a)
+    provider_a = await _seed_global_saml(migrations_pg_dsn)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://testserver",
     ) as client:
-        a_resp = await client.get(f"/auth/sso/{tenant_a}/saml/login")
-        assert a_resp.status_code == 302, a_resp.text
+        # Mint a RelayState while provider A is the enabled global config.
+        relay_state_a = await _login_relay_state(client, provider_a)
 
-        b_resp = await client.get(f"/auth/sso/{tenant_b}/saml/login")
-    assert b_resp.status_code == 404, b_resp.text
+        # Provider A is removed and a fresh provider B takes the global slot.
+        await _delete_saml_config(migrations_pg_dsn, provider_a)
+        provider_b = await _seed_global_saml(migrations_pg_dsn)
+        assert provider_b != provider_a
 
-
-@pytest.mark.cross_tenant
-@pytest.mark.asyncio
-async def test_relay_state_minted_for_a_rejected_at_b(
-    configured_app, migrations_pg_dsn: str
-) -> None:
-    """A RelayState minted by tenant A's /login must not be accepted at
-    tenant B's ACS — the ACS asserts the stored state's tenant matches."""
-    await _truncate_all(migrations_pg_dsn)
-    tenant_a = await _seed_tenant(migrations_pg_dsn, slug="alpha")
-    tenant_b = await _seed_tenant(migrations_pg_dsn, slug="bravo")
-    await _seed_saml_config(migrations_pg_dsn, tenant_id=tenant_a)
-    await _seed_saml_config(migrations_pg_dsn, tenant_id=tenant_b)
-
-    async with AsyncClient(
-        transport=ASGITransport(app=configured_app),
-        base_url="http://testserver",
-    ) as client:
-        relay_state_a = await _login_relay_state(client, tenant_a)
-        # Forge: present A's RelayState to B's ACS (with a B-targeted resp).
-        saml_response_b = _build_signed_response(tenant_id=tenant_b)
+        # Replaying A's RelayState resolves provider A from the stored
+        # state; A no longer exists, so the ACS answers 400 (it does NOT
+        # silently fall through onto provider B).
         resp = await client.post(
-            f"/auth/sso/{tenant_b}/saml/acs",
-            data={"SAMLResponse": saml_response_b, "RelayState": relay_state_a},
+            "/auth/sso/saml/acs",
+            data={"SAMLResponse": _build_signed_response(), "RelayState": relay_state_a},
         )
     assert resp.status_code == 400, resp.text
-    assert "tenant" in resp.text.lower()
+    assert "no longer available" in resp.text.lower()

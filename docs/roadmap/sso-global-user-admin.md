@@ -102,6 +102,36 @@ Ver **ADR 0047** para el diseño completo. Resumen de lo que entra:
       `docs/07-changelog/sso-global-user-admin.md`; fila en roadmap README.
 - **Tests**: `test -f` changelog + docs SSO mencionan el modelo global
 
+### Fase G — Reescritura de los tests heredados per-tenant
+
+#### `task_sso_07` — Adaptar las 5 suites SSO/auth viejas al modelo global
+
+- [x] **Título**: Reescritura de las suites SSO/auth per-tenant que rompían tras la migración 0076. Las 5 nombradas en
+      el encargo + **2 adicionales detectadas en la selección completa** (`test_jit_provisioning.py`,
+      `test_group_mapping.py`) que también seedean `tenant_id` y asumen membership/grupo-en-login (ambos retirados por
+      ADR 0047). Se reescriben `test_oidc_config_crud.py` + `test_saml_config_crud.py` al CRUD **global + system_admin**
+      (seed sin `tenant_id`; "tenant_user puede listar / no puede borrar" → "system_admin gestiona / no-system-admin
+      403"; "segundo create 409" → unicidad global por provider; "edit conserva/re-cifra secreto" se mantiene; los
+      tests de aislamiento per-tenant y de SP-metadata per-tenant se ELIMINAN — SP-metadata es global zero-arg).
+      `test_saml.py` pasa a las rutas globales (`/auth/sso/{provider_id}/saml/login` + `POST /auth/sso/saml/acs`, seed
+      global); la sesión emitida es de **identidad sin tenant** (assert `active_tenant_id is None` + `memberships ==
+    []`); los cross-tenant se sustituyen por **RelayState ligado a su provider** (un RelayState capturado no se puede
+      dirigir a otro provider). `test_saml_crypto.py` mantiene los tests de cripto reescritos al config global y
+      reemplaza el `test_sp_signing_config_isolated_per_tenant` por un único test de SP-signing global.
+      `test_jit_provisioning.py` se reescribe al **aprovisionamiento de identidad global** (usuario creado con hash
+      centinela `!sso-no-local-login!` + `is_sso_provisioned`, sin membership; link-by-email sin duplicar; el usuario
+      SSO no entra por login local; idempotencia bajo carrera) y ELIMINA las aserciones de membership/tenant.
+      `test_group_mapping.py` se reduce a los **unit tests puros** de `resolve_role_from_groups`/`is_grantable_role`
+      (siguen válidos: la columna `group_role_mappings` y su validador siguen existiendo) y ELIMINA el e2e
+      grupo→rol-en-login (ADR 0047: el login no lee grupos ni crea membership). `test_login_discovery.py` se **ELIMINA**
+      (ADR 0047: no hay claiming por email-domain; los providers públicos los cubre `test_sso_global_login.py`).
+- **Bug de producción corregido**: el CRUD de `routers/sso.py` seguía con `require_tenant_admin` + `get_tenant_session`
+  tras la migración a tabla global (sin RLS). Eso permitía que **cualquier `tenant_admin` de cualquier tenant**
+  leyera/modificara/borrara la config SSO **platform-global** — escalada de privilegios contra el límite de
+  plataforma, contra ADR 0047 ("acceso solo `system_admin`"). Corregido: todos los endpoints CRUD/helpers de SSO
+  pasan a `require_system_admin` + `get_admin_session` (BYPASSRLS), igual que `/admin/*` y `llm_providers`.
+- **Tests**: `pytest tests/integration -k "sso or saml or oidc or login or jit or group_map or scim or mfa or auth or membership or session" -q` → 0 failed (full SSO/auth suite verde; password/MFA/SCIM intactos).
+
 ## Tests humanos del Plan
 
 ```yaml

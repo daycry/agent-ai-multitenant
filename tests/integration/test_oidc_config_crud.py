@@ -1,19 +1,26 @@
-"""Integration tests for the per-tenant OIDC config CRUD (Plan 08 task_08_03).
+"""Integration tests for the platform-global OIDC config CRUD (ADR 0047).
 
-These back the Tenant-Admin SSO-config UI. No IdP is involved — the CRUD
-is pure DB + RBAC + RLS. Coverage:
+After the SSO global re-architecture (ADR 0047, supersedes the per-tenant
+part of ADR 0031) the ``sso_configurations`` table is **platform-global**:
+no ``tenant_id`` column, no RLS, identity by ``provider``/kind (one
+``oidc`` row for the whole platform). The config CRUD backing the System
+Admin "SSO configuration" UI is therefore **system_admin only** and runs
+on the BYPASSRLS admin session. Coverage:
 
-  * RBAC: unauthenticated -> 401; a `tenant_user` write -> 403; reads
-    allowed for any tenant member; writes require `tenant_admin`.
+  * RBAC: unauthenticated -> 401; a non-system-admin (even a tenant_admin)
+    -> 403 on read AND write; system_admin manages everything.
   * create -> 201, the row is persisted with the secret ENCRYPTED at rest
     (never plaintext), and the response NEVER echoes the secret.
-  * a second create -> 409 (one OIDC config per tenant).
+  * a second create -> 409 (global uniqueness per provider).
   * edit without a secret keeps the stored one; edit with a new secret
-    re-encrypts; toggling `enabled` flips the flag.
+    re-encrypts; toggling ``enabled`` flips the flag.
   * delete soft-deletes (the row disappears from the list).
-  * templates + callback-url helper endpoints return sensible data.
-  * cross-tenant isolation (@pytest.mark.cross_tenant): tenant A's config
-    id never resolves for a tenant-B session (RLS) — read/edit/delete 404.
+  * templates + callback-url helper endpoints return sensible data
+    (system_admin gated).
+
+The per-tenant-isolation tests of the old model are gone (there is no
+``tenant_id`` to isolate by); the security boundary they protected is now
+the system_admin-only gate, asserted directly above.
 
 Pre-condition: postgres (15432) + redis (6379) from docker-compose are
 healthy; the session fixture creates a throwaway DB and flushes Redis 15.
@@ -41,12 +48,35 @@ _CLIENT_ID = "acme-oidc-client"
 
 
 # ---------------------------------------------------------------------------
-# DB seed helpers
+# DB seed helpers — the table is GLOBAL now (no tenant_id column).
 # ---------------------------------------------------------------------------
-async def _seed_tenant_with_user(dsn: str, *, slug: str, role: str) -> tuple[UUID, UUID]:
-    """Insert a tenant + a user with `role` membership. Returns (tenant, user)."""
-    tenant = uuid4()
+async def _seed_user(dsn: str, *, slug: str, is_system_admin: bool) -> UUID:
+    """Insert a bare global user row. Returns its id."""
     user = uuid4()
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO users (id, email, password_hash, is_system_admin) "
+            "VALUES ($1, $2, $3, $4)",
+            user,
+            f"{slug}@example.test",
+            "argon2-placeholder",
+            is_system_admin,
+        )
+    finally:
+        await conn.close()
+    return user
+
+
+async def _seed_tenant_admin(dsn: str, *, slug: str) -> tuple[UUID, UUID]:
+    """Insert a tenant + a tenant_admin user (NOT a system admin).
+
+    Used to prove that a tenant_admin — the most privileged tenant role —
+    is still forbidden from the platform-global SSO config (ADR 0047:
+    config is system_admin only).
+    """
+    tenant = uuid4()
+    user = await _seed_user(dsn, slug=slug, is_system_admin=False)
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
@@ -56,37 +86,30 @@ async def _seed_tenant_with_user(dsn: str, *, slug: str, role: str) -> tuple[UUI
             slug,
         )
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3)",
-            user,
-            f"{slug}@example.test",
-            "argon2-placeholder",
-        )
-        await conn.execute(
             "INSERT INTO user_org_memberships (id, tenant_id, user_id, role, is_active)"
-            " VALUES ($1, $2, $3, $4, true)",
+            " VALUES ($1, $2, $3, 'tenant_admin', true)",
             uuid4(),
             tenant,
             user,
-            role,
         )
     finally:
         await conn.close()
     return tenant, user
 
 
-async def _seed_oidc_config(dsn: str, *, tenant_id: UUID, enabled: bool = True) -> UUID:
+async def _seed_global_oidc(dsn: str, *, enabled: bool = True) -> UUID:
+    """Insert the single global OIDC config (no tenant_id). Returns its id."""
     config_id = uuid4()
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
             """
             INSERT INTO sso_configurations
-                (id, tenant_id, provider, display_name, enabled, issuer,
+                (id, provider, display_name, enabled, issuer,
                  client_id, client_secret_encrypted, scopes, claim_mappings)
-            VALUES ($1, $2, 'oidc', 'Acme OIDC', $3, $4, $5, $6, $7::jsonb, $8::jsonb)
+            VALUES ($1, 'oidc', 'Acme OIDC', $2, $3, $4, $5, $6::jsonb, $7::jsonb)
             """,
             config_id,
-            tenant_id,
             enabled,
             _ISSUER,
             _CLIENT_ID,
@@ -163,7 +186,9 @@ def configured_app(
         get_settings.cache_clear()
 
 
-async def _mint_token(user_id: UUID, tenant_id: UUID | None) -> str:
+async def _mint_token(
+    user_id: UUID, *, tenant_id: UUID | None = None, is_system_admin: bool = False
+) -> str:
     from api_server.auth.deps import get_redis
     from api_server.auth.jwt import encode_jwt
     from api_server.auth.sessions import SessionStore
@@ -171,7 +196,9 @@ async def _mint_token(user_id: UUID, tenant_id: UUID | None) -> str:
     sid = uuid7()
     store = SessionStore(get_redis())
     await store.create(sid, user_id=user_id, tenant_id=tenant_id, ttl_seconds=3600)
-    return encode_jwt(user_id=user_id, session_id=sid, tenant_id=tenant_id)
+    return encode_jwt(
+        user_id=user_id, session_id=sid, tenant_id=tenant_id, is_system_admin=is_system_admin
+    )
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -193,7 +220,7 @@ def _valid_payload(**overrides: object) -> dict[str, object]:
 
 
 # ---------------------------------------------------------------------------
-# RBAC
+# RBAC — system_admin only (ADR 0047)
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_list_unauthenticated_is_401(configured_app, migrations_pg_dsn: str) -> None:
@@ -206,10 +233,12 @@ async def test_list_unauthenticated_is_401(configured_app, migrations_pg_dsn: st
 
 
 @pytest.mark.asyncio
-async def test_tenant_user_cannot_create(configured_app, migrations_pg_dsn: str) -> None:
+async def test_non_system_admin_cannot_create(configured_app, migrations_pg_dsn: str) -> None:
+    """A tenant_admin (the top tenant role) is still forbidden — the
+    global SSO config is system_admin only (ADR 0047)."""
     await _truncate_all(migrations_pg_dsn)
-    tenant, user = await _seed_tenant_with_user(migrations_pg_dsn, slug="acme", role="tenant_user")
-    token = await _mint_token(user, tenant)
+    tenant, user = await _seed_tenant_admin(migrations_pg_dsn, slug="acme")
+    token = await _mint_token(user, tenant_id=tenant, is_system_admin=False)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
@@ -219,11 +248,27 @@ async def test_tenant_user_cannot_create(configured_app, migrations_pg_dsn: str)
 
 
 @pytest.mark.asyncio
-async def test_tenant_user_can_list(configured_app, migrations_pg_dsn: str) -> None:
+async def test_non_system_admin_cannot_list(configured_app, migrations_pg_dsn: str) -> None:
+    """Reads are system_admin only too — a tenant_admin gets 403, not the
+    config (ADR 0047: the platform-global config is not a tenant surface)."""
     await _truncate_all(migrations_pg_dsn)
-    tenant, user = await _seed_tenant_with_user(migrations_pg_dsn, slug="acme", role="tenant_user")
-    await _seed_oidc_config(migrations_pg_dsn, tenant_id=tenant)
-    token = await _mint_token(user, tenant)
+    tenant, user = await _seed_tenant_admin(migrations_pg_dsn, slug="acme")
+    await _seed_global_oidc(migrations_pg_dsn)
+    token = await _mint_token(user, tenant_id=tenant, is_system_admin=False)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://testserver"
+    ) as client:
+        resp = await client.get("/auth/sso/config", headers=_auth(token))
+    assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.asyncio
+async def test_system_admin_can_list(configured_app, migrations_pg_dsn: str) -> None:
+    await _truncate_all(migrations_pg_dsn)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    await _seed_global_oidc(migrations_pg_dsn)
+    token = await _mint_token(admin, is_system_admin=True)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
@@ -241,8 +286,8 @@ async def test_create_persists_encrypted_and_never_echoes_secret(
     configured_app, migrations_pg_dsn: str
 ) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant, user = await _seed_tenant_with_user(migrations_pg_dsn, slug="acme", role="tenant_admin")
-    token = await _mint_token(user, tenant)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    token = await _mint_token(admin, is_system_admin=True)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
@@ -275,8 +320,8 @@ async def test_create_persists_encrypted_and_never_echoes_secret(
 @pytest.mark.asyncio
 async def test_create_requires_a_secret(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant, user = await _seed_tenant_with_user(migrations_pg_dsn, slug="acme", role="tenant_admin")
-    token = await _mint_token(user, tenant)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    token = await _mint_token(admin, is_system_admin=True)
 
     payload = _valid_payload()
     del payload["client_secret"]
@@ -290,8 +335,8 @@ async def test_create_requires_a_secret(configured_app, migrations_pg_dsn: str) 
 @pytest.mark.asyncio
 async def test_create_rejects_both_secret_forms(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant, user = await _seed_tenant_with_user(migrations_pg_dsn, slug="acme", role="tenant_admin")
-    token = await _mint_token(user, tenant)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    token = await _mint_token(admin, is_system_admin=True)
 
     payload = _valid_payload(client_secret_ref="vault:secret/data/oidc/acme")
     async with AsyncClient(
@@ -303,10 +348,11 @@ async def test_create_rejects_both_secret_forms(configured_app, migrations_pg_ds
 
 @pytest.mark.asyncio
 async def test_second_create_is_409(configured_app, migrations_pg_dsn: str) -> None:
+    """Global uniqueness per provider: a second OIDC config -> 409."""
     await _truncate_all(migrations_pg_dsn)
-    tenant, user = await _seed_tenant_with_user(migrations_pg_dsn, slug="acme", role="tenant_admin")
-    await _seed_oidc_config(migrations_pg_dsn, tenant_id=tenant)
-    token = await _mint_token(user, tenant)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    await _seed_global_oidc(migrations_pg_dsn)
+    token = await _mint_token(admin, is_system_admin=True)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
@@ -323,9 +369,9 @@ async def test_edit_without_secret_keeps_stored_secret(
     configured_app, migrations_pg_dsn: str
 ) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant, user = await _seed_tenant_with_user(migrations_pg_dsn, slug="acme", role="tenant_admin")
-    config_id = await _seed_oidc_config(migrations_pg_dsn, tenant_id=tenant, enabled=False)
-    token = await _mint_token(user, tenant)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    config_id = await _seed_global_oidc(migrations_pg_dsn, enabled=False)
+    token = await _mint_token(admin, is_system_admin=True)
 
     payload = _valid_payload(enabled=True)
     del payload["client_secret"]  # no secret in the edit
@@ -345,9 +391,9 @@ async def test_edit_without_secret_keeps_stored_secret(
 @pytest.mark.asyncio
 async def test_edit_with_new_secret_reencrypts(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant, user = await _seed_tenant_with_user(migrations_pg_dsn, slug="acme", role="tenant_admin")
-    config_id = await _seed_oidc_config(migrations_pg_dsn, tenant_id=tenant)
-    token = await _mint_token(user, tenant)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    config_id = await _seed_global_oidc(migrations_pg_dsn)
+    token = await _mint_token(admin, is_system_admin=True)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
@@ -368,8 +414,8 @@ async def test_edit_with_new_secret_reencrypts(configured_app, migrations_pg_dsn
 @pytest.mark.asyncio
 async def test_edit_missing_config_is_404(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant, user = await _seed_tenant_with_user(migrations_pg_dsn, slug="acme", role="tenant_admin")
-    token = await _mint_token(user, tenant)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    token = await _mint_token(admin, is_system_admin=True)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
@@ -386,9 +432,9 @@ async def test_edit_missing_config_is_404(configured_app, migrations_pg_dsn: str
 @pytest.mark.asyncio
 async def test_delete_soft_deletes(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant, user = await _seed_tenant_with_user(migrations_pg_dsn, slug="acme", role="tenant_admin")
-    config_id = await _seed_oidc_config(migrations_pg_dsn, tenant_id=tenant)
-    token = await _mint_token(user, tenant)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    config_id = await _seed_global_oidc(migrations_pg_dsn)
+    token = await _mint_token(admin, is_system_admin=True)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
@@ -406,11 +452,11 @@ async def test_delete_soft_deletes(configured_app, migrations_pg_dsn: str) -> No
 
 
 @pytest.mark.asyncio
-async def test_tenant_user_cannot_delete(configured_app, migrations_pg_dsn: str) -> None:
+async def test_non_system_admin_cannot_delete(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant, user = await _seed_tenant_with_user(migrations_pg_dsn, slug="acme", role="tenant_user")
-    config_id = await _seed_oidc_config(migrations_pg_dsn, tenant_id=tenant)
-    token = await _mint_token(user, tenant)
+    tenant, user = await _seed_tenant_admin(migrations_pg_dsn, slug="acme")
+    config_id = await _seed_global_oidc(migrations_pg_dsn)
+    token = await _mint_token(user, tenant_id=tenant, is_system_admin=False)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
@@ -418,15 +464,20 @@ async def test_tenant_user_cannot_delete(configured_app, migrations_pg_dsn: str)
         resp = await client.delete(f"/auth/sso/config/{config_id}", headers=_auth(token))
     assert resp.status_code == 403, resp.text
 
+    # The config is untouched.
+    row = await _fetch_config_row(migrations_pg_dsn, config_id)
+    assert row is not None
+    assert row["deleted_at"] is None
+
 
 # ---------------------------------------------------------------------------
-# Templates + callback URL helpers
+# Templates + callback URL helpers (system_admin gated)
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_templates_endpoint_lists_idps(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant, user = await _seed_tenant_with_user(migrations_pg_dsn, slug="acme", role="tenant_user")
-    token = await _mint_token(user, tenant)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    token = await _mint_token(admin, is_system_admin=True)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
@@ -442,10 +493,25 @@ async def test_templates_endpoint_lists_idps(configured_app, migrations_pg_dsn: 
 
 
 @pytest.mark.asyncio
+async def test_templates_endpoint_forbidden_for_non_system_admin(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    await _truncate_all(migrations_pg_dsn)
+    tenant, user = await _seed_tenant_admin(migrations_pg_dsn, slug="acme")
+    token = await _mint_token(user, tenant_id=tenant, is_system_admin=False)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://testserver"
+    ) as client:
+        resp = await client.get("/auth/sso/oidc/templates", headers=_auth(token))
+    assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.asyncio
 async def test_callback_url_endpoint(configured_app, migrations_pg_dsn: str) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant, user = await _seed_tenant_with_user(migrations_pg_dsn, slug="acme", role="tenant_user")
-    token = await _mint_token(user, tenant)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    token = await _mint_token(admin, is_system_admin=True)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
@@ -453,46 +519,3 @@ async def test_callback_url_endpoint(configured_app, migrations_pg_dsn: str) -> 
         resp = await client.get("/auth/sso/oidc/callback-url", headers=_auth(token))
     assert resp.status_code == 200, resp.text
     assert resp.json()["callback_url"] == "http://testserver/auth/sso/oidc/callback"
-
-
-# ---------------------------------------------------------------------------
-# Cross-tenant isolation
-# ---------------------------------------------------------------------------
-@pytest.mark.cross_tenant
-@pytest.mark.asyncio
-async def test_tenant_b_cannot_read_tenant_a_config(configured_app, migrations_pg_dsn: str) -> None:
-    """Tenant A has an OIDC config. A tenant-B admin must not see it: the
-    list returns empty and a direct edit/delete on A's id 404s — RLS
-    scopes every query by ``app.tenant_id``."""
-    await _truncate_all(migrations_pg_dsn)
-    tenant_a, _user_a = await _seed_tenant_with_user(
-        migrations_pg_dsn, slug="alpha", role="tenant_admin"
-    )
-    tenant_b, user_b = await _seed_tenant_with_user(
-        migrations_pg_dsn, slug="bravo", role="tenant_admin"
-    )
-    a_config_id = await _seed_oidc_config(migrations_pg_dsn, tenant_id=tenant_a)
-    token_b = await _mint_token(user_b, tenant_b)
-
-    async with AsyncClient(
-        transport=ASGITransport(app=configured_app), base_url="http://testserver"
-    ) as client:
-        # B's list does NOT include A's config.
-        listing = await client.get("/auth/sso/config", headers=_auth(token_b))
-        assert listing.status_code == 200, listing.text
-        assert listing.json() == []
-
-        # B cannot edit A's config (RLS hides the row -> 404).
-        edit = await client.put(
-            f"/auth/sso/config/{a_config_id}", json=_valid_payload(), headers=_auth(token_b)
-        )
-        assert edit.status_code == 404, edit.text
-
-        # B cannot delete A's config either.
-        delete = await client.delete(f"/auth/sso/config/{a_config_id}", headers=_auth(token_b))
-        assert delete.status_code == 404, delete.text
-
-    # A's config is untouched.
-    row = await _fetch_config_row(migrations_pg_dsn, a_config_id)
-    assert row is not None
-    assert row["deleted_at"] is None

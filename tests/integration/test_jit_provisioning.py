@@ -1,27 +1,33 @@
-"""Integration tests for hardened JIT provisioning (Plan 08 task_08_07).
+"""Integration tests for GLOBAL identity provisioning at SSO login (ADR 0047).
 
-Phase A/B already create a user on first SSO login (the
-``_jit_provision_user`` helper, shared by the OIDC callback and the SAML
-ACS). This module exercises the *hardened* policy task_08_07 adds on top:
+ADR 0047 (global auth + access-by-membership) re-scoped what an SSO login
+does: a successful OIDC callback / SAML ACS provisions only the GLOBAL
+user identity (``_provision_identity`` in ``routers/sso.py``) and creates
+NO tenant membership and reads NO IdP groups — access to a tenant is
+granted EXCLUSIVELY by the membership an admin assigns AFTER login. So the
+old "JIT login also creates an active tenant_user membership in the
+config's tenant" behaviour is GONE; the membership assertions of the
+per-tenant model are removed, along with the per-tenant
+"lands-in-config-tenant-only" test.
 
-  * first SSO login creates the user + an ACTIVE membership with role
-    ``tenant_user`` in the SSO config's tenant, and flags the user
-    ``is_sso_provisioned = true`` (no usable local password);
+What survives — and stays meaningful — is the identity-provisioning
+policy, reworked to the global login route (``GET
+/auth/sso/{provider_id}/oidc/login`` + the shared callback):
+
+  * first SSO login CREATES the global user with no usable local password
+    (the ``!sso-no-local-login!`` sentinel hash) and ``is_sso_provisioned
+    = true`` — and NO membership (the JWT session is tenant-less);
   * a second login REUSES the same user (no duplicate row);
   * an EXISTING user (matched by verified email) is LINKED, never
-    duplicated — including a pre-existing LOCAL-password user, whose
-    local password keeps working untouched while they also gain SSO;
-  * the user lands in the SSO config's tenant ONLY
-    (``@pytest.mark.cross_tenant``);
-  * concurrent first-logins are idempotent — neither the user nor the
-    membership is duplicated under a race;
+    duplicated — including a pre-existing LOCAL-password user, whose local
+    password keeps working untouched while they also gain the SSO identity;
+  * concurrent first-logins are idempotent — the user is never duplicated
+    under a race;
   * an SSO-provisioned user is rejected by LOCAL login with a clean 401
     (the sentinel password hash never reaches the argon2 verifier).
 
 No real IdP: a :class:`httpx.MockTransport` serves a complete fake
-OpenID Provider so the whole flow runs offline. The fake IdP and the
-seed helpers mirror ``test_oidc_generic.py`` so the two suites stay
-consistent.
+OpenID Provider so the whole flow runs offline.
 
 Pre-condition: postgres (15432) + redis (6379) from docker-compose are
 healthy; the fixtures create a throwaway DB and flush Redis DB 15.
@@ -57,15 +63,17 @@ _USERINFO = f"{_ISSUER}/userinfo"
 _JWKS = f"{_ISSUER}/jwks"
 _KID = "test-key-1"
 
-# The IdP asserts a MIXED-CASE email; the flow + JIT both lower-case it,
-# so the stored/lookup email is the normalized lower-case form. We use a
-# `.example.com` domain (not `.test`) because the LOCAL-login negative
-# tests POST through `LoginRequest.email: EmailStr`, whose RFC validator
-# rejects the reserved `.test` TLD — the SSO callback path itself accepts
-# any IdP-asserted address.
+# The IdP asserts a MIXED-CASE email; the flow + provisioning both
+# lower-case it, so the stored/lookup email is the normalized lower-case
+# form. We use a `.example.com` domain (not `.test`) because the
+# LOCAL-login negative tests POST through `LoginRequest.email: EmailStr`,
+# whose RFC validator rejects the reserved `.test` TLD — the SSO callback
+# path itself accepts any IdP-asserted address.
 _IDP_EMAIL = "Worker@Acme.example.com"
 _NORMALIZED_EMAIL = "worker@acme.example.com"
 _LOCAL_PASSWORD = "correct horse battery staple"  # - test-only, >= 8 chars
+
+_SSO_PASSWORD_SENTINEL = "!sso-no-local-login!"
 
 _SIGNING_KEY = RSAKey.generate_key(2048, parameters={"kid": _KID}, private=True)
 
@@ -84,7 +92,7 @@ def _id_token(*, nonce: str, sub: str = "idp-subject-123", aud: str = _CLIENT_ID
 
 
 class _FakeIdP:
-    """Stateful mock OpenID Provider (mirrors test_oidc_generic)."""
+    """Stateful mock OpenID Provider (mirrors test_sso_global_login)."""
 
     def __init__(self) -> None:
         self.last_nonce: str | None = None
@@ -131,35 +139,21 @@ class _FakeIdP:
 
 
 # ---------------------------------------------------------------------------
-# DB seed + inspection helpers (BYPASSRLS via migrations_user DSN)
+# DB seed + inspection helpers — the table is GLOBAL now (no tenant_id).
 # ---------------------------------------------------------------------------
-async def _seed_tenant(dsn: str, *, slug: str) -> UUID:
-    tenant = uuid4()
-    conn = await asyncpg.connect(dsn)
-    try:
-        await conn.execute(
-            "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)",
-            tenant,
-            slug.title(),
-            slug,
-        )
-    finally:
-        await conn.close()
-    return tenant
-
-
-async def _seed_oidc_config(dsn: str, *, tenant_id: UUID, enabled: bool = True) -> None:
+async def _seed_global_oidc(dsn: str, *, enabled: bool = True) -> UUID:
+    """Insert the single global OIDC config. Returns its provider id."""
+    config_id = uuid4()
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
             """
             INSERT INTO sso_configurations
-                (id, tenant_id, provider, display_name, enabled, issuer,
+                (id, provider, display_name, enabled, issuer,
                  client_id, client_secret_encrypted, scopes, claim_mappings)
-            VALUES ($1, $2, 'oidc', 'Acme OIDC', $3, $4, $5, $6, $7::jsonb, $8::jsonb)
+            VALUES ($1, 'oidc', 'Acme OIDC', $2, $3, $4, $5, $6::jsonb, $7::jsonb)
             """,
-            uuid4(),
-            tenant_id,
+            config_id,
             enabled,
             _ISSUER,
             _CLIENT_ID,
@@ -169,6 +163,7 @@ async def _seed_oidc_config(dsn: str, *, tenant_id: UUID, enabled: bool = True) 
         )
     finally:
         await conn.close()
+    return config_id
 
 
 async def _seed_local_user(dsn: str, *, email: str, password: str) -> UUID:
@@ -210,14 +205,17 @@ async def _user_row(dsn: str, email: str) -> asyncpg.Record | None:
         await conn.close()
 
 
-async def _membership_rows(dsn: str, *, tenant_id: UUID) -> list[asyncpg.Record]:
+async def _count_memberships(dsn: str, *, email: str) -> int:
     conn = await asyncpg.connect(dsn)
     try:
-        return list(
-            await conn.fetch(
-                "SELECT user_id, role, is_active FROM user_org_memberships WHERE tenant_id = $1",
-                tenant_id,
-            )
+        return await conn.fetchval(
+            """
+            SELECT count(*)
+              FROM user_org_memberships m
+              JOIN users u ON u.id = m.user_id
+             WHERE u.email = $1
+            """,
+            email,
         )
     finally:
         await conn.close()
@@ -301,10 +299,10 @@ def configured_app(
         get_settings.cache_clear()
 
 
-async def _login_state(client: AsyncClient, tenant_id: UUID, idp: _FakeIdP) -> str:
-    """Start a login; return the ``state`` and mirror the nonce into the IdP
-    so its token endpoint echoes the matching value."""
-    resp = await client.get(f"/auth/sso/{tenant_id}/oidc/login")
+async def _login_state(client: AsyncClient, provider_id: UUID, idp: _FakeIdP) -> str:
+    """Start a login by provider; return the ``state`` and mirror the nonce
+    into the IdP so its token endpoint echoes the matching value."""
+    resp = await client.get(f"/auth/sso/{provider_id}/oidc/login")
     assert resp.status_code == 307, resp.text
     params = dict(httpx.URL(resp.headers["location"]).params)
     idp.last_nonce = params["nonce"]
@@ -318,26 +316,25 @@ async def _sso_callback(client: AsyncClient, state: str) -> httpx.Response:
     )
 
 
-async def _full_sso_login(client: AsyncClient, tenant_id: UUID, idp: _FakeIdP) -> httpx.Response:
-    state = await _login_state(client, tenant_id, idp)
+async def _full_sso_login(client: AsyncClient, provider_id: UUID, idp: _FakeIdP) -> httpx.Response:
+    state = await _login_state(client, provider_id, idp)
     return await _sso_callback(client, state)
 
 
 # ---------------------------------------------------------------------------
-# First login: creates user + membership(tenant_user) + sso-provisioned flag
+# First login: creates the global user (sso-provisioned) with NO membership
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_first_login_creates_user_and_membership(
+async def test_first_login_creates_user_without_membership(
     configured_app, migrations_pg_dsn: str, idp: _FakeIdP
 ) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_oidc_config(migrations_pg_dsn, tenant_id=tenant)
+    provider_id = await _seed_global_oidc(migrations_pg_dsn)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
     ) as client:
-        resp = await _full_sso_login(client, tenant, idp)
+        resp = await _full_sso_login(client, provider_id, idp)
         assert resp.status_code == 200, resp.text
         token = resp.json()["access_token"]
 
@@ -345,51 +342,46 @@ async def test_first_login_creates_user_and_membership(
         assert me.status_code == 200, me.text
         body = me.json()
         assert body["email"] == _NORMALIZED_EMAIL
-        assert body["active_tenant_id"] == str(tenant)
-        roles = [m["role"] for m in body["memberships"] if m["tenant_id"] == str(tenant)]
-        assert roles == ["tenant_user"]
+        # Identity session: no active tenant, no membership (ADR 0047).
+        assert body["active_tenant_id"] is None
+        assert body["memberships"] == []
 
     assert await _count_users_with_email(migrations_pg_dsn, _NORMALIZED_EMAIL) == 1
     row = await _user_row(migrations_pg_dsn, _NORMALIZED_EMAIL)
     assert row is not None
     # SSO-provisioned: flagged + no usable local password (sentinel hash).
     assert row["is_sso_provisioned"] is True
-    assert row["password_hash"] == "!sso-no-local-login!"
-
-    memberships = await _membership_rows(migrations_pg_dsn, tenant_id=tenant)
-    assert len(memberships) == 1
-    assert memberships[0]["role"] == "tenant_user"
-    assert memberships[0]["is_active"] is True
+    assert row["password_hash"] == _SSO_PASSWORD_SENTINEL
+    # No membership is auto-created (access is by admin assignment).
+    assert await _count_memberships(migrations_pg_dsn, email=_NORMALIZED_EMAIL) == 0
 
 
 # ---------------------------------------------------------------------------
-# Second login: reuses the same user + membership (no duplicate)
+# Second login: reuses the same user (no duplicate)
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_second_login_reuses_user_and_membership(
+async def test_second_login_reuses_user(
     configured_app, migrations_pg_dsn: str, idp: _FakeIdP
 ) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_oidc_config(migrations_pg_dsn, tenant_id=tenant)
+    provider_id = await _seed_global_oidc(migrations_pg_dsn)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
     ) as client:
-        first = await _full_sso_login(client, tenant, idp)
+        first = await _full_sso_login(client, provider_id, idp)
         assert first.status_code == 200, first.text
         first_user = await _user_row(migrations_pg_dsn, _NORMALIZED_EMAIL)
         assert first_user is not None
 
-        second = await _full_sso_login(client, tenant, idp)
+        second = await _full_sso_login(client, provider_id, idp)
         assert second.status_code == 200, second.text
 
-    # Exactly one user and one membership despite two logins.
+    # Exactly one user despite two logins (same row reused).
     assert await _count_users_with_email(migrations_pg_dsn, _NORMALIZED_EMAIL) == 1
     second_user = await _user_row(migrations_pg_dsn, _NORMALIZED_EMAIL)
     assert second_user is not None
-    assert second_user["id"] == first_user["id"]  # same row reused
-    assert len(await _membership_rows(migrations_pg_dsn, tenant_id=tenant)) == 1
+    assert second_user["id"] == first_user["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -401,8 +393,7 @@ async def test_existing_email_links_no_duplicate(
     configured_app, migrations_pg_dsn: str, idp: _FakeIdP
 ) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_oidc_config(migrations_pg_dsn, tenant_id=tenant)
+    provider_id = await _seed_global_oidc(migrations_pg_dsn)
     # Pre-existing LOCAL user with the SAME (normalized) email the IdP asserts.
     local_id = await _seed_local_user(
         migrations_pg_dsn, email=_NORMALIZED_EMAIL, password=_LOCAL_PASSWORD
@@ -411,7 +402,7 @@ async def test_existing_email_links_no_duplicate(
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
     ) as client:
-        resp = await _full_sso_login(client, tenant, idp)
+        resp = await _full_sso_login(client, provider_id, idp)
         assert resp.status_code == 200, resp.text
 
     # No duplicate: the SSO login linked to the existing user row.
@@ -421,14 +412,9 @@ async def test_existing_email_links_no_duplicate(
     assert row["id"] == local_id
     # The existing local user is NOT clobbered into an SSO-only identity:
     # its local password hash and the is_sso_provisioned flag stay intact,
-    # so local login keeps working AND it now also has an SSO membership.
+    # so local login keeps working.
     assert row["is_sso_provisioned"] is False
-    assert row["password_hash"] != "!sso-no-local-login!"
-
-    memberships = await _membership_rows(migrations_pg_dsn, tenant_id=tenant)
-    assert len(memberships) == 1
-    assert memberships[0]["user_id"] == local_id
-    assert memberships[0]["role"] == "tenant_user"
+    assert row["password_hash"] != _SSO_PASSWORD_SENTINEL
 
     # And the pre-existing local password still authenticates.
     async with AsyncClient(
@@ -449,14 +435,13 @@ async def test_sso_provisioned_user_cannot_login_locally(
     configured_app, migrations_pg_dsn: str, idp: _FakeIdP
 ) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_oidc_config(migrations_pg_dsn, tenant_id=tenant)
+    provider_id = await _seed_global_oidc(migrations_pg_dsn)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
     ) as client:
         # First SSO login materialises the SSO-only user.
-        resp = await _full_sso_login(client, tenant, idp)
+        resp = await _full_sso_login(client, provider_id, idp)
         assert resp.status_code == 200, resp.text
 
         # Any local password attempt is rejected with the generic 401 —
@@ -470,29 +455,25 @@ async def test_sso_provisioned_user_cannot_login_locally(
 
 
 # ---------------------------------------------------------------------------
-# Concurrency: simultaneous first-logins do not duplicate user/membership
+# Concurrency: simultaneous first-logins do not duplicate the user
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_concurrent_first_logins_are_idempotent(
     configured_app, migrations_pg_dsn: str, idp: _FakeIdP
 ) -> None:
     await _truncate_all(migrations_pg_dsn)
-    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
-    await _seed_oidc_config(migrations_pg_dsn, tenant_id=tenant)
+    provider_id = await _seed_global_oidc(migrations_pg_dsn)
 
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
     ) as client:
         # Two independent login states (distinct nonce/state) so each
-        # callback runs a full, valid flow. Mirror the nonce per state by
-        # capturing them sequentially, then firing the callbacks together.
-        state_1 = await _login_state(client, tenant, idp)
-        # The fake IdP echoes whatever last_nonce is set at /token time;
-        # both states share the same identity (same email) which is the
-        # point — they race to create the SAME user.
+        # callback runs a full, valid flow; both share the same identity
+        # (same email) — they race to create the SAME user.
+        state_1 = await _login_state(client, provider_id, idp)
         results = await asyncio.gather(
             _sso_callback(client, state_1),
-            _full_sso_login(client, tenant, idp),
+            _full_sso_login(client, provider_id, idp),
             return_exceptions=True,
         )
 
@@ -501,35 +482,5 @@ async def test_concurrent_first_logins_are_idempotent(
     assert any(s == 200 for s in statuses), results
     assert all(not isinstance(r, BaseException) for r in results), results
 
-    # Idempotent: exactly one user row and exactly one membership.
+    # Idempotent: exactly one user row despite the race.
     assert await _count_users_with_email(migrations_pg_dsn, _NORMALIZED_EMAIL) == 1
-    assert len(await _membership_rows(migrations_pg_dsn, tenant_id=tenant)) == 1
-
-
-# ---------------------------------------------------------------------------
-# Cross-tenant: the user lands ONLY in the SSO config's tenant
-# ---------------------------------------------------------------------------
-@pytest.mark.cross_tenant
-@pytest.mark.asyncio
-async def test_user_lands_in_config_tenant_only(
-    configured_app, migrations_pg_dsn: str, idp: _FakeIdP
-) -> None:
-    """Tenant A has the OIDC config; the JIT membership must land on A and
-    tenant B must stay empty — the membership is written under
-    ``app.tenant_id`` bound to the state's (config's) tenant."""
-    await _truncate_all(migrations_pg_dsn)
-    tenant_a = await _seed_tenant(migrations_pg_dsn, slug="alpha")
-    tenant_b = await _seed_tenant(migrations_pg_dsn, slug="bravo")
-    await _seed_oidc_config(migrations_pg_dsn, tenant_id=tenant_a)
-
-    async with AsyncClient(
-        transport=ASGITransport(app=configured_app), base_url="http://testserver"
-    ) as client:
-        resp = await _full_sso_login(client, tenant_a, idp)
-        assert resp.status_code == 200, resp.text
-
-    a_members = await _membership_rows(migrations_pg_dsn, tenant_id=tenant_a)
-    b_members = await _membership_rows(migrations_pg_dsn, tenant_id=tenant_b)
-    assert len(a_members) == 1
-    assert a_members[0]["role"] == "tenant_user"
-    assert len(b_members) == 0
