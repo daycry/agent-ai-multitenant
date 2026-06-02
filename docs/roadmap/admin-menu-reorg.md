@@ -87,7 +87,7 @@ moderna** en el sidebar; (4) **header moderno** que muestre el tenant actual + e
 
 #### `task_menu_03` — Changelog + ui-conventions + verificación
 
-- [ ] **Título**: Actualizar `docs/03-guides/ui-conventions.md` (estructura del menú por grupos + ámbito + header);
+- [x] **Título**: Actualizar `docs/03-guides/ui-conventions.md` (estructura del menú por grupos + ámbito + header);
       changelog `docs/07-changelog/admin-menu-reorg.md`; fila en roadmap README; verificación final
       (typecheck/lint/build + 0 `data-testid` de e2e perdidos). Nota si el backend SSO no es global.
 - **Tests**: build verde; `test -f` changelog; 0 `data-testid` de e2e perdidos

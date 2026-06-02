@@ -188,6 +188,90 @@ estados, en este orden de precedencia: cargando → error → vacío → conteni
 - **Navegación por teclado.** Controles nativos por debajo (`Checkbox`,
   `Select`, `<button>`) ⇒ tab/space/flechas funcionan sin JS extra.
 
+## Navegación del panel — sidebar + header (Plan `admin-menu-reorg`)
+
+El shell del `apps/admin-panel` vive en
+[`components/layout/admin-shell.tsx`](../../apps/admin-panel/components/layout/admin-shell.tsx)
+(sidebar) +
+[`components/layout/admin-header.tsx`](../../apps/admin-panel/components/layout/admin-header.tsx)
+(top bar). El menú **no** es una lista plana: se organiza en **5 grupos
+con submenús colapsables**, con **visibilidad por ámbito** (RBAC + ADR 0028) y una **scrollbar moderna** cuando desborda.
+
+### Grupos del menú (estructura canónica)
+
+El orden y el ámbito de cada grupo son fijos. El ámbito decide qué grupos
+ve cada rol (el gating del cliente es UX; **la barrera real es el
+backend**):
+
+| Grupo                        | Ámbito (flag)                    | Ítems (rutas preservadas)                                                                                     |
+| ---------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Trabajo**                  | por rol (todos los logueados)    | Dashboard, Mis tareas, Tablero, Aprobaciones, Bandeja                                                         |
+| **Recursos**                 | `tenant_admin` (`adminOnly`)     | Agentes, Agentes humanos, Equipos, Proyectos, Knowledge Bases, Memorias, Documentos                           |
+| **Configuración del tenant** | `tenant_admin` (`adminOnly`)     | Guardrails, Validación humana, Notificaciones, Calidad (Evals), Estadísticas, Marketplace, Ajustes (Settings) |
+| **Plataforma**               | System Admin (`systemAdminOnly`) | Proveedores LLM, Modelos & Precios, **Auth/SSO**, Backups (+ destinos + restaurar)                            |
+| **Ayuda**                    | por rol (todos)                  | Documentación                                                                                                 |
+
+- **`Plataforma` es platform-global (ADR 0028):** solo el System Admin del
+  tenant especial la ve. Reúne lo que **no** pertenece a un tenant concreto
+  (catálogo de proveedores/modelos, autenticación, backups del sistema).
+- **`Auth/SSO` pasó de _Ajustes del tenant_ al grupo `Plataforma`** por
+  coherencia con ADR 0028 (proveedores de auth platform-global). Es solo
+  recolocación de menú: la **ruta no cambia** (`/admin/settings/sso`,
+  `/admin/settings/sso/saml`) y el **backend de SSO sigue siendo
+  per-tenant** (ADR 0031: ACS SAML en `/auth/sso/{tenant_id}/saml/acs`). El
+  re-scope del backend de auth, si llegara, es **otro plan** — aquí no se
+  toca.
+
+### Comportamiento colapsable
+
+- Cada grupo es un encabezado clicable que abre/cierra su submenú; el
+  estado abierto/cerrado por grupo **persiste en `localStorage`**.
+- El grupo que contiene el **ítem activo** se **auto-expande** al cargar,
+  para que la ruta actual sea siempre visible sin clicar.
+- El estado activo de un ítem se calcula con `isActive` (coincidencia
+  exacta o por prefijo `href + "/"`), y marca `aria-current="page"`.
+
+### Scrollbar moderna del sidebar
+
+Cuando el sidebar desborda, usa una **scrollbar fina tematizada** en vez
+de la nativa, expuesta como **utilidad reutilizable** (`scrollbar-thin` /
+`.scrollbar-slim`) en
+[`app/globals.css`](../../apps/admin-panel/app/globals.css): combina
+`scrollbar-width: thin` + `scrollbar-color` (Firefox) con
+`::-webkit-scrollbar` / `::-webkit-scrollbar-thumb` (Chromium/WebKit)
+cableados a tokens del tema (`--sidebar*`). Aplícala al contenedor
+`overflow-y-auto` del `<nav>`; reutilízala en cualquier panel con scroll
+interno en lugar de re-declarar reglas de scrollbar a mano.
+
+### Header — tenant actual + usuario (Plan `admin-menu-reorg`)
+
+El `admin-header.tsx` es **sticky** y siempre visible. Cluster derecho:
+
+1. **Tenant actual.** Para el **System Admin** es el `TenantPicker`
+   existente (puede cambiar de tenant / "Todos los tenants" / crear
+   tenant; conserva sus `data-testid`). Para `tenant_admin`/`tenant_user`
+   es un **pill estático** (`data-testid="current-tenant"` +
+   `current-tenant-name`) con el nombre del tenant activo, resuelto desde
+   las memberships de `useCurrentUser()` (`/me`) — estos roles no eligen
+   tenant en esta versión.
+2. **`RoleBadge`** (`data-testid="role-badge"`): pill que codifica el nivel
+   (system_admin / admin / user) por color.
+3. **Selector ES/EN** (`lang-switcher` + `lang-es`/`lang-en`) vía
+   `useLang()`.
+4. **Menú de usuario** (`user-menu` → `user-menu-popover`): avatar con la
+   inicial + nombre/email y dropdown con **Perfil** (`user-menu-profile`,
+   → `/admin/settings`) y **Cerrar sesión** (`logout`, el de siempre: POST
+   `/auth/logout` → limpia token + tenant → `/login`). Cierra con `Escape`
+   y mueve el foco al primer ítem al abrir (`role="menu"`/`menuitem`).
+
+> **Behavior-preserving (igual que el refresh).** El menú agrupado y el
+> header son **presentación + arquitectura de información**: no cambian
+> rutas, llamadas API, ni el contrato de datos, y **preservan todos los
+> `data-testid`** que usan los e2e (`nav-*`, `sidebar-nav`, `mobile-nav`,
+> `admin-header`, `open-mobile-nav`, `lang-*`, `role-badge`, `user-menu*`,
+> `logout`, los del `TenantPicker`). Los testids nuevos (de grupo, de
+> tenant/usuario) son **aditivos**.
+
 ## Qué usar cuándo (cheatsheet)
 
 | Necesito…                                       | Usa                                                           |

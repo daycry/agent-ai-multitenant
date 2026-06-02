@@ -83,9 +83,10 @@ Planes con `plan_id` descriptivo, **solo frontend** y
 **behavior-preserving** (no tocan backend, rutas, llamadas API ni
 `data-testid`). No bloquean ni son bloqueados por las fases.
 
-| Plan                                               | Qué produce                                                                                                                |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| [ui-refresh-refactor.md](./ui-refresh-refactor.md) | Refresh visual moderado + refactor del `admin-panel`: tokens refinados, primitivas y componentes compartidos nuevos, a11y. |
+| Plan                                               | Qué produce                                                                                                                                                             |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [ui-refresh-refactor.md](./ui-refresh-refactor.md) | Refresh visual moderado + refactor del `admin-panel`: tokens refinados, primitivas y componentes compartidos nuevos, a11y.                                              |
+| [admin-menu-reorg.md](./admin-menu-reorg.md)       | Menú del `admin-panel` en 5 grupos con submenús colapsables + ámbito (Plataforma=System Admin, SSO movido ahí) + scrollbar y header modernos (tenant actual + usuario). |
 
 ### Planes correctivos (no entran en el gate de fases)
 
