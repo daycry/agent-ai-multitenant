@@ -55,11 +55,6 @@ import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
-import {
-  isDefaultRedirectBase,
-  redirectBaseFromUrl,
-  SSO_REDIRECT_BASE_DEFAULT,
-} from "@/lib/sso-redirect-base";
 
 // --------------------------------------------------------------------------
 // Types — mirror api_server.schemas.sso
@@ -284,8 +279,47 @@ export default function SsoConfigPage() {
 // --------------------------------------------------------------------------
 // Callback URL card — the redirect URI to register at the IdP
 // --------------------------------------------------------------------------
+interface PublicBaseUrl {
+  base_url: string;
+  is_override: boolean;
+  env_default: string;
+}
+
 function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolean }) {
+  const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Authoritative source: the effective public base URL + whether it is the
+  // operator override or still the env bootstrap default (ADR 0047).
+  const baseQuery = useQuery({
+    queryKey: ["sso-public-base-url"],
+    queryFn: () => apiFetch<PublicBaseUrl>("/auth/sso/public-base-url"),
+    refetchOnWindowFocus: false,
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: (base_url: string) =>
+      apiFetch<PublicBaseUrl>("/auth/sso/public-base-url", {
+        method: "PUT",
+        body: { base_url },
+      }),
+    onSuccess: () => {
+      setSaveError(null);
+      setDraft(null);
+      // Re-read the base + the derived callback URL (it depends on the base).
+      void queryClient.invalidateQueries({ queryKey: ["sso-public-base-url"] });
+      void queryClient.invalidateQueries({ queryKey: ["sso-callback-url"] });
+    },
+    onError: (err) => setSaveError(err instanceof ApiError ? err.body : String(err)),
+  });
+
+  const baseData = baseQuery.data;
+  const fieldValue = draft ?? baseData?.base_url ?? "";
+  const dirty =
+    draft !== null && draft.trim() !== "" && draft.trim() !== (baseData?.base_url ?? "");
+  const stillDefault = baseData ? !baseData.is_override : false;
 
   async function copy() {
     if (url === null) return;
@@ -298,60 +332,100 @@ function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolea
     }
   }
 
-  // The callback URL is built from `sso_redirect_base_url`; if it still
-  // carries the backend default placeholder, warn the operator to set the
-  // real public base before wiring up the IdP (ADR 0047 §6).
-  const isPlaceholder = !loading && isDefaultRedirectBase(url);
-  const base = redirectBaseFromUrl(url);
-
   return (
     <Card className="mt-6" data-testid="sso-callback-card">
       <CardHeader>
-        <CardTitle className="text-base">URL de callback / redirect</CardTitle>
+        <CardTitle className="text-base">URL base pública de la aplicación</CardTitle>
       </CardHeader>
-      <CardContent>
-        <p className="text-muted-foreground mb-2 text-sm">
-          Esta URL es <strong>global</strong> (una sola para toda la plataforma). Regístrala en la
-          lista de redirect URIs permitidas de tu proveedor de identidad.
+      <CardContent className="space-y-3">
+        <p className="text-muted-foreground text-sm">
+          La URL pública única de la plataforma (p. ej.{" "}
+          <span className="font-mono">https://agentic-orchestrator.com</span>). De ella se derivan
+          la <strong>callback de SSO</strong> y el <strong>ACS de SAML</strong> como rutas — el
+          puerto queda detrás de tu gateway en producción. Es global (una para toda la plataforma).
         </p>
-        <div className="flex items-center gap-2">
-          <code
-            className="bg-muted/40 flex-1 break-all rounded-md border px-3 py-2 font-mono text-xs"
-            data-testid="sso-callback-url"
-          >
-            {loading ? "Cargando…" : (url ?? "—")}
-          </code>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={copy}
-            disabled={url === null}
-            data-testid="sso-callback-copy"
-            aria-label="Copiar URL de callback"
-          >
-            <Copy className="h-3.5 w-3.5" />
-            {copied ? "Copiado" : "Copiar"}
-          </Button>
+
+        {/* Editable base URL — System Admin only (the backend gates the PUT). */}
+        <RoleGuard
+          min="system_admin"
+          fallback={
+            <p className="text-muted-foreground text-xs" data-testid="sso-redirect-base">
+              Base pública actual:{" "}
+              <span className="font-mono">
+                {baseQuery.isLoading ? "…" : (baseData?.base_url ?? "—")}
+              </span>
+            </p>
+          }
+        >
+          <div className="space-y-1.5">
+            <Label htmlFor="public-base-url">URL base pública</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="public-base-url"
+                value={fieldValue}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder="https://tu-dominio.com"
+                data-testid="sso-public-base-url-input"
+                disabled={baseQuery.isLoading || saveMutation.isPending}
+              />
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => saveMutation.mutate(fieldValue.trim())}
+                disabled={!dirty || saveMutation.isPending}
+                data-testid="sso-public-base-url-save"
+              >
+                {saveMutation.isPending ? "Guardando…" : "Guardar"}
+              </Button>
+            </div>
+            {saveError && (
+              <p
+                className="text-danger-soft-foreground text-xs"
+                data-testid="sso-public-base-url-error"
+              >
+                {saveError}
+              </p>
+            )}
+          </div>
+        </RoleGuard>
+
+        {/* The derived callback URL the operator registers at the IdP. */}
+        <div>
+          <Label className="text-xs">URL de callback / redirect (a registrar en el IdP)</Label>
+          <div className="mt-1 flex items-center gap-2">
+            <code
+              className="bg-muted/40 flex-1 break-all rounded-md border px-3 py-2 font-mono text-xs"
+              data-testid="sso-callback-url"
+            >
+              {loading ? "Cargando…" : (url ?? "—")}
+            </code>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={copy}
+              disabled={url === null}
+              data-testid="sso-callback-copy"
+              aria-label="Copiar URL de callback"
+            >
+              <Copy className="h-3.5 w-3.5" />
+              {copied ? "Copiado" : "Copiar"}
+            </Button>
+          </div>
         </div>
-        {base !== null && !loading ? (
-          <p className="text-muted-foreground mt-2 text-xs" data-testid="sso-redirect-base">
-            Base pública configurada: <span className="font-mono">{base}</span>
-          </p>
-        ) : null}
-        {isPlaceholder ? (
+
+        {stillDefault && (
           <p
-            className="bg-warning-soft text-warning-soft-foreground border-warning/30 mt-2 rounded-md border px-3 py-2 text-xs"
+            className="bg-warning-soft text-warning-soft-foreground border-warning/30 rounded-md border px-3 py-2 text-xs"
             data-testid="sso-redirect-base-warning"
             role="alert"
           >
-            Sigue usando la base por defecto{" "}
-            <span className="font-mono">{SSO_REDIRECT_BASE_DEFAULT}</span> (un marcador de posición,
-            ni siquiera coincide con el api-server de desarrollo). Configura{" "}
-            <span className="font-mono">SSO_REDIRECT_BASE_URL</span> con tu URL pública antes de
-            registrar la callback en el IdP.
+            Sigue usando el valor de arranque{" "}
+            <span className="font-mono">{baseData?.env_default}</span> (apunta al api-server local,
+            no a tu dominio público). Pon arriba tu URL pública real antes de registrar la callback
+            en el IdP.
           </p>
-        ) : null}
+        )}
       </CardContent>
     </Card>
   );

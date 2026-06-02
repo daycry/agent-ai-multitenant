@@ -63,6 +63,74 @@ async def set_platform_setting(
     return row
 
 
+# ---------------------------------------------------------------------------
+# Public application base URL (ADR 0047 — operator-configurable)
+# ---------------------------------------------------------------------------
+# The single PUBLIC base URL of the whole application — ONE clean origin (e.g.
+# ``https://agentic-orchestrator.com``), port-abstract for end users. It is the
+# canonical base for absolute links AND for building the SSO callback / SAML ACS
+# / EntityID (those are PATHS appended to it). It must be registered in the IdP's
+# allow-list, so it has to match the platform's real public hostname/gateway:
+# a deploy concern that must still be operator-tunable (not hardcoded). A System
+# Admin sets it from the SSO settings page; when unset, the router falls back to
+# the API_SERVER_SSO_REDIRECT_BASE_URL env default (bootstrap — the api-server's
+# own origin in dev, where /auth/* resolves without a proxy). Stored as a
+# normalised absolute http(s) URL with no path / trailing slash.
+APP_PUBLIC_BASE_URL_KEY = "app.public_base_url"
+
+
+class InvalidPublicBaseUrlError(ValueError):
+    """Raised when a proposed public base URL is not a valid absolute http(s)
+    URL (bad scheme, missing host, or carrying a path/query/fragment)."""
+
+
+def validate_public_base_url(value: str) -> str:
+    """Validate + normalise the public application base URL.
+
+    Must be an absolute ``http(s)://host[:port]`` origin with NO path, query or
+    fragment (the callback / ACS paths are appended by the SSO router). Returns
+    it normalised (scheme + netloc, no trailing slash). Raises
+    :class:`InvalidPublicBaseUrlError` otherwise.
+    """
+    from urllib.parse import urlparse
+
+    candidate = (value or "").strip()
+    if not candidate:
+        raise InvalidPublicBaseUrlError("base URL must not be empty")
+    parsed = urlparse(candidate)
+    if parsed.scheme not in ("http", "https"):
+        raise InvalidPublicBaseUrlError("base URL must start with http:// or https://")
+    if not parsed.netloc:
+        raise InvalidPublicBaseUrlError("base URL must include a host")
+    if parsed.path.strip("/") or parsed.query or parsed.fragment:
+        raise InvalidPublicBaseUrlError(
+            "base URL must be a bare scheme://host[:port] (no path or query)"
+        )
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+async def get_app_public_base_url_override(session: AsyncSession) -> str | None:
+    """The System-Admin public-base-URL override, or ``None`` when unset.
+
+    When unset the router falls back to the env default
+    (``settings.sso_redirect_base_url`` — the bootstrap value)."""
+    value = await get_platform_setting(session, APP_PUBLIC_BASE_URL_KEY, default=None)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()
+
+
+async def set_app_public_base_url(session: AsyncSession, value: str, *, actor: User) -> str:
+    """Persist the public application base URL override (System Admin only).
+
+    Validates FIRST (raising :class:`InvalidPublicBaseUrlError` before any
+    write); ``set_platform_setting`` re-checks the actor is a System Admin.
+    Returns the normalised URL stored."""
+    normalised = validate_public_base_url(value)
+    await set_platform_setting(session, APP_PUBLIC_BASE_URL_KEY, normalised, actor=actor)
+    return normalised
+
+
 async def get_max_review_retries(session: AsyncSession) -> int:
     """The effective max_review_retries — the platform override, or the
     default. This is what an execution's review-retry budget is built from."""

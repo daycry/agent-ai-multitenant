@@ -172,6 +172,31 @@ class CallbackUrlResponse(BaseModel):
     callback_url: str
 
 
+class PublicBaseUrlResponse(BaseModel):
+    """The effective public application base URL + how it is sourced (ADR 0047).
+
+    ``base_url`` is the effective origin (override if set, else env default);
+    ``is_override`` is True when it comes from the System-Admin platform setting;
+    ``env_default`` is the bootstrap so the UI can warn when the effective value
+    is still the localhost default. The SSO callback / ACS are PATHS under it.
+    """
+
+    model_config = _BASE_CONFIG
+
+    base_url: str
+    is_override: bool
+    env_default: str
+
+
+class PublicBaseUrlUpdate(BaseModel):
+    """Set the public application base URL (System Admin). A bare
+    ``scheme://host[:port]`` origin; path/query are rejected server-side."""
+
+    model_config = _BASE_CONFIG
+
+    base_url: str = Field(min_length=1, max_length=512)
+
+
 # ===========================================================================
 # SAML 2.0 per-tenant config CRUD (Plan 08 task_08_06) — the Tenant-Admin UI.
 #
