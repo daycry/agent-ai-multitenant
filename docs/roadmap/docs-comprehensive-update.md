@@ -84,7 +84,7 @@ refleja.
 
 #### `task_doc_02` — 01-overview + 04-reference al día + cross-links
 
-- [ ] **Título**: Que `docs/01-overview/` liste todas las capacidades del producto final; que `docs/04-reference/`
+- [x] **Título**: Que `docs/01-overview/` liste todas las capacidades del producto final; que `docs/04-reference/`
       (domain-model, rbac, índices) refleje human agents, llm_providers, allowed_commands/runtime, marketplace,
       budgets/FX, webhooks, evals; índices sin enlaces rotos; cross-links.
 - **Tests**: `pytest`/grep: la referencia menciona los modelos/endpoints nuevos; índices sin enlaces rotos

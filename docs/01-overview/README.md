@@ -2,7 +2,7 @@
 title: Visión general
 docs_language: es
 audience: todos
-updated: 2026-05-29
+updated: 2026-06-02
 ---
 
 # 01-overview — Visión general
@@ -15,6 +15,15 @@ primera parada para alguien que llega nuevo al proyecto.
 | ------------------------------------------ | ------------------------------------------------------------ |
 | [01-introduction.md](./01-introduction.md) | Qué es la plataforma, para quién, qué hace y qué no es       |
 | [02-architecture.md](./02-architecture.md) | Cómo encajan las piezas en una sola máquina (Docker Compose) |
+
+## Para profundizar
+
+- [Arquitectura end-to-end](../context/architecture-overview.md) — el
+  sistema final completo (componentes, flujo de un plan, multi-tenancy)
+  con diagramas Mermaid.
+- [Glosario](../context/glossary.md) — términos del dominio.
+- [Referencia técnica](../04-reference/) — modelo de dominio, RBAC y
+  cada subsistema.
 
 ## Siguiente paso
 
