@@ -1,7 +1,7 @@
 ---
 plan_id: price-sync-active-providers
 title: Sync de precios filtrado a las familias de proveedores LLM activos
-status: in_progress
+status: pending_human_validation
 blocking_plan: []
 started_at: 2026-06-01
 completed_at: null
