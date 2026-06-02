@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
 import { setToken } from "@/lib/auth";
+import { resolveAndRoute } from "@/lib/session";
 
 interface LoginResponse {
   access_token: string;
@@ -35,8 +36,13 @@ export default function LoginPage() {
         method: "POST",
         body: { email, password },
       });
+      // The login token proves IDENTITY only (no tenant yet). Resolve the
+      // user's memberships to decide where to land: enter the tenant
+      // directly (single), pick one (multiple) or the no-access screen
+      // (none) — ADR 0047 / task_sso_03.
       setToken(data.access_token);
-      router.push("/admin/dashboard");
+      const next = await resolveAndRoute();
+      router.push(next);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setError("Invalid email or password.");

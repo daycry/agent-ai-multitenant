@@ -13,6 +13,8 @@ from lots of IPs) at the same time.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -34,12 +36,18 @@ from api_server.auth.passwords import hash_password, verify_password
 from api_server.auth.rate_limit import RateLimiter
 from api_server.auth.sessions import SessionStore
 from api_server.config import get_settings
-from api_server.db.models import User
-from api_server.db.session import get_sessionmaker
+from api_server.db.models import Organization, User, UserOrganizationMembership
+from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 from api_server.schemas.auth import (
+    RESOLUTION_STATE_MULTIPLE,
+    RESOLUTION_STATE_NO_ACCESS,
+    RESOLUTION_STATE_SINGLE,
     LoginRequest,
     LoginResponse,
     RegisterRequest,
+    ResolvedMembership,
+    SelectTenantRequest,
+    SessionResolutionResponse,
     UserResponse,
 )
 from api_server.schemas.mfa import MfaRequiredResponse
@@ -64,6 +72,94 @@ async def _fetch_user_by_email(session: AsyncSession, email: str) -> User | None
     """Look up a user by email. RLS is NOT involved (users is un-RLSed)."""
     result = await session.execute(select(User).where(User.email == email))
     return result.scalar_one_or_none()
+
+
+async def _load_active_memberships(user_id: UUID) -> list[ResolvedMembership]:
+    """Return the user's ACTIVE, non-deleted tenant memberships (ADR 0047).
+
+    Tenant access is granted EXCLUSIVELY by ``UserOrganizationMembership``
+    that the admin assigns AFTER login — no email-domain claiming, no
+    auto-created membership (ADR 0047). This is the single source of truth
+    for the post-login resolution: 0 rows → "no access", 1 → enter, >1 →
+    picker.
+
+    Runs on the BYPASSRLS admin engine because the caller's session has no
+    active tenant yet (``app.tenant_id`` is unset), so the RLS policy on
+    ``user_org_memberships`` would hide every row. Cross-tenant exposure is
+    prevented by constraining the query to ``user_id = user_id`` — the
+    user only ever sees their OWN memberships, never another user's.
+    """
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(
+                UserOrganizationMembership.tenant_id,
+                UserOrganizationMembership.role,
+                Organization.name.label("tenant_name"),
+            )
+            .join(
+                Organization,
+                Organization.id == UserOrganizationMembership.tenant_id,
+            )
+            .where(
+                UserOrganizationMembership.user_id == user_id,
+                UserOrganizationMembership.is_active.is_(True),
+                UserOrganizationMembership.deleted_at.is_(None),
+                # Only memberships into a live tenant count (a soft-deleted
+                # organization grants no access).
+                Organization.deleted_at.is_(None),
+            )
+            .order_by(Organization.name)
+        )
+        return [
+            ResolvedMembership(
+                tenant_id=row.tenant_id,
+                tenant_name=row.tenant_name,
+                role=row.role,
+            )
+            for row in result.all()
+        ]
+
+
+async def _is_active_member(user_id: UUID, tenant_id: UUID) -> bool:
+    """True iff ``user_id`` has an ACTIVE, non-deleted membership in a live
+    ``tenant_id`` (ADR 0047). The select-tenant endpoint's authorization
+    check — a user can only activate a tenant they actually belong to."""
+    memberships = await _load_active_memberships(user_id)
+    return any(m.tenant_id == tenant_id for m in memberships)
+
+
+async def _mint_tenant_session(
+    sessions: SessionStore,
+    *,
+    user_id: UUID,
+    tenant_id: UUID | None,
+    is_system_admin: bool,
+) -> LoginResponse:
+    """Mint a session + JWT bound to ``tenant_id`` (or tenant-less if None).
+
+    Shared by the password login, the post-login single-tenant
+    auto-resolution, and the explicit tenant pick. The Redis session and
+    the JWT share one TTL so they expire together; the JWT's ``tid`` claim
+    is what ``get_principal`` reads to scope RLS for a REGULAR user (who,
+    unlike a system admin, cannot override the tenant via ``X-Tenant-Id``).
+    """
+    settings = get_settings()
+    session_id = uuid7()
+    ttl_seconds = settings.jwt_expiration_minutes * 60
+    await sessions.create(
+        session_id,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        ttl_seconds=ttl_seconds,
+    )
+    token = encode_jwt(
+        user_id=user_id,
+        session_id=session_id,
+        tenant_id=tenant_id,
+        is_system_admin=is_system_admin,
+    )
+    return LoginResponse(access_token=token, token_type="bearer", expires_in=ttl_seconds)
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +331,101 @@ async def logout(
     """Revoke the current session. Subsequent requests with the same
     JWT will be rejected (401) because the sid is gone from Redis."""
     await sessions.revoke(principal.session_id)
+
+
+# ---------------------------------------------------------------------------
+# GET /auth/session/resolve  (ADR 0047, task_sso_03)
+# ---------------------------------------------------------------------------
+@router.get("/session/resolve", response_model=SessionResolutionResponse)
+async def resolve_session(
+    principal: AuthPrincipal = Depends(get_principal),
+    sessions: SessionStore = Depends(get_session_store),
+) -> SessionResolutionResponse:
+    """Resolve the tenant the authenticated identity may enter (ADR 0047).
+
+    Called by the client RIGHT AFTER a successful login — password OR SSO,
+    both produce the same tenant-less IDENTITY session — to turn the user's
+    ACTIVE memberships into a typed next step:
+
+      * **0 memberships** → ``state="no_access"``: the session stays valid
+        (it proves identity) but the user has NO tenant; the admin-panel
+        shows the "sin permisos, contacta al administrador" screen. NO
+        token is minted and NO membership is auto-created (ADR 0047 —
+        deny-by-default, access is granted only by an explicit admin
+        assignment).
+      * **1 membership** → ``state="single"``: a fresh TENANT-SCOPED token
+        is minted and returned so the client enters that tenant directly.
+      * **>1 memberships** → ``state="multiple"``: the client shows the
+        tenant-picker and then POSTs ``/auth/session/select-tenant``.
+
+    A System Admin is NOT special-cased here: this endpoint reports only
+    real memberships. The superadmin's cross-tenant powers come from the
+    ``X-Tenant-Id`` override + BYPASSRLS engine (``auth/deps.py``), not
+    from this resolution — so an admin with no memberships still gets the
+    portfolio view via the picker, exactly as today.
+    """
+    memberships = await _load_active_memberships(principal.user_id)
+
+    if not memberships:
+        return SessionResolutionResponse(
+            state=RESOLUTION_STATE_NO_ACCESS,
+            memberships=[],
+        )
+
+    if len(memberships) == 1:
+        only = memberships[0]
+        minted = await _mint_tenant_session(
+            sessions,
+            user_id=principal.user_id,
+            tenant_id=only.tenant_id,
+            is_system_admin=principal.is_system_admin,
+        )
+        return SessionResolutionResponse(
+            state=RESOLUTION_STATE_SINGLE,
+            memberships=memberships,
+            access_token=minted.access_token,
+            token_type=minted.token_type,
+            expires_in=minted.expires_in,
+        )
+
+    return SessionResolutionResponse(
+        state=RESOLUTION_STATE_MULTIPLE,
+        memberships=memberships,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/session/select-tenant  (ADR 0047, task_sso_03)
+# ---------------------------------------------------------------------------
+@router.post("/session/select-tenant", response_model=LoginResponse)
+async def select_tenant(
+    payload: SelectTenantRequest,
+    principal: AuthPrincipal = Depends(get_principal),
+    sessions: SessionStore = Depends(get_session_store),
+) -> LoginResponse:
+    """Activate one of the user's tenants and mint a tenant-scoped token.
+
+    The tenant-picker (``state="multiple"``) POSTs the chosen ``tenant_id``
+    here. We re-assert an ACTIVE membership for ``(user_id, tenant_id)`` —
+    the user can NEVER activate a tenant they don't belong to (a forged id
+    returns 403) — then mint a fresh session + JWT carrying that tenant in
+    its ``tid`` claim. This is the mechanism by which a REGULAR user (who
+    cannot use the ``X-Tenant-Id`` superadmin override) acquires a
+    tenant-scoped session.
+    """
+    if not await _is_active_member(principal.user_id, payload.tenant_id):
+        # Same answer whether the tenant doesn't exist or the user simply
+        # isn't a member — never reveal which.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="no active membership in the requested tenant",
+        )
+    return await _mint_tenant_session(
+        sessions,
+        user_id=principal.user_id,
+        tenant_id=payload.tenant_id,
+        is_system_admin=principal.is_system_admin,
+    )
 
 
 # ---------------------------------------------------------------------------

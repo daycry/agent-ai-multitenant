@@ -71,7 +71,7 @@ Ver **ADR 0047** para el diseño completo. Resumen de lo que entra:
 
 #### `task_sso_03` — Resolución post-login + pantalla "sin permisos"
 
-- [ ] **Título**: Tras login (SSO o password): 0 memberships activas → respuesta/pantalla "sin permisos, contacta
+- [x] **Título**: Tras login (SSO o password): 0 memberships activas → respuesta/pantalla "sin permisos, contacta
       al admin" (sesión válida, sin tenant); 1 → tenant activo; >1 → tenant-picker. Backend + UI de la pantalla.
 - **Tests**: `pytest tests/integration/test_post_login_membership_resolution.py -v` (@pytest.mark.cross_tenant)
 
