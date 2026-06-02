@@ -39,6 +39,7 @@ from api_server.config import get_settings
 from api_server.db.models import Organization, User, UserOrganizationMembership
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 from api_server.schemas.auth import (
+    RESOLUTION_STATE_ADMIN,
     RESOLUTION_STATE_MULTIPLE,
     RESOLUTION_STATE_NO_ACCESS,
     RESOLUTION_STATE_SINGLE,
@@ -358,13 +359,27 @@ async def resolve_session(
       * **>1 memberships** → ``state="multiple"``: the client shows the
         tenant-picker and then POSTs ``/auth/session/select-tenant``.
 
-    A System Admin is NOT special-cased here: this endpoint reports only
-    real memberships. The superadmin's cross-tenant powers come from the
-    ``X-Tenant-Id`` override + BYPASSRLS engine (``auth/deps.py``), not
-    from this resolution — so an admin with no memberships still gets the
-    portfolio view via the picker, exactly as today.
+    A System Admin is never locked out by membership. Their cross-tenant
+    powers come from the ``X-Tenant-Id`` override + BYPASSRLS engine
+    (``auth/deps.py``), not from a membership row, so a superadmin with NO
+    membership must NOT hit ``no_access`` — that would be a chicken-and-egg
+    lockout (they could not even reach ``/admin/users`` to grant themselves
+    one). They resolve to ``state="admin"`` and enter the PORTFOLIO view
+    (no active tenant) with the tenant-less identity token they already
+    hold; the header tenant-picker switches tenant or bootstraps the first
+    one. A superadmin who ALSO has explicit memberships still flows through
+    ``single``/``multiple`` below (and can switch to "all tenants" from the
+    header regardless).
     """
     memberships = await _load_active_memberships(principal.user_id)
+
+    if principal.is_system_admin and not memberships:
+        # Portfolio entry: no token minted — the identity token is already
+        # tenant-less and carries ``is_system_admin`` (see login/SSO mint).
+        return SessionResolutionResponse(
+            state=RESOLUTION_STATE_ADMIN,
+            memberships=[],
+        )
 
     if not memberships:
         return SessionResolutionResponse(

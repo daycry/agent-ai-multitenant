@@ -70,12 +70,18 @@ class UserResponse(BaseModel):
 #                   minted TENANT-SCOPED token so the client enters directly.
 #   - "multiple"  → the tenant-picker lets the user choose; the client then
 #                   POSTs /auth/session/select-tenant to activate one.
+#   - "admin"     → a System Admin with NO membership; enters in PORTFOLIO
+#                   mode (no active tenant) with the tenant-less identity
+#                   token, switching tenant from the header picker. Never the
+#                   no-access screen — that would be a chicken-and-egg lockout
+#                   (they could not reach /admin/users to grant a membership).
 
 # Typed resolution states (string literals so the JSON is self-describing
 # and the admin-panel can switch on them without a magic number).
 RESOLUTION_STATE_NO_ACCESS = "no_access"
 RESOLUTION_STATE_SINGLE = "single"
 RESOLUTION_STATE_MULTIPLE = "multiple"
+RESOLUTION_STATE_ADMIN = "admin"
 
 
 class ResolvedMembership(BaseModel):
@@ -89,12 +95,13 @@ class ResolvedMembership(BaseModel):
 class SessionResolutionResponse(BaseModel):
     """Typed post-login tenant resolution (ADR 0047, task_sso_03).
 
-    `state` is one of `no_access` / `single` / `multiple`. `memberships`
-    lists every ACTIVE tenant membership (empty iff `no_access`). For the
-    `single` state ONLY, `access_token` carries a tenant-scoped JWT minting
-    the active tenant so the client can enter without a second round-trip;
-    for the other states it is `None` and the client either shows the
-    no-access screen or the picker.
+    `state` is one of `no_access` / `single` / `multiple` / `admin`.
+    `memberships` lists every ACTIVE tenant membership (empty iff `no_access`
+    or `admin`). For the `single` state ONLY, `access_token` carries a
+    tenant-scoped JWT minting the active tenant so the client can enter
+    without a second round-trip; for the other states it is `None` and the
+    client shows the no-access screen, the picker, or — for `admin` — enters
+    the portfolio view with the tenant-less identity token it already holds.
     """
 
     state: str

@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
 import { clearToken, getToken } from "@/lib/auth";
-import { setTenantId } from "@/lib/tenant-storage";
+import { clearTenantId } from "@/lib/tenant-storage";
 
 export default function NoAccessPage() {
   const router = useRouter();
@@ -40,7 +40,7 @@ export default function NoAccessPage() {
       if (!(err instanceof ApiError)) console.error(err);
     } finally {
       clearToken();
-      setTenantId(null);
+      clearTenantId();
       router.replace("/login");
     }
   }

@@ -37,7 +37,7 @@ import { useLang, type Lang } from "@/lib/lang-context";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
 import { clearToken } from "@/lib/auth";
-import { setTenantId as clearStoredTenant } from "@/lib/tenant-storage";
+import { clearTenantId as clearStoredTenant } from "@/lib/tenant-storage";
 import { useCurrentUser, type CurrentUser } from "@/lib/use-current-user";
 
 export function AdminHeader({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
@@ -53,7 +53,7 @@ export function AdminHeader({ onOpenMobileNav }: { onOpenMobileNav: () => void }
     } finally {
       clearToken();
       // Drop the active-tenant choice too — next login starts fresh.
-      clearStoredTenant(null);
+      clearStoredTenant();
       router.replace("/login");
     }
   }

@@ -341,7 +341,7 @@ function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolea
         ) : null}
         {isPlaceholder ? (
           <p
-            className="border-warning/40 bg-warning/10 text-warning-foreground mt-2 rounded-md border px-3 py-2 text-xs"
+            className="bg-warning-soft text-warning-soft-foreground border-warning/30 mt-2 rounded-md border px-3 py-2 text-xs"
             data-testid="sso-redirect-base-warning"
             role="alert"
           >

@@ -14,11 +14,29 @@
  * `isSuperadmin=false`.
  */
 
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/api";
-import { getTenantId, setTenantId as persistTenantId } from "@/lib/tenant-storage";
+import {
+  getTenantChoice,
+  getTenantId,
+  setAllTenants,
+  setTenantId as persistSpecificTenant,
+} from "@/lib/tenant-storage";
+
+// The platform tenant holds built-in catalogs (CLAUDE.md §1); it is never
+// an "acting tenant" so it is excluded from the auto-default below (and the
+// picker filters it out too).
+const PLATFORM_TENANT_ID = "00000000-0000-0000-0000-000000000001";
 
 interface MeResponse {
   id: string;
@@ -80,7 +98,10 @@ export function TenantProvider({ children }: { children: ReactNode }) {
   const setTenantId = useCallback(
     (id: string | null) => {
       setTenantIdState(id);
-      persistTenantId(id);
+      // null from the picker means the EXPLICIT "Todos los tenants" choice
+      // (sticky portfolio) — store the sentinel, not "unset".
+      if (id) persistSpecificTenant(id);
+      else setAllTenants();
       // Drop tenant-scoped queries so the next read goes out with the new
       // X-Tenant-Id header — but NOT the queries that don't depend on the
       // tenant (frontend-admin-panel-2). `auth` is the user identity,
@@ -100,6 +121,24 @@ export function TenantProvider({ children }: { children: ReactNode }) {
   const refreshTenants = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["admin", "tenants"] });
   }, [queryClient]);
+
+  // Auto-default for a FRESH superadmin: a system admin with no membership
+  // enters in portfolio mode (e.g. the bootstrap `root` — ADR 0047), but a
+  // null tenant means tenant-scoped WRITES 400 with "active tenant required".
+  // So when they have NEVER made an explicit choice (storage unset — NOT the
+  // "__all__" sentinel) and at least one real tenant exists, land them IN the
+  // first tenant so editing works immediately. An explicit "Todos los
+  // tenants" pick is sticky and never auto-overridden; runs once per mount.
+  const autoDefaultedRef = useRef(false);
+  useEffect(() => {
+    if (autoDefaultedRef.current || !isSuperadmin || tenantsQuery.isLoading) return;
+    if (getTenantChoice() !== null) return; // explicit "all" or a specific tenant already
+    const firstReal = (tenantsQuery.data ?? []).find((t) => t.id !== PLATFORM_TENANT_ID);
+    if (firstReal) {
+      autoDefaultedRef.current = true;
+      setTenantId(firstReal.id);
+    }
+  }, [isSuperadmin, tenantsQuery.isLoading, tenantsQuery.data, setTenantId]);
 
   const value: TenantContextValue = {
     me: meQuery.data ?? null,

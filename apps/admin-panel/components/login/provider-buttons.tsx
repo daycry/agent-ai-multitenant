@@ -77,17 +77,21 @@ export function ProviderButtons() {
 
   return (
     <div className="space-y-5">
+      {/* Divider first, then the buttons: the password form sits ABOVE, so
+          these providers are the alternative below it. Only renders when at
+          least one provider is enabled. */}
+      <div className="flex items-center gap-3" aria-hidden="true" data-testid="login-divider">
+        <span className="bg-border h-px flex-1" />
+        <span className="text-muted-foreground text-xs uppercase tracking-wide">
+          o continúa con
+        </span>
+        <span className="bg-border h-px flex-1" />
+      </div>
+
       <div className="space-y-2" data-testid="login-providers">
         {providers.map((provider) => (
           <ProviderButton key={provider.id} provider={provider} />
         ))}
-      </div>
-
-      {/* Divider only when at least one provider rendered above. */}
-      <div className="flex items-center gap-3" aria-hidden="true" data-testid="login-divider">
-        <span className="bg-border h-px flex-1" />
-        <span className="text-muted-foreground text-xs uppercase tracking-wide">o con email</span>
-        <span className="bg-border h-px flex-1" />
       </div>
     </div>
   );

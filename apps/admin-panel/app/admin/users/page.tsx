@@ -392,25 +392,31 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
                         </span>
                       </TableCell>
                       <TableCell className="px-3">
-                        <Select
-                          value={m.role}
-                          onChange={(e) =>
-                            updateMutation.mutate({
-                              membershipId: m.id,
-                              body: { role: e.target.value },
-                            })
-                          }
-                          disabled={updateMutation.isPending}
-                          className="h-8 w-auto text-xs"
-                          data-testid={`membership-role-${m.id}`}
-                          aria-label={`Rol de ${m.tenant_name}`}
-                        >
-                          {ROLES.map((r) => (
-                            <option key={r} value={r}>
-                              {ROLE_LABEL[r]}
-                            </option>
-                          ))}
-                        </Select>
+                        {/* Constrain the PARENT (not the select with w-auto):
+                            the Select chevron is positioned against its
+                            w-full wrapper, so a shrunk select would float the
+                            arrow at the cell's right edge. */}
+                        <div className="w-40">
+                          <Select
+                            value={m.role}
+                            onChange={(e) =>
+                              updateMutation.mutate({
+                                membershipId: m.id,
+                                body: { role: e.target.value },
+                              })
+                            }
+                            disabled={updateMutation.isPending}
+                            className="h-8 text-xs"
+                            data-testid={`membership-role-${m.id}`}
+                            aria-label={`Rol de ${m.tenant_name}`}
+                          >
+                            {ROLES.map((r) => (
+                              <option key={r} value={r}>
+                                {ROLE_LABEL[r]}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
                       </TableCell>
                       <TableCell className="px-3">
                         <button
