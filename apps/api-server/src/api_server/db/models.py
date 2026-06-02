@@ -404,19 +404,23 @@ class TenantSetting(Base):
 # ---------------------------------------------------------------------------
 # SSOConfiguration — per-tenant enterprise SSO config (Plan 08 task_08_01)
 # ---------------------------------------------------------------------------
-class SSOConfiguration(
-    Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDeleteMixin
-):
-    """Per-tenant OIDC (and, later, SAML) provider configuration.
+class SSOConfiguration(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
+    """Platform-global OIDC / SAML provider configuration (ADR 0047).
 
-    Multi-tenancy: tenant-scoped via :class:`TenantScopedMixin` + RLS
-    (`tenant_isolation` policy in the migration). Tenant A's row is
-    invisible to a session bound to tenant B — the database refuses to
-    return it, so an OIDC login can never resolve another tenant's IdP.
+    Tenancy decision (ADR 0047, supersedes the per-tenant part of ADR
+    0031, re-aligns with ADR 0028): auth providers are **platform-global**
+    — configured ONCE by ``system_admin`` and serving every tenant. The
+    table therefore carries **no ``tenant_id``** and has **no RLS policy**:
+    access to a tenant is granted by ``UserOrganizationMembership`` AFTER
+    login, not by which tenant owns the provider. The config identity is
+    per ``provider``/kind (one ``oidc`` row + one ``saml`` row for the
+    whole platform), enforced by ``uq_sso_config_provider``. Reads run on
+    the BYPASSRLS admin engine (the System Admin surface); no tenant /
+    ``app_user`` path ever resolves a provider by tenant.
 
     Secret handling (CLAUDE.md principle: no plaintext secrets in the
-    DB). The OIDC ``client_secret`` is stored in EXACTLY ONE of two
-    forms, never both, never in clear text:
+    DB) — UNCHANGED by the global re-scope. The OIDC ``client_secret`` is
+    stored in EXACTLY ONE of two forms, never both, never in clear text:
 
       * ``client_secret_ref``: a Vault pointer (``vault:<mount>/data/...``)
         resolved at login time through the same VaultResolver the MCP
@@ -434,18 +438,24 @@ class SSOConfiguration(
 
     __tablename__ = "sso_configurations"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "provider", name="uq_sso_config_tenant_provider"),
+        # Global identity: one enabled config per provider/kind for the
+        # whole platform (ADR 0047). Replaces the per-tenant
+        # uq_sso_config_tenant_provider.
+        UniqueConstraint("provider", name="uq_sso_config_provider"),
         Index(
-            "ix_sso_configurations_tenant_enabled",
-            "tenant_id",
+            "ix_sso_configurations_enabled",
+            "provider",
             "enabled",
             postgresql_where=text("deleted_at IS NULL"),
         ),
     )
 
     provider: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'oidc'"))
-    # Human-friendly label shown in the tenant's login picker.
+    # Human-friendly label shown in the login picker.
     display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Login-button text shown on the public /login page (ADR 0047). NULL
+    # falls back to a kind-derived default in the UI.
+    button_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
     # --- OIDC discovery + client identity (NULL on a `saml` row) ---
@@ -548,7 +558,7 @@ class SSOConfiguration(
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
-            f"SSOConfiguration(id={self.id!r}, tenant={self.tenant_id!r}, "
+            f"SSOConfiguration(id={self.id!r}, "
             f"provider={self.provider!r}, enabled={self.enabled!r})"
         )
 

@@ -53,7 +53,7 @@ Ver **ADR 0047** para el diseño completo. Resumen de lo que entra:
 
 #### `task_sso_01` — `sso_configurations` platform-global + button_label + migración
 
-- [ ] **Título**: Re-scopear `SSOConfiguration` a platform-global (sin RLS tenant; identidad por provider/kind, no
+- [x] **Título**: Re-scopear `SSOConfiguration` a platform-global (sin RLS tenant; identidad por provider/kind, no
       por tenant), añadir `button_label`; migración reversible que consolida las filas per-tenant existentes en
       globales. Repos/queries (`_load_enabled_oidc_config`/`_load_enabled_saml_config`) pasan a globales.
 - **Tests**: `pytest tests/integration/test_sso_global_config.py + tests/integration/test_migrations.py -v`

@@ -10,6 +10,7 @@ It relies on the docker-compose Postgres being healthy on localhost
 from __future__ import annotations
 
 import asyncio
+import json
 from uuid import uuid4
 
 import asyncpg
@@ -295,3 +296,153 @@ def test_reversible_migration_preserves_row_data(alembic_config, admin_pg_dsn: s
         _fetch_one(admin_pg_dsn, f"SELECT count(*) FROM organizations WHERE id = '{second_id}'")
     )
     assert written == (1,), "schema not writable after the round-trip"
+
+
+# ---------------------------------------------------------------------------
+# task_sso_01 — sso_configurations platform-global (migration 0076, ADR 0047)
+#
+# The table loses its per-tenant scoping: no tenant_id, no RLS, identity by
+# provider/kind. The migration must be reversible (up/down/up) and the
+# per-tenant rows must be consolidated into one global row per provider
+# (most-recently-updated wins) without losing the surviving row's data.
+# ---------------------------------------------------------------------------
+_SSO_BEFORE_0076 = "0075_memory_source_human_ws"
+
+
+def _column_exists(dsn: str, table: str, column: str) -> bool:
+    rows = asyncio.run(
+        _fetch_all(
+            dsn,
+            "SELECT column_name FROM information_schema.columns "
+            f"WHERE table_name = '{table}' AND column_name = '{column}'",
+        )
+    )
+    return len(rows) == 1
+
+
+def _unique_constraints(dsn: str, table: str) -> set[str]:
+    rows = asyncio.run(
+        _fetch_all(
+            dsn,
+            f"SELECT conname FROM pg_constraint "
+            f"WHERE conrelid = '{table}'::regclass AND contype = 'u'",
+        )
+    )
+    return {r[0] for r in rows}
+
+
+def test_sso_global_migration_drops_tenant_scoping(alembic_config, admin_pg_dsn: str) -> None:
+    command.upgrade(alembic_config, "head")
+
+    # No tenant_id, has button_label.
+    assert not _column_exists(admin_pg_dsn, "sso_configurations", "tenant_id")
+    assert _column_exists(admin_pg_dsn, "sso_configurations", "button_label")
+
+    # RLS off, no tenant_isolation policy.
+    assert "sso_configurations" not in _rls_enabled_tables(admin_pg_dsn)
+    assert ("sso_configurations", "tenant_isolation") not in _policies(admin_pg_dsn)
+
+    # Global unique by provider; per-tenant unique gone.
+    uniques = _unique_constraints(admin_pg_dsn, "sso_configurations")
+    assert "uq_sso_config_provider" in uniques
+    assert "uq_sso_config_tenant_provider" not in uniques
+
+
+def test_sso_global_migration_is_reversible(alembic_config, admin_pg_dsn: str) -> None:
+    """Downgrading past 0076 restores the per-tenant shape; re-upgrading
+    returns to the global shape (up/down/up)."""
+    command.upgrade(alembic_config, "head")
+    assert not _column_exists(admin_pg_dsn, "sso_configurations", "tenant_id")
+
+    command.downgrade(alembic_config, _SSO_BEFORE_0076)
+    # Per-tenant shape is back.
+    assert _column_exists(admin_pg_dsn, "sso_configurations", "tenant_id")
+    assert not _column_exists(admin_pg_dsn, "sso_configurations", "button_label")
+    assert "sso_configurations" in _rls_enabled_tables(admin_pg_dsn)
+    assert ("sso_configurations", "tenant_isolation") in _policies(admin_pg_dsn)
+    uniques = _unique_constraints(admin_pg_dsn, "sso_configurations")
+    assert "uq_sso_config_tenant_provider" in uniques
+    assert "uq_sso_config_provider" not in uniques
+
+    # Re-upgrade restores the global shape.
+    command.upgrade(alembic_config, "head")
+    assert not _column_exists(admin_pg_dsn, "sso_configurations", "tenant_id")
+    assert _column_exists(admin_pg_dsn, "sso_configurations", "button_label")
+    assert "uq_sso_config_provider" in _unique_constraints(admin_pg_dsn, "sso_configurations")
+
+
+def test_sso_global_migration_consolidates_per_tenant_rows(
+    alembic_config, admin_pg_dsn: str
+) -> None:
+    """Two tenants with the same provider before 0076 -> one global row
+    after (the most-recently-updated wins); the surviving row's data is
+    intact and the global unique constraint then holds."""
+    # Downgrade to the per-tenant shape so we can seed two tenant rows.
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, _SSO_BEFORE_0076)
+
+    # Clean slate for this table.
+    asyncio.run(_exec(admin_pg_dsn, "TRUNCATE sso_configurations RESTART IDENTITY CASCADE"))
+
+    tenant_old = uuid4()
+    tenant_new = uuid4()
+    config_old = uuid4()
+    config_new = uuid4()
+    for tid in (tenant_old, tenant_new):
+        asyncio.run(
+            _exec(
+                admin_pg_dsn,
+                "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)",
+                tid,
+                f"Org {tid.hex[:6]}",
+                f"org-{tid.hex[:12]}",
+            )
+        )
+    # Older row (updated_at in the past) — should LOSE consolidation.
+    asyncio.run(
+        _exec(
+            admin_pg_dsn,
+            "INSERT INTO sso_configurations "
+            "(id, tenant_id, provider, display_name, enabled, issuer, client_id, "
+            " scopes, claim_mappings, updated_at) "
+            "VALUES ($1, $2, 'oidc', 'OLD', true, $3, $4, $5::jsonb, $6::jsonb, "
+            " now() - interval '2 days')",
+            config_old,
+            tenant_old,
+            "https://old.example.test",
+            "old-client",
+            json.dumps(["openid"]),
+            json.dumps({}),
+        )
+    )
+    # Newer row — should WIN consolidation.
+    asyncio.run(
+        _exec(
+            admin_pg_dsn,
+            "INSERT INTO sso_configurations "
+            "(id, tenant_id, provider, display_name, enabled, issuer, client_id, "
+            " scopes, claim_mappings, updated_at) "
+            "VALUES ($1, $2, 'oidc', 'NEW', true, $3, $4, $5::jsonb, $6::jsonb, now())",
+            config_new,
+            tenant_new,
+            "https://new.example.test",
+            "new-client",
+            json.dumps(["openid"]),
+            json.dumps({}),
+        )
+    )
+
+    # Upgrade -> consolidation runs.
+    command.upgrade(alembic_config, "head")
+
+    remaining = asyncio.run(
+        _fetch_all(
+            admin_pg_dsn,
+            "SELECT id, display_name, issuer FROM sso_configurations WHERE provider = 'oidc'",
+        )
+    )
+    assert len(remaining) == 1, f"expected one global oidc row, got {remaining}"
+    surviving_id, display_name, issuer = remaining[0]
+    assert surviving_id == config_new, "the most-recently-updated row must win"
+    assert display_name == "NEW"
+    assert issuer == "https://new.example.test"

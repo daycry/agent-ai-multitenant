@@ -131,11 +131,12 @@ _SP_ENTITY_PATH = "/auth/sso/saml/metadata"
 # tenant's config even though the POST carries no RelayState we minted.
 _SAML_ACS_PATH_TEMPLATE = "/auth/sso/{tenant_id}/saml/acs"
 
-# The per-tenant login-flow entry points login discovery points the UI at.
-# `{tenant_id}` is substituted with the resolved tenant. These match the
-# `oidc_login` / `saml_login` routes below.
-_OIDC_LOGIN_PATH_TEMPLATE = "/auth/sso/{tenant_id}/oidc/login"
-_SAML_LOGIN_PATH_TEMPLATE = "/auth/sso/{tenant_id}/saml/login"
+# The login-flow entry points login discovery points the UI at. Auth
+# providers are platform-global (ADR 0047), so the path is keyed by the
+# global provider id, not a tenant. The route shape is finalised in
+# task_sso_02; these match the `oidc_login` / `saml_login` routes below.
+_OIDC_LOGIN_PATH_TEMPLATE = "/auth/sso/{provider_id}/oidc/login"
+_SAML_LOGIN_PATH_TEMPLATE = "/auth/sso/{provider_id}/saml/login"
 
 
 # ---------------------------------------------------------------------------
@@ -177,19 +178,18 @@ def _callback_redirect_uri() -> str:
     return f"{base}{_CALLBACK_PATH}"
 
 
-async def _load_enabled_oidc_config(tenant_id: str) -> SSOConfiguration | None:
-    """Load the tenant's enabled, non-deleted OIDC config under RLS.
+async def _load_enabled_oidc_config() -> SSOConfiguration | None:
+    """Load the platform-global enabled, non-deleted OIDC config (ADR 0047).
 
-    Runs on the app role with ``app.tenant_id`` bound to ``tenant_id`` so
-    the database itself filters to that tenant — a forged config id from
-    another tenant simply returns no rows.
+    Auth providers are platform-global: there is at most one enabled
+    ``oidc`` config for the whole platform (``uq_sso_config_provider``).
+    The read runs on the BYPASSRLS admin engine (System Admin surface) —
+    the table has no RLS policy and no ``tenant_id``; tenant access is
+    granted by membership AFTER login, not by which tenant owns the
+    provider.
     """
-    sessionmaker = get_sessionmaker()
+    sessionmaker = get_admin_sessionmaker()
     async with sessionmaker() as session, session.begin():
-        await session.execute(
-            text("SELECT set_config('app.tenant_id', :tid, true)"),
-            {"tid": tenant_id},
-        )
         result = await session.execute(
             select(SSOConfiguration).where(
                 SSOConfiguration.provider == SSOProvider.OIDC.value,
@@ -234,19 +234,15 @@ def _resolve_config(row: SSOConfiguration) -> ResolvedOIDCConfig:
 # ---------------------------------------------------------------------------
 # SAML config loading + resolution (mirrors the OIDC helpers above)
 # ---------------------------------------------------------------------------
-async def _load_enabled_saml_config(tenant_id: str) -> SSOConfiguration | None:
-    """Load the tenant's enabled, non-deleted SAML config under RLS.
+async def _load_enabled_saml_config() -> SSOConfiguration | None:
+    """Load the platform-global enabled, non-deleted SAML config (ADR 0047).
 
-    Same RLS guarantee as :func:`_load_enabled_oidc_config`: the read
-    runs with ``app.tenant_id`` bound, so tenant A's SAML config is
-    invisible to tenant B even with a forged identifier.
+    Mirrors :func:`_load_enabled_oidc_config`: at most one enabled
+    ``saml`` config for the whole platform, read on the BYPASSRLS admin
+    engine (the table has no RLS / ``tenant_id``).
     """
-    sessionmaker = get_sessionmaker()
+    sessionmaker = get_admin_sessionmaker()
     async with sessionmaker() as session, session.begin():
-        await session.execute(
-            text("SELECT set_config('app.tenant_id', :tid, true)"),
-            {"tid": tenant_id},
-        )
         result = await session.execute(
             select(SSOConfiguration).where(
                 SSOConfiguration.provider == SSOProvider.SAML.value,
@@ -403,18 +399,20 @@ async def discover_login(
 
     provider = config.provider
     if provider == SSOProvider.OIDC.value:
-        login_url = _OIDC_LOGIN_PATH_TEMPLATE.format(tenant_id=config.tenant_id)
+        login_url = _OIDC_LOGIN_PATH_TEMPLATE.format(provider_id=config.id)
     elif provider == SSOProvider.SAML.value:
-        login_url = _SAML_LOGIN_PATH_TEMPLATE.format(tenant_id=config.tenant_id)
+        login_url = _SAML_LOGIN_PATH_TEMPLATE.format(provider_id=config.id)
     else:  # pragma: no cover - provider column is constrained to oidc/saml
         # Unknown provider value — fail safe to local login rather than
         # emit a half-formed SSO answer.
         return LoginDiscoveryResponse(method=LOGIN_METHOD_PASSWORD)
 
+    # tenant_id is no longer part of the SSO answer (ADR 0047): the
+    # provider is platform-global and tenant access is resolved by
+    # membership after login.
     return LoginDiscoveryResponse(
         method=LOGIN_METHOD_SSO,
         provider=provider,
-        tenant_id=config.tenant_id,
         login_url=login_url,
     )
 
@@ -437,13 +435,13 @@ async def oidc_login(
             detail="invalid tenant id",
         ) from exc
 
-    config_row = await _load_enabled_oidc_config(tenant_id)
+    config_row = await _load_enabled_oidc_config()
     if config_row is None:
-        # No config, or it's disabled/deleted — same response either way so
-        # we don't reveal whether a tenant has SSO at all.
+        # No enabled global OIDC config — same response either way so we
+        # don't reveal whether the platform has OIDC SSO at all.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="no enabled OIDC configuration for this tenant",
+            detail="no enabled OIDC configuration",
         )
 
     config = _resolve_config(config_row)
@@ -492,10 +490,9 @@ async def oidc_callback(
             detail="invalid or expired login state",
         )
 
-    tenant_id = str(login_state.tenant_id)
-    config_row = await _load_enabled_oidc_config(tenant_id)
+    config_row = await _load_enabled_oidc_config()
     if config_row is None:
-        # The tenant's config was disabled/removed mid-flight.
+        # The global config was disabled/removed mid-flight.
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="SSO configuration is no longer available",
@@ -570,13 +567,13 @@ async def saml_login(
             detail="invalid tenant id",
         ) from exc
 
-    config_row = await _load_enabled_saml_config(tenant_id)
+    config_row = await _load_enabled_saml_config()
     if config_row is None:
-        # No config, or disabled/deleted — same response either way so we
-        # don't reveal whether a tenant has SAML SSO at all.
+        # No enabled global SAML config — same response either way so we
+        # don't reveal whether the platform has SAML SSO at all.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="no enabled SAML configuration for this tenant",
+            detail="no enabled SAML configuration",
         )
 
     config = _resolve_saml_config(config_row, tenant_id=tenant_id)
@@ -649,7 +646,7 @@ async def saml_acs(
             detail="invalid tenant id",
         ) from exc
 
-    config_row = await _load_enabled_saml_config(tenant_id)
+    config_row = await _load_enabled_saml_config()
     if config_row is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1013,12 +1010,13 @@ async def create_sso_config(
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> SSOConfigResponse:
-    """Create the tenant's OIDC config. tenant_admin only.
+    """Create the platform-global OIDC config (ADR 0047). tenant_admin only.
 
-    There is one OIDC config per tenant (DB unique constraint on
-    ``tenant_id, provider``); a second create returns 409.
+    There is one OIDC config for the whole platform (DB unique constraint
+    on ``provider``); a second create returns 409. The System Admin
+    surface / RBAC is finalised in task_sso_04.
     """
-    tenant_id = require_tenant_id(principal)
+    require_tenant_id(principal)
 
     # Block a duplicate before the DB raises, so the client gets a clean
     # 409 instead of a 500 from the IntegrityError. A soft-deleted row
@@ -1034,12 +1032,11 @@ async def create_sso_config(
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="this tenant already has an OIDC configuration; edit it instead",
+            detail="the platform already has an OIDC configuration; edit it instead",
         )
 
     row = SSOConfiguration(
         id=uuid7(),
-        tenant_id=tenant_id,
         provider=SSOProvider.OIDC.value,
         display_name=payload.display_name,
         enabled=payload.enabled,
@@ -1059,7 +1056,7 @@ async def create_sso_config(
         # against the unique constraint.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="this tenant already has an OIDC configuration",
+            detail="the platform already has an OIDC configuration",
         ) from exc
     await session.refresh(row)
     return _to_response(row)
@@ -1320,12 +1317,13 @@ async def create_saml_config(
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> SAMLConfigResponse:
-    """Create the tenant's SAML config. tenant_admin only.
+    """Create the platform-global SAML config (ADR 0047). tenant_admin only.
 
-    One SAML config per tenant (DB unique constraint on
-    ``tenant_id, provider``); a second create returns 409.
+    One SAML config for the whole platform (DB unique constraint on
+    ``provider``); a second create returns 409. The System Admin surface /
+    RBAC is finalised in task_sso_04.
     """
-    tenant_id = require_tenant_id(principal)
+    require_tenant_id(principal)
 
     existing = await session.execute(
         select(SSOConfiguration).where(
@@ -1336,12 +1334,11 @@ async def create_saml_config(
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="this tenant already has a SAML configuration; edit it instead",
+            detail="the platform already has a SAML configuration; edit it instead",
         )
 
     row = SSOConfiguration(
         id=uuid7(),
-        tenant_id=tenant_id,
         provider=SSOProvider.SAML.value,
         display_name=payload.display_name,
         enabled=payload.enabled,
@@ -1366,7 +1363,7 @@ async def create_saml_config(
     except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="this tenant already has a SAML configuration",
+            detail="the platform already has a SAML configuration",
         ) from exc
     await session.refresh(row)
     return _to_saml_response(row)
