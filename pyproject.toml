@@ -214,6 +214,14 @@ ignore_missing_imports = true
 module = ["shared_guardrails", "shared_guardrails.*"]
 ignore_missing_imports = true
 
+# `shared-domain` is a local path package (Plan 06.18 task_06_18_03, ADR 0048):
+# the canonical tool-name source of truth. Same pattern as shared_llm /
+# shared_mcp / shared_test_runtimes / shared_guardrails — the pre-commit mypy
+# hook venv doesn't install it; the runtime / dev venv does.
+[[tool.mypy.overrides]]
+module = ["shared_domain", "shared_domain.*"]
+ignore_missing_imports = true
+
 # Cross-app imports (Plan 06 task_06_H / orchestrator.plan_runner).
 # The orchestrator imports from api_server.* and workers.* directly to
 # stitch the modules into a sync demo runner. Same story: pre-commit

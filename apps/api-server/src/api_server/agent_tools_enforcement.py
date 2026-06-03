@@ -30,9 +30,12 @@ module only decides *what* that allowlist is for a given agent + mode. It is
 NOT the layered guardrail engine (Plan 11) — it is the minimal call-time
 enforcement that makes a per-agent assignment real instead of advisory.
 
-Tool *names* (not ids) are forwarded: the runtime registry is keyed on the
-canonical ``Tool.name`` (e.g. ``read_file``), which is also what the chat-mode
-allowlists are expressed in — so the intersection is over a single namespace.
+Tool *names* (not ids) are forwarded. The catalog, chat-modes and runtime
+historically used divergent names for the same action (``read_file`` vs
+``file_read``), so both layers are normalised through
+``shared_domain.tool_names.to_canonical_set`` (ADR 0048) before intersecting —
+otherwise ``read_file`` (catalog) and ``file_read`` (chat-mode) would intersect
+to the empty set by mere name mismatch (the silent "unknown tool" failure).
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from uuid import UUID
 
+from shared_domain.tool_names import to_canonical_set
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -97,8 +101,8 @@ def combine_tool_allowlists(
     layers share no tool", which the runtime reads as "block every tool",
     exactly as the discussion mode's empty allowlist already does.
     """
-    agent_set = None if agent_tool_names is None else frozenset(agent_tool_names)
-    mode_set = None if mode_allowed_tools is None else frozenset(mode_allowed_tools)
+    agent_set = None if agent_tool_names is None else to_canonical_set(agent_tool_names)
+    mode_set = None if mode_allowed_tools is None else to_canonical_set(mode_allowed_tools)
 
     if agent_set is None and mode_set is None:
         return None
