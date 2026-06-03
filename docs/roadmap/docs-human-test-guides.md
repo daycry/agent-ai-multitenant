@@ -32,7 +32,7 @@ Cada plan del roadmap define en su sección "Tests Humanos del Plan" una lista `
 un revisor humano valida antes de pasar el plan de `pending_human_validation` a `completed`). `docs/03-guides/
 human-tests/` ya documenta **11 planes** (02, 04, 04.5, 05, 06, 06.6–06.9, 06.12, 06.14). **Faltan el resto**, y
 en particular **todos los planes en `pending_human_validation`** que el operador necesita validar ahora (07–16,
-09.1, 11.2, 06.15, 06.16, demo-webscorpo, 15). Este plan **rellena las guías que faltan**, con el mismo formato
+09.1, 11.2, 06.15, 06.16, 15). Este plan **rellena las guías que faltan**, con el mismo formato
 que las existentes (intro + estado + TL;DR con setup/launcher + checklists accionables con precondiciones y
 resultado esperado), y actualiza el índice.
 
@@ -40,8 +40,7 @@ resultado esperado), y actualiza el índice.
 
 **Entra** — crear las guías que faltan en `docs/03-guides/human-tests/<plan>.md` (formato de las existentes):
 
-- **Prioridad (pending_human_validation)**: 07, 08, 09, 09.1, 10, 11, 11.2, 12, 13, 14, 15, 16, 06.15, 06.16,
-  demo-webscorpo.
+- **Prioridad (pending_human_validation)**: 07, 08, 09, 09.1, 10, 11, 11.2, 12, 13, 14, 15, 16, 06.15, 06.16.
 - **Completitud (completed sin guía)**: 00, 01, 03, 06.10, 06.11, 06.13.
 - Cada guía deriva del bloque "Tests Humanos del Plan" del roadmap del plan: intro + "Estado del plan" + TL;DR
   (referencia al `scripts/setup_demo_*.py` / launcher si existe, si no pasos manuales de setup) + un checklist
@@ -80,10 +79,10 @@ resultado esperado), y actualiza el índice.
 - [x] **Título**: Crear las guías de 13-api-publica-webhooks, 14-evals-estadisticas, 15-instalador-produccion, 16-human-agents.
 - **Tests**: `test -f` de las 4 guías + pre-commit prettier verde
 
-#### `task_htg_04` — Guías 06.15, 06.16, demo-webscorpo
+#### `task_htg_04` — Guías 06.15, 06.16
 
-- [x] **Título**: Crear las guías de 06.15-agent-tools-assignment-ui, 06.16-polyglot-tool-catalog, demo-webscorpo-team-kb (incl. cómo correr `scripts/setup_webscorpo.py`).
-- **Tests**: `test -f` de las 3 guías + pre-commit prettier verde
+- [x] **Título**: Crear las guías de 06.15-agent-tools-assignment-ui, 06.16-polyglot-tool-catalog. (La guía del antiguo seed demo se retiró en el plan correctivo `codeigniter-4-builtin-team`, que convirtió CodeIgniter 4 en equipo built-in de fábrica.)
+- **Tests**: `test -f` de las 2 guías + pre-commit prettier verde
 
 ### Fase B — Completitud + índice
 

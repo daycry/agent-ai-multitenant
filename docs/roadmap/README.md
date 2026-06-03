@@ -66,9 +66,9 @@ Planes con `plan_id` descriptivo (no numerado) que **usan** la plataforma para
 materializar escenarios reales en lugar de construir features. No bloquean ni
 son bloqueados por las fases.
 
-| Plan                                                     | Qué materializa                                                                  | Construye sobre      |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------- |
-| [demo-webscorpo-team-kb.md](./demo-webscorpo-team-kb.md) | Equipo WebScorpo (CI4) de 10 agentes + proyecto + KB completo (equipo + por-rol) | 06.15, 06.16, 04, 16 |
+| Plan                                                             | Qué materializa                                                                                     | Construye sobre      |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------- |
+| [codeigniter-4-builtin-team.md](./codeigniter-4-builtin-team.md) | Equipo built-in CodeIgniter 4 de 10 agentes + 8 KBs de fábrica + plantilla de proyecto (correctivo) | 06.15, 06.16, 04, 16 |
 
 ### Planes documentales (no entran en el gate de fases)
 
