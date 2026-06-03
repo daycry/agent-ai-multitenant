@@ -77,13 +77,6 @@ export default function LoginPage() {
           <CardTitle>Sign in</CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
-          {/* Branded SSO buttons for the enabled GLOBAL providers (ADR
-              0047), with an "or with email" divider. Added ALONGSIDE the
-              password form below — never a gate in front of it; if no
-              provider is enabled this renders nothing (no divider) and the
-              password form stands alone. */}
-          <ProviderButtons />
-
           <form onSubmit={onSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="email">Email</Label>
@@ -117,6 +110,13 @@ export default function LoginPage() {
               {loading ? "Signing in…" : "Sign in"}
             </Button>
           </form>
+
+          {/* Branded SSO buttons for the enabled GLOBAL providers (ADR
+              0047), shown BELOW the email/password form with an "or continue
+              with" divider. Added ALONGSIDE local login — never a gate in
+              front of it; if no provider is enabled this renders nothing (no
+              divider) and the password form stands alone. */}
+          <ProviderButtons />
         </CardContent>
       </Card>
     </main>

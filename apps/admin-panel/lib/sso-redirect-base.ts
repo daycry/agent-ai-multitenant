@@ -16,8 +16,10 @@
  * that merely contains the substring.
  */
 
-/** The backend `sso_redirect_base_url` default (api_server.config). */
-export const SSO_REDIRECT_BASE_DEFAULT = "http://localhost:8000";
+/** The backend bootstrap default base URL (api_server.config). System Admins
+ *  override it live from the SSO page (platform setting `app.public_base_url`),
+ *  so this only matches when no override is set. Dev api-server is on :8001. */
+export const SSO_REDIRECT_BASE_DEFAULT = "http://localhost:8001";
 
 /**
  * True when `url` (a callback/ACS/SP-entity URL) is built from the default

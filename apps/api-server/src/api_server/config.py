@@ -83,14 +83,15 @@ class Settings(BaseSettings):
         description="Secret used to derive the Fernet key for notification "
         "channel secrets at rest. MUST match NOTIFY_NOTIFICATION_ENCRYPTION_KEY.",
     )
-    # Public base URL the IdP redirects back to after authentication.
-    # The OIDC callback path (`/auth/sso/oidc/callback`) is appended to
-    # this. In dev the api-server is reachable at localhost:8000; in prod
-    # this is the external gateway URL the IdP's redirect-URI allowlist
-    # is configured with.
+    # Public base URL the IdP redirects back to after authentication. The
+    # OIDC callback (`/auth/sso/oidc/callback`) + SAML ACS / EntityID are
+    # appended to it, so it must point at the API SERVER's PUBLIC URL (NOT
+    # the admin-panel). This is the BOOTSTRAP fallback only: a System Admin
+    # overrides it live from the SSO settings page (platform setting
+    # `sso.redirect_base_url`, ADR 0047). In dev the api-server is on :8001.
     sso_redirect_base_url: str = Field(
-        default="http://localhost:8000",
-        description="Public base URL used to build the OIDC redirect_uri.",
+        default="http://localhost:8001",
+        description="Bootstrap public app base URL (System-Admin-overridable).",
     )
     # TTL of the short-lived state/nonce record stored in Redis between
     # the /login redirect and the /callback. Bounds how long a login can

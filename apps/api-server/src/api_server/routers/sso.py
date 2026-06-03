@@ -96,6 +96,11 @@ from api_server.db.models import (
     SSOProvider,
     User,
 )
+from api_server.db.platform_settings import (
+    InvalidPublicBaseUrlError,
+    get_app_public_base_url_override,
+    set_app_public_base_url,
+)
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 from api_server.routers.mcp import get_vault_resolver
 from api_server.schemas.auth import LoginResponse
@@ -107,6 +112,8 @@ from api_server.schemas.sso import (
     IdPMetadataParseResponse,
     LoginDiscoveryResponse,
     OIDCTemplateResponse,
+    PublicBaseUrlResponse,
+    PublicBaseUrlUpdate,
     PublicProviderResponse,
     SAMLConfigResponse,
     SAMLConfigUpsertRequest,
@@ -188,9 +195,25 @@ def get_saml_relay_state_store(
     return SAMLRelayStateStore(sessions._redis)  # - same package
 
 
-def _callback_redirect_uri() -> str:
-    base = get_settings().sso_redirect_base_url.rstrip("/")
-    return f"{base}{_CALLBACK_PATH}"
+async def _effective_redirect_base() -> str:
+    """The effective public base URL for IdP redirects (ADR 0047).
+
+    The System-Admin override from ``platform_settings`` if set, else the env
+    bootstrap default (``settings.sso_redirect_base_url``). Read on the
+    BYPASSRLS admin engine (it is a platform setting, no tenant). Trailing
+    slash stripped. Resolved once per request at each async entry point and
+    handed to the sync URL builders below — so the OIDC/SAML resolution logic
+    stays synchronous.
+    """
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        override = await get_app_public_base_url_override(session)
+    base = override or get_settings().sso_redirect_base_url
+    return base.rstrip("/")
+
+
+def _callback_redirect_uri(base: str) -> str:
+    return f"{base.rstrip('/')}{_CALLBACK_PATH}"
 
 
 async def _load_enabled_oidc_config() -> SSOConfiguration | None:
@@ -312,18 +335,16 @@ async def _load_enabled_saml_config() -> SSOConfiguration | None:
         return result.scalar_one_or_none()
 
 
-def _sp_entity_id() -> str:
-    base = get_settings().sso_redirect_base_url.rstrip("/")
-    return f"{base}{_SP_ENTITY_PATH}"
+def _sp_entity_id(base: str) -> str:
+    return f"{base.rstrip('/')}{_SP_ENTITY_PATH}"
 
 
-def _saml_acs_url() -> str:
+def _saml_acs_url(base: str) -> str:
     """The single, GLOBAL ACS URL the IdP POSTs the SAMLResponse to (ADR 0047)."""
-    base = get_settings().sso_redirect_base_url.rstrip("/")
-    return f"{base}{_SAML_ACS_PATH}"
+    return f"{base.rstrip('/')}{_SAML_ACS_PATH}"
 
 
-def _resolve_saml_config(row: SSOConfiguration) -> ResolvedSAMLConfig:
+def _resolve_saml_config(row: SSOConfiguration, base: str) -> ResolvedSAMLConfig:
     """Turn a global SAML DB row into a flow config (ADR 0047).
 
     The per-provider CHECK constraint guarantees a `saml` row has
@@ -355,8 +376,8 @@ def _resolve_saml_config(row: SSOConfiguration) -> ResolvedSAMLConfig:
         idp_entity_id=row.idp_entity_id,
         idp_sso_url=row.idp_sso_url,
         idp_x509_cert=row.idp_x509_cert,
-        sp_entity_id=_sp_entity_id(),
-        sp_acs_url=_saml_acs_url(),
+        sp_entity_id=_sp_entity_id(base),
+        sp_acs_url=_saml_acs_url(base),
         name_id_format=row.name_id_format or DEFAULT_NAME_ID_FORMAT,
         attribute_mappings={str(k): str(v) for k, v in (row.attribute_mappings or {}).items()},
         sp_x509_cert=row.sp_x509_cert,
@@ -550,7 +571,7 @@ async def oidc_login(
         )
 
     config = _resolve_config(config_row)
-    redirect_uri = _callback_redirect_uri()
+    redirect_uri = _callback_redirect_uri(await _effective_redirect_base())
     state = new_token()
     nonce = new_token()
 
@@ -685,7 +706,7 @@ async def saml_login(
             detail="unknown SAML provider",
         )
 
-    config = _resolve_saml_config(config_row)
+    config = _resolve_saml_config(config_row, await _effective_redirect_base())
 
     # RelayState is the SAML analogue of the OIDC `state`: a random,
     # single-use token the IdP echoes back to the ACS so we recover the
@@ -773,7 +794,7 @@ async def saml_acs(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="SAML configuration is no longer available",
         )
-    config = _resolve_saml_config(config_row)
+    config = _resolve_saml_config(config_row, await _effective_redirect_base())
 
     post_data = {"SAMLResponse": saml_response}
     if relay_state is not None:
@@ -986,7 +1007,59 @@ async def get_oidc_callback_url(
     _principal: AuthPrincipal = Depends(require_system_admin),
 ) -> CallbackUrlResponse:
     """The redirect/callback URL the operator must register at the IdP."""
-    return CallbackUrlResponse(callback_url=_callback_redirect_uri())
+    return CallbackUrlResponse(
+        callback_url=_callback_redirect_uri(await _effective_redirect_base())
+    )
+
+
+@router.get("/public-base-url", response_model=PublicBaseUrlResponse)
+async def get_public_base_url(
+    _principal: AuthPrincipal = Depends(require_system_admin),
+) -> PublicBaseUrlResponse:
+    """The public application base URL + how it is currently sourced (ADR 0047).
+
+    ``base_url`` is the EFFECTIVE value (the System-Admin override if set, else
+    the env bootstrap default). ``is_override`` says whether it came from the
+    DB override; ``env_default`` exposes the bootstrap so the UI can warn when
+    the effective value is still the (localhost) default. The callback / ACS
+    URLs are PATHS under this base — the operator registers those at the IdP.
+    """
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        override = await get_app_public_base_url_override(session)
+    env_default = get_settings().sso_redirect_base_url.rstrip("/")
+    return PublicBaseUrlResponse(
+        base_url=(override or env_default).rstrip("/"),
+        is_override=override is not None,
+        env_default=env_default,
+    )
+
+
+@router.put("/public-base-url", response_model=PublicBaseUrlResponse)
+async def put_public_base_url(
+    payload: PublicBaseUrlUpdate,
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> PublicBaseUrlResponse:
+    """Set the public application base URL override (System Admin only).
+
+    Validated + normalised (a bare ``scheme://host[:port]`` origin, no path) —
+    a bad value is a 422, never persisted. Stored in ``platform_settings`` so it
+    takes effect live (the next SSO redirect reads it) without a restart.
+    """
+    actor = await session.get(User, principal.user_id)
+    if actor is None:  # pragma: no cover - token validated upstream
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="user no longer exists"
+        )
+    try:
+        stored = await set_app_public_base_url(session, payload.base_url, actor=actor)
+    except InvalidPublicBaseUrlError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    env_default = get_settings().sso_redirect_base_url.rstrip("/")
+    return PublicBaseUrlResponse(base_url=stored, is_override=True, env_default=env_default)
 
 
 @router.get("/config", response_model=list[SSOConfigResponse])
@@ -1243,7 +1316,8 @@ async def get_saml_sp_metadata(
     URL; needs no native crypto. Gated to System Admin (the role that
     manages the global SSO config).
     """
-    return SPMetadataResponse(sp_entity_id=_sp_entity_id(), acs_url=_saml_acs_url())
+    base = await _effective_redirect_base()
+    return SPMetadataResponse(sp_entity_id=_sp_entity_id(base), acs_url=_saml_acs_url(base))
 
 
 @router.post("/saml/parse-metadata", response_model=IdPMetadataParseResponse)

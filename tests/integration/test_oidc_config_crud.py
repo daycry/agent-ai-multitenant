@@ -519,3 +519,95 @@ async def test_callback_url_endpoint(configured_app, migrations_pg_dsn: str) -> 
         resp = await client.get("/auth/sso/oidc/callback-url", headers=_auth(token))
     assert resp.status_code == 200, resp.text
     assert resp.json()["callback_url"] == "http://testserver/auth/sso/oidc/callback"
+
+
+# ---------------------------------------------------------------------------
+# Public application base URL — GET/PUT (ADR 0047, operator-configurable)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_public_base_url_defaults_to_env_then_override_wins(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Fresh: GET reports the env bootstrap (is_override=False). After a PUT,
+    the override WINS (is_override=True) and the derived callback URL reflects
+    it — proving the value is operator-configurable, not env-locked."""
+    await _truncate_all(migrations_pg_dsn)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    token = await _mint_token(admin, is_system_admin=True)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://testserver"
+    ) as client:
+        # Unset → env bootstrap (the fixture sets it to http://testserver).
+        got = await client.get("/auth/sso/public-base-url", headers=_auth(token))
+        assert got.status_code == 200, got.text
+        body = got.json()
+        assert body["base_url"] == "http://testserver"
+        assert body["is_override"] is False
+        assert body["env_default"] == "http://testserver"
+
+        # Set the override (a trailing slash is normalised away).
+        put = await client.put(
+            "/auth/sso/public-base-url",
+            json={"base_url": "https://agentic-orchestrator.com/"},
+            headers=_auth(token),
+        )
+        assert put.status_code == 200, put.text
+        assert put.json()["base_url"] == "https://agentic-orchestrator.com"
+        assert put.json()["is_override"] is True
+
+        # Override wins on the next read…
+        got2 = await client.get("/auth/sso/public-base-url", headers=_auth(token))
+        assert got2.json()["base_url"] == "https://agentic-orchestrator.com"
+        assert got2.json()["is_override"] is True
+
+        # …and the callback URL is the override + the well-known path.
+        cb = await client.get("/auth/sso/oidc/callback-url", headers=_auth(token))
+        assert cb.json()["callback_url"] == (
+            "https://agentic-orchestrator.com/auth/sso/oidc/callback"
+        )
+
+
+@pytest.mark.asyncio
+async def test_public_base_url_rejects_invalid(configured_app, migrations_pg_dsn: str) -> None:
+    """A non-bare URL (carries a path) is a 422 and is never persisted."""
+    await _truncate_all(migrations_pg_dsn)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    token = await _mint_token(admin, is_system_admin=True)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://testserver"
+    ) as client:
+        bad = await client.put(
+            "/auth/sso/public-base-url",
+            json={"base_url": "https://example.com/auth/callback"},
+            headers=_auth(token),
+        )
+        assert bad.status_code == 422, bad.text
+        # Still the env default — nothing was stored.
+        got = await client.get("/auth/sso/public-base-url", headers=_auth(token))
+        assert got.json()["is_override"] is False
+
+
+@pytest.mark.asyncio
+async def test_public_base_url_non_system_admin_forbidden(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """A tenant_admin cannot read OR write the public base URL (system_admin only)."""
+    await _truncate_all(migrations_pg_dsn)
+    tenant, user = await _seed_tenant_admin(migrations_pg_dsn, slug="acme")
+    token = await _mint_token(user, tenant_id=tenant, is_system_admin=False)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://testserver"
+    ) as client:
+        assert (
+            await client.get("/auth/sso/public-base-url", headers=_auth(token))
+        ).status_code == 403
+        assert (
+            await client.put(
+                "/auth/sso/public-base-url",
+                json={"base_url": "https://evil.example.com"},
+                headers=_auth(token),
+            )
+        ).status_code == 403

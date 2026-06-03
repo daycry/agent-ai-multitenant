@@ -104,7 +104,7 @@ test("renders one branded button per enabled provider + the divider", async ({ p
   // Divider appears only when at least one provider rendered.
   await expect(page.getByTestId("login-divider")).toBeVisible();
 
-  // Password form coexists below the buttons.
+  // Password form coexists above the buttons (SSO is additive, not a gate).
   await expect(page.getByLabel("Password")).toBeVisible();
 
   const ms = page.getByTestId(`login-provider-${MICROSOFT.id}`);

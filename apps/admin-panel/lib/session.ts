@@ -13,13 +13,17 @@
  *     store it + the active tenant and enter the app directly.
  *   - "multiple"  → the tenant-picker (`/admin/select-tenant`) lets the
  *     user choose; that screen POSTs `/auth/session/select-tenant`.
+ *   - "admin"     → a System Admin with NO membership; enter the PORTFOLIO
+ *     view (no active tenant) with the tenant-less identity token already
+ *     held. NEVER the no-access screen — the header picker switches tenant
+ *     or bootstraps the first one.
  */
 
 import { apiFetch } from "@/lib/api";
 import { setToken } from "@/lib/auth";
-import { setTenantId } from "@/lib/tenant-storage";
+import { clearTenantId, setTenantId } from "@/lib/tenant-storage";
 
-export type ResolutionState = "no_access" | "single" | "multiple";
+export type ResolutionState = "no_access" | "single" | "multiple" | "admin";
 
 export interface ResolvedMembership {
   tenant_id: string;
@@ -84,8 +88,17 @@ export async function resolveAndRoute(): Promise<string> {
     return SELECT_TENANT_ROUTE;
   }
 
+  if (resolution.state === "admin") {
+    // System Admin with no membership: enter with the tenant-less identity
+    // token already stored (no token minted). CLEAR the choice (unset, NOT
+    // explicit "all") so TenantProvider auto-lands them in a real tenant and
+    // tenant-scoped edits work; they can switch to "Todos los tenants" later.
+    clearTenantId();
+    return HOME_ROUTE;
+  }
+
   // no_access: a valid identity with no tenant — clear any stale tenant.
-  setTenantId(null);
+  clearTenantId();
   return NO_ACCESS_ROUTE;
 }
 

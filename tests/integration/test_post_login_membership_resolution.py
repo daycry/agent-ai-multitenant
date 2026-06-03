@@ -146,17 +146,18 @@ async def _seed_tenant(dsn: str, *, slug: str, name: str | None = None) -> UUID:
     return tenant
 
 
-async def _seed_password_user(dsn: str, *, email: str) -> UUID:
+async def _seed_password_user(dsn: str, *, email: str, is_system_admin: bool = False) -> UUID:
     user_id = uuid4()
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
             "INSERT INTO users (id, email, full_name, password_hash, is_system_admin) "
-            "VALUES ($1, $2, $3, $4, false)",
+            "VALUES ($1, $2, $3, $4, $5)",
             user_id,
             email,
             "Pwd User",
             hash_password(_PASSWORD),
+            is_system_admin,
         )
     finally:
         await conn.close()
@@ -321,6 +322,45 @@ async def test_password_resolve_no_access(configured_app, migrations_pg_dsn: str
     assert body["state"] == "no_access"
     assert body["memberships"] == []
     assert body["access_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_system_admin_with_no_membership_enters_portfolio(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """A System Admin with NO membership is NEVER locked out (ADR 0047).
+
+    Regression for the chicken-and-egg lockout: the bootstrap superadmin
+    (``root@example.com``) is promoted to ``is_system_admin`` but gets no
+    tenant/membership, so the membership resolution must route them to
+    ``state="admin"`` (portfolio entry), NOT ``no_access`` — otherwise they
+    could not even reach ``/admin/users`` to grant a membership. No token is
+    minted: the tenant-less identity token already carries their powers.
+    """
+    await _truncate_all(migrations_pg_dsn)
+    # A tenant may or may not exist; the superadmin enters portfolio either
+    # way. Seed one to prove it is NOT auto-selected (no active tenant).
+    await _seed_tenant(migrations_pg_dsn, slug="acme")
+    await _seed_password_user(migrations_pg_dsn, email="root@admin.example", is_system_admin=True)
+
+    async with _client(configured_app) as client:
+        token = await _password_login(client, "root@admin.example")
+        resolve = await client.get(
+            "/auth/session/resolve", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resolve.status_code == 200, resolve.text
+        body = resolve.json()
+        assert body["state"] == "admin"
+        assert body["memberships"] == []
+        # No token minted — the client keeps the tenant-less identity token.
+        assert body["access_token"] is None
+
+        # The identity token already works and is tenant-less (portfolio):
+        # /me reports the superadmin with NO active tenant.
+        me = await client.get("/me", headers={"Authorization": f"Bearer {token}"})
+        assert me.status_code == 200, me.text
+        assert me.json()["is_system_admin"] is True
+        assert me.json()["active_tenant_id"] is None
 
 
 @pytest.mark.asyncio
