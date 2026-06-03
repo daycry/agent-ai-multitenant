@@ -32,6 +32,7 @@ Orientados a quien mantiene el sistema corriendo en una sola máquina
 | [dr-manual-backup.md](./dr-manual-backup.md)                         | Backup manual con el motor, verificación y subida a destino remoto                   |
 | [dr-vault-unseal-rotation.md](./dr-vault-unseal-rotation.md)         | Rotar las unseal keys de Vault con `vault operator rekey`                            |
 | [internal-pentest-methodology.md](./internal-pentest-methodology.md) | Pentest interno: threat model, invariantes automáticas y plan de pruebas manuales    |
+| [external-pentest-readiness.md](./external-pentest-readiness.md)     | Pentest externo: readiness, alcance, reglas de enfrentamiento y plantilla de informe |
 | [apparmor-profiles.md](./apparmor-profiles.md)                       | Cargar y verificar los perfiles AppArmor de confinamiento de contenedores            |
 | [sso-global-auth.md](./sso-global-auth.md)                           | Configurar SSO platform-global, login por provider, acceso por membership (ADR 0047) |
 

@@ -565,6 +565,11 @@ El sistema funcional ya está. Esta fase lo hace instalable por terceros sin asi
 - **Complejidad**: l
 - **Rol sugerido**: external auditor
 - **Dependencias**: ninguna (primera tarea de la fase)
+- **Preparación (readiness)**: alcance, reglas de enfrentamiento, provisión de
+  entorno, línea base de remediación y plantilla de informe en
+  [`docs/06-runbooks/external-pentest-readiness.md`](../06-runbooks/external-pentest-readiness.md).
+  El gate (`0099-external-pentest-results.md`) lo cierra el auditor real al
+  entregar; NO se crea antes.
 - **Tests automáticos**:
   ```yaml
   - id: auto_15_27_a
