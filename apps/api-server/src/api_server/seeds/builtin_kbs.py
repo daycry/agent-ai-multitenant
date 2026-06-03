@@ -131,6 +131,96 @@ BUILTIN_KBS: tuple[BuiltinKB, ...] = (
         ),
         category_slug="stack",
     ),
+    # --- KBs built-in del equipo CodeIgniter 4 (plan codeigniter-4-builtin-team) ---
+    # El corpus vive en seeds/catalog/codeigniter-4-*.md (purgado, sin marca de
+    # proyecto). seed_catalog_ingestion las rellena con documents + chunks bajo
+    # PLATFORM_TENANT_ID. Se exponen al RAG al adoptar la plantilla de proyecto
+    # codeigniter-4-app (default_kb_grants), no per-agente (agent_knowledge_bases
+    # niega grants a agentes global_builtin — migración 0026).
+    BuiltinKB(
+        slug="codeigniter-4-conventions",
+        name="CodeIgniter 4 — Convenciones del equipo",
+        description=(
+            "Convenciones de stack para proyectos CodeIgniter 4: arquitectura "
+            "HMVC, patrón Config+Items, estándares de código y toolchain, "
+            "política i18n EN/ES y catálogo de dependencias del ecosistema "
+            "(daycry/auth, daycry/doctrine, daycry/twig)."
+        ),
+        category_slug="stack",
+    ),
+    BuiltinKB(
+        slug="codeigniter-4-architecture",
+        name="CodeIgniter 4 — Arquitectura HMVC y routing",
+        description=(
+            "Arquitectura HMVC modular de CodeIgniter 4: estructura "
+            "app/Modules/, patrón Config+Items, BaseEntity como "
+            "MappedSuperclass, Second-Level Cache de Doctrine y routing "
+            "config-driven."
+        ),
+        category_slug="role",
+    ),
+    BuiltinKB(
+        slug="codeigniter-4-doctrine-data",
+        name="CodeIgniter 4 — Modelo de datos con Doctrine",
+        description=(
+            "Modelo de datos con Doctrine 3.x vía daycry/doctrine: attribute "
+            "mapping, BaseEntity (UUID, timestamps, soft-delete, lifecycle), "
+            "funciones JSON, migraciones reversibles, seeds y regiones de "
+            "Second-Level Cache."
+        ),
+        category_slug="role",
+    ),
+    BuiltinKB(
+        slug="codeigniter-4-testing",
+        name="CodeIgniter 4 — Estrategia de testing",
+        description=(
+            "Estrategia de testing con PHPUnit: suites Unit / Integration / "
+            "E2E (Selenium/Chrome), modo estricto, phpunit.xml.dist y scripts "
+            "composer de cobertura y mutación (Infection)."
+        ),
+        category_slug="role",
+    ),
+    BuiltinKB(
+        slug="codeigniter-4-security",
+        name="CodeIgniter 4 — Seguridad y autenticación",
+        description=(
+            "Seguridad y autenticación con daycry/auth: authenticators "
+            "session/JWT/access-token, grupos y permisos, rate-limiting, "
+            "CSP/Cookies/CSRF y buenas prácticas de gestión de secretos."
+        ),
+        category_slug="role",
+    ),
+    BuiltinKB(
+        slug="codeigniter-4-i18n",
+        name="CodeIgniter 4 — Internacionalización EN/ES",
+        description=(
+            "Internacionalización EN/ES: defaultLocale=en, "
+            "supportedLocales=['en','es'], ficheros de idioma de CodeIgniter 4, "
+            "daycry/codeigniter-language, columnas JSON {es,en} y la UI de "
+            "pestañas de idioma."
+        ),
+        category_slug="role",
+    ),
+    BuiltinKB(
+        slug="codeigniter-4-frontend",
+        name="CodeIgniter 4 — Frontend y assets",
+        description=(
+            "Frontend y pipeline de assets: JS core, TinyMCE, Select2, "
+            "DataTables, Bootstrap, versionado de assets para cache-busting y "
+            "macros Twig de formulario con campos traducibles por locale."
+        ),
+        category_slug="role",
+    ),
+    BuiltinKB(
+        slug="codeigniter-4-ci-cd",
+        name="CodeIgniter 4 — CI/CD y despliegue",
+        description=(
+            "CI/CD y despliegue: pipeline build -> test -> deploy, imagen "
+            "Docker PHP-FPM + Nginx + supervisor, health-check, gate solo en "
+            "main y checklist de deploy."
+        ),
+        category_slug="role",
+    ),
 )
 
 

@@ -264,28 +264,40 @@ _UPSERT_SQL = text(
 )
 
 
+async def upsert_project_template(session: AsyncSession, tpl: BuiltinProjectTemplate) -> None:
+    """Upsert one :class:`BuiltinProjectTemplate`. Idempotent.
+
+    Extracted so other built-in seeders (e.g. the CodeIgniter 4 app
+    template in ``ci4_team.py``) can reuse the exact same SQL without
+    duplicating it, and without adding their template to
+    ``BUILTIN_PROJECT_TEMPLATES`` (whose count the seed test pins). The
+    referenced team must already be seeded (FK on ``projects.team_id``).
+    """
+    await session.execute(
+        _UPSERT_SQL,
+        {
+            "id": str(tpl.id),
+            "tenant_id": str(PLATFORM_TENANT_ID),
+            "name": tpl.name,
+            "description": tpl.description,
+            "team_id": str(builtin_team_id(tpl.team_slug)),
+            "worker_config": json.dumps(tpl.worker_config),
+            "repository_config": (
+                json.dumps(tpl.repository_config) if tpl.repository_config is not None else None
+            ),
+            "human_approval_policy": (
+                json.dumps(tpl.human_approval_policy)
+                if tpl.human_approval_policy is not None
+                else None
+            ),
+            # PostgreSQL TEXT[] — asyncpg encodes Python list as
+            # the SQL array literal natively.
+            "default_kb_grants": list(tpl.default_kb_grants),
+        },
+    )
+
+
 async def seed_builtin_project_templates(session: AsyncSession) -> int:
     for tpl in BUILTIN_PROJECT_TEMPLATES:
-        await session.execute(
-            _UPSERT_SQL,
-            {
-                "id": str(tpl.id),
-                "tenant_id": str(PLATFORM_TENANT_ID),
-                "name": tpl.name,
-                "description": tpl.description,
-                "team_id": str(builtin_team_id(tpl.team_slug)),
-                "worker_config": json.dumps(tpl.worker_config),
-                "repository_config": (
-                    json.dumps(tpl.repository_config) if tpl.repository_config is not None else None
-                ),
-                "human_approval_policy": (
-                    json.dumps(tpl.human_approval_policy)
-                    if tpl.human_approval_policy is not None
-                    else None
-                ),
-                # PostgreSQL TEXT[] — asyncpg encodes Python list as
-                # the SQL array literal natively.
-                "default_kb_grants": list(tpl.default_kb_grants),
-            },
-        )
+        await upsert_project_template(session, tpl)
     return len(BUILTIN_PROJECT_TEMPLATES)

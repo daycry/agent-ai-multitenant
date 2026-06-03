@@ -22,6 +22,12 @@ from api_server.seeds.builtin_skills import seed_builtin_skills
 from api_server.seeds.builtin_teams import seed_builtin_teams
 from api_server.seeds.builtin_tools import seed_builtin_tools
 from api_server.seeds.catalog_ingestion import seed_catalog_ingestion
+from api_server.seeds.ci4_team import (
+    seed_ci4_agent_tools,
+    seed_ci4_agents,
+    seed_ci4_project_template,
+    seed_ci4_team,
+)
 from api_server.seeds.human_agent_templates import seed_human_agent_templates
 from api_server.seeds.platform import ensure_platform_tenant
 from api_server.seeds.qa_e2e_automator import seed_qa_e2e_automator
@@ -45,13 +51,31 @@ async def main() -> None:
         # global_builtin platform agents — agent_type='human' — that tenants
         # clone-and-fork from the Human Agents gallery.
         n_human_templates = await seed_human_agent_templates(session)
+        # Plan codeigniter-4-builtin-team: ten more global_builtin platform
+        # agents (the ci4-* roster) seeded via their own loader to keep the
+        # eleven-core count test_seed_agents pins stable. They carry NO
+        # provider/model in model_config (they inherit the platform default,
+        # ADR 0055 / f87ca62). MUST run before seed_builtin_teams (the
+        # codeigniter-4 team's members FK to these agent ids by slug).
+        n_ci4_agents = await seed_ci4_agents(session)
         n_skills = await seed_builtin_skills(session)
         # Agent<->skill links need both agents AND skills to exist first
         # (FKs on agent_skills). Wire them once both seeds have run.
         n_agent_skills = await seed_builtin_agent_skills(session)
         n_tools = await seed_builtin_tools(session)
+        # Plan codeigniter-4-builtin-team: wire each ci4-* agent to its
+        # built-in tools via the agent_tools junction (the table does NOT
+        # restrict scope, so global_builtin agents can carry tools). MUST run
+        # after seed_builtin_tools (FK agent_tools.tool_id) AND after
+        # seed_ci4_agents (FK agent_tools.agent_id).
+        n_ci4_agent_tools = await seed_ci4_agent_tools(session)
         # Teams depend on agents being present (FK on team_members.agent_id).
         n_teams = await seed_builtin_teams(session)
+        # Plan codeigniter-4-builtin-team: the CodeIgniter 4 built-in team
+        # (1 team + 10 members) seeded via its own loader so the five-team
+        # count test_seed_teams pins stays stable. MUST run after
+        # seed_ci4_agents (FK team_members.agent_id resolves the ci4-* slugs).
+        n_ci4_team = await seed_ci4_team(session)
         # Plan 06.10: las categorías deben existir antes que las KBs
         # built-in (seed_builtin_kbs resuelve category_slug -> FK).
         n_kb_categories = await seed_builtin_kb_categories(session)
@@ -65,6 +89,12 @@ async def main() -> None:
         catalog = await seed_catalog_ingestion(session)
         # Project templates depend on teams (FK on projects.team_id).
         n_proj_templates = await seed_builtin_project_templates(session)
+        # Plan codeigniter-4-builtin-team: the codeigniter-4-app project
+        # template seeded via its own loader (keeps the eight-template count
+        # test_seed_project_templates pins stable). MUST run after
+        # seed_ci4_team (FK projects.team_id) and after seed_builtin_kbs (its
+        # default_kb_grants reference the CI4 built-in KB slugs).
+        n_ci4_template = await seed_ci4_project_template(session)
         n_policies = await seed_builtin_approval_policies(session)
         # Plan 09.1 task_09_1_01: fill the official marketplace catalog so it
         # is not empty on a fresh install. Publishes the VERIFIED + GLOBAL
@@ -80,6 +110,10 @@ async def main() -> None:
         agents=n_agents,
         qa_e2e_automator=n_qa_e2e,
         human_agent_templates=n_human_templates,
+        ci4_agents=n_ci4_agents,
+        ci4_agent_tools=n_ci4_agent_tools,
+        ci4_team=n_ci4_team,
+        ci4_project_template=n_ci4_template,
         skills=n_skills,
         agent_skills=n_agent_skills,
         tools=n_tools,
