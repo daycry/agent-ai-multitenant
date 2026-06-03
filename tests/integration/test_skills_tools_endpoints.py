@@ -305,8 +305,10 @@ async def test_tools_crud_roundtrip(configured_app, migrations_pg_dsn: str) -> N
         create = await client.post(
             "/tools",
             json={
-                "name": "Custom: Internal API",
-                "category": "integration",
+                # Names are normalised to slug-case (task_06_18_04); the
+                # response carries the slug, not the raw label.
+                "name": "Internal API",
+                "category": "custom",
                 "implementation_type": "http_endpoint",
                 "implementation_ref": "https://internal/api",
                 "input_schema": {"type": "object"},
@@ -318,12 +320,13 @@ async def test_tools_crud_roundtrip(configured_app, migrations_pg_dsn: str) -> N
         assert create.status_code == 201, create.text
         body = create.json()
         assert body["is_builtin"] is False
+        assert body["name"] == "internal_api"  # slug-normalised
         assert body["security_level"] == "safe"  # default
         tool_id = body["id"]
 
         listed = await client.get("/tools", headers=headers)
         names = {t["name"] for t in listed.json()}
-        assert {"Custom: Internal API", "Catalog: HTTP Fetch"} <= names
+        assert {"internal_api", "Catalog: HTTP Fetch"} <= names
 
         # FILTER by category.
         filtered = await client.get("/tools?category=network", headers=headers)
@@ -383,7 +386,7 @@ async def test_tools_timeout_must_be_positive(configured_app, migrations_pg_dsn:
             "/tools",
             json={
                 "name": "Bad Tool",
-                "category": "data",
+                "category": "custom",
                 "implementation_type": "builtin",
                 "timeout_seconds": 0,
             },

@@ -6,15 +6,40 @@ seeing platform-owned built-ins (is_builtin=true) read-only.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from api_server.db.domain import Skill, Tool, ToolImplementationType, ToolSecurityLevel
+from api_server.db.domain import (
+    Skill,
+    Tool,
+    ToolCategory,
+    ToolImplementationType,
+    ToolSecurityLevel,
+)
 
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+_SLUG_SEP_RE = re.compile(r"[\s\-]+")
+_SLUG_STRIP_RE = re.compile(r"[^a-z0-9_.]")
+_SLUG_COLLAPSE_RE = re.compile(r"_+")
+
+
+def normalize_tool_name(name: str) -> str:
+    """Normalise a tool name to slug-case (ADR 0049, task_06_18_04).
+
+    Lower-cases, turns runs of whitespace/hyphens into a single ``_`` and drops
+    any remaining character that is not ``[a-z0-9_.]`` — so ``"Read File"`` and
+    ``read_file`` collapse to the same slug and cannot coexist as duplicates.
+    The dot is preserved because MCP tools are namespaced ``<server>.<tool>``.
+    """
+    slug = _SLUG_SEP_RE.sub("_", name.strip().lower())
+    slug = _SLUG_STRIP_RE.sub("", slug)
+    slug = _SLUG_COLLAPSE_RE.sub("_", slug).strip("_")
+    return slug
 
 
 # =============================================================================
@@ -81,7 +106,7 @@ class ToolCreateRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=120)
     description: str | None = None
-    category: str = Field(min_length=1, max_length=64)
+    category: ToolCategory
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
     implementation_type: ToolImplementationType
@@ -90,13 +115,21 @@ class ToolCreateRequest(BaseModel):
     timeout_seconds: int = Field(default=60, gt=0, le=3600)
     rate_limit_per_minute: int | None = Field(default=None, ge=1)
 
+    @field_validator("name")
+    @classmethod
+    def _slugify_name(cls, v: str) -> str:
+        slug = normalize_tool_name(v)
+        if not slug:
+            raise ValueError("name must contain at least one slug-safe character")
+        return slug
+
 
 class ToolUpdateRequest(BaseModel):
     model_config = _BASE_CONFIG
 
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = None
-    category: str | None = Field(default=None, min_length=1, max_length=64)
+    category: ToolCategory | None = None
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
     implementation_type: ToolImplementationType | None = None
@@ -104,6 +137,16 @@ class ToolUpdateRequest(BaseModel):
     security_level: ToolSecurityLevel | None = None
     timeout_seconds: int | None = Field(default=None, gt=0, le=3600)
     rate_limit_per_minute: int | None = Field(default=None, ge=1)
+
+    @field_validator("name")
+    @classmethod
+    def _slugify_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        slug = normalize_tool_name(v)
+        if not slug:
+            raise ValueError("name must contain at least one slug-safe character")
+        return slug
 
 
 class ToolResponse(BaseModel):
