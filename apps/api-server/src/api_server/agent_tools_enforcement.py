@@ -41,6 +41,7 @@ to the empty set by mere name mismatch (the silent "unknown tool" failure).
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
 from uuid import UUID
 
 from shared_domain.tool_names import to_canonical_set
@@ -48,6 +49,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.db.domain import AgentTool, Tool
+
+# Default argv the four ``run_*`` builtins execute inside their runtime
+# container (Plan 06.18 task_06_18_05). The Tool rows carry the runtime
+# template (``implementation_ref``) but not a command, so the orchestrator
+# serialises a sane default ``command_template`` here; ``{path}`` resolves
+# from the call args by the docker_command executor. Tools absent from this
+# map fall back to a no-op echo so the spec is still well-formed (the
+# operator can override per-tool config in a later plan).
+_RUN_TOOL_COMMANDS: dict[str, list[str]] = {
+    "run_pytest": ["pytest", "{path}"],
+    "run_lint": ["ruff", "check", "{path}"],
+    "run_typecheck": ["mypy", "{path}"],
+    "run_build": ["make", "build"],
+}
 
 
 async def resolve_agent_tool_names(session: AsyncSession, agent_id: UUID) -> frozenset[str] | None:
@@ -74,6 +89,84 @@ async def resolve_agent_tool_names(session: AsyncSession, agent_id: UUID) -> fro
     if not names:
         return None
     return frozenset(names)
+
+
+async def serialize_agent_tool_specs(
+    session: AsyncSession, agent_id: UUID
+) -> list[dict[str, Any]] | None:
+    """Serialise the agent's assigned Tool rows into executable ToolSpec dicts.
+
+    Plan 06.18 task_06_18_05: the runtime boot needs more than tool *names* to
+    register a tool — it needs the ``implementation_type`` (which executor) and
+    the type-specific config (URL template, code, runtime template +
+    command). This is the read seam the orchestrator calls (in ``_route_ai``)
+    to build ``request["tool_specs"]``; the worker forwards it into the agent
+    spec and ``__main__.run_task`` rebuilds :class:`ToolSpec` objects from it.
+
+    Returns ``None`` when the agent has **no** ``agent_tools`` rows — the same
+    sentinel ``resolve_agent_tool_names`` uses: no rows means no per-agent
+    wiring, the pre-06.18 backward-compatible behaviour (echo/noop only). A
+    non-empty list carries one dict per live assigned tool.
+
+    Each dict is ``{"name", "implementation_type", "config"}``:
+
+      * ``builtin`` — config is empty; the runtime registers the canonical
+        family executor (file/network/…). ``shell_exec`` is excluded: it is
+        wired separately from the project's ``allowed_commands`` (Plan 06.16),
+        not from a serialised spec.
+      * ``docker_command`` (the ``run_*`` tools) — config carries
+        ``runtime_template`` (the tool's ``implementation_ref``, e.g.
+        ``python-pytest``) so the WORKER resolves it to a concrete image (it
+        owns the runtime catalog; the sandboxed runtime must not import it) and
+        a default ``command_template``.
+      * ``http_endpoint`` / ``python_function`` — config carries the
+        ``implementation_ref`` as the URL template / code respectively.
+      * ``mcp_tool`` — passed through; the runtime's MCP wiring owns it.
+
+    Tenant-safe by construction (same RLS reasoning as
+    :func:`resolve_agent_tool_names`).
+    """
+    rows = (
+        (
+            await session.execute(
+                select(Tool)
+                .join(AgentTool, AgentTool.tool_id == Tool.id)
+                .where(AgentTool.agent_id == agent_id, Tool.deleted_at.is_(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
+        return None
+    specs: list[dict[str, Any]] = []
+    for tool in rows:
+        # shell_exec is wired per project (allowed_commands), never from a spec.
+        if tool.name == "shell_exec":
+            continue
+        specs.append(_tool_to_spec(tool))
+    return specs
+
+
+def _tool_to_spec(tool: Tool) -> dict[str, Any]:
+    """Project one Tool row to the serialisable ToolSpec dict the runtime
+    rebuilds at boot (task_06_18_05)."""
+    impl = tool.implementation_type
+    config: dict[str, Any] = {}
+    if impl == "docker_command":
+        # Carry the runtime template so the WORKER resolves the image. NULL
+        # implementation_ref (run_lint/typecheck/build) → the worker falls back
+        # to the project stack / python-pytest.
+        if tool.implementation_ref:
+            config["runtime_template"] = tool.implementation_ref
+        config["command_template"] = list(_RUN_TOOL_COMMANDS.get(tool.name, ["echo", "{path}"]))
+    elif impl == "http_endpoint":
+        if tool.implementation_ref:
+            config["url_template"] = tool.implementation_ref
+    elif impl == "python_function":
+        if tool.implementation_ref:
+            config["code"] = tool.implementation_ref
+    return {"name": tool.name, "implementation_type": impl, "config": config}
 
 
 def combine_tool_allowlists(
@@ -113,4 +206,8 @@ def combine_tool_allowlists(
     return sorted(agent_set & mode_set)
 
 
-__all__ = ["combine_tool_allowlists", "resolve_agent_tool_names"]
+__all__ = [
+    "combine_tool_allowlists",
+    "resolve_agent_tool_names",
+    "serialize_agent_tool_specs",
+]

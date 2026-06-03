@@ -27,6 +27,7 @@ import structlog
 from api_server.agent_tools_enforcement import (
     combine_tool_allowlists,
     resolve_agent_tool_names,
+    serialize_agent_tool_specs,
 )
 from api_server.budgets import budget_pause_block
 from api_server.db.domain import (
@@ -359,6 +360,16 @@ class TaskDispatcher:
         agent_tool_names = await resolve_agent_tool_names(session, agent.id)
         allowed_tools = combine_tool_allowlists(agent_tool_names, None)
 
+        # Executable ToolSpec serialisation (Plan 06.18 task_06_18_05). The
+        # allowlist (names) is not enough for the runtime to REGISTER a tool —
+        # it needs the implementation_type + type config. We serialise the
+        # agent's assigned Tool rows so the runtime boot wires the real
+        # executors (file/network/run_*/custom) under canonical names instead
+        # of falling into the silent "unknown tool". `None` when the agent has
+        # no assignments → no `tool_specs` key → the runtime keeps the pre-06.18
+        # echo/noop behaviour (06.15 backward-compat).
+        tool_specs = await serialize_agent_tool_specs(session, agent.id)
+
         request: dict[str, Any] = {
             "tenant_id": str(task.tenant_id),
             "task_id": str(task.id),
@@ -378,6 +389,12 @@ class TaskDispatcher:
         # "no restriction". An empty list IS emitted (block every tool).
         if allowed_tools is not None:
             request["allowed_tools"] = allowed_tools
+
+        # Serialised executable ToolSpec list (task_06_18_05). Only emit when
+        # the agent has assignments — `None` keeps the key absent so the
+        # runtime boot stays on the pre-06.18 path (no new families wired).
+        if tool_specs is not None:
+            request["tool_specs"] = tool_specs
 
         # Per-project shell-command allowlist (Plan 06.16 task_06_16_02). Thread
         # `projects.allowed_commands` into the spec so the runtime can build a

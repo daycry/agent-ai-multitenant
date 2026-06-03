@@ -112,6 +112,16 @@ class ExecutionRequest:
     # what a project that pinned no stack carries) keeps each tool's own default
     # runtime (backward-compatible — no behaviour change for Python projects).
     default_runtime_template: str | None = None
+    # The agent's assigned tools serialised as executable ToolSpec dicts
+    # (`serialize_agent_tool_specs`, Plan 06.18 task_06_18_05). The orchestrator
+    # builds it from the agent's `agent_tools` rows; the worker forwards it into
+    # the agent spec so `__main__.run_task` registers the real executors under
+    # canonical names. `None` = no key (no assignments) → the runtime keeps the
+    # pre-06.18 echo/noop behaviour (06.15 backward-compat). Before forwarding,
+    # the worker resolves any `docker_command` spec's `runtime_template` to a
+    # concrete image (the worker owns the runtime catalog; the sandboxed
+    # runtime must not import `shared_test_runtimes`).
+    tool_specs: list[dict[str, Any]] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict — the Celery payload the orchestrator sends."""
@@ -125,6 +135,7 @@ class ExecutionRequest:
             "allowed_tools": self.allowed_tools,
             "allowed_commands": self.allowed_commands,
             "default_runtime_template": self.default_runtime_template,
+            "tool_specs": self.tool_specs,
         }
 
     @classmethod
@@ -140,6 +151,7 @@ class ExecutionRequest:
             allowed_tools=raw.get("allowed_tools"),
             allowed_commands=raw.get("allowed_commands"),
             default_runtime_template=raw.get("default_runtime_template"),
+            tool_specs=raw.get("tool_specs"),
         )
 
 
@@ -199,7 +211,51 @@ def _agent_spec(
     # backward-compatible for existing Python projects.
     if request.default_runtime_template is not None:
         spec["default_runtime_template"] = request.default_runtime_template
+    # Forward the serialised executable ToolSpec list (task_06_18_05). Only emit
+    # when the agent has assignments — `None` means "no key", which the runtime
+    # reads as "register no new families" (pre-06.18 echo/noop behaviour). Before
+    # forwarding we resolve each docker_command spec's `runtime_template` to a
+    # concrete image (the worker owns the runtime catalog; the sandboxed runtime
+    # must not import `shared_test_runtimes`).
+    if request.tool_specs is not None:
+        spec["tool_specs"] = _resolve_tool_spec_images(
+            request.tool_specs, request.default_runtime_template
+        )
     return spec
+
+
+def _resolve_tool_spec_images(
+    tool_specs: list[dict[str, Any]], project_default_runtime: str | None
+) -> list[dict[str, Any]]:
+    """Pre-resolve each ``docker_command`` ToolSpec's ``runtime_template`` to a
+    concrete docker image (Plan 06.18 task_06_18_05).
+
+    The agent-runtime is a separate container with no access to
+    ``shared_test_runtimes``; only the worker can map a runtime-template id to
+    an image. So we resolve here — honouring the project stack over the tool
+    default (Plan 06.16 precedence) — and replace ``runtime_template`` with an
+    explicit ``image`` the runtime's ``docker_command`` builder consumes
+    directly. Specs that already carry an explicit ``image`` (Plan 05 custom
+    tools) are left untouched. An unknown runtime id surfaces as a clear
+    ``RuntimeResolutionError`` at dispatch, not a silent boot crash inside the
+    container.
+    """
+    from workers.test_runtime import resolve_run_runtime_image
+
+    resolved: list[dict[str, Any]] = []
+    for raw in tool_specs:
+        spec = dict(raw)
+        if spec.get("implementation_type") == "docker_command":
+            config = dict(spec.get("config") or {})
+            if not config.get("image"):
+                tool_runtime = config.pop("runtime_template", None)
+                config["image"] = resolve_run_runtime_image(
+                    project_default_runtime,
+                    str(tool_runtime) if tool_runtime else None,
+                )
+            spec["config"] = config
+        resolved.append(spec)
+    return resolved
 
 
 async def _load_project(session: AsyncSession, task_id: UUID) -> Project | None:
