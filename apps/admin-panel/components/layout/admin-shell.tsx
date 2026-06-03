@@ -360,7 +360,9 @@ function NavGroupBlock({
       </button>
 
       {open && (
-        <ul className="mt-1 flex flex-col gap-1">
+        // Hijos indentados + guía vertical de árbol bajo la cabecera del grupo,
+        // para que la jerarquía padre→hijo se distinga de un vistazo.
+        <ul className="ml-3 mt-1 flex flex-col gap-1 border-l border-sidebar-border pl-2">
           {group.items.map(({ href, label, Icon: ItemIcon }) => {
             const active = isActive(href);
             return (
