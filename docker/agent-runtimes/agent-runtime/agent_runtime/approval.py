@@ -17,12 +17,16 @@ from __future__ import annotations
 
 from typing import Any
 
-# Builtin tool → sensitive-action category (spec §7.7). A tool absent
-# from this map is not sensitive and is never gated.
+from shared_domain.tool_names import to_canonical
+
+# Builtin tool → sensitive-action category (spec §7.7). Keyed on CANONICAL
+# tool names (ADR 0048) so it matches what the runtime registers; a tool
+# absent from this map is not sensitive and is never gated.
 DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "shell_exec": "code_execution",
-    "file_write": "file_write",
-    "http_request": "network_access",
+    "write_file": "file_write",
+    "http_get": "network_access",
+    "http_post": "network_access",
     "agent_invoke": "agent_delegation",
 }
 
@@ -58,7 +62,11 @@ class ApprovalGate:
         tool may run without approval."""
         if not tool:
             return None
-        category = self._tool_categories.get(tool)
-        if category is not None and requires_human(self._policy, category):
-            return category
+        # Resolve legacy aliases (file_write → write_file, http_request →
+        # http_get/http_post) to canonical names (ADR 0048) before lookup, so a
+        # sensitive call cannot slip past the gate by mere name mismatch.
+        for canonical in to_canonical(tool):
+            category = self._tool_categories.get(canonical)
+            if category is not None and requires_human(self._policy, category):
+                return category
         return None

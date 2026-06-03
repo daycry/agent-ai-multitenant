@@ -17,6 +17,11 @@ dependencies = [
   # sessions via a background asyncio loop.
   "shared-mcp",
 
+  # Canonical tool-name source of truth (ADR 0048, Plan 06.18): the approval
+  # gate keys its sensitive categories on canonical names and resolves legacy
+  # aliases via shared_domain.tool_names.
+  "shared-domain",
+
   # Builtin tools lean on these (Fase D)
   "httpx>=0.27,<1.0",
 
