@@ -54,14 +54,34 @@ _RUN_AGENTS = {
 }
 
 
+async def _truncate_domain(admin_url: str) -> None:
+    """Clear the tenant-scoped domain tables so this demo seed runs on a clean
+    slate (CASCADE handles the junctions). Since Plan 06.18 added
+    ``UNIQUE (tenant_id, name)`` on ``tools``, a built-in ``read_file`` left by
+    an earlier test in the session would otherwise collide with this seed's own
+    ``seed_builtin_tools`` and abort the whole seed transaction."""
+    engine = create_async_engine(admin_url)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "TRUNCATE tools, skills, agents, teams, projects,"
+                    " knowledge_bases, organizations RESTART IDENTITY CASCADE"
+                )
+            )
+    finally:
+        await engine.dispose()
+
+
 @pytest.fixture()
 def migrated_db(alembic_config, admin_database_url: str):
-    """Upgrade the throwaway test DB to head + grant the app role. Yields the
-    admin (BYPASSRLS) URL the seed writes through."""
+    """Upgrade the throwaway test DB to head + grant the app role + truncate the
+    domain tables. Yields the admin (BYPASSRLS) URL the seed writes through."""
     command.upgrade(alembic_config, "head")
     from tests.integration.conftest import _grant_app_user_existing_tables
 
     asyncio.run(_grant_app_user_existing_tables())
+    asyncio.run(_truncate_domain(admin_database_url))
     yield admin_database_url
 
 
