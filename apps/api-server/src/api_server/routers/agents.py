@@ -25,15 +25,19 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, ConfigDict, Field
+from shared_domain.tool_names import to_canonical_set
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.agent_tools_enforcement import compute_effective_tools
 from api_server.auth.deps import (
     AuthPrincipal,
     get_tenant_session,
     require_tenant_admin,
     require_tenant_member,
 )
+from api_server.chat.modes import resolve_mode_config
 from api_server.db.domain import (
     Agent,
     AgentScope,
@@ -858,3 +862,180 @@ async def _agent_project_mcp_server_names(
         if isinstance(name, str):
             names.add(name)
     return names
+
+
+# ---------------------------------------------------------------------------
+# Plan 06.18 task_06_18_07: GET /agents/{id}/effective-tools
+# ---------------------------------------------------------------------------
+#
+# The honest "what does the runtime really execute for this agent" contract —
+# the frontier 06.17's Capability Hub (HACER) consumes without recomputing.
+# It answers the operator's "I assigned a tool and nothing happens" by being
+# the single place that:
+#   * lists the agent's assigned tools, each flagged executable_in_runtime;
+#   * computes the agent∩mode intersection through the SINGLE point
+#     (`combine_tool_allowlists`, reused inside `compute_effective_tools`);
+#   * crosses shell_exec with the project's `allowed_commands`;
+#   * surfaces explicit, readable warnings instead of silent surprises.
+#
+# Field names are snake_case and stable: this is a contract. Read-only,
+# tenant-scoped like the rest of the router (404 on a hidden/missing agent).
+
+
+class EffectiveToolEntry(BaseModel):
+    """One assigned tool, projected with its real runtime executability."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    tool_id: UUID
+    name: str
+    #: Canonical name(s) the runtime resolves this assignment to (alias layer,
+    #: ADR 0048): ``semantic_search`` → ``rag_search``, ``http_request`` →
+    #: both verbs. Usually a single name; a list keeps the contract stable.
+    canonical_names: list[str] = Field(default_factory=list)
+    category: str
+    implementation_type: str
+    security_level: str
+    is_builtin: bool
+    #: Whether the agent-runtime can actually execute this tool (ADR 0049).
+    #: A ``False`` here is the "asignada pero no ejecutable" case.
+    executable_in_runtime: bool
+
+
+class EffectiveToolsResponse(BaseModel):
+    """The effective-tools contract (06.18 → 06.17).
+
+    ``assigned`` lists every assignment with its executability; ``effective``
+    is the sorted canonical set the runtime really wires for the requested
+    ``mode`` (agent∩mode ∩ runtime-wired, plus ``shell_exec`` only when its
+    project authorises commands). ``unrestricted`` is ``True`` for an agent with
+    no per-agent assignment (backward-compatible 06.15 behaviour: the runtime
+    keeps its default surface, so ``effective`` is empty by design).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: UUID
+    #: The chat mode the effective set was computed against, or ``None`` when no
+    #: mode was requested (the task-dispatch path carries no mode allowlist).
+    mode: str | None = None
+    assigned: list[EffectiveToolEntry] = Field(default_factory=list)
+    effective: list[str] = Field(default_factory=list)
+    #: ``True`` when the agent has no assignments (no per-agent restriction).
+    unrestricted: bool = False
+    #: Whether ``shell_exec`` is effective (assigned ∧ allowed_commands non-empty).
+    shell_exec_effective: bool = False
+    #: Readable notices: empty set in a mode, non-executable assignment,
+    #: shell_exec without allowed_commands.
+    warnings: list[str] = Field(default_factory=list)
+
+
+@router.get("/{agent_id}/effective-tools", response_model=EffectiveToolsResponse)
+async def get_agent_effective_tools(
+    agent_id: UUID,
+    mode: str | None = Query(
+        default=None,
+        description=(
+            "Chat mode whose allowlist the effective set is intersected with "
+            "(planning|discussion|execution|<custom>). Omit for no mode "
+            "restriction (the task-dispatch path)."
+        ),
+    ),
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> EffectiveToolsResponse:
+    """Return the agent's honest effective tool set + per-tool executability.
+
+    Tenant-scoped: RLS hides cross-tenant agents, so a hidden/missing agent
+    surfaces as 404 (an empty body would otherwise look like "no tools").
+    """
+    # 404 on a hidden/missing agent (RLS handles cross-tenant).
+    agent_q = await session.execute(
+        select(Agent).where(Agent.id == agent_id, Agent.deleted_at.is_(None))
+    )
+    agent = agent_q.scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent not found")
+
+    # Resolve the mode allowlist (None when no mode requested). An unknown mode
+    # name is a 422 — the operator asked for a mode that does not exist.
+    mode_allowed_tools: tuple[str, ...] | None = None
+    if mode is not None:
+        try:
+            mode_config = resolve_mode_config(mode)
+        except ValueError:
+            # Built-in lookup miss (custom modes are resolved elsewhere with a
+            # tenant registry). Treat an unknown built-in name as a bad request.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"unknown chat mode: {mode!r}",
+            ) from None
+        mode_allowed_tools = mode_config.allowed_tools
+
+    # Load the assigned Tool rows (live only) — one query, projected to the
+    # entry shape. `resolve_agent_tool_names` is the read seam for the *names*,
+    # but we need the full rows for the per-tool entry + shell_exec detection.
+    rows = await session.execute(
+        select(Tool)
+        .join(AgentTool, AgentTool.tool_id == Tool.id)
+        .where(AgentTool.agent_id == agent_id, Tool.deleted_at.is_(None))
+        .order_by(Tool.name, Tool.id)
+    )
+    assigned_tools = list(rows.scalars().all())
+
+    # `None` (no rows) is the load-bearing "no per-agent restriction" sentinel,
+    # exactly as `resolve_agent_tool_names` returns it.
+    assigned_names: list[str] | None = [t.name for t in assigned_tools] if assigned_tools else None
+    shell_exec_assigned = any(t.name == "shell_exec" for t in assigned_tools)
+
+    # The canonical names that are *actually* runtime-wired, computed from the
+    # full Tool rows so a typed custom tool (http_endpoint / python_function /
+    # docker_command / mcp_tool) counts as wired regardless of name. This is the
+    # honest "executable in runtime" set the pure computation intersects with.
+    wired_canonical_names: set[str] = set()
+    for tool in assigned_tools:
+        if tool_is_runtime_wired(tool.name, tool.implementation_type):
+            wired_canonical_names |= to_canonical_set([tool.name])
+
+    # Whether the agent's project authorises any shell command (the cross that
+    # makes shell_exec truly effective).
+    allowed_commands_non_empty = False
+    if agent.project_id is not None:
+        project_q = await session.execute(
+            select(Project.allowed_commands).where(
+                Project.id == agent.project_id, Project.deleted_at.is_(None)
+            )
+        )
+        commands = project_q.scalar_one_or_none()
+        allowed_commands_non_empty = bool(commands)
+
+    result = compute_effective_tools(
+        assigned_names,
+        mode_allowed_tools,
+        mode_name=mode,
+        shell_exec_assigned=shell_exec_assigned,
+        allowed_commands_non_empty=allowed_commands_non_empty,
+        wired_canonical_names=wired_canonical_names,
+    )
+
+    return EffectiveToolsResponse(
+        agent_id=agent_id,
+        mode=mode,
+        assigned=[
+            EffectiveToolEntry(
+                tool_id=tool.id,
+                name=tool.name,
+                canonical_names=sorted(to_canonical_set([tool.name])),
+                category=tool.category,
+                implementation_type=tool.implementation_type,
+                security_level=tool.security_level,
+                is_builtin=tool.is_builtin,
+                executable_in_runtime=tool_is_runtime_wired(tool.name, tool.implementation_type),
+            )
+            for tool in assigned_tools
+        ],
+        effective=result.effective,
+        unrestricted=result.unrestricted,
+        shell_exec_effective=result.shell_exec_effective,
+        warnings=result.warnings,
+    )

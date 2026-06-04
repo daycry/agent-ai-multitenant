@@ -48,7 +48,7 @@ def tool_is_runtime_wired(name: str, implementation_type: str) -> bool:
     """
     if implementation_type in _SPEC_WIRED_IMPL_TYPES:
         return True
-    return _name_is_runtime_wired(name)
+    return bool(_name_is_runtime_wired(name))
 
 
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)

@@ -43,6 +43,10 @@ interface ToolDiagnostic {
   implementation_type: string;
   security_level: string;
   timeout_seconds: number;
+  // Honest availability (ADR 0049, Plan 06.18 task_06_18_07): si el runtime
+  // puede ejecutar de verdad la tool asignada. Si es false, la tool está
+  // asignada pero NO se ejecutará (caía en "unknown tool" silencioso).
+  executable_in_runtime: boolean;
 }
 
 interface McpServerDiagnostic {
@@ -214,9 +218,9 @@ function AgentCard({ agent }: { agent: AgentDiagnostic }) {
             className="text-muted-foreground text-sm italic"
             data-testid={`diagnostic-agent-tools-empty-${agent.id}`}
           >
-            Este agente no tiene tools wired. (Los builtin como echo, http_request o memory_recall
-            están disponibles siempre; sólo aparecen aquí los Tool rows wired vía
-            <code>agent_tools</code>.)
+            Este agente no tiene tools asignadas vía <code>agent_tools</code>. Sin asignaciones, el
+            agente conserva el comportamiento por defecto del runtime (sin restricción por agente);
+            no significa que ejecute todo el catálogo.
           </p>
         ) : (
           <ul className="space-y-1.5" data-testid={`diagnostic-agent-tools-list-${agent.id}`}>
@@ -243,6 +247,11 @@ function ToolRow({ tool }: { tool: ToolDiagnostic }) {
           <span className="font-mono">{tool.name}</span>
           <Badge variant={implVariant}>{tool.implementation_type}</Badge>
           <Badge variant={secVariant}>{tool.security_level}</Badge>
+          {tool.executable_in_runtime ? null : (
+            <Badge variant="warning" data-testid={`diagnostic-tool-not-wired-${tool.id}`}>
+              No disponible aún
+            </Badge>
+          )}
           <span className="text-muted-foreground text-xs">
             timeout {tool.timeout_seconds}s · {tool.category}
           </span>
