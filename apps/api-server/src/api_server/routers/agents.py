@@ -37,6 +37,19 @@ from api_server.auth.deps import (
     require_tenant_admin,
     require_tenant_member,
 )
+from api_server.capabilities import (
+    CapabilitiesResponse,
+    CapabilityRecordar,
+    CapabilitySaber,
+    agent_global_warning,
+    build_ser,
+    hacer_for_agent,
+    kbs_for_agent_role,
+    kbs_for_project,
+    memory_counts,
+    merge_kbs,
+    private_memory_warning,
+)
 from api_server.chat.modes import resolve_mode_config
 from api_server.db.domain import (
     Agent,
@@ -1191,4 +1204,76 @@ async def get_agent_effective_tools(
         unrestricted=result.unrestricted,
         shell_exec_effective=result.shell_exec_effective,
         warnings=result.warnings,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan 06.17 task_06_17_08: GET /agents/{id}/capabilities
+# ---------------------------------------------------------------------------
+#
+# El Hub de Capacidad por agente: SABER (KBs visibles por nivel rol/stack/
+# plataforma), RECORDAR (memoria por scope + el memory_scope del agente), SER
+# (modelo configurado) y HACER (set efectivo de tools). La sección HACER
+# DELEGA/COMPONE con la pieza pura `compute_effective_tools` de 06.18 — NO
+# recalcula la intersección (frontera con 06.18). Read-only, tenant-scoped: RLS
+# oculta agentes cross-tenant, así que un agente oculto/inexistente → 404.
+@router.get("/{agent_id}/capabilities", response_model=CapabilitiesResponse)
+async def get_agent_capabilities(
+    agent_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> CapabilitiesResponse:
+    """Devuelve el set efectivo REAL de capacidad del agente + avisos honestos.
+
+    SABER es la UNIÓN de las KBs de rol (``agent_knowledge_bases``) y, si el
+    agente está atado a un proyecto, las KBs del stack (``kb_projects``). HACER
+    compone con ``compute_effective_tools`` (06.18). Avisos honestos: agente
+    global sin contexto de proyecto (ADR 0054), modelo no configurado (ADR 0055)
+    y ``memory_scope=private`` silencioso.
+    """
+    agent_q = await session.execute(
+        select(Agent).where(Agent.id == agent_id, Agent.deleted_at.is_(None))
+    )
+    agent = agent_q.scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent not found")
+
+    warnings: list[str] = []
+
+    # SABER: rol mas stack (si hay proyecto). El nivel rol gana si una KB aparece
+    # por ambas vias (orden de merge_kbs).
+    role_kbs = await kbs_for_agent_role(session, agent_id=agent_id)
+    project_kbs = (
+        await kbs_for_project(session, project_id=agent.project_id)
+        if agent.project_id is not None
+        else []
+    )
+    saber = CapabilitySaber(knowledge_bases=merge_kbs(role_kbs, project_kbs))
+
+    # RECORDAR: el memory_scope del agente + conteo por scope de su proyecto.
+    recordar = CapabilityRecordar(
+        memory_scope=agent.memory_scope,
+        memory=await memory_counts(session, project_id=agent.project_id),
+    )
+    warnings += private_memory_warning(agent.memory_scope)
+
+    # SER: persona/modelo (ADR 0055).
+    ser, ser_warnings = build_ser(agent)
+    warnings += ser_warnings
+
+    # HACER: delega en compute_effective_tools (06.18).
+    hacer, hacer_warnings = await hacer_for_agent(session, agent=agent)
+    warnings += hacer_warnings
+
+    # Aviso honesto del agente global (ADR 0054).
+    warnings += agent_global_warning(agent)
+
+    return CapabilitiesResponse(
+        entity_type="agent",
+        entity_id=agent.id,
+        saber=saber,
+        recordar=recordar,
+        ser=ser,
+        hacer=hacer,
+        warnings=warnings,
     )
