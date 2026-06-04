@@ -284,6 +284,48 @@ async def get_default_memory_scope(session: AsyncSession) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Agente global usa el project_id de la tarea (Plan 06.17 task_06_17_13 / ADR 0054)
+# ---------------------------------------------------------------------------
+# Un agente GLOBAL (``project_id IS NULL``: built-in o tenant-template) que
+# ejecuta una tarea DE UN PROYECTO sufría una asimetría real entre escritura y
+# lectura: el Memorizer ESCRIBÍA memoria bajo ``task.project_id`` pero los
+# endpoints internos LEÍAN por ``agent.project_id`` (None), de modo que el agente
+# global no veía NUNCA los chunks ni la memoria ``project_shared`` del proyecto de
+# la tarea (``internal_agent.py`` rag-search ``hits=[]``; memory-recall sin
+# candidatos). El ADR 0054 (opción B) resuelve el ``project_id`` de LECTURA como
+# el de la tarea en curso (``task.project_id``) cuando el agente es global,
+# **estrictamente tenant-safe** (el ``task_id`` lo porta el token del runtime; el
+# proyecto se resuelve server-side validando ``task.tenant_id == principal.
+# tenant_id``) y acotado a ESE ÚNICO proyecto — jamás cross-tenant ni
+# cross-project.
+#
+# Esta clave operator-configurable gobierna el comportamiento. Default ON: arregla
+# la asimetría real (read = write = ``task.project_id``). Un operador que prefiera
+# el aislamiento estricto antiguo (agente global = sin contexto de proyecto) lo
+# apaga sin tocar código. Se lee EN VIVO por petición, así que un cambio surte
+# efecto de inmediato. Solo un System Admin lo escribe (``set_platform_setting``).
+GLOBAL_AGENT_USES_TASK_PROJECT_KEY = "memory.global_agent_uses_task_project"
+DEFAULT_GLOBAL_AGENT_USES_TASK_PROJECT = True
+
+
+async def get_global_agent_uses_task_project(session: AsyncSession) -> bool:
+    """Si un agente global lee RAG/memoria con el ``project_id`` de la tarea en curso.
+
+    Lo leen ``/internal/agent/rag-search`` y ``/internal/agent/memory-recall``
+    antes de resolver el ``project_id`` efectivo de un agente global. Default ON
+    (ADR 0054): arregla la asimetría write≠read. Cuando es False el agente global
+    conserva el comportamiento estricto antiguo (sin contexto de proyecto). Solo
+    un System Admin puede escribir el flag (``set_platform_setting``).
+    """
+    value = await get_platform_setting(
+        session,
+        GLOBAL_AGENT_USES_TASK_PROJECT_KEY,
+        default=DEFAULT_GLOBAL_AGENT_USES_TASK_PROJECT,
+    )
+    return bool(value)
+
+
+# ---------------------------------------------------------------------------
 # Default seguro de model_config para agentes (Plan 06.17 task_06_17_10 / ADR 0055)
 # ---------------------------------------------------------------------------
 # El ``model_config`` de un agente (la pata SER: proveedor/modelo/temperatura)

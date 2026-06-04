@@ -35,9 +35,12 @@ from api_server.auth.internal_agent import (
     get_agent_principal,
     get_agent_tenant_session,
 )
-from api_server.db.domain import Agent, MemoryScope, Project
+from api_server.db.domain import Agent, MemoryScope, Project, Task
 from api_server.db.knowledge import Chunk, Document, KnowledgeBase, KnowledgeBaseProject
-from api_server.db.platform_settings import get_rag_reranker_enabled
+from api_server.db.platform_settings import (
+    get_global_agent_uses_task_project,
+    get_rag_reranker_enabled,
+)
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
 from api_server.memorizer.recall import recall
@@ -133,6 +136,60 @@ async def _resolve_agent_context(
     return agent, project
 
 
+async def _resolve_effective_project(
+    session: AsyncSession,
+    *,
+    agent: Agent,
+    principal: AgentPrincipal,
+) -> Project | None:
+    """Resuelve el proyecto EFECTIVO de LECTURA para RAG/memoria (ADR 0054).
+
+    Reglas (Plan 06.17 task_06_17_13):
+
+      * un agente ligado a un proyecto (``agent.project_id`` no nulo) usa SU
+        proyecto — comportamiento histórico, sin cambio;
+      * un agente GLOBAL (``project_id`` nulo) usa el proyecto de la TAREA en
+        curso (``task.project_id``) SI el flag operator-configurable está ON y
+        el token porta un ``task_id``. El proyecto se resuelve server-side y es
+        **estrictamente tenant-safe**: la tarea se carga con un predicado
+        explícito ``Task.tenant_id == principal.tenant_id`` (bajo RLS además),
+        de modo que un ``task_id`` de OTRO tenant nunca resuelve un proyecto
+        (devuelve ``None``). El alcance es ese ÚNICO proyecto de la tarea —
+        jamás un conjunto, jamás otro tenant.
+
+    Devuelve la fila ``Project`` efectiva, o ``None`` cuando no hay contexto de
+    proyecto (agente global sin tarea, flag OFF, o tarea ajena al tenant). El
+    proyecto NUNCA se toma del cliente: solo de ``agent.project_id`` o de la
+    tarea autenticada.
+    """
+    if agent.project_id is not None:
+        return (
+            await session.execute(select(Project).where(Project.id == agent.project_id))
+        ).scalar_one_or_none()
+
+    # Agente global: solo con el flag ON y un task_id en el token.
+    if principal.task_id is None:
+        return None
+    if not await get_global_agent_uses_task_project(session):
+        return None
+
+    task = (
+        await session.execute(
+            select(Task).where(
+                Task.id == principal.task_id,
+                # Defensa en profundidad sobre RLS: la tarea DEBE ser del tenant
+                # del token; un task_id cross-tenant no resuelve nada.
+                Task.tenant_id == principal.tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if task is None or task.project_id is None:
+        return None
+    return (
+        await session.execute(select(Project).where(Project.id == task.project_id))
+    ).scalar_one_or_none()
+
+
 @router.post("/memory-recall", response_model=MemoryRecallResponse)
 async def memory_recall(
     payload: MemoryRecallRequest,
@@ -157,10 +214,17 @@ async def memory_recall(
     si el embedder no está disponible (Ollama caído ⇒ ``EmbeddingError``) el
     recall cae a BM25 sin romper.
     """
-    agent, project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+    agent, _project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+    # Proyecto EFECTIVO de lectura (ADR 0054): para un agente ligado a proyecto
+    # es el suyo; para un agente global es el de la tarea en curso (flag ON +
+    # task_id en el token), resuelto server-side y tenant-safe. La memoria
+    # ``project_shared`` (y ``team_shared`` vía ``project.team_id``) usa este
+    # proyecto efectivo, de modo que read = write = ``task.project_id`` para el
+    # agente global — sin la asimetría histórica.
+    project = await _resolve_effective_project(session, agent=agent, principal=principal)
     scopes = payload.scopes or _default_readable_scopes(agent.memory_scope)
     team_id = project.team_id if project is not None else None
-    project_id = agent.project_id
+    project_id = project.id if project is not None else None
 
     query_embedding = await _embed_query(embedder, payload.query)
 
@@ -423,7 +487,14 @@ async def rag_search_endpoint(
     keeps the tool contract uniform — the agent always sees a hits list.
     """
     agent, _project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
-    if agent.project_id is None:
+    # Proyecto EFECTIVO de búsqueda (ADR 0054): el del agente si está ligado a
+    # uno; el de la TAREA en curso si el agente es global (flag ON + task_id en
+    # el token), resuelto server-side y tenant-safe. Cuando no hay proyecto
+    # efectivo (agente global sin tarea, flag OFF, o tarea ajena al tenant) se
+    # conserva la respuesta informativa ``hits=[]`` (un agente sin contexto de
+    # proyecto no tiene KBs que buscar).
+    project = await _resolve_effective_project(session, agent=agent, principal=principal)
+    if project is None:
         return RagSearchResponse(hits=[])
 
     # Plan 06.9: KBs visibles = union de KBs del proyecto y KBs del
@@ -433,7 +504,7 @@ async def rag_search_endpoint(
         session,
         query=payload.query,
         tenant_id=principal.tenant_id,
-        project_id=agent.project_id,
+        project_id=project.id,
         agent_id=principal.agent_id,
         limit=payload.limit,
         recall_k=payload.recall_k,
