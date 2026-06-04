@@ -41,6 +41,10 @@ from api_server.db.domain import (
     Task,
     TaskStatus,
 )
+from api_server.db.platform_settings import (
+    get_default_model_config,
+    is_model_config_empty,
+)
 from api_server.task_state_machine import transition_task_status
 from celery import Celery
 from sqlalchemy import and_, func, or_, select
@@ -378,6 +382,19 @@ class TaskDispatcher:
         # (backward-compat, mismo sentinel que `tool_specs`).
         skill_prompt_fragments = await resolve_agent_skill_prompt_fragments(session, agent.id)
 
+        # Default seguro de model_config para spec legacy ``{}`` (Plan 06.17
+        # task_06_17_10 / ADR 0055). Un agente creado antes de la validación —
+        # o saneado parcialmente — puede traer ``model_config = {}`` (o un spec
+        # sin provider/model). En vez de propagar ese spec vacío y hacer fallar
+        # el arranque del run de forma tardía y opaca, el dispatch resuelve el
+        # default seguro operator-configurable (``model.default_config`` en
+        # platform_settings, anclado al catálogo cerrado del ADR 0021). NO falla
+        # el arranque y NO hace auto-retry — solo rellena el spec. Un
+        # ``model_config`` completo se forwardea verbatim (el default no pisa).
+        model_spec = dict(agent.model_config or {})
+        if is_model_config_empty(model_spec):
+            model_spec = await get_default_model_config(session)
+
         request: dict[str, Any] = {
             "tenant_id": str(task.tenant_id),
             "task_id": str(task.id),
@@ -389,7 +406,7 @@ class TaskDispatcher:
             },
             # The agent carries its ModelClient spec; the worker
             # feeds it to the agent-runtime verbatim.
-            "model": dict(agent.model_config),
+            "model": model_spec,
             "budgets": None,
         }
         # Only emit the key when a restriction applies — `None` means "no

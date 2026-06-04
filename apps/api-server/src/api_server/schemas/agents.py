@@ -64,6 +64,27 @@ class AgentCreateRequest(BaseModel):
             raise ValueError("project_id must be null for non-project_local scopes")
         return self
 
+    @model_validator(mode="after")
+    def _validate_model_config(self) -> AgentCreateRequest:
+        """Valida ``model_config`` contra el catálogo cerrado (ADR 0055 / 0021).
+
+        Solo valida cuando el body envía un ``model_config`` NO vacío: un ``{}``
+        (o "no enviado") pasa porque el endpoint le aplica el default explícito
+        operator-configurable. Un proveedor fuera de catálogo, un ``model`` vacío
+        o una ``temperature`` fuera de rango → ``422``.
+        """
+        if self.llm_config:
+            from api_server.db.platform_settings import (
+                InvalidModelConfigError,
+                validate_model_config,
+            )
+
+            try:
+                validate_model_config(self.llm_config)
+            except InvalidModelConfigError as exc:
+                raise ValueError(str(exc)) from exc
+        return self
+
 
 # ---------------------------------------------------------------------------
 # Update — all fields optional; only sent values are touched
@@ -86,6 +107,27 @@ class AgentUpdateRequest(BaseModel):
     # the linked-vs-forked invariants; do it via a separate "fork" endpoint
     # (task_01_15).
     anchored_version: str | None = Field(default=None, max_length=32)
+
+    @model_validator(mode="after")
+    def _validate_model_config(self) -> AgentUpdateRequest:
+        """Valida ``model_config`` contra el catálogo cerrado (ADR 0055 / 0021).
+
+        Solo valida cuando el ``PUT`` envía un ``model_config`` NO vacío (un
+        update parcial que no toca el modelo lo deja a ``None`` y no se valida).
+        Mismas reglas que el create: proveedor fuera de catálogo, ``model`` vacío
+        o ``temperature`` fuera de rango → ``422``.
+        """
+        if self.llm_config:
+            from api_server.db.platform_settings import (
+                InvalidModelConfigError,
+                validate_model_config,
+            )
+
+            try:
+                validate_model_config(self.llm_config)
+            except InvalidModelConfigError as exc:
+                raise ValueError(str(exc)) from exc
+        return self
 
 
 # ---------------------------------------------------------------------------

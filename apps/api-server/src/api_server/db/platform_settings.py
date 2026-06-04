@@ -284,6 +284,122 @@ async def get_default_memory_scope(session: AsyncSession) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Default seguro de model_config para agentes (Plan 06.17 task_06_17_10 / ADR 0055)
+# ---------------------------------------------------------------------------
+# El ``model_config`` de un agente (la pata SER: proveedor/modelo/temperatura)
+# nacía a menudo ``{}`` (ningún diálogo de la UI lo enviaba), de modo que en
+# dispatch ese ``{}`` se traducía a un spec de modelo vacío que podía hacer
+# fallar el arranque del run — un fallo tardío y opaco. El ADR 0055 (opción M-B)
+# decide:
+#
+#   * ``POST /agents`` rellena un DEFAULT EXPLÍCITO cuando el body no envía
+#     ``model_config`` (ningún agente nuevo nace ``{}``);
+#   * el dispatch aplica este MISMO default seguro a cualquier spec legacy ``{}``
+#     (sin fallo de arranque, SIN auto-retry — solo rellena);
+#   * una migración (0081) sanea las filas ``agents`` con ``model_config = {}``.
+#
+# El default es OPERATOR-CONFIGURABLE vía esta clave de ``platform_settings``: un
+# System Admin lo cambia desde el panel (proveedor/modelo/temperatura). Si nunca
+# se configuró, cae al fallback de CÓDIGO ``DEFAULT_MODEL_CONFIG`` (también del
+# catálogo cerrado), nunca a un fallo. El default mismo se VALIDA contra el
+# catálogo cerrado del ADR 0021; un valor almacenado inválido cae al fallback.
+MODEL_DEFAULT_CONFIG_KEY = "model.default_config"
+
+# Fallback de código anclado al catálogo cerrado del ADR 0021. Claude SDK es el
+# camino primario de la plataforma (suscripción Pro/Max). ``temperature`` baja
+# por defecto (salida más determinista para tareas de agente).
+DEFAULT_MODEL_CONFIG: dict[str, Any] = {
+    "provider": "claude_sdk",
+    "model": "claude-sonnet-4",
+    "temperature": 0.2,
+}
+
+# Rango válido de temperatura (mismo rango que valida el schema de agente).
+MODEL_TEMPERATURE_MIN = 0.0
+MODEL_TEMPERATURE_MAX = 2.0
+
+
+class InvalidModelConfigError(ValueError):
+    """Lanzada cuando un ``model_config`` propuesto no valida contra el catálogo
+    cerrado (ADR 0021): proveedor fuera de catálogo, ``model`` vacío o
+    ``temperature`` fuera de rango."""
+
+
+def validate_model_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Valida un ``model_config`` contra el catálogo cerrado (ADR 0021 / 0055).
+
+    Reglas (un fallo levanta :class:`InvalidModelConfigError`, que el router
+    traduce a ``422``):
+
+      * ``provider`` ∈ ``{claude_sdk, copilot, azure_foundry, ollama}`` (los
+        cuatro proveedores del catálogo cerrado del ADR 0021);
+      * ``model`` presente y no vacío;
+      * ``temperature``, si está presente, dentro de ``[MIN, MAX]``.
+
+    Devuelve el dict (intacto) en éxito. La fuente única de los proveedores
+    válidos es ``LLM_PROVIDER_KINDS`` (no una lista paralela que se desincronice
+    del enum ``LLMProviderKind``).
+    """
+    from api_server.db.llm_providers import LLM_PROVIDER_KINDS
+
+    provider = cfg.get("provider")
+    if provider not in LLM_PROVIDER_KINDS:
+        raise InvalidModelConfigError(
+            f"provider {provider!r} is not in the closed catalogue "
+            f"{LLM_PROVIDER_KINDS} (ADR 0021)"
+        )
+    model = cfg.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise InvalidModelConfigError("model must be a non-empty string")
+    temperature = cfg.get("temperature")
+    if temperature is not None:
+        try:
+            temp = float(temperature)
+        except (TypeError, ValueError) as exc:
+            raise InvalidModelConfigError("temperature must be a number") from exc
+        if temp < MODEL_TEMPERATURE_MIN or temp > MODEL_TEMPERATURE_MAX:
+            raise InvalidModelConfigError(
+                f"temperature {temp} must be between "
+                f"{MODEL_TEMPERATURE_MIN} and {MODEL_TEMPERATURE_MAX}"
+            )
+    return cfg
+
+
+def is_model_config_empty(cfg: dict[str, Any] | None) -> bool:
+    """Si un ``model_config`` cuenta como "vacío" (legacy ``{}``).
+
+    Vacío = ``None`` o ``{}`` (un dict sin ninguna clave). Es el predicado que el
+    endpoint y el dispatch usan para decidir si aplicar el default seguro. Un dict
+    NO vacío se trata como un spec INTENCIONAL y se respeta tal cual — incluso si
+    no trae ``provider``/``model`` canónicos (p. ej. el spec scripted del runtime
+    de test usa ``kind`` en vez de ``provider``); el ADR 0055 acota el saneo al
+    caso ``{}`` legacy, no a cualquier spec "incompleto". La validación de catálogo
+    (``validate_model_config``, ``422`` en create/update) ya garantiza que un spec
+    nuevo no vacío trae ``provider``/``model`` válidos."""
+    return not cfg
+
+
+async def get_default_model_config(session: AsyncSession) -> dict[str, Any]:
+    """El ``model_config`` por defecto seguro para un agente sin spec explícito.
+
+    Lo lee ``POST /agents`` cuando el body no envía ``model_config`` y el
+    dispatch cuando un agente legacy tiene ``{}``. Devuelve el override del
+    System Admin si está configurado Y valida contra el catálogo; si nunca se
+    configuró o el valor almacenado es inválido, cae al fallback de código
+    ``DEFAULT_MODEL_CONFIG`` (también del catálogo). NUNCA devuelve ``{}`` ni
+    levanta — el dispatch no debe fallar el arranque por un default mal puesto."""
+    value = await get_platform_setting(session, MODEL_DEFAULT_CONFIG_KEY, default=None)
+    if isinstance(value, dict) and value:
+        try:
+            return dict(validate_model_config(value))
+        except InvalidModelConfigError:
+            # Un default mal configurado no debe romper la creación ni el
+            # dispatch; cae al fallback de código del catálogo.
+            return dict(DEFAULT_MODEL_CONFIG)
+    return dict(DEFAULT_MODEL_CONFIG)
+
+
+# ---------------------------------------------------------------------------
 # Estados de ejecución elegibles para memorización (Plan 06.17 task_06_17_04)
 # ---------------------------------------------------------------------------
 # El Memorizer solo destila ejecuciones "exitosas" — históricamente solo

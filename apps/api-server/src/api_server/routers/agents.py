@@ -200,6 +200,21 @@ async def create_agent(
 
         memory_scope = await get_default_memory_scope(session)
 
+    # Default EXPLÍCITO de model_config operator-configurable (Plan 06.17
+    # task_06_17_10 / ADR 0055): cuando el body no envía ``model_config`` (o lo
+    # envía vacío), se rellena con el default seguro de ``model.default_config``
+    # (platform_settings, anclado al catálogo cerrado del ADR 0021) en vez de
+    # persistir ``{}``. Así NINGÚN agente nuevo nace con un spec vacío que
+    # fallaría tarde en dispatch. Un ``model_config`` no vacío ya fue validado
+    # contra el catálogo por el schema (422 fuera de catálogo) y gana sobre el
+    # default.
+    if payload.llm_config:
+        model_config_value = payload.llm_config
+    else:
+        from api_server.db.platform_settings import get_default_model_config
+
+        model_config_value = await get_default_model_config(session)
+
     agent = Agent(
         tenant_id=tenant_id,
         name=payload.name,
@@ -208,7 +223,7 @@ async def create_agent(
         agent_type=payload.agent_type.value,
         role=payload.role.value,
         system_prompt=payload.system_prompt,
-        model_config=payload.llm_config,
+        model_config=model_config_value,
         memory_scope=memory_scope,
         review_capability=payload.review_capability,
         max_concurrent_tasks=payload.max_concurrent_tasks,
