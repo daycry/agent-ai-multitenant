@@ -652,7 +652,10 @@ class Team(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     default_workflow_template_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), nullable=True
     )
-    shared_memory_namespace: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Plan 06.17 task_06_17_15 / ADR 0053: `shared_memory_namespace` se retiró.
+    # Era un campo muerto (sin lectura productiva en recall/store): la memoria
+    # `team_shared` se resuelve por `project.team_id`, no por un namespace. La
+    # migración 0082 dropea la columna (reversible).
     # Catalog marker -- same pattern as Skill/Tool.is_builtin.
     is_builtin: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 

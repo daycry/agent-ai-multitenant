@@ -160,7 +160,6 @@ async def create_team(
         name=payload.name,
         description=payload.description,
         default_workflow_template_id=payload.default_workflow_template_id,
-        shared_memory_namespace=payload.shared_memory_namespace,
     )
     session.add(team)
     await session.flush()

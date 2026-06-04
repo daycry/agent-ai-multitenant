@@ -505,13 +505,12 @@ _UPSERT_ORG_SQL = """
 """
 
 _UPSERT_TEAM_SQL = """
-    INSERT INTO teams (id, tenant_id, name, description, shared_memory_namespace, is_builtin)
-    VALUES (:id, :tenant_id, :name, :description, :ns, false)
+    INSERT INTO teams (id, tenant_id, name, description, is_builtin)
+    VALUES (:id, :tenant_id, :name, :description, false)
     ON CONFLICT (id) DO UPDATE SET
         tenant_id = EXCLUDED.tenant_id,
         name = EXCLUDED.name,
         description = EXCLUDED.description,
-        shared_memory_namespace = EXCLUDED.shared_memory_namespace,
         updated_at = now(),
         deleted_at = NULL
 """
@@ -734,7 +733,6 @@ async def seed_webscorpo(
                 "Twig + daycry/auth): PM, Arquitecto, Backend CI4, DBA Doctrine, "
                 "Frontend, Auth/Security, i18n, QA, Reviewer y DevOps."
             ),
-            "ns": f"team:{TEAM_SLUG}",
         },
     )
 

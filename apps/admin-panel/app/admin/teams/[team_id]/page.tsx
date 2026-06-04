@@ -22,6 +22,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
+import { CapabilityHub } from "@/components/capability/capability-hub";
 import { ApiError, apiFetch } from "@/lib/api";
 
 interface TeamMember {
@@ -92,6 +93,8 @@ export default function TeamDetailPage() {
   // Plan 06.6: edit + delete dialogs.
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // Plan 06.17 task_06_17_15: edición de metadata de miembro (líder/prioridad/rol).
+  const [memberEditing, setMemberEditing] = useState<TeamMember | null>(null);
   const router = useRouter();
 
   function resetDialog() {
@@ -214,6 +217,18 @@ export default function TeamDetailPage() {
       )}
 
       {team && (
+        <>
+          {/* Plan 06.17 task_06_17_15 (ADR 0053): "qué sabe el equipo" — la
+              capacidad de equipo es la UNIÓN AGREGADA read-only de la de sus
+              miembros, no un subsistema TeamKB nuevo. Consume
+              GET /teams/{id}/capabilities. */}
+          <div className="mb-6">
+            <CapabilityHub entityType="team" entityId={teamId} />
+          </div>
+        </>
+      )}
+
+      {team && (
         <section data-testid="team-detail">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-lg font-semibold">
@@ -276,11 +291,27 @@ export default function TeamDetailPage() {
                             ))}
                         </p>
                       </div>
-                      {m.is_team_leader && (
-                        <Badge variant="warning" data-testid="leader-badge">
-                          Líder
+                      <div className="flex items-center gap-2">
+                        {m.is_team_leader && (
+                          <Badge variant="warning" data-testid="leader-badge">
+                            Líder
+                          </Badge>
+                        )}
+                        <Badge variant="muted" data-testid={`member-priority-${m.agent_id}`}>
+                          Prioridad {m.assignment_priority}
                         </Badge>
-                      )}
+                        {!isReadOnly && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setMemberEditing(m)}
+                            data-testid={`member-edit-${m.agent_id}`}
+                          >
+                            <Pencil className="mr-1 h-4 w-4" />
+                            Editar
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </Card>
                 );
@@ -413,7 +444,150 @@ export default function TeamDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {memberEditing && (
+        <MemberEditDialog
+          teamId={teamId}
+          member={memberEditing}
+          agentName={agentsById.get(memberEditing.agent_id)?.name ?? "(agente)"}
+          open={memberEditing !== null}
+          onOpenChange={(next) => {
+            if (!next) setMemberEditing(null);
+          }}
+          onSaved={() => {
+            void queryClient.invalidateQueries({ queryKey: ["teams", teamId] });
+            setMemberEditing(null);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Member metadata edit dialog (Plan 06.17 task_06_17_15, ADR 0053)
+//
+// La única escritura nueva de la UI a nivel de equipo: invoca el
+// `PUT /teams/{id}/members/{agent_id}` ya existente para fijar
+// is_team_leader / role_in_team / assignment_priority.
+// ---------------------------------------------------------------------------
+
+interface MemberUpdate {
+  is_team_leader: boolean;
+  role_in_team: string | null;
+  assignment_priority: number;
+}
+
+function MemberEditDialog({
+  teamId,
+  member,
+  agentName,
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  teamId: string;
+  member: TeamMember;
+  agentName: string;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onSaved: () => void;
+}) {
+  const [isLeader, setIsLeader] = useState(member.is_team_leader);
+  const [roleInTeam, setRoleInTeam] = useState(member.role_in_team ?? "");
+  const [priority, setPriority] = useState(String(member.assignment_priority));
+
+  useEffect(() => {
+    if (open) {
+      setIsLeader(member.is_team_leader);
+      setRoleInTeam(member.role_in_team ?? "");
+      setPriority(String(member.assignment_priority));
+    }
+  }, [open, member.is_team_leader, member.role_in_team, member.assignment_priority]);
+
+  const mutation = useMutation<Team, ApiError, MemberUpdate>({
+    mutationFn: (payload) =>
+      apiFetch<Team>(`/teams/${teamId}/members/${member.agent_id}`, {
+        method: "PUT",
+        body: payload,
+      }),
+    onSuccess: onSaved,
+  });
+
+  const priorityNum = Number(priority);
+  const priorityValid = Number.isInteger(priorityNum) && priorityNum >= 0 && priorityNum <= 1000;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent data-testid="member-edit-dialog">
+        <DialogHeader>
+          <DialogTitle>Editar miembro</DialogTitle>
+          <DialogDescription>
+            Metadata de <strong>{agentName}</strong> en este equipo: si es líder, su rol y su
+            prioridad de asignación.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody className="space-y-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={isLeader}
+              onChange={(e) => setIsLeader(e.target.checked)}
+              data-testid="member-edit-leader"
+            />
+            <span>Líder del equipo</span>
+          </label>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="me-role">Rol en el equipo</Label>
+            <Input
+              id="me-role"
+              value={roleInTeam}
+              onChange={(e) => setRoleInTeam(e.target.value)}
+              placeholder="p. ej. Tech Lead"
+              data-testid="member-edit-role"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="me-priority">Prioridad de asignación (0–1000)</Label>
+            <Input
+              id="me-priority"
+              type="number"
+              min={0}
+              max={1000}
+              value={priority}
+              onChange={(e) => setPriority(e.target.value)}
+              data-testid="member-edit-priority"
+            />
+          </div>
+          {mutation.isError && (
+            <p
+              className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
+              data-testid="member-edit-error"
+            >
+              {mutation.error?.body ?? mutation.error?.message ?? "Error al guardar"}
+            </p>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancelar
+          </Button>
+          <Button
+            disabled={!priorityValid || mutation.isPending}
+            onClick={() =>
+              mutation.mutate({
+                is_team_leader: isLeader,
+                role_in_team: roleInTeam.trim() || null,
+                assignment_priority: priorityNum,
+              })
+            }
+            data-testid="member-edit-save"
+          >
+            {mutation.isPending ? "Guardando…" : "Guardar"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

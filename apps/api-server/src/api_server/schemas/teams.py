@@ -72,7 +72,6 @@ class TeamCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str | None = None
     default_workflow_template_id: UUID | None = None
-    shared_memory_namespace: str | None = Field(default=None, max_length=120)
 
 
 class TeamUpdateRequest(BaseModel):
@@ -81,7 +80,6 @@ class TeamUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = None
     default_workflow_template_id: UUID | None = None
-    shared_memory_namespace: str | None = Field(default=None, max_length=120)
 
 
 class TeamResponse(BaseModel):
@@ -92,7 +90,6 @@ class TeamResponse(BaseModel):
     name: str
     description: str | None
     default_workflow_template_id: UUID | None
-    shared_memory_namespace: str | None
     is_builtin: bool
     members: list[TeamMemberResponse]
     created_at: datetime
@@ -107,7 +104,6 @@ def to_team_response(t: Team, members: list[TeamMember]) -> TeamResponse:
         name=t.name,
         description=t.description,
         default_workflow_template_id=t.default_workflow_template_id,
-        shared_memory_namespace=t.shared_memory_namespace,
         is_builtin=t.is_builtin,
         members=[to_member_response(m) for m in members],
         created_at=t.created_at,
