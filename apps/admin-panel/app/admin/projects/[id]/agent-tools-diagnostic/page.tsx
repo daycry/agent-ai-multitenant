@@ -35,7 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useLang, type Lang } from "@/lib/lang-context";
-import { resolveImpl, resolveSecurity } from "@/lib/tools/taxonomy";
+import { resolveCategory, resolveImpl, resolveSecurity } from "@/lib/tools/taxonomy";
 
 // --------------------------------------------------------------------------
 // Types — project snapshot (mirror api_server.routers.tools_diagnostic)
@@ -357,8 +357,10 @@ function ToolRow({ tool, lang }: { tool: ToolDiagnostic; lang: Lang }) {
   // raw enum is NEVER rendered.
   const impl = resolveImpl(tool.implementation_type, lang);
   const sec = resolveSecurity(tool.security_level, lang);
+  const cat = resolveCategory(tool.category, lang);
   const implLabel = lang === "es" ? impl.labelEs : impl.labelEn;
   const secLabel = lang === "es" ? sec.labelEs : sec.labelEn;
+  const catLabel = lang === "es" ? cat.labelEs : cat.labelEn;
   return (
     <li
       className="border-muted flex items-center justify-between gap-3 rounded border px-3 py-2 text-sm"
@@ -380,10 +382,10 @@ function ToolRow({ tool, lang }: { tool: ToolDiagnostic; lang: Lang }) {
           )}
           {tool.timeout_seconds > 0 ? (
             <span className="text-muted-foreground text-xs">
-              timeout {tool.timeout_seconds}s · {tool.category}
+              timeout {tool.timeout_seconds}s · {catLabel}
             </span>
           ) : (
-            <span className="text-muted-foreground text-xs">{tool.category}</span>
+            <span className="text-muted-foreground text-xs">{catLabel}</span>
           )}
         </div>
         {tool.description ? (
