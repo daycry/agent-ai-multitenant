@@ -31,8 +31,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_member
 from api_server.db.memory import MemoryEntry
+from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
 from api_server.routers._helpers import require_tenant_id
+from api_server.routers.docs_viewer import get_query_embedder
 
 router = APIRouter(prefix="/memories", tags=["memories"])
 
@@ -173,12 +175,18 @@ async def store_memory(
     payload: MemoryStoreRequest,
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
+    embedder: Embedder | None = Depends(get_query_embedder),
 ) -> MemoryResponse:
     """Persist a single memory manually (Plan 04 task_04_05).
 
     The Memorizer (task_04_03) writes memories automatically after
     each execution; this endpoint covers the "I want to remember this
     *now*" case humans hit in the chat UI.
+
+    Plan 06.17 task_06_17_03: el contenido se embebe en el momento de crear
+    (best-effort, reutilizando ``get_query_embedder``) para que ``has_embedding``
+    y "similares" funcionen ya; si el embed falla, queda NULL y el back-fill lo
+    rellena luego.
     """
     tenant_id = require_tenant_id(principal)
     if payload.scope == "global":
@@ -206,6 +214,7 @@ async def store_memory(
         agent_id=None,
         source_execution_id=None,
         extra_metadata={"source": "manual", "actor_user_id": str(principal.user_id)},
+        embedder=embedder,
     )
     await session.flush()
     row = rows[0]
@@ -394,12 +403,19 @@ async def merge_memory_into(
     payload: MergeRequest,
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
+    embedder: Embedder | None = Depends(get_query_embedder),
 ) -> MemoryResponse:
     """Fold ``source_id`` INTO ``target_id`` (asymmetric merge).
 
     Target's content gets the source's appended (separator
     ``\\n\\n---\\n``); tags become the union; ``metadata.merged_from``
     accumulates the source's id. The source is soft-deleted.
+
+    Plan 06.17 task_06_17_03: el contenido del destino CAMBIA, así que su
+    embedding queda obsoleto — se RE-EMBEBE el contenido combinado (best-effort,
+    reutilizando ``get_query_embedder``) para que "similares" siga siendo
+    coherente. Si el embed falla (Ollama caído), el embedding queda NULL y el
+    back-fill lo rellena luego; el merge no se bloquea.
     """
     require_tenant_id(principal)
 
@@ -454,6 +470,10 @@ async def merge_memory_into(
     md["merged_from"] = history
     tgt.metadata_ = md
 
+    # El contenido del destino cambió → re-embeber (best-effort) para no dejar
+    # un embedding que ya no representa el texto. Un fallo deja NULL (back-fill).
+    tgt.embedding = await _reembed_content(embedder, tgt.content)
+
     from datetime import UTC
     from datetime import datetime as _dt
 
@@ -461,6 +481,21 @@ async def merge_memory_into(
     await session.flush()
     await session.refresh(tgt)
     return _to_response(tgt)
+
+
+async def _reembed_content(embedder: Embedder | None, content: str) -> list[float] | None:
+    """Re-embebe ``content`` (best-effort) tras un merge.
+
+    Devuelve el vector, o ``None`` cuando no hay embedder, el contenido está
+    vacío o el embed falla (Ollama caído). En ese último caso el back-fill
+    rellena el NULL más tarde; el merge no se bloquea."""
+    if embedder is None or not content.strip():
+        return None
+    try:
+        vectors = await embedder.embed([content])
+    except EmbeddingError:
+        return None
+    return list(vectors[0]) if vectors else None
 
 
 __all__ = ["router"]

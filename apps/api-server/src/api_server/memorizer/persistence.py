@@ -7,9 +7,13 @@ constraint ``ck_memory_entries_scope_pointer`` (migration 0020) makes
 the DB the final arbiter — if our mapping is wrong, the insert fails
 loudly. Tests cover every scope branch.
 
-The embedding column is left NULL on insert. Task_04_14 will back-fill
-it once the Ollama embedding provider lands; the column is nullable
-exactly so a write here never blocks on the embedder.
+El embedding se rellena EN EL MOMENTO DE CREAR cuando el caller pasa un
+``embedder`` (Plan 06.17 task_06_17_03): así el recall vectorial y los
+"similares" funcionan sin esperar al back-fill. La columna sigue siendo
+nullable y el embed es BEST-EFFORT — si el embedder falla (Ollama caído) o no
+se pasa, la fila nace con ``embedding=NULL`` y el worker dedicado de back-fill
+(``workers.backfill_memory_embeddings``) la rellena después, idempotente. Un
+write de memoria NUNCA se bloquea por el embedder.
 """
 
 from __future__ import annotations
@@ -23,9 +27,36 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.db.domain import MemoryScope
 from api_server.db.memory import MemoryEntry
+from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer.distillation import MemoryCandidate
 
 logger = structlog.get_logger(__name__)
+
+
+async def _embed_contents(
+    embedder: Embedder | None, contents: Sequence[str]
+) -> list[list[float] | None]:
+    """Embebe ``contents`` con ``embedder`` (best-effort).
+
+    Devuelve una lista alineada con ``contents``: el vector por contenido, o
+    ``None`` cuando no hay embedder o el embed falla. Nunca lanza — un fallo del
+    embedder no debe abortar la persistencia de la memoria (BM25 sigue
+    funcionando y el back-fill rellenará los NULL más tarde)."""
+    if embedder is None or not contents:
+        return [None] * len(contents)
+    try:
+        vectors = await embedder.embed(list(contents))
+    except EmbeddingError as exc:
+        logger.warning("memorizer.embed_failed", error=str(exc), count=len(contents))
+        return [None] * len(contents)
+    if len(vectors) != len(contents):
+        logger.warning(
+            "memorizer.embed_count_mismatch",
+            expected=len(contents),
+            got=len(vectors),
+        )
+        return [None] * len(contents)
+    return [list(v) for v in vectors]
 
 
 def _owner_kwargs(
@@ -70,6 +101,7 @@ async def persist_memory_candidates(
     source_execution_id: UUID | None = None,
     source_human_work_session_id: UUID | None = None,
     extra_metadata: Mapping[str, Any] | None = None,
+    embedder: Embedder | None = None,
 ) -> list[MemoryEntry]:
     """Write `candidates` as `MemoryEntry` rows and return them.
 
@@ -92,6 +124,11 @@ async def persist_memory_candidates(
             JSONB (e.g. distillation model id, cost in USD). Tags
             stay on the candidate side; this column carries the
             "how was this produced" metadata.
+        embedder: opcional (Plan 06.17 task_06_17_03). Cuando se pasa, el
+            contenido se embebe EN EL MOMENTO DE CREAR para que el recall
+            vectorial / "similares" funcionen sin esperar al back-fill. Es
+            best-effort: si el embed falla, la fila nace con ``embedding=NULL``
+            (el back-fill la rellena luego) y el write no se bloquea.
 
     Returns the newly-added (not yet flushed) `MemoryEntry`
     instances.
@@ -111,13 +148,18 @@ async def persist_memory_candidates(
     owner = _owner_kwargs(scope, user_id=user_id, team_id=team_id, project_id=project_id)
     metadata_base: dict[str, Any] = dict(extra_metadata or {})
 
+    # Embebe el contenido en el momento de crear (best-effort) cuando hay
+    # embedder; si falla / no se pasa, queda NULL y el back-fill lo rellena.
+    embeddings = await _embed_contents(embedder, [c.content for c in candidates])
+
     rows: list[MemoryEntry] = []
-    for cand in candidates:
+    for cand, embedding in zip(candidates, embeddings, strict=True):
         row = MemoryEntry(
             tenant_id=tenant_id,
             scope=scope,
             type=cand.type,
             content=cand.content,
+            embedding=embedding,
             agent_id=agent_id,
             source_execution_id=source_execution_id,
             source_human_work_session_id=source_human_work_session_id,

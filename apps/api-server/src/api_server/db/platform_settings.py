@@ -171,6 +171,87 @@ async def get_rag_reranker_enabled(session: AsyncSession) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Back-fill de embeddings de memoria (Plan 06.17 task_06_17_03)
+# ---------------------------------------------------------------------------
+# El worker dedicado ``workers.backfill_memory_embeddings`` rellena la columna
+# ``memory_entries.embedding`` que nace NULL (persistence.py): un trabajo
+# IDEMPOTENTE (solo toca filas con ``embedding IS NULL``), por LOTES y
+# THROTTLED, NUNCA parte del flujo de run (sin auto-retry — el run no espera al
+# embedder). Tres palancas operator-configurable, leídas en vivo al inicio de
+# cada ejecución del worker (un System Admin las cambia desde el panel y surten
+# efecto en la siguiente pasada sin reiniciar Celery):
+#
+#   * ``memory.backfill_enabled``    — lever ON/OFF (default ON: una plataforma
+#       desatendida debe ir rellenando los embeddings que faltan).
+#   * ``memory.backfill_batch_size`` — cuántas filas se embeben por lote (acota
+#       la memoria y el tamaño de la petición al embedder).
+#   * ``memory.backfill_throttle_ms``— pausa entre lotes en milisegundos (evita
+#       saturar Ollama / la DB; 0 = sin pausa).
+#
+# El worker recorre TODOS los tenants (corre con un rol BYPASSRLS, como el
+# Memorizer), de modo que no necesita ``app.tenant_id``; la columna
+# ``tenant_id`` sigue presente en cada UPDATE como defensa en profundidad.
+MEMORY_BACKFILL_ENABLED_KEY = "memory.backfill_enabled"
+DEFAULT_MEMORY_BACKFILL_ENABLED = True
+
+MEMORY_BACKFILL_BATCH_SIZE_KEY = "memory.backfill_batch_size"
+DEFAULT_MEMORY_BACKFILL_BATCH_SIZE = 50
+# Cotas de cordura: al menos 1 fila por lote; un techo generoso evita que un
+# typo cargue miles de contenidos en una sola petición al embedder.
+MEMORY_BACKFILL_BATCH_SIZE_MIN = 1
+MEMORY_BACKFILL_BATCH_SIZE_MAX = 500
+
+MEMORY_BACKFILL_THROTTLE_MS_KEY = "memory.backfill_throttle_ms"
+DEFAULT_MEMORY_BACKFILL_THROTTLE_MS = 0
+MEMORY_BACKFILL_THROTTLE_MS_MIN = 0
+MEMORY_BACKFILL_THROTTLE_MS_MAX = 60_000
+
+
+async def get_memory_backfill_enabled(session: AsyncSession) -> bool:
+    """Si el back-fill de embeddings de memoria está habilitado.
+
+    Lo lee el worker ``workers.backfill_memory_embeddings`` al inicio de cada
+    ejecución; cuando es False la pasada es un no-op (no lee ni escribe filas).
+    Default ON: una plataforma desatendida debe rellenar los embeddings que
+    faltan. Solo un System Admin puede escribir el flag (``set_platform_setting``).
+    """
+    value = await get_platform_setting(
+        session, MEMORY_BACKFILL_ENABLED_KEY, default=DEFAULT_MEMORY_BACKFILL_ENABLED
+    )
+    return bool(value)
+
+
+async def get_memory_backfill_batch_size(session: AsyncSession) -> int:
+    """Tamaño de lote del back-fill (acotado a [MIN, MAX]).
+
+    Lo lee el worker en vivo; un valor fuera de rango se recorta a la cota más
+    cercana en vez de romper la pasada."""
+    value = await get_platform_setting(
+        session, MEMORY_BACKFILL_BATCH_SIZE_KEY, default=DEFAULT_MEMORY_BACKFILL_BATCH_SIZE
+    )
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MEMORY_BACKFILL_BATCH_SIZE
+    return max(MEMORY_BACKFILL_BATCH_SIZE_MIN, min(MEMORY_BACKFILL_BATCH_SIZE_MAX, size))
+
+
+async def get_memory_backfill_throttle_ms(session: AsyncSession) -> int:
+    """Pausa (ms) entre lotes del back-fill (acotada a [MIN, MAX]).
+
+    Lo lee el worker en vivo; 0 = sin pausa. Un valor fuera de rango se recorta
+    a la cota más cercana."""
+    value = await get_platform_setting(
+        session, MEMORY_BACKFILL_THROTTLE_MS_KEY, default=DEFAULT_MEMORY_BACKFILL_THROTTLE_MS
+    )
+    try:
+        ms = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MEMORY_BACKFILL_THROTTLE_MS
+    return max(MEMORY_BACKFILL_THROTTLE_MS_MIN, min(MEMORY_BACKFILL_THROTTLE_MS_MAX, ms))
+
+
+# ---------------------------------------------------------------------------
 # Plan approval — double-signature threshold (Plan 03 task_03_25)
 # ---------------------------------------------------------------------------
 PLAN_DOUBLE_SIGNATURE_THRESHOLD_KEY = "plan_approval_double_signature_threshold"

@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import structlog
@@ -57,11 +57,28 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from workers.celery_app import app
 from workers.config import Settings, get_settings
 
+if TYPE_CHECKING:
+    from api_server.ingestion.embeddings import Embedder
+
 _log = structlog.get_logger("workers.memorizer")
 
 # Type alias for the LLM factory tests can override. Returns the
 # provider AND a flag whether the caller owns it (for `aclose()`).
 LLMFactory = Callable[[Settings], LLMProvider]
+
+# Factory del embedder que rellena ``memory_entries.embedding`` al persistir las
+# memorias destiladas (Plan 06.17 task_06_17_03). Best-effort: si el embed falla
+# la fila nace NULL y el worker de back-fill la rellena luego. Los tests lo
+# sobreescriben con un HashEmbedder; ``None`` deshabilita el embed-al-crear.
+EmbedderFactory = Callable[[Settings], "Embedder"]
+
+
+def _default_embedder_factory(settings: Settings) -> Embedder:
+    """Embedder por defecto del Memorizer: el ``OllamaEmbedder`` de la ingesta,
+    apuntado a la URL de Ollama del worker (mismo modelo / dimensión)."""
+    from api_server.ingestion.embeddings import OllamaEmbedder
+
+    return OllamaEmbedder(base_url=settings.memory_embedder_base_url)
 
 
 def _default_llm_factory(settings: Settings) -> LLMProvider:
@@ -91,6 +108,7 @@ def memorize_execution(execution_id: str) -> dict[str, Any]:
             UUID(execution_id),
             settings=settings,
             llm_factory=_default_llm_factory,
+            embedder_factory=_default_embedder_factory,
         )
     )
 
@@ -100,9 +118,10 @@ async def _memorize_execution_async(
     *,
     settings: Settings,
     llm_factory: LLMFactory,
+    embedder_factory: EmbedderFactory | None = None,
 ) -> dict[str, Any]:
     """Async core. Tests inject a fake `llm_factory` to avoid the
-    network."""
+    network; ``embedder_factory`` es opcional (best-effort embed-al-crear)."""
     engine = create_async_engine(settings.database_url)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -142,17 +161,23 @@ async def _memorize_execution_async(
         if not candidates:
             return _result(execution_id, 0, "ok:no_candidates")
 
-        async with sessionmaker() as session, session.begin():
-            rows = await persist_memory_candidates(
-                session,
-                candidates,
-                tenant_id=ctx["tenant_id"],
-                scope=ctx["agent"]["memory_scope"],
-                agent_id=ctx["agent"]["id"],
-                source_execution_id=execution_id,
-                extra_metadata={"distill_model": getattr(llm, "name", "unknown")},
-                **owner,
-            )
+        embedder = embedder_factory(settings) if embedder_factory is not None else None
+        try:
+            async with sessionmaker() as session, session.begin():
+                rows = await persist_memory_candidates(
+                    session,
+                    candidates,
+                    tenant_id=ctx["tenant_id"],
+                    scope=ctx["agent"]["memory_scope"],
+                    agent_id=ctx["agent"]["id"],
+                    source_execution_id=execution_id,
+                    extra_metadata={"distill_model": getattr(llm, "name", "unknown")},
+                    embedder=embedder,
+                    **owner,
+                )
+        finally:
+            if embedder is not None:
+                await embedder.aclose()
         _log.info(
             "memorizer.persisted",
             execution_id=str(execution_id),
@@ -275,6 +300,7 @@ def memorize_human_work_session(work_session_id: str) -> dict[str, Any]:
             UUID(work_session_id),
             settings=settings,
             llm_factory=_default_llm_factory,
+            embedder_factory=_default_embedder_factory,
         )
     )
 
@@ -284,8 +310,10 @@ async def _memorize_human_work_session_async(
     *,
     settings: Settings,
     llm_factory: LLMFactory,
+    embedder_factory: EmbedderFactory | None = None,
 ) -> dict[str, Any]:
-    """Async core. Tests inject a fake `llm_factory` to avoid the network."""
+    """Async core. Tests inject a fake `llm_factory` to avoid the network;
+    ``embedder_factory`` es opcional (best-effort embed-al-crear)."""
     engine = create_async_engine(settings.database_url)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -330,24 +358,30 @@ async def _memorize_human_work_session_async(
         if not candidates:
             return _human_result(work_session_id, 0, "ok:no_candidates")
 
-        async with sessionmaker() as write_session, write_session.begin():
-            rows = await persist_memory_candidates(
-                write_session,
-                candidates,
-                tenant_id=ctx["tenant_id"],
-                scope=scope,
-                agent_id=ctx["agent"]["id"],  # type: ignore[index]
-                source_human_work_session_id=work_session_id,
-                extra_metadata={
-                    "distill_model": getattr(llm, "name", "unknown"),
-                    "source_kind": "human_work_session",
-                    "task_id": str(ctx["task"]["id"]),
-                    "worker_user_id": (
-                        str(ctx["session"]["user_id"]) if ctx["session"]["user_id"] else None
-                    ),
-                },
-                **owner,
-            )
+        embedder = embedder_factory(settings) if embedder_factory is not None else None
+        try:
+            async with sessionmaker() as write_session, write_session.begin():
+                rows = await persist_memory_candidates(
+                    write_session,
+                    candidates,
+                    tenant_id=ctx["tenant_id"],
+                    scope=scope,
+                    agent_id=ctx["agent"]["id"],  # type: ignore[index]
+                    source_human_work_session_id=work_session_id,
+                    extra_metadata={
+                        "distill_model": getattr(llm, "name", "unknown"),
+                        "source_kind": "human_work_session",
+                        "task_id": str(ctx["task"]["id"]),
+                        "worker_user_id": (
+                            str(ctx["session"]["user_id"]) if ctx["session"]["user_id"] else None
+                        ),
+                    },
+                    embedder=embedder,
+                    **owner,
+                )
+        finally:
+            if embedder is not None:
+                await embedder.aclose()
         _log.info(
             "memorizer.human_persisted",
             work_session_id=str(work_session_id),

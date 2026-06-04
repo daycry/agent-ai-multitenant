@@ -63,6 +63,17 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": schedule(run_every=120.0),
         "options": {"queue": "ingestion"},
     },
+    # Plan 06.17 task_06_17_03 — back-fill IDEMPOTENTE de embeddings de memoria:
+    # rellena los memory_entries.embedding NULL por lotes/throttled. Worker
+    # DEDICADO (nunca parte del flujo de un run, sin auto-retry). Cada 5 min;
+    # una pasada solo toca filas NULL, así que con todo rellenado es un no-op
+    # barato. Su enable/batch/throttle son platform settings (memory.backfill_*)
+    # que un System Admin posee. Pinned a `ingestion` (donde vive el embedder).
+    "backfill-memory-embeddings-every-5m": {
+        "task": "workers.backfill_memory_embeddings",
+        "schedule": schedule(run_every=300.0),
+        "options": {"queue": "ingestion"},
+    },
 }
 
 # Plan 11 task_11_18: the scheduled price-catalog sync entry name. Kept as a

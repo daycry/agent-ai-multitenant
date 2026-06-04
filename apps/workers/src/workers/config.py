@@ -155,6 +155,20 @@ class Settings(BaseSettings):
         "a small local model is the right trade-off (no quota, no egress).",
     )
 
+    # ----- Back-fill de embeddings de memoria (Plan 06.17 task_06_17_03) -----
+    # El worker dedicado ``workers.backfill_memory_embeddings`` rellena los
+    # ``memory_entries.embedding`` NULL embebiendo el contenido con Ollama
+    # (mismo embedder que la ingesta de KBs: ``OllamaEmbedder`` → ``/api/embed``,
+    # default ``nomic-embed-text-v1.5``, 768 dims). Esta es la BASE URL de Ollama
+    # (sin ``/v1``, distinta del endpoint de chat del Memorizer). El flag ON/OFF,
+    # el batch y el throttle son PLATFORM settings que un System Admin posee
+    # (``memory.backfill_*``); este env es solo el cableado del host hacia Ollama.
+    memory_embedder_base_url: str = Field(
+        default="http://localhost:11434",
+        description="Base URL de Ollama que el back-fill de embeddings de memoria "
+        "usa (endpoint ``/api/embed``). Apunta a un Ollama local por defecto.",
+    )
+
     # ----- Plan 06 / 06.5: shared data root for worktrees + dep-cache -----
     data_root: str = Field(
         default="/data/agent-platform",

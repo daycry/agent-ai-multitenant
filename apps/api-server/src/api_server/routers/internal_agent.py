@@ -38,7 +38,7 @@ from api_server.auth.internal_agent import (
 from api_server.db.domain import Agent, MemoryScope, Project
 from api_server.db.knowledge import Chunk, Document, KnowledgeBase, KnowledgeBaseProject
 from api_server.db.platform_settings import get_rag_reranker_enabled
-from api_server.ingestion.embeddings import Embedder
+from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
 from api_server.memorizer.recall import recall
 from api_server.rag.reranker import BGEReranker, Reranker
@@ -138,6 +138,7 @@ async def memory_recall(
     payload: MemoryRecallRequest,
     principal: AgentPrincipal = Depends(get_agent_principal),
     session: AsyncSession = Depends(get_agent_tenant_session),
+    embedder: Embedder | None = Depends(get_query_embedder),
 ) -> MemoryRecallResponse:
     """Hybrid BM25 + vector recall over memory_entries.
 
@@ -148,11 +149,20 @@ async def memory_recall(
         team's or project's memories;
       - ``private`` is included for forward compatibility but yields
         nothing for an AI agent (no user_id is set on AI principals).
+
+    Plan 06.17 task_06_17_03: el query-embedder se reutiliza de
+    ``docs_viewer.get_query_embedder`` (misma fuente, no se duplica) para que
+    ``query_embedding`` deje de ser ``None`` y el path vectorial+RRF participe
+    (``recall._vector_candidates`` devuelve candidatos). El embed es best-effort:
+    si el embedder no está disponible (Ollama caído ⇒ ``EmbeddingError``) el
+    recall cae a BM25 sin romper.
     """
     agent, project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
     scopes = payload.scopes or _default_readable_scopes(agent.memory_scope)
     team_id = project.team_id if project is not None else None
     project_id = agent.project_id
+
+    query_embedding = await _embed_query(embedder, payload.query)
 
     hits = await recall(
         session,
@@ -162,7 +172,7 @@ async def memory_recall(
         user_id=None,  # AI agents have no user attribution
         team_id=team_id,
         project_id=project_id,
-        query_embedding=None,  # embedder wire-up: Plan 04 task_04_14
+        query_embedding=query_embedding,
         limit=payload.limit,
     )
     return MemoryRecallResponse(
@@ -218,6 +228,7 @@ async def memory_store(
     payload: MemoryStoreRequest,
     principal: AgentPrincipal = Depends(get_agent_principal),
     session: AsyncSession = Depends(get_agent_tenant_session),
+    embedder: Embedder | None = Depends(get_query_embedder),
 ) -> MemoryStoreResponse:
     """Persist a single memory written by the agent.
 
@@ -225,6 +236,12 @@ async def memory_store(
     pointers (team_id / project_id) are resolved from the agent's
     project, never from the request body — the agent cannot escape
     its own tenant + team + project boundary.
+
+    Plan 06.17 task_06_17_03: el contenido se embebe EN EL MOMENTO DE CREAR
+    (best-effort, reutilizando ``get_query_embedder``) para que el recall
+    vectorial y "similares" funcionen sin esperar al back-fill. Si el embed
+    falla (Ollama caído), la fila nace con ``embedding=NULL`` y el worker de
+    back-fill la rellena después — el store no se bloquea.
     """
     agent, project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
 
@@ -267,6 +284,7 @@ async def memory_store(
         agent_id=agent.id,
         source_execution_id=None,
         extra_metadata={"source": "agent_runtime"},
+        embedder=embedder,
         **owner,
     )
     await session.flush()
@@ -278,6 +296,21 @@ async def memory_store(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+async def _embed_query(embedder: Embedder | None, query: str) -> list[float] | None:
+    """Embebe la query del recall (best-effort).
+
+    Devuelve el vector, o ``None`` cuando no hay embedder, la query está vacía
+    o el embed falla (Ollama caído). En ese caso el recall cae a BM25 — nunca
+    rompe (Plan 06.17 task_06_17_03)."""
+    if embedder is None or not query.strip():
+        return None
+    try:
+        vectors = await embedder.embed([query])
+    except EmbeddingError:
+        return None
+    return list(vectors[0]) if vectors else None
+
+
 def _default_readable_scopes(agent_scope: str) -> list[str]:
     """The scope set an agent reads when it doesn't specify one.
 
