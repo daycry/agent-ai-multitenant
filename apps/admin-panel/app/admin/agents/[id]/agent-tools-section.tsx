@@ -25,7 +25,7 @@
  * Read-only para agentes `global_builtin` y para usuarios no `tenant_admin`.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -400,9 +400,21 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                   onToggle={toggle}
                   onToggleMany={toggleMany}
                   emptyMessage={
-                    q
-                      ? "Ninguna tool avanzada coincide con la búsqueda."
-                      : "No hay tools avanzadas (custom · MCP). Crea una en el catálogo /tools o configura un MCP server en el proyecto."
+                    q ? (
+                      "Ninguna tool avanzada coincide con la búsqueda."
+                    ) : (
+                      <>
+                        No hay tools avanzadas (custom · MCP). Créalas en el{" "}
+                        <Link
+                          href="/admin/tools"
+                          className="text-primary font-medium underline-offset-4 hover:underline"
+                          data-testid="agent-tools-catalog-link"
+                        >
+                          catálogo de tools
+                        </Link>{" "}
+                        o configura un MCP server en el proyecto.
+                      </>
+                    )
                   }
                   testidPrefix="advanced"
                 />
@@ -434,7 +446,7 @@ function GroupedToolList({
   lang: Lang;
   onToggle: (toolId: string) => void;
   onToggleMany: (toolIds: string[], on: boolean) => void;
-  emptyMessage: string;
+  emptyMessage: ReactNode;
   testidPrefix: string;
 }) {
   const groups = useMemo(() => {

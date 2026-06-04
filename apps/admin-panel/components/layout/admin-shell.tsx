@@ -34,6 +34,7 @@ import {
   Store,
   UserRound,
   Users,
+  Wrench,
   X,
 } from "lucide-react";
 
@@ -94,6 +95,7 @@ const NAV_GROUPS: NavGroup[] = [
     adminOnly: true,
     items: [
       { href: "/admin/agents", label: "Agentes", Icon: Bot },
+      { href: "/admin/tools", label: "Catálogo", Icon: Wrench },
       { href: "/admin/human-agents", label: "Agentes humanos", Icon: UserRound, adminOnly: true },
       { href: "/admin/teams", label: "Equipos", Icon: Users },
       { href: "/admin/projects", label: "Proyectos", Icon: FolderKanban },
