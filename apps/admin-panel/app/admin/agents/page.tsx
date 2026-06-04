@@ -28,8 +28,16 @@ import { Select } from "@/components/ui/select";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StateBlock } from "@/components/shared/state-block";
+import { PersonaModelFields } from "@/components/capability/persona-section";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useLang, type Lang } from "@/lib/lang-context";
+import {
+  buildModelConfig,
+  DEFAULT_MODEL_CONFIG,
+  validateDraft,
+  type ModelConfig,
+  type ModelConfigDraft,
+} from "@/lib/persona/persona";
 
 interface Agent {
   id: string;
@@ -257,6 +265,9 @@ interface NewAgentRequest {
   description: string | null;
   role: string;
   system_prompt: string;
+  // Persona enviada bajo la clave JSON `model_config` (alias de llm_config):
+  // proveedor/modelo/temperatura del catálogo cerrado + system_prompts.{es,en}.
+  model_config: ModelConfig;
   scope: "global_tenant_template" | "project_local";
   project_id: string | null;
 }
@@ -270,10 +281,16 @@ function NewAgentDialog({
   onOpenChange: (v: boolean) => void;
   onCreated: () => void;
 }) {
+  const { lang } = useLang();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [role, setRole] = useState("backend_dev");
   const [systemPrompt, setSystemPrompt] = useState("");
+  // Persona (SER): proveedor/modelo/temperatura del catálogo cerrado (ADR 0021)
+  // + el prompt EN opcional. El prompt ES sale del campo `systemPrompt` de arriba
+  // (fuente del bilingüe `system_prompts.es`).
+  const [draft, setDraft] = useState<ModelConfigDraft>({ ...DEFAULT_MODEL_CONFIG });
+  const [promptEn, setPromptEn] = useState("");
   const [scope, setScope] = useState<"global_tenant_template" | "project_local">(
     "global_tenant_template",
   );
@@ -290,14 +307,18 @@ function NewAgentDialog({
       setName("");
       setDescription("");
       setSystemPrompt("");
+      setPromptEn("");
+      setDraft({ ...DEFAULT_MODEL_CONFIG });
       setProjectId("");
       onCreated();
     },
   });
 
+  const personaValid = validateDraft(draft, lang).length === 0;
   const submitDisabled =
     !name.trim() ||
     !systemPrompt.trim() ||
+    !personaValid ||
     (scope === "project_local" && !projectId.trim()) ||
     mutation.isPending;
 
@@ -350,7 +371,7 @@ function NewAgentDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label>System prompt</Label>
+            <Label>{lang === "es" ? "System prompt (ES)" : "System prompt (ES)"}</Label>
             <MarkdownTextarea
               value={systemPrompt}
               onChange={setSystemPrompt}
@@ -358,6 +379,26 @@ function NewAgentDialog({
               data-testid="new-agent-system-prompt"
             />
           </div>
+
+          {/* Persona (SER): proveedor/modelo/temperatura del catálogo cerrado
+              (ADR 0021) + prompt EN opcional (el ES sale del campo de arriba). */}
+          <fieldset className="border-border space-y-3 rounded-md border p-3">
+            <legend className="px-1 text-sm font-medium">
+              {lang === "es" ? "Persona (modelo)" : "Persona (model)"}
+            </legend>
+            <PersonaModelFields draft={draft} onChange={setDraft} idPrefix="new-agent" />
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="new-agent-prompt-en">System prompt (EN)</Label>
+              <textarea
+                id="new-agent-prompt-en"
+                value={promptEn}
+                onChange={(e) => setPromptEn(e.target.value)}
+                rows={4}
+                className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2"
+                data-testid="new-agent-prompt-en"
+              />
+            </div>
+          </fieldset>
 
           <fieldset className="flex flex-col gap-2">
             <legend className="text-sm font-medium">Scope</legend>
@@ -418,6 +459,13 @@ function NewAgentDialog({
                 description: description.trim() || null,
                 role,
                 system_prompt: systemPrompt,
+                // El ES viene del campo de arriba; el EN del textarea opcional.
+                // model_config nace SIEMPRE poblado (ningún agente nuevo {}).
+                model_config: buildModelConfig({
+                  current: null,
+                  draft,
+                  prompts: { es: systemPrompt, en: promptEn },
+                }),
                 scope,
                 project_id: scope === "project_local" ? projectId.trim() : null,
               })

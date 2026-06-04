@@ -35,6 +35,7 @@ from api_server.auth.deps import (
     get_tenant_session,
     require_tenant_member,
 )
+from api_server.chat.modes import list_chat_modes
 from api_server.db.conversation import (
     ChatMode,
     Conversation,
@@ -54,6 +55,7 @@ from api_server.routers._helpers import (
     soft_delete,
 )
 from api_server.schemas.conversations import (
+    ChatModeResponse,
     ConversationCreateRequest,
     ConversationResponse,
     ConversationUpdateRequest,
@@ -68,6 +70,10 @@ project_conversations_router = APIRouter(
     prefix="/projects/{project_id}/conversations", tags=["conversations"]
 )
 conversations_router = APIRouter(prefix="/conversations", tags=["conversations"])
+# Catalogo de modos de chat para la UI (Plan 06.17 task_06_17_11): un GET
+# read-only que la seccion Persona consume para componer el "prompt efectivo"
+# (rol + modo) sin hardcodear los prompts de modo en el frontend.
+chat_modes_router = APIRouter(prefix="/chat-modes", tags=["conversations"])
 
 
 # ---------------------------------------------------------------------------
@@ -335,10 +341,38 @@ async def list_messages(
     return [to_message_response(m) for m in result.scalars().all()]
 
 
+# ===========================================================================
+# Chat-mode catalog (Plan 06.17 task_06_17_11)
+# ===========================================================================
+@chat_modes_router.get("", response_model=list[ChatModeResponse])
+async def list_chat_mode_catalog(
+    _: AuthPrincipal = Depends(require_tenant_member),
+) -> list[ChatModeResponse]:
+    """Catalogo de modos de chat para la seccion Persona del agente.
+
+    Devuelve los tres modos built-in (con su ``system_prompt`` real, fuente
+    unica para componer el "prompt efectivo" rol+modo) y el modo ``custom``
+    marcado ``available=False`` ("No disponible aun"). No toca la base de datos:
+    el catalogo es estatico (``api_server.chat.modes``); requiere autenticacion
+    de miembro del tenant como el resto de la superficie de chat.
+    """
+    return [
+        ChatModeResponse(
+            name=m.name,
+            label_es=m.label_es,
+            label_en=m.label_en,
+            system_prompt=m.system_prompt,
+            available=m.available,
+        )
+        for m in list_chat_modes()
+    ]
+
+
 # Keep `ChatMode` reachable from this module so external callers can
 # import all chat-router public surface from one place.
 __all__ = [
     "ChatMode",
+    "chat_modes_router",
     "conversations_router",
     "project_conversations_router",
 ]

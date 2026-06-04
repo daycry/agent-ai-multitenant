@@ -43,6 +43,20 @@ import { ApiError, apiFetch } from "@/lib/api";
 import { useLang } from "@/lib/lang-context";
 import { privateScopeMemoryWarning } from "@/lib/memory/honesty";
 import { CapabilityHub } from "@/components/capability/capability-hub";
+import {
+  PersonaModelFields,
+  PersonaPromptFields,
+  PersonaSection,
+} from "@/components/capability/persona-section";
+import {
+  buildModelConfig,
+  draftFromConfig,
+  resolvePromptSource,
+  validateDraft,
+  type ModelConfig,
+  type ModelConfigDraft,
+  type SystemPrompts,
+} from "@/lib/persona/persona";
 
 import { AgentKbsSection } from "./agent-kbs-section";
 import { AgentSkillsSection } from "./agent-skills-section";
@@ -56,6 +70,9 @@ interface Agent {
   agent_type: string;
   role: string;
   system_prompt: string;
+  // Bilingual persona prompts live under model_config.system_prompts.{es,en}.
+  // The backend exposes the column as `model_config` (alias of llm_config).
+  model_config?: ModelConfig | null;
   memory_scope: string;
   review_capability: boolean;
   max_concurrent_tasks: number;
@@ -70,6 +87,9 @@ interface AgentUpdate {
   description?: string | null;
   role?: string;
   system_prompt?: string;
+  // Sent under the JSON key `model_config` (alias of llm_config). Carries the
+  // persona: provider/model/temperature + bilingual system_prompts.{es,en}.
+  model_config?: ModelConfig;
   memory_scope?: string;
   review_capability?: boolean;
   max_concurrent_tasks?: number;
@@ -203,10 +223,17 @@ export default function AgentHubPage() {
 
           <div>
             <p className="text-muted-foreground text-xs font-semibold uppercase tracking-wide">
-              System prompt
+              System prompt · {lang}
             </p>
-            <pre className="bg-muted/40 mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded p-3 text-xs">
-              {agent.system_prompt}
+            {/* Fuente ÚNICA (Plan 06.17 task_06_17_11): la MISMA que lee la
+                tarjeta de la lista (model_config.system_prompts), con fallback
+                al campo plano legacy. Cierra la colisión lista vs detalle. */}
+            <pre
+              className="bg-muted/40 mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded p-3 text-xs"
+              data-testid="agent-system-prompt-view"
+            >
+              {resolvePromptSource(agent.model_config, agent.system_prompt, lang).text ||
+                agent.system_prompt}
             </pre>
           </div>
 
@@ -239,6 +266,18 @@ export default function AgentHubPage() {
       {agent && (
         <div className="mt-4">
           <CapabilityHub entityType="agent" entityId={agent.id} />
+        </div>
+      )}
+
+      {/* Plan 06.17 task_06_17_11: sección Persona (SER) — proveedor/modelo/
+          temperatura del catálogo cerrado + prompt efectivo (rol + modo). */}
+      {agent && (
+        <div className="mt-4">
+          <PersonaSection
+            modelConfig={agent.model_config}
+            systemPrompt={agent.system_prompt}
+            role={agent.role}
+          />
         </div>
       )}
 
@@ -304,6 +343,19 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * Prompts iniciales del editor: prioriza `model_config.system_prompts` (fuente
+ * única) y, si está vacía, siembra el ES con el campo plano legacy para que el
+ * primer guardado migre el agente al formato bilingüe sin perder el prompt.
+ */
+function initialPrompts(agent: Agent): SystemPrompts {
+  const bilingual = agent.model_config?.system_prompts;
+  if (bilingual && (bilingual.es?.trim() || bilingual.en?.trim())) {
+    return { es: bilingual.es ?? "", en: bilingual.en ?? "" };
+  }
+  return { es: agent.system_prompt ?? "", en: "" };
+}
+
 // ---------------------------------------------------------------------------
 // Edit dialog
 // ---------------------------------------------------------------------------
@@ -323,10 +375,15 @@ function AgentEditDialog({
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
   const [role, setRole] = useState(agent.role);
-  const [systemPrompt, setSystemPrompt] = useState(agent.system_prompt);
   const [memoryScope, setMemoryScope] = useState(agent.memory_scope);
   const [reviewCap, setReviewCap] = useState(agent.review_capability);
   const [maxTasks, setMaxTasks] = useState(agent.max_concurrent_tasks);
+  // Persona (SER): borrador de modelo + prompts bilingües sobre la fuente única.
+  const [draft, setDraft] = useState<ModelConfigDraft>(() => draftFromConfig(agent.model_config));
+  const [prompts, setPrompts] = useState<SystemPrompts>(() => initialPrompts(agent));
+  // Persona válida = modelo del catálogo (sin errores) + al menos un prompt.
+  const hasPrompt = Boolean((prompts.es ?? "").trim() || (prompts.en ?? "").trim());
+  const personaValid = validateDraft(draft, lang).length === 0 && hasPrompt;
   const privateWarning =
     agent.agent_type === "ai" ? privateScopeMemoryWarning(memoryScope, lang) : null;
 
@@ -335,10 +392,11 @@ function AgentEditDialog({
       setName(agent.name);
       setDescription(agent.description ?? "");
       setRole(agent.role);
-      setSystemPrompt(agent.system_prompt);
       setMemoryScope(agent.memory_scope);
       setReviewCap(agent.review_capability);
       setMaxTasks(agent.max_concurrent_tasks);
+      setDraft(draftFromConfig(agent.model_config));
+      setPrompts(initialPrompts(agent));
     }
   }, [open, agent]);
 
@@ -402,18 +460,15 @@ function AgentEditDialog({
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ae-prompt">System prompt</Label>
-            <textarea
-              id="ae-prompt"
-              value={systemPrompt}
-              onChange={(e) => setSystemPrompt(e.target.value)}
-              rows={6}
-              className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2"
-              data-testid="edit-agent-system-prompt"
-              required
-            />
-          </div>
+          {/* Persona (SER): proveedor/modelo/temperatura del catálogo cerrado
+              (ADR 0021) + system prompt bilingüe es/en sobre la fuente única. */}
+          <fieldset className="border-border space-y-3 rounded-md border p-3">
+            <legend className="px-1 text-sm font-medium">
+              {lang === "es" ? "Persona (modelo y prompt)" : "Persona (model and prompt)"}
+            </legend>
+            <PersonaModelFields draft={draft} onChange={setDraft} idPrefix="edit-agent" />
+            <PersonaPromptFields prompts={prompts} onChange={setPrompts} idPrefix="edit-agent" />
+          </fieldset>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="flex flex-col gap-1.5">
@@ -477,18 +532,27 @@ function AgentEditDialog({
             Cancelar
           </Button>
           <Button
-            disabled={!name.trim() || !systemPrompt.trim() || mutation.isPending}
-            onClick={() =>
+            disabled={!name.trim() || !personaValid || mutation.isPending}
+            onClick={() => {
+              // El campo plano `system_prompt` (NOT NULL en backend) se deriva
+              // de la fuente única bilingüe: prioriza ES, cae a EN. El
+              // `model_config` lleva la persona completa (modelo + prompts).
+              const flat = (prompts.es ?? "").trim() || (prompts.en ?? "").trim();
               mutation.mutate({
                 name: name.trim(),
                 description: description.trim() || null,
                 role,
-                system_prompt: systemPrompt,
+                system_prompt: flat,
+                model_config: buildModelConfig({
+                  current: agent.model_config,
+                  draft,
+                  prompts,
+                }),
                 memory_scope: memoryScope,
                 review_capability: reviewCap,
                 max_concurrent_tasks: maxTasks,
-              })
-            }
+              });
+            }}
             data-testid="edit-agent-save"
           >
             {mutation.isPending ? "Guardando…" : "Guardar"}
