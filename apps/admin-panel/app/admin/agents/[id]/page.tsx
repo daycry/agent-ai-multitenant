@@ -42,6 +42,7 @@ import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useLang } from "@/lib/lang-context";
 import { privateScopeMemoryWarning } from "@/lib/memory/honesty";
+import { CapabilityHub } from "@/components/capability/capability-hub";
 
 import { AgentKbsSection } from "./agent-kbs-section";
 import { AgentSkillsSection } from "./agent-skills-section";
@@ -230,6 +231,15 @@ export default function AgentHubPage() {
             </p>
           ) : null}
         </Card>
+      )}
+
+      {/* Plan 06.17 task_06_17_09: Hub de Capacidad (modelo mental único
+          SABER/RECORDAR/SER/HACER). Vista del set efectivo REAL por encima de
+          las secciones de edición que vienen debajo. */}
+      {agent && (
+        <div className="mt-4">
+          <CapabilityHub entityType="agent" entityId={agent.id} />
+        </div>
       )}
 
       {/* Plan 06.9: knowledge bases granted to this agent template */}
