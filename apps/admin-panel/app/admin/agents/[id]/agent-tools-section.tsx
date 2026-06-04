@@ -31,12 +31,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bell,
   BookOpen,
+  Check,
   FileText,
   GitBranch,
   Globe,
+  Info,
   type LucideIcon,
   ScanSearch,
   Search,
+  Shield,
   Terminal,
   TerminalSquare,
   Wrench,
@@ -49,8 +52,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useCurrentUser } from "@/lib/use-current-user";
+import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
 // Types (mirror api_server.schemas.catalog.ToolResponse +
@@ -160,6 +165,14 @@ const IMPL_BADGE: Record<string, BadgeVariant> = {
   docker_command: "info",
 };
 
+const IMPL_HELP: Record<string, string> = {
+  builtin: "Implementada de forma nativa por la plataforma.",
+  mcp_tool: "Proporcionada por un servidor MCP configurado en el proyecto.",
+  http_endpoint: "Llama a un endpoint HTTP externo.",
+  python_function: "Ejecuta una función Python registrada.",
+  docker_command: "Se ejecuta dentro de un contenedor efímero aislado.",
+};
+
 function categoryLabel(cat: string): string {
   return CATEGORY_LABEL[cat] ?? cat.charAt(0).toUpperCase() + cat.slice(1);
 }
@@ -202,6 +215,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [dirty, setDirty] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
   const [query, setQuery] = useState("");
 
   const assignedIds = useMemo(
@@ -224,6 +238,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
       }),
     onSuccess: () => {
       setSaveError(null);
+      setSavedAt(Date.now());
       void queryClient.invalidateQueries({ queryKey: ["agent-tools", agentId] });
     },
     onError: (err) => {
@@ -239,6 +254,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
       return next;
     });
     setDirty(true);
+    setSavedAt(null);
   };
 
   const toggleMany = (toolIds: string[], on: boolean) => {
@@ -251,12 +267,14 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
       return next;
     });
     setDirty(true);
+    setSavedAt(null);
   };
 
   const reset = () => {
     setSelected(new Set(assignedIds));
     setDirty(false);
     setSaveError(null);
+    setSavedAt(null);
   };
 
   const isLoading = catalogQuery.isLoading || assignedQuery.isLoading || roleLoading;
@@ -337,6 +355,15 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
               >
                 {saveMutation.isPending ? "Guardando…" : "Guardar"}
               </Button>
+              {!saveMutation.isPending && savedAt !== null && !dirty && (
+                <span
+                  className="text-success-soft-foreground inline-flex items-center gap-1 text-sm"
+                  data-testid="agent-tools-saved"
+                >
+                  <Check className="h-4 w-4" />
+                  Guardado
+                </span>
+              )}
             </>
           )}
         </div>
@@ -484,6 +511,9 @@ function GroupedToolList({
         const ids = items.map((t) => t.id);
         const selectedCount = ids.filter((id) => selected.has(id)).length;
         const allOn = selectedCount === ids.length;
+        const noneOn = selectedCount === 0;
+        const indeterminate = !allOn && !noneOn;
+        const bulkId = `agent-tools-group-toggle-${cat}`;
         return (
           <section key={cat} data-testid={`agent-tools-group-${cat}`}>
             <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -495,14 +525,24 @@ function GroupedToolList({
                 </span>
               </h4>
               {canEdit && (
-                <button
-                  type="button"
-                  onClick={() => onToggleMany(ids, !allOn)}
-                  className="text-primary text-xs hover:underline"
-                  data-testid={`agent-tools-group-toggle-${cat}`}
+                <label
+                  htmlFor={bulkId}
+                  className="text-muted-foreground hover:text-foreground inline-flex cursor-pointer items-center gap-1.5 text-xs"
                 >
+                  <Checkbox
+                    id={bulkId}
+                    checked={allOn}
+                    indeterminate={indeterminate}
+                    onChange={() => onToggleMany(ids, !allOn)}
+                    aria-label={
+                      allOn
+                        ? `Quitar todas las tools de ${categoryLabel(cat)}`
+                        : `Seleccionar todas las tools de ${categoryLabel(cat)}`
+                    }
+                    data-testid={bulkId}
+                  />
                   {allOn ? "Quitar todas" : "Seleccionar todas"}
-                </button>
+                </label>
               )}
             </div>
             <ul className="space-y-2">
@@ -537,33 +577,84 @@ function ToolRow({
   const secVariant = SECURITY_BADGE[tool.security_level] ?? "muted";
   const implVariant = IMPL_BADGE[tool.implementation_type] ?? "muted";
   const inputId = `agent-tool-${tool.id}`;
+  const secLabel = SECURITY_LABEL[tool.security_level] ?? tool.security_level;
+  const secHelp = SECURITY_HELP[tool.security_level] ?? secLabel;
+  const implLabel = IMPL_LABEL[tool.implementation_type] ?? tool.implementation_type;
+  const implHelp = IMPL_HELP[tool.implementation_type] ?? implLabel;
+
   return (
     <li
-      className="hover:bg-muted/40 flex items-start gap-3 rounded border p-3 transition-colors"
+      // Strong, glance-readable selected state: the whole row tints and
+      // gets a primary border. Hover affordance only when editable, and
+      // the highlighted area === the toggle area (the <label> is full-bleed).
+      className={cn(
+        "rounded border transition-colors",
+        checked ? "border-primary/60 bg-primary/5" : "border-border",
+        canEdit && "hover:bg-muted/40",
+        checked && canEdit && "hover:bg-primary/10",
+      )}
       data-testid={`agent-tool-row-${tool.id}`}
+      data-selected={checked ? "true" : "false"}
     >
-      <Checkbox
-        id={inputId}
-        className="mt-0.5"
-        checked={checked}
-        disabled={!canEdit}
-        onChange={() => onToggle(tool.id)}
-        data-testid={`agent-tool-checkbox-${tool.id}`}
-      />
-      <label htmlFor={inputId} className="min-w-0 flex-1 cursor-pointer">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium">{tool.name}</span>
-          <Badge variant={secVariant} title={SECURITY_HELP[tool.security_level] ?? ""}>
-            {SECURITY_LABEL[tool.security_level] ?? tool.security_level}
-          </Badge>
-          <Badge variant={implVariant}>
-            {IMPL_LABEL[tool.implementation_type] ?? tool.implementation_type}
-          </Badge>
+      <div className="flex items-start gap-3 p-3">
+        {/* Toggle area: the label fills the row, so clicking the name /
+            description / blank space all flip the same checkbox. Read-only
+            rows use the default cursor and the checkbox is disabled, so
+            nothing pretends to be clickable. */}
+        <label
+          htmlFor={inputId}
+          className={cn(
+            "flex min-w-0 flex-1 items-start gap-3",
+            canEdit ? "cursor-pointer" : "cursor-default",
+          )}
+        >
+          <Checkbox
+            id={inputId}
+            className="mt-0.5"
+            checked={checked}
+            disabled={!canEdit}
+            onChange={() => onToggle(tool.id)}
+            data-testid={`agent-tool-checkbox-${tool.id}`}
+          />
+          <span className="min-w-0 flex-1">
+            <span className="text-sm font-medium">{tool.name}</span>
+            {tool.description && (
+              <span className="text-muted-foreground mt-0.5 line-clamp-2 block text-xs">
+                {tool.description}
+              </span>
+            )}
+          </span>
+        </label>
+
+        {/* Informative badges live OUTSIDE the toggle <label> so a click on
+            a badge (or its tooltip trigger) never flips the checkbox. They
+            are flat (no border / no button affordance) but carry an icon
+            and an accessible tooltip that opens on hover AND keyboard focus. */}
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+          <Tooltip content={secHelp}>
+            <TooltipTrigger
+              aria-label={`Seguridad: ${secLabel}. ${secHelp}`}
+              data-testid={`agent-tool-security-badge-${tool.id}`}
+            >
+              <Badge variant={secVariant} className="gap-1">
+                <Shield aria-hidden="true" className="h-3 w-3" />
+                {secLabel}
+              </Badge>
+            </TooltipTrigger>
+          </Tooltip>
+          <Tooltip content={implHelp}>
+            <TooltipTrigger
+              aria-label={`Implementación: ${implLabel}. ${implHelp}`}
+              data-testid={`agent-tool-impl-badge-${tool.id}`}
+            >
+              <Badge variant={implVariant} className="gap-1">
+                <Info aria-hidden="true" className="h-3 w-3" />
+                {implLabel}
+              </Badge>
+            </TooltipTrigger>
+          </Tooltip>
         </div>
-        {tool.description && (
-          <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs">{tool.description}</p>
-        )}
-      </label>
+      </div>
     </li>
   );
 }
