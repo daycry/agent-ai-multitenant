@@ -139,6 +139,14 @@ class ProjectCreateRequest(BaseModel):
     # = a plain project with no auto-grants (backward-compatible).
     template_id: UUID | None = None
 
+    # Plan 06.17 task_06_17_14: the wizard sends this flag alongside
+    # `template_id` to decide whether the template's `default_kb_grants`
+    # are actually applied. `True` (default, backward-compatible) grants
+    # the KBs; `False` adopts the template's shape (team/config inherited
+    # by the wizard front-end) WITHOUT auto-granting any KB. Ignored when
+    # `template_id` is absent ("proyecto en blanco" grants nothing anyway).
+    apply_template_kb_grants: bool = True
+
     mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
     rag_knowledge_bases: list[dict[str, Any]] = Field(default_factory=list)
     worker_config: dict[str, Any] = Field(default_factory=dict)

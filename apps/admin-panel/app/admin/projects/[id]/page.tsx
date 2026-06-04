@@ -21,6 +21,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
+  Brain,
   Database,
   FolderKanban,
   Layers,
@@ -113,6 +114,12 @@ const SUBSECTIONS = [
     label: "Knowledge Bases",
     description: "Bases de conocimiento + documentos indexados.",
     Icon: Database,
+  },
+  {
+    key: "memories",
+    label: "Memoria",
+    description: "Lo que el equipo recuerda en el scope del proyecto (project_shared).",
+    Icon: Brain,
   },
   {
     key: "mcp-servers",

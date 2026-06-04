@@ -215,7 +215,13 @@ async def create_project(
     # the project is flushed (so the FK target exists) and is idempotent —
     # the helper resolves `default_kb_grants` slugs to built-in KB ids and
     # inserts kb_projects rows ON CONFLICT DO NOTHING.
-    if payload.template_id is not None:
+    #
+    # Plan 06.17 task_06_17_14: the wizard can opt out of the auto-grant via
+    # `apply_template_kb_grants=False` — the template is still validated/
+    # adopted (its team/config shape is inherited by the wizard front-end)
+    # but no kb_projects rows are created. "Proyecto en blanco" (no
+    # template_id) never reaches this branch.
+    if payload.template_id is not None and payload.apply_template_kb_grants:
         await apply_template_kb_grants(
             session,
             template_id=payload.template_id,
