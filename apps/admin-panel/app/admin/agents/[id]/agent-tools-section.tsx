@@ -45,7 +45,7 @@ import {
   Wrench,
 } from "lucide-react";
 
-import { Badge, type BadgeVariant } from "@/components/ui/badge";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -54,6 +54,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useLang, type Lang } from "@/lib/lang-context";
+import { resolveCategory, resolveImpl, resolveSecurity } from "@/lib/tools/taxonomy";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { cn } from "@/lib/utils";
 
@@ -95,19 +97,12 @@ interface AgentToolsSectionProps {
 }
 
 // ---------------------------------------------------------------------------
-// Human-friendly labels (no raw enums in the UI — Plan 06.15 UX requirement)
+// Presentation-only helpers. Labels / variants / help for the THREE facets
+// (Función / Seguridad / Origen) live in the SHARED taxonomy module
+// (`@/lib/tools/taxonomy`) so the same tool renders identically here and in the
+// read-only diagnostic. Only the per-category ICON + display ORDER are
+// UI-specific to this grouped list and stay local.
 // ---------------------------------------------------------------------------
-const CATEGORY_LABEL: Record<string, string> = {
-  file: "Archivos",
-  git: "Git",
-  runtime: "Ejecución / Tests",
-  network: "Red",
-  knowledge: "Conocimiento",
-  notification: "Notificaciones",
-  command: "Comandos shell",
-  shell: "Comandos shell",
-};
-
 const CATEGORY_ICON: Record<string, LucideIcon> = {
   file: FileText,
   git: GitBranch,
@@ -131,50 +126,9 @@ const CATEGORY_ORDER = [
   "notification",
 ];
 
-const SECURITY_LABEL: Record<string, string> = {
-  safe: "Segura",
-  sandboxed: "Aislada",
-  privileged: "Privilegiada",
-};
-
-const SECURITY_HELP: Record<string, string> = {
-  safe: "Solo lectura / sin efectos secundarios — sin riesgo.",
-  sandboxed: "Modifica dentro del sandbox de la tarea (worktree/contenedor efímero).",
-  privileged: "Capacidad potente (p. ej. ejecutar comandos): asígnala con criterio.",
-};
-
-const SECURITY_BADGE: Record<string, BadgeVariant> = {
-  safe: "success",
-  sandboxed: "warning",
-  privileged: "danger",
-};
-
-const IMPL_LABEL: Record<string, string> = {
-  builtin: "Nativa",
-  mcp_tool: "MCP",
-  http_endpoint: "HTTP",
-  python_function: "Python",
-  docker_command: "Contenedor",
-};
-
-const IMPL_BADGE: Record<string, BadgeVariant> = {
-  builtin: "muted",
-  mcp_tool: "success",
-  http_endpoint: "info",
-  python_function: "warning",
-  docker_command: "info",
-};
-
-const IMPL_HELP: Record<string, string> = {
-  builtin: "Implementada de forma nativa por la plataforma.",
-  mcp_tool: "Proporcionada por un servidor MCP configurado en el proyecto.",
-  http_endpoint: "Llama a un endpoint HTTP externo.",
-  python_function: "Ejecuta una función Python registrada.",
-  docker_command: "Se ejecuta dentro de un contenedor efímero aislado.",
-};
-
-function categoryLabel(cat: string): string {
-  return CATEGORY_LABEL[cat] ?? cat.charAt(0).toUpperCase() + cat.slice(1);
+function categoryLabel(cat: string, lang: Lang): string {
+  const d = resolveCategory(cat, lang);
+  return lang === "es" ? d.labelEs : d.labelEn;
 }
 
 function categoryRank(cat: string): number {
@@ -192,6 +146,7 @@ function isBasic(tool: { is_builtin: boolean }): boolean {
 
 export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentToolsSectionProps) {
   const queryClient = useQueryClient();
+  const { lang } = useLang();
   const { isTenantAdmin, isLoading: roleLoading } = useCurrentUser();
 
   // Non-admins (tenant_user) get a read-only view too — the backend
@@ -294,9 +249,9 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
           q === "" ||
           t.name.toLowerCase().includes(q) ||
           (t.description ?? "").toLowerCase().includes(q) ||
-          categoryLabel(t.category).toLowerCase().includes(q),
+          categoryLabel(t.category, lang).toLowerCase().includes(q),
       ),
-    [catalog, q],
+    [catalog, q, lang],
   );
   const basicTools = useMemo(() => matches.filter(isBasic), [matches]);
   const advancedTools = useMemo(() => matches.filter((t) => !isBasic(t)), [matches]);
@@ -424,6 +379,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                   tools={basicTools}
                   selected={selected}
                   canEdit={canEdit}
+                  lang={lang}
                   onToggle={toggle}
                   onToggleMany={toggleMany}
                   emptyMessage={
@@ -440,6 +396,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                   tools={advancedTools}
                   selected={selected}
                   canEdit={canEdit}
+                  lang={lang}
                   onToggle={toggle}
                   onToggleMany={toggleMany}
                   emptyMessage={
@@ -465,6 +422,7 @@ function GroupedToolList({
   tools,
   selected,
   canEdit,
+  lang,
   onToggle,
   onToggleMany,
   emptyMessage,
@@ -473,6 +431,7 @@ function GroupedToolList({
   tools: CatalogTool[];
   selected: Set<string>;
   canEdit: boolean;
+  lang: Lang;
   onToggle: (toolId: string) => void;
   onToggleMany: (toolIds: string[], on: boolean) => void;
   emptyMessage: string;
@@ -519,7 +478,7 @@ function GroupedToolList({
             <div className="mb-1.5 flex items-center justify-between gap-2">
               <h4 className="text-muted-foreground inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide">
                 <Icon className="h-3.5 w-3.5" />
-                {categoryLabel(cat)}
+                {categoryLabel(cat, lang)}
                 <span className="text-muted-foreground/70 font-normal normal-case">
                   ({selectedCount}/{ids.length})
                 </span>
@@ -536,8 +495,8 @@ function GroupedToolList({
                     onChange={() => onToggleMany(ids, !allOn)}
                     aria-label={
                       allOn
-                        ? `Quitar todas las tools de ${categoryLabel(cat)}`
-                        : `Seleccionar todas las tools de ${categoryLabel(cat)}`
+                        ? `Quitar todas las tools de ${categoryLabel(cat, lang)}`
+                        : `Seleccionar todas las tools de ${categoryLabel(cat, lang)}`
                     }
                     data-testid={bulkId}
                   />
@@ -552,6 +511,7 @@ function GroupedToolList({
                   tool={tool}
                   checked={selected.has(tool.id)}
                   canEdit={canEdit}
+                  lang={lang}
                   onToggle={onToggle}
                 />
               ))}
@@ -567,20 +527,26 @@ function ToolRow({
   tool,
   checked,
   canEdit,
+  lang,
   onToggle,
 }: {
   tool: CatalogTool;
   checked: boolean;
   canEdit: boolean;
+  lang: Lang;
   onToggle: (toolId: string) => void;
 }) {
-  const secVariant = SECURITY_BADGE[tool.security_level] ?? "muted";
-  const implVariant = IMPL_BADGE[tool.implementation_type] ?? "muted";
   const inputId = `agent-tool-${tool.id}`;
-  const secLabel = SECURITY_LABEL[tool.security_level] ?? tool.security_level;
-  const secHelp = SECURITY_HELP[tool.security_level] ?? secLabel;
-  const implLabel = IMPL_LABEL[tool.implementation_type] ?? tool.implementation_type;
-  const implHelp = IMPL_HELP[tool.implementation_type] ?? implLabel;
+  // SINGLE source: the same shared resolvers the diagnostic uses, so a tool
+  // shows identical label/variant in both screens (never the raw enum).
+  const sec = resolveSecurity(tool.security_level, lang);
+  const impl = resolveImpl(tool.implementation_type, lang);
+  const secVariant = sec.variant;
+  const implVariant = impl.variant;
+  const secLabel = lang === "es" ? sec.labelEs : sec.labelEn;
+  const secHelp = sec.help;
+  const implLabel = lang === "es" ? impl.labelEs : impl.labelEn;
+  const implHelp = impl.help;
 
   return (
     <li
