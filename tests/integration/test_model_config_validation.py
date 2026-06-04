@@ -521,8 +521,12 @@ def test_migration_0081_sanitizes_empty_model_config_and_is_reversible(
     assert after_up.get("provider") in LLM_PROVIDER_KINDS
     assert isinstance(after_up.get("model"), str) and after_up["model"].strip()
 
-    # Reversibilidad: downgrade restaura {} en las filas saneadas; re-upgrade OK.
-    command.downgrade(alembic_config, "-1")
+    # Reversibilidad: bajamos a 0080 (la revisión ANTERIOR a 0081) para que el
+    # downgrade de 0081 corra y restaure {} en las filas saneadas. Revisión
+    # NOMBRADA (no "-1" relativo al head) para que el test siga siendo correcto
+    # al apilar migraciones posteriores (p.ej. 0082): un "-1" solo desharía la
+    # cima y dejaría intacto el saneo de 0081.
+    command.downgrade(alembic_config, "0080_documents_indexed_empty")
     after_down = asyncio.run(_read_model_config(migrations_pg_dsn, agent_id))
     assert after_down == {}, "el downgrade debe restaurar el model_config {} saneado"
     command.upgrade(alembic_config, "head")
