@@ -252,9 +252,147 @@ async def recall_chunks(
     return hits
 
 
+# ---------------------------------------------------------------------------
+# KB-scoped preview search (Plan 06.17 task_06_17_05)
+# ---------------------------------------------------------------------------
+async def search_kb_chunks(
+    session: AsyncSession,
+    *,
+    kb_id: UUID,
+    query: str,
+    query_embedding: Sequence[float] | None = None,
+    limit: int = 8,
+    bm25_k: int = BM25_K_DEFAULT,
+    vector_k: int = VECTOR_K_DEFAULT,
+    rrf_k: int = RRF_K_DEFAULT,
+) -> list[ChunkHit]:
+    """Búsqueda híbrida (BM25 + vector + RRF) acotada a UNA KB.
+
+    A diferencia de :func:`recall_chunks` (acotada por grants de
+    proyecto/agente para el RAG del agente), esta es el **preview del
+    dueño de la KB**: busca chunks de los documentos de ``kb_id``,
+    aislada por tenant vía RLS (la sesión ya trae ``app.tenant_id``).
+    El llamador (endpoint) verifica antes que la KB es visible (404 si
+    no), de modo que cross-tenant nunca llega aquí.
+
+    Devuelve hasta ``limit`` :class:`ChunkHit` ordenados por RRF. Lista
+    vacía si ``query`` es blanco.
+    """
+    if not query.strip():
+        return []
+
+    bm25_ids = await _kb_bm25_chunks(session, kb_id=kb_id, query=query, limit=bm25_k)
+    vec_ids = await _kb_vector_chunks(
+        session, kb_id=kb_id, query_embedding=query_embedding, limit=vector_k
+    )
+    fused = fuse_rankings(bm25_ids, vec_ids, k=rrf_k)
+    if not fused:
+        return []
+
+    top_ids = [mid for mid, _ in sorted(fused.items(), key=lambda kv: -kv[1][0])][:limit]
+    if not top_ids:
+        return []
+
+    rows = await session.execute(
+        text(
+            "SELECT chunks.id, chunks.document_id, documents.kb_id,"
+            "       chunks.content, chunks.ordinal, chunks.bbox"
+            " FROM chunks"
+            " JOIN documents ON documents.id = chunks.document_id"
+            " WHERE chunks.id = ANY(:ids)"
+        ),
+        {"ids": top_ids},
+    )
+    by_id: dict[UUID, dict[str, Any]] = {
+        row[0]: {
+            "document_id": row[1],
+            "kb_id": row[2],
+            "content": row[3],
+            "ordinal": row[4],
+            "bbox": row[5],
+        }
+        for row in rows.all()
+    }
+
+    hits: list[ChunkHit] = []
+    for chunk_id in top_ids:
+        if chunk_id not in by_id:
+            continue
+        s, bm25_r, vec_r = fused[chunk_id]
+        d = by_id[chunk_id]
+        hits.append(
+            ChunkHit(
+                chunk_id=chunk_id,
+                document_id=d["document_id"],
+                kb_id=d["kb_id"],
+                content=d["content"],
+                ordinal=d["ordinal"],
+                bbox=d["bbox"],
+                bm25_rank=bm25_r,
+                vector_rank=vec_r,
+                rrf_score=s,
+            )
+        )
+    return hits
+
+
+async def _kb_bm25_chunks(
+    session: AsyncSession, *, kb_id: UUID, query: str, limit: int
+) -> list[UUID]:
+    """Top-`limit` chunk ids por ts_rank_cd, acotados a la KB.
+
+    Usa la misma configuración TS español/inglés + unaccent que el recall
+    de memoria (``public.es_unaccent``, migración 0079) para que
+    ``arquitectura`` case ``arquitecturas`` en el preview."""
+    if not query.strip():
+        return []
+    sql = (
+        "SELECT chunks.id"
+        " FROM chunks"
+        " JOIN documents ON documents.id = chunks.document_id"
+        " WHERE documents.kb_id = :kb_id"
+        "   AND documents.deleted_at IS NULL"
+        "   AND to_tsvector('public.es_unaccent', chunks.content)"
+        "        @@ plainto_tsquery('public.es_unaccent', :q)"
+        " ORDER BY ts_rank_cd("
+        "          to_tsvector('public.es_unaccent', chunks.content),"
+        "          plainto_tsquery('public.es_unaccent', :q)) DESC"
+        " LIMIT :limit"
+    )
+    result = await session.execute(text(sql), {"q": query, "kb_id": kb_id, "limit": limit})
+    return [row[0] for row in result.all()]
+
+
+async def _kb_vector_chunks(
+    session: AsyncSession,
+    *,
+    kb_id: UUID,
+    query_embedding: Sequence[float] | None,
+    limit: int,
+) -> list[UUID]:
+    """Top-`limit` chunk ids por similitud coseno, acotados a la KB.
+    Lista vacía si no hay query embedding (sin embedder no hay vector)."""
+    if query_embedding is None:
+        return []
+    sql = (
+        "SELECT chunks.id"
+        " FROM chunks"
+        " JOIN documents ON documents.id = chunks.document_id"
+        " WHERE documents.kb_id = :kb_id"
+        "   AND documents.deleted_at IS NULL"
+        "   AND chunks.embedding IS NOT NULL"
+        " ORDER BY chunks.embedding <=> CAST(:qvec AS vector)"
+        " LIMIT :limit"
+    )
+    qvec_str = "[" + ",".join(f"{x:.6f}" for x in query_embedding) + "]"
+    result = await session.execute(text(sql), {"qvec": qvec_str, "kb_id": kb_id, "limit": limit})
+    return [row[0] for row in result.all()]
+
+
 __all__ = [
     "ChunkHit",
     "bm25_chunks",
     "recall_chunks",
+    "search_kb_chunks",
     "vector_chunks",
 ]

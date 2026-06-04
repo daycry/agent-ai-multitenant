@@ -55,6 +55,9 @@ const STATUS_VARIANT: Record<string, "muted" | "warning" | "success" | "danger" 
   pending: "muted",
   processing: "warning",
   indexed: "success",
+  // task_06_17_05: "indexado vacío" NO es verde — se procesó pero 0 chunks,
+  // el agente no puede recuperar nada. Warning, no success.
+  indexed_empty: "warning",
   failed: "danger",
 };
 
@@ -62,6 +65,7 @@ const STATUS_LABEL: Record<string, string> = {
   pending: "Pendiente",
   processing: "Procesando",
   indexed: "Indexado",
+  indexed_empty: "Indexado vacío",
   failed: "Fallido",
 };
 
@@ -165,9 +169,11 @@ export default function DocumentIngestionPage() {
             >
               {status === "indexed"
                 ? "Documento ya indexado. No hay pipeline corriendo, así que no llegarán eventos nuevos por WebSocket."
-                : status === "failed"
-                  ? `Documento en estado fallido${docQuery.data?.error_message ? `: ${docQuery.data.error_message}` : "."}`
-                  : "Esperando eventos del worker de ingestión…"}
+                : status === "indexed_empty"
+                  ? "Indexado vacío: el documento se procesó pero no produjo ningún fragmento (0 chunks), así que el agente no puede recuperar nada de él. Suele pasar con PDFs solo-imagen o formatos no soportados. Sube un original con texto seleccionable o reindexa."
+                  : status === "failed"
+                    ? `Documento en estado fallido${docQuery.data?.error_message ? `: ${docQuery.data.error_message}` : "."}`
+                    : "Esperando eventos del worker de ingestión…"}
             </p>
           ) : (
             <ul className="space-y-2 text-sm" data-testid="ingestion-events-list">

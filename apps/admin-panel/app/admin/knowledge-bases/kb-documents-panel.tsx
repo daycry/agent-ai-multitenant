@@ -35,7 +35,7 @@ import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { apiFetch } from "@/lib/api";
 
-type DocumentStatus = "pending" | "processing" | "indexed" | "failed";
+type DocumentStatus = "pending" | "processing" | "indexed" | "indexed_empty" | "failed";
 
 interface KBDocument {
   id: string;
@@ -56,6 +56,9 @@ const STATUS_VARIANT: Record<DocumentStatus, BadgeVariant> = {
   pending: "muted",
   processing: "warning",
   indexed: "success",
+  // task_06_17_05: "indexado vacío" (0 chunks) NO es verde — el agente no
+  // puede recuperar nada del documento. Warning honesto, no success.
+  indexed_empty: "warning",
   failed: "danger",
 };
 
@@ -63,6 +66,7 @@ const STATUS_LABEL: Record<DocumentStatus, string> = {
   pending: "Pendiente",
   processing: "Procesando",
   indexed: "Indexado",
+  indexed_empty: "Indexado vacío",
   failed: "Fallido",
 };
 
@@ -154,8 +158,10 @@ function DocumentRow({
   });
 
   // Re-index makes sense once the run finished (indexed → re-parse;
-  // failed → retry). Hidden mid-flight (pending/processing).
-  const canReindex = doc.status === "failed" || doc.status === "indexed";
+  // failed → retry; indexed_empty → re-parse, quizá tras subir un
+  // original con texto). Hidden mid-flight (pending/processing).
+  const canReindex =
+    doc.status === "failed" || doc.status === "indexed" || doc.status === "indexed_empty";
 
   return (
     <li
@@ -176,6 +182,15 @@ function DocumentRow({
         <p className="mt-0.5 truncate">{doc.title}</p>
         {doc.error_message ? (
           <p className="text-destructive mt-0.5 text-xs">{doc.error_message}</p>
+        ) : null}
+        {doc.status === "indexed_empty" ? (
+          <p
+            className="text-warning-soft-foreground mt-0.5 text-xs"
+            data-testid={`kb-docs-empty-hint-${doc.id}`}
+          >
+            Procesado pero sin fragmentos (0 chunks): el agente no puede recuperar nada de este
+            documento. Sube un original con texto seleccionable o reindexa.
+          </p>
         ) : null}
       </div>
       <div className="flex items-center gap-1">
