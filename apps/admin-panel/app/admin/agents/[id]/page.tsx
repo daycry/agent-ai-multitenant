@@ -18,7 +18,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Home, Pencil, Trash2 } from "lucide-react";
+import { Bot, Copy, Home, Pencil, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
@@ -133,6 +133,8 @@ export default function AgentHubPage() {
 
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // Plan 06.17 task_06_17_12: fork "Personalizar (crear copia)".
+  const [forkOpen, setForkOpen] = useState(false);
 
   const {
     data: agent,
@@ -165,29 +167,45 @@ export default function AgentHubPage() {
         title={agent?.name ?? "Agente"}
         description={agent?.description ?? "Cargando…"}
         actions={
-          agent && !isReadOnly ? (
-            <div className="flex gap-2">
+          agent ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Plan 06.17 task_06_17_12: "Personalizar (crear copia)" disponible
+                  para CUALQUIER agente (incl. built-ins read-only — forkear es la
+                  vía para personalizar un built-in). El fork hereda KBs/tools/skills. */}
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setEditOpen(true)}
-                data-testid="agent-edit-button"
+                onClick={() => setForkOpen(true)}
+                data-testid="agent-fork-button"
               >
-                <Pencil className="mr-1 h-4 w-4" />
-                Editar
+                <Copy className="mr-1 h-4 w-4" />
+                Personalizar (crear copia)
               </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => setDeleteOpen(true)}
-                data-testid="agent-delete-button"
-              >
-                <Trash2 className="mr-1 h-4 w-4" />
-                Borrar
-              </Button>
+              {!isReadOnly ? (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditOpen(true)}
+                    data-testid="agent-edit-button"
+                  >
+                    <Pencil className="mr-1 h-4 w-4" />
+                    Editar
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setDeleteOpen(true)}
+                    data-testid="agent-delete-button"
+                  >
+                    <Trash2 className="mr-1 h-4 w-4" />
+                    Borrar
+                  </Button>
+                </>
+              ) : (
+                <Badge variant="muted">read-only (built-in)</Badge>
+              )}
             </div>
-          ) : agent && isReadOnly ? (
-            <Badge variant="muted">read-only (built-in)</Badge>
           ) : null
         }
       />
@@ -218,7 +236,18 @@ export default function AgentHubPage() {
             <Badge variant="muted">{agent.agent_type}</Badge>
             {agent.review_capability && <Badge variant="success">puede revisar</Badge>}
             {agent.is_template && <Badge variant="info">plantilla</Badge>}
-            {agent.forked_from_agent_id && <Badge variant="warning">forked</Badge>}
+            {/* Plan 06.17 task_06_17_12: badge Linked/Forked DERIVADO de
+                forked_from_agent_id (no del scope, que mentía). Un agente con
+                origen es "Forked"; sin origen es "Linked" (copia de catálogo). */}
+            {agent.forked_from_agent_id ? (
+              <Badge variant="warning" data-testid="agent-forked-badge">
+                Forked
+              </Badge>
+            ) : (
+              <Badge variant="muted" data-testid="agent-linked-badge">
+                Linked
+              </Badge>
+            )}
           </div>
 
           <div>
@@ -327,6 +356,19 @@ export default function AgentHubPage() {
           onDeleted={() => {
             setDeleteOpen(false);
             router.push("/admin/agents");
+          }}
+        />
+      )}
+
+      {agent && (
+        <AgentForkDialog
+          agent={agent}
+          open={forkOpen}
+          onOpenChange={setForkOpen}
+          onForked={(newId) => {
+            setForkOpen(false);
+            void queryClient.invalidateQueries({ queryKey: ["agents", "list"] });
+            router.push(`/admin/agents/${newId}`);
           }}
         />
       )}
@@ -636,6 +678,133 @@ function AgentDeleteDialog({
             data-testid="delete-agent-confirm"
           >
             {mutation.isPending ? "Borrando…" : "Borrar definitivamente"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Fork dialog — "Personalizar (crear copia)" (Plan 06.17 task_06_17_12)
+// ---------------------------------------------------------------------------
+//
+// Clona el agente en un proyecto del tenant como copia editable. El backend
+// (POST /agents/{id}/fork) hereda automáticamente KBs/tools/skills del origen.
+// El fork siempre aterriza en un proyecto concreto, por eso el selector de
+// proyecto destino es obligatorio.
+
+interface ForkProject {
+  id: string;
+  name: string;
+  is_template: boolean;
+}
+
+function AgentForkDialog({
+  agent,
+  open,
+  onOpenChange,
+  onForked,
+}: {
+  agent: Agent;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onForked: (newId: string) => void;
+}) {
+  const [projectId, setProjectId] = useState("");
+  const [name, setName] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setProjectId("");
+      setName(`${agent.name} (copia)`);
+    }
+  }, [open, agent.name]);
+
+  const projectsQuery = useQuery<ForkProject[], ApiError>({
+    queryKey: ["projects", "list"],
+    queryFn: () => apiFetch<ForkProject[]>("/projects"),
+    enabled: open,
+    refetchOnWindowFocus: false,
+  });
+  const projects = (projectsQuery.data ?? []).filter((p) => !p.is_template);
+
+  const mutation = useMutation<Agent, ApiError, void>({
+    mutationFn: () =>
+      apiFetch<Agent>(`/agents/${agent.id}/fork`, {
+        method: "POST",
+        body: { project_id: projectId, name: name.trim() || undefined },
+      }),
+    onSuccess: (fork) => onForked(fork.id),
+  });
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) mutation.reset();
+        onOpenChange(v);
+      }}
+    >
+      <DialogContent data-testid="agent-fork-dialog">
+        <DialogHeader>
+          <DialogTitle>Personalizar (crear copia)</DialogTitle>
+          <DialogDescription>
+            Crea una copia editable de <strong>{agent.name}</strong> en uno de tus proyectos. La
+            copia <strong>hereda</strong> el conocimiento, las tools y las skills del original y es
+            independiente: editarla no afecta al agente de origen.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody className="space-y-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="fork-name">Nombre de la copia</Label>
+            <Input
+              id="fork-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              data-testid="fork-agent-name"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="fork-project">Proyecto destino</Label>
+            <Select
+              id="fork-project"
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              data-testid="fork-agent-project"
+            >
+              <option value="">— Selecciona —</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+            {projectsQuery.isSuccess && projects.length === 0 && (
+              <p className="text-muted-foreground text-xs" data-testid="fork-agent-no-projects">
+                No tienes proyectos creados. Crea uno primero para poder personalizar.
+              </p>
+            )}
+          </div>
+          {mutation.isError && (
+            <p
+              className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
+              data-testid="fork-agent-error"
+            >
+              {mutation.error?.message ?? "Error al crear la copia"}
+            </p>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancelar
+          </Button>
+          <Button
+            disabled={!projectId || mutation.isPending}
+            onClick={() => mutation.mutate()}
+            data-testid="fork-agent-submit"
+          >
+            {mutation.isPending ? "Creando…" : "Crear copia"}
           </Button>
         </DialogFooter>
       </DialogContent>

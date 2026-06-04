@@ -202,12 +202,32 @@ class AgentMergeRequest(BaseModel):
     fields: list[str] = Field(min_length=1)
 
 
+class AgentCapabilitiesDiff(BaseModel):
+    """Sets de capacidad de un lado del diff (fork o source).
+
+    Plan 06.17 task_06_17_12: el diff/merge no solo compara los campos escalares
+    (``_DIFFABLE_FIELDS``) sino también las CAPACIDADES asignadas, para que la UI
+    pueda mostrar qué KBs/tools/skills tiene cada lado. Los ids van como cadenas
+    para no acoplar el contrato JSON a la serialización de UUID.
+    """
+
+    model_config = _BASE_CONFIG
+
+    kb_ids: list[str] = Field(default_factory=list)
+    tool_ids: list[str] = Field(default_factory=list)
+    skill_ids: list[str] = Field(default_factory=list)
+
+
 class AgentDiffResponse(BaseModel):
     """Field-by-field diff between a fork and its source agent.
 
     `source_moved` is true when the source has been updated since the
     fork point (captured in `forked_from_version`). UI can use this to
     decide whether to offer the "absorb upstream improvements" action.
+
+    `capabilities` expone los sets de KBs/tools/skills de cada lado
+    (Plan 06.17 task_06_17_12) — sólo informativo; el merge de campos sigue
+    operando sobre ``_DIFFABLE_FIELDS``.
     """
 
     model_config = _BASE_CONFIG
@@ -219,6 +239,7 @@ class AgentDiffResponse(BaseModel):
     source_moved: bool
     source_deleted: bool
     fields: dict[str, AgentFieldDiff]
+    capabilities: dict[str, AgentCapabilitiesDiff] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

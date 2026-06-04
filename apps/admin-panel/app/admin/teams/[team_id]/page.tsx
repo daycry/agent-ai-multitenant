@@ -46,6 +46,10 @@ interface Agent {
   role: string;
   scope: string;
   project_id: string | null;
+  // Plan 06.17 task_06_17_12: el badge Linked/Forked se deriva de este campo,
+  // no del scope (que mentía: un fork project_local se mostraba "Forked" aunque
+  // no tuviera origen, y un template linked aparecía como "Linked (tenant)").
+  forked_from_agent_id: string | null;
 }
 
 interface Project {
@@ -252,24 +256,24 @@ export default function TeamDetailPage() {
                         <p className="font-medium">{agent?.name ?? "(agente)"}</p>
                         <p className="text-muted-foreground text-xs">
                           {m.role_in_team ?? agent?.role ?? "—"}
-                          {agent && (
-                            <Badge
-                              variant={
-                                agent.scope === "global_builtin"
-                                  ? "muted"
-                                  : agent.scope === "global_tenant_template"
-                                    ? "info"
-                                    : "primary"
-                              }
-                              className="ml-2"
-                            >
-                              {agent.scope === "global_builtin"
-                                ? "Linked (built-in)"
-                                : agent.scope === "global_tenant_template"
-                                  ? "Linked (tenant)"
-                                  : "Forked"}
-                            </Badge>
-                          )}
+                          {agent &&
+                            (agent.forked_from_agent_id ? (
+                              <Badge
+                                variant="warning"
+                                className="ml-2"
+                                data-testid={`member-forked-${agent.id}`}
+                              >
+                                Forked
+                              </Badge>
+                            ) : (
+                              <Badge
+                                variant="muted"
+                                className="ml-2"
+                                data-testid={`member-linked-${agent.id}`}
+                              >
+                                Linked
+                              </Badge>
+                            ))}
                         </p>
                       </div>
                       {m.is_team_leader && (

@@ -74,6 +74,7 @@ from api_server.routers._pagination import (
     offset_query,
 )
 from api_server.schemas.agents import (
+    AgentCapabilitiesDiff,
     AgentCreateRequest,
     AgentDiffResponse,
     AgentFieldDiff,
@@ -355,8 +356,117 @@ async def fork_agent(
     )
     session.add(fork)
     await session.flush()
+
+    # Plan 06.17 task_06_17_12: el fork hereda las CAPACIDADES del origen, no
+    # solo la persona. Clonamos las tres junctions (SABER/HACER/SER):
+    #   * agent_knowledge_bases (KBs de rol)
+    #   * agent_tools (tools asignadas, con su config_override)
+    #   * agent_skills (skills asignadas, con su proficiency)
+    #
+    # Tenant-safe por construcción: solo se copian las filas VISIBLES al que
+    # forkea. `agent_knowledge_bases` está aislada por RLS (tenant_id), así que
+    # forkear un built-in de plataforma NO arrastra sus KBs (ADR 0026 — el tenant
+    # grantea las suyas al fork). `agent_tools`/`agent_skills` no tienen RLS
+    # propia pero el origen ya es visible (RLS de `agents`), de modo que un
+    # source de otro tenant ni siquiera llega aquí (404 arriba). Las filas
+    # clonadas de KB llevan el `tenant_id` del que forkea, nunca el del origen.
+    await _clone_agent_capabilities(
+        session,
+        source_id=source.id,
+        fork_id=fork.id,
+        tenant_id=tenant_id,
+        granted_by=principal.user_id,
+    )
+
     await session.refresh(fork)
     return to_agent_response(fork)
+
+
+async def _clone_agent_capabilities(
+    session: AsyncSession,
+    *,
+    source_id: UUID,
+    fork_id: UUID,
+    tenant_id: UUID,
+    granted_by: UUID | None,
+) -> None:
+    """Clona KBs/tools/skills del agente origen al fork (Plan 06.17 task_06_17_12).
+
+    Idempotencia no aplica: el fork es una fila recién creada sin junctions
+    previas. Solo se copian las filas que RLS hace visibles al que forkea, de
+    modo que el aislamiento multi-tenant queda garantizado por la sesión.
+    """
+    # SABER — KBs de rol. Re-`tenant_id`amos al del que forkea (la fila origen
+    # solo es visible si ya es de ese tenant, pero lo fijamos explícitamente
+    # para no depender de la denormalización del origen).
+    kb_rows = await session.execute(
+        select(AgentKnowledgeBase.kb_id).where(AgentKnowledgeBase.agent_id == source_id)
+    )
+    for (kb_id,) in kb_rows.all():
+        session.add(
+            AgentKnowledgeBase(
+                agent_id=fork_id,
+                kb_id=kb_id,
+                tenant_id=tenant_id,
+                granted_by=granted_by,
+            )
+        )
+
+    # HACER — tools asignadas, preservando el config_override por agente.
+    tool_rows = await session.execute(
+        select(AgentTool.tool_id, AgentTool.config_override).where(AgentTool.agent_id == source_id)
+    )
+    for tool_id, config_override in tool_rows.all():
+        session.add(
+            AgentTool(
+                agent_id=fork_id,
+                tool_id=tool_id,
+                # Copia superficial del JSON para que editar el override del
+                # fork no mute el del origen vía referencias compartidas.
+                config_override=dict(config_override) if config_override is not None else None,
+            )
+        )
+
+    # SER — skills asignadas (ADR 0050), preservando la proficiency.
+    skill_rows = await session.execute(
+        select(AgentSkill.skill_id, AgentSkill.proficiency).where(AgentSkill.agent_id == source_id)
+    )
+    for skill_id, proficiency in skill_rows.all():
+        session.add(
+            AgentSkill(
+                agent_id=fork_id,
+                skill_id=skill_id,
+                proficiency=proficiency,
+            )
+        )
+
+    await session.flush()
+
+
+async def _agent_capability_ids(
+    session: AsyncSession,
+    agent_id: UUID,
+) -> AgentCapabilitiesDiff:
+    """Sets de KBs/tools/skills asignados a un agente (Plan 06.17 task_06_17_12).
+
+    Sólo se ven las filas que RLS hace visibles al llamante: para un built-in de
+    plataforma, sus KBs (RLS por tenant) no aparecen, lo que es coherente con
+    que el fork tampoco las hereda (ADR 0026).
+    """
+    kb_rows = await session.execute(
+        select(AgentKnowledgeBase.kb_id).where(AgentKnowledgeBase.agent_id == agent_id)
+    )
+    tool_rows = await session.execute(
+        select(AgentTool.tool_id).where(AgentTool.agent_id == agent_id)
+    )
+    skill_rows = await session.execute(
+        select(AgentSkill.skill_id).where(AgentSkill.agent_id == agent_id)
+    )
+    return AgentCapabilitiesDiff(
+        kb_ids=sorted(str(r[0]) for r in kb_rows.all()),
+        tool_ids=sorted(str(r[0]) for r in tool_rows.all()),
+        skill_ids=sorted(str(r[0]) for r in skill_rows.all()),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +523,14 @@ async def diff_fork_against_source(
         and source_current_version != fork.forked_from_version
     )
 
+    # Exponemos también las CAPACIDADES de cada lado (Plan 06.17 task_06_17_12)
+    # para que la UI muestre qué KBs/tools/skills tiene el fork frente al origen.
+    capabilities: dict[str, AgentCapabilitiesDiff] = {
+        "fork": await _agent_capability_ids(session, fork.id),
+    }
+    if source is not None:
+        capabilities["source"] = await _agent_capability_ids(session, source.id)
+
     return AgentDiffResponse(
         fork_id=fork.id,
         source_id=fork.forked_from_agent_id,
@@ -421,6 +539,7 @@ async def diff_fork_against_source(
         source_moved=source_moved,
         source_deleted=source_deleted,
         fields=fields,
+        capabilities=capabilities,
     )
 
 
