@@ -24,12 +24,14 @@ from api_server.memorizer.distillation import (
 from api_server.memorizer.persistence import persist_memory_candidates
 from api_server.memorizer.policy import (
     MemorizeDecision,
+    MemorizeSkipReason,
     should_memorize,
     should_memorize_human_session,
 )
 
 __all__ = [
     "MemorizeDecision",
+    "MemorizeSkipReason",
     "MemoryCandidate",
     "distil_execution",
     "distil_human_work_session",

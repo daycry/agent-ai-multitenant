@@ -253,6 +253,57 @@ async def list_memories(
 
 
 # ---------------------------------------------------------------------------
+# GET /memories/skip-reasons — por qué un run NO dejó memoria (Plan 06.17 task_06_17_04)
+# ---------------------------------------------------------------------------
+class MemorizeSkipItem(BaseModel):
+    """Una ejecución que NO produjo memoria + su motivo canónico."""
+
+    model_config = _BASE_CONFIG
+
+    execution_id: UUID
+    task_id: UUID
+    agent_id: UUID | None
+    status: str
+    reason: str
+    """Código canónico (``not_done``/``skip_private``/``no_team``/``no_scope``/``llm_empty``)."""
+    completed_at: datetime | None
+
+
+@router.get("/skip-reasons", response_model=list[MemorizeSkipItem])
+async def list_memorize_skip_reasons(
+    reason: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[MemorizeSkipItem]:
+    """Ejecuciones del tenant cuyo Memorizer NO produjo memoria, con el motivo.
+
+    Fin del skip silencioso (Plan 06.17 task_06_17_04): el worker persiste el
+    código en ``executions.memorize_skip_reason`` y este endpoint lo expone para
+    que la UI explique "por qué no hay memoria de este run". RLS acota por tenant
+    (un run de otro tenant nunca aparece); opcionalmente se filtra por ``reason``.
+    """
+    from api_server.db.domain import Execution
+
+    stmt = select(Execution).where(Execution.memorize_skip_reason.is_not(None))
+    if reason is not None:
+        stmt = stmt.where(Execution.memorize_skip_reason == reason)
+    stmt = stmt.order_by(Execution.created_at.desc()).limit(limit)
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        MemorizeSkipItem(
+            execution_id=row.id,
+            task_id=row.task_id,
+            agent_id=row.agent_id,
+            status=row.status,
+            reason=row.memorize_skip_reason or "",
+            completed_at=row.completed_at,
+        )
+        for row in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
 # DELETE /memories/{id}
 # ---------------------------------------------------------------------------
 @router.delete("/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)

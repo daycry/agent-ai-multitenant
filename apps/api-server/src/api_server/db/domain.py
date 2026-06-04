@@ -1044,6 +1044,14 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     abort_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     output: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Por qué el Memorizer NO produjo memoria a partir de este run, como código
+    # canónico (:class:`~api_server.memorizer.policy.MemorizeSkipReason`):
+    # ``not_done`` / ``skip_private`` / ``no_team`` / ``no_scope`` / ``llm_empty``
+    # (Plan 06.17 task_06_17_04). NULL cuando se memorizó OK o el Memorizer aún no
+    # ha corrido. Lo escribe el worker dedicado (``workers.memorize_execution``);
+    # un endpoint lo expone para que la UI explique el "por qué no hay memoria".
+    memorize_skip_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
     # The steps_log: one dict per step (node / model_call / tool_call /
     # memory_read). Stored as JSONB so the shape can evolve migration-free.
     steps_log: Mapped[list[Any]] = mapped_column(

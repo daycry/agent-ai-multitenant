@@ -177,6 +177,16 @@ async def create_agent(
             detail="global_builtin agents cannot be created through the tenant API",
         )
 
+    # Default de memory_scope operator-configurable (Plan 06.17 task_06_17_04):
+    # cuando el body no envía ``memory_scope``, se lee de ``memory.default_scope``
+    # (platform_settings) en vez de hardcodear ``private``. Un valor explícito gana.
+    if payload.memory_scope is not None:
+        memory_scope = payload.memory_scope.value
+    else:
+        from api_server.db.platform_settings import get_default_memory_scope
+
+        memory_scope = await get_default_memory_scope(session)
+
     agent = Agent(
         tenant_id=tenant_id,
         name=payload.name,
@@ -186,7 +196,7 @@ async def create_agent(
         role=payload.role.value,
         system_prompt=payload.system_prompt,
         model_config=payload.llm_config,
-        memory_scope=payload.memory_scope.value,
+        memory_scope=memory_scope,
         review_capability=payload.review_capability,
         max_concurrent_tasks=payload.max_concurrent_tasks,
         is_template=payload.is_template,

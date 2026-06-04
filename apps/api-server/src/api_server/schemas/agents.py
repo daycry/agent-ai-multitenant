@@ -40,7 +40,10 @@ class AgentCreateRequest(BaseModel):
     role: AgentRole
     system_prompt: str = Field(min_length=1)
     llm_config: dict[str, Any] = Field(default_factory=dict, alias="model_config")
-    memory_scope: MemoryScope = MemoryScope.PRIVATE
+    # None = "no especificado": el endpoint resuelve el default operator-configurable
+    # (``memory.default_scope`` en platform_settings) en vez de hardcodear `private`
+    # (Plan 06.17 task_06_17_04). Un valor explícito gana sobre el default.
+    memory_scope: MemoryScope | None = None
     review_capability: bool = False
     max_concurrent_tasks: int = Field(default=1, ge=1, le=64)
     is_template: bool = False

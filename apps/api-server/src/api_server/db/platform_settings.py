@@ -252,6 +252,75 @@ async def get_memory_backfill_throttle_ms(session: AsyncSession) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Default de memory_scope para agentes nuevos (Plan 06.17 task_06_17_04)
+# ---------------------------------------------------------------------------
+# Hasta esta tarea ``AgentCreateRequest`` defaulteaba SIEMPRE a ``private``
+# (``domain.py`` ``server_default 'private'`` + el schema), de modo que un agente
+# IA creado por UI sin elegir scope nacía ``private`` y el Memorizer no
+# memorizaba nada en silencio. Este setting hace el default OPERATOR-CONFIGURABLE:
+# el endpoint ``POST /agents`` lo lee cuando el body NO trae ``memory_scope``. El
+# default de plataforma sigue siendo ``private`` (backward-compat: no cambia el
+# comportamiento de los agentes ya creados ni el previo). Solo un System Admin lo
+# escribe (``set_platform_setting``). Un valor no canónico cae a ``private``.
+MEMORY_DEFAULT_SCOPE_KEY = "memory.default_scope"
+DEFAULT_MEMORY_DEFAULT_SCOPE = "private"
+
+
+async def get_default_memory_scope(session: AsyncSession) -> str:
+    """El ``memory_scope`` por defecto para un agente creado sin scope explícito.
+
+    Lo lee ``POST /agents`` cuando el body no envía ``memory_scope``. Falla a
+    ``private`` (el default histórico, backward-compat). Un valor almacenado
+    fuera de las cuatro :class:`~api_server.db.domain.MemoryScope` canónicas se
+    sanea a ``private`` en vez de romper la creación."""
+    from api_server.db.domain import MemoryScope
+
+    value = await get_platform_setting(
+        session, MEMORY_DEFAULT_SCOPE_KEY, default=DEFAULT_MEMORY_DEFAULT_SCOPE
+    )
+    scope = str(value).strip()
+    canonical = {s.value for s in MemoryScope}
+    return scope if scope in canonical else DEFAULT_MEMORY_DEFAULT_SCOPE
+
+
+# ---------------------------------------------------------------------------
+# Estados de ejecución elegibles para memorización (Plan 06.17 task_06_17_04)
+# ---------------------------------------------------------------------------
+# El Memorizer solo destila ejecuciones "exitosas" — históricamente solo
+# ``done`` (``policy.py``). Este setting hace ese conjunto OPERATOR-CONFIGURABLE
+# (p.ej. añadir ``aborted`` para aprender de fallos): el worker lo lee en vivo y
+# se lo pasa a ``should_memorize``. Default ``["done"]`` (backward-compat). Solo
+# un System Admin lo escribe. Un valor que no sea una lista de
+# :class:`~api_server.db.domain.ExecutionStatus` válidos cae al default.
+MEMORY_MEMORIZABLE_STATUSES_KEY = "memory.memorizable_statuses"
+DEFAULT_MEMORY_MEMORIZABLE_STATUSES: tuple[str, ...] = ("done",)
+
+
+async def get_memorizable_statuses(session: AsyncSession) -> frozenset[str]:
+    """Estados de ejecución que disparan memorización (default ``{"done"}``).
+
+    Lo lee el worker del Memorizer en vivo y se lo pasa a ``should_memorize`` como
+    conjunto elegible. Normaliza a un ``frozenset`` de estados
+    :class:`~api_server.db.domain.ExecutionStatus` válidos; descarta entradas no
+    reconocidas y, si la lista queda vacía o no es lista, cae al default
+    ``{"done"}`` (nunca deja al Memorizer sin ningún estado elegible)."""
+    from api_server.db.domain import ExecutionStatus
+
+    value = await get_platform_setting(
+        session,
+        MEMORY_MEMORIZABLE_STATUSES_KEY,
+        default=list(DEFAULT_MEMORY_MEMORIZABLE_STATUSES),
+    )
+    valid = {s.value for s in ExecutionStatus}
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list | tuple | set | frozenset):
+        return frozenset(DEFAULT_MEMORY_MEMORIZABLE_STATUSES)
+    statuses = {str(item).strip() for item in value if str(item).strip() in valid}
+    return frozenset(statuses) if statuses else frozenset(DEFAULT_MEMORY_MEMORIZABLE_STATUSES)
+
+
+# ---------------------------------------------------------------------------
 # Plan approval — double-signature threshold (Plan 03 task_03_25)
 # ---------------------------------------------------------------------------
 PLAN_DOUBLE_SIGNATURE_THRESHOLD_KEY = "plan_approval_double_signature_threshold"
