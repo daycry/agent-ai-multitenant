@@ -404,8 +404,11 @@ def test_migration_upgrade_downgrade_upgrade_is_reversible(
 
     assert asyncio.run(_index_present()) is True
 
-    # downgrade one step removes the unique index + CHECKs added by this rev...
-    command.downgrade(alembic_config, "-1")
+    # Downgrade to the revision *before* 0077 (which added the index). We target
+    # 0076 explicitly rather than a relative "-1" so this stays correct as later
+    # revisions stack on top of 0077 (e.g. 0078 skills CHECK): a relative step
+    # would only unwind the topmost revision and leave 0077's index in place.
+    command.downgrade(alembic_config, "0076_sso_global")
     assert asyncio.run(_index_present()) is False
 
     # ...and re-upgrade restores it (proves the migration is reversible).

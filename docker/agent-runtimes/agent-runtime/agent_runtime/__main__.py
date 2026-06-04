@@ -176,7 +176,7 @@ def _to_mcp_config(raw: dict[str, Any]) -> Any:
 
     return MCPServerConfig(
         name=str(raw["name"]),
-        transport=str(raw["transport"]),  # type: ignore[arg-type]
+        transport=str(raw["transport"]),
         command=raw.get("command"),
         args=tuple(raw.get("args") or ()),
         env=dict(raw.get("env") or {}),
@@ -264,58 +264,64 @@ def run_task(spec: dict[str, Any]) -> int:
     # run ends — kept here so the `finally` below tears it down.
     mcp_runner = _wire_mcp_servers(registry, spec)
 
-    # `shell_exec` is wired per project (task_06_16_02). The worker forwards
-    # the project's `allowed_commands` allowlist here; we register a
-    # `ShellExecTool` bound to it so the agent can run STACK commands
-    # (`php`, `composer`, `vendor/bin/phpunit`, `npm`, …) — but ONLY those
-    # binaries (deny-by-default). The key is always present from the worker:
-    # an empty list registers a deny-all shell_exec (every command rejected),
-    # which is the safe default for a project that authorised nothing. When
-    # the key is absent (a bare run / older payload) shell_exec is simply
-    # not registered.
-    allowed_commands = spec.get("allowed_commands")
-    if allowed_commands is not None:
-        registry.register(
-            "shell_exec",
-            ShellExecTool(allowed_commands=frozenset(allowed_commands)),
+    # The MCP runner (when present) holds live sessions: a background event loop
+    # and open transports/subprocesses. From the instant it is started it MUST be
+    # torn down on EVERY exit path, so the whole remaining boot — not just the
+    # agent loop — runs inside this try/finally. Otherwise an exception while
+    # wiring shell_exec, building deps or parsing budgets would leak the runner
+    # (task_06_18_12 review fix: previously the try started after deps/budgets).
+    try:
+        # `shell_exec` is wired per project (task_06_16_02). The worker forwards
+        # the project's `allowed_commands` allowlist here; we register a
+        # `ShellExecTool` bound to it so the agent can run STACK commands
+        # (`php`, `composer`, `vendor/bin/phpunit`, `npm`, …) — but ONLY those
+        # binaries (deny-by-default). The key is always present from the worker:
+        # an empty list registers a deny-all shell_exec (every command rejected),
+        # which is the safe default for a project that authorised nothing. When
+        # the key is absent (a bare run / older payload) shell_exec is simply
+        # not registered.
+        allowed_commands = spec.get("allowed_commands")
+        if allowed_commands is not None:
+            registry.register(
+                "shell_exec",
+                ShellExecTool(allowed_commands=frozenset(allowed_commands)),
+            )
+
+        # The active chat mode's tool whitelist (task_06_14_07). The worker
+        # forwards `ChatModeConfig.allowed_tools` here; when present, the
+        # registry rejects any tool outside the set at call time. Absent
+        # (None) = no restriction. An explicit empty list = block every tool
+        # (the `discussion` mode). We must distinguish "key missing" from
+        # "key present but empty", so we read with a sentinel rather than a
+        # falsy default.
+        allowed_tools = spec.get("allowed_tools", _NO_ALLOWLIST)
+        if allowed_tools is not _NO_ALLOWLIST:
+            registry.set_allowed_tools(allowed_tools)
+
+        deps = AgentDeps(
+            model=model_from_spec(spec["model"]),
+            tools=registry,
+            approval=ApprovalGate(policy) if policy else None,
         )
 
-    # The active chat mode's tool whitelist (task_06_14_07). The worker
-    # forwards `ChatModeConfig.allowed_tools` here; when present, the
-    # registry rejects any tool outside the set at call time. Absent
-    # (None) = no restriction. An explicit empty list = block every tool
-    # (the `discussion` mode). We must distinguish "key missing" from
-    # "key present but empty", so we read with a sentinel rather than a
-    # falsy default.
-    allowed_tools = spec.get("allowed_tools", _NO_ALLOWLIST)
-    if allowed_tools is not _NO_ALLOWLIST:
-        registry.set_allowed_tools(allowed_tools)
+        budgets = None
+        if spec.get("budgets"):
+            known = {
+                key: value
+                for key, value in spec["budgets"].items()
+                if key in Budgets.__dataclass_fields__
+            }
+            budgets = Budgets(**known)
 
-    deps = AgentDeps(
-        model=model_from_spec(spec["model"]),
-        tools=registry,
-        approval=ApprovalGate(policy) if policy else None,
-    )
+        # Skills → inyección de prompt (task_06_18_13 / ADR 0050). El worker
+        # forwardea los `prompt_fragment` de las skills asignadas; los concatenamos
+        # en un preámbulo que el modelo prepende al system prompt EFECTIVO. Clave
+        # ausente / lista vacía → `None` → el system prompt queda intacto
+        # (backward-compat).
+        fragments = spec.get("skill_prompt_fragments") or []
+        system_preamble = "\n\n".join(str(f) for f in fragments if f) or None
 
-    budgets = None
-    if spec.get("budgets"):
-        known = {
-            key: value
-            for key, value in spec["budgets"].items()
-            if key in Budgets.__dataclass_fields__
-        }
-        budgets = Budgets(**known)
-
-    # Skills → inyección de prompt (task_06_18_13 / ADR 0050). El worker
-    # forwardea los `prompt_fragment` de las skills asignadas; los concatenamos
-    # en un preámbulo que el modelo prepende al system prompt EFECTIVO. Clave
-    # ausente / lista vacía → `None` → el system prompt queda intacto
-    # (backward-compat).
-    fragments = spec.get("skill_prompt_fragments") or []
-    system_preamble = "\n\n".join(str(f) for f in fragments if f) or None
-
-    _emit({"event": "execution.started", "task": task})
-    try:
+        _emit({"event": "execution.started", "task": task})
         result = run_agent(
             deps,
             task,
