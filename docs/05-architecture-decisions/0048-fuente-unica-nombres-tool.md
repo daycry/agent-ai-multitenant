@@ -25,6 +25,19 @@ incompatibles**, y la intersección de enforcement se hace por string crudo:
 - **Runtime ejecutable** (`agent_runtime/file_tools.py:41,55,69`, `orchestration_tools.py:99-102`):
   `file_read` / `file_write` / `file_list` / `notify_user`.
 
+**Tabla de mapeo de los tres namespaces** (misma acción lógica, tres nombres incompatibles). El
+nombre **canónico** elegido (ver Decisión) es el del catálogo, y el alias bidireccional reconcilia
+los otros dos:
+
+| Canónico (catálogo) | Chat-mode (`chat/modes.py`) | Runtime ejecutable (`agent_runtime`) | Alias                             |
+| ------------------- | --------------------------- | ------------------------------------ | --------------------------------- |
+| `read_file`         | `file_read`                 | `file_read`                          | `file_read ↔ read_file`           |
+| `write_file`        | `file_write`                | `file_write`                         | `file_write ↔ write_file`         |
+| `list_files`        | `file_list`                 | `file_list`                          | `file_list ↔ list_files`          |
+| `http_get`          | `http_request`              | (familia red)                        | `http_request ↔ {http_get,…}`     |
+| `http_post`         | `http_request`              | (familia red)                        | `http_request ↔ {…,http_post}`    |
+| `send_notification` | `notify_user`               | `notify_user`                        | `notify_user ↔ send_notification` |
+
 `combine_tool_allowlists` (`agent_tools_enforcement.py:75-109`) intersecta por `Tool.name`; su
 docstring (`:33-35`) afirma **falsamente** un "single namespace … `read_file`". Resultado: **el
 nombre del catálogo que el operador ve y asigna (`read_file`) nunca existe como función ejecutable
