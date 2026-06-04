@@ -122,6 +122,15 @@ class ExecutionRequest:
     # concrete image (the worker owns the runtime catalog; the sandboxed
     # runtime must not import `shared_test_runtimes`).
     tool_specs: list[dict[str, Any]] | None = None
+    # The project's MCP server declarations (`projects.mcp_servers`, JSONB; Plan
+    # 06.18 task_06_18_12 / ADR 0052). The orchestrator threads it from the
+    # task's project; the worker forwards it into the agent spec so
+    # `__main__.run_task` starts an `MCPToolRunner`, connects each server (auth
+    # via Vault) and registers its `<server>.<tool>` tools before the graph.
+    # `None` = no key (no MCP servers declared) -> the runtime opens no MCP
+    # session, the pre-06.18 behaviour (feature-safe). Each entry mirrors
+    # `shared_mcp.MCPServerConfig` / `api_server.mcp.config.MCPServerConfigModel`.
+    mcp_servers: list[dict[str, Any]] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict — the Celery payload the orchestrator sends."""
@@ -136,6 +145,7 @@ class ExecutionRequest:
             "allowed_commands": self.allowed_commands,
             "default_runtime_template": self.default_runtime_template,
             "tool_specs": self.tool_specs,
+            "mcp_servers": self.mcp_servers,
         }
 
     @classmethod
@@ -152,6 +162,7 @@ class ExecutionRequest:
             allowed_commands=raw.get("allowed_commands"),
             default_runtime_template=raw.get("default_runtime_template"),
             tool_specs=raw.get("tool_specs"),
+            mcp_servers=raw.get("mcp_servers"),
         )
 
 
@@ -221,6 +232,13 @@ def _agent_spec(
         spec["tool_specs"] = _resolve_tool_spec_images(
             request.tool_specs, request.default_runtime_template
         )
+    # Forward the project's MCP server declarations (task_06_18_12 / ADR 0052).
+    # Only emit the key when the project declares servers -- `None` means "no
+    # key", which the runtime reads as "open no MCP session" (feature-safe,
+    # pre-06.18 behaviour). The runtime starts an `MCPToolRunner`, connects each
+    # server and registers its `<server>.<tool>` tools before the graph.
+    if request.mcp_servers is not None:
+        spec["mcp_servers"] = request.mcp_servers
     return spec
 
 

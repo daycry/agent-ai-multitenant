@@ -142,6 +142,97 @@ def _wire_assigned_tools(
     register_tool_specs(registry, specs, ctx=ctx)
 
 
+def _build_mcp_vault_resolver() -> Any | None:
+    """Best-effort Vault resolver for MCP auth (task_06_18_12 / ADR 0052).
+
+    A connected MCP server that declares ``auth_ref`` needs a resolver to fetch
+    its secret from Vault. We build an ``HvacVaultResolver`` from the env
+    (``AGENT_VAULT_ADDR`` + ``AGENT_VAULT_TOKEN``) when both are present; absent
+    a token (a bare run / a server that needs no auth) we return ``None`` so the
+    runner stays unauthenticated — connecting a server WITH ``auth_ref`` then
+    surfaces a typed ``MCPAuthError`` rather than silently opening an
+    unauthenticated session.
+    """
+    token = os.environ.get("AGENT_VAULT_TOKEN")
+    if not token:
+        return None
+    try:
+        import hvac
+        from shared_mcp import HvacVaultResolver
+    except ImportError:  # pragma: no cover - hvac/shared_mcp not installed
+        return None
+    client = hvac.Client(url=os.environ.get("AGENT_VAULT_ADDR", "http://vault:8200"), token=token)
+    return HvacVaultResolver(client=client)
+
+
+def _to_mcp_config(raw: dict[str, Any]) -> Any:
+    """Map one serialised ``mcp_servers`` entry to a ``MCPServerConfig``.
+
+    Mirrors ``api_server.routers.mcp._to_runtime_config`` — the same JSON shape
+    the project's ``mcp_servers`` JSONB carries, projected onto the frozen
+    dataclass the client consumes (list ``args`` -> tuple to stay hashable).
+    """
+    from shared_mcp import MCPServerConfig
+
+    return MCPServerConfig(
+        name=str(raw["name"]),
+        transport=str(raw["transport"]),  # type: ignore[arg-type]
+        command=raw.get("command"),
+        args=tuple(raw.get("args") or ()),
+        env=dict(raw.get("env") or {}),
+        url=raw.get("url"),
+        headers=dict(raw.get("headers") or {}),
+        auth_ref=raw.get("auth_ref"),
+        timeout_s=float(raw.get("timeout_s", 30.0)),
+    )
+
+
+def _wire_mcp_servers(registry: Any, spec: dict[str, Any]) -> Any | None:
+    """Start an ``MCPToolRunner`` and register every declared server's tools.
+
+    Activated only when the worker threaded a non-empty ``mcp_servers`` list
+    (task_06_18_12 / ADR 0052). For each server we open a session (auth via
+    Vault when ``auth_ref`` is set) and register its tools under the canonical
+    ``<server>.<tool>`` namespace so the agent∩mode allowlist (ADR 0048) can
+    intersect them like any other tool. A server that fails to connect does NOT
+    abort the boot: it is reported as an ``execution`` event and skipped, so the
+    rest of the run proceeds with the tools that did connect.
+
+    Returns the live ``MCPToolRunner`` so the caller closes it in ``finally``,
+    or ``None`` when there is nothing to wire (feature-safe — no MCP session is
+    opened, the pre-06.18 behaviour).
+    """
+    raw_servers = spec.get("mcp_servers") or []
+    if not raw_servers:
+        return None
+
+    from agent_runtime.mcp_tools import MCPToolRunner, register_mcp_server
+
+    runner = MCPToolRunner(vault_resolver=_build_mcp_vault_resolver())
+    runner.start()
+    for raw in raw_servers:
+        try:
+            config = _to_mcp_config(raw)
+            tools = runner.connect(config)
+            registered = register_mcp_server(registry, runner, config.name, tools)
+            _emit(
+                {
+                    "event": "mcp.server_connected",
+                    "server": config.name,
+                    "tools": registered,
+                }
+            )
+        except Exception as exc:
+            _emit(
+                {
+                    "event": "mcp.server_failed",
+                    "server": str(raw.get("name", "?")),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+    return runner
+
+
 def run_task(spec: dict[str, Any]) -> int:
     """Run the agent loop for `spec`, streaming the steps_log as JSON lines."""
     from agent_runtime.approval import ApprovalGate
@@ -165,6 +256,13 @@ def run_task(spec: dict[str, Any]) -> int:
     # keeps the pre-06.18 echo/noop behaviour (06.15 backward-compat).
     if "tool_specs" in spec:
         _wire_assigned_tools(registry, spec)
+
+    # Wire the project's MCP servers (task_06_18_12 / ADR 0052). Gated on a
+    # non-empty `mcp_servers` list: each declared server's `<server>.<tool>`
+    # tools are registered so the allowlist below intersects them like any
+    # other tool. The runner holds the live sessions and MUST be closed when the
+    # run ends — kept here so the `finally` below tears it down.
+    mcp_runner = _wire_mcp_servers(registry, spec)
 
     # `shell_exec` is wired per project (task_06_16_02). The worker forwards
     # the project's `allowed_commands` allowlist here; we register a
@@ -209,12 +307,18 @@ def run_task(spec: dict[str, Any]) -> int:
         budgets = Budgets(**known)
 
     _emit({"event": "execution.started", "task": task})
-    result = run_agent(
-        deps,
-        task,
-        budgets=budgets,
-        on_step=lambda step: _emit({"event": "step", "step": step}),
-    )
+    try:
+        result = run_agent(
+            deps,
+            task,
+            budgets=budgets,
+            on_step=lambda step: _emit({"event": "step", "step": step}),
+        )
+    finally:
+        # Always tear down the MCP sessions (background loop + open transports),
+        # even when the run raised — leaking them would keep subprocesses alive.
+        if mcp_runner is not None:
+            mcp_runner.close()
     _emit({"event": "execution.finished", "result": result.as_dict()})
     return 0
 

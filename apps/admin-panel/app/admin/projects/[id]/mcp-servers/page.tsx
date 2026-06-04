@@ -433,6 +433,13 @@ function McpServerDialog({
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
+  // task_06_18_12 (ADR 0052) — selección de tools a importar al catálogo.
+  // Multiselección configurable por el operador: NO importamos todo, el
+  // operador marca qué tools de terceros entran en su catálogo (supply chain).
+  const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importedCount, setImportedCount] = useState<number | null>(null);
 
   const isStdio = state.transport === "stdio";
 
@@ -483,6 +490,8 @@ function McpServerDialog({
     setTesting(true);
     setTestResult(null);
     setTestError(null);
+    setImportError(null);
+    setImportedCount(null);
     try {
       const result = await apiFetch<TestConnectionResult>(
         `/projects/${projectId}/mcp/test-connection`,
@@ -492,10 +501,46 @@ function McpServerDialog({
         },
       );
       setTestResult(result);
+      // Pre-seleccionar todas las tools descubiertas — el operador puede
+      // desmarcar las que no quiera importar (multiselección configurable).
+      setSelectedTools(new Set(result.tools.map((t) => t.name)));
     } catch (err) {
       setTestError(err instanceof ApiError ? err.body : String(err));
     } finally {
       setTesting(false);
+    }
+  }
+
+  function toggleSelectedTool(name: string) {
+    setSelectedTools((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
+
+  async function handleImportTools() {
+    // El nombre del server tal como se guarda en el proyecto — es el prefijo
+    // de namespacing <server>.<tool> que el backend aplica.
+    const serverName = buildPayload().name;
+    if (!serverName || selectedTools.size === 0) return;
+    setImporting(true);
+    setImportError(null);
+    setImportedCount(null);
+    try {
+      const result = await apiFetch<{ tools: { name: string }[] }>(
+        `/projects/${projectId}/mcp/servers/${encodeURIComponent(serverName)}/import-tools`,
+        {
+          method: "POST",
+          body: { tool_names: Array.from(selectedTools) },
+        },
+      );
+      setImportedCount(result.tools.length);
+    } catch (err) {
+      setImportError(err instanceof ApiError ? err.body : String(err));
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -772,7 +817,16 @@ function McpServerDialog({
                 </Button>
               </div>
               {testResult ? (
-                <TestResultPanel result={testResult} />
+                <TestResultPanel
+                  result={testResult}
+                  serverName={buildPayload().name}
+                  selected={selectedTools}
+                  onToggle={toggleSelectedTool}
+                  onImport={handleImportTools}
+                  importing={importing}
+                  importError={importError}
+                  importedCount={importedCount}
+                />
               ) : testError ? (
                 <p
                   className="text-destructive mt-2 whitespace-pre-wrap text-xs"
@@ -937,7 +991,27 @@ interface TestConnectionResult {
   tools: DiscoveredTool[];
 }
 
-function TestResultPanel({ result }: { result: TestConnectionResult }) {
+function TestResultPanel({
+  result,
+  serverName,
+  selected,
+  onToggle,
+  onImport,
+  importing,
+  importError,
+  importedCount,
+}: {
+  result: TestConnectionResult;
+  // Nombre del server tal como se guardará en el proyecto — es el prefijo de
+  // namespacing <server>.<tool> que el backend aplica al importar (ADR 0052).
+  serverName: string;
+  selected: Set<string>;
+  onToggle: (name: string) => void;
+  onImport: () => void;
+  importing: boolean;
+  importError: string | null;
+  importedCount: number | null;
+}) {
   return (
     <div className="mt-2 space-y-2" data-testid="mcp-form-test-result">
       <p className="text-xs">
@@ -961,14 +1035,62 @@ function TestResultPanel({ result }: { result: TestConnectionResult }) {
           data-testid="mcp-form-test-tools-list"
         >
           {result.tools.map((tool) => (
-            <li key={tool.name} data-testid={`mcp-form-test-tool-${tool.name}`}>
-              <code className="font-mono">{tool.name}</code>
-              {tool.description ? (
-                <span className="text-muted-foreground"> — {tool.description}</span>
-              ) : null}
+            <li
+              key={tool.name}
+              data-testid={`mcp-form-test-tool-${tool.name}`}
+              className="flex items-start gap-2"
+            >
+              {/* Multiselección: el operador marca qué tools importar. */}
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={selected.has(tool.name)}
+                onChange={() => onToggle(tool.name)}
+                data-testid={`mcp-form-import-select-${tool.name}`}
+                aria-label={`Seleccionar ${tool.name}`}
+              />
+              <span className="min-w-0">
+                {/* Faceta Origen=MCP: el server como prefijo/badge para que
+                    <server>.read_file no parezca un duplicado de read_file. */}
+                <Badge variant="info" className="mr-1 align-middle">
+                  {serverName || "mcp"}
+                </Badge>
+                <code className="font-mono">{tool.name}</code>
+                {tool.description ? (
+                  <span className="text-muted-foreground"> — {tool.description}</span>
+                ) : null}
+              </span>
             </li>
           ))}
         </ul>
+      ) : null}
+      {result.tools.length > 0 ? (
+        <div className="flex items-center justify-between gap-2">
+          <Button
+            type="button"
+            size="sm"
+            onClick={onImport}
+            disabled={importing || selected.size === 0 || !serverName}
+            data-testid="mcp-form-import-button"
+          >
+            {importing
+              ? "Importando…"
+              : `Importar ${selected.size} tool${selected.size === 1 ? "" : "s"} al catálogo`}
+          </Button>
+          {importedCount !== null ? (
+            <span className="text-success text-xs" data-testid="mcp-form-import-success">
+              Importadas {importedCount} al catálogo (Origen MCP, nivel “Aislada”).
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {importError ? (
+        <p
+          className="text-destructive whitespace-pre-wrap text-xs"
+          data-testid="mcp-form-import-error"
+        >
+          {importError}
+        </p>
       ) : null}
       {result.server_instructions ? (
         <p

@@ -416,6 +416,17 @@ class TaskDispatcher:
         project_runtime = getattr(project, "default_runtime_template", None) if project else None
         if project_runtime:
             request["default_runtime_template"] = str(project_runtime)
+
+        # Per-project MCP servers (Plan 06.18 task_06_18_12 / ADR 0052). Thread
+        # `projects.mcp_servers` into the spec so the runtime opens an MCP
+        # session per declared server and registers its `<server>.<tool>` tools
+        # (which the agent∩mode allowlist then intersects, ADR 0048). Only emit
+        # the key when the project declares servers; an empty/absent list keeps
+        # the key absent so the runtime opens no MCP session (feature-safe — no
+        # behaviour change for projects without MCP).
+        project_mcp_servers = getattr(project, "mcp_servers", None) if project else None
+        if project_mcp_servers:
+            request["mcp_servers"] = [dict(server) for server in project_mcp_servers]
         return _AiDispatch(request=request)
 
     async def _route_human(
