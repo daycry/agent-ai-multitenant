@@ -21,6 +21,7 @@ Endpoints:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any, Literal
 from uuid import UUID
 
@@ -36,9 +37,13 @@ from api_server.auth.internal_agent import (
 )
 from api_server.db.domain import Agent, MemoryScope, Project
 from api_server.db.knowledge import Chunk, Document, KnowledgeBase, KnowledgeBaseProject
+from api_server.db.platform_settings import get_rag_reranker_enabled
+from api_server.ingestion.embeddings import Embedder
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
 from api_server.memorizer.recall import recall
+from api_server.rag.reranker import BGEReranker, Reranker
 from api_server.rag.tool import rag_search
+from api_server.routers.docs_viewer import get_query_embedder
 
 router = APIRouter(prefix="/internal/agent", tags=["internal-agent"])
 
@@ -331,11 +336,37 @@ class RagSearchResponse(BaseModel):
     hits: list[RagSearchHitOut]
 
 
+async def get_rag_reranker(
+    session: AsyncSession = Depends(get_agent_tenant_session),
+) -> AsyncIterator[Reranker | None]:
+    """Construye el reranker del rag-search según el flag operator-configurable
+    (Plan 06.17 task_06_17_02).
+
+    Lee ``rag.reranker_enabled`` de ``platform_settings`` (default OFF). Cuando
+    está OFF devuelve ``None`` → ``rag_search`` conserva el orden RRF y no anota
+    ``rerank_score`` (honestidad: no parece reranqueado si no lo está). Cuando
+    está ON construye el :class:`BGEReranker` real; su import pesado (torch +
+    transformers) es ``lazy``, así que un despliegue con el flag en OFF nunca
+    paga el coste. Los tests sobreescriben esta dependencia para inyectar un
+    reranker determinista sin tocar el flag.
+    """
+    if not await get_rag_reranker_enabled(session):
+        yield None
+        return
+    reranker = BGEReranker()
+    try:
+        yield reranker
+    finally:
+        await reranker.aclose()
+
+
 @router.post("/rag-search", response_model=RagSearchResponse)
 async def rag_search_endpoint(
     payload: RagSearchRequest,
     principal: AgentPrincipal = Depends(get_agent_principal),
     session: AsyncSession = Depends(get_agent_tenant_session),
+    embedder: Embedder | None = Depends(get_query_embedder),
+    reranker: Reranker | None = Depends(get_rag_reranker),
 ) -> RagSearchResponse:
     """Project-scoped RAG over KB chunks.
 
@@ -344,6 +375,14 @@ async def rag_search_endpoint(
     recall + reranker. The embedder + reranker live in api-server
     (not in the sandbox) so the model weights are never shipped into
     untrusted containers.
+
+    Plan 06.17 task_06_17_02: el query-embedder se reutiliza de
+    ``docs_viewer.get_query_embedder`` (misma fuente, no se duplica) para que
+    ``query_embedding`` deje de ser ``None`` y el path vectorial+RRF participe.
+    El reranker se activa por flag operator-configurable (``rag.reranker_enabled``,
+    default OFF). Si el embedder no está disponible (Ollama caído ⇒ el embed
+    lanza ``EmbeddingError`` que ``rag_search`` captura), el recall cae a BM25
+    sin romper.
 
     Returns ``hits=[]`` (200) when the agent isn't bound to a project;
     a global/builtin agent has nothing to search and ``[]`` is the
@@ -354,10 +393,6 @@ async def rag_search_endpoint(
     if agent.project_id is None:
         return RagSearchResponse(hits=[])
 
-    # No embedder / reranker injection yet — Plan 04 task_04_14 wires
-    # the embedder, the reranker is configurable per-deployment. For
-    # now we rely on BM25-only recall + NoopReranker, which is what
-    # the integration tests of Plan 04 Fase D already validated.
     # Plan 06.9: KBs visibles = union de KBs del proyecto y KBs del
     # agente template. Pasamos `agent_id` para que el resolver una
     # las dos fuentes en el visibility filter.
@@ -369,8 +404,8 @@ async def rag_search_endpoint(
         agent_id=principal.agent_id,
         limit=payload.limit,
         recall_k=payload.recall_k,
-        embedder=None,
-        reranker=None,
+        embedder=embedder,
+        reranker=reranker,
     )
     return RagSearchResponse(
         hits=[

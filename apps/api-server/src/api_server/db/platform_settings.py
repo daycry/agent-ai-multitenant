@@ -141,6 +141,36 @@ async def get_max_review_retries(session: AsyncSession) -> int:
 
 
 # ---------------------------------------------------------------------------
+# RAG reranker activation (Plan 06.17 task_06_17_02)
+# ---------------------------------------------------------------------------
+# Live enable/disable lever for the cross-encoder reranker applied on top of
+# the hybrid (BM25 + vector + RRF) recall in /internal/agent/rag-search. When
+# OFF (the default) the endpoint keeps the RRF order — the recall is already
+# useful and the real reranker (BGEReranker) pulls in torch + transformers,
+# a cost a deployment should opt INTO, not pay by default. When a System Admin
+# flips it ON from the admin panel the endpoint applies the configured reranker
+# on the next request (no restart). The flag is read live per request, so a
+# change takes effect immediately. Only a System Admin may write it
+# (``set_platform_setting``).
+RAG_RERANKER_ENABLED_KEY = "rag.reranker_enabled"
+DEFAULT_RAG_RERANKER_ENABLED = False
+
+
+async def get_rag_reranker_enabled(session: AsyncSession) -> bool:
+    """Whether the RAG reranker is currently enabled for /rag-search.
+
+    Read live by the rag-search endpoint before it decides to apply a reranker.
+    Default OFF: the hybrid RRF recall is already useful and the real reranker
+    is a heavy opt-in dependency. A System Admin flips this from the admin panel
+    — only a System Admin may write a platform setting (``set_platform_setting``).
+    """
+    value = await get_platform_setting(
+        session, RAG_RERANKER_ENABLED_KEY, default=DEFAULT_RAG_RERANKER_ENABLED
+    )
+    return bool(value)
+
+
+# ---------------------------------------------------------------------------
 # Plan approval — double-signature threshold (Plan 03 task_03_25)
 # ---------------------------------------------------------------------------
 PLAN_DOUBLE_SIGNATURE_THRESHOLD_KEY = "plan_approval_double_signature_threshold"
