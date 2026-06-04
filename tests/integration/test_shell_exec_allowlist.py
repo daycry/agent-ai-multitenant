@@ -263,8 +263,9 @@ def test_seed_exposes_shell_exec_as_assignable_builtin(
         return n, row
 
     n, row = asyncio.run(_seed_and_fetch())
-    # The catalog count went 18 -> 19.
-    assert n == 19
+    # The catalog count: 18 -> 19 (shell_exec) -> 15 (git family retired,
+    # task_06_18_06).
+    assert n == 15
     assert row is not None
     assert row["category"] == "command"
     assert row["security_level"] == "privileged"

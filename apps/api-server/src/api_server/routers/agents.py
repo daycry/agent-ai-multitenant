@@ -67,6 +67,7 @@ from api_server.schemas.agents import (
     SetAgentToolsRequest,
     to_agent_response,
 )
+from api_server.schemas.catalog import tool_is_runtime_wired
 
 # Fields that participate in the fork-vs-source diff. JSON columns are
 # compared as whole values; in v2 we may want a deeper diff for nested
@@ -764,6 +765,26 @@ async def set_agent_tools(
             detail=(
                 "unknown or non-assignable tool_id(s): "
                 + ", ".join(str(tool_id) for tool_id in missing)
+            ),
+        )
+
+    # Reject a tool the agent-runtime cannot execute (ADR 0049, task_06_18_06):
+    # assigning a builtin with no executor (apply_patch / search_code /
+    # summarize_text, the retired git_*) would die as a silent `unknown tool`
+    # at run time. We refuse it up front rather than at execution. Typed rows
+    # (http_endpoint / python_function / docker_command / mcp_tool) are wired
+    # from a serialised spec, so only non-executable builtins are rejected.
+    not_wired = [
+        tool
+        for tool in tools_by_id.values()
+        if not tool_is_runtime_wired(tool.name, tool.implementation_type)
+    ]
+    if not_wired:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "tool(s) not executable in the agent-runtime (no wired executor): "
+                + ", ".join(sorted(tool.name for tool in not_wired))
             ),
         )
 

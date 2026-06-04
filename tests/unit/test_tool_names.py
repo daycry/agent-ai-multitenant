@@ -75,3 +75,35 @@ def test_to_canonical_set_unions_and_expands() -> None:
     )
     # Empty in, empty out.
     assert to_canonical_set([]) == frozenset()
+
+
+def test_semantic_search_reconciles_onto_rag_search() -> None:
+    from shared_domain.tool_names import to_canonical
+
+    # The catalog name the operator assigns maps to the runtime's executor name
+    # (task_06_18_06, ADR 0049) so it is not orphaned as `unknown tool`.
+    assert to_canonical("semantic_search") == frozenset({"rag_search"})
+
+
+def test_git_family_not_canonical_after_retirement() -> None:
+    from shared_domain.tool_names import CANONICAL_TOOL_NAMES
+
+    # The git family was retired from the seed/catalog (task_06_18_06): it has
+    # no runtime executor, so it is no longer a canonical (assignable) name.
+    for name in ("git_status", "git_diff", "git_commit", "git_log"):
+        assert name not in CANONICAL_TOOL_NAMES, name
+
+
+def test_is_runtime_wired_reflects_executor() -> None:
+    from shared_domain.tool_names import is_runtime_wired
+
+    # Wired families + run_* + shell.
+    for name in ("read_file", "http_get", "rag_search", "run_pytest", "shell_exec"):
+        assert is_runtime_wired(name) is True, name
+    # semantic_search via the rag_search alias.
+    assert is_runtime_wired("semantic_search") is True
+    # A legacy alias resolves first, then checks membership.
+    assert is_runtime_wired("file_read") is True
+    # Builtins with no executor (and the retired git family).
+    for name in ("apply_patch", "search_code", "summarize_text", "git_status"):
+        assert is_runtime_wired(name) is False, name

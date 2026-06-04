@@ -12,6 +12,7 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from shared_domain.tool_names import is_runtime_wired as _name_is_runtime_wired
 
 from api_server.db.domain import (
     Skill,
@@ -20,6 +21,35 @@ from api_server.db.domain import (
     ToolImplementationType,
     ToolSecurityLevel,
 )
+
+# Implementation types the agent-runtime wires from a serialised ToolSpec
+# (``register_tool_specs``): a custom tool of one of these executes regardless
+# of its name. A ``builtin`` tool only executes if its canonical name is in the
+# runtime's builtin registrable set (``RUNTIME_WIRED_TOOL_NAMES``).
+_SPEC_WIRED_IMPL_TYPES: frozenset[str] = frozenset(
+    {
+        ToolImplementationType.HTTP_ENDPOINT.value,
+        ToolImplementationType.PYTHON_FUNCTION.value,
+        ToolImplementationType.DOCKER_COMMAND.value,
+        ToolImplementationType.MCP_TOOL.value,
+    }
+)
+
+
+def tool_is_runtime_wired(name: str, implementation_type: str) -> bool:
+    """Whether a Tool is actually executable by the agent-runtime (ADR 0049).
+
+    A typed row (``http_endpoint`` / ``python_function`` / ``docker_command`` /
+    ``mcp_tool``) is wired by ``register_tool_specs`` whatever its name. A
+    ``builtin`` row is wired only when its canonical name is in the runtime's
+    builtin registrable set — so ``read_file`` / ``run_pytest`` /
+    ``semantic_search`` (→ ``rag_search``) are wired, while ``apply_patch`` /
+    ``search_code`` / ``summarize_text`` (and the retired ``git_*``) are not.
+    """
+    if implementation_type in _SPEC_WIRED_IMPL_TYPES:
+        return True
+    return _name_is_runtime_wired(name)
+
 
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
@@ -165,6 +195,10 @@ class ToolResponse(BaseModel):
     timeout_seconds: int
     rate_limit_per_minute: int | None
     is_builtin: bool
+    #: Derived (ADR 0049): whether the agent-runtime can actually execute this
+    #: tool. The catalog uses it to mark "No disponible aún" and to refuse
+    #: assigning a tool that would die as a silent ``unknown tool``.
+    is_runtime_wired: bool
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
@@ -185,6 +219,7 @@ def to_tool_response(t: Tool) -> ToolResponse:
         timeout_seconds=t.timeout_seconds,
         rate_limit_per_minute=t.rate_limit_per_minute,
         is_builtin=t.is_builtin,
+        is_runtime_wired=tool_is_runtime_wired(t.name, t.implementation_type),
         created_at=t.created_at,
         updated_at=t.updated_at,
         deleted_at=t.deleted_at,

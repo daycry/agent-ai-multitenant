@@ -1,10 +1,11 @@
-"""Built-in tool catalog (task_01_11; shell_exec added task_06_16_02).
+"""Built-in tool catalog (task_01_11; shell_exec added task_06_16_02;
+git family retired task_06_18_06).
 
-Nineteen tool definitions covering file ops, git, code runtime, HTTP,
-notifications and one shell command. NONE of these are executable in
-Plan 01 -- the platform records the metadata and rejects invocations
-with 501 Not Implemented until Plan 02 wires the workers + runtime
-templates.
+Fifteen tool definitions covering file ops, code runtime, HTTP,
+knowledge, notifications and one shell command. The ``git`` family was
+removed (ADR 0049): it had no runtime executor, so it could never run.
+Each row's ``is_runtime_wired`` (derived in ``ToolResponse``) tells the
+operator which of these the agent-runtime can actually execute today.
 
 `implementation_type` choices reflect the eventual execution path:
 
@@ -61,7 +62,7 @@ def _obj(props: dict[str, Any], required: list[str] | None = None) -> dict[str, 
 
 
 # ---------------------------------------------------------------------------
-# Catalog -- 19 tools
+# Catalog -- 15 tools (git family retired, task_06_18_06)
 # ---------------------------------------------------------------------------
 BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     # ----- File / Project -----
@@ -223,62 +224,11 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         ),
     ),
     # ----- Git -----
-    BuiltinTool(
-        "git-status",
-        "git_status",
-        "Muestra el estado del worktree (modified, staged, untracked).",
-        "git",
-        "builtin",
-        "safe",
-        10,
-        _obj({}),
-        _obj({"clean": {"type": "boolean"}, "files": {"type": "array"}}, ["clean", "files"]),
-    ),
-    BuiltinTool(
-        "git-diff",
-        "git_diff",
-        "Muestra el diff actual (staged + unstaged) en formato unified.",
-        "git",
-        "builtin",
-        "safe",
-        30,
-        _obj(
-            {
-                "staged_only": {"type": "boolean", "default": False},
-                "path": {"type": "string"},
-            }
-        ),
-        _obj({"diff": {"type": "string"}}, ["diff"]),
-    ),
-    BuiltinTool(
-        "git-commit",
-        "git_commit",
-        "Stage + commit. Mensaje obligatorio. Trailers Plan-Id/Task-Id/Execution-Id "
-        "los inyecta el sistema automáticamente.",
-        "git",
-        "builtin",
-        "sandboxed",
-        30,
-        _obj(
-            {
-                "message": {"type": "string"},
-                "files": {"type": "array", "items": {"type": "string"}, "default": []},
-            },
-            ["message"],
-        ),
-        _obj({"commit_sha": {"type": "string"}}, ["commit_sha"]),
-    ),
-    BuiltinTool(
-        "git-log",
-        "git_log",
-        "Lee el log reciente (default: últimos 20 commits) del worktree actual.",
-        "git",
-        "builtin",
-        "safe",
-        10,
-        _obj({"limit": {"type": "integer", "default": 20, "minimum": 1, "maximum": 200}}),
-        _obj({"commits": {"type": "array"}}, ["commits"]),
-    ),
+    # RETIRED (task_06_18_06, ADR 0049): the four git tools (git_status /
+    # git_diff / git_commit / git_log) carried a UI category but NO runtime
+    # executor (`register_git_tools` does not exist), so any assignment died as
+    # a silent `unknown tool`. They are removed from the seed until a real
+    # executor lands; offering them as assignable would lie about availability.
     # ----- HTTP / Web -----
     BuiltinTool(
         "http-get",
