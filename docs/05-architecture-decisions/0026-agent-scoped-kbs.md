@@ -182,6 +182,14 @@ Atar las KBs al team en lugar de al agent template. Un team
 Rechazada como reemplazo. Anotada como follow-up si surge la
 necesidad real: `team_knowledge_bases` con la misma maquinaria.
 
+> **Nota (Plan 06.17, ADR 0053):** ese follow-up se evaluó y se
+> **resolvió manteniendo este ADR** — NO se crea `team_knowledge_bases`
+> ni un scope de memoria de equipo nuevo. La "capacidad de equipo" se
+> entrega como una **vista agregada read-only** de las KBs/tools de los
+> miembros + edición de la metadata de miembro; el "fork de equipo" se
+> compone clonando los agentes miembros. Ver
+> [ADR 0053](0053-capacidad-de-equipo.md).
+
 ### Alt-3: KBs por rol (enum), no por agent template
 
 Atar las KBs al rol del agente (`backend_dev`, `qa`, etc.) en lugar
