@@ -20,7 +20,7 @@ sola pantalla, el **verbo único** "Asignar/Quitar" y la **escalera de niveles**
 > exactamente cada cosa**.
 
 > **Capacitar NO es fine-tuning.** Los LLM son externos y de catálogo cerrado
-> ([ADR 0021](../05-architecture-decisions/0021-llm-provider-catalog.md)): no se
+> ([ADR 0021](../05-architecture-decisions/0021-shared-llm-layer-catalogo-cerrado.md)): no se
 > tocan los pesos del modelo. **Capacitar = dotar de CAPACIDAD** por cuatro vías
 > complementarias.
 
@@ -139,7 +139,7 @@ refleja la verdad del linaje.
 ## Resumen (EN)
 
 "Enabling" an agent/team/project is **not** fine-tuning (LLMs are external,
-closed-catalog — [ADR 0021](../05-architecture-decisions/0021-llm-provider-catalog.md)).
+closed-catalog — [ADR 0021](../05-architecture-decisions/0021-shared-llm-layer-catalogo-cerrado.md)).
 It means granting **CAPABILITY** along four paths: **KNOW** (knowledge bases +
 RAG), **REMEMBER** (memory by scope), **BE** (persona: provider/model/prompt +
 skills) and **DO** (tools + stack commands + runtime, defined in Plan 06.18). The

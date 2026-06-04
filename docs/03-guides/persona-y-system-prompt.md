@@ -12,7 +12,7 @@ La **persona** es la vía **SER** del modelo de capacitación: **quién es** el 
 y **cómo se comporta**. Se compone de cuatro piezas:
 
 1. **Modelo** (`model_config`): proveedor, modelo y temperatura del **catálogo
-   cerrado** ([ADR 0021](../05-architecture-decisions/0021-llm-provider-catalog.md)).
+   cerrado** ([ADR 0021](../05-architecture-decisions/0021-shared-llm-layer-catalogo-cerrado.md)).
 2. **System prompt** bilingüe (es/en) del rol del agente.
 3. **Modo de chat** (planning / discussion / execution), que aporta su propio prompt.
 4. **Skills** asignadas, cuyo `prompt_fragment` se suma ([skills-de-agentes.md](./skills-de-agentes.md)).
@@ -92,7 +92,7 @@ La sección **SER** del Hub muestra el estado real:
 
 The **persona** is the **BE** path: provider/model/temperature from the **closed
 catalog** (the only four — `claude_sdk`, `copilot`, `azure_foundry`, `ollama`;
-[ADR 0021](../05-architecture-decisions/0021-llm-provider-catalog.md)), the
+[ADR 0021](../05-architecture-decisions/0021-shared-llm-layer-catalogo-cerrado.md)), the
 bilingual (es/en) role system prompt, the chat mode and the assigned skills'
 `prompt_fragment`. `model_config` is validated ([ADR 0055](../05-architecture-decisions/0055-validacion-model-config.md)):
 an out-of-catalog provider, empty model or out-of-range temperature returns **422**;

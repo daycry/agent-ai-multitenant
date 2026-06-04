@@ -16,7 +16,7 @@ o una guía habla de capacitación, este documento es la fuente de verdad de los
 términos y los verbos.
 
 > **Capacitar NO es fine-tuning.** Los LLM son externos y de catálogo cerrado
-> ([ADR 0021](../05-architecture-decisions/0021-llm-provider-catalog.md)): no se
+> ([ADR 0021](../05-architecture-decisions/0021-shared-llm-layer-catalogo-cerrado.md)): no se
 > tocan los pesos del modelo. **Capacitar = dotar de CAPACIDAD** por cuatro vías
 > complementarias. Ese es todo el alcance del verbo en este producto.
 
