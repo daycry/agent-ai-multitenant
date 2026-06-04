@@ -16,6 +16,7 @@ from shared_domain.tool_names import is_runtime_wired as _name_is_runtime_wired
 
 from api_server.db.domain import (
     Skill,
+    SkillCategory,
     Tool,
     ToolCategory,
     ToolImplementationType,
@@ -79,7 +80,10 @@ class SkillCreateRequest(BaseModel):
     model_config = _BASE_CONFIG
 
     name: str = Field(min_length=1, max_length=120)
-    category: str = Field(min_length=1, max_length=64)
+    # Categoría cerrada al enum del seed (ADR 0050): el endpoint rechaza con 422
+    # cualquier valor fuera de SkillCategory antes de tocar la BD (que también
+    # lo blinda con ck_skills_category).
+    category: SkillCategory
     description: str | None = None
     prompt_fragment: str = Field(min_length=1)
     required_tools: list[UUID] = Field(default_factory=list)
@@ -89,7 +93,7 @@ class SkillUpdateRequest(BaseModel):
     model_config = _BASE_CONFIG
 
     name: str | None = Field(default=None, min_length=1, max_length=120)
-    category: str | None = Field(default=None, min_length=1, max_length=64)
+    category: SkillCategory | None = None
     description: str | None = None
     prompt_fragment: str | None = Field(default=None, min_length=1)
     required_tools: list[UUID] | None = None

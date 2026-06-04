@@ -24,6 +24,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+from api_server.agent_skills_enforcement import resolve_agent_skill_prompt_fragments
 from api_server.agent_tools_enforcement import (
     combine_tool_allowlists,
     resolve_agent_tool_names,
@@ -370,6 +371,13 @@ class TaskDispatcher:
         # echo/noop behaviour (06.15 backward-compat).
         tool_specs = await serialize_agent_tool_specs(session, agent.id)
 
+        # Skills → inyección de prompt (Plan 06.18 task_06_18_13 / ADR 0050). El
+        # prompt_fragment de las skills asignadas se threadea al spec para que el
+        # runtime lo prependa al system prompt EFECTIVO. `None` cuando el agente
+        # no tiene skills → no se emite la clave → el prompt actual queda intacto
+        # (backward-compat, mismo sentinel que `tool_specs`).
+        skill_prompt_fragments = await resolve_agent_skill_prompt_fragments(session, agent.id)
+
         request: dict[str, Any] = {
             "tenant_id": str(task.tenant_id),
             "task_id": str(task.id),
@@ -395,6 +403,12 @@ class TaskDispatcher:
         # runtime boot stays on the pre-06.18 path (no new families wired).
         if tool_specs is not None:
             request["tool_specs"] = tool_specs
+
+        # Skill prompt fragments (task_06_18_13). Solo se emite cuando el agente
+        # tiene skills — `None` mantiene la clave ausente para que el runtime no
+        # altere el system prompt (06.15/06.18 backward-compat).
+        if skill_prompt_fragments is not None:
+            request["skill_prompt_fragments"] = skill_prompt_fragments
 
         # Per-project shell-command allowlist (Plan 06.16 task_06_16_02). Thread
         # `projects.allowed_commands` into the spec so the runtime can build a

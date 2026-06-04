@@ -131,6 +131,13 @@ class ExecutionRequest:
     # session, the pre-06.18 behaviour (feature-safe). Each entry mirrors
     # `shared_mcp.MCPServerConfig` / `api_server.mcp.config.MCPServerConfigModel`.
     mcp_servers: list[dict[str, Any]] | None = None
+    # The agent's assigned skills' `prompt_fragment` list (Plan 06.18
+    # task_06_18_13 / ADR 0050). The orchestrator resolves it from the agent's
+    # `agent_skills` rows; the worker forwards it into the agent spec so
+    # `__main__.run_task` prepends it to the system prompt EFECTIVO. `None` = no
+    # key (no skills assigned) -> the runtime keeps the current prompt untouched
+    # (backward-compatible).
+    skill_prompt_fragments: list[str] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict — the Celery payload the orchestrator sends."""
@@ -146,6 +153,7 @@ class ExecutionRequest:
             "default_runtime_template": self.default_runtime_template,
             "tool_specs": self.tool_specs,
             "mcp_servers": self.mcp_servers,
+            "skill_prompt_fragments": self.skill_prompt_fragments,
         }
 
     @classmethod
@@ -163,6 +171,7 @@ class ExecutionRequest:
             default_runtime_template=raw.get("default_runtime_template"),
             tool_specs=raw.get("tool_specs"),
             mcp_servers=raw.get("mcp_servers"),
+            skill_prompt_fragments=raw.get("skill_prompt_fragments"),
         )
 
 
@@ -239,6 +248,11 @@ def _agent_spec(
     # server and registers its `<server>.<tool>` tools before the graph.
     if request.mcp_servers is not None:
         spec["mcp_servers"] = request.mcp_servers
+    # Forward the assigned skills' prompt fragments (task_06_18_13 / ADR 0050).
+    # Only emit the key when the agent has skills -- `None` means "no key", which
+    # the runtime reads as "keep the system prompt untouched" (backward-compat).
+    if request.skill_prompt_fragments is not None:
+        spec["skill_prompt_fragments"] = request.skill_prompt_fragments
     return spec
 
 

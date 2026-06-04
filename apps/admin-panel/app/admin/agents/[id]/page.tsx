@@ -42,6 +42,7 @@ import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
 
 import { AgentKbsSection } from "./agent-kbs-section";
+import { AgentSkillsSection } from "./agent-skills-section";
 import { AgentToolsSection } from "./agent-tools-section";
 
 interface Agent {
@@ -228,6 +229,13 @@ export default function AgentHubPage() {
             isReadOnly={isReadOnly}
             projectId={agent.project_id}
           />
+        </div>
+      )}
+
+      {/* Plan 06.18: skills assigned to this agent (inject prompt_fragment) */}
+      {agent && (
+        <div className="mt-4">
+          <AgentSkillsSection agentId={agent.id} isReadOnly={isReadOnly} />
         </div>
       )}
 

@@ -150,18 +150,22 @@ class MemoryType(enum.StrEnum):
 
 
 class SkillCategory(enum.StrEnum):
-    """Open-ended skill grouping. Free-form `category` text is also accepted;
-    this enum is just for the curated catalog (see task_01_10 seed)."""
+    """Cerrada *categoría* de skill (ADR 0050, task_06_18_13).
 
-    CODING = "coding"
-    REVIEW = "review"
-    PLANNING = "planning"
-    RESEARCH = "research"
+    Los seis valores son EXACTAMENTE las categorías que usan las 33 skills
+    seedeadas (``api_server.seeds.builtin_skills``). Antes este enum tenía nueve
+    valores divergentes (``coding``/``review``/``planning``/``data``/
+    ``security``…) que no coincidían con el seed y nunca se validaban; ADR 0050
+    los alinea y aplica un ``CHECK`` en BD (migración 0078) construido desde este
+    mismo conjunto, de modo que base de datos y aplicación concuerdan.
+    """
+
+    BACKEND = "backend"
+    FRONTEND = "frontend"
     DEVOPS = "devops"
-    DATA = "data"
-    DOCS = "docs"
     QA = "qa"
-    SECURITY = "security"
+    RESEARCH = "research"
+    DOCS = "docs"
 
 
 class ToolCategory(enum.StrEnum):
@@ -483,6 +487,12 @@ class Skill(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDe
             "ix_skills_is_builtin",
             "is_builtin",
             postgresql_where=text("is_builtin = true"),
+        ),
+        # Cerramos `category` al conjunto del seed (ADR 0050, migración 0078).
+        # El value set se deriva de `SkillCategory`, la única declaración.
+        CheckConstraint(
+            "category IN (" + ", ".join(f"'{c.value}'" for c in SkillCategory) + ")",
+            name="ck_skills_category",
         ),
     )
 

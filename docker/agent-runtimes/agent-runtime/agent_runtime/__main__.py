@@ -306,6 +306,14 @@ def run_task(spec: dict[str, Any]) -> int:
         }
         budgets = Budgets(**known)
 
+    # Skills → inyección de prompt (task_06_18_13 / ADR 0050). El worker
+    # forwardea los `prompt_fragment` de las skills asignadas; los concatenamos
+    # en un preámbulo que el modelo prepende al system prompt EFECTIVO. Clave
+    # ausente / lista vacía → `None` → el system prompt queda intacto
+    # (backward-compat).
+    fragments = spec.get("skill_prompt_fragments") or []
+    system_preamble = "\n\n".join(str(f) for f in fragments if f) or None
+
     _emit({"event": "execution.started", "task": task})
     try:
         result = run_agent(
@@ -313,6 +321,7 @@ def run_task(spec: dict[str, Any]) -> int:
             task,
             budgets=budgets,
             on_step=lambda step: _emit({"event": "step", "step": step}),
+            system_preamble=system_preamble,
         )
     finally:
         # Always tear down the MCP sessions (background loop + open transports),

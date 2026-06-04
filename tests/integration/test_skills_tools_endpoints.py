@@ -83,7 +83,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             builtin_skill,
             _PLATFORM_TENANT_ID,
             "Catalog: Code Review",
-            "review",
+            "qa",
             "Review code for correctness, style, and security.",
         )
         await conn.execute(
@@ -188,7 +188,7 @@ async def test_skills_crud_roundtrip(configured_app, migrations_pg_dsn: str) -> 
             "/skills",
             json={
                 "name": "Custom: SQL Tuning",
-                "category": "data",
+                "category": "backend",
                 "prompt_fragment": "You can tune slow PostgreSQL queries.",
                 "required_tools": [],
             },
@@ -214,11 +214,11 @@ async def test_skills_crud_roundtrip(configured_app, migrations_pg_dsn: str) -> 
         # PUT
         upd = await client.put(
             f"/skills/{skill_id}",
-            json={"category": "performance"},
+            json={"category": "devops"},
             headers=headers,
         )
         assert upd.status_code == 200
-        assert upd.json()["category"] == "performance"
+        assert upd.json()["category"] == "devops"
 
         # DELETE
         dele = await client.delete(f"/skills/{skill_id}", headers=headers)
@@ -244,9 +244,11 @@ async def test_skills_builtin_is_readable_but_not_writable(
         assert got.status_code == 200
         assert got.json()["is_builtin"] is True
 
+        # Categoría válida (enum cerrado): el rechazo debe venir de que es un
+        # built-in read-only (404), no de la validación de categoría.
         upd = await client.put(
             f"/skills/{builtin_id}",
-            json={"category": "hijacked"},
+            json={"category": "devops"},
             headers=headers,
         )
         assert upd.status_code == 404
@@ -269,7 +271,7 @@ async def test_skills_tenant_isolation(configured_app, migrations_pg_dsn: str) -
             "/skills",
             json={
                 "name": "A's secret skill",
-                "category": "internal",
+                "category": "research",
                 "prompt_fragment": "Confidential.",
             },
             headers={"Authorization": f"Bearer {token_a}"},

@@ -457,6 +457,7 @@ def run_agent(
     loop_threshold: int = DEFAULT_LOOP_THRESHOLD,
     clock: Callable[[], float] | None = None,
     on_step: Callable[[dict[str, Any]], None] | None = None,
+    system_preamble: str | None = None,
 ) -> ExecutionResult:
     """Run one execution of the agent loop end to end.
 
@@ -464,6 +465,10 @@ def run_agent(
     produced — the graph is streamed node by node, so a live consumer
     (the agent-runtime entrypoint, task_02_29) sees steps as they
     happen rather than only at the end.
+
+    `system_preamble` (Plan 06.18 task_06_18_13) carries the assigned skills'
+    prompt fragments to prepend to the model's system prompt; `None` keeps the
+    historical prompt untouched (backward-compat).
     """
     budgets = budgets or Budgets()
     tracker = SafeguardTracker(budgets, clock=clock or time.monotonic)
@@ -477,7 +482,7 @@ def run_agent(
 
     # Stream the full state after every super-step: the last one is the
     # final state, and the growing `steps` list feeds `on_step` live.
-    final: AgentState = initial_state(task)
+    final: AgentState = initial_state(task, system_preamble=system_preamble)
     emitted = 0
     for state in graph.stream(final, stream_mode="values", config=config):
         final = state
