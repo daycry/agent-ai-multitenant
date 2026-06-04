@@ -11,8 +11,9 @@ Asserts that after running ``seed_webscorpo`` once:
   * the project carries the Plan 06.16 fields — ``allowed_commands`` with the
     expected PHP/CI4 toolchain and ``default_runtime_template='php-phpunit'``;
   * every agent has its per-role tools assigned via the ``agent_tools`` junction
-    (Plan 06.15), with ``shell_exec`` + file + git on EVERY agent and the
-    ``run_*`` runtime tools on backend/dba/qa/devops;
+    (Plan 06.15), with ``shell_exec`` + the file family on EVERY agent and the
+    ``run_*`` runtime tools on backend/dba/qa/devops (the git family was retired
+    from the catalog in Plan 06.18, ADR 0049, so it is no longer assigned);
   * re-running the seed is idempotent — counts do not grow and no duplicates
     appear.
 
@@ -218,9 +219,10 @@ async def test_tools_assigned_per_agent(migrated_db) -> None:
     result = await _run_seed(migrated_db)
 
     shell_id = _tool_id("shell-exec")
-    file_git_ids = {
-        _tool_id(s) for s in ("read-file", "write-file", "list-files", "search-code", "git-status")
-    }
+    # File family on EVERY agent. The git family (git-status/diff/commit/log) was
+    # RETIRED from the catalog in Plan 06.18 (task_06_18_06, ADR 0049) — it has no
+    # runtime executor — so it is no longer assigned (and would FK-fail).
+    file_ids = {_tool_id(s) for s in ("read-file", "write-file", "list-files", "search-code")}
     run_ids = {_tool_id(s) for s in _RUN_SLUGS}
 
     engine = create_async_engine(migrated_db)
@@ -238,9 +240,9 @@ async def test_tools_assigned_per_agent(migrated_db) -> None:
                     ).all()
                 }
                 assert tool_ids, f"{slug} has no tools assigned"
-                # shell_exec + file + git on EVERY agent.
+                # shell_exec + file family on EVERY agent (git retired in 06.18).
                 assert shell_id in tool_ids, f"{slug} missing shell_exec"
-                assert file_git_ids <= tool_ids, f"{slug} missing file/git tools"
+                assert file_ids <= tool_ids, f"{slug} missing file tools"
                 # run_* only on backend/dba/qa/devops.
                 if slug in _RUN_AGENTS:
                     assert run_ids <= tool_ids, f"{slug} missing run_* tools"

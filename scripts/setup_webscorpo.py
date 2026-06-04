@@ -173,16 +173,20 @@ class WebScorpoAgent:
 
 
 # Conjuntos de tools reutilizables (slugs del catálogo built-in
-# `api_server.seeds.builtin_tools`). shell_exec + file + git van a TODOS;
+# `api_server.seeds.builtin_tools`). shell_exec + file van a TODOS;
 # run_* (tests/lint/typecheck/build) a backend/dba/qa/devops; http_get a
 # auth-security/devops; semantic_search a todos (KB del equipo).
 _FILE_TOOLS = ("read-file", "write-file", "apply-patch", "list-files", "search-code")
-_GIT_TOOLS = ("git-status", "git-diff", "git-commit", "git-log")
+# NOTA: la familia git (git-status/diff/commit/log) fue RETIRADA del catálogo
+# built-in en el Plan 06.18 (task_06_18_06, ADR 0049) — no tiene ejecutor en el
+# runtime, así que asignarla moriría como `unknown tool` y además rompe la FK
+# `agent_tools.tool_id` (la fila ya no existe en el seed). Se reintroducirá
+# cuando exista un `register_git_tools` real.
 _RUN_TOOLS = ("run-pytest", "run-lint", "run-typecheck", "run-build")
 # Base que todo agente del equipo recibe: ejecutar comandos del stack
-# (deny-by-default por allowed_commands), leer/editar el repo, git y la
+# (deny-by-default por allowed_commands), leer/editar el repo y la
 # búsqueda semántica en el KB del equipo.
-_BASE_TOOLS = ("shell-exec", *_FILE_TOOLS, *_GIT_TOOLS, "semantic-search")
+_BASE_TOOLS = ("shell-exec", *_FILE_TOOLS, "semantic-search")
 
 
 WEBSCORPO_AGENTS: tuple[WebScorpoAgent, ...] = (
