@@ -103,7 +103,7 @@ no intencionada).
 | `tenant_id`                               | `UUID NOT NULL`       | NULL no permitido; built-ins viven bajo el tenant plataforma `00000000-0000-0000-0000-000000000001`.                                   |
 | `scope`                                   | `agent_scope`         | `global_builtin` (read-only para tenants) / `global_tenant_template` (tenant template) / `project_local` (fork dentro de un proyecto). |
 | `project_id`                              | `UUID NULL`           | Solo poblado para scope `project_local`.                                                                                               |
-| `parent_agent_id`                         | `UUID NULL`           | Apunta al agente origen cuando se forkea un global a project_local.                                                                    |
+| `forked_from_agent_id`                    | `UUID NULL`           | Apunta al agente origen cuando se forkea un global a project_local (columna real en `agents`; indexada por `ix_agents_forked_from`).   |
 | `role`                                    | `agent_role`          | Identidad funcional.                                                                                                                   |
 | `agent_type`                              | `text` (`ai`/`human`) | `ai` por defecto. `human` = **Human Agent**: su config vive en `human_agent_config` (ver sección final). CHECK `ck_agents_agent_type`. |
 | `name`, `description`                     | `text`                | Bilingüe ES/EN: el sufijo `_en` se almacena en `description_en`, `system_prompt_en`.                                                   |
@@ -114,8 +114,9 @@ no intencionada).
 | `deleted_at`                              | `timestamptz NULL`    | Soft delete.                                                                                                                           |
 
 **Linked vs Forked.** Un agente con `scope = project_local` y
-`parent_agent_id != NULL` es un **fork**: copia editable creada con
-`POST /agents/{id}/fork`. Un team puede añadir agentes globales por
+`forked_from_agent_id != NULL` es un **fork**: copia editable creada con
+`POST /agents/{id}/fork`. El badge Linked/Forked de la UI deriva de
+`forked_from_agent_id` (no del scope). Un team puede añadir agentes globales por
 referencia (**linked**) o forkearlos antes para personalizarlos —
 ver [ADR 0006](../05-architecture-decisions/0006-linked-vs-forked-agents.md).
 
