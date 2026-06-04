@@ -22,11 +22,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Brain } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useLang } from "@/lib/lang-context";
+import { memoryDetectorState } from "@/lib/memory/honesty";
 
 interface RegistrySettingDef {
   type: "float" | "int" | "string" | "bool";
@@ -52,10 +55,17 @@ interface SettingValueResponse {
   is_default: boolean;
 }
 
+// Forma mínima de `GET /memories` que esta pantalla necesita: solo el flag
+// `has_embedding` (memories.py:118) para decidir si el detector puede operar.
+interface MemoryEmbeddingProbe {
+  has_embedding: boolean;
+}
+
 const CATEGORY = "memories";
 
 export default function MemoriesSettingsPage() {
   const queryClient = useQueryClient();
+  const { lang } = useLang();
 
   const registryQuery = useQuery<{ categories: Record<string, RegistryCategoryDef> }, ApiError>({
     queryKey: ["tenant-settings", "_registry"],
@@ -68,6 +78,19 @@ export default function MemoriesSettingsPage() {
     queryFn: () => apiFetch<SettingValueResponse[]>(`/tenant-settings/${CATEGORY}`),
     refetchOnWindowFocus: false,
   });
+
+  // Honestidad de estado (Plan 06.17 task_06_17_06): el slider de umbral y el
+  // detector de similares solo sirven si ALGUNA memoria tiene embedding. Si no,
+  // los controles se marcan "No disponible aún" en vez de fingir que filtran.
+  const embeddingProbeQuery = useQuery<MemoryEmbeddingProbe[], ApiError>({
+    queryKey: ["memories", "embedding-probe"],
+    queryFn: () => apiFetch<MemoryEmbeddingProbe[]>("/memories?limit=200"),
+    refetchOnWindowFocus: false,
+  });
+  const hasAnyEmbedding = (embeddingProbeQuery.data ?? []).some((m) => m.has_embedding);
+  const detector = memoryDetectorState(hasAnyEmbedding, lang);
+  // Mientras la sonda carga no afirmamos nada (ni activo ni roto).
+  const detectorUnavailable = embeddingProbeQuery.isSuccess && !detector.available;
 
   const [threshold, setThreshold] = useState<number>(0.85);
   const [limit, setLimit] = useState<number>(5);
@@ -123,10 +146,24 @@ export default function MemoriesSettingsPage() {
       />
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between gap-3">
           <CardTitle>Detector de similares</CardTitle>
+          {detectorUnavailable && (
+            <Badge variant="muted" data-testid="settings-memories-unavailable">
+              {detector.label}
+            </Badge>
+          )}
         </CardHeader>
         <CardContent className="space-y-6">
+          {detectorUnavailable && (
+            <p
+              className="bg-muted/40 text-muted-foreground rounded p-3 text-xs"
+              data-testid="settings-memories-unavailable-note"
+              role="status"
+            >
+              {detector.note}
+            </p>
+          )}
           <div className="space-y-2">
             <Label htmlFor="threshold" className="text-sm font-medium">
               {thresholdDef?.label_es ?? "Umbral de similitud"} · {threshold.toFixed(2)}
@@ -140,7 +177,9 @@ export default function MemoriesSettingsPage() {
               value={threshold}
               onChange={(e) => setThreshold(Number(e.target.value))}
               data-testid="settings-memories-threshold"
-              className="w-full"
+              disabled={detectorUnavailable}
+              aria-disabled={detectorUnavailable}
+              className="w-full disabled:cursor-not-allowed disabled:opacity-50"
             />
             <p className="text-muted-foreground text-xs">{thresholdDef?.description_es}</p>
           </div>
@@ -157,6 +196,7 @@ export default function MemoriesSettingsPage() {
               value={limit}
               onChange={(e) => setLimit(Number(e.target.value))}
               data-testid="settings-memories-limit"
+              disabled={detectorUnavailable}
               className="w-32"
             />
             <p className="text-muted-foreground text-xs">{limitDef?.description_es}</p>
@@ -165,7 +205,7 @@ export default function MemoriesSettingsPage() {
           <div className="flex items-center gap-3">
             <Button
               onClick={() => void onSave()}
-              disabled={putSetting.isPending}
+              disabled={putSetting.isPending || detectorUnavailable}
               data-testid="settings-memories-save"
             >
               {putSetting.isPending ? "Guardando…" : "Guardar"}

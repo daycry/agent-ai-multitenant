@@ -36,7 +36,10 @@ import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { ProjectCombobox } from "@/components/ui/project-combobox";
 import { TeamCombobox } from "@/components/ui/team-combobox";
+import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useLang } from "@/lib/lang-context";
+import { memoryDetectorState } from "@/lib/memory/honesty";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 
 // --------------------------------------------------------------------------
@@ -235,7 +238,11 @@ function MemoryRow({ memory, onDeleted }: { memory: MemoryResponse; onDeleted: (
             {SCOPE_LABEL[memory.scope]}
           </Badge>
           <Badge variant={TYPE_VARIANT[memory.type] ?? "muted"}>{TYPE_LABEL[memory.type]}</Badge>
-          {memory.has_embedding ? <Badge variant="success">embedding</Badge> : null}
+          {memory.has_embedding ? (
+            <Badge variant="success">embedding</Badge>
+          ) : (
+            <SimilarUnavailableBadge memoryId={memory.id} />
+          )}
           <SimilarCountBadge
             memoryId={memory.id}
             hasEmbedding={memory.has_embedding}
@@ -280,6 +287,26 @@ function MemoryRow({ memory, onDeleted }: { memory: MemoryResponse; onDeleted: (
 // `/memories/similar-counts` (follow-up); para volúmenes normales el
 // caché de TanStack (staleTime 30s) lo hace barato.
 // --------------------------------------------------------------------------
+
+// --------------------------------------------------------------------------
+// Honestidad de estado (Plan 06.17 task_06_17_06): una memoria SIN embedding
+// no puede tener "similares" (cos-sim sobre un vector ausente) ni participar
+// del umbral. En vez de no mostrar nada (que parecía "0 similares, todo bien"),
+// se marca "No disponible aún" con el motivo en el tooltip accesible.
+// --------------------------------------------------------------------------
+function SimilarUnavailableBadge({ memoryId }: { memoryId: string }) {
+  const { lang } = useLang();
+  const state = memoryDetectorState(false, lang);
+  return (
+    <Tooltip content={state.note}>
+      <TooltipTrigger>
+        <Badge variant="muted" data-testid={`memory-similar-unavailable-${memoryId}`}>
+          {state.label}
+        </Badge>
+      </TooltipTrigger>
+    </Tooltip>
+  );
+}
 
 function SimilarCountBadge({
   memoryId,

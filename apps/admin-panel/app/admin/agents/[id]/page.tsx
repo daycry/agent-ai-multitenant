@@ -40,6 +40,8 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useLang } from "@/lib/lang-context";
+import { privateScopeMemoryWarning } from "@/lib/memory/honesty";
 
 import { AgentKbsSection } from "./agent-kbs-section";
 import { AgentSkillsSection } from "./agent-skills-section";
@@ -106,6 +108,7 @@ export default function AgentHubPage() {
   const agentId = params?.id ?? "";
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { lang } = useLang();
 
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -211,6 +214,21 @@ export default function AgentHubPage() {
             <Field label="Max concurrent tasks" value={String(agent.max_concurrent_tasks)} />
             <Field label="Project" value={agent.project_id ? agent.project_id.slice(0, 8) : "—"} />
           </div>
+
+          {/* Honestidad de estado (Plan 06.17 task_06_17_06): un agente IA con
+              memory_scope=private NO memoriza entre runs — el Memorizer hace
+              skip silencioso (skip_private). Avisamos en vez de prometer
+              recuerdo. Solo aplica a agentes IA (un "agente" humano no memoriza
+              vía Memorizer en ningún caso). */}
+          {agent.agent_type === "ai" && privateScopeMemoryWarning(agent.memory_scope, lang) ? (
+            <p
+              className="bg-warning-soft text-warning-soft-foreground rounded p-3 text-xs"
+              data-testid="agent-private-memory-warning"
+              role="status"
+            >
+              {privateScopeMemoryWarning(agent.memory_scope, lang)}
+            </p>
+          ) : null}
         </Card>
       )}
 
@@ -291,6 +309,7 @@ function AgentEditDialog({
   onOpenChange: (v: boolean) => void;
   onSaved: () => void;
 }) {
+  const { lang } = useLang();
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
   const [role, setRole] = useState(agent.role);
@@ -298,6 +317,8 @@ function AgentEditDialog({
   const [memoryScope, setMemoryScope] = useState(agent.memory_scope);
   const [reviewCap, setReviewCap] = useState(agent.review_capability);
   const [maxTasks, setMaxTasks] = useState(agent.max_concurrent_tasks);
+  const privateWarning =
+    agent.agent_type === "ai" ? privateScopeMemoryWarning(memoryScope, lang) : null;
 
   useEffect(() => {
     if (open) {
@@ -399,6 +420,15 @@ function AgentEditDialog({
                   </option>
                 ))}
               </Select>
+              {privateWarning ? (
+                <p
+                  className="text-warning-soft-foreground text-xs"
+                  data-testid="edit-agent-private-memory-warning"
+                  role="status"
+                >
+                  {privateWarning}
+                </p>
+              ) : null}
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="ae-tasks">Max concurrent tasks</Label>
