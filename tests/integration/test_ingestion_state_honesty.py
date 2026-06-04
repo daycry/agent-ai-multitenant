@@ -138,9 +138,12 @@ def test_migration_0080_check_accepts_indexed_empty_and_is_reversible(
     command.upgrade(alembic_config, "head")
     document_id = asyncio.run(_insert_indexed_empty_doc(migrations_pg_dsn))
 
-    # Reversibilidad: downgrade normaliza 'indexed_empty'→'indexed' y
-    # re-estrecha la CHECK; upgrade vuelve a head sin errores.
-    command.downgrade(alembic_config, "-1")
+    # Reversibilidad: bajamos a la revisión ANTERIOR a 0080 (0079) para que el
+    # downgrade de 0080 corra de verdad y normalice 'indexed_empty'→'indexed' +
+    # re-estreche la CHECK. Apuntamos a la revisión nombrada (no a "-1" relativo
+    # al head) para que el test siga siendo correcto cuando se apilan migraciones
+    # posteriores (p.ej. 0081): un "-1" solo desharía la cima y dejaría 0080 en pie.
+    command.downgrade(alembic_config, "0079_memory_defaults")
     status_after_down = asyncio.run(_read_doc_status(migrations_pg_dsn, document_id))
     assert status_after_down == "indexed"
     command.upgrade(alembic_config, "head")
