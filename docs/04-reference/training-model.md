@@ -89,6 +89,28 @@ stack".
 6. **Onboarding/checklist**: el Hub guía el orden **Persona → Saber → Hacer →
    Recordar**.
 
+## El contrato del Hub: `GET /{entity}/{id}/capabilities`
+
+El **Hub de Capacidad** (ficha de agente/proyecto/equipo) consume un único endpoint
+que devuelve el **set efectivo real** de las cuatro vías. `{entity}` es `agents`,
+`projects` o `teams`. Es tenant-scoped (RLS): pedir la entidad de otro tenant
+devuelve **404**.
+
+| Campo                   | Significado                                                                                                                 |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `entity_type`           | `agent` \| `project` \| `team`.                                                                                             |
+| `entity_id`             | UUID de la entidad.                                                                                                         |
+| `saber.knowledge_bases` | KBs visibles, cada una con su `level` (`rol`/`stack`/`plataforma`) e `is_builtin`.                                          |
+| `recordar.memory_scope` | `memory_scope` del agente; `null` para proyecto/equipo.                                                                     |
+| `recordar.memory`       | Conteo de memorias por scope (`scope`, `count`).                                                                            |
+| `ser`                   | Solo en agente: `model_configured`, `provider`, `model`, `temperature`, `system_prompt_present`. `null` en proyecto/equipo. |
+| `hacer`                 | `effective` (tools efectivas, compuestas con `effective-tools` de 06.18), `unrestricted`, `shell_exec_effective`.           |
+| `warnings`              | Avisos honestos (p. ej. agente global sin contexto de proyecto, ADR 0054; modelo no configurado).                           |
+
+La sección **HACER** **no** se recalcula aquí: el endpoint la **compone** con
+`GET /agents/{id}/effective-tools` del Plan 06.18. El frontend deriva el estado de
+cada sección con lógica pura (`lib/capability/hub.ts`), sin inventar campos.
+
 ## Cómo se relaciona con el resto
 
 - El **acoplamiento conocimiento/memoria de proyecto** (un agente global que ejecuta

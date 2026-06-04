@@ -8,15 +8,19 @@ y la tabla de NIVELES) vive en
 
 ## Capacitar agentes, equipos y proyectos
 
-| Guía                                                                       | Para qué                                                            |
-| -------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| [01-create-first-project.md](./01-create-first-project.md)                 | Crear el primer proyecto desde la UI                                |
-| [kb-ingestion.md](./kb-ingestion.md)                                       | Subir documentos a una Knowledge Base (SABER)                       |
-| [knowledge-bases-rol-vs-stack.md](./knowledge-bases-rol-vs-stack.md)       | Cuándo asignar una KB al rol del agente vs al stack del proyecto    |
-| [asignar-tools-a-agentes.md](./asignar-tools-a-agentes.md)                 | Asignar tools (y skills) a un agente y leer el set efectivo (HACER) |
-| [comandos-y-runtime-por-proyecto.md](./comandos-y-runtime-por-proyecto.md) | Autorizar comandos del stack (PHP/Node/.NET) + runtime por proyecto |
-| [configurar-mcp-server.md](./configurar-mcp-server.md)                     | Añadir un servidor MCP a un proyecto (catálogo o custom)            |
-| [human-agents.md](./human-agents.md)                                       | Crear, configurar, asignar y operar tareas de Human Agents          |
+| Guía                                                                       | Para qué                                                                      |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [como-capacitar-agentes.md](./como-capacitar-agentes.md)                   | Guía paraguas: las 4 vías (SABER/RECORDAR/SER/HACER), el Hub, niveles         |
+| [01-create-first-project.md](./01-create-first-project.md)                 | Crear el primer proyecto desde la UI                                          |
+| [kb-ingestion.md](./kb-ingestion.md)                                       | Subir documentos a una Knowledge Base (SABER)                                 |
+| [knowledge-bases-rol-vs-stack.md](./knowledge-bases-rol-vs-stack.md)       | Cuándo asignar una KB al rol del agente vs al stack del proyecto              |
+| [memoria-de-agentes.md](./memoria-de-agentes.md)                           | RECORDAR: scopes, escalera de lectura, back-fill, por qué private no memoriza |
+| [persona-y-system-prompt.md](./persona-y-system-prompt.md)                 | SER: modelo del catálogo cerrado, prompt efectivo, edición es/en              |
+| [skills-de-agentes.md](./skills-de-agentes.md)                             | SER: skills como fragmentos de persona asignables (prompt_fragment)           |
+| [asignar-tools-a-agentes.md](./asignar-tools-a-agentes.md)                 | Asignar tools (y skills) a un agente y leer el set efectivo (HACER)           |
+| [comandos-y-runtime-por-proyecto.md](./comandos-y-runtime-por-proyecto.md) | Autorizar comandos del stack (PHP/Node/.NET) + runtime por proyecto           |
+| [configurar-mcp-server.md](./configurar-mcp-server.md)                     | Añadir un servidor MCP a un proyecto (catálogo o custom)                      |
+| [human-agents.md](./human-agents.md)                                       | Crear, configurar, asignar y operar tareas de Human Agents                    |
 
 ## Operar la plataforma
 

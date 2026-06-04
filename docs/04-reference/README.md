@@ -17,10 +17,11 @@ los reflejan.
 
 ## Núcleo del dominio
 
-| Documento                            | Cubre                                                                                                                                                                                 |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [domain-model.md](./domain-model.md) | Esquema relacional: agentes (IA + humanos), skills, tools, teams, proyectos, planes, tareas, entidades nuevas (human agents, llm_providers, marketplace, presupuestos…), enums y RLS. |
-| [rbac.md](./rbac.md)                 | Matriz de roles por endpoint (el **contrato** de los gates), incl. la superficie platform-global del System Admin.                                                                    |
+| Documento                                | Cubre                                                                                                                                                                                 |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [domain-model.md](./domain-model.md)     | Esquema relacional: agentes (IA + humanos), skills, tools, teams, proyectos, planes, tareas, entidades nuevas (human agents, llm_providers, marketplace, presupuestos…), enums y RLS. |
+| [training-model.md](./training-model.md) | Modelo de capacitación (SABER/RECORDAR/SER/HACER), verbo único "Asignar/Quitar", tabla de niveles y el contrato del Hub `GET /{entity}/{id}/capabilities`.                            |
+| [rbac.md](./rbac.md)                     | Matriz de roles por endpoint (el **contrato** de los gates), incl. la superficie platform-global del System Admin.                                                                    |
 
 ## Subsistemas
 
