@@ -317,8 +317,13 @@ async def test_empty_team_capability_is_honest(configured_app, migrations_pg_dsn
 
         assert body["saber"]["knowledge_bases"] == []
         assert body["hacer"]["effective"] == []
-        warnings_text = " ".join(body["warnings"]).lower()
-        assert "sin miembros" in warnings_text
+        # Aviso bilingüe estructurado: {code, es, en}.
+        codes = {w["code"] for w in body["warnings"]}
+        assert "team_no_members" in codes
+        es_text = " ".join(w["es"] for w in body["warnings"]).lower()
+        en_text = " ".join(w["en"] for w in body["warnings"]).lower()
+        assert "sin miembros" in es_text
+        assert "no members" in en_text
 
 
 # ===========================================================================

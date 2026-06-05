@@ -138,11 +138,15 @@ const CAPS_FULL = {
   },
 };
 
-/** Agente GLOBAL en una tarea de proyecto → warning honesto (ADR 0054). */
+/** Agente GLOBAL en una tarea de proyecto → warning honesto bilingüe (ADR 0054). */
 const CAPS_GLOBAL_AGENT = {
   ...CAPS_EMPTY,
   warnings: [
-    "Agente global: no ve conocimiento ni memoria de proyecto en esta vista (en una tarea de proyecto usará el contexto de la tarea, ADR 0054).",
+    {
+      code: "global_agent_no_project_context",
+      es: "Agente global: no ve conocimiento ni memoria de proyecto en esta vista (en una tarea de proyecto usará el contexto de la tarea, ADR 0054).",
+      en: "Global agent: does not see project knowledge or memory in this view (in a project task it uses the task context, ADR 0054).",
+    },
   ],
 };
 

@@ -33,11 +33,13 @@ from api_server.auth.deps import (
     require_tenant_member,
 )
 from api_server.capabilities import (
+    WARN_TEAM_NO_MEMBERS,
     CapabilitiesResponse,
     CapabilityHacer,
     CapabilityKB,
     CapabilityRecordar,
     CapabilitySaber,
+    CapabilityWarning,
     hacer_for_agent,
     kbs_for_agent_role,
     kbs_for_project,
@@ -337,11 +339,20 @@ async def get_team_capabilities(
     )
     members = list(member_rows.scalars().all())
 
-    warnings: list[str] = []
+    warnings: list[CapabilityWarning] = []
     if not members:
         warnings.append(
-            "equipo sin miembros: aún no hay conocimiento ni tools de equipo "
-            "(la capacidad de equipo es la unión de la de sus miembros, ADR 0053)"
+            CapabilityWarning(
+                code=WARN_TEAM_NO_MEMBERS,
+                es=(
+                    "equipo sin miembros: aún no hay conocimiento ni tools de equipo "
+                    "(la capacidad de equipo es la unión de la de sus miembros, ADR 0053)"
+                ),
+                en=(
+                    "team has no members: no team knowledge or tools yet "
+                    "(team capability is the union of its members', ADR 0053)"
+                ),
+            )
         )
 
     # SABER agregado: union de rol mas stack de cada miembro.

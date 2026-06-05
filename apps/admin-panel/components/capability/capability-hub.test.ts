@@ -15,6 +15,7 @@ import {
   VERB_ASSIGN,
   VERB_EDIT,
   VERB_REMOVE,
+  WARN_GLOBAL_AGENT,
   type CapabilitiesResponse,
 } from "@/lib/capability/hub";
 
@@ -195,17 +196,36 @@ describe("capability hub — verbo único Asignar / Quitar (regla 1)", () => {
   });
 });
 
-describe("capability hub — aviso de agente global (ADR 0054)", () => {
-  it("detecta el warning del backend de agente global y devuelve su texto", () => {
+describe("capability hub — aviso de agente global bilingüe (ADR 0054)", () => {
+  it("detecta el warning del backend por su code y devuelve el texto del idioma activo", () => {
     const caps = agentCaps({
       warnings: [
-        "agente global: no ve conocimiento ni memoria de proyecto en esta vista (ADR 0054)",
+        {
+          code: WARN_GLOBAL_AGENT,
+          es: "agente global: no ve conocimiento ni memoria de proyecto en esta vista (ADR 0054)",
+          en: "global agent: does not see project knowledge or memory in this view (ADR 0054)",
+        },
       ],
     });
     expect(isGlobalAgentWarning(caps)).toBe(true);
-    const notice = globalAgentNotice(caps, "es");
-    expect(notice).not.toBeNull();
-    expect(notice?.toLowerCase()).toContain("agente global");
+    // ES y EN salen del MISMO warning estructurado (la rama EN ya no está muerta).
+    expect(globalAgentNotice(caps, "es")?.toLowerCase()).toContain("agente global");
+    expect(globalAgentNotice(caps, "en")?.toLowerCase()).toContain("global agent");
+  });
+
+  it("empareja por code, no por el texto castellano", () => {
+    // Un warning de otro tipo (modelo no configurado) NO dispara el aviso global.
+    const caps = agentCaps({
+      warnings: [
+        {
+          code: "model_not_configured",
+          es: "modelo no configurado",
+          en: "model not configured",
+        },
+      ],
+    });
+    expect(isGlobalAgentWarning(caps)).toBe(false);
+    expect(globalAgentNotice(caps, "es")).toBeNull();
   });
 
   it("un agente sin ese warning NO muestra el aviso (honestidad)", () => {
@@ -218,7 +238,13 @@ describe("capability hub — aviso de agente global (ADR 0054)", () => {
       ...agentCaps(),
       entity_type: "project",
       ser: null,
-      warnings: ["agente global: ..."],
+      warnings: [
+        {
+          code: WARN_GLOBAL_AGENT,
+          es: "agente global: ...",
+          en: "global agent: ...",
+        },
+      ],
     };
     expect(isGlobalAgentWarning(projectCaps)).toBe(false);
   });

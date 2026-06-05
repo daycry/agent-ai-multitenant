@@ -359,12 +359,24 @@ async def test_global_agent_capabilities_warnings(configured_app, migrations_pg_
         # Modelo no configurado (model_config={}).
         assert body["ser"]["model_configured"] is False
 
-        warnings_text = " ".join(body["warnings"]).lower()
-        # Aviso honesto: agente global no ve conocimiento de proyecto.
-        assert "global" in warnings_text
-        assert "proyecto" in warnings_text
-        # Aviso honesto: modelo no configurado.
-        assert "modelo" in warnings_text
+        # Cada warning es bilingüe estructurado: {code, es, en}.
+        codes = {w["code"] for w in body["warnings"]}
+        assert "global_agent_no_project_context" in codes
+        assert "model_not_configured" in codes
+        for warning in body["warnings"]:
+            assert set(warning) == {"code", "es", "en"}
+            assert warning["es"] and warning["en"]
+
+        es_text = " ".join(w["es"] for w in body["warnings"]).lower()
+        en_text = " ".join(w["en"] for w in body["warnings"]).lower()
+        # Aviso honesto bilingüe: agente global no ve conocimiento de proyecto.
+        assert "global" in es_text
+        assert "proyecto" in es_text
+        assert "global" in en_text
+        assert "project" in en_text
+        # Aviso honesto bilingüe: modelo no configurado.
+        assert "modelo" in es_text
+        assert "model" in en_text
 
 
 # ===========================================================================
@@ -383,8 +395,12 @@ async def test_private_memory_scope_warning(configured_app, migrations_pg_dsn: s
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["recordar"]["memory_scope"] == "private"
-        warnings_text = " ".join(body["warnings"]).lower()
-        assert "private" in warnings_text
+        codes = {w["code"] for w in body["warnings"]}
+        assert "private_memory_scope" in codes
+        es_text = " ".join(w["es"] for w in body["warnings"]).lower()
+        en_text = " ".join(w["en"] for w in body["warnings"]).lower()
+        assert "private" in es_text
+        assert "private" in en_text
 
 
 # ===========================================================================

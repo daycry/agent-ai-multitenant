@@ -31,7 +31,7 @@ from shared_domain.tool_names import to_canonical_set
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.agent_tools_enforcement import compute_effective_tools
+from api_server.agent_tools_enforcement import ToolWarning, compute_effective_tools
 from api_server.db.domain import Agent, AgentTool, Project, Tool
 from api_server.db.knowledge import AgentKnowledgeBase, KnowledgeBase, KnowledgeBaseProject
 from api_server.db.memory import MemoryEntry
@@ -45,10 +45,37 @@ LEVEL_ROLE = "rol"
 LEVEL_STACK = "stack"
 LEVEL_PLATFORM = "plataforma"
 
+# Códigos estables de los avisos honestos del Hub. Son el identificador
+# idioma-neutral que el frontend usa para emparejar/destacar cada aviso (p. ej.
+# el de agente global, ADR 0054) sin inspeccionar el texto castellano —la rama
+# EN dejaba de funcionar al hacerlo (follow-up bilingual-warnings). Los avisos de
+# la sección HACER reusan los códigos de :mod:`agent_tools_enforcement`.
+WARN_MODEL_NOT_CONFIGURED = "model_not_configured"
+WARN_PRIVATE_MEMORY = "private_memory_scope"
+WARN_GLOBAL_AGENT = "global_agent_no_project_context"
+WARN_TEAM_NO_MEMBERS = "team_no_members"
+
 
 # ---------------------------------------------------------------------------
 # Schemas del contrato (compartidos por los tres routers)
 # ---------------------------------------------------------------------------
+class CapabilityWarning(BaseModel):
+    """Un aviso honesto del Hub en forma BILINGÜE estructurada (06.17 + follow-up).
+
+    Cada aviso lleva un ``code`` estable (idioma-neutral) y el mismo mensaje en
+    ``es`` y ``en`` (los dos únicos idiomas de esta versión). Antes los warnings
+    eran ``list[str]`` SOLO en castellano y el frontend los pintaba verbatim,
+    dejando muerta la rama EN; ahora el frontend elige el idioma activo por el
+    contrato y empareja el aviso de agente global (ADR 0054) por su ``code``.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    code: str
+    es: str
+    en: str
+
+
 class CapabilityKB(BaseModel):
     """Una KB visible, etiquetada por su nivel (rol/stack/plataforma)."""
 
@@ -131,21 +158,23 @@ class CapabilitiesResponse(BaseModel):
     #: Solo poblada para un agente; ``None`` para proyecto/equipo.
     ser: CapabilitySer | None = None
     hacer: CapabilityHacer
-    #: Avisos honestos legibles (agente global sin contexto de proyecto, modelo
+    #: Avisos honestos BILINGÜES (agente global sin contexto de proyecto, modelo
     #: no configurado, memory_scope=private silencioso, equipo sin miembros…).
-    warnings: list[str] = Field(default_factory=list)
+    #: Cada uno = ``{code, es, en}``; el frontend renderiza el idioma activo.
+    warnings: list[CapabilityWarning] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
 # Builders puros / queries compartidas
 # ---------------------------------------------------------------------------
-def build_ser(agent: Agent) -> tuple[CapabilitySer, list[str]]:
+def build_ser(agent: Agent) -> tuple[CapabilitySer, list[CapabilityWarning]]:
     """Sección SER de un agente + avisos (modelo no configurado).
 
     ``model_configured`` es ``True`` solo cuando el ``model_config`` trae
     ``provider`` y ``model`` no vacíos (ADR 0055: un ``{}`` legacy o un spec sin
     proveedor/modelo no cuenta como configurado y dispararía el default en
-    dispatch). Devuelve también el aviso "modelo no configurado" cuando procede.
+    dispatch). Devuelve también el aviso "modelo no configurado" (bilingüe)
+    cuando procede.
     """
     cfg = agent.model_config or {}
     provider = cfg.get("provider")
@@ -155,11 +184,22 @@ def build_ser(agent: Agent) -> tuple[CapabilitySer, list[str]]:
     model_str = str(model).strip() if isinstance(model, str) else None
     configured = bool(provider_str) and bool(model_str)
 
-    warnings: list[str] = []
+    warnings: list[CapabilityWarning] = []
     if not configured:
         warnings.append(
-            "modelo no configurado: el agente usará el default operator-configurable "
-            "en dispatch (define provider y model en model_config)"
+            CapabilityWarning(
+                code=WARN_MODEL_NOT_CONFIGURED,
+                es=(
+                    "modelo no configurado: el agente usará el default "
+                    "operator-configurable en dispatch (define provider y model "
+                    "en model_config)"
+                ),
+                en=(
+                    "model not configured: the agent will use the "
+                    "operator-configurable default at dispatch (set provider and "
+                    "model in model_config)"
+                ),
+            )
         )
 
     temp_val: float | None
@@ -278,14 +318,14 @@ async def memory_counts(
 
 async def hacer_for_agent(
     session: AsyncSession, *, agent: Agent
-) -> tuple[CapabilityHacer, list[str]]:
+) -> tuple[CapabilityHacer, list[CapabilityWarning]]:
     """Sección HACER de un agente: delega en ``compute_effective_tools`` (06.18).
 
     Reutiliza EXACTAMENTE el mismo cálculo que ``GET /agents/{id}/effective-tools``
     (el punto único de intersección agente∩modo + cruce de ``allowed_commands``),
     sin modo (el Hub muestra el set base del dispatch). Devuelve el shape recortado
-    para el Hub + los ``warnings`` honestos del cálculo (tool no ejecutable,
-    shell_exec sin commands).
+    para el Hub + los ``warnings`` honestos BILINGÜES del cálculo (tool no
+    ejecutable, shell_exec sin commands), tomados de ``result.warnings_i18n``.
     """
     rows = await session.execute(
         select(Tool)
@@ -327,12 +367,22 @@ async def hacer_for_agent(
             unrestricted=result.unrestricted,
             shell_exec_effective=result.shell_exec_effective,
         ),
-        list(result.warnings),
+        [_tool_warning_to_capability(w) for w in result.warnings_i18n],
     )
 
 
-def agent_global_warning(agent: Agent) -> list[str]:
-    """Aviso honesto para un agente global (ADR 0054).
+def _tool_warning_to_capability(warning: ToolWarning) -> CapabilityWarning:
+    """Adapta un ``ToolWarning`` de 06.18 al ``CapabilityWarning`` del Hub.
+
+    Mismo ``code`` y mismos textos ``es``/``en``: la sección HACER no reescribe
+    los avisos del cálculo efectivo, solo cambia de envoltura para unificar el
+    contrato bilingüe de ``warnings``.
+    """
+    return CapabilityWarning(code=warning.code, es=warning.es, en=warning.en)
+
+
+def agent_global_warning(agent: Agent) -> list[CapabilityWarning]:
+    """Aviso honesto BILINGÜE para un agente global (ADR 0054).
 
     Un agente sin ``project_id`` (``global_builtin`` / ``global_tenant_template``)
     no tiene contexto de proyecto propio para la lectura de KBs/memoria; lo
@@ -340,23 +390,51 @@ def agent_global_warning(agent: Agent) -> list[str]:
     tiempo de run, no en esta vista estática)."""
     if agent.project_id is None:
         return [
-            "agente global: no ve conocimiento ni memoria de proyecto en esta vista "
-            "(en una tarea de proyecto usará el contexto de la tarea según ADR 0054)"
+            CapabilityWarning(
+                code=WARN_GLOBAL_AGENT,
+                es=(
+                    "agente global: no ve conocimiento ni memoria de proyecto en "
+                    "esta vista (en una tarea de proyecto usará el contexto de la "
+                    "tarea según ADR 0054)"
+                ),
+                en=(
+                    "global agent: does not see project knowledge or memory in this "
+                    "view (in a project task it uses the task context per ADR 0054)"
+                ),
+            )
         ]
     return []
 
 
-def private_memory_warning(memory_scope: str) -> list[str]:
-    """Aviso de ``memory_scope=private`` silencioso para un agente IA."""
+def private_memory_warning(memory_scope: str) -> list[CapabilityWarning]:
+    """Aviso BILINGÜE de ``memory_scope=private`` silencioso para un agente IA."""
     if memory_scope == "private":
         return [
-            "memory_scope=private: un agente IA no memoriza nada en este scope "
-            "(elige team_shared/project_shared/global para que recuerde entre runs)"
+            CapabilityWarning(
+                code=WARN_PRIVATE_MEMORY,
+                es=(
+                    "memory_scope=private: un agente IA no memoriza nada en este "
+                    "scope (elige team_shared/project_shared/global para que "
+                    "recuerde entre runs)"
+                ),
+                en=(
+                    "memory_scope=private: an AI agent remembers nothing in this "
+                    "scope (choose team_shared/project_shared/global so it "
+                    "remembers across runs)"
+                ),
+            )
         ]
     return []
 
 
 __all__ = [
+    "LEVEL_PLATFORM",
+    "LEVEL_ROLE",
+    "LEVEL_STACK",
+    "WARN_GLOBAL_AGENT",
+    "WARN_MODEL_NOT_CONFIGURED",
+    "WARN_PRIVATE_MEMORY",
+    "WARN_TEAM_NO_MEMBERS",
     "CapabilitiesResponse",
     "CapabilityHacer",
     "CapabilityKB",
@@ -364,9 +442,7 @@ __all__ = [
     "CapabilityRecordar",
     "CapabilitySaber",
     "CapabilitySer",
-    "LEVEL_PLATFORM",
-    "LEVEL_ROLE",
-    "LEVEL_STACK",
+    "CapabilityWarning",
     "agent_global_warning",
     "build_ser",
     "hacer_for_agent",

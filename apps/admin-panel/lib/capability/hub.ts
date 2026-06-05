@@ -68,6 +68,27 @@ export interface CapabilityHacer {
 
 export type CapabilityEntityType = "agent" | "project" | "team";
 
+/**
+ * Aviso honesto BILINGÜE (espeja `api_server.capabilities.CapabilityWarning`).
+ * `code` es el identificador estable idioma-neutral (p. ej. el de agente global,
+ * ADR 0054); `es`/`en` son el mismo mensaje en cada idioma soportado. El Hub
+ * renderiza el idioma activo y empareja por `code` (NUNCA por el texto, que
+ * dejaba muerta la rama EN antes del follow-up bilingual-warnings).
+ */
+export interface CapabilityWarning {
+  code: string;
+  es: string;
+  en: string;
+}
+
+/** Código del aviso de agente global (ADR 0054); espeja `WARN_GLOBAL_AGENT`. */
+export const WARN_GLOBAL_AGENT = "global_agent_no_project_context";
+
+/** Texto de un aviso bilingüe en el idioma activo. */
+export function warningText(warning: CapabilityWarning, lang: Lang): string {
+  return lang === "es" ? warning.es : warning.en;
+}
+
 export interface CapabilitiesResponse {
   entity_type: CapabilityEntityType;
   entity_id: string;
@@ -76,7 +97,7 @@ export interface CapabilitiesResponse {
   /** Solo poblada para un agente; `null` para proyecto/equipo. */
   ser: CapabilitySer | null;
   hacer: CapabilityHacer;
-  warnings: string[];
+  warnings: CapabilityWarning[];
 }
 
 // ---------------------------------------------------------------------------
@@ -333,24 +354,19 @@ export function buildSections(caps: CapabilitiesResponse, lang: Lang): HubSectio
 
 /** `true` si entre los warnings del endpoint está el aviso de agente global. */
 export function isGlobalAgentWarning(caps: CapabilitiesResponse): boolean {
-  return (
-    caps.entity_type === "agent" &&
-    caps.warnings.some((w) => w.toLowerCase().includes("agente global"))
-  );
+  return caps.entity_type === "agent" && caps.warnings.some((w) => w.code === WARN_GLOBAL_AGENT);
 }
 
 /**
- * Texto del aviso de agente global para destacarlo en cabecera del Hub. Devuelve
- * `null` si no aplica. Usa el texto del backend si existe (fuente única) y, si
- * no, una redacción bilingüe equivalente.
+ * Texto BILINGÜE del aviso de agente global para destacarlo en cabecera del Hub.
+ * Devuelve `null` si no aplica. Empareja por `code` (fuente única) y renderiza el
+ * idioma activo; si por alguna razón no viaja, cae a una redacción equivalente.
  */
 export function globalAgentNotice(caps: CapabilitiesResponse, lang: Lang): string | null {
-  if (!isGlobalAgentWarning(caps)) return null;
-  const fromBackend = caps.warnings.find((w) => w.toLowerCase().includes("agente global"));
-  if (fromBackend) return fromBackend;
-  return lang === "es"
-    ? "Agente global: no ve conocimiento ni memoria de proyecto en esta vista (en una tarea de proyecto usará el contexto de la tarea, ADR 0054)."
-    : "Global agent: does not see project knowledge or memory in this view (in a project task it uses the task context, ADR 0054).";
+  if (caps.entity_type !== "agent") return null;
+  const warning = caps.warnings.find((w) => w.code === WARN_GLOBAL_AGENT);
+  if (warning) return warningText(warning, lang);
+  return null;
 }
 
 // ---------------------------------------------------------------------------

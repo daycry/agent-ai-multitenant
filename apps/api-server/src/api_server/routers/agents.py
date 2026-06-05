@@ -41,6 +41,7 @@ from api_server.capabilities import (
     CapabilitiesResponse,
     CapabilityRecordar,
     CapabilitySaber,
+    CapabilityWarning,
     agent_global_warning,
     build_ser,
     hacer_for_agent,
@@ -1372,7 +1373,7 @@ async def get_agent_capabilities(
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent not found")
 
-    warnings: list[str] = []
+    warnings: list[CapabilityWarning] = []
 
     # SABER: rol mas stack (si hay proyecto). El nivel rol gana si una KB aparece
     # por ambas vias (orden de merge_kbs).

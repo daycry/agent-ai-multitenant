@@ -216,6 +216,33 @@ def combine_tool_allowlists(
 # ---------------------------------------------------------------------------
 # Effective-tools computation (Plan 06.18 task_06_18_07)
 # ---------------------------------------------------------------------------
+
+#: Códigos estables de los avisos del cálculo efectivo. Son el identificador
+#: idioma-neutral que el contrato bilingüe del Hub (06.17) usa para emparejar y
+#: traducir cada aviso, en lugar de inspeccionar el texto castellano (que era la
+#: rama EN muerta del follow-up bilingual-warnings).
+WARN_TOOL_NOT_WIRED = "tool_not_runtime_wired"
+WARN_SHELL_EXEC_NO_COMMANDS = "shell_exec_no_allowed_commands"
+WARN_EMPTY_EFFECTIVE_IN_MODE = "empty_effective_in_mode"
+
+
+@dataclass(frozen=True)
+class ToolWarning:
+    """Un aviso del cálculo efectivo en forma BILINGÜE estructurada.
+
+    ``code`` es el identificador estable (uno de los ``WARN_*``); ``es``/``en``
+    son el mismo aviso redactado en cada idioma soportado (ES + EN, los únicos
+    de esta versión). El endpoint ``effective-tools`` (06.18) sigue exponiendo
+    ``EffectiveTools.warnings`` como ``list[str]`` en castellano (su contrato no
+    cambia); el Hub de Capacidad (06.17) consume ``warnings_i18n`` para renderizar
+    el idioma activo sin dejar muerta la rama EN.
+    """
+
+    code: str
+    es: str
+    en: str
+
+
 @dataclass(frozen=True)
 class EffectiveTools:
     """The honest "what does the runtime really execute for this agent" view.
@@ -239,15 +266,21 @@ class EffectiveTools:
       * ``shell_exec_effective`` — whether ``shell_exec`` is in ``effective``
         (assigned ∧ allowed_commands non-empty). Surfaced explicitly because the
         cross of ``allowed_commands`` is the operator's most common confusion.
-      * ``warnings`` — human-readable, language-neutral-ish notices: an empty
-        effective set under a mode, an assigned-but-not-runtime-wired tool, and
-        a ``shell_exec`` assigned without ``allowed_commands``.
+      * ``warnings`` — human-readable, Spanish notices: an empty effective set
+        under a mode, an assigned-but-not-runtime-wired tool, and a
+        ``shell_exec`` assigned without ``allowed_commands``. Contrato del
+        endpoint ``effective-tools`` (06.18): NO cambia.
+      * ``warnings_i18n`` — los MISMOS avisos en forma bilingüe estructurada
+        (``ToolWarning`` = ``code`` + ``es`` + ``en``), en el mismo orden que
+        ``warnings``. El Hub de Capacidad (06.17) los consume para renderizar el
+        idioma activo (follow-up bilingual-warnings).
     """
 
     effective: list[str] = field(default_factory=list)
     unrestricted: bool = False
     shell_exec_effective: bool = False
     warnings: list[str] = field(default_factory=list)
+    warnings_i18n: list[ToolWarning] = field(default_factory=list)
 
 
 def compute_effective_tools(
@@ -296,6 +329,7 @@ def compute_effective_tools(
     warning instead — mirroring what the runtime really does.
     """
     warnings: list[str] = []
+    warnings_i18n: list[ToolWarning] = []
 
     if assigned_names is None:
         # No per-agent restriction: backward-compatible 06.15 behaviour. There
@@ -306,6 +340,7 @@ def compute_effective_tools(
             unrestricted=True,
             shell_exec_effective=False,
             warnings=warnings,
+            warnings_i18n=warnings_i18n,
         )
 
     def _wired(name: str) -> bool:
@@ -328,6 +363,19 @@ def compute_effective_tools(
                 f"tool '{name}' asignada pero no ejecutable en el runtime "
                 "(sin executor cableado)"
             )
+            warnings_i18n.append(
+                ToolWarning(
+                    code=WARN_TOOL_NOT_WIRED,
+                    es=(
+                        f"tool '{name}' asignada pero no ejecutable en el runtime "
+                        "(sin executor cableado)"
+                    ),
+                    en=(
+                        f"tool '{name}' is assigned but not executable in the runtime "
+                        "(no wired executor)"
+                    ),
+                )
+            )
 
     # Effective = combined ∩ runtime-wired, minus shell_exec (handled below).
     effective_set = {name for name in combined_set if name != _SHELL_EXEC and _wired(name)}
@@ -343,6 +391,19 @@ def compute_effective_tools(
             "shell_exec asignado pero allowed_commands del proyecto está vacío; "
             "no se ejecutará ningún comando"
         )
+        warnings_i18n.append(
+            ToolWarning(
+                code=WARN_SHELL_EXEC_NO_COMMANDS,
+                es=(
+                    "shell_exec asignado pero allowed_commands del proyecto está vacío; "
+                    "no se ejecutará ningún comando"
+                ),
+                en=(
+                    "shell_exec is assigned but the project's allowed_commands is empty; "
+                    "no command will run"
+                ),
+            )
+        )
 
     # Empty effective set under an explicit mode is a load-bearing warning: the
     # agent will be unable to call any tool in that mode.
@@ -351,17 +412,35 @@ def compute_effective_tools(
             f"set efectivo vacío en el modo '{mode_name}': el agente no podrá "
             "llamar a ninguna tool en este modo"
         )
+        warnings_i18n.append(
+            ToolWarning(
+                code=WARN_EMPTY_EFFECTIVE_IN_MODE,
+                es=(
+                    f"set efectivo vacío en el modo '{mode_name}': el agente no podrá "
+                    "llamar a ninguna tool en este modo"
+                ),
+                en=(
+                    f"empty effective set in mode '{mode_name}': the agent will be unable "
+                    "to call any tool in this mode"
+                ),
+            )
+        )
 
     return EffectiveTools(
         effective=sorted(effective_set),
         unrestricted=False,
         shell_exec_effective=shell_exec_effective,
         warnings=warnings,
+        warnings_i18n=warnings_i18n,
     )
 
 
 __all__ = [
+    "WARN_EMPTY_EFFECTIVE_IN_MODE",
+    "WARN_SHELL_EXEC_NO_COMMANDS",
+    "WARN_TOOL_NOT_WIRED",
     "EffectiveTools",
+    "ToolWarning",
     "combine_tool_allowlists",
     "compute_effective_tools",
     "resolve_agent_tool_names",
