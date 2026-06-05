@@ -38,7 +38,6 @@ y la tabla de NIVELES) vive en
 | ---------------------------------------------------- | ----------------------------------------------------------------------- |
 | [watching-e2e-tests.md](./watching-e2e-tests.md)     | Ver los specs Playwright en directo (headed, slow-mo, UI inspector)     |
 | [run-demo-human-tests.md](./run-demo-human-tests.md) | Ejecutar los scripts demo de tests humanos (Plan 02 + Plan 04.5)        |
-| [demo-webscorpo.md](./demo-webscorpo.md)             | Correr el seed del equipo WebScorpo (CI4) + KB completo y re-indexarlo  |
 | [design-tokens.md](./design-tokens.md)               | Tokens de diseño del frontend                                           |
 | [ui-conventions.md](./ui-conventions.md)             | Design-system del admin-panel: primitivas, componentes, estados, a11y   |
 | [gotchas/](./gotchas/)                               | Trampas conocidas del toolchain (Docker, asyncpg, mypy, OTEL, Windows…) |
