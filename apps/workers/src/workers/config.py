@@ -55,6 +55,19 @@ class Settings(BaseSettings):
         "off agentic-net so agents cannot reach Postgres/Redis/Vault or "
         "the platform services.",
     )
+    agent_internal_api_url: str = Field(
+        default="http://api-server:8000",
+        description="URL INTERNA del api-server que el contenedor agent-runtime "
+        "alcanza para la API interna del agente (``/internal/agent/*``: "
+        "rag-search, memory-recall/store, document-convert, promote-to-kb). El "
+        "worker la inyecta como ``AGENTIC_API_URL`` junto al "
+        "``AGENTIC_INTERNAL_TOKEN`` minteado (ADR 0012, Plan 04.5). Debe ser "
+        "alcanzable desde la red del sandbox (la red del compose), no la URL "
+        "pública. Operator-tunable; default = el hostname del servicio en el "
+        "compose. El token se firma con el ``jwt_secret`` del api-server, así que "
+        "el worker necesita ``API_SERVER_JWT_SECRET`` (mismo secreto que "
+        "api-server) en su entorno para que el token valide.",
+    )
     agent_network_internal: bool = Field(
         default=True,
         description="Create the agent network as `internal` (no egress to "

@@ -25,6 +25,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+from api_server.auth.internal_agent import mint_agent_token
 from api_server.db.approval_repo import request_approval_if_needed
 from api_server.db.domain import Project, Task
 from api_server.db.execution_repo import (
@@ -256,6 +257,50 @@ def _agent_spec(
     return spec
 
 
+def _build_runtime_env(
+    request: ExecutionRequest,
+    approval_policy: dict[str, Any] | None,
+    *,
+    agent_internal_api_url: str,
+) -> dict[str, str]:
+    """El env del contenedor `agent-runtime` para una ejecución (función PURA).
+
+    Sin docker, sin red: toma la `ExecutionRequest` (más la `approval_policy`
+    resuelta del proyecto) y devuelve el dict de variables de entorno que el
+    `ContainerSpec` lleva. Extraída de `conduct_execution` para poder testearla
+    en aislamiento (Plan 06.17 / followup-worker-internal-token).
+
+    Siempre incluye ``AGENT_TASK_SPEC``. Cuando la tarea tiene un agente
+    asignado, mintea además ``AGENTIC_INTERNAL_TOKEN`` (firmado con el
+    `jwt_secret` del api-server, vía :func:`mint_agent_token`) y publica
+    ``AGENTIC_API_URL`` para que el runtime active las familias de
+    conocimiento/memoria (rag-search, memory-recall/store, document-convert,
+    promote-to-kb) — la costura de la API interna del agente (ADR 0012,
+    Plan 04.5). El token lleva el contexto de la tarea (claim ``task`` =
+    `request.task_id`) para que los endpoints internos resuelvan el project_id
+    EFECTIVO de un agente global (ADR 0054).
+
+    RIESGO operativo: esto ACTIVA llamadas HTTP internas del runtime hacia el
+    api-server que antes estaban dormidas. Si la tarea NO tiene agente asignado
+    NO se mintea token — sin token el runtime salta esas familias con gracia
+    (backward-compat, el comportamiento actual). El runtime también degrada con
+    gracia si el token expira o el api-server no responde.
+    """
+    env: dict[str, str] = {
+        "AGENT_TASK_SPEC": json.dumps(_agent_spec(request, approval_policy)),
+    }
+    # Sin agente asignado no hay sujeto para el token: lo dejamos fuera y el
+    # runtime mantiene su comportamiento sin API interna (backward-compat).
+    if request.agent_id:
+        env["AGENTIC_INTERNAL_TOKEN"] = mint_agent_token(
+            agent_id=UUID(request.agent_id),
+            tenant_id=UUID(request.tenant_id),
+            task_id=UUID(request.task_id),
+        )
+        env["AGENTIC_API_URL"] = agent_internal_api_url
+    return env
+
+
 def _resolve_tool_spec_images(
     tool_specs: list[dict[str, Any]], project_default_runtime: str | None
 ) -> list[dict[str, Any]]:
@@ -436,7 +481,11 @@ async def conduct_execution(  # noqa: PLR0915 - tramos lineales (seed/run/finali
     drainer = asyncio.create_task(drain())
     container_spec = ContainerSpec(
         image=settings.agent_runtime_image,
-        env={"AGENT_TASK_SPEC": json.dumps(_agent_spec(request, approval_policy))},
+        env=_build_runtime_env(
+            request,
+            approval_policy,
+            agent_internal_api_url=settings.agent_internal_api_url,
+        ),
         labels={"com.agentic-platform.execution-id": exec_id},
     )
     runner = AgentContainerRunner(settings)
