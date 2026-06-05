@@ -1,0 +1,233 @@
+"use client";
+
+/**
+ * Asistente personal — chat (Plan 10 task assistant-ui).
+ *
+ * El Tenant Admin pregunta al asistente y recibe una respuesta grounded en
+ * las herramientas de solo lectura cross-proyecto (el backend las ejecuta y
+ * devuelve `tools_called` + `rounds`). Sólo POST /assistant/chat — no se
+ * inventa ningún endpoint.
+ *
+ * Gating: el asistente es Tenant-Admin-only y está gated por el toggle
+ * `personal_assistant_enabled`. El BACKEND devuelve 403; la UI lo refleja
+ * mostrando un estado "sin acceso" y NO renderizando el input (la e2e
+ * comprueba `assistant-input` con count 0 para el caso member/toggle off).
+ */
+
+import { useRef, useState } from "react";
+import Link from "next/link";
+import { useMutation } from "@tanstack/react-query";
+import { Bot, Send, Settings } from "lucide-react";
+
+import { PageHeader } from "@/components/layout/page-header";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Spinner } from "@/components/ui/spinner";
+import { ApiError, apiFetch } from "@/lib/api";
+import { ASSISTANT_LIMITS, assistantToolLabel, type AssistantChatResponse } from "@/lib/assistant";
+import { cn } from "@/lib/utils";
+import { useCurrentUser } from "@/lib/use-current-user";
+
+interface ChatTurn {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  toolsCalled?: string[];
+  rounds?: number;
+}
+
+let turnSeq = 0;
+const nextId = () => `turn-${(turnSeq += 1)}`;
+
+export default function AssistantChatPage() {
+  const { isTenantAdmin, isLoading: userLoading } = useCurrentUser();
+  const [draft, setDraft] = useState("");
+  const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const [forbidden, setForbidden] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const mutation = useMutation<AssistantChatResponse, ApiError, string>({
+    mutationFn: (message) =>
+      apiFetch<AssistantChatResponse>("/assistant/chat", {
+        method: "POST",
+        body: { message },
+      }),
+    onSuccess: (data) => {
+      setTurns((prev) => [
+        ...prev,
+        {
+          id: nextId(),
+          role: "assistant",
+          content: data.answer,
+          toolsCalled: data.tools_called,
+          rounds: data.rounds,
+        },
+      ]);
+    },
+    onError: (error) => {
+      // A 403 here means the toggle was flipped off (or the role changed)
+      // after load: reflect the backend's gate rather than showing a chat
+      // surface we know is denied.
+      if (error.status === 403) setForbidden(true);
+    },
+  });
+
+  // While we don't yet know the role, render nothing interactive — never
+  // flash the chat input before confirming the user is a tenant admin.
+  if (userLoading) {
+    return (
+      <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
+        <p className="text-muted-foreground flex items-center gap-2 text-sm">
+          <Spinner />
+          Cargando…
+        </p>
+      </div>
+    );
+  }
+
+  // Member / toggle off -> no chat input at all (e2e: count 0).
+  if (!isTenantAdmin || forbidden) {
+    return <AssistantNoAccess />;
+  }
+
+  const trimmed = draft.trim();
+  const canSend = trimmed.length > 0 && !mutation.isPending;
+
+  const submit = () => {
+    if (!canSend) return;
+    const message = trimmed.slice(0, ASSISTANT_LIMITS.message.max);
+    setTurns((prev) => [...prev, { id: nextId(), role: "user", content: message }]);
+    setDraft("");
+    mutation.mutate(message);
+    inputRef.current?.focus();
+  };
+
+  return (
+    <div className="mx-auto flex w-full max-w-3xl flex-col px-4 py-8 sm:px-6 lg:px-8">
+      <PageHeader
+        icon={<Bot className="h-6 w-6 sm:h-7 sm:w-7" />}
+        title="Asistente personal"
+        description="Pregunta por el estado global de tu tenant: proyectos, planes, actividad, presupuesto y carga de agentes."
+        actions={
+          <Button variant="outline" asChild>
+            <Link href="/admin/assistant/settings">
+              <Settings className="mr-2 h-4 w-4" />
+              Identidad
+            </Link>
+          </Button>
+        }
+        data-testid="assistant-chat-header"
+      />
+
+      <Card className="mt-6">
+        <CardContent className="flex flex-col gap-4 pt-5">
+          <div
+            data-testid="assistant-chat"
+            className="flex min-h-[16rem] flex-col gap-3"
+            aria-live="polite"
+          >
+            {turns.length === 0 && !mutation.isPending ? (
+              <EmptyState
+                icon={Bot}
+                title="Empieza una conversación"
+                description="Por ejemplo: «¿Qué planes tengo pendientes de aprobación?»"
+              />
+            ) : (
+              turns.map((turn) => <ChatBubble key={turn.id} turn={turn} />)
+            )}
+            {mutation.isPending ? (
+              <p
+                className="text-muted-foreground flex items-center gap-2 text-sm"
+                data-testid="assistant-thinking"
+              >
+                <Spinner />
+                Pensando…
+              </p>
+            ) : null}
+          </div>
+
+          {mutation.isError && !forbidden ? (
+            <p className="text-destructive text-sm" data-testid="assistant-chat-error">
+              {mutation.error instanceof ApiError ? mutation.error.body : String(mutation.error)}
+            </p>
+          ) : null}
+
+          <form
+            className="flex items-end gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submit();
+            }}
+          >
+            <input
+              ref={inputRef}
+              data-testid="assistant-input"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              maxLength={ASSISTANT_LIMITS.message.max}
+              placeholder="Escribe tu pregunta…"
+              className="border-input bg-background placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background flex h-10 w-full rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+            />
+            <Button type="submit" data-testid="assistant-send" disabled={!canSend}>
+              <Send className="mr-2 h-4 w-4" />
+              Enviar
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ChatBubble({ turn }: { turn: ChatTurn }) {
+  const isUser = turn.role === "user";
+  return (
+    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
+      <div
+        data-testid={isUser ? "assistant-question" : "assistant-answer"}
+        className={cn(
+          "max-w-[85%] rounded-lg px-3 py-2 text-sm",
+          isUser ? "bg-primary text-primary-foreground" : "bg-muted text-foreground border",
+        )}
+      >
+        <p className="whitespace-pre-wrap">{turn.content}</p>
+        {!isUser && turn.toolsCalled && turn.toolsCalled.length > 0 ? (
+          <div className="mt-2 flex flex-wrap gap-1" data-testid="assistant-answer-tools">
+            {turn.toolsCalled.map((tool) => (
+              <span
+                key={tool}
+                className="bg-background text-muted-foreground rounded border px-1.5 py-0.5 text-[10px]"
+              >
+                {assistantToolLabel(tool)}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {!isUser && typeof turn.rounds === "number" ? (
+          <p className="text-muted-foreground mt-1 text-[10px] uppercase tracking-wide">
+            {turn.rounds} ronda{turn.rounds === 1 ? "" : "s"}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function AssistantNoAccess() {
+  return (
+    <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
+      <PageHeader
+        icon={<Bot className="h-6 w-6 sm:h-7 sm:w-7" />}
+        title="Asistente personal"
+        data-testid="assistant-chat-header"
+      />
+      <EmptyState
+        data-testid="assistant-no-access"
+        icon={Bot}
+        title="Asistente no disponible"
+        description="El asistente personal es exclusivo para administradores del tenant y debe estar habilitado para tu organización."
+      />
+    </div>
+  );
+}

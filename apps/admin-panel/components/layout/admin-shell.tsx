@@ -85,6 +85,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/admin/board", label: "Tablero", Icon: LayoutGrid },
       { href: "/admin/approvals", label: "Aprobaciones", Icon: BellRing },
       { href: "/admin/notifications/inbox", label: "Bandeja", Icon: Inbox },
+      { href: "/admin/assistant", label: "Asistente", Icon: Bot, adminOnly: true },
     ],
   },
   {
