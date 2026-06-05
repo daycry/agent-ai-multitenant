@@ -12,11 +12,16 @@
  * `personal_assistant_enabled`. El BACKEND devuelve 403; la UI lo refleja
  * mostrando un estado "sin acceso" y NO renderizando el input (la e2e
  * comprueba `assistant-input` con count 0 para el caso member/toggle off).
+ *
+ * Si quien mira es un Tenant Admin pero el toggle está apagado, el estado
+ * "deshabilitado" le indica que puede habilitarlo en Ajustes (con enlace a
+ * /admin/assistant/settings). Para un member el mensaje sigue siendo el de
+ * "exclusivo para administradores".
  */
 
 import { useRef, useState } from "react";
 import Link from "next/link";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Bot, Send, Settings } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
@@ -25,7 +30,13 @@ import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
-import { ASSISTANT_LIMITS, assistantToolLabel, type AssistantChatResponse } from "@/lib/assistant";
+import {
+  ASSISTANT_LIMITS,
+  assistantToolLabel,
+  getAssistantEnabled,
+  type AssistantChatResponse,
+  type AssistantToggleState,
+} from "@/lib/assistant";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/use-current-user";
 
@@ -46,6 +57,19 @@ export default function AssistantChatPage() {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [forbidden, setForbidden] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Read the on/off toggle (tenant_admin-only, NOT toggle-gated) so a Tenant
+  // Admin landing here with the assistant disabled gets a helpful "enable it
+  // in Ajustes" message instead of a generic dead end. A member's toggle GET
+  // 403s; we treat that the same as "no access".
+  const toggleQuery = useQuery<AssistantToggleState, ApiError>({
+    queryKey: ["assistant-enabled"],
+    queryFn: getAssistantEnabled,
+    enabled: isTenantAdmin,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const assistantDisabled = toggleQuery.data ? !toggleQuery.data.enabled : false;
 
   const mutation = useMutation<AssistantChatResponse, ApiError, string>({
     mutationFn: (message) =>
@@ -73,9 +97,10 @@ export default function AssistantChatPage() {
     },
   });
 
-  // While we don't yet know the role, render nothing interactive — never
-  // flash the chat input before confirming the user is a tenant admin.
-  if (userLoading) {
+  // While we don't yet know the role (or the toggle state for an admin),
+  // render nothing interactive — never flash the chat input before we know
+  // the user may use it.
+  if (userLoading || (isTenantAdmin && toggleQuery.isLoading)) {
     return (
       <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
         <p className="text-muted-foreground flex items-center gap-2 text-sm">
@@ -86,9 +111,11 @@ export default function AssistantChatPage() {
     );
   }
 
-  // Member / toggle off -> no chat input at all (e2e: count 0).
-  if (!isTenantAdmin || forbidden) {
-    return <AssistantNoAccess />;
+  // Member / toggle off / 403 -> no chat input at all (e2e: count 0). An
+  // admin whose tenant has the assistant disabled gets the "enable it in
+  // Ajustes" variant; a member gets the plain "admins only" message.
+  if (!isTenantAdmin || forbidden || assistantDisabled) {
+    return <AssistantNoAccess canEnable={isTenantAdmin && (assistantDisabled || forbidden)} />;
   }
 
   const trimmed = draft.trim();
@@ -215,7 +242,7 @@ function ChatBubble({ turn }: { turn: ChatTurn }) {
   );
 }
 
-function AssistantNoAccess() {
+function AssistantNoAccess({ canEnable = false }: { canEnable?: boolean }) {
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
@@ -227,7 +254,21 @@ function AssistantNoAccess() {
         data-testid="assistant-no-access"
         icon={Bot}
         title="Asistente no disponible"
-        description="El asistente personal es exclusivo para administradores del tenant y debe estar habilitado para tu organización."
+        description={
+          canEnable
+            ? "El asistente está deshabilitado para tu organización. Como administrador del tenant puedes habilitarlo en Ajustes."
+            : "El asistente personal es exclusivo para administradores del tenant y debe estar habilitado para tu organización."
+        }
+        action={
+          canEnable ? (
+            <Button asChild data-testid="assistant-enable-cta">
+              <Link href="/admin/assistant/settings">
+                <Settings className="mr-2 h-4 w-4" />
+                Ir a Ajustes
+              </Link>
+            </Button>
+          ) : undefined
+        }
       />
     </div>
   );

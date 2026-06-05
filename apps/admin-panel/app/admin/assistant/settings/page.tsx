@@ -7,11 +7,16 @@
  * junto con avatar, tono, idioma (es/en), un override del system prompt y la
  * lista de herramientas de solo lectura que el asistente puede usar.
  *
- * Carga con GET /assistant/identity, guarda con PUT /assistant/identity
- * (TanStack Query). El asistente es Tenant-Admin-only y está gated por el
- * toggle `personal_assistant_enabled`: el BACKEND devuelve 403 si el usuario
- * no es admin o el toggle está apagado. La UI sólo lo REFLEJA — el gate real
- * vive en el servidor.
+ * Arriba del todo hay un toggle "Asistente habilitado" que un Tenant Admin
+ * usa para encender/apagar el asistente de SU tenant (GET/PUT
+ * /tenant-settings/personal-assistant — gated SÓLO por tenant_admin, así que
+ * sí se puede encender). Cuando está apagado, el resto del formulario de
+ * identidad se muestra deshabilitado con un texto claro.
+ *
+ * La identidad se carga con GET /assistant/identity y se guarda con PUT
+ * /assistant/identity (TanStack Query). Esos endpoints SIGUEN gated por el
+ * toggle: el BACKEND devuelve 403 si el usuario no es admin o el toggle está
+ * apagado. La UI sólo lo REFLEJA — el gate real vive en el servidor.
  */
 
 import { useEffect, useState } from "react";
@@ -32,12 +37,15 @@ import { ApiError, apiFetch } from "@/lib/api";
 import {
   ASSISTANT_LIMITS,
   ASSISTANT_TOOL_CATALOGUE,
+  getAssistantEnabled,
   identityToFormValues,
+  setAssistantEnabled,
   toIdentityUpdate,
   validateAssistantIdentity,
   type AssistantIdentity,
   type AssistantIdentityFormErrors,
   type AssistantIdentityFormValues,
+  type AssistantToggleState,
 } from "@/lib/assistant";
 import { useCurrentUser } from "@/lib/use-current-user";
 
@@ -58,13 +66,34 @@ export default function AssistantSettingsPage() {
   const [seeded, setSeeded] = useState(false);
   const [touched, setTouched] = useState(false);
 
-  // Only attempt the GET when we believe the user is a tenant admin —
-  // otherwise we'd just provoke a 403 we already expect. The query itself
-  // surfaces a real 403 (e.g. toggle off) via `forbidden` below.
+  // The on/off toggle. Gated SOLELY by tenant_admin server-side, so a
+  // Tenant Admin can always read it (and flip it) regardless of the toggle
+  // state itself — this is what lets the feature be turned on at all.
+  const toggleQuery = useQuery<AssistantToggleState, ApiError>({
+    queryKey: ["assistant-enabled"],
+    queryFn: getAssistantEnabled,
+    enabled: isTenantAdmin,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const assistantEnabled = toggleQuery.data?.enabled ?? false;
+
+  const toggleMutation = useMutation<AssistantToggleState, ApiError, boolean>({
+    mutationFn: (next) => setAssistantEnabled(next),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["assistant-enabled"], data);
+      // Turning it on/off changes the assistant gate; refresh identity.
+      void queryClient.invalidateQueries({ queryKey: ["assistant-identity"] });
+    },
+  });
+
+  // The identity GET is itself toggle-gated server-side (403 when off), so we
+  // only attempt it once we know the toggle is ON and the user is admin —
+  // otherwise we'd just provoke a 403 we already expect.
   const identityQuery = useQuery<AssistantIdentity, ApiError>({
     queryKey: ["assistant-identity"],
     queryFn: () => apiFetch<AssistantIdentity>("/assistant/identity"),
-    enabled: isTenantAdmin,
+    enabled: isTenantAdmin && assistantEnabled,
     refetchOnWindowFocus: false,
     retry: false,
   });
@@ -88,12 +117,15 @@ export default function AssistantSettingsPage() {
     },
   });
 
+  // Member / not-an-admin -> no access at all. The toggle endpoint is
+  // tenant_admin-only, so a 403 THERE also means "not an admin". The
+  // identity query's 403 is the toggle being OFF — that is NOT a no-access
+  // case: an admin must still see the toggle to turn it on.
   const forbidden =
-    !userLoading &&
-    (!isTenantAdmin || (identityQuery.isError && identityQuery.error?.status === 403));
+    !userLoading && (!isTenantAdmin || (toggleQuery.isError && toggleQuery.error?.status === 403));
 
-  // --- No-access / disabled state (member or toggle off). No form -> no
-  // assistant-input/assistant-name in the DOM (the e2e relies on count 0). ---
+  // --- No-access state (member). No identity form -> no assistant-name in the
+  // DOM, matching the member case the e2e relies on. ---
   if (forbidden) {
     return <AssistantNoAccess />;
   }
@@ -133,15 +165,60 @@ export default function AssistantSettingsPage() {
         data-testid="assistant-settings-header"
       />
 
+      {/* On/off toggle — el control que enciende el asistente del tenant. */}
+      <Card className="mt-6">
+        <CardContent className="pt-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 space-y-1">
+              <Label htmlFor="assistant-enabled-toggle" className="text-base">
+                Asistente habilitado
+              </Label>
+              <p className="text-muted-foreground text-sm">
+                Activa el asistente personal para tu organización. Mientras esté desactivado, nadie
+                de tu tenant podrá usarlo y esta configuración permanece bloqueada.
+              </p>
+            </div>
+            <label
+              htmlFor="assistant-enabled-toggle"
+              className="flex shrink-0 cursor-pointer items-center gap-2"
+            >
+              <span className="mt-0.5">
+                <Checkbox
+                  id="assistant-enabled-toggle"
+                  data-testid="assistant-enabled-toggle"
+                  checked={assistantEnabled}
+                  disabled={toggleQuery.isLoading || toggleMutation.isPending}
+                  onChange={(e) => toggleMutation.mutate(e.target.checked)}
+                />
+              </span>
+              <span className="text-sm font-medium">
+                {assistantEnabled ? "Activado" : "Desactivado"}
+              </span>
+            </label>
+          </div>
+          {toggleMutation.isError ? (
+            <p className="text-destructive mt-3 text-sm" data-testid="assistant-enabled-error">
+              {toggleMutation.error instanceof ApiError
+                ? toggleMutation.error.body
+                : String(toggleMutation.error)}
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
+
       <Card className="mt-6">
         <CardHeader>
           <CardTitle>Configuración</CardTitle>
         </CardHeader>
         <CardContent>
-          {userLoading || identityQuery.isLoading ? (
+          {userLoading || toggleQuery.isLoading || identityQuery.isLoading ? (
             <p className="text-muted-foreground flex items-center gap-2 text-sm">
               <Spinner />
               Cargando identidad…
+            </p>
+          ) : !assistantEnabled ? (
+            <p className="text-muted-foreground text-sm" data-testid="assistant-identity-locked">
+              Habilita el asistente para configurarlo.
             </p>
           ) : (
             <form

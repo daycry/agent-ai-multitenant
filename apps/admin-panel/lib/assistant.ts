@@ -11,8 +11,12 @@
  *   - pure validation for the identity form, factored out so a vitest can
  *     exercise it without rendering React.
  *
- * Kept framework-free on purpose: no React, no fetch — just data + functions.
+ * The only fetch helpers here are the assistant on/off toggle (Tenant-Admin
+ * only, gated SOLELY by tenant_admin so it can actually be turned on). The
+ * rest stays framework-free: pure data + functions.
  */
+
+import { apiFetch } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // Endpoint contract (the three endpoints in routers/assistant.py)
@@ -224,4 +228,31 @@ export function identityToFormValues(identity: AssistantIdentity): AssistantIden
     systemPrompt: identity.system_prompt_override ?? "",
     enabledTools: [...identity.enabled_tools],
   };
+}
+
+// ---------------------------------------------------------------------------
+// Assistant on/off toggle (GET/PUT /tenant-settings/personal-assistant)
+//
+// This pair is the ONLY way a Tenant Admin enables the assistant for their
+// tenant. The backend gates it SOLELY by `require_tenant_admin` (never by the
+// assistant gate that requires the toggle ON), so it can actually be flipped
+// on. The `/assistant/*` endpoints stay toggle-gated; this one does not.
+// ---------------------------------------------------------------------------
+
+/** GET/PUT /tenant-settings/personal-assistant payload shape. */
+export interface AssistantToggleState {
+  enabled: boolean;
+}
+
+/** Read the per-tenant assistant on/off toggle. Tenant-Admin-only (403 else). */
+export function getAssistantEnabled(): Promise<AssistantToggleState> {
+  return apiFetch<AssistantToggleState>("/tenant-settings/personal-assistant");
+}
+
+/** Flip the per-tenant assistant on/off toggle. Tenant-Admin-only (403 else). */
+export function setAssistantEnabled(enabled: boolean): Promise<AssistantToggleState> {
+  return apiFetch<AssistantToggleState>("/tenant-settings/personal-assistant", {
+    method: "PUT",
+    body: { enabled },
+  });
 }
