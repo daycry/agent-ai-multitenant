@@ -163,6 +163,7 @@ export default function AssistantChatPage() {
             <input
               ref={inputRef}
               data-testid="assistant-input"
+              aria-label="Mensaje para el asistente"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               maxLength={ASSISTANT_LIMITS.message.max}
