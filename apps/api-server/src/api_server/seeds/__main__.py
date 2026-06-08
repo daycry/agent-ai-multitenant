@@ -10,6 +10,12 @@ import asyncio
 
 import structlog
 
+# Import the ORM models aggregator FIRST so every mapper is registered before
+# any session/flush triggers mapper configuration. Without it a standalone
+# `python -m api_server.seeds` trips on an unresolved cross-module FK (e.g.
+# documents -> users) because only a subset of model modules got imported.
+# Mirrors migrations/env.py, which imports this for the same reason.
+from api_server.db import models as _models  # noqa: F401
 from api_server.db.session import get_admin_sessionmaker
 from api_server.logging import configure_logging
 from api_server.marketplace.seed import seed_marketplace_listings
