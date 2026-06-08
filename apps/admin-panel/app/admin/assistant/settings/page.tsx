@@ -401,7 +401,8 @@ export default function AssistantSettingsPage() {
       </Card>
 
       {/* Modelo LLM del asistente (Tenant Admin) — override que hereda del
-          default de plataforma (ADR 0053). */}
+          default de plataforma (ADR 0053). Los modelos disponibles se
+          sincronizan desde "Proveedores LLM" (System Admin). */}
       <AssistantModelCard enabled={assistantEnabled} />
 
       {/* Modelo por defecto de la plataforma — solo System Admin. */}

@@ -49,7 +49,9 @@ function errorText(error: unknown): string {
   return String(error);
 }
 
-/** Shared provider + model selects. ``providerId === ""`` means "none picked". */
+/** Shared provider + model selects. ``providerId === ""`` means "none picked".
+ * The model list comes from the provider's catalogue + synced models; a System
+ * Admin populates it from "Proveedores LLM" → "Sincronizar modelos". */
 function ProviderModelSelects({
   idPrefix,
   providers,
@@ -100,7 +102,7 @@ function ProviderModelSelects({
             {!providerId
               ? "— Elige primero un proveedor —"
               : models.length === 0
-                ? "— Sin modelos catalogados —"
+                ? "— Sin modelos (sincronízalos en Proveedores LLM) —"
                 : "— Selecciona un modelo —"}
           </option>
           {models.map((m) => (
@@ -319,7 +321,6 @@ export function PlatformDefaultModelCard() {
       saveMutation.reset();
     },
   });
-
   const current = currentQuery.data;
   const busy = saveMutation.isPending || clearMutation.isPending;
   const hasDefault = Boolean(current?.provider_id);

@@ -84,11 +84,13 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             admin_b,
             "tenant_admin",
         )
-        # One active provider + one current price (model 'llama3.1').
+        # One active provider with two SYNCED models in config.models (as if a
+        # prior /sync-models ran) + one current price (catalogued 'llama3.1').
         await conn.execute(
-            "INSERT INTO llm_providers (id, kind, display_name, base_url, is_active)"
-            " VALUES ($1, 'ollama', 'Ollama local', 'http://ollama:11434/v1', true)",
+            "INSERT INTO llm_providers (id, kind, display_name, base_url, is_active, config)"
+            " VALUES ($1, 'ollama', 'Ollama local', 'http://ollama:11434/v1', true, $2::jsonb)",
             provider_id,
+            '{"models": ["glm-5.1", "gemma3:4b"]}',
         )
         await conn.execute(
             "INSERT INTO model_prices"
@@ -248,7 +250,31 @@ async def test_model_options_lists_active_provider_and_models(
     assert len(providers) == 1
     assert providers[0]["provider_id"] == str(seeded["provider_id"])
     assert providers[0]["kind"] == "ollama"
-    assert "llama3.1" in providers[0]["models"]
+    models = providers[0]["models"]
+    # Catalogue model + the two synced models (config.models) all appear.
+    assert "llama3.1" in models
+    assert "glm-5.1" in models
+    assert "gemma3:4b" in models
+
+
+@pytest.mark.asyncio
+async def test_put_model_accepts_a_synced_non_catalogued_model(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """A model the provider synced into config.models (but absent from the
+    price catalogue) is a valid selection."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint(seeded["admin_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with _client(configured_app) as client:
+        resp = await client.put(
+            "/assistant/model",
+            json={"provider_id": str(seeded["provider_id"]), "model_id": "glm-5.1"},
+            headers=headers,
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["model_id"] == "glm-5.1"
+    assert resp.json()["source"] == "tenant_override"
 
 
 # ===========================================================================
@@ -326,6 +352,40 @@ async def test_default_model_put_requires_system_admin(
 
 
 # ===========================================================================
+# Sync models endpoint (System Admin)
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_sync_models_requires_system_admin(configured_app, migrations_pg_dsn: str) -> None:
+    """A Tenant Admin cannot sync a provider's models."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint(seeded["admin_a"], seeded["tenant_a"])
+    async with _client(configured_app) as client:
+        resp = await client.post(
+            f"/admin/llm-providers/{seeded['provider_id']}/sync-models",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.asyncio
+async def test_sync_models_degrades_gracefully_when_unreachable(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """The seeded provider points at an unreachable host, so discovery finds
+    nothing — the endpoint returns 200 with count 0 (no crash) and leaves the
+    existing config.models untouched."""
+    seeded = await _seed(migrations_pg_dsn)
+    sys_token = await _mint(seeded["sysadmin"], None, system=True)
+    async with _client(configured_app) as client:
+        resp = await client.post(
+            f"/admin/llm-providers/{seeded['provider_id']}/sync-models",
+            headers={"Authorization": f"Bearer {sys_token}"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["count"] == 0
+
+
+# ===========================================================================
 # Override wins over default; cross-tenant isolation
 # ===========================================================================
 @pytest.mark.cross_tenant
@@ -372,6 +432,37 @@ async def test_model_endpoint_member_is_403(configured_app, migrations_pg_dsn: s
     async with _client(configured_app) as client:
         resp = await client.get("/assistant/model", headers=headers)
     assert resp.status_code == 403, resp.text
+
+
+def _install_raising_model(app, exc: Exception) -> None:
+    """Override get_assistant_model with a model whose ``decide`` raises
+    ``exc`` — simulates a provider call failing (e.g. Ollama 401)."""
+    from api_server.routers.assistant import get_assistant_model
+
+    class _RaisingModel:
+        async def decide(self, state):
+            raise exc
+
+    app.dependency_overrides[get_assistant_model] = lambda: _RaisingModel()
+
+
+@pytest.mark.asyncio
+async def test_chat_provider_auth_error_is_502_not_500(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """A provider auth failure must surface as a handled 502 (which carries
+    CORS headers and a helpful message) — NOT an unhandled 500 (which the
+    browser sees as an opaque 'Failed to fetch')."""
+    from shared_llm.exceptions import AuthError
+
+    seeded = await _seed(migrations_pg_dsn)
+    _install_raising_model(configured_app, AuthError("ollama: auth failed (401) unauthorized"))
+    token = await _mint(seeded["admin_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with _client(configured_app) as client:
+        resp = await client.post("/assistant/chat", json={"message": "hola"}, headers=headers)
+    assert resp.status_code == 502, resp.text
+    assert "auth" in resp.json()["detail"].lower()
 
 
 @pytest.mark.asyncio

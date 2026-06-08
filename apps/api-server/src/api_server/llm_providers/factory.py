@@ -27,6 +27,7 @@ as their default model and the per-call ``model`` overrides it.
 
 from __future__ import annotations
 
+import contextlib
 from uuid import UUID
 
 from shared_llm.base import LLMProvider
@@ -170,4 +171,39 @@ async def build_llm_provider(
     return build_provider_from_kind(row.kind, base_url=base_url, secret=secret, model=model)
 
 
-__all__ = ["build_llm_provider", "build_provider_from_kind"]
+async def list_provider_models(
+    admin_session: AsyncSession,
+    *,
+    provider_id: UUID,
+    vault: LLMProviderVaultStore | None,
+) -> list[str]:
+    """Live model ids the provider actually serves, or ``[]``.
+
+    Builds the provider client and calls its ``list_models()`` (the
+    OpenAI-compatible ``/v1/models`` endpoint — Ollama supports it). Returns
+    ``[]`` when the provider has no listing capability, cannot be built
+    (missing creds / optional SDK), or the call errors — discovery is
+    best-effort, so a transient failure degrades to "no live models" rather
+    than breaking the config screen. The client is always closed.
+    """
+    client = await build_llm_provider(admin_session, provider_id=provider_id, model="", vault=vault)
+    if client is None:
+        return []
+    lister = getattr(client, "list_models", None)
+    try:
+        if lister is None:
+            return []
+        return [str(m) for m in await lister()]
+    except Exception:
+        # Best-effort discovery: any error (no listing API, auth, network) maps
+        # to "no live models" so the config screen never breaks.
+        return []
+    finally:
+        aclose = getattr(client, "aclose", None)
+        if aclose is not None:
+            # Closing must never mask the result.
+            with contextlib.suppress(Exception):
+                await aclose()
+
+
+__all__ = ["build_llm_provider", "build_provider_from_kind", "list_provider_models"]

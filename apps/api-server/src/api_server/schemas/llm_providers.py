@@ -201,6 +201,20 @@ class LLMProviderTestResponse(BaseModel):
     detail: str
 
 
+class LLMProviderModelsSyncResponse(BaseModel):
+    """Result of ``POST /admin/llm-providers/{id}/sync-models``.
+
+    ``models`` is the model ids discovered from the provider's ``/v1/models``
+    and persisted on ``config.models``; ``count`` is their number. An empty
+    list means nothing was discovered (no listing API / call failed) and the
+    previously-stored list was left untouched."""
+
+    model_config = _BASE_CONFIG
+
+    models: list[str]
+    count: int
+
+
 # ---------------------------------------------------------------------------
 # Shared per-kind validation + credential extraction.
 # ---------------------------------------------------------------------------
@@ -254,6 +268,7 @@ def _credential_fields(
 
 __all__ = [
     "LLMProviderCreateRequest",
+    "LLMProviderModelsSyncResponse",
     "LLMProviderResponse",
     "LLMProviderTestResponse",
     "LLMProviderUpdateRequest",

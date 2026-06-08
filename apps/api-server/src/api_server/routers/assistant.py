@@ -29,6 +29,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from shared_llm.exceptions import AuthError, LLMError, RateLimitError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,10 +44,11 @@ from api_server.assistant.model_config import (
     get_platform_default_model,
     get_tenant_model_override,
     is_valid_selection,
-    list_catalog_models_for_provider,
+    list_available_models_for_provider,
     resolve_assistant_model,
     set_platform_default_model,
     set_tenant_model_override,
+    to_provider_model_name,
 )
 from api_server.assistant.tools import AssistantToolContext
 from api_server.auth.deps import (
@@ -141,10 +143,13 @@ async def get_assistant_model(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="no LLM model configured for the personal assistant",
             )
+        # The catalog id can be LiteLLM-keyed (e.g. ``ollama/llama3.1``); the
+        # provider API wants the bare model name.
+        api_model = to_provider_model_name(resolved.provider_kind, resolved.model_id)
         provider = await build_llm_provider(
             admin_session,
             provider_id=resolved.provider_id,
-            model=resolved.model_id,
+            model=api_model,
             vault=vault,
         )
     if provider is None:
@@ -152,7 +157,7 @@ async def get_assistant_model(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="the configured LLM provider is unavailable",
         )
-    return LLMAssistantModel(provider=provider, model=resolved.model_id)
+    return LLMAssistantModel(provider=provider, model=api_model)
 
 
 # ---------------------------------------------------------------------------
@@ -172,13 +177,36 @@ async def assistant_chat(
         tenant_id=tenant_id,
         user_id=principal.user_id,
     )
-    result = await run_assistant_turn(
-        model,
-        system_prompt=identity.system_prompt(),
-        enabled_tools=identity.effective_tools(),
-        tool_ctx=tool_ctx,
-        chat_history=[{"role": "user", "content": payload.message}],
-    )
+    try:
+        result = await run_assistant_turn(
+            model,
+            system_prompt=identity.system_prompt(),
+            enabled_tools=identity.effective_tools(),
+            tool_ctx=tool_ctx,
+            chat_history=[{"role": "user", "content": payload.message}],
+        )
+    except AuthError as exc:
+        # Bad/expired provider credential — most often a misconfigured provider
+        # (e.g. an Ollama Cloud endpoint with no API key). A handled 502 flows
+        # back through the CORS middleware (an UNHANDLED 500 would not, and the
+        # browser would see an opaque "Failed to fetch" instead of this hint).
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "el proveedor LLM rechazó las credenciales (auth); revisa la "
+                f"credencial del proveedor o elige otro modelo. Detalle: {exc}"
+            ),
+        ) from exc
+    except RateLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"el proveedor LLM está limitando las peticiones: {exc}",
+        ) from exc
+    except LLMError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"el proveedor LLM del asistente falló: {exc}",
+        ) from exc
     return AssistantChatResponse(
         answer=result.content,
         tools_called=list(result.tools_called),
@@ -232,14 +260,15 @@ def _parse_selection(provider_id: str | None, model_id: str | None) -> Assistant
 async def _validate_selection_or_422(
     admin_session: AsyncSession, selection: AssistantModelSelection
 ) -> None:
-    """422 unless the selection names an ACTIVE provider and a CATALOGUED
-    model (ADR 0021 closed catalogue)."""
+    """422 unless the selection names an ACTIVE provider and a SELECTABLE
+    model (price catalogue plus the provider's synced models)."""
     if not await is_valid_selection(admin_session, selection):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
                 "invalid selection: provider_id must be an active provider and "
-                "model_id must be in that provider's catalogue"
+                "model_id must be one it offers (catalogue or synced — sync the "
+                "provider's models first)"
             ),
         )
 
@@ -305,15 +334,17 @@ async def put_model(
 
 
 async def _build_model_options(admin_session: AsyncSession) -> AssistantModelOptionsResponse:
-    """Active providers + their catalogued model ids (no secrets) — the shared
-    dropdown source for both the tenant and the platform-default surfaces."""
+    """Active providers + their selectable models (price catalogue plus the
+    provider's synced models — both from the DB, no network). The shared
+    dropdown source for the tenant and platform-default surfaces. No secrets
+    are exposed (only kind + display_name + model ids)."""
     providers = await list_llm_providers(admin_session, active_only=True)
     options = [
         AssistantModelOption(
             provider_id=str(provider.id),
             kind=provider.kind,
             display_name=provider.display_name,
-            models=await list_catalog_models_for_provider(admin_session, provider),
+            models=await list_available_models_for_provider(admin_session, provider),
         )
         for provider in providers
     ]
@@ -326,9 +357,9 @@ async def _build_model_options(admin_session: AsyncSession) -> AssistantModelOpt
     dependencies=[Depends(require_assistant_access)],
 )
 async def get_model_options() -> AssistantModelOptionsResponse:
-    """Active providers and the model ids selectable on each — the dropdown
+    """Active providers and the models selectable on each — the dropdown
     source for the tenant UI. Gated to Tenant Admins (toggle ON); no secrets
-    are exposed (only kind + display_name + catalogued model ids)."""
+    are exposed."""
     sessionmaker = get_admin_sessionmaker()
     async with sessionmaker() as admin_session:
         return await _build_model_options(admin_session)

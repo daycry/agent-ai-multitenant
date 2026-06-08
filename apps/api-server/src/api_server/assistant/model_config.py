@@ -39,7 +39,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.assistant.config import ASSISTANT_SETTINGS_CATEGORY
-from api_server.db.llm_providers import LlmProvider, get_llm_provider
+from api_server.db.llm_providers import (
+    PROVIDER_SYNCED_MODELS_KEY,
+    LlmProvider,
+    get_llm_provider,
+)
 from api_server.db.model_prices import ModelPrice
 from api_server.db.models import TenantSetting, User
 from api_server.db.platform_settings import get_platform_setting, set_platform_setting
@@ -204,14 +208,59 @@ async def list_catalog_models_for_provider(
     return sorted({str(model_id) for model_id in result.scalars().all()})
 
 
+def to_provider_model_name(kind: str, model_id: str) -> str:
+    """Map a catalog model id to the provider's native API model name.
+
+    The price catalog keys models the LiteLLM way, which prefixes some
+    families with ``<family>/`` (e.g. ``ollama/llama3.1``,
+    ``azure/gpt-4o``). A provider's API wants the bare model name, so strip a
+    leading ``<family>/`` that matches the provider's kind. Names without such
+    a prefix (e.g. ``claude-sonnet-4-5``, ``gpt-oss:20b``) pass through
+    unchanged. The catalog id is what we store/show; this transform applies
+    only at the API-call boundary.
+    """
+    for family in KIND_TO_LITELLM_FAMILIES.get(kind, frozenset()):
+        prefix = f"{family}/"
+        if model_id.startswith(prefix):
+            return model_id[len(prefix) :]
+    return model_id
+
+
+def synced_models(provider: LlmProvider) -> list[str]:
+    """The model ids a previous sync persisted on the provider's config.
+
+    Tolerant of a missing/garbled value (returns ``[]``)."""
+    config = provider.config if isinstance(provider.config, dict) else {}
+    raw = config.get(PROVIDER_SYNCED_MODELS_KEY)
+    if not isinstance(raw, list):
+        return []
+    return [str(m) for m in raw]
+
+
+async def list_available_models_for_provider(
+    admin_session: AsyncSession, provider: LlmProvider
+) -> list[str]:
+    """Selectable models = the price catalogue PLUS the provider's synced models.
+
+    Both come from the DB (no network): the price catalogue (LiteLLM keys) plus
+    the models a System Admin synced from the provider's ``/v1/models`` into
+    ``config.models``. The sync is what makes real Ollama Cloud models
+    (``glm-5.1``, ``gpt-oss:120b``, ...) appear even though the price catalogue
+    only knows local-Ollama keys.
+    """
+    catalog = await list_catalog_models_for_provider(admin_session, provider)
+    return sorted(set(catalog) | set(synced_models(provider)))
+
+
 async def is_valid_selection(
     admin_session: AsyncSession, selection: AssistantModelSelection
 ) -> bool:
-    """True iff the provider is active AND the model is in its catalogue."""
+    """True iff the provider is active AND the model is selectable (catalogue
+    plus synced). Pure DB — no provider network call."""
     provider = await get_llm_provider(admin_session, selection.provider_id)
     if provider is None or not provider.is_active:
         return False
-    models = await list_catalog_models_for_provider(admin_session, provider)
+    models = await list_available_models_for_provider(admin_session, provider)
     return selection.model_id in models
 
 
@@ -223,10 +272,14 @@ async def resolve_assistant_model(
 ) -> ResolvedAssistantModel | None:
     """Resolve the effective model for ``tenant_id``, or ``None``.
 
-    Returns the first VALID tier: the tenant override, then the platform
-    default. A tier whose stored selection is no longer valid (provider
-    disabled, model retired) is skipped. ``None`` means nothing usable is
-    configured — the chat endpoint surfaces that as a 503.
+    Returns the first usable tier: the tenant override, then the platform
+    default. A tier is usable when its provider still exists and is ACTIVE —
+    the model id is NOT re-validated here (that happened at save time, and
+    re-checking against the catalogue/live API on every chat would add a
+    network round-trip to the hot path and would wrongly reject a live-only
+    model). A genuinely bad model id surfaces as the provider's own handled
+    error (502) rather than a silent fall-through. ``None`` means nothing
+    usable is configured — the chat endpoint surfaces that as a 503.
     """
     for source, selection in (
         ("tenant_override", await get_tenant_model_override(admin_session, tenant_id)),
@@ -236,9 +289,6 @@ async def resolve_assistant_model(
             continue
         provider = await get_llm_provider(admin_session, selection.provider_id)
         if provider is None or not provider.is_active:
-            continue
-        models = await list_catalog_models_for_provider(admin_session, provider)
-        if selection.model_id not in models:
             continue
         return ResolvedAssistantModel(
             provider_id=selection.provider_id,
@@ -253,6 +303,7 @@ async def resolve_assistant_model(
 __all__ = [
     "ASSISTANT_MODEL_KEY",
     "PLATFORM_DEFAULT_MODEL_KEY",
+    "PROVIDER_SYNCED_MODELS_KEY",
     "AssistantModelSelection",
     "ResolvedAssistantModel",
     "clear_platform_default_model",
@@ -260,8 +311,11 @@ __all__ = [
     "get_platform_default_model",
     "get_tenant_model_override",
     "is_valid_selection",
+    "list_available_models_for_provider",
     "list_catalog_models_for_provider",
     "resolve_assistant_model",
     "set_platform_default_model",
     "set_tenant_model_override",
+    "synced_models",
+    "to_provider_model_name",
 ]

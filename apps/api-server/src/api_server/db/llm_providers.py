@@ -77,6 +77,12 @@ class LLMProviderKind(enum.StrEnum):
 # The CHECK / membership source of truth — the four valid ``kind`` values.
 LLM_PROVIDER_KINDS: tuple[str, ...] = tuple(k.value for k in LLMProviderKind)
 
+# Key under the non-secret ``config`` JSONB holding the model ids discovered by
+# an on-demand sync (POST /admin/llm-providers/{id}/sync-models). Read by the
+# assistant model selector WITHOUT any network call (ADR 0053 — sync, don't
+# poll the provider on every dropdown open).
+PROVIDER_SYNCED_MODELS_KEY = "models"
+
 
 # =============================================================================
 # llm_providers — platform-global provider configuration (no tenant_id, no RLS)
@@ -194,6 +200,7 @@ async def list_active_llm_providers_by_kind(
 
 __all__ = [
     "LLM_PROVIDER_KINDS",
+    "PROVIDER_SYNCED_MODELS_KEY",
     "LLMProviderKind",
     "LlmProvider",
     "get_llm_provider",
