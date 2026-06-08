@@ -117,6 +117,12 @@ export const ASSISTANT_TOOL_CATALOGUE: readonly AssistantToolDef[] = [
     label: "Asignaciones humanas pendientes",
     description: "Tareas humanas sin aceptar desde hace más de N horas (por defecto 24h).",
   },
+  {
+    name: "remember_about_me",
+    label: "Recordar sobre ti",
+    description:
+      "Deja que el asistente guarde datos personales duraderos (tu nombre, preferencias, gustos) y los recuerde en futuras conversaciones.",
+  },
 ] as const;
 
 /** Friendly label for a tool name, falling back to the raw name. */

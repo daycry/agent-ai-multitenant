@@ -45,6 +45,9 @@ DEFAULT_ENABLED_TOOLS: tuple[str, ...] = (
     "tenant_budget_status",
     "tenant_human_workload",
     "tenant_human_assignments_pending",
+    # Write tool: let the assistant remember durable facts about the user
+    # (private per-user memory — ADR 0054).
+    "remember_about_me",
 )
 
 _DEFAULT_NAME = "Asistente"

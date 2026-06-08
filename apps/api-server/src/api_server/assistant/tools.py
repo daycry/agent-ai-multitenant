@@ -38,6 +38,7 @@ from uuid import UUID
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.assistant.memory import remember_user_fact
 from api_server.db.domain import (
     HumanTaskAssignment,
     HumanTaskAssignmentStatus,
@@ -387,6 +388,34 @@ async def _tenant_human_assignments_pending(
 
 
 # ---------------------------------------------------------------------------
+# Write tool: remember a durable fact about the asking user (ADR 0054)
+# ---------------------------------------------------------------------------
+async def _remember_about_me(
+    ctx: AssistantToolContext,
+    *,
+    content: str,
+    type: str = "semantic",
+    tags: list[str] | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Persist one durable fact about the asking user as private memory.
+
+    Writes through the request's RLS-bound session as a ``scope='private'``
+    ``memory_entries`` row owned by ``ctx.user_id`` (dedup handled in
+    :func:`~api_server.assistant.memory.remember_user_fact`). This is the only
+    WRITE tool the assistant has, and it can only write the asking user's own
+    private memory."""
+    return await remember_user_fact(
+        ctx.session,
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id,
+        content=content,
+        type=type,
+        tags=tuple(tags or ()),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registry + JSON schemas (the shape an LLM tool-calling API expects)
 # ---------------------------------------------------------------------------
 ToolImpl = Callable[..., Awaitable[dict[str, Any]]]
@@ -507,6 +536,45 @@ ASSISTANT_TOOLS: dict[str, ToolEntry] = {
                         "minimum": 0,
                     }
                 },
+            },
+        },
+    ),
+    "remember_about_me": ToolEntry(
+        impl=_remember_about_me,
+        schema={
+            "name": "remember_about_me",
+            "description": (
+                "Guarda un dato personal DURADERO del usuario para recordarlo en "
+                "futuras conversaciones: su nombre, una preferencia, un gusto o "
+                "su estilo de comunicación. Úsalo cuando el usuario comparta algo "
+                "así. No lo uses para cosas efímeras ni repitas algo que ya sabes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": (
+                            "El dato a recordar, en una frase breve (p. ej. "
+                            "'Se llama Jose', 'Prefiere respuestas concisas')."
+                        ),
+                        "maxLength": 2000,
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": ["semantic", "episodic"],
+                        "description": (
+                            "semantic = preferencia/hecho durable (lo habitual); "
+                            "episodic = un evento puntual."
+                        ),
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Etiquetas opcionales para clasificar el recuerdo.",
+                    },
+                },
+                "required": ["content"],
             },
         },
     ),

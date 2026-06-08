@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_server.assistant.config import get_assistant_identity, set_assistant_identity
 from api_server.assistant.graph import AssistantModelClient, run_assistant_turn
 from api_server.assistant.llm import LLMAssistantModel
+from api_server.assistant.memory import augment_system_prompt, recall_user_memories
 from api_server.assistant.model_config import (
     AssistantModelSelection,
     ResolvedAssistantModel,
@@ -177,11 +178,22 @@ async def assistant_chat(
         tenant_id=tenant_id,
         user_id=principal.user_id,
     )
+    enabled_tools = identity.effective_tools()
+    # Surface what we already know about this user and fold it into the system
+    # prompt so the assistant "knows" them without a tool call (ADR 0054).
+    known_facts = await recall_user_memories(
+        session, tenant_id=tenant_id, user_id=principal.user_id
+    )
+    system_prompt = augment_system_prompt(
+        identity.system_prompt(),
+        known_facts=known_facts,
+        remember_enabled="remember_about_me" in enabled_tools,
+    )
     try:
         result = await run_assistant_turn(
             model,
-            system_prompt=identity.system_prompt(),
-            enabled_tools=identity.effective_tools(),
+            system_prompt=system_prompt,
+            enabled_tools=enabled_tools,
             tool_ctx=tool_ctx,
             chat_history=[{"role": "user", "content": payload.message}],
         )
