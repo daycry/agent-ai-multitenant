@@ -24,9 +24,11 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+from api_server.agent_skills_enforcement import resolve_agent_skill_prompt_fragments
 from api_server.agent_tools_enforcement import (
     combine_tool_allowlists,
     resolve_agent_tool_names,
+    serialize_agent_tool_specs,
 )
 from api_server.budgets import budget_pause_block
 from api_server.db.domain import (
@@ -359,6 +361,23 @@ class TaskDispatcher:
         agent_tool_names = await resolve_agent_tool_names(session, agent.id)
         allowed_tools = combine_tool_allowlists(agent_tool_names, None)
 
+        # Executable ToolSpec serialisation (Plan 06.18 task_06_18_05). The
+        # allowlist (names) is not enough for the runtime to REGISTER a tool —
+        # it needs the implementation_type + type config. We serialise the
+        # agent's assigned Tool rows so the runtime boot wires the real
+        # executors (file/network/run_*/custom) under canonical names instead
+        # of falling into the silent "unknown tool". `None` when the agent has
+        # no assignments → no `tool_specs` key → the runtime keeps the pre-06.18
+        # echo/noop behaviour (06.15 backward-compat).
+        tool_specs = await serialize_agent_tool_specs(session, agent.id)
+
+        # Skills → inyección de prompt (Plan 06.18 task_06_18_13 / ADR 0050). El
+        # prompt_fragment de las skills asignadas se threadea al spec para que el
+        # runtime lo prependa al system prompt EFECTIVO. `None` cuando el agente
+        # no tiene skills → no se emite la clave → el prompt actual queda intacto
+        # (backward-compat, mismo sentinel que `tool_specs`).
+        skill_prompt_fragments = await resolve_agent_skill_prompt_fragments(session, agent.id)
+
         request: dict[str, Any] = {
             "tenant_id": str(task.tenant_id),
             "task_id": str(task.id),
@@ -378,6 +397,18 @@ class TaskDispatcher:
         # "no restriction". An empty list IS emitted (block every tool).
         if allowed_tools is not None:
             request["allowed_tools"] = allowed_tools
+
+        # Serialised executable ToolSpec list (task_06_18_05). Only emit when
+        # the agent has assignments — `None` keeps the key absent so the
+        # runtime boot stays on the pre-06.18 path (no new families wired).
+        if tool_specs is not None:
+            request["tool_specs"] = tool_specs
+
+        # Skill prompt fragments (task_06_18_13). Solo se emite cuando el agente
+        # tiene skills — `None` mantiene la clave ausente para que el runtime no
+        # altere el system prompt (06.15/06.18 backward-compat).
+        if skill_prompt_fragments is not None:
+            request["skill_prompt_fragments"] = skill_prompt_fragments
 
         # Per-project shell-command allowlist (Plan 06.16 task_06_16_02). Thread
         # `projects.allowed_commands` into the spec so the runtime can build a
@@ -399,6 +430,17 @@ class TaskDispatcher:
         project_runtime = getattr(project, "default_runtime_template", None) if project else None
         if project_runtime:
             request["default_runtime_template"] = str(project_runtime)
+
+        # Per-project MCP servers (Plan 06.18 task_06_18_12 / ADR 0052). Thread
+        # `projects.mcp_servers` into the spec so the runtime opens an MCP
+        # session per declared server and registers its `<server>.<tool>` tools
+        # (which the agent∩mode allowlist then intersects, ADR 0048). Only emit
+        # the key when the project declares servers; an empty/absent list keeps
+        # the key absent so the runtime opens no MCP session (feature-safe — no
+        # behaviour change for projects without MCP).
+        project_mcp_servers = getattr(project, "mcp_servers", None) if project else None
+        if project_mcp_servers:
+            request["mcp_servers"] = [dict(server) for server in project_mcp_servers]
         return _AiDispatch(request=request)
 
     async def _route_human(

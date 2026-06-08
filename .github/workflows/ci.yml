@@ -46,6 +46,11 @@ jobs:
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
           python -m pip install -e "packages/shared-llm[dev]"
+          # shared-domain: canonical tool-name source of truth (ADR 0048,
+          # Plan 06.18). Dependency-free; imported by api-server / orchestrator
+          # / agent-runtime so the catalog, chat-modes, runtime and approval
+          # all speak one tool namespace.
+          python -m pip install -e "packages/shared-domain[dev]"
           python -m pip install -e "packages/shared-mcp[dev]"
           # shared-test-runtimes lands with Plan 06 task_06_01 — install
           # editable so the runtime template catalog imports resolve in
@@ -171,6 +176,11 @@ jobs:
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
           python -m pip install -e "packages/shared-llm[dev]"
+          # shared-domain: canonical tool-name source of truth (ADR 0048,
+          # Plan 06.18). Dependency-free; imported by api-server / orchestrator
+          # / agent-runtime so the catalog, chat-modes, runtime and approval
+          # all speak one tool namespace.
+          python -m pip install -e "packages/shared-domain[dev]"
           python -m pip install -e "packages/shared-mcp[dev]"
           # shared-test-runtimes lands with Plan 06 task_06_01 — install
           # editable so the runtime template catalog imports resolve in
@@ -240,6 +250,11 @@ jobs:
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
           python -m pip install -e "packages/shared-llm[dev]"
+          # shared-domain: canonical tool-name source of truth (ADR 0048,
+          # Plan 06.18). Dependency-free; imported by api-server / orchestrator
+          # / agent-runtime so the catalog, chat-modes, runtime and approval
+          # all speak one tool namespace.
+          python -m pip install -e "packages/shared-domain[dev]"
           python -m pip install -e "packages/shared-mcp[dev]"
           # shared-test-runtimes lands with Plan 06 task_06_01 — install
           # editable so the runtime template catalog imports resolve in

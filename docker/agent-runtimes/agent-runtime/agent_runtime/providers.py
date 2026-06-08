@@ -72,6 +72,20 @@ _REVIEW_SYSTEM = (
 _CONTEXT_WINDOW = 8
 
 
+def _system_content(state: dict[str, Any]) -> str:
+    """The EFFECTIVE system prompt for this run (Plan 06.18 task_06_18_13).
+
+    Prepends the assigned skills' prompt fragments (``state['system_preamble']``,
+    ADR 0050) to the base agent instruction. Absent/empty preamble → the
+    historical ``_DECIDE_SYSTEM`` verbatim (backward-compat). The preamble goes
+    first so the skill cues frame the agent's behaviour before the loop rules.
+    """
+    preamble = state.get("system_preamble")
+    if preamble and str(preamble).strip():
+        return f"{str(preamble).strip()}\n\n{_DECIDE_SYSTEM}"
+    return _DECIDE_SYSTEM
+
+
 def _decide_messages(state: dict[str, Any]) -> list[Message]:
     """Turn the agent-loop state into the chat messages for a decision."""
     task = state.get("task") or {}
@@ -86,7 +100,7 @@ def _decide_messages(state: dict[str, Any]) -> list[Message]:
     if observation:
         lines.append(f"Last observation: {json.dumps(observation, default=str)}")
     return [
-        Message(role="system", content=_DECIDE_SYSTEM),
+        Message(role="system", content=_system_content(state)),
         Message(role="user", content="\n".join(line for line in lines if line)),
     ]
 

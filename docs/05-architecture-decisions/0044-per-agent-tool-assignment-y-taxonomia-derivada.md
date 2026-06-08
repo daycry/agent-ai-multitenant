@@ -52,12 +52,22 @@ El único criterio es `is_builtin`. El `implementation_type` NO entra en la
 dicotomía (sería un bug: `run_pytest` es `is_builtin=true` con
 `implementation_type=docker_command` y es **básica**).
 
-- Las **básicas** son las 18 tools `builtin` seedeadas en
+- Las **básicas** son las tools `builtin` seedeadas en
   `PLATFORM_TENANT_ID` (`builtin_tools.py`): file (`read_file`,
   `write_file`, `apply_patch`, `list_files`, `search_code`), runtime
-  (`run_pytest`, `run_lint`, `run_typecheck`…), git, network y
-  orquestación. Son `is_builtin=true` y asignables a **cualquier**
-  agente de cualquier tenant.
+  (`run_pytest`, `run_lint`, `run_typecheck`…), red y orquestación. Son
+  `is_builtin=true` y asignables a **cualquier** agente de cualquier
+  tenant.
+
+> **Actualización Plan 06.18 (`task_06_18_06`, ADR 0049):** el catálogo
+> seedeado pasó de 18 a **15 tools built-in** al **retirar la familia
+> `git`** (`git_status`/`git_diff`/`git_commit`/`git_log`): tenían
+> categoría en la UI pero **ningún ejecutor de runtime**, así que
+> cualquier asignación moría como un `unknown tool` silencioso. Ofrecerlas
+> como asignables mentía sobre su disponibilidad. La cuenta exacta y la
+> fuente única de nombres viven ahora en `shared_domain.tool_names`
+> (`CANONICAL_TOOL_NAMES`, **ADR 0048**), no en este ADR.
+
 - Las **avanzadas** son todo lo que NO es de plataforma: tools custom
   creadas por un tenant (`is_builtin=false`) y las tools MCP descubiertas
   de los MCP servers del proyecto. El `implementation_type` es ortogonal:
@@ -68,6 +78,21 @@ dicotomía (sería un bug: `run_pytest` es `is_builtin=true` con
 **ortogonal**: una básica puede ser `sandboxed` (`write_file`) y una
 avanzada puede ser `safe`. La UI muestra ambos como badges
 independientes; no se mezclan en la dicotomía básica/avanzada.
+
+> **Actualización Plan 06.18 (ADR 0049):** la dicotomía básica/avanzada
+> se generaliza a una **taxonomía de tres facetas ortogonales** —
+> **Función** (`category`), **Seguridad** (`security_level`) y **Origen**
+> (plataforma / tenant / MCP). "Básica vs avanzada" sigue siendo la
+> proyección de la faceta **Origen** sobre `is_builtin`. Las facetas se
+> sirven con etiqueta ES+EN desde un módulo compartido
+> (`apps/admin-panel/lib/tools/taxonomy.ts`) consumido por igual por la
+> asignación y el diagnóstico, para que la misma tool muestre idéntico
+> color/etiqueta en ambas superficies. Además, 06.18 añade el flag
+> derivado **`is_runtime_wired`** en `ToolResponse` (¿el runtime sabe
+> ejecutar esta tool hoy?): una tool básica puede no estar cableada
+> (p. ej. `apply_patch`/`search_code`/`summarize_text`) y la UI la marca
+> "No disponible aún" en vez de ofrecerla como si funcionara. La fuente
+> de verdad del cableado es `shared_domain.tool_names.RUNTIME_WIRED_TOOL_NAMES`.
 
 **Por qué derivar y no persistir**: `is_builtin` + `implementation_type`
 ya determinan unívocamente el tier. Una columna `tier` sería
@@ -197,7 +222,7 @@ Persistir la dicotomía como campo de primera clase.
 - ❌ Redundante con `is_builtin`/`implementation_type` — dos fuentes de
   verdad que se desincronizan. Una tool creada sin rellenar `tier`
   quedaría en un estado indefinido.
-- ❌ Migración (reversible) + backfill de las 18 built-ins + todas las
+- ❌ Migración (reversible) + backfill de todas las built-ins + las
   custom existentes. Coste sin beneficio mientras la derivación sea
   exacta.
 
@@ -280,3 +305,9 @@ este plan es `0071_model_prices_provider_id`; este plan no lo mueve.)
 - RBAC: `docs/04-reference/rbac.md` (sección `agents.py`).
 - ADRs relacionados: 0014 (tools builtin), 0025 (MCP + ejecutores),
   0026 (agent-scoped KBs — patrón espejado).
+- **Plan 06.18 (`06.18-tools-overhaul`):** endurece esta decisión con la
+  **fuente única de nombres** (`ADR 0048`), la **taxonomía de tres
+  facetas + `is_runtime_wired`** (`ADR 0049`) que generaliza la dicotomía
+  básica/avanzada, y el endpoint `GET /agents/{id}/effective-tools` que
+  hace honesta la disponibilidad. Referencia técnica:
+  `packages/shared-domain/src/shared_domain/tool_names.py`.

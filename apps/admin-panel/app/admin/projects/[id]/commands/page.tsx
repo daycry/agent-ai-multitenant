@@ -40,6 +40,8 @@ import { RoleGuard } from "@/components/ui/role-guard";
 import { Select } from "@/components/ui/select";
 import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useLang } from "@/lib/lang-context";
+import { runtimeLabel, useRuntimeTemplates } from "@/lib/runtime-templates";
 
 // --------------------------------------------------------------------------
 // Types (mirror api_server.schemas.projects)
@@ -65,25 +67,11 @@ const STACK_PRESETS: { key: string; label: string; commands: string[] }[] = [
   { key: "python", label: "Python", commands: ["python", "pytest"] },
 ];
 
-// The runtime templates the operator can pick (mirrors
-// shared_test_runtimes.catalog). "" = sin runtime por defecto (los
-// run_* caen al default por-tool — backward-compatible).
-const RUNTIME_TEMPLATES: string[] = [
-  "python-pytest",
-  "php-phpunit",
-  "php-pest",
-  "dotnet-test",
-  "node-jest",
-  "node-vitest",
-  "node-playwright",
-  "go-test",
-  "java-gradle",
-  "java-maven",
-  "ruby-rspec",
-  "rust-cargo",
-  "generic-shell",
-  "generic-http",
-];
+// The runtime templates the operator can pick come from GET /runtime-templates
+// (task_06_18_08) — the backend is the single source of truth. We no longer
+// hardcode the catalog here (it used to drift: 14 ids here vs 12 in dep-cache).
+// "" = sin runtime por defecto (los run_* caen al default por-tool —
+// backward-compatible).
 
 // --------------------------------------------------------------------------
 // Page
@@ -133,6 +121,9 @@ export default function ProjectCommandsPage() {
 // --------------------------------------------------------------------------
 function CommandsEditor({ project }: { project: Project }) {
   const queryClient = useQueryClient();
+  const { lang } = useLang();
+  const runtimesQuery = useRuntimeTemplates();
+  const runtimeTemplates = useMemo(() => runtimesQuery.data ?? [], [runtimesQuery.data]);
 
   const [commands, setCommands] = useState<string[]>(project.allowed_commands);
   const [runtime, setRuntime] = useState<string>(project.default_runtime_template ?? "");
@@ -158,6 +149,13 @@ function CommandsEditor({ project }: { project: Project }) {
       setSavedAt(Date.now());
     },
   });
+
+  // Read-only display: resolve the persisted slug to its served bilingual
+  // label; fall back to the slug only if the catalog has not loaded yet.
+  const runtimeDisplay = useMemo(() => {
+    const found = runtimeTemplates.find((rt) => rt.id === runtime);
+    return found ? runtimeLabel(found, lang) : runtime;
+  }, [runtimeTemplates, runtime, lang]);
 
   const dirty = useMemo(() => {
     const sameCommands =
@@ -332,7 +330,7 @@ function CommandsEditor({ project }: { project: Project }) {
               fallback={
                 <p className="text-sm" data-testid="commands-runtime-readonly">
                   {runtime ? (
-                    <code className="font-mono">{runtime}</code>
+                    <span>{runtimeDisplay}</span>
                   ) : (
                     <span className="text-muted-foreground italic">
                       Sin runtime por defecto (defaults por-tool)
@@ -345,6 +343,7 @@ function CommandsEditor({ project }: { project: Project }) {
                 <Select
                   id="commands-runtime"
                   value={runtime}
+                  disabled={runtimesQuery.isLoading}
                   onChange={(e) => {
                     setRuntime(e.target.value);
                     setSavedAt(null);
@@ -352,12 +351,20 @@ function CommandsEditor({ project }: { project: Project }) {
                   data-testid="commands-runtime-select"
                 >
                   <option value="">— Sin runtime por defecto (defaults por-tool) —</option>
-                  {RUNTIME_TEMPLATES.map((rt) => (
-                    <option key={rt} value={rt}>
-                      {rt}
+                  {runtimeTemplates.map((rt) => (
+                    <option key={rt.id} value={rt.id}>
+                      {runtimeLabel(rt, lang)}
                     </option>
                   ))}
                 </Select>
+                {runtimesQuery.isError && (
+                  <p
+                    className="text-danger-soft-foreground mt-1.5 text-xs"
+                    data-testid="commands-runtime-error"
+                  >
+                    No se pudo cargar el catálogo de runtimes.
+                  </p>
+                )}
               </div>
             </RoleGuard>
           </div>

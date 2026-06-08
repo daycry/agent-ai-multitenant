@@ -1,7 +1,7 @@
 ---
 plan_id: 15-instalador-produccion
 title: Instalador, Endurecimiento y Producción
-status: in_progress
+status: pending_human_validation
 started_at: 2026-05-31
 blocking_plan:
   [

@@ -13,6 +13,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from shared_domain.tool_names import CANONICAL_TOOL_NAMES, to_canonical
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +43,42 @@ from api_server.schemas.catalog import (
 )
 
 router = APIRouter(prefix="/tools", tags=["tools"])
+
+
+async def _assert_name_available(
+    session: AsyncSession,
+    name: str,
+    *,
+    exclude_tool_id: UUID | None = None,
+) -> None:
+    """Reject a slug that collides with a platform built-in or another live
+    tool of the caller's tenant with ``409`` (task_06_18_04, ADR 0049).
+
+    Two collision sources, both deduped against the *normalised* name:
+
+      - **Platform built-in**: the canonical resolution of ``name`` intersects
+        ``CANONICAL_TOOL_NAMES`` (catches aliases too — ``file_read`` ->
+        ``read_file``). Built-ins live under the platform tenant, so a plain
+        ``tenant_id`` query would miss them; the canonical set is the guard.
+      - **Same-tenant duplicate**: a live ``tools`` row visible to this tenant
+        session already carries the name. The partial unique index enforces
+        this at the DB layer too; the pre-check turns the IntegrityError into a
+        clean 409. ``exclude_tool_id`` skips the row being updated.
+    """
+    if to_canonical(name) & CANONICAL_TOOL_NAMES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"name '{name}' collides with a platform built-in tool",
+        )
+    stmt = select(Tool.id).where(Tool.name == name, Tool.deleted_at.is_(None))
+    if exclude_tool_id is not None:
+        stmt = stmt.where(Tool.id != exclude_tool_id)
+    existing = (await session.execute(stmt)).scalars().first()
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"a tool named '{name}' already exists in this tenant",
+        )
 
 
 @router.get("", response_model=list[ToolResponse])
@@ -89,11 +126,12 @@ async def create_tool(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> ToolResponse:
     tenant_id = require_tenant_id(principal)
+    await _assert_name_available(session, payload.name)
     tool = Tool(
         tenant_id=tenant_id,
         name=payload.name,
         description=payload.description,
-        category=payload.category,
+        category=payload.category.value,
         input_schema=payload.input_schema,
         output_schema=payload.output_schema,
         implementation_type=payload.implementation_type.value,
@@ -126,7 +164,13 @@ async def update_tool(
         extra_filters=(Tool.is_builtin.is_(False),),
     )
 
-    apply_partial_update(tool, payload, enum_fields=("implementation_type", "security_level"))
+    # A rename must not collide with a built-in or another live tool.
+    if payload.name is not None and payload.name != tool.name:
+        await _assert_name_available(session, payload.name, exclude_tool_id=tool_id)
+
+    apply_partial_update(
+        tool, payload, enum_fields=("category", "implementation_type", "security_level")
+    )
 
     await session.flush()
     await session.refresh(tool)

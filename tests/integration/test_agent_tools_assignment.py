@@ -125,7 +125,10 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             "  implementation_type, security_level, is_builtin)"
             " VALUES"
             " ($1, $2, 'read_file', 'read', 'file', 'builtin', 'safe', true),"
-            " ($3, $4, 'git_status', 'git', 'git', 'builtin', 'safe', true)",
+            # `list_files` is a runtime-wired builtin (the git family was retired
+            # in task_06_18_06; assigning a non-executable builtin now 422s, so
+            # the second assignable built-in here must be a wired one).
+            " ($3, $4, 'list_files', 'list', 'file', 'builtin', 'safe', true)",
             builtin_tool_a,
             tenant,
             builtin_tool_b,

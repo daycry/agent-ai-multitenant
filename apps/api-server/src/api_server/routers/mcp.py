@@ -34,11 +34,20 @@ from shared_mcp import (
     discover_tools,
 )
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
-from api_server.db.domain import Project
+from api_server.db.domain import (
+    Project,
+    Tool,
+    ToolCategory,
+    ToolImplementationType,
+    ToolSecurityLevel,
+)
 from api_server.mcp.config import MCPServerConfigModel
+from api_server.routers._helpers import require_tenant_id
+from api_server.schemas.catalog import ToolResponse, normalize_tool_name, to_tool_response
 
 router = APIRouter(prefix="/projects/{project_id}/mcp", tags=["mcp"])
 
@@ -256,6 +265,144 @@ async def test_mcp_connection(
 
 
 # ---------------------------------------------------------------------------
+# POST /projects/{id}/mcp/servers/{server_name}/import-tools  (ADR 0052)
+# ---------------------------------------------------------------------------
+class ImportMcpToolsRequest(BaseModel):
+    """Operator's multiselección de tools a importar al catálogo.
+
+    ``tool_names`` son los nombres *crudos* que el server expone (los que
+    ``test-connection`` devolvió); el endpoint los namespacea
+    ``<server>.<tool>`` antes de persistirlos. La lista es la decisión del
+    operador (supply chain, ADR 0052 opción P-A) — NO se importa todo
+    automáticamente. ``security_level`` arranca en ``sandboxed`` (mínimo
+    privilegio para código de terceros) y el operador puede ajustarlo.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    tool_names: list[str] = Field(min_length=1, max_length=200)
+    security_level: ToolSecurityLevel = ToolSecurityLevel.SANDBOXED
+
+
+class ImportMcpToolsResponse(BaseModel):
+    """Las filas ``Tool`` resultantes del upsert (creadas o actualizadas)."""
+
+    tools: list[ToolResponse] = Field(default_factory=list)
+
+
+@router.post("/servers/{server_name}/import-tools", response_model=ImportMcpToolsResponse)
+async def import_mcp_tools(
+    project_id: UUID,
+    server_name: str,
+    payload: ImportMcpToolsRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> ImportMcpToolsResponse:
+    """Importar tools descubiertas de un MCP server al catálogo (ADR 0052).
+
+    Tras un ``test-connection`` exitoso, el operador importa la selección que
+    elija (``tool_names``). Cada tool se persiste como una fila ``Tool``
+    ``mcp_tool`` namespaced ``<server>.<tool>`` para que ``<server>.read_file``
+    no parezca un duplicado de un built-in ``read_file`` (faceta Origen=MCP,
+    ADR 0049). El upsert es **idempotente**: re-importar una tool ya existente
+    actualiza su ``security_level`` en vez de crear un duplicado, respetando el
+    ``UNIQUE(tenant_id, name)`` de task_06_18_04 (un ``IntegrityError`` por
+    carrera se traduce en un 409 limpio).
+
+    Tenant-safe: el proyecto debe ser visible a la sesión (RLS); uno de otro
+    tenant produce ``404`` sin filtrar su existencia. El server debe estar
+    declarado en ``project.mcp_servers`` (si no, ``404``) — solo se importan
+    tools de servers que el operador ya configuró.
+    """
+    tenant_id = require_tenant_id(principal)
+
+    project = (
+        await session.execute(
+            select(Project).where(Project.id == project_id, Project.deleted_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
+
+    declared = {
+        str(server.get("name"))
+        for server in (project.mcp_servers or [])
+        if isinstance(server, dict) and server.get("name")
+    }
+    if server_name not in declared:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"MCP server {server_name!r} not declared on this project",
+        )
+
+    # Namespaced name <server>.<tool>; the tool segment is normalised to a
+    # slug so it matches the ``tools.name`` invariant (task_06_18_04). Dedupe
+    # the requested names so a duplicated selection upserts once.
+    namespaced: dict[str, str] = {}
+    for raw in payload.tool_names:
+        tool_slug = normalize_tool_name(raw)
+        if not tool_slug:
+            continue
+        namespaced[f"{server_name}.{tool_slug}"] = raw
+    if not namespaced:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="no importable tool names after normalisation",
+        )
+
+    # Existing live rows for these names (so re-import updates rather than
+    # inserts) — keyed by name, scoped to the tenant session (RLS).
+    existing_rows = (
+        (
+            await session.execute(
+                select(Tool).where(
+                    Tool.name.in_(list(namespaced)),
+                    Tool.deleted_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_name = {row.name: row for row in existing_rows}
+
+    result_tools: list[Tool] = []
+    for name, raw_name in namespaced.items():
+        row = by_name.get(name)
+        if row is None:
+            row = Tool(
+                tenant_id=tenant_id,
+                name=name,
+                description=f"MCP tool {raw_name!r} from server {server_name!r}",
+                category=ToolCategory.MCP.value,
+                implementation_type=ToolImplementationType.MCP_TOOL.value,
+                implementation_ref=name,
+                security_level=payload.security_level.value,
+                is_builtin=False,
+            )
+            session.add(row)
+        else:
+            # ON CONFLICT-style update: keep the row, refresh the operator's
+            # security choice (the editable default, ADR 0052).
+            row.security_level = payload.security_level.value
+            row.implementation_ref = name
+        result_tools.append(row)
+
+    try:
+        await session.flush()
+    except IntegrityError as exc:  # pragma: no cover - racing concurrent import
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="concurrent import collided on a tool name; retry",
+        ) from exc
+    for row in result_tools:
+        await session.refresh(row)
+
+    return ImportMcpToolsResponse(tools=[to_tool_response(t) for t in result_tools])
+
+
+# ---------------------------------------------------------------------------
 # Pydantic → runtime dataclass conversion
 # ---------------------------------------------------------------------------
 def _to_runtime_config(payload: MCPServerConfigModel) -> MCPServerConfig:
@@ -279,6 +426,8 @@ def _to_runtime_config(payload: MCPServerConfigModel) -> MCPServerConfig:
 
 __all__ = [
     "DiscoveredTool",
+    "ImportMcpToolsRequest",
+    "ImportMcpToolsResponse",
     "McpErrorCode",
     "McpTestConnectionError",
     "TestConnectionResponse",

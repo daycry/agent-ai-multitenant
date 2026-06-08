@@ -252,6 +252,56 @@ class AgentToolResponse(BaseModel):
     config_override: dict[str, Any] | None = None
 
 
+# ---------------------------------------------------------------------------
+# Assign skills to an agent (Plan 06.18 task_06_18_13, ADR 0050 Opción A)
+# ---------------------------------------------------------------------------
+class AgentSkillAssignment(BaseModel):
+    """Una entrada del payload declarativo de ``PUT /agents/{id}/skills``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: UUID
+
+
+class SetAgentSkillsRequest(BaseModel):
+    """Payload de ``PUT /agents/{id}/skills`` — el conjunto deseado completo.
+
+    El endpoint es declarativo: las filas ``agent_skills`` del agente se
+    reemplazan en bloque con esta lista (una lista vacía limpia todas las
+    asignaciones → sin inyección de prompt, comportamiento previo intacto).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    skills: list[AgentSkillAssignment] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _no_duplicate_skill_ids(self) -> SetAgentSkillsRequest:
+        seen: set[UUID] = set()
+        for entry in self.skills:
+            if entry.skill_id in seen:
+                raise ValueError(f"duplicate skill_id in payload: {entry.skill_id}")
+            seen.add(entry.skill_id)
+        return self
+
+
+class AgentSkillResponse(BaseModel):
+    """Una Skill asignada, proyectada a lo que la UI de asignación necesita.
+
+    ``prompt_fragment`` se incluye para que la ficha del agente pueda mostrar el
+    efecto real (qué se inyectará en el prompt) sin una segunda llamada.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    skill_id: UUID
+    name: str
+    category: str
+    description: str | None = None
+    prompt_fragment: str
+    is_builtin: bool
+
+
 def to_agent_response(a: Agent) -> AgentResponse:
     """ORM -> DTO with the `model_config` rename baked in.
 

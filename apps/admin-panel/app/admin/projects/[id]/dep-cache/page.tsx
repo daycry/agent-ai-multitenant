@@ -3,8 +3,9 @@
 /**
  * task_06_12 — Botón "Invalidar caché" del dep-cache del proyecto.
  *
- * Tabla minimalista: una fila por runtime conocido, con un botón para
- * invalidar todas las entradas de ese runtime. La invalidación llama a
+ * Tabla minimalista: una fila por runtime que usa el dep-cache, con un
+ * botón para invalidar todas las entradas de ese runtime. La invalidación
+ * llama a
  *
  *     POST /projects/{id}/dep-cache/invalidate
  *
@@ -12,6 +13,14 @@
  * test-run del runtime ese paga de nuevo el coste de instalación; este
  * panel es un escape hatch para cuando un operador sospecha que el
  * caché está corrupto.
+ *
+ * Plan 06.18 task_06_18_11: la lista de runtimes y sus etiquetas vienen de
+ * `GET /runtime-templates` (el backend es la única fuente de verdad). Antes
+ * esta pantalla hardcodeaba 12 runtimes con etiquetas + "lock files"
+ * inventados que divergían de los 14 de la pantalla de Comandos. Ahora solo
+ * mostramos los templates que realmente usan dep-cache (`dep_cache_mount`
+ * no nulo) con su `label` ES+EN servido — los `generic-*` (sin caché) no
+ * aparecen porque no tienen nada que invalidar.
  *
  * La pantalla no muestra entries existentes (sería otra petición a un
  * endpoint listing que aún no existe). Si en un futuro hace falta una
@@ -26,27 +35,17 @@ import { Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
 import { DataTable, type DataTableColumn } from "@/components/shared/data-table";
+import { StateBlock } from "@/components/shared/state-block";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useLang } from "@/lib/lang-context";
+import {
+  runtimeLabel,
+  useRuntimeTemplates,
+  type RuntimeTemplateDto,
+} from "@/lib/runtime-templates";
 import { cn } from "@/lib/utils";
-
-// Mirror del catálogo en shared_test_runtimes/catalog.py — el orden
-// matchea el de CATALOG (insertion order).
-const RUNTIMES: Array<{ id: string; label: string; lockFile: string }> = [
-  { id: "python-pytest", label: "Python · pytest", lockFile: "requirements.txt" },
-  { id: "node-jest", label: "Node · Jest", lockFile: "package-lock.json" },
-  { id: "node-vitest", label: "Node · Vitest", lockFile: "package-lock.json" },
-  { id: "node-playwright", label: "Node · Playwright", lockFile: "package-lock.json" },
-  { id: "php-phpunit", label: "PHP · PHPUnit", lockFile: "composer.lock" },
-  { id: "php-pest", label: "PHP · Pest", lockFile: "composer.lock" },
-  { id: "go-test", label: "Go · go test", lockFile: "go.sum" },
-  { id: "java-maven", label: "Java · Maven", lockFile: "pom.xml" },
-  { id: "java-gradle", label: "Java · Gradle", lockFile: "gradle.lockfile" },
-  { id: "ruby-rspec", label: "Ruby · RSpec", lockFile: "Gemfile.lock" },
-  { id: "rust-cargo", label: "Rust · Cargo", lockFile: "Cargo.lock" },
-  { id: "dotnet-test", label: ".NET · dotnet test", lockFile: "packages.lock.json" },
-];
 
 interface InvalidateResponse {
   runtime: string;
@@ -63,7 +62,13 @@ interface ResultRow {
 export default function DepCachePage() {
   const params = useParams<{ id: string }>();
   const projectId = params?.id ?? "";
+  const { lang } = useLang();
   const [results, setResults] = useState<Record<string, ResultRow>>({});
+
+  const runtimesQuery = useRuntimeTemplates();
+  // Only templates with a dep-cache mount can have something to invalidate;
+  // generic-shell / generic-http opt out (dep_cache_mount === null).
+  const cachedRuntimes = (runtimesQuery.data ?? []).filter((rt) => rt.dep_cache_mount !== null);
 
   const invalidate = useMutation<InvalidateResponse, ApiError, string>({
     mutationFn: async (runtime: string) => {
@@ -98,18 +103,17 @@ export default function DepCachePage() {
     },
   });
 
-  const columns: DataTableColumn<(typeof RUNTIMES)[number]>[] = [
+  const columns: DataTableColumn<RuntimeTemplateDto>[] = [
     {
       key: "runtime",
       header: "Runtime",
-      className: "font-mono",
-      cell: (rt) => rt.label,
+      cell: (rt) => runtimeLabel(rt, lang),
     },
     {
-      key: "lock",
-      header: "Lock file",
+      key: "mount",
+      header: "Punto de montaje",
       className: "font-mono text-xs",
-      cell: (rt) => rt.lockFile,
+      cell: (rt) => rt.dep_cache_mount,
     },
     {
       key: "actions",
@@ -168,13 +172,24 @@ export default function DepCachePage() {
           <CardTitle>Runtimes con caché</CardTitle>
         </CardHeader>
         <CardContent>
-          <DataTable
-            data={RUNTIMES}
-            data-testid="dep-cache-table"
-            getRowKey={(rt) => rt.id}
-            rowProps={(rt) => ({ "data-runtime": rt.id })}
-            columns={columns}
-          />
+          <StateBlock
+            isLoading={runtimesQuery.isLoading}
+            loadingSkeleton
+            skeletonRows={4}
+            loadingTestId="dep-cache-loading"
+            isError={runtimesQuery.isError}
+            error={runtimesQuery.error}
+            errorTitle="No se pudo cargar el catálogo de runtimes"
+            errorTestId="dep-cache-error"
+          >
+            <DataTable
+              data={cachedRuntimes}
+              data-testid="dep-cache-table"
+              getRowKey={(rt) => rt.id}
+              rowProps={(rt) => ({ "data-runtime": rt.id })}
+              columns={columns}
+            />
+          </StateBlock>
         </CardContent>
       </Card>
     </div>

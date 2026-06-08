@@ -92,7 +92,9 @@ async def create_skill(
     skill = Skill(
         tenant_id=tenant_id,
         name=payload.name,
-        category=payload.category,
+        # `category` es un SkillCategory (StrEnum); a la columna String guardamos
+        # su valor plano para que el driver no reciba el objeto enum.
+        category=str(payload.category),
         description=payload.description,
         prompt_fragment=payload.prompt_fragment,
         required_tools=_str_uuid_list(payload.required_tools),
@@ -122,7 +124,11 @@ async def update_skill(
         extra_filters=(Skill.is_builtin.is_(False),),
     )
 
-    apply_partial_update(skill, payload, transform={"required_tools": _str_uuid_list})
+    apply_partial_update(
+        skill,
+        payload,
+        transform={"required_tools": _str_uuid_list, "category": str},
+    )
 
     await session.flush()
     await session.refresh(skill)
