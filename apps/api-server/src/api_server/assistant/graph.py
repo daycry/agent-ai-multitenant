@@ -77,11 +77,12 @@ class AssistantModelClient(Protocol):
 
     ``decide`` receives the full state (system prompt, chat history, the
     tool results accumulated so far) and returns either tool calls or a
-    final answer. Kept a single method so a scripted test client can
-    replay turns without an LLM round-trip.
+    final answer. It is **async** so the real adapter can ``await`` the
+    provider on the request's event loop (no cross-loop bridging); the
+    scripted test double just returns its next turn.
     """
 
-    def decide(self, state: AssistantState) -> ModelTurn: ...
+    async def decide(self, state: AssistantState) -> ModelTurn: ...
 
 
 @dataclass
@@ -96,7 +97,7 @@ class ScriptedAssistantModel:
     turns: list[ModelTurn]
     _cursor: int = 0
 
-    def decide(self, state: AssistantState) -> ModelTurn:  # noqa: ARG002
+    async def decide(self, state: AssistantState) -> ModelTurn:  # noqa: ARG002
         if not self.turns:
             raise ValueError("ScriptedAssistantModel needs at least one turn")
         index = min(self._cursor, len(self.turns) - 1)
@@ -131,7 +132,7 @@ class AssistantState:
 # ---------------------------------------------------------------------------
 def _node_decide(model: AssistantModelClient) -> AssistantNode:
     async def _run(state: AssistantState) -> AssistantState:
-        turn = model.decide(state)
+        turn = await model.decide(state)
         # Drop any tool the tenant has not enabled — a model can never
         # widen its own surface past the tenant's allow-list.
         if turn.tool_calls:

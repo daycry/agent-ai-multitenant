@@ -13,9 +13,8 @@ real provider is ever contacted (the established chat-test pattern).
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import cast
 
 from shared_llm.base import LLMProvider
 from shared_llm.types import Message as LLMMessage
@@ -29,11 +28,15 @@ from api_server.assistant.tools import tool_schemas
 class LLMAssistantModel:
     """Adapt an ``LLMProvider`` to the assistant graph's ``decide`` seam.
 
-    ``decide`` is synchronous (the graph calls it inside an async node but
-    expects a value back); the provider is async, so we drive one
-    ``complete()`` call to completion on a fresh event loop slice. Each
-    call sends the system prompt + chat history + accumulated tool
-    results and lets the model either call more tools or answer.
+    ``decide`` is async: the graph node awaits it on the request's event
+    loop, so the async ``provider.complete()`` runs on that same loop. (It
+    used to be sync and bridge to async via a worker-thread ``asyncio.run``
+    per call — but that closed a fresh loop each round, and a provider's
+    pooled httpx connection from round 1 then blew up on round 2 with
+    "Event loop is closed" on Windows. Awaiting directly avoids the whole
+    cross-loop problem.) Each call sends the system prompt + chat history +
+    accumulated tool results and lets the model either call more tools or
+    answer.
     """
 
     provider: LLMProvider
@@ -41,21 +44,19 @@ class LLMAssistantModel:
     max_tokens: int = 1024
     temperature: float = 0.3
 
-    def decide(self, state: AssistantState) -> ModelTurn:
+    async def decide(self, state: AssistantState) -> ModelTurn:
         messages = self._build_messages(state)
         schemas = tool_schemas(state.enabled_tools)
         # Wrap each schema in the OpenAI-style {type:function,function:{...}}
         # envelope most providers expect; harmless for those that ignore it.
         tools = [{"type": "function", "function": s} for s in schemas] if schemas else None
 
-        response = _run_sync(
-            self.provider.complete(
-                messages,
-                model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                tools=tools,
-            )
+        response = await self.provider.complete(
+            messages,
+            model=self.model,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            tools=tools,
         )
         if response.tool_calls:
             calls = tuple(
@@ -86,27 +87,6 @@ class LLMAssistantModel:
                 )
             )
         return messages
-
-
-def _run_sync(coro: Any) -> Any:
-    """Run an async coroutine to completion from a sync context.
-
-    The graph node that calls ``decide`` is itself async, but ``decide``
-    is a sync method on the Protocol (so the scripted test double stays
-    trivial). We therefore drive the provider coroutine on its own loop.
-    """
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-    if loop is not None:
-        # Already inside a loop (the graph node) — run on a private loop in
-        # a worker thread to avoid re-entrancy.
-        import concurrent.futures
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, coro).result()
-    return asyncio.run(coro)
 
 
 __all__ = ["LLMAssistantModel"]
