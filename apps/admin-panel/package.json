@@ -10,6 +10,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:watch": "vitest",
     "generate:api-types": "openapi-typescript http://localhost:8001/openapi.json -o types/api.ts",
     "e2e": "playwright test",
     "e2e:install": "playwright install chromium"

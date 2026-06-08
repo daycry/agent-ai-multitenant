@@ -50,6 +50,7 @@ import {
   Pencil,
   PlugZap,
   Plus,
+  RefreshCw,
   ShieldAlert,
   Trash2,
   XCircle,
@@ -202,6 +203,8 @@ function LlmProvidersContent() {
   const [deviceFlowTarget, setDeviceFlowTarget] = useState<LlmProvider | null>(null);
   // Per-provider test result, keyed by provider id.
   const [testResults, setTestResults] = useState<Record<string, ProviderTestResult>>({});
+  // Per-provider model-sync message, keyed by provider id.
+  const [syncResults, setSyncResults] = useState<Record<string, string>>({});
 
   const listQuery = useQuery({
     queryKey: ["llm-providers"],
@@ -220,6 +223,22 @@ function LlmProvidersContent() {
         ...prev,
         [id]: { ok: false, status: "upstream_error", detail: errorText(err) },
       }));
+    },
+  });
+
+  // Sync the provider's available models (POST /{id}/sync-models) into
+  // config.models, so the assistant model selector reflects what the provider
+  // actually serves (ADR 0053).
+  const syncMutation = useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{ models: string[]; count: number }>(`/admin/llm-providers/${id}/sync-models`, {
+        method: "POST",
+      }),
+    onSuccess: (result, id) => {
+      setSyncResults((prev) => ({ ...prev, [id]: `${result.count} modelos sincronizados` }));
+    },
+    onError: (err, id) => {
+      setSyncResults((prev) => ({ ...prev, [id]: errorText(err) }));
     },
   });
 
@@ -291,6 +310,8 @@ function LlmProvidersContent() {
                   const kindLabel = isKind(p.kind) ? KIND_LABEL[p.kind] : p.kind;
                   const result = testResults[p.id];
                   const isTesting = testMutation.isPending && testMutation.variables === p.id;
+                  const isSyncing = syncMutation.isPending && syncMutation.variables === p.id;
+                  const syncMsg = syncResults[p.id];
                   return (
                     <TableRow key={p.id} data-testid={`provider-row-${p.id}`}>
                       <TableCell className="px-3">
@@ -347,47 +368,70 @@ function LlmProvidersContent() {
                         )}
                       </TableCell>
                       <TableCell className="px-3">
-                        <div className="flex items-center justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => testMutation.mutate(p.id)}
-                            disabled={isTesting}
-                            data-testid={`provider-test-${p.id}`}
-                            aria-label="Probar conexión"
-                          >
-                            <PlugZap className="h-3.5 w-3.5" />
-                          </Button>
-                          {p.kind === "copilot" ? (
+                        <div className="flex flex-col items-end gap-1">
+                          <div className="flex items-center justify-end gap-1">
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => setDeviceFlowTarget(p)}
-                              data-testid={`provider-device-flow-${p.id}`}
-                              aria-label="Autorizar con GitHub (Device Flow)"
+                              onClick={() => testMutation.mutate(p.id)}
+                              disabled={isTesting}
+                              data-testid={`provider-test-${p.id}`}
+                              aria-label="Probar conexión"
                             >
-                              <KeyRound className="h-3.5 w-3.5" />
+                              <PlugZap className="h-3.5 w-3.5" />
                             </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => syncMutation.mutate(p.id)}
+                              disabled={isSyncing}
+                              data-testid={`provider-sync-models-${p.id}`}
+                              aria-label="Sincronizar modelos"
+                              title="Sincronizar modelos (descubre /v1/models)"
+                            >
+                              <RefreshCw
+                                className={`h-3.5 w-3.5 ${isSyncing ? "animate-spin" : ""}`}
+                              />
+                            </Button>
+                            {p.kind === "copilot" ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setDeviceFlowTarget(p)}
+                                data-testid={`provider-device-flow-${p.id}`}
+                                aria-label="Autorizar con GitHub (Device Flow)"
+                              >
+                                <KeyRound className="h-3.5 w-3.5" />
+                              </Button>
+                            ) : null}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setEditTarget(p)}
+                              data-testid={`provider-edit-${p.id}`}
+                              aria-label="Editar"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => deleteMutation.mutate(p.id)}
+                              disabled={deleteMutation.isPending}
+                              data-testid={`provider-delete-${p.id}`}
+                              aria-label="Eliminar"
+                            >
+                              <Trash2 className="text-destructive h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                          {syncMsg ? (
+                            <span
+                              className="text-muted-foreground text-xs"
+                              data-testid={`provider-sync-result-${p.id}`}
+                            >
+                              {syncMsg}
+                            </span>
                           ) : null}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setEditTarget(p)}
-                            data-testid={`provider-edit-${p.id}`}
-                            aria-label="Editar"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => deleteMutation.mutate(p.id)}
-                            disabled={deleteMutation.isPending}
-                            data-testid={`provider-delete-${p.id}`}
-                            aria-label="Eliminar"
-                          >
-                            <Trash2 className="text-destructive h-3.5 w-3.5" />
-                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>

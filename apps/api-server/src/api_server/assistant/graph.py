@@ -18,8 +18,9 @@ RLS-bound session, so tenant isolation is enforced by the database.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, runtime_checkable
 
 from langgraph.graph import END, START, StateGraph
@@ -77,11 +78,12 @@ class AssistantModelClient(Protocol):
 
     ``decide`` receives the full state (system prompt, chat history, the
     tool results accumulated so far) and returns either tool calls or a
-    final answer. Kept a single method so a scripted test client can
-    replay turns without an LLM round-trip.
+    final answer. It is **async** so the real adapter can ``await`` the
+    provider on the request's event loop (no cross-loop bridging); the
+    scripted test double just returns its next turn.
     """
 
-    def decide(self, state: AssistantState) -> ModelTurn: ...
+    async def decide(self, state: AssistantState) -> ModelTurn: ...
 
 
 @dataclass
@@ -96,7 +98,7 @@ class ScriptedAssistantModel:
     turns: list[ModelTurn]
     _cursor: int = 0
 
-    def decide(self, state: AssistantState) -> ModelTurn:  # noqa: ARG002
+    async def decide(self, state: AssistantState) -> ModelTurn:  # noqa: ARG002
         if not self.turns:
             raise ValueError("ScriptedAssistantModel needs at least one turn")
         index = min(self._cursor, len(self.turns) - 1)
@@ -121,6 +123,13 @@ class AssistantState:
     tools_called: list[str] = field(default_factory=list)
     rounds: int = 0
     answer: str | None = None
+    # The latest non-empty content the model produced this turn — used as the
+    # answer when the loop ends without a fresh content turn.
+    last_content: str | None = None
+    # Signatures (name+args) of tool calls already executed this turn, so an
+    # over-eager model re-calling the SAME tool doesn't loop (a weak/reasoning
+    # model otherwise repeats the same call until the round ceiling).
+    executed_signatures: set[str] = field(default_factory=set)
 
     # Injected, not serialised into the prompt — the RLS-bound context.
     tool_ctx: AssistantToolContext | None = None
@@ -129,18 +138,33 @@ class AssistantState:
 # ---------------------------------------------------------------------------
 # Nodes
 # ---------------------------------------------------------------------------
+def _signature(call: ToolInvocation) -> str:
+    """Stable identity of a tool call (name + arguments) used to detect a model
+    re-calling the exact same tool, so the loop converges instead of repeating
+    it until the round ceiling."""
+    return f"{call.name}|{json.dumps(call.arguments, sort_keys=True, default=str)}"
+
+
 def _node_decide(model: AssistantModelClient) -> AssistantNode:
     async def _run(state: AssistantState) -> AssistantState:
-        turn = model.decide(state)
-        # Drop any tool the tenant has not enabled — a model can never
-        # widen its own surface past the tenant's allow-list.
-        if turn.tool_calls:
-            allowed = set(state.enabled_tools)
-            kept = tuple(tc for tc in turn.tool_calls if tc.name in allowed)
-            turn = ModelTurn(content=turn.content, tool_calls=kept)
-        state.pending = turn
-        if not turn.tool_calls:
-            state.answer = turn.content or ""
+        turn = await model.decide(state)
+        if turn.content:
+            state.last_content = turn.content
+        # Keep only tool calls that are (a) enabled for the tenant and (b) not
+        # already executed this turn — an over-eager model re-emitting the same
+        # call (e.g. remembering the same fact every round) is dropped, which
+        # lets the loop converge.
+        allowed = set(state.enabled_tools)
+        kept = tuple(
+            tc
+            for tc in turn.tool_calls
+            if tc.name in allowed and _signature(tc) not in state.executed_signatures
+        )
+        state.pending = ModelTurn(content=turn.content, tool_calls=kept)
+        if not kept:
+            # No new work to do → this is the answer (the model's content, or
+            # the latest content it produced earlier this turn).
+            state.answer = turn.content or state.last_content or ""
         return state
 
     return _run
@@ -152,6 +176,7 @@ def _node_run_tools() -> AssistantNode:
         assert state.tool_ctx is not None
         state.rounds += 1
         for call in state.pending.tool_calls:
+            state.executed_signatures.add(_signature(call))
             result = await run_assistant_tool(call.name, state.tool_ctx, call.arguments)
             state.tools_called.append(call.name)
             state.tool_results.append({"tool": call.name, "result": result})
@@ -161,7 +186,7 @@ def _node_run_tools() -> AssistantNode:
 
 
 def _route_after_decide(state: AssistantState) -> str:
-    """Loop into the tool round when the model asked for tools AND we are
+    """Loop into the tool round when the model asked for NEW tools AND we are
     under the round ceiling; otherwise finish."""
     assert state.pending is not None
     if state.pending.tool_calls and state.rounds < MAX_TOOL_ROUNDS:
@@ -169,13 +194,19 @@ def _route_after_decide(state: AssistantState) -> str:
     return "finish"
 
 
-def _node_finish() -> AssistantNode:
+def _node_finish(model: AssistantModelClient) -> AssistantNode:
     async def _run(state: AssistantState) -> AssistantState:
-        if state.answer is None:
-            # Hit the round ceiling without a content turn — degrade
-            # gracefully rather than loop. The accumulated tool results
-            # are still available to the caller.
-            state.answer = ""
+        if state.answer:
+            return state
+        if state.last_content:
+            state.answer = state.last_content
+            return state
+        # The model kept calling tools without ever answering. Ask once more
+        # with NO tools available so it MUST produce a textual answer, grounded
+        # on the tool results gathered so far.
+        final = replace(state, enabled_tools=(), pending=None)
+        turn = await model.decide(final)
+        state.answer = turn.content or ""
         return state
 
     return _run
@@ -188,7 +219,7 @@ def build_assistant_graph(model: AssistantModelClient) -> Any:
     graph: StateGraph[AssistantState] = StateGraph(AssistantState)
     graph.add_node("decide", _node_decide(model))
     graph.add_node("run_tools", _node_run_tools())
-    graph.add_node("finish", _node_finish())
+    graph.add_node("finish", _node_finish(model))
 
     graph.add_edge(START, "decide")
     graph.add_conditional_edges(

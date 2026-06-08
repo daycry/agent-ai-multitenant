@@ -61,6 +61,18 @@ class HourlyRateUpdateRequest(BaseModel):
     hourly_rate_currency: str | None = Field(default=None, min_length=3, max_length=3)
 
 
+class PersonalAssistantToggleResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    enabled: bool
+
+
+class PersonalAssistantToggleRequest(BaseModel):
+    model_config = _BASE_CONFIG
+
+    enabled: bool
+
+
 async def _load_org(session: AsyncSession, tenant_id: Any) -> Organization:
     result = await session.execute(
         select(Organization).where(Organization.id == tenant_id, Organization.deleted_at.is_(None))
@@ -106,6 +118,41 @@ async def update_tenant_hourly_rate(
         hourly_rate=org.hourly_rate,
         hourly_rate_currency=org.hourly_rate_currency,
     )
+
+
+# ---------------------------------------------------------------------------
+# Plan 10 — Personal assistant on/off toggle
+# ---------------------------------------------------------------------------
+# This is the ONLY way a Tenant Admin can enable the assistant for their
+# tenant. It is gated by ``require_tenant_admin`` and NEVER by
+# ``require_assistant_access`` (which itself requires the toggle to be ON):
+# gating it behind the assistant gate would make it impossible to ever turn
+# the assistant on (a chicken-and-egg lock-out). The ``/assistant/*``
+# endpoints stay toggle-gated; this pair does not.
+
+
+@router.get("/personal-assistant", response_model=PersonalAssistantToggleResponse)
+async def get_personal_assistant_toggle(
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> PersonalAssistantToggleResponse:
+    tenant_id = require_tenant_id(principal)
+    org = await _load_org(session, tenant_id)
+    return PersonalAssistantToggleResponse(enabled=org.personal_assistant_enabled)
+
+
+@router.put("/personal-assistant", response_model=PersonalAssistantToggleResponse)
+async def update_personal_assistant_toggle(
+    payload: PersonalAssistantToggleRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> PersonalAssistantToggleResponse:
+    tenant_id = require_tenant_id(principal)
+    org = await _load_org(session, tenant_id)
+    org.personal_assistant_enabled = payload.enabled
+    await session.flush()
+    await session.refresh(org)
+    return PersonalAssistantToggleResponse(enabled=org.personal_assistant_enabled)
 
 
 # ---------------------------------------------------------------------------

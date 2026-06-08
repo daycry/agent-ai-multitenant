@@ -42,7 +42,13 @@ from api_server.auth.deps import (
     get_admin_session,
     require_system_admin,
 )
-from api_server.db.llm_providers import LlmProvider, get_llm_provider, list_llm_providers
+from api_server.db.llm_providers import (
+    PROVIDER_SYNCED_MODELS_KEY,
+    LlmProvider,
+    get_llm_provider,
+    list_llm_providers,
+)
+from api_server.llm_providers.factory import list_provider_models
 from api_server.llm_providers.liveness import probe_provider
 from api_server.llm_providers.vault import (
     HvacLLMProviderVaultStore,
@@ -52,6 +58,7 @@ from api_server.llm_providers.vault import (
 )
 from api_server.schemas.llm_providers import (
     LLMProviderCreateRequest,
+    LLMProviderModelsSyncResponse,
     LLMProviderResponse,
     LLMProviderTestResponse,
     LLMProviderUpdateRequest,
@@ -338,6 +345,34 @@ async def test_provider(
         secret=secret,
     )
     return LLMProviderTestResponse(ok=result.ok, status=result.status.value, detail=result.detail)
+
+
+# ===========================================================================
+# POST /admin/llm-providers/{id}/sync-models — discover + persist model ids
+# ===========================================================================
+@admin_router.post("/{provider_id}/sync-models", response_model=LLMProviderModelsSyncResponse)
+async def sync_provider_models(
+    provider_id: UUID,
+    _: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+    vault: LLMProviderVaultStore | None = Depends(get_provider_vault_store),
+) -> LLMProviderModelsSyncResponse:
+    """Discover the models the provider serves and persist them on the row.
+
+    Calls the provider's ``/v1/models`` (Ollama and other OpenAI-compatible
+    providers expose it) ONCE, on demand, and stores the result in the
+    non-secret ``config.models`` — so the assistant model dropdown reflects
+    what the provider actually serves without a network call on every open
+    (ADR 0053). A discovery that finds nothing (provider has no listing API,
+    or the call failed) leaves the existing list untouched and reports
+    ``count = 0`` rather than wiping it. RBAC: ``require_system_admin``.
+    """
+    provider = await _load_provider(session, provider_id)
+    models = await list_provider_models(session, provider_id=provider_id, vault=vault)
+    if models:
+        provider.config = {**(provider.config or {}), PROVIDER_SYNCED_MODELS_KEY: models}
+        await session.flush()
+    return LLMProviderModelsSyncResponse(models=models, count=len(models))
 
 
 __all__ = [

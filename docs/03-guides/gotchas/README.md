@@ -66,6 +66,10 @@ el problema ya esté documentado.
 - [alembic-revision-id-32-chars.md](./alembic-revision-id-32-chars.md)
   — `alembic_version.version_num` es `varchar(32)`: un revision id > 32
   chars revienta con `StringDataRightTruncationError`.
+- [alembic-db-ahead-after-branch-switch.md](./alembic-db-ahead-after-branch-switch.md)
+  — `Can't locate revision identified by 'XXXX'`: la BD se migró en otro
+  branch y quedó por delante; downgrade trayendo los ficheros, no
+  `UPDATE alembic_version`.
 
 ### pre-commit / mypy / ruff
 
