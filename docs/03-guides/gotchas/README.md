@@ -70,6 +70,9 @@ el problema ya esté documentado.
   — `Can't locate revision identified by 'XXXX'`: la BD se migró en otro
   branch y quedó por delante; downgrade trayendo los ficheros, no
   `UPDATE alembic_version`.
+- [alembic-dev-db-branch-only-revision.md](./alembic-dev-db-branch-only-revision.md)
+  — `Can't locate revision`: la DB de dev quedó en una revisión cuyo fichero
+  solo existe en otra rama; verifica migraciones SOLO en la DB de test.
 
 ### pre-commit / mypy / ruff
 

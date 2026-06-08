@@ -164,33 +164,46 @@ _DELETE_STALE_MEMBERS_SQL = text(
 )
 
 
-async def seed_builtin_teams(session: AsyncSession) -> int:
-    for team in BUILTIN_TEAMS:
+async def upsert_team(session: AsyncSession, team: BuiltinTeam) -> None:
+    """Upsert one :class:`BuiltinTeam` + its members. Idempotent.
+
+    Extracted so other built-in seeders (e.g. the CodeIgniter 4 team in
+    ``ci4_team.py``) can reuse the exact same SQL without duplicating it,
+    and without adding their team to ``BUILTIN_TEAMS`` (whose count the
+    seed test pins). Resolves each member's ``agent_id`` from its slug via
+    the shared ``builtin_agent_id`` namespace, so the referenced agents
+    must already be seeded (FK on ``team_members.agent_id``).
+    """
+    await session.execute(
+        _UPSERT_TEAM_SQL,
+        {
+            "id": str(team.id),
+            "tenant_id": str(PLATFORM_TENANT_ID),
+            "name": team.name,
+            "description": team.description,
+        },
+    )
+    for member in team.members:
         await session.execute(
-            _UPSERT_TEAM_SQL,
+            _UPSERT_MEMBER_SQL,
             {
-                "id": str(team.id),
-                "tenant_id": str(PLATFORM_TENANT_ID),
-                "name": team.name,
-                "description": team.description,
+                "team_id": str(team.id),
+                "agent_id": str(builtin_agent_id(member.agent_slug)),
+                "role_in_team": member.role_in_team,
+                "is_team_leader": member.is_team_leader,
+                "priority": member.assignment_priority,
             },
         )
-        for member in team.members:
-            await session.execute(
-                _UPSERT_MEMBER_SQL,
-                {
-                    "team_id": str(team.id),
-                    "agent_id": str(builtin_agent_id(member.agent_slug)),
-                    "role_in_team": member.role_in_team,
-                    "is_team_leader": member.is_team_leader,
-                    "priority": member.assignment_priority,
-                },
-            )
-        # Drop any member rows that aren't in the current spec for this team
-        # -- handles the case where we shrink a team between seed releases.
-        keep_ids = [str(builtin_agent_id(m.agent_slug)) for m in team.members]
-        await session.execute(
-            _DELETE_STALE_MEMBERS_SQL,
-            {"team_id": str(team.id), "keep_ids": keep_ids},
-        )
+    # Drop any member rows that aren't in the current spec for this team
+    # -- handles the case where we shrink a team between seed releases.
+    keep_ids = [str(builtin_agent_id(m.agent_slug)) for m in team.members]
+    await session.execute(
+        _DELETE_STALE_MEMBERS_SQL,
+        {"team_id": str(team.id), "keep_ids": keep_ids},
+    )
+
+
+async def seed_builtin_teams(session: AsyncSession) -> int:
+    for team in BUILTIN_TEAMS:
+        await upsert_team(session, team)
     return len(BUILTIN_TEAMS)
