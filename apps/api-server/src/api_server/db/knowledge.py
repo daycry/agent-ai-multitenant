@@ -131,7 +131,7 @@ class Document(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Sof
         ),
         Index("ix_documents_tenant_id", "tenant_id"),
         CheckConstraint(
-            "status IN ('pending', 'processing', 'indexed', 'failed')",
+            "status IN ('pending', 'processing', 'indexed', 'indexed_empty', 'failed')",
             name="ck_documents_status",
         ),
         CheckConstraint("source_size_bytes >= 0", name="ck_documents_size_non_negative"),

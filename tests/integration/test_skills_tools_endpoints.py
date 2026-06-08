@@ -83,7 +83,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             builtin_skill,
             _PLATFORM_TENANT_ID,
             "Catalog: Code Review",
-            "review",
+            "qa",
             "Review code for correctness, style, and security.",
         )
         await conn.execute(
@@ -188,7 +188,7 @@ async def test_skills_crud_roundtrip(configured_app, migrations_pg_dsn: str) -> 
             "/skills",
             json={
                 "name": "Custom: SQL Tuning",
-                "category": "data",
+                "category": "backend",
                 "prompt_fragment": "You can tune slow PostgreSQL queries.",
                 "required_tools": [],
             },
@@ -214,11 +214,11 @@ async def test_skills_crud_roundtrip(configured_app, migrations_pg_dsn: str) -> 
         # PUT
         upd = await client.put(
             f"/skills/{skill_id}",
-            json={"category": "performance"},
+            json={"category": "devops"},
             headers=headers,
         )
         assert upd.status_code == 200
-        assert upd.json()["category"] == "performance"
+        assert upd.json()["category"] == "devops"
 
         # DELETE
         dele = await client.delete(f"/skills/{skill_id}", headers=headers)
@@ -244,9 +244,11 @@ async def test_skills_builtin_is_readable_but_not_writable(
         assert got.status_code == 200
         assert got.json()["is_builtin"] is True
 
+        # Categoría válida (enum cerrado): el rechazo debe venir de que es un
+        # built-in read-only (404), no de la validación de categoría.
         upd = await client.put(
             f"/skills/{builtin_id}",
-            json={"category": "hijacked"},
+            json={"category": "devops"},
             headers=headers,
         )
         assert upd.status_code == 404
@@ -269,7 +271,7 @@ async def test_skills_tenant_isolation(configured_app, migrations_pg_dsn: str) -
             "/skills",
             json={
                 "name": "A's secret skill",
-                "category": "internal",
+                "category": "research",
                 "prompt_fragment": "Confidential.",
             },
             headers={"Authorization": f"Bearer {token_a}"},
@@ -305,8 +307,10 @@ async def test_tools_crud_roundtrip(configured_app, migrations_pg_dsn: str) -> N
         create = await client.post(
             "/tools",
             json={
-                "name": "Custom: Internal API",
-                "category": "integration",
+                # Names are normalised to slug-case (task_06_18_04); the
+                # response carries the slug, not the raw label.
+                "name": "Internal API",
+                "category": "custom",
                 "implementation_type": "http_endpoint",
                 "implementation_ref": "https://internal/api",
                 "input_schema": {"type": "object"},
@@ -318,12 +322,13 @@ async def test_tools_crud_roundtrip(configured_app, migrations_pg_dsn: str) -> N
         assert create.status_code == 201, create.text
         body = create.json()
         assert body["is_builtin"] is False
+        assert body["name"] == "internal_api"  # slug-normalised
         assert body["security_level"] == "safe"  # default
         tool_id = body["id"]
 
         listed = await client.get("/tools", headers=headers)
         names = {t["name"] for t in listed.json()}
-        assert {"Custom: Internal API", "Catalog: HTTP Fetch"} <= names
+        assert {"internal_api", "Catalog: HTTP Fetch"} <= names
 
         # FILTER by category.
         filtered = await client.get("/tools?category=network", headers=headers)
@@ -383,7 +388,7 @@ async def test_tools_timeout_must_be_positive(configured_app, migrations_pg_dsn:
             "/tools",
             json={
                 "name": "Bad Tool",
-                "category": "data",
+                "category": "custom",
                 "implementation_type": "builtin",
                 "timeout_seconds": 0,
             },

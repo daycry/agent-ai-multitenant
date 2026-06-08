@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_member
 from api_server.db.domain import Agent, AgentTool, Project, Tool
+from api_server.schemas.catalog import tool_is_runtime_wired
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["tools-diagnostic"])
 
@@ -50,6 +51,11 @@ class ToolDiagnostic(BaseModel):
     implementation_type: str
     security_level: str
     timeout_seconds: int
+    #: Honest availability (ADR 0049, Plan 06.18 task_06_18_07): whether the
+    #: agent-runtime can actually execute this assigned tool. A ``False`` here
+    #: is the "tool asignada pero no ejecutable" case the diagnostic must NOT
+    #: hide; it is the same flag the ``effective-tools`` contract exposes.
+    executable_in_runtime: bool
 
 
 class McpServerDiagnostic(BaseModel):
@@ -166,6 +172,9 @@ async def get_agent_tools_diagnostic(
                         implementation_type=tool.implementation_type,
                         security_level=tool.security_level,
                         timeout_seconds=tool.timeout_seconds,
+                        executable_in_runtime=tool_is_runtime_wired(
+                            tool.name, tool.implementation_type
+                        ),
                     )
                     for tool in tools_by_agent.get(agent.id, [])
                 ],

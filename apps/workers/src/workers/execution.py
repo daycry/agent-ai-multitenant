@@ -25,6 +25,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+from api_server.auth.internal_agent import mint_agent_token
 from api_server.db.approval_repo import request_approval_if_needed
 from api_server.db.domain import Project, Task
 from api_server.db.execution_repo import (
@@ -112,6 +113,32 @@ class ExecutionRequest:
     # what a project that pinned no stack carries) keeps each tool's own default
     # runtime (backward-compatible — no behaviour change for Python projects).
     default_runtime_template: str | None = None
+    # The agent's assigned tools serialised as executable ToolSpec dicts
+    # (`serialize_agent_tool_specs`, Plan 06.18 task_06_18_05). The orchestrator
+    # builds it from the agent's `agent_tools` rows; the worker forwards it into
+    # the agent spec so `__main__.run_task` registers the real executors under
+    # canonical names. `None` = no key (no assignments) → the runtime keeps the
+    # pre-06.18 echo/noop behaviour (06.15 backward-compat). Before forwarding,
+    # the worker resolves any `docker_command` spec's `runtime_template` to a
+    # concrete image (the worker owns the runtime catalog; the sandboxed
+    # runtime must not import `shared_test_runtimes`).
+    tool_specs: list[dict[str, Any]] | None = None
+    # The project's MCP server declarations (`projects.mcp_servers`, JSONB; Plan
+    # 06.18 task_06_18_12 / ADR 0052). The orchestrator threads it from the
+    # task's project; the worker forwards it into the agent spec so
+    # `__main__.run_task` starts an `MCPToolRunner`, connects each server (auth
+    # via Vault) and registers its `<server>.<tool>` tools before the graph.
+    # `None` = no key (no MCP servers declared) -> the runtime opens no MCP
+    # session, the pre-06.18 behaviour (feature-safe). Each entry mirrors
+    # `shared_mcp.MCPServerConfig` / `api_server.mcp.config.MCPServerConfigModel`.
+    mcp_servers: list[dict[str, Any]] | None = None
+    # The agent's assigned skills' `prompt_fragment` list (Plan 06.18
+    # task_06_18_13 / ADR 0050). The orchestrator resolves it from the agent's
+    # `agent_skills` rows; the worker forwards it into the agent spec so
+    # `__main__.run_task` prepends it to the system prompt EFECTIVO. `None` = no
+    # key (no skills assigned) -> the runtime keeps the current prompt untouched
+    # (backward-compatible).
+    skill_prompt_fragments: list[str] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict — the Celery payload the orchestrator sends."""
@@ -125,6 +152,9 @@ class ExecutionRequest:
             "allowed_tools": self.allowed_tools,
             "allowed_commands": self.allowed_commands,
             "default_runtime_template": self.default_runtime_template,
+            "tool_specs": self.tool_specs,
+            "mcp_servers": self.mcp_servers,
+            "skill_prompt_fragments": self.skill_prompt_fragments,
         }
 
     @classmethod
@@ -140,6 +170,9 @@ class ExecutionRequest:
             allowed_tools=raw.get("allowed_tools"),
             allowed_commands=raw.get("allowed_commands"),
             default_runtime_template=raw.get("default_runtime_template"),
+            tool_specs=raw.get("tool_specs"),
+            mcp_servers=raw.get("mcp_servers"),
+            skill_prompt_fragments=raw.get("skill_prompt_fragments"),
         )
 
 
@@ -199,7 +232,107 @@ def _agent_spec(
     # backward-compatible for existing Python projects.
     if request.default_runtime_template is not None:
         spec["default_runtime_template"] = request.default_runtime_template
+    # Forward the serialised executable ToolSpec list (task_06_18_05). Only emit
+    # when the agent has assignments — `None` means "no key", which the runtime
+    # reads as "register no new families" (pre-06.18 echo/noop behaviour). Before
+    # forwarding we resolve each docker_command spec's `runtime_template` to a
+    # concrete image (the worker owns the runtime catalog; the sandboxed runtime
+    # must not import `shared_test_runtimes`).
+    if request.tool_specs is not None:
+        spec["tool_specs"] = _resolve_tool_spec_images(
+            request.tool_specs, request.default_runtime_template
+        )
+    # Forward the project's MCP server declarations (task_06_18_12 / ADR 0052).
+    # Only emit the key when the project declares servers -- `None` means "no
+    # key", which the runtime reads as "open no MCP session" (feature-safe,
+    # pre-06.18 behaviour). The runtime starts an `MCPToolRunner`, connects each
+    # server and registers its `<server>.<tool>` tools before the graph.
+    if request.mcp_servers is not None:
+        spec["mcp_servers"] = request.mcp_servers
+    # Forward the assigned skills' prompt fragments (task_06_18_13 / ADR 0050).
+    # Only emit the key when the agent has skills -- `None` means "no key", which
+    # the runtime reads as "keep the system prompt untouched" (backward-compat).
+    if request.skill_prompt_fragments is not None:
+        spec["skill_prompt_fragments"] = request.skill_prompt_fragments
     return spec
+
+
+def _build_runtime_env(
+    request: ExecutionRequest,
+    approval_policy: dict[str, Any] | None,
+    *,
+    agent_internal_api_url: str,
+) -> dict[str, str]:
+    """El env del contenedor `agent-runtime` para una ejecución (función PURA).
+
+    Sin docker, sin red: toma la `ExecutionRequest` (más la `approval_policy`
+    resuelta del proyecto) y devuelve el dict de variables de entorno que el
+    `ContainerSpec` lleva. Extraída de `conduct_execution` para poder testearla
+    en aislamiento (Plan 06.17 / followup-worker-internal-token).
+
+    Siempre incluye ``AGENT_TASK_SPEC``. Cuando la tarea tiene un agente
+    asignado, mintea además ``AGENTIC_INTERNAL_TOKEN`` (firmado con el
+    `jwt_secret` del api-server, vía :func:`mint_agent_token`) y publica
+    ``AGENTIC_API_URL`` para que el runtime active las familias de
+    conocimiento/memoria (rag-search, memory-recall/store, document-convert,
+    promote-to-kb) — la costura de la API interna del agente (ADR 0012,
+    Plan 04.5). El token lleva el contexto de la tarea (claim ``task`` =
+    `request.task_id`) para que los endpoints internos resuelvan el project_id
+    EFECTIVO de un agente global (ADR 0054).
+
+    RIESGO operativo: esto ACTIVA llamadas HTTP internas del runtime hacia el
+    api-server que antes estaban dormidas. Si la tarea NO tiene agente asignado
+    NO se mintea token — sin token el runtime salta esas familias con gracia
+    (backward-compat, el comportamiento actual). El runtime también degrada con
+    gracia si el token expira o el api-server no responde.
+    """
+    env: dict[str, str] = {
+        "AGENT_TASK_SPEC": json.dumps(_agent_spec(request, approval_policy)),
+    }
+    # Sin agente asignado no hay sujeto para el token: lo dejamos fuera y el
+    # runtime mantiene su comportamiento sin API interna (backward-compat).
+    if request.agent_id:
+        env["AGENTIC_INTERNAL_TOKEN"] = mint_agent_token(
+            agent_id=UUID(request.agent_id),
+            tenant_id=UUID(request.tenant_id),
+            task_id=UUID(request.task_id),
+        )
+        env["AGENTIC_API_URL"] = agent_internal_api_url
+    return env
+
+
+def _resolve_tool_spec_images(
+    tool_specs: list[dict[str, Any]], project_default_runtime: str | None
+) -> list[dict[str, Any]]:
+    """Pre-resolve each ``docker_command`` ToolSpec's ``runtime_template`` to a
+    concrete docker image (Plan 06.18 task_06_18_05).
+
+    The agent-runtime is a separate container with no access to
+    ``shared_test_runtimes``; only the worker can map a runtime-template id to
+    an image. So we resolve here — honouring the project stack over the tool
+    default (Plan 06.16 precedence) — and replace ``runtime_template`` with an
+    explicit ``image`` the runtime's ``docker_command`` builder consumes
+    directly. Specs that already carry an explicit ``image`` (Plan 05 custom
+    tools) are left untouched. An unknown runtime id surfaces as a clear
+    ``RuntimeResolutionError`` at dispatch, not a silent boot crash inside the
+    container.
+    """
+    from workers.test_runtime import resolve_run_runtime_image
+
+    resolved: list[dict[str, Any]] = []
+    for raw in tool_specs:
+        spec = dict(raw)
+        if spec.get("implementation_type") == "docker_command":
+            config = dict(spec.get("config") or {})
+            if not config.get("image"):
+                tool_runtime = config.pop("runtime_template", None)
+                config["image"] = resolve_run_runtime_image(
+                    project_default_runtime,
+                    str(tool_runtime) if tool_runtime else None,
+                )
+            spec["config"] = config
+        resolved.append(spec)
+    return resolved
 
 
 async def _load_project(session: AsyncSession, task_id: UUID) -> Project | None:
@@ -348,7 +481,11 @@ async def conduct_execution(  # noqa: PLR0915 - tramos lineales (seed/run/finali
     drainer = asyncio.create_task(drain())
     container_spec = ContainerSpec(
         image=settings.agent_runtime_image,
-        env={"AGENT_TASK_SPEC": json.dumps(_agent_spec(request, approval_policy))},
+        env=_build_runtime_env(
+            request,
+            approval_policy,
+            agent_internal_api_url=settings.agent_internal_api_url,
+        ),
         labels={"com.agentic-platform.execution-id": exec_id},
     )
     runner = AgentContainerRunner(settings)

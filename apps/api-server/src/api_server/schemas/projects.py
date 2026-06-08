@@ -18,6 +18,7 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from shared_test_runtimes import CATALOG
 
 from api_server.db.domain import BudgetPeriod, HumanTaskReviewMode, Project, ProjectStatus
 from api_server.mcp.config import validate_mcp_servers_payload
@@ -61,6 +62,23 @@ def _normalise_allowed_commands(value: list[str]) -> list[str]:
     if len(out) > _MAX_ALLOWED_COMMANDS:
         raise ValueError(f"too many allowed_commands ({len(out)}); max {_MAX_ALLOWED_COMMANDS}")
     return out
+
+
+def _validate_runtime_template(value: str | None) -> str | None:
+    """Reject a `default_runtime_template` that is not in the catalog.
+
+    Plan 06.18 task_06_18_08 (ADR 0051): the project's default runtime must
+    be one of the curated templates in `shared_test_runtimes.CATALOG`,
+    reusing the same guard that already lived only in `dep_cache.py` (422 if
+    the runtime is unknown). `None` means "no default runtime" (the run_*
+    tools fall back to per-tool defaults) and stays accepted.
+    """
+    if value is None:
+        return None
+    if value not in CATALOG:
+        known = ", ".join(sorted(CATALOG))
+        raise ValueError(f"unknown default_runtime_template {value!r}; known: {known}")
+    return value
 
 
 def _check_json_config_size(value: Any, field_name: str) -> None:
@@ -121,6 +139,14 @@ class ProjectCreateRequest(BaseModel):
     # = a plain project with no auto-grants (backward-compatible).
     template_id: UUID | None = None
 
+    # Plan 06.17 task_06_17_14: the wizard sends this flag alongside
+    # `template_id` to decide whether the template's `default_kb_grants`
+    # are actually applied. `True` (default, backward-compatible) grants
+    # the KBs; `False` adopts the template's shape (team/config inherited
+    # by the wizard front-end) WITHOUT auto-granting any KB. Ignored when
+    # `template_id` is absent ("proyecto en blanco" grants nothing anyway).
+    apply_template_kb_grants: bool = True
+
     mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
     rag_knowledge_bases: list[dict[str, Any]] = Field(default_factory=list)
     worker_config: dict[str, Any] = Field(default_factory=dict)
@@ -152,6 +178,11 @@ class ProjectCreateRequest(BaseModel):
     @classmethod
     def _validate_allowed_commands(cls, value: list[str]) -> list[str]:
         return _normalise_allowed_commands(value)
+
+    @field_validator("default_runtime_template", mode="after")
+    @classmethod
+    def _validate_runtime_template(cls, value: str | None) -> str | None:
+        return _validate_runtime_template(value)
 
     @field_validator(
         "rag_knowledge_bases",
@@ -219,6 +250,11 @@ class ProjectUpdateRequest(BaseModel):
         if value is None:
             return None
         return _normalise_allowed_commands(value)
+
+    @field_validator("default_runtime_template", mode="after")
+    @classmethod
+    def _validate_runtime_template(cls, value: str | None) -> str | None:
+        return _validate_runtime_template(value)
 
     @field_validator(
         "rag_knowledge_bases",

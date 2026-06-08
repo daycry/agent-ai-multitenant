@@ -25,20 +25,40 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, ConfigDict, Field
+from shared_domain.tool_names import to_canonical_set
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.agent_tools_enforcement import compute_effective_tools
 from api_server.auth.deps import (
     AuthPrincipal,
     get_tenant_session,
     require_tenant_admin,
     require_tenant_member,
 )
+from api_server.capabilities import (
+    CapabilitiesResponse,
+    CapabilityRecordar,
+    CapabilitySaber,
+    CapabilityWarning,
+    agent_global_warning,
+    build_ser,
+    hacer_for_agent,
+    kbs_for_agent_role,
+    kbs_for_project,
+    memory_counts,
+    merge_kbs,
+    private_memory_warning,
+)
+from api_server.chat.modes import resolve_mode_config
 from api_server.db.domain import (
     Agent,
     AgentScope,
+    AgentSkill,
     AgentTool,
     Project,
+    Skill,
     Tool,
     ToolImplementationType,
 )
@@ -55,18 +75,22 @@ from api_server.routers._pagination import (
     offset_query,
 )
 from api_server.schemas.agents import (
+    AgentCapabilitiesDiff,
     AgentCreateRequest,
     AgentDiffResponse,
     AgentFieldDiff,
     AgentForkRequest,
     AgentMergeRequest,
     AgentResponse,
+    AgentSkillResponse,
     AgentToolResponse,
     AgentUpdateRequest,
     GrantKBRequest,
+    SetAgentSkillsRequest,
     SetAgentToolsRequest,
     to_agent_response,
 )
+from api_server.schemas.catalog import tool_is_runtime_wired
 
 # Fields that participate in the fork-vs-source diff. JSON columns are
 # compared as whole values; in v2 we may want a deeper diff for nested
@@ -168,6 +192,31 @@ async def create_agent(
             detail="global_builtin agents cannot be created through the tenant API",
         )
 
+    # Default de memory_scope operator-configurable (Plan 06.17 task_06_17_04):
+    # cuando el body no envía ``memory_scope``, se lee de ``memory.default_scope``
+    # (platform_settings) en vez de hardcodear ``private``. Un valor explícito gana.
+    if payload.memory_scope is not None:
+        memory_scope = payload.memory_scope.value
+    else:
+        from api_server.db.platform_settings import get_default_memory_scope
+
+        memory_scope = await get_default_memory_scope(session)
+
+    # Default EXPLÍCITO de model_config operator-configurable (Plan 06.17
+    # task_06_17_10 / ADR 0055): cuando el body no envía ``model_config`` (o lo
+    # envía vacío), se rellena con el default seguro de ``model.default_config``
+    # (platform_settings, anclado al catálogo cerrado del ADR 0021) en vez de
+    # persistir ``{}``. Así NINGÚN agente nuevo nace con un spec vacío que
+    # fallaría tarde en dispatch. Un ``model_config`` no vacío ya fue validado
+    # contra el catálogo por el schema (422 fuera de catálogo) y gana sobre el
+    # default.
+    if payload.llm_config:
+        model_config_value = payload.llm_config
+    else:
+        from api_server.db.platform_settings import get_default_model_config
+
+        model_config_value = await get_default_model_config(session)
+
     agent = Agent(
         tenant_id=tenant_id,
         name=payload.name,
@@ -176,8 +225,8 @@ async def create_agent(
         agent_type=payload.agent_type.value,
         role=payload.role.value,
         system_prompt=payload.system_prompt,
-        model_config=payload.llm_config,
-        memory_scope=payload.memory_scope.value,
+        model_config=model_config_value,
+        memory_scope=memory_scope,
         review_capability=payload.review_capability,
         max_concurrent_tasks=payload.max_concurrent_tasks,
         is_template=payload.is_template,
@@ -308,8 +357,117 @@ async def fork_agent(
     )
     session.add(fork)
     await session.flush()
+
+    # Plan 06.17 task_06_17_12: el fork hereda las CAPACIDADES del origen, no
+    # solo la persona. Clonamos las tres junctions (SABER/HACER/SER):
+    #   * agent_knowledge_bases (KBs de rol)
+    #   * agent_tools (tools asignadas, con su config_override)
+    #   * agent_skills (skills asignadas, con su proficiency)
+    #
+    # Tenant-safe por construcción: solo se copian las filas VISIBLES al que
+    # forkea. `agent_knowledge_bases` está aislada por RLS (tenant_id), así que
+    # forkear un built-in de plataforma NO arrastra sus KBs (ADR 0026 — el tenant
+    # grantea las suyas al fork). `agent_tools`/`agent_skills` no tienen RLS
+    # propia pero el origen ya es visible (RLS de `agents`), de modo que un
+    # source de otro tenant ni siquiera llega aquí (404 arriba). Las filas
+    # clonadas de KB llevan el `tenant_id` del que forkea, nunca el del origen.
+    await _clone_agent_capabilities(
+        session,
+        source_id=source.id,
+        fork_id=fork.id,
+        tenant_id=tenant_id,
+        granted_by=principal.user_id,
+    )
+
     await session.refresh(fork)
     return to_agent_response(fork)
+
+
+async def _clone_agent_capabilities(
+    session: AsyncSession,
+    *,
+    source_id: UUID,
+    fork_id: UUID,
+    tenant_id: UUID,
+    granted_by: UUID | None,
+) -> None:
+    """Clona KBs/tools/skills del agente origen al fork (Plan 06.17 task_06_17_12).
+
+    Idempotencia no aplica: el fork es una fila recién creada sin junctions
+    previas. Solo se copian las filas que RLS hace visibles al que forkea, de
+    modo que el aislamiento multi-tenant queda garantizado por la sesión.
+    """
+    # SABER — KBs de rol. Re-`tenant_id`amos al del que forkea (la fila origen
+    # solo es visible si ya es de ese tenant, pero lo fijamos explícitamente
+    # para no depender de la denormalización del origen).
+    kb_rows = await session.execute(
+        select(AgentKnowledgeBase.kb_id).where(AgentKnowledgeBase.agent_id == source_id)
+    )
+    for (kb_id,) in kb_rows.all():
+        session.add(
+            AgentKnowledgeBase(
+                agent_id=fork_id,
+                kb_id=kb_id,
+                tenant_id=tenant_id,
+                granted_by=granted_by,
+            )
+        )
+
+    # HACER — tools asignadas, preservando el config_override por agente.
+    tool_rows = await session.execute(
+        select(AgentTool.tool_id, AgentTool.config_override).where(AgentTool.agent_id == source_id)
+    )
+    for tool_id, config_override in tool_rows.all():
+        session.add(
+            AgentTool(
+                agent_id=fork_id,
+                tool_id=tool_id,
+                # Copia superficial del JSON para que editar el override del
+                # fork no mute el del origen vía referencias compartidas.
+                config_override=dict(config_override) if config_override is not None else None,
+            )
+        )
+
+    # SER — skills asignadas (ADR 0050), preservando la proficiency.
+    skill_rows = await session.execute(
+        select(AgentSkill.skill_id, AgentSkill.proficiency).where(AgentSkill.agent_id == source_id)
+    )
+    for skill_id, proficiency in skill_rows.all():
+        session.add(
+            AgentSkill(
+                agent_id=fork_id,
+                skill_id=skill_id,
+                proficiency=proficiency,
+            )
+        )
+
+    await session.flush()
+
+
+async def _agent_capability_ids(
+    session: AsyncSession,
+    agent_id: UUID,
+) -> AgentCapabilitiesDiff:
+    """Sets de KBs/tools/skills asignados a un agente (Plan 06.17 task_06_17_12).
+
+    Sólo se ven las filas que RLS hace visibles al llamante: para un built-in de
+    plataforma, sus KBs (RLS por tenant) no aparecen, lo que es coherente con
+    que el fork tampoco las hereda (ADR 0026).
+    """
+    kb_rows = await session.execute(
+        select(AgentKnowledgeBase.kb_id).where(AgentKnowledgeBase.agent_id == agent_id)
+    )
+    tool_rows = await session.execute(
+        select(AgentTool.tool_id).where(AgentTool.agent_id == agent_id)
+    )
+    skill_rows = await session.execute(
+        select(AgentSkill.skill_id).where(AgentSkill.agent_id == agent_id)
+    )
+    return AgentCapabilitiesDiff(
+        kb_ids=sorted(str(r[0]) for r in kb_rows.all()),
+        tool_ids=sorted(str(r[0]) for r in tool_rows.all()),
+        skill_ids=sorted(str(r[0]) for r in skill_rows.all()),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +524,14 @@ async def diff_fork_against_source(
         and source_current_version != fork.forked_from_version
     )
 
+    # Exponemos también las CAPACIDADES de cada lado (Plan 06.17 task_06_17_12)
+    # para que la UI muestre qué KBs/tools/skills tiene el fork frente al origen.
+    capabilities: dict[str, AgentCapabilitiesDiff] = {
+        "fork": await _agent_capability_ids(session, fork.id),
+    }
+    if source is not None:
+        capabilities["source"] = await _agent_capability_ids(session, source.id)
+
     return AgentDiffResponse(
         fork_id=fork.id,
         source_id=fork.forked_from_agent_id,
@@ -374,6 +540,7 @@ async def diff_fork_against_source(
         source_moved=source_moved,
         source_deleted=source_deleted,
         fields=fields,
+        capabilities=capabilities,
     )
 
 
@@ -767,6 +934,26 @@ async def set_agent_tools(
             ),
         )
 
+    # Reject a tool the agent-runtime cannot execute (ADR 0049, task_06_18_06):
+    # assigning a builtin with no executor (apply_patch / search_code /
+    # summarize_text, the retired git_*) would die as a silent `unknown tool`
+    # at run time. We refuse it up front rather than at execution. Typed rows
+    # (http_endpoint / python_function / docker_command / mcp_tool) are wired
+    # from a serialised spec, so only non-executable builtins are rejected.
+    not_wired = [
+        tool
+        for tool in tools_by_id.values()
+        if not tool_is_runtime_wired(tool.name, tool.implementation_type)
+    ]
+    if not_wired:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "tool(s) not executable in the agent-runtime (no wired executor): "
+                + ", ".join(sorted(tool.name for tool in not_wired))
+            ),
+        )
+
     # MCP tools require the agent's project to declare the matching server.
     mcp_tools = [
         tool
@@ -837,3 +1024,391 @@ async def _agent_project_mcp_server_names(
         if isinstance(name, str):
             names.add(name)
     return names
+
+
+# ---------------------------------------------------------------------------
+# Plan 06.18 task_06_18_13: GET/PUT /agents/{id}/skills (ADR 0050 Opción A)
+# ---------------------------------------------------------------------------
+#
+# Espejo del patrón de `agent_tools` / grants de KB. Las skills son
+# declarativas: el PUT reemplaza el conjunto entero del agente en una sola
+# transacción. Una lista vacía limpia todas las filas (→ sin inyección de
+# prompt_fragment, comportamiento previo intacto).
+#
+# Reglas de scope (ADR 0050, mismas que tools/KB):
+#   * built-in (is_builtin)        -> asignable a cualquier agente.
+#   * custom (is_builtin=false)    -> solo del tenant del agente; RLS oculta las
+#       de otro tenant, así que un lookup que no encuentra nada se devuelve como
+#       un 422 limpio (el cuerpo lleva un skill_id inválido, no una ruta mala).
+#   * agente global_builtin        -> 403 (forkear primero, plataforma-managed).
+#
+# El prompt_fragment de las skills asignadas se inyecta en el system prompt
+# EFECTIVO del runtime (dispatch.py -> spec -> agent_runtime); el endpoint solo
+# persiste la asignación.
+
+
+async def _load_writable_agent_for_skills(
+    session: AsyncSession,
+    agent_id: UUID,
+    principal: AuthPrincipal,
+) -> Agent:
+    """Carga un agente para asignar skills; rechaza `global_builtin` (403).
+
+    Espeja `_load_writable_agent_for_tools`: los built-in son
+    plataforma-managed y vetados a los tenant_admin — forkea primero, asigna
+    sobre el fork.
+    """
+    agent = await get_writable_or_404(
+        session, Agent, agent_id, principal, not_found_detail="agent not found"
+    )
+    if agent.scope == AgentScope.GLOBAL_BUILTIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "cannot assign skills to a global_builtin agent; "
+                "fork it first and assign on the fork"
+            ),
+        )
+    return agent
+
+
+@router.get("/{agent_id}/skills", response_model=list[AgentSkillResponse])
+async def list_agent_skills(
+    agent_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[AgentSkillResponse]:
+    """Lista las skills asignadas al agente vía la junction `agent_skills`.
+
+    Un agente sin filas devuelve ``[]`` (sin inyección de prompt). 404 sobre un
+    agente oculto/inexistente para no aparentar "sin asignaciones".
+    """
+    agent_q = await session.execute(
+        select(Agent).where(Agent.id == agent_id, Agent.deleted_at.is_(None))
+    )
+    if agent_q.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent not found")
+
+    rows = await session.execute(
+        select(Skill)
+        .join(AgentSkill, AgentSkill.skill_id == Skill.id)
+        .where(AgentSkill.agent_id == agent_id, Skill.deleted_at.is_(None))
+        .order_by(Skill.name, Skill.id)
+    )
+    return [
+        AgentSkillResponse(
+            skill_id=skill.id,
+            name=skill.name,
+            category=skill.category,
+            description=skill.description,
+            prompt_fragment=skill.prompt_fragment,
+            is_builtin=skill.is_builtin,
+        )
+        for skill in rows.scalars().all()
+    ]
+
+
+@router.put("/{agent_id}/skills", response_model=list[AgentSkillResponse])
+async def set_agent_skills(
+    agent_id: UUID,
+    payload: SetAgentSkillsRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[AgentSkillResponse]:
+    """Reemplaza declarativamente las skills del agente (tenant_admin).
+
+    El conjunto deseado se valida por scope, luego se borran las filas
+    `agent_skills` existentes y se inserta el nuevo conjunto en la misma
+    transacción. Devuelve las asignaciones resultantes.
+    """
+    require_tenant_id(principal)
+    await _load_writable_agent_for_skills(session, agent_id, principal)
+
+    requested = {entry.skill_id for entry in payload.skills}
+
+    # Carga todas las skills pedidas en una query. RLS limita el resultado a los
+    # built-ins de plataforma + las del tenant, así que una skill custom de otro
+    # tenant simplemente no aparece — la atrapa el chequeo de "missing" abajo.
+    skills_by_id: dict[UUID, Skill] = {}
+    if requested:
+        skill_rows = await session.execute(
+            select(Skill).where(Skill.id.in_(requested), Skill.deleted_at.is_(None))
+        )
+        skills_by_id = {skill.id: skill for skill in skill_rows.scalars().all()}
+
+    missing = [skill_id for skill_id in requested if skill_id not in skills_by_id]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "unknown or non-assignable skill_id(s): "
+                + ", ".join(str(skill_id) for skill_id in missing)
+            ),
+        )
+
+    # Reemplazo transaccional: borra las filas viejas, inserta las nuevas.
+    await session.execute(delete(AgentSkill).where(AgentSkill.agent_id == agent_id))
+    for skill_id in requested:
+        session.add(AgentSkill(agent_id=agent_id, skill_id=skill_id))
+    await session.flush()
+
+    return [
+        AgentSkillResponse(
+            skill_id=skill.id,
+            name=skill.name,
+            category=skill.category,
+            description=skill.description,
+            prompt_fragment=skill.prompt_fragment,
+            is_builtin=skill.is_builtin,
+        )
+        for skill in sorted(skills_by_id.values(), key=lambda s: (s.name, str(s.id)))
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Plan 06.18 task_06_18_07: GET /agents/{id}/effective-tools
+# ---------------------------------------------------------------------------
+#
+# The honest "what does the runtime really execute for this agent" contract —
+# the frontier 06.17's Capability Hub (HACER) consumes without recomputing.
+# It answers the operator's "I assigned a tool and nothing happens" by being
+# the single place that:
+#   * lists the agent's assigned tools, each flagged executable_in_runtime;
+#   * computes the agent∩mode intersection through the SINGLE point
+#     (`combine_tool_allowlists`, reused inside `compute_effective_tools`);
+#   * crosses shell_exec with the project's `allowed_commands`;
+#   * surfaces explicit, readable warnings instead of silent surprises.
+#
+# Field names are snake_case and stable: this is a contract. Read-only,
+# tenant-scoped like the rest of the router (404 on a hidden/missing agent).
+
+
+class EffectiveToolEntry(BaseModel):
+    """One assigned tool, projected with its real runtime executability."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    tool_id: UUID
+    name: str
+    #: Canonical name(s) the runtime resolves this assignment to (alias layer,
+    #: ADR 0048): ``semantic_search`` → ``rag_search``, ``http_request`` →
+    #: both verbs. Usually a single name; a list keeps the contract stable.
+    canonical_names: list[str] = Field(default_factory=list)
+    category: str
+    implementation_type: str
+    security_level: str
+    is_builtin: bool
+    #: Whether the agent-runtime can actually execute this tool (ADR 0049).
+    #: A ``False`` here is the "asignada pero no ejecutable" case.
+    executable_in_runtime: bool
+
+
+class EffectiveToolsResponse(BaseModel):
+    """The effective-tools contract (06.18 → 06.17).
+
+    ``assigned`` lists every assignment with its executability; ``effective``
+    is the sorted canonical set the runtime really wires for the requested
+    ``mode`` (agent∩mode ∩ runtime-wired, plus ``shell_exec`` only when its
+    project authorises commands). ``unrestricted`` is ``True`` for an agent with
+    no per-agent assignment (backward-compatible 06.15 behaviour: the runtime
+    keeps its default surface, so ``effective`` is empty by design).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: UUID
+    #: The chat mode the effective set was computed against, or ``None`` when no
+    #: mode was requested (the task-dispatch path carries no mode allowlist).
+    mode: str | None = None
+    assigned: list[EffectiveToolEntry] = Field(default_factory=list)
+    effective: list[str] = Field(default_factory=list)
+    #: ``True`` when the agent has no assignments (no per-agent restriction).
+    unrestricted: bool = False
+    #: Whether ``shell_exec`` is effective (assigned ∧ allowed_commands non-empty).
+    shell_exec_effective: bool = False
+    #: Readable notices: empty set in a mode, non-executable assignment,
+    #: shell_exec without allowed_commands.
+    warnings: list[str] = Field(default_factory=list)
+
+
+@router.get("/{agent_id}/effective-tools", response_model=EffectiveToolsResponse)
+async def get_agent_effective_tools(
+    agent_id: UUID,
+    mode: str | None = Query(
+        default=None,
+        description=(
+            "Chat mode whose allowlist the effective set is intersected with "
+            "(planning|discussion|execution|<custom>). Omit for no mode "
+            "restriction (the task-dispatch path)."
+        ),
+    ),
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> EffectiveToolsResponse:
+    """Return the agent's honest effective tool set + per-tool executability.
+
+    Tenant-scoped: RLS hides cross-tenant agents, so a hidden/missing agent
+    surfaces as 404 (an empty body would otherwise look like "no tools").
+    """
+    # 404 on a hidden/missing agent (RLS handles cross-tenant).
+    agent_q = await session.execute(
+        select(Agent).where(Agent.id == agent_id, Agent.deleted_at.is_(None))
+    )
+    agent = agent_q.scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent not found")
+
+    # Resolve the mode allowlist (None when no mode requested). An unknown mode
+    # name is a 422 — the operator asked for a mode that does not exist.
+    mode_allowed_tools: tuple[str, ...] | None = None
+    if mode is not None:
+        try:
+            mode_config = resolve_mode_config(mode)
+        except ValueError:
+            # Built-in lookup miss (custom modes are resolved elsewhere with a
+            # tenant registry). Treat an unknown built-in name as a bad request.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"unknown chat mode: {mode!r}",
+            ) from None
+        mode_allowed_tools = mode_config.allowed_tools
+
+    # Load the assigned Tool rows (live only) — one query, projected to the
+    # entry shape. `resolve_agent_tool_names` is the read seam for the *names*,
+    # but we need the full rows for the per-tool entry + shell_exec detection.
+    rows = await session.execute(
+        select(Tool)
+        .join(AgentTool, AgentTool.tool_id == Tool.id)
+        .where(AgentTool.agent_id == agent_id, Tool.deleted_at.is_(None))
+        .order_by(Tool.name, Tool.id)
+    )
+    assigned_tools = list(rows.scalars().all())
+
+    # `None` (no rows) is the load-bearing "no per-agent restriction" sentinel,
+    # exactly as `resolve_agent_tool_names` returns it.
+    assigned_names: list[str] | None = [t.name for t in assigned_tools] if assigned_tools else None
+    shell_exec_assigned = any(t.name == "shell_exec" for t in assigned_tools)
+
+    # The canonical names that are *actually* runtime-wired, computed from the
+    # full Tool rows so a typed custom tool (http_endpoint / python_function /
+    # docker_command / mcp_tool) counts as wired regardless of name. This is the
+    # honest "executable in runtime" set the pure computation intersects with.
+    wired_canonical_names: set[str] = set()
+    for tool in assigned_tools:
+        if tool_is_runtime_wired(tool.name, tool.implementation_type):
+            wired_canonical_names |= to_canonical_set([tool.name])
+
+    # Whether the agent's project authorises any shell command (the cross that
+    # makes shell_exec truly effective).
+    allowed_commands_non_empty = False
+    if agent.project_id is not None:
+        project_q = await session.execute(
+            select(Project.allowed_commands).where(
+                Project.id == agent.project_id, Project.deleted_at.is_(None)
+            )
+        )
+        commands = project_q.scalar_one_or_none()
+        allowed_commands_non_empty = bool(commands)
+
+    result = compute_effective_tools(
+        assigned_names,
+        mode_allowed_tools,
+        mode_name=mode,
+        shell_exec_assigned=shell_exec_assigned,
+        allowed_commands_non_empty=allowed_commands_non_empty,
+        wired_canonical_names=wired_canonical_names,
+    )
+
+    return EffectiveToolsResponse(
+        agent_id=agent_id,
+        mode=mode,
+        assigned=[
+            EffectiveToolEntry(
+                tool_id=tool.id,
+                name=tool.name,
+                canonical_names=sorted(to_canonical_set([tool.name])),
+                category=tool.category,
+                implementation_type=tool.implementation_type,
+                security_level=tool.security_level,
+                is_builtin=tool.is_builtin,
+                executable_in_runtime=tool_is_runtime_wired(tool.name, tool.implementation_type),
+            )
+            for tool in assigned_tools
+        ],
+        effective=result.effective,
+        unrestricted=result.unrestricted,
+        shell_exec_effective=result.shell_exec_effective,
+        warnings=result.warnings,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan 06.17 task_06_17_08: GET /agents/{id}/capabilities
+# ---------------------------------------------------------------------------
+#
+# El Hub de Capacidad por agente: SABER (KBs visibles por nivel rol/stack/
+# plataforma), RECORDAR (memoria por scope + el memory_scope del agente), SER
+# (modelo configurado) y HACER (set efectivo de tools). La sección HACER
+# DELEGA/COMPONE con la pieza pura `compute_effective_tools` de 06.18 — NO
+# recalcula la intersección (frontera con 06.18). Read-only, tenant-scoped: RLS
+# oculta agentes cross-tenant, así que un agente oculto/inexistente → 404.
+@router.get("/{agent_id}/capabilities", response_model=CapabilitiesResponse)
+async def get_agent_capabilities(
+    agent_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> CapabilitiesResponse:
+    """Devuelve el set efectivo REAL de capacidad del agente + avisos honestos.
+
+    SABER es la UNIÓN de las KBs de rol (``agent_knowledge_bases``) y, si el
+    agente está atado a un proyecto, las KBs del stack (``kb_projects``). HACER
+    compone con ``compute_effective_tools`` (06.18). Avisos honestos: agente
+    global sin contexto de proyecto (ADR 0054), modelo no configurado (ADR 0055)
+    y ``memory_scope=private`` silencioso.
+    """
+    agent_q = await session.execute(
+        select(Agent).where(Agent.id == agent_id, Agent.deleted_at.is_(None))
+    )
+    agent = agent_q.scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent not found")
+
+    warnings: list[CapabilityWarning] = []
+
+    # SABER: rol mas stack (si hay proyecto). El nivel rol gana si una KB aparece
+    # por ambas vias (orden de merge_kbs).
+    role_kbs = await kbs_for_agent_role(session, agent_id=agent_id)
+    project_kbs = (
+        await kbs_for_project(session, project_id=agent.project_id)
+        if agent.project_id is not None
+        else []
+    )
+    saber = CapabilitySaber(knowledge_bases=merge_kbs(role_kbs, project_kbs))
+
+    # RECORDAR: el memory_scope del agente + conteo por scope de su proyecto.
+    recordar = CapabilityRecordar(
+        memory_scope=agent.memory_scope,
+        memory=await memory_counts(session, project_id=agent.project_id),
+    )
+    warnings += private_memory_warning(agent.memory_scope)
+
+    # SER: persona/modelo (ADR 0055).
+    ser, ser_warnings = build_ser(agent)
+    warnings += ser_warnings
+
+    # HACER: delega en compute_effective_tools (06.18).
+    hacer, hacer_warnings = await hacer_for_agent(session, agent=agent)
+    warnings += hacer_warnings
+
+    # Aviso honesto del agente global (ADR 0054).
+    warnings += agent_global_warning(agent)
+
+    return CapabilitiesResponse(
+        entity_type="agent",
+        entity_id=agent.id,
+        saber=saber,
+        recordar=recordar,
+        ser=ser,
+        hacer=hacer,
+        warnings=warnings,
+    )

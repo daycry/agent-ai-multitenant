@@ -191,6 +191,56 @@ class CustomModeSpec:
         )
 
 
+@dataclass(frozen=True)
+class ChatModeListing:
+    """Una entrada del catálogo de modos para la UI (Plan 06.17 task_06_17_11).
+
+    Lo consume la vista "prompt efectivo" de la sección Persona: combina el
+    ``system_prompt`` del rol del agente con el del modo de chat seleccionado.
+    El modo ``custom`` se lista con ``available=False`` ("No disponible aún"):
+    los modos custom creables de extremo a extremo están diferidos (alcance del
+    plan 06.17), así que la UI lo muestra pero no lo deja elegir — honestidad de
+    estado (regla 4 del plan).
+    """
+
+    name: str
+    label_es: str
+    label_en: str
+    system_prompt: str
+    available: bool
+
+
+def list_chat_modes() -> list[ChatModeListing]:
+    """Catálogo de modos de chat para la UI, en orden de lectura.
+
+    Los tres modos built-in (planning/discussion/execution) son
+    ``available=True`` y traen su ``system_prompt`` real (fuente única: no se
+    duplica en el frontend). El modo ``custom`` aparece al final marcado
+    ``available=False`` — la UI lo muestra como "No disponible aún" en vez de
+    fingir una capacidad que no existe todavía.
+    """
+    listings = [
+        ChatModeListing(
+            name=cfg.name,
+            label_es=cfg.label_es,
+            label_en=cfg.label_en,
+            system_prompt=cfg.system_prompt,
+            available=True,
+        )
+        for cfg in (_BUILTIN_PLANNING, _BUILTIN_DISCUSSION, _BUILTIN_EXECUTION)
+    ]
+    listings.append(
+        ChatModeListing(
+            name=ChatMode.CUSTOM.value,
+            label_es="Personalizado",
+            label_en="Custom",
+            system_prompt="",
+            available=False,
+        )
+    )
+    return listings
+
+
 def resolve_mode_config(
     current_mode: str,
     *,
@@ -236,6 +286,8 @@ __all__ = [
     "BUILTIN_MODES",
     "BuiltinChatMode",
     "ChatModeConfig",
+    "ChatModeListing",
     "CustomModeSpec",
+    "list_chat_modes",
     "resolve_mode_config",
 ]

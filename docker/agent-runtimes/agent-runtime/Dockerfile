@@ -45,6 +45,13 @@ RUN pip install --no-cache-dir /src/shared-llm
 COPY packages/shared-mcp/ /src/shared-mcp/
 RUN pip install --no-cache-dir /src/shared-mcp
 
+# shared-domain is a path dependency of agent-runtime since Plan 06.18
+# (ADR 0048: canonical tool-name source of truth used by the approval gate).
+# Same trick as shared-llm/shared-mcp: install from the local wheel before
+# agent-runtime so its name resolves locally rather than failing on PyPI.
+COPY packages/shared-domain/ /src/shared-domain/
+RUN pip install --no-cache-dir /src/shared-domain
+
 # pyproject.toml is the single source of truth for the dependency set.
 WORKDIR /build
 COPY docker/agent-runtimes/agent-runtime/pyproject.toml ./

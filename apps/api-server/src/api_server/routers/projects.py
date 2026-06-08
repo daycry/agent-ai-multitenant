@@ -22,6 +22,14 @@ from api_server.auth.deps import (
     require_tenant_admin,
     require_tenant_member,
 )
+from api_server.capabilities import (
+    CapabilitiesResponse,
+    CapabilityHacer,
+    CapabilityRecordar,
+    CapabilitySaber,
+    kbs_for_project,
+    memory_counts,
+)
 from api_server.db.domain import Project, ProjectStatus, Team
 from api_server.routers._helpers import (
     apply_partial_update,
@@ -207,7 +215,13 @@ async def create_project(
     # the project is flushed (so the FK target exists) and is idempotent —
     # the helper resolves `default_kb_grants` slugs to built-in KB ids and
     # inserts kb_projects rows ON CONFLICT DO NOTHING.
-    if payload.template_id is not None:
+    #
+    # Plan 06.17 task_06_17_14: the wizard can opt out of the auto-grant via
+    # `apply_template_kb_grants=False` — the template is still validated/
+    # adopted (its team/config shape is inherited by the wizard front-end)
+    # but no kb_projects rows are created. "Proyecto en blanco" (no
+    # template_id) never reaches this branch.
+    if payload.template_id is not None and payload.apply_template_kb_grants:
         await apply_template_kb_grants(
             session,
             template_id=payload.template_id,
@@ -263,3 +277,48 @@ async def delete_project(
         session, Project, project_id, principal, not_found_detail="project not found"
     )
     await soft_delete(session, project)
+
+
+# ---------------------------------------------------------------------------
+# Plan 06.17 task_06_17_08: GET /projects/{id}/capabilities
+# ---------------------------------------------------------------------------
+#
+# El Hub de Capacidad por proyecto: SABER (KBs del stack vía `kb_projects`,
+# nivel stack/plataforma) y RECORDAR (memoria `project_shared` del proyecto +
+# `global`). HACER queda vacío a nivel de proyecto (las tools son del agente;
+# la capacidad efectiva de tools la da `/agents/{id}/effective-tools` y, agregada,
+# `/teams/{id}/capabilities`). Read-only, tenant-scoped: RLS oculta proyectos
+# cross-tenant, así que un proyecto oculto/inexistente → 404.
+@router.get("/{project_id}/capabilities", response_model=CapabilitiesResponse)
+async def get_project_capabilities(
+    project_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> CapabilitiesResponse:
+    """Devuelve la capacidad efectiva del proyecto (SABER + RECORDAR).
+
+    El proyecto no tiene persona ni tools propias (eso vive en sus agentes),
+    así que ``ser`` es ``None`` y ``hacer`` no es restrictivo a este nivel.
+    """
+    project_q = await session.execute(
+        select(Project).where(Project.id == project_id, Project.deleted_at.is_(None))
+    )
+    project = project_q.scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
+
+    saber = CapabilitySaber(knowledge_bases=await kbs_for_project(session, project_id=project_id))
+    recordar = CapabilityRecordar(
+        memory_scope=None,
+        memory=await memory_counts(session, project_id=project_id),
+    )
+
+    return CapabilitiesResponse(
+        entity_type="project",
+        entity_id=project.id,
+        saber=saber,
+        recordar=recordar,
+        ser=None,
+        hacer=CapabilityHacer(unrestricted=True),
+        warnings=[],
+    )

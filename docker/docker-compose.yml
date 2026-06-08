@@ -43,6 +43,20 @@ x-logging: &default-logging
 # Profiles validated in tests/security/test_seccomp_profiles.py +
 # test_apparmor.py; kernel enforcement confirmed on Linux (see
 # internal-pentest-methodology.md §5).
+#
+# WORKER ↔ API-SERVER SHARED JWT SECRET (Plan 04.5 / followup-worker-internal-token).
+# The app services (api-server, workers, orchestrator) are not yet declared in
+# this compose file (dev runs them locally; the production declarations land
+# with the Plan 15 installer). When the `workers` service IS declared here, it
+# MUST receive `API_SERVER_JWT_SECRET` with the SAME value the `api-server`
+# service uses — never inline plaintext, source it from env/Vault. The worker
+# mints a short-lived `AGENTIC_INTERNAL_TOKEN` (api_server.auth.internal_agent.
+# mint_agent_token) for each agent task and injects it into the agent-runtime
+# container; that token is signed with the api-server's `jwt_secret`, so the
+# api-server's `/internal/agent/*` endpoints only validate it when both sides
+# share the secret. The internal URL the runtime calls back on is the
+# operator-tunable `WORKERS_AGENT_INTERNAL_API_URL` (default
+# `http://api-server:8000`, this compose's service hostname).
 x-seccomp: &default-seccomp
   security_opt:
     - no-new-privileges:true

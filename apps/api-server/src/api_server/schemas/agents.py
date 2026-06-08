@@ -40,7 +40,10 @@ class AgentCreateRequest(BaseModel):
     role: AgentRole
     system_prompt: str = Field(min_length=1)
     llm_config: dict[str, Any] = Field(default_factory=dict, alias="model_config")
-    memory_scope: MemoryScope = MemoryScope.PRIVATE
+    # None = "no especificado": el endpoint resuelve el default operator-configurable
+    # (``memory.default_scope`` en platform_settings) en vez de hardcodear `private`
+    # (Plan 06.17 task_06_17_04). Un valor explícito gana sobre el default.
+    memory_scope: MemoryScope | None = None
     review_capability: bool = False
     max_concurrent_tasks: int = Field(default=1, ge=1, le=64)
     is_template: bool = False
@@ -59,6 +62,27 @@ class AgentCreateRequest(BaseModel):
             raise ValueError("project_id is required when scope='project_local'")
         if self.scope != AgentScope.PROJECT_LOCAL and self.project_id is not None:
             raise ValueError("project_id must be null for non-project_local scopes")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_model_config(self) -> AgentCreateRequest:
+        """Valida ``model_config`` contra el catálogo cerrado (ADR 0055 / 0021).
+
+        Solo valida cuando el body envía un ``model_config`` NO vacío: un ``{}``
+        (o "no enviado") pasa porque el endpoint le aplica el default explícito
+        operator-configurable. Un proveedor fuera de catálogo, un ``model`` vacío
+        o una ``temperature`` fuera de rango → ``422``.
+        """
+        if self.llm_config:
+            from api_server.db.platform_settings import (
+                InvalidModelConfigError,
+                validate_model_config,
+            )
+
+            try:
+                validate_model_config(self.llm_config)
+            except InvalidModelConfigError as exc:
+                raise ValueError(str(exc)) from exc
         return self
 
 
@@ -83,6 +107,27 @@ class AgentUpdateRequest(BaseModel):
     # the linked-vs-forked invariants; do it via a separate "fork" endpoint
     # (task_01_15).
     anchored_version: str | None = Field(default=None, max_length=32)
+
+    @model_validator(mode="after")
+    def _validate_model_config(self) -> AgentUpdateRequest:
+        """Valida ``model_config`` contra el catálogo cerrado (ADR 0055 / 0021).
+
+        Solo valida cuando el ``PUT`` envía un ``model_config`` NO vacío (un
+        update parcial que no toca el modelo lo deja a ``None`` y no se valida).
+        Mismas reglas que el create: proveedor fuera de catálogo, ``model`` vacío
+        o ``temperature`` fuera de rango → ``422``.
+        """
+        if self.llm_config:
+            from api_server.db.platform_settings import (
+                InvalidModelConfigError,
+                validate_model_config,
+            )
+
+            try:
+                validate_model_config(self.llm_config)
+            except InvalidModelConfigError as exc:
+                raise ValueError(str(exc)) from exc
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -157,12 +202,32 @@ class AgentMergeRequest(BaseModel):
     fields: list[str] = Field(min_length=1)
 
 
+class AgentCapabilitiesDiff(BaseModel):
+    """Sets de capacidad de un lado del diff (fork o source).
+
+    Plan 06.17 task_06_17_12: el diff/merge no solo compara los campos escalares
+    (``_DIFFABLE_FIELDS``) sino también las CAPACIDADES asignadas, para que la UI
+    pueda mostrar qué KBs/tools/skills tiene cada lado. Los ids van como cadenas
+    para no acoplar el contrato JSON a la serialización de UUID.
+    """
+
+    model_config = _BASE_CONFIG
+
+    kb_ids: list[str] = Field(default_factory=list)
+    tool_ids: list[str] = Field(default_factory=list)
+    skill_ids: list[str] = Field(default_factory=list)
+
+
 class AgentDiffResponse(BaseModel):
     """Field-by-field diff between a fork and its source agent.
 
     `source_moved` is true when the source has been updated since the
     fork point (captured in `forked_from_version`). UI can use this to
     decide whether to offer the "absorb upstream improvements" action.
+
+    `capabilities` expone los sets de KBs/tools/skills de cada lado
+    (Plan 06.17 task_06_17_12) — sólo informativo; el merge de campos sigue
+    operando sobre ``_DIFFABLE_FIELDS``.
     """
 
     model_config = _BASE_CONFIG
@@ -174,6 +239,7 @@ class AgentDiffResponse(BaseModel):
     source_moved: bool
     source_deleted: bool
     fields: dict[str, AgentFieldDiff]
+    capabilities: dict[str, AgentCapabilitiesDiff] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +316,56 @@ class AgentToolResponse(BaseModel):
     security_level: str
     is_builtin: bool
     config_override: dict[str, Any] | None = None
+
+
+# ---------------------------------------------------------------------------
+# Assign skills to an agent (Plan 06.18 task_06_18_13, ADR 0050 Opción A)
+# ---------------------------------------------------------------------------
+class AgentSkillAssignment(BaseModel):
+    """Una entrada del payload declarativo de ``PUT /agents/{id}/skills``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: UUID
+
+
+class SetAgentSkillsRequest(BaseModel):
+    """Payload de ``PUT /agents/{id}/skills`` — el conjunto deseado completo.
+
+    El endpoint es declarativo: las filas ``agent_skills`` del agente se
+    reemplazan en bloque con esta lista (una lista vacía limpia todas las
+    asignaciones → sin inyección de prompt, comportamiento previo intacto).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    skills: list[AgentSkillAssignment] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _no_duplicate_skill_ids(self) -> SetAgentSkillsRequest:
+        seen: set[UUID] = set()
+        for entry in self.skills:
+            if entry.skill_id in seen:
+                raise ValueError(f"duplicate skill_id in payload: {entry.skill_id}")
+            seen.add(entry.skill_id)
+        return self
+
+
+class AgentSkillResponse(BaseModel):
+    """Una Skill asignada, proyectada a lo que la UI de asignación necesita.
+
+    ``prompt_fragment`` se incluye para que la ficha del agente pueda mostrar el
+    efecto real (qué se inyectará en el prompt) sin una segunda llamada.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    skill_id: UUID
+    name: str
+    category: str
+    description: str | None = None
+    prompt_fragment: str
+    is_builtin: bool
 
 
 def to_agent_response(a: Agent) -> AgentResponse:

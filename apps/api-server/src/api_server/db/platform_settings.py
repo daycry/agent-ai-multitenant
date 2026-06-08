@@ -141,6 +141,344 @@ async def get_max_review_retries(session: AsyncSession) -> int:
 
 
 # ---------------------------------------------------------------------------
+# RAG reranker activation (Plan 06.17 task_06_17_02)
+# ---------------------------------------------------------------------------
+# Live enable/disable lever for the cross-encoder reranker applied on top of
+# the hybrid (BM25 + vector + RRF) recall in /internal/agent/rag-search. When
+# OFF (the default) the endpoint keeps the RRF order — the recall is already
+# useful and the real reranker (BGEReranker) pulls in torch + transformers,
+# a cost a deployment should opt INTO, not pay by default. When a System Admin
+# flips it ON from the admin panel the endpoint applies the configured reranker
+# on the next request (no restart). The flag is read live per request, so a
+# change takes effect immediately. Only a System Admin may write it
+# (``set_platform_setting``).
+RAG_RERANKER_ENABLED_KEY = "rag.reranker_enabled"
+DEFAULT_RAG_RERANKER_ENABLED = False
+
+
+async def get_rag_reranker_enabled(session: AsyncSession) -> bool:
+    """Whether the RAG reranker is currently enabled for /rag-search.
+
+    Read live by the rag-search endpoint before it decides to apply a reranker.
+    Default OFF: the hybrid RRF recall is already useful and the real reranker
+    is a heavy opt-in dependency. A System Admin flips this from the admin panel
+    — only a System Admin may write a platform setting (``set_platform_setting``).
+    """
+    value = await get_platform_setting(
+        session, RAG_RERANKER_ENABLED_KEY, default=DEFAULT_RAG_RERANKER_ENABLED
+    )
+    return bool(value)
+
+
+# ---------------------------------------------------------------------------
+# Back-fill de embeddings de memoria (Plan 06.17 task_06_17_03)
+# ---------------------------------------------------------------------------
+# El worker dedicado ``workers.backfill_memory_embeddings`` rellena la columna
+# ``memory_entries.embedding`` que nace NULL (persistence.py): un trabajo
+# IDEMPOTENTE (solo toca filas con ``embedding IS NULL``), por LOTES y
+# THROTTLED, NUNCA parte del flujo de run (sin auto-retry — el run no espera al
+# embedder). Tres palancas operator-configurable, leídas en vivo al inicio de
+# cada ejecución del worker (un System Admin las cambia desde el panel y surten
+# efecto en la siguiente pasada sin reiniciar Celery):
+#
+#   * ``memory.backfill_enabled``    — lever ON/OFF (default ON: una plataforma
+#       desatendida debe ir rellenando los embeddings que faltan).
+#   * ``memory.backfill_batch_size`` — cuántas filas se embeben por lote (acota
+#       la memoria y el tamaño de la petición al embedder).
+#   * ``memory.backfill_throttle_ms``— pausa entre lotes en milisegundos (evita
+#       saturar Ollama / la DB; 0 = sin pausa).
+#
+# El worker recorre TODOS los tenants (corre con un rol BYPASSRLS, como el
+# Memorizer), de modo que no necesita ``app.tenant_id``; la columna
+# ``tenant_id`` sigue presente en cada UPDATE como defensa en profundidad.
+MEMORY_BACKFILL_ENABLED_KEY = "memory.backfill_enabled"
+DEFAULT_MEMORY_BACKFILL_ENABLED = True
+
+MEMORY_BACKFILL_BATCH_SIZE_KEY = "memory.backfill_batch_size"
+DEFAULT_MEMORY_BACKFILL_BATCH_SIZE = 50
+# Cotas de cordura: al menos 1 fila por lote; un techo generoso evita que un
+# typo cargue miles de contenidos en una sola petición al embedder.
+MEMORY_BACKFILL_BATCH_SIZE_MIN = 1
+MEMORY_BACKFILL_BATCH_SIZE_MAX = 500
+
+MEMORY_BACKFILL_THROTTLE_MS_KEY = "memory.backfill_throttle_ms"
+DEFAULT_MEMORY_BACKFILL_THROTTLE_MS = 0
+MEMORY_BACKFILL_THROTTLE_MS_MIN = 0
+MEMORY_BACKFILL_THROTTLE_MS_MAX = 60_000
+
+
+async def get_memory_backfill_enabled(session: AsyncSession) -> bool:
+    """Si el back-fill de embeddings de memoria está habilitado.
+
+    Lo lee el worker ``workers.backfill_memory_embeddings`` al inicio de cada
+    ejecución; cuando es False la pasada es un no-op (no lee ni escribe filas).
+    Default ON: una plataforma desatendida debe rellenar los embeddings que
+    faltan. Solo un System Admin puede escribir el flag (``set_platform_setting``).
+    """
+    value = await get_platform_setting(
+        session, MEMORY_BACKFILL_ENABLED_KEY, default=DEFAULT_MEMORY_BACKFILL_ENABLED
+    )
+    return bool(value)
+
+
+async def get_memory_backfill_batch_size(session: AsyncSession) -> int:
+    """Tamaño de lote del back-fill (acotado a [MIN, MAX]).
+
+    Lo lee el worker en vivo; un valor fuera de rango se recorta a la cota más
+    cercana en vez de romper la pasada."""
+    value = await get_platform_setting(
+        session, MEMORY_BACKFILL_BATCH_SIZE_KEY, default=DEFAULT_MEMORY_BACKFILL_BATCH_SIZE
+    )
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MEMORY_BACKFILL_BATCH_SIZE
+    return max(MEMORY_BACKFILL_BATCH_SIZE_MIN, min(MEMORY_BACKFILL_BATCH_SIZE_MAX, size))
+
+
+async def get_memory_backfill_throttle_ms(session: AsyncSession) -> int:
+    """Pausa (ms) entre lotes del back-fill (acotada a [MIN, MAX]).
+
+    Lo lee el worker en vivo; 0 = sin pausa. Un valor fuera de rango se recorta
+    a la cota más cercana."""
+    value = await get_platform_setting(
+        session, MEMORY_BACKFILL_THROTTLE_MS_KEY, default=DEFAULT_MEMORY_BACKFILL_THROTTLE_MS
+    )
+    try:
+        ms = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MEMORY_BACKFILL_THROTTLE_MS
+    return max(MEMORY_BACKFILL_THROTTLE_MS_MIN, min(MEMORY_BACKFILL_THROTTLE_MS_MAX, ms))
+
+
+# ---------------------------------------------------------------------------
+# Default de memory_scope para agentes nuevos (Plan 06.17 task_06_17_04)
+# ---------------------------------------------------------------------------
+# Hasta esta tarea ``AgentCreateRequest`` defaulteaba SIEMPRE a ``private``
+# (``domain.py`` ``server_default 'private'`` + el schema), de modo que un agente
+# IA creado por UI sin elegir scope nacía ``private`` y el Memorizer no
+# memorizaba nada en silencio. Este setting hace el default OPERATOR-CONFIGURABLE:
+# el endpoint ``POST /agents`` lo lee cuando el body NO trae ``memory_scope``. El
+# default de plataforma sigue siendo ``private`` (backward-compat: no cambia el
+# comportamiento de los agentes ya creados ni el previo). Solo un System Admin lo
+# escribe (``set_platform_setting``). Un valor no canónico cae a ``private``.
+MEMORY_DEFAULT_SCOPE_KEY = "memory.default_scope"
+DEFAULT_MEMORY_DEFAULT_SCOPE = "private"
+
+
+async def get_default_memory_scope(session: AsyncSession) -> str:
+    """El ``memory_scope`` por defecto para un agente creado sin scope explícito.
+
+    Lo lee ``POST /agents`` cuando el body no envía ``memory_scope``. Falla a
+    ``private`` (el default histórico, backward-compat). Un valor almacenado
+    fuera de las cuatro :class:`~api_server.db.domain.MemoryScope` canónicas se
+    sanea a ``private`` en vez de romper la creación."""
+    from api_server.db.domain import MemoryScope
+
+    value = await get_platform_setting(
+        session, MEMORY_DEFAULT_SCOPE_KEY, default=DEFAULT_MEMORY_DEFAULT_SCOPE
+    )
+    scope = str(value).strip()
+    canonical = {s.value for s in MemoryScope}
+    return scope if scope in canonical else DEFAULT_MEMORY_DEFAULT_SCOPE
+
+
+# ---------------------------------------------------------------------------
+# Agente global usa el project_id de la tarea (Plan 06.17 task_06_17_13 / ADR 0054)
+# ---------------------------------------------------------------------------
+# Un agente GLOBAL (``project_id IS NULL``: built-in o tenant-template) que
+# ejecuta una tarea DE UN PROYECTO sufría una asimetría real entre escritura y
+# lectura: el Memorizer ESCRIBÍA memoria bajo ``task.project_id`` pero los
+# endpoints internos LEÍAN por ``agent.project_id`` (None), de modo que el agente
+# global no veía NUNCA los chunks ni la memoria ``project_shared`` del proyecto de
+# la tarea (``internal_agent.py`` rag-search ``hits=[]``; memory-recall sin
+# candidatos). El ADR 0054 (opción B) resuelve el ``project_id`` de LECTURA como
+# el de la tarea en curso (``task.project_id``) cuando el agente es global,
+# **estrictamente tenant-safe** (el ``task_id`` lo porta el token del runtime; el
+# proyecto se resuelve server-side validando ``task.tenant_id == principal.
+# tenant_id``) y acotado a ESE ÚNICO proyecto — jamás cross-tenant ni
+# cross-project.
+#
+# Esta clave operator-configurable gobierna el comportamiento. Default ON: arregla
+# la asimetría real (read = write = ``task.project_id``). Un operador que prefiera
+# el aislamiento estricto antiguo (agente global = sin contexto de proyecto) lo
+# apaga sin tocar código. Se lee EN VIVO por petición, así que un cambio surte
+# efecto de inmediato. Solo un System Admin lo escribe (``set_platform_setting``).
+GLOBAL_AGENT_USES_TASK_PROJECT_KEY = "memory.global_agent_uses_task_project"
+DEFAULT_GLOBAL_AGENT_USES_TASK_PROJECT = True
+
+
+async def get_global_agent_uses_task_project(session: AsyncSession) -> bool:
+    """Si un agente global lee RAG/memoria con el ``project_id`` de la tarea en curso.
+
+    Lo leen ``/internal/agent/rag-search`` y ``/internal/agent/memory-recall``
+    antes de resolver el ``project_id`` efectivo de un agente global. Default ON
+    (ADR 0054): arregla la asimetría write≠read. Cuando es False el agente global
+    conserva el comportamiento estricto antiguo (sin contexto de proyecto). Solo
+    un System Admin puede escribir el flag (``set_platform_setting``).
+    """
+    value = await get_platform_setting(
+        session,
+        GLOBAL_AGENT_USES_TASK_PROJECT_KEY,
+        default=DEFAULT_GLOBAL_AGENT_USES_TASK_PROJECT,
+    )
+    return bool(value)
+
+
+# ---------------------------------------------------------------------------
+# Default seguro de model_config para agentes (Plan 06.17 task_06_17_10 / ADR 0055)
+# ---------------------------------------------------------------------------
+# El ``model_config`` de un agente (la pata SER: proveedor/modelo/temperatura)
+# nacía a menudo ``{}`` (ningún diálogo de la UI lo enviaba), de modo que en
+# dispatch ese ``{}`` se traducía a un spec de modelo vacío que podía hacer
+# fallar el arranque del run — un fallo tardío y opaco. El ADR 0055 (opción M-B)
+# decide:
+#
+#   * ``POST /agents`` rellena un DEFAULT EXPLÍCITO cuando el body no envía
+#     ``model_config`` (ningún agente nuevo nace ``{}``);
+#   * el dispatch aplica este MISMO default seguro a cualquier spec legacy ``{}``
+#     (sin fallo de arranque, SIN auto-retry — solo rellena);
+#   * una migración (0081) sanea las filas ``agents`` con ``model_config = {}``.
+#
+# El default es OPERATOR-CONFIGURABLE vía esta clave de ``platform_settings``: un
+# System Admin lo cambia desde el panel (proveedor/modelo/temperatura). Si nunca
+# se configuró, cae al fallback de CÓDIGO ``DEFAULT_MODEL_CONFIG`` (también del
+# catálogo cerrado), nunca a un fallo. El default mismo se VALIDA contra el
+# catálogo cerrado del ADR 0021; un valor almacenado inválido cae al fallback.
+MODEL_DEFAULT_CONFIG_KEY = "model.default_config"
+
+# Fallback de código anclado al catálogo cerrado del ADR 0021. Claude SDK es el
+# camino primario de la plataforma (suscripción Pro/Max). ``temperature`` baja
+# por defecto (salida más determinista para tareas de agente).
+DEFAULT_MODEL_CONFIG: dict[str, Any] = {
+    "provider": "claude_sdk",
+    "model": "claude-sonnet-4",
+    "temperature": 0.2,
+}
+
+# Rango válido de temperatura (mismo rango que valida el schema de agente).
+MODEL_TEMPERATURE_MIN = 0.0
+MODEL_TEMPERATURE_MAX = 2.0
+
+
+class InvalidModelConfigError(ValueError):
+    """Lanzada cuando un ``model_config`` propuesto no valida contra el catálogo
+    cerrado (ADR 0021): proveedor fuera de catálogo, ``model`` vacío o
+    ``temperature`` fuera de rango."""
+
+
+def validate_model_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Valida un ``model_config`` contra el catálogo cerrado (ADR 0021 / 0055).
+
+    Reglas (un fallo levanta :class:`InvalidModelConfigError`, que el router
+    traduce a ``422``):
+
+      * ``provider`` ∈ ``{claude_sdk, copilot, azure_foundry, ollama}`` (los
+        cuatro proveedores del catálogo cerrado del ADR 0021);
+      * ``model`` presente y no vacío;
+      * ``temperature``, si está presente, dentro de ``[MIN, MAX]``.
+
+    Devuelve el dict (intacto) en éxito. La fuente única de los proveedores
+    válidos es ``LLM_PROVIDER_KINDS`` (no una lista paralela que se desincronice
+    del enum ``LLMProviderKind``).
+    """
+    from api_server.db.llm_providers import LLM_PROVIDER_KINDS
+
+    provider = cfg.get("provider")
+    if provider not in LLM_PROVIDER_KINDS:
+        raise InvalidModelConfigError(
+            f"provider {provider!r} is not in the closed catalogue "
+            f"{LLM_PROVIDER_KINDS} (ADR 0021)"
+        )
+    model = cfg.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise InvalidModelConfigError("model must be a non-empty string")
+    temperature = cfg.get("temperature")
+    if temperature is not None:
+        try:
+            temp = float(temperature)
+        except (TypeError, ValueError) as exc:
+            raise InvalidModelConfigError("temperature must be a number") from exc
+        if temp < MODEL_TEMPERATURE_MIN or temp > MODEL_TEMPERATURE_MAX:
+            raise InvalidModelConfigError(
+                f"temperature {temp} must be between "
+                f"{MODEL_TEMPERATURE_MIN} and {MODEL_TEMPERATURE_MAX}"
+            )
+    return cfg
+
+
+def is_model_config_empty(cfg: dict[str, Any] | None) -> bool:
+    """Si un ``model_config`` cuenta como "vacío" (legacy ``{}``).
+
+    Vacío = ``None`` o ``{}`` (un dict sin ninguna clave). Es el predicado que el
+    endpoint y el dispatch usan para decidir si aplicar el default seguro. Un dict
+    NO vacío se trata como un spec INTENCIONAL y se respeta tal cual — incluso si
+    no trae ``provider``/``model`` canónicos (p. ej. el spec scripted del runtime
+    de test usa ``kind`` en vez de ``provider``); el ADR 0055 acota el saneo al
+    caso ``{}`` legacy, no a cualquier spec "incompleto". La validación de catálogo
+    (``validate_model_config``, ``422`` en create/update) ya garantiza que un spec
+    nuevo no vacío trae ``provider``/``model`` válidos."""
+    return not cfg
+
+
+async def get_default_model_config(session: AsyncSession) -> dict[str, Any]:
+    """El ``model_config`` por defecto seguro para un agente sin spec explícito.
+
+    Lo lee ``POST /agents`` cuando el body no envía ``model_config`` y el
+    dispatch cuando un agente legacy tiene ``{}``. Devuelve el override del
+    System Admin si está configurado Y valida contra el catálogo; si nunca se
+    configuró o el valor almacenado es inválido, cae al fallback de código
+    ``DEFAULT_MODEL_CONFIG`` (también del catálogo). NUNCA devuelve ``{}`` ni
+    levanta — el dispatch no debe fallar el arranque por un default mal puesto."""
+    value = await get_platform_setting(session, MODEL_DEFAULT_CONFIG_KEY, default=None)
+    if isinstance(value, dict) and value:
+        try:
+            return dict(validate_model_config(value))
+        except InvalidModelConfigError:
+            # Un default mal configurado no debe romper la creación ni el
+            # dispatch; cae al fallback de código del catálogo.
+            return dict(DEFAULT_MODEL_CONFIG)
+    return dict(DEFAULT_MODEL_CONFIG)
+
+
+# ---------------------------------------------------------------------------
+# Estados de ejecución elegibles para memorización (Plan 06.17 task_06_17_04)
+# ---------------------------------------------------------------------------
+# El Memorizer solo destila ejecuciones "exitosas" — históricamente solo
+# ``done`` (``policy.py``). Este setting hace ese conjunto OPERATOR-CONFIGURABLE
+# (p.ej. añadir ``aborted`` para aprender de fallos): el worker lo lee en vivo y
+# se lo pasa a ``should_memorize``. Default ``["done"]`` (backward-compat). Solo
+# un System Admin lo escribe. Un valor que no sea una lista de
+# :class:`~api_server.db.domain.ExecutionStatus` válidos cae al default.
+MEMORY_MEMORIZABLE_STATUSES_KEY = "memory.memorizable_statuses"
+DEFAULT_MEMORY_MEMORIZABLE_STATUSES: tuple[str, ...] = ("done",)
+
+
+async def get_memorizable_statuses(session: AsyncSession) -> frozenset[str]:
+    """Estados de ejecución que disparan memorización (default ``{"done"}``).
+
+    Lo lee el worker del Memorizer en vivo y se lo pasa a ``should_memorize`` como
+    conjunto elegible. Normaliza a un ``frozenset`` de estados
+    :class:`~api_server.db.domain.ExecutionStatus` válidos; descarta entradas no
+    reconocidas y, si la lista queda vacía o no es lista, cae al default
+    ``{"done"}`` (nunca deja al Memorizer sin ningún estado elegible)."""
+    from api_server.db.domain import ExecutionStatus
+
+    value = await get_platform_setting(
+        session,
+        MEMORY_MEMORIZABLE_STATUSES_KEY,
+        default=list(DEFAULT_MEMORY_MEMORIZABLE_STATUSES),
+    )
+    valid = {s.value for s in ExecutionStatus}
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list | tuple | set | frozenset):
+        return frozenset(DEFAULT_MEMORY_MEMORIZABLE_STATUSES)
+    statuses = {str(item).strip() for item in value if str(item).strip() in valid}
+    return frozenset(statuses) if statuses else frozenset(DEFAULT_MEMORY_MEMORIZABLE_STATUSES)
+
+
+# ---------------------------------------------------------------------------
 # Plan approval — double-signature threshold (Plan 03 task_03_25)
 # ---------------------------------------------------------------------------
 PLAN_DOUBLE_SIGNATURE_THRESHOLD_KEY = "plan_approval_double_signature_threshold"

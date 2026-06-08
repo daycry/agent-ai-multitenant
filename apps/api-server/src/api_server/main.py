@@ -36,6 +36,7 @@ from api_server.routers.auth import router as auth_router
 from api_server.routers.backup import router as backup_router
 from api_server.routers.budget_pause import router as budget_pause_router
 from api_server.routers.conversations import (
+    chat_modes_router,
     conversations_router,
     project_conversations_router,
 )
@@ -76,6 +77,7 @@ from api_server.routers.notifications import router as notifications_router
 from api_server.routers.plans import plans_router, project_plans_router
 from api_server.routers.projects import router as projects_router
 from api_server.routers.review import router as review_router
+from api_server.routers.runtimes import router as runtime_templates_router
 from api_server.routers.scim import router as scim_router
 from api_server.routers.skills import router as skills_router
 from api_server.routers.sso import discovery_router as sso_discovery_router
@@ -194,6 +196,7 @@ def _register_routers(app: FastAPI) -> None:
         internal_agent_router,
         project_conversations_router,
         conversations_router,
+        chat_modes_router,
         project_plans_router,
         plans_router,
         memories_router,
@@ -208,6 +211,7 @@ def _register_routers(app: FastAPI) -> None:
         copilot_device_flow_admin_router,
         mcp_router,
         mcp_catalog_router,
+        runtime_templates_router,
         tools_diagnostic_router,
         dep_cache_router,
         docs_viewer_router,

@@ -165,11 +165,17 @@ así la precedencia y la lookup del catálogo viven en **un solo sitio**
   resuelve la imagen de los `run_*` vía resolver inyectado. Coste de
   cómputo despreciable; la complejidad es de **cableado** (documentada en
   la ruta de spec arriba).
-- El conjunto de runtime templates seleccionables en la UI (chips de
+- ~~El conjunto de runtime templates seleccionables en la UI (chips de
   `RUNTIME_TEMPLATES`) está **codificado en el frontend** además de en
-  `shared_test_runtimes.catalog`. Si se añade un template hay que tocar
-  ambos. Se acepta por simplicidad (un `<select>` estático evita una
-  llamada extra); si la lista crece se expondrá por endpoint.
+  `shared_test_runtimes.catalog`.~~ **Resuelto en el Plan 06.18
+  (`task_06_18_08`, ADR 0051):** el catálogo ya **no** se hardcodea en el
+  frontend. Se expone por `GET /runtime-templates`
+  (`routers/runtimes.py`), que proyecta `shared_test_runtimes.CATALOG`
+  con label **ES+EN**, `dep_cache_mount` y `network_policy`; las pantallas
+  de Comandos y de Caché de dependencias lo consumen (eliminado el
+  triple-hardcodeo divergente 14 vs 12). Además, `default_runtime_template`
+  pasa a validarse con un `field_validator` en `ProjectCreate`/`Update`
+  que rechaza **422** un id fuera del catálogo.
 
 ### Trade-offs explícitos
 
@@ -247,12 +253,12 @@ Probada up / down / up por
 
 ## Riesgos
 
-| Riesgo                                                                           | Probabilidad | Impacto | Mitigación                                                                                               |
-| -------------------------------------------------------------------------------- | ------------ | ------- | -------------------------------------------------------------------------------------------------------- |
-| Operador autoriza un binario peligroso (`bash`, `sh`) y deshace el confinamiento | Media        | Medio   | La allowlist es la 2ª barrera; el contenedor (sin socket Docker, red restringida, cap-drop) es la 1ª.    |
-| `default_runtime_template` apunta a un id que no existe en el catálogo           | Baja         | Bajo    | `RuntimeResolutionError` con el set conocido deletreado; el `<select>` de la UI sólo ofrece ids válidos. |
-| El set de runtimes de la UI se desincroniza de `shared_test_runtimes.catalog`    | Media        | Bajo    | Documentado aquí + en la guía; ambos listan los mismos ids. Si crece, se expone por endpoint.            |
-| Un payload antiguo sin `allowed_commands` deja un agente sin `shell_exec`        | Baja         | Bajo    | Es el comportamiento correcto (clave ausente ⇒ no registrar); el dispatch nuevo siempre emite la clave.  |
+| Riesgo                                                                           | Probabilidad       | Impacto | Mitigación                                                                                                                                                                                             |
+| -------------------------------------------------------------------------------- | ------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Operador autoriza un binario peligroso (`bash`, `sh`) y deshace el confinamiento | Media              | Medio   | La allowlist es la 2ª barrera; el contenedor (sin socket Docker, red restringida, cap-drop) es la 1ª.                                                                                                  |
+| `default_runtime_template` apunta a un id que no existe en el catálogo           | Baja               | Bajo    | `RuntimeResolutionError` con el set conocido deletreado; el `<select>` de la UI sólo ofrece ids válidos.                                                                                               |
+| El set de runtimes de la UI se desincroniza de `shared_test_runtimes.catalog`    | ~~Media~~ Resuelto | Bajo    | **Plan 06.18:** la UI consume `GET /runtime-templates` (proyección de `CATALOG`); ya no hay lista hardcodeada que desincronizar. Un test de contrato mantiene los labels en lock-step con el catálogo. |
+| Un payload antiguo sin `allowed_commands` deja un agente sin `shell_exec`        | Baja               | Bajo    | Es el comportamiento correcto (clave ausente ⇒ no registrar); el dispatch nuevo siempre emite la clave.                                                                                                |
 
 ## Trazabilidad
 
@@ -279,6 +285,13 @@ Probada up / down / up por
 - Frontend: `apps/admin-panel/app/admin/projects/[id]/commands/page.tsx`
   (chips + presets por stack + selector de runtime; `RoleGuard`
   `tenant_admin`).
+- **Plan 06.18 (`06.18-tools-overhaul`):** expone el catálogo por
+  `GET /runtime-templates` (`apps/api-server/src/api_server/routers/runtimes.py`,
+  ADR 0051) y valida `default_runtime_template` con `field_validator`
+  (`schemas/projects.py`); el frontend (Comandos + Caché de dependencias)
+  deja de hardcodear los ids/labels. `shell_exec` queda cableado por el
+  boot del runtime (`register_builtin_families` no lo registra; lo monta
+  `__main__` desde `allowed_commands`, ADR 0048/0049).
 - Tests: `tests/integration/test_project_command_config.py`,
   `test_shell_exec_allowlist.py`, `test_run_tools_by_stack.py`; e2e
   `apps/admin-panel/e2e/project-commands.spec.ts` (escrito, no ejecutado).

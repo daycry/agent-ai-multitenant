@@ -103,6 +103,20 @@ def test_combine_disjoint_layers_block_everything() -> None:
     assert combine_tool_allowlists({"write_file"}, ["read_file"]) == []
 
 
+def test_combine_resolves_aliases_so_catalog_and_mode_names_intersect() -> None:
+    # ADR 0048: the agent is assigned the CATALOG name (read_file) and the mode
+    # allows the legacy chat-mode name (file_read) — the same logical action.
+    # Before canonicalisation this intersected to [] (the silent "unknown tool"
+    # bug). Both must resolve to the canonical read_file so the tool survives.
+    assert combine_tool_allowlists({"read_file"}, ["file_read"]) == ["read_file"]
+    # http_request (chat-mode) expands to both verbs; an agent allowed http_get
+    # keeps it (the mode does not strip it away by name mismatch).
+    assert combine_tool_allowlists({"http_get"}, ["http_request"]) == ["http_get"]
+    # A genuine disjoint pair (different actions) still blocks — canonicalising
+    # must not collapse distinct tools together.
+    assert combine_tool_allowlists({"write_file"}, ["file_read"]) == []
+
+
 # ===========================================================================
 # DB: resolve_agent_tool_names — the None "no rows" sentinel + isolation
 # ===========================================================================

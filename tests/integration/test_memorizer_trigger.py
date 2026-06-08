@@ -286,8 +286,11 @@ async def test_memorize_private_scope_for_ai_agent_is_skipped(
     schema_at_head, migrations_pg_dsn: str, workers_settings
 ) -> None:
     """Private auto-memorisation has no clean user attribution for an
-    AI agent — the task logs and skips. Human-curated private memories
-    go through ``POST /memories`` instead."""
+    AI agent — the task skips. Human-curated private memories go through
+    ``POST /memories`` instead.
+
+    Plan 06.17 task_06_17_04: el skip ya no es silencioso — el motivo canónico
+    ``skip_private`` se devuelve y se PERSISTE en ``executions.memorize_skip_reason``."""
     from tests.integration.conftest import _grant_app_user_existing_tables
 
     await _grant_app_user_existing_tables()
@@ -303,7 +306,18 @@ async def test_memorize_private_scope_for_ai_agent_is_skipped(
     )
 
     assert result["persisted"] == 0
-    assert result["reason"] == "skipped:no_owner_for_scope"
+    assert result["reason"] == "skipped:skip_private"
+
+    # El motivo queda consultable en la ejecución (fin del skip silencioso).
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        reason = await conn.fetchval(
+            "SELECT memorize_skip_reason FROM executions WHERE id = $1",
+            seeded["execution_id"],
+        )
+    finally:
+        await conn.close()
+    assert reason == "skip_private"
 
 
 @pytest.mark.asyncio

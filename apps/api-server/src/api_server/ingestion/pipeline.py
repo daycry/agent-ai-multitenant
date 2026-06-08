@@ -9,13 +9,22 @@ client, embedder) into one async function:
   4. docling-serve parse + chunk,
   5. embed chunks in one batch,
   6. persist `chunks` rows and update `documents` (`indexed_at`,
-     `page_count`, `status=indexed`),
+     `page_count`, `status`),
   7. emit a final `document.status` event with the count.
 
-Any failure flips the document to `failed`, stamps `error_message`,
-and emits the same event so the UI bar turns red. The pipeline never
-raises into the Celery worker — Celery's retry is reserved for
-infrastructure failures, not parse errors.
+The terminal status is **honest** (Plan 06.17 task_06_17_05):
+
+  - ``indexed``        — chunks were produced and persisted;
+  - ``indexed_empty``  — the document parsed cleanly but yielded ZERO
+    chunks (e.g. an image-only PDF, an unsupported layout). It is NOT
+    green ``indexed`` because the agent cannot retrieve anything from
+    it; the UI surfaces "indexado vacío" so the operator re-uploads;
+  - ``failed``         — a hard failure (storage / AV / Docling parse
+    error). The Docling failure reason is propagated to
+    ``error_message`` (no silent ``_fail``).
+
+The pipeline never raises into the Celery worker — Celery's retry is
+reserved for infrastructure failures, not parse errors.
 """
 
 from __future__ import annotations
@@ -54,7 +63,7 @@ class IngestionResult:
     """
 
     document_id: UUID
-    status: str  # 'indexed' | 'failed'
+    status: str  # 'indexed' | 'indexed_empty' | 'failed'
     chunks_persisted: int
     error_message: str | None
 
@@ -150,7 +159,12 @@ async def ingest_document(
                 metadata_=chunk_spec.metadata or {},
             )
         )
-    doc.status = "indexed"
+    # Honestidad de estado (task_06_17_05): 0 chunks NO es verde
+    # "indexed". El documento se procesó (indexed_at se sella), pero no
+    # aporta conocimiento recuperable; lo marcamos `indexed_empty` para
+    # que la UI no mienta y el operador re-suba un original con texto.
+    terminal_status = "indexed" if docling_chunks else "indexed_empty"
+    doc.status = terminal_status
     doc.error_message = None
     doc.indexed_at = datetime.now(tz=UTC)
     doc.page_count = _infer_page_count(docling_chunks)
@@ -160,12 +174,13 @@ async def ingest_document(
     logger.info(
         "ingestion.indexed",
         document_id=str(doc.id),
+        status=terminal_status,
         chunks=len(docling_chunks),
         pages=doc.page_count,
     )
     return IngestionResult(
         document_id=doc.id,
-        status="indexed",
+        status=terminal_status,
         chunks_persisted=len(docling_chunks),
         error_message=None,
     )

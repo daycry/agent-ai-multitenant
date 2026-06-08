@@ -34,6 +34,7 @@ import {
   Store,
   UserRound,
   Users,
+  Wrench,
   X,
 } from "lucide-react";
 
@@ -95,6 +96,7 @@ const NAV_GROUPS: NavGroup[] = [
     adminOnly: true,
     items: [
       { href: "/admin/agents", label: "Agentes", Icon: Bot },
+      { href: "/admin/tools", label: "Catálogo", Icon: Wrench },
       { href: "/admin/human-agents", label: "Agentes humanos", Icon: UserRound, adminOnly: true },
       { href: "/admin/teams", label: "Equipos", Icon: Users },
       { href: "/admin/projects", label: "Proyectos", Icon: FolderKanban },
@@ -361,7 +363,9 @@ function NavGroupBlock({
       </button>
 
       {open && (
-        <ul className="mt-1 flex flex-col gap-1">
+        // Hijos indentados + guía vertical de árbol bajo la cabecera del grupo,
+        // para que la jerarquía padre→hijo se distinga de un vistazo.
+        <ul className="ml-3 mt-1 flex flex-col gap-1 border-l border-sidebar-border pl-2">
           {group.items.map(({ href, label, Icon: ItemIcon }) => {
             const active = isActive(href);
             return (

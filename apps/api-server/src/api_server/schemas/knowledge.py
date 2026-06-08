@@ -202,7 +202,30 @@ def to_document_response(d: Document) -> DocumentResponse:
     )
 
 
+# ---------------------------------------------------------------------------
+# Chunk search/preview (Plan 06.17 task_06_17_05)
+# ---------------------------------------------------------------------------
+class ChunkSearchHit(BaseModel):
+    """Un chunk recuperado por el preview/búsqueda de una KB.
+
+    Expone los ranks por path (BM25/vector) y el score RRF fusionado
+    para que la UI pueda explicar *por qué* salió el chunk."""
+
+    model_config = _BASE_CONFIG
+
+    chunk_id: UUID
+    document_id: UUID
+    kb_id: UUID
+    ordinal: int
+    content: str
+    bbox: dict[str, object] | None = None
+    bm25_rank: int | None = None
+    vector_rank: int | None = None
+    rrf_score: float
+
+
 __all__ = [
+    "ChunkSearchHit",
     "DocumentResponse",
     "KbCategoryCreateRequest",
     "KbCategoryResponse",

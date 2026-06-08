@@ -31,8 +31,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_member
 from api_server.db.memory import MemoryEntry
+from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
 from api_server.routers._helpers import require_tenant_id
+from api_server.routers.docs_viewer import get_query_embedder
 
 router = APIRouter(prefix="/memories", tags=["memories"])
 
@@ -173,12 +175,18 @@ async def store_memory(
     payload: MemoryStoreRequest,
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
+    embedder: Embedder | None = Depends(get_query_embedder),
 ) -> MemoryResponse:
     """Persist a single memory manually (Plan 04 task_04_05).
 
     The Memorizer (task_04_03) writes memories automatically after
     each execution; this endpoint covers the "I want to remember this
     *now*" case humans hit in the chat UI.
+
+    Plan 06.17 task_06_17_03: el contenido se embebe en el momento de crear
+    (best-effort, reutilizando ``get_query_embedder``) para que ``has_embedding``
+    y "similares" funcionen ya; si el embed falla, queda NULL y el back-fill lo
+    rellena luego.
     """
     tenant_id = require_tenant_id(principal)
     if payload.scope == "global":
@@ -206,6 +214,7 @@ async def store_memory(
         agent_id=None,
         source_execution_id=None,
         extra_metadata={"source": "manual", "actor_user_id": str(principal.user_id)},
+        embedder=embedder,
     )
     await session.flush()
     row = rows[0]
@@ -241,6 +250,57 @@ async def list_memories(
     stmt = stmt.order_by(MemoryEntry.created_at.desc()).limit(limit)
     result = await session.execute(stmt)
     return [_to_response(row) for row in result.scalars().all()]
+
+
+# ---------------------------------------------------------------------------
+# GET /memories/skip-reasons — por qué un run NO dejó memoria (Plan 06.17 task_06_17_04)
+# ---------------------------------------------------------------------------
+class MemorizeSkipItem(BaseModel):
+    """Una ejecución que NO produjo memoria + su motivo canónico."""
+
+    model_config = _BASE_CONFIG
+
+    execution_id: UUID
+    task_id: UUID
+    agent_id: UUID | None
+    status: str
+    reason: str
+    """Código canónico (``not_done``/``skip_private``/``no_team``/``no_scope``/``llm_empty``)."""
+    completed_at: datetime | None
+
+
+@router.get("/skip-reasons", response_model=list[MemorizeSkipItem])
+async def list_memorize_skip_reasons(
+    reason: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[MemorizeSkipItem]:
+    """Ejecuciones del tenant cuyo Memorizer NO produjo memoria, con el motivo.
+
+    Fin del skip silencioso (Plan 06.17 task_06_17_04): el worker persiste el
+    código en ``executions.memorize_skip_reason`` y este endpoint lo expone para
+    que la UI explique "por qué no hay memoria de este run". RLS acota por tenant
+    (un run de otro tenant nunca aparece); opcionalmente se filtra por ``reason``.
+    """
+    from api_server.db.domain import Execution
+
+    stmt = select(Execution).where(Execution.memorize_skip_reason.is_not(None))
+    if reason is not None:
+        stmt = stmt.where(Execution.memorize_skip_reason == reason)
+    stmt = stmt.order_by(Execution.created_at.desc()).limit(limit)
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        MemorizeSkipItem(
+            execution_id=row.id,
+            task_id=row.task_id,
+            agent_id=row.agent_id,
+            status=row.status,
+            reason=row.memorize_skip_reason or "",
+            completed_at=row.completed_at,
+        )
+        for row in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -394,12 +454,19 @@ async def merge_memory_into(
     payload: MergeRequest,
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
+    embedder: Embedder | None = Depends(get_query_embedder),
 ) -> MemoryResponse:
     """Fold ``source_id`` INTO ``target_id`` (asymmetric merge).
 
     Target's content gets the source's appended (separator
     ``\\n\\n---\\n``); tags become the union; ``metadata.merged_from``
     accumulates the source's id. The source is soft-deleted.
+
+    Plan 06.17 task_06_17_03: el contenido del destino CAMBIA, así que su
+    embedding queda obsoleto — se RE-EMBEBE el contenido combinado (best-effort,
+    reutilizando ``get_query_embedder``) para que "similares" siga siendo
+    coherente. Si el embed falla (Ollama caído), el embedding queda NULL y el
+    back-fill lo rellena luego; el merge no se bloquea.
     """
     require_tenant_id(principal)
 
@@ -454,6 +521,10 @@ async def merge_memory_into(
     md["merged_from"] = history
     tgt.metadata_ = md
 
+    # El contenido del destino cambió → re-embeber (best-effort) para no dejar
+    # un embedding que ya no representa el texto. Un fallo deja NULL (back-fill).
+    tgt.embedding = await _reembed_content(embedder, tgt.content)
+
     from datetime import UTC
     from datetime import datetime as _dt
 
@@ -461,6 +532,21 @@ async def merge_memory_into(
     await session.flush()
     await session.refresh(tgt)
     return _to_response(tgt)
+
+
+async def _reembed_content(embedder: Embedder | None, content: str) -> list[float] | None:
+    """Re-embebe ``content`` (best-effort) tras un merge.
+
+    Devuelve el vector, o ``None`` cuando no hay embedder, el contenido está
+    vacío o el embed falla (Ollama caído). En ese último caso el back-fill
+    rellena el NULL más tarde; el merge no se bloquea."""
+    if embedder is None or not content.strip():
+        return None
+    try:
+        vectors = await embedder.embed([content])
+    except EmbeddingError:
+        return None
+    return list(vectors[0]) if vectors else None
 
 
 __all__ = ["router"]

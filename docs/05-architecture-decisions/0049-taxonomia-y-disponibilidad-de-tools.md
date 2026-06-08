@@ -74,8 +74,9 @@ no entrega:
    avisa/`422` ante nombre no ejecutable (`task_06_18_06`).
 4. **Categorías sin motor**: se **retira del seed** la categoría `git` hasta que exista
    `register_git_tools`, y se reconcilia `semantic_search`↔`rag_search` en la fuente única (ADR 0048).
-5. Se **actualiza el ADR 0044** al conteo real (19 tools) y se documenta que el tier se deriva del
-   backend (campo derivado en `ToolResponse`), no re-derivado en cliente.
+5. Se **actualiza el ADR 0044** al conteo real **tras retirar `git`** (15 tools, no 19: el punto 4
+   elimina las 4 tools `git_*`) y se documenta que el tier se deriva del backend (campo derivado en
+   `ToolResponse`), no re-derivado en cliente.
 
 ## Consecuencias
 

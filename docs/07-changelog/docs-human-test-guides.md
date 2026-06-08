@@ -51,7 +51,7 @@ Plan" del roadmap de cada plan. No se inventaron tests fuera de ese bloque.
 - ✅ **`task_htg_04`** — Guías de 06.15, 06.16, demo-webscorpo:
   - [`06.15-agent-tools-assignment-ui.md`](../03-guides/human-tests/06.15-agent-tools-assignment-ui.md) (2 tests, `human_06_15_01..02`)
   - [`06.16-polyglot-tool-catalog.md`](../03-guides/human-tests/06.16-polyglot-tool-catalog.md) (1 test, `human_06_16_01`)
-  - [`demo-webscorpo-team-kb.md`](../03-guides/human-tests/demo-webscorpo-team-kb.md) (1 test, `human_demo_ws_01`; incluye cómo correr `scripts/setup_webscorpo.py`)
+  - `demo-webscorpo-team-kb.md` (1 test, `human_demo_ws_01`; incluía cómo correr `scripts/setup_webscorpo.py`) — _guía y demo retiradas al purgar WebScorpo en favor del built-in CodeIgniter 4 (06.17 follow-up); enlace eliminado._
 
 ### Fase B — Completitud (`completed` sin guía) + índice
 

@@ -4,9 +4,10 @@ Two retrieval paths over `memory_entries` combined with Reciprocal
 Rank Fusion:
 
   - **Text path (BM25-like)** — `ts_rank_cd` over the GIN-indexed
-    `to_tsvector('simple', content)`. PostgreSQL builds an inverted
-    index on terms; the rank function approximates BM25 closely
-    enough for memory retrieval.
+    `to_tsvector('public.es_unaccent', content)` (español + unaccent,
+    Plan 06.17 task_06_17_04 / migración 0079). PostgreSQL builds an
+    inverted index on stemmed, accent-folded terms; the rank function
+    approximates BM25 closely enough for memory retrieval.
   - **Vector path** — `embedding <=> :query_vector` (cosine distance,
     converted to similarity). Skips rows where the embedder hasn't
     back-filled the embedding yet (`embedding IS NULL`).
@@ -136,7 +137,13 @@ async def _bm25_candidates(
     project_id: UUID | None,
     limit: int,
 ) -> list[UUID]:
-    """Top-`limit` ids by `ts_rank_cd`. Empty list if `query` is blank."""
+    """Top-`limit` ids by `ts_rank_cd`. Empty list if `query` is blank.
+
+    Plan 06.17 task_06_17_04: el path BM25 usa la configuración ``public.es_unaccent``
+    (español + unaccent, migración 0079) en vez de ``'simple'``, de modo que
+    ``arquitectura`` casa ``arquitecturas`` (stemming ES) y el acento es
+    irrelevante (``decision`` casa ``decisión``). El índice GIN expresión-based de
+    ``content`` usa LA MISMA configuración, así que la query lo aprovecha."""
     if not query.strip():
         return []
     sql = (
@@ -144,10 +151,11 @@ async def _bm25_candidates(
         " FROM memory_entries"
         " WHERE tenant_id = :tenant_id"
         "   AND deleted_at IS NULL"
-        "   AND to_tsvector('simple', content) @@ plainto_tsquery('simple', :q)"
+        "   AND to_tsvector('public.es_unaccent', content)"
+        "       @@ plainto_tsquery('public.es_unaccent', :q)"
         + _scope_filter_sql()
-        + " ORDER BY ts_rank_cd(to_tsvector('simple', content),"
-        "          plainto_tsquery('simple', :q)) DESC"
+        + " ORDER BY ts_rank_cd(to_tsvector('public.es_unaccent', content),"
+        "          plainto_tsquery('public.es_unaccent', :q)) DESC"
         "  LIMIT :limit"
     )
     result = await session.execute(

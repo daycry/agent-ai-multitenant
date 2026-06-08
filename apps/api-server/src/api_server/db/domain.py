@@ -150,18 +150,54 @@ class MemoryType(enum.StrEnum):
 
 
 class SkillCategory(enum.StrEnum):
-    """Open-ended skill grouping. Free-form `category` text is also accepted;
-    this enum is just for the curated catalog (see task_01_10 seed)."""
+    """Cerrada *categoría* de skill (ADR 0050, task_06_18_13).
 
-    CODING = "coding"
-    REVIEW = "review"
-    PLANNING = "planning"
-    RESEARCH = "research"
+    Los seis valores son EXACTAMENTE las categorías que usan las 33 skills
+    seedeadas (``api_server.seeds.builtin_skills``). Antes este enum tenía nueve
+    valores divergentes (``coding``/``review``/``planning``/``data``/
+    ``security``…) que no coincidían con el seed y nunca se validaban; ADR 0050
+    los alinea y aplica un ``CHECK`` en BD (migración 0078) construido desde este
+    mismo conjunto, de modo que base de datos y aplicación concuerdan.
+    """
+
+    BACKEND = "backend"
+    FRONTEND = "frontend"
     DEVOPS = "devops"
-    DATA = "data"
-    DOCS = "docs"
     QA = "qa"
-    SECURITY = "security"
+    RESEARCH = "research"
+    DOCS = "docs"
+
+
+class ToolCategory(enum.StrEnum):
+    """Closed *Función* facet of the tool taxonomy (ADR 0049).
+
+    The seven function buckets are exactly the ``category`` values used by the
+    19 built-in seed rows (``api_server.seeds.builtin_tools``); a CI contract
+    test (task_06_18_14) asserts this enum stays a superset of the seed.
+
+    Three extra buckets carry tools that are *not* in the catalog seed:
+
+      - ``MCP`` — tools imported from an MCP server (origin facet ``mcp_tool``;
+        ADR 0052), namespaced ``<server>.<tool>``.
+      - ``ORCHESTRATION`` — runtime-registered orchestration tools
+        (``kanban_update`` / ``task_comment`` / ``agent_invoke``; ADR 0048).
+      - ``CUSTOM`` — the catch-all for tenant-authored tools that do not map to
+        a function bucket above.
+
+    The DB-level CHECK on ``tools.category`` (migration 0077) is built from this
+    same value set so the database and the application agree.
+    """
+
+    FILE = "file"
+    RUNTIME = "runtime"
+    GIT = "git"
+    NETWORK = "network"
+    KNOWLEDGE = "knowledge"
+    NOTIFICATION = "notification"
+    COMMAND = "command"
+    MCP = "mcp"
+    ORCHESTRATION = "orchestration"
+    CUSTOM = "custom"
 
 
 class ToolImplementationType(enum.StrEnum):
@@ -452,6 +488,12 @@ class Skill(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDe
             "is_builtin",
             postgresql_where=text("is_builtin = true"),
         ),
+        # Cerramos `category` al conjunto del seed (ADR 0050, migración 0078).
+        # El value set se deriva de `SkillCategory`, la única declaración.
+        CheckConstraint(
+            "category IN (" + ", ".join(f"'{c.value}'" for c in SkillCategory) + ")",
+            name="ck_skills_category",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -487,7 +529,32 @@ class Tool(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
             "is_builtin",
             postgresql_where=text("is_builtin = true"),
         ),
+        # No two LIVE tools of the same tenant may share a name (a soft-deleted
+        # name may be reused). Partial unique index because PostgreSQL UNIQUE
+        # constraints cannot carry a WHERE clause (task_06_18_04, ADR 0049).
+        Index(
+            "uq_tools_tenant_name",
+            "tenant_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         CheckConstraint("timeout_seconds > 0", name="ck_tools_timeout_positive"),
+        # Closed taxonomy value sets (ADR 0049). The category list mirrors
+        # ToolCategory; security_level / implementation_type mirror their enums.
+        CheckConstraint(
+            "category IN (" + ", ".join(f"'{c.value}'" for c in ToolCategory) + ")",
+            name="ck_tools_category",
+        ),
+        CheckConstraint(
+            "security_level IN ('safe', 'sandboxed', 'privileged')",
+            name="ck_tools_security_level",
+        ),
+        CheckConstraint(
+            "implementation_type IN ("
+            "'builtin', 'python_function', 'http_endpoint', 'mcp_tool', 'docker_command')",
+            name="ck_tools_implementation_type",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -585,7 +652,10 @@ class Team(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     default_workflow_template_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), nullable=True
     )
-    shared_memory_namespace: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Plan 06.17 task_06_17_15 / ADR 0053: `shared_memory_namespace` se retiró.
+    # Era un campo muerto (sin lectura productiva en recall/store): la memoria
+    # `team_shared` se resuelve por `project.team_id`, no por un namespace. La
+    # migración 0082 dropea la columna (reversible).
     # Catalog marker -- same pattern as Skill/Tool.is_builtin.
     is_builtin: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 
@@ -976,6 +1046,14 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     # repetitive_loop_detected, …). NULL on a clean run.
     abort_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     output: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Por qué el Memorizer NO produjo memoria a partir de este run, como código
+    # canónico (:class:`~api_server.memorizer.policy.MemorizeSkipReason`):
+    # ``not_done`` / ``skip_private`` / ``no_team`` / ``no_scope`` / ``llm_empty``
+    # (Plan 06.17 task_06_17_04). NULL cuando se memorizó OK o el Memorizer aún no
+    # ha corrido. Lo escribe el worker dedicado (``workers.memorize_execution``);
+    # un endpoint lo expone para que la UI explique el "por qué no hay memoria".
+    memorize_skip_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # The steps_log: one dict per step (node / model_call / tool_call /
     # memory_read). Stored as JSONB so the shape can evolve migration-free.

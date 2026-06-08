@@ -35,6 +35,12 @@ class AgentState(TypedDict):
     status: str
     abort_code: str | None
 
+    # Preámbulo a prepender al system prompt EFECTIVO (Plan 06.18 task_06_18_13,
+    # ADR 0050): los `prompt_fragment` de las skills asignadas al agente,
+    # concatenados. `None`/"" = sin inyección → el system prompt queda intacto
+    # (backward-compat). Escalar, replicado tal cual a cada turno.
+    system_preamble: str | None
+
     # Working memory — every node may append context fragments.
     context: Annotated[list[dict[str, Any]], operator.add]
     reflections: Annotated[list[str], operator.add]
@@ -53,13 +59,19 @@ class AgentState(TypedDict):
     steps: Annotated[list[dict[str, Any]], operator.add]
 
 
-def initial_state(task: AgentTask) -> AgentState:
-    """A fresh state for a task at the start of an execution."""
+def initial_state(task: AgentTask, *, system_preamble: str | None = None) -> AgentState:
+    """A fresh state for a task at the start of an execution.
+
+    `system_preamble` (Plan 06.18 task_06_18_13) carries the assigned skills'
+    prompt fragments to prepend to the model's system prompt; `None` keeps the
+    historical prompt untouched.
+    """
     return AgentState(
         task=task,
         iteration=0,
         status=STATUS_RUNNING,
         abort_code=None,
+        system_preamble=system_preamble,
         context=[],
         reflections=[],
         last_decision=None,

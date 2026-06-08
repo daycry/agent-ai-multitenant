@@ -4,16 +4,20 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, Sparkles } from "lucide-react";
+import { ArrowLeft, ArrowRight, FilePlus2, Sparkles } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useLang } from "@/lib/lang-context";
+import { runtimeLabel, useRuntimeTemplates } from "@/lib/runtime-templates";
 
 interface Project {
   id: string;
@@ -21,8 +25,10 @@ interface Project {
   description: string | null;
   status: string;
   team_id: string | null;
-  mcp_servers: Array<Record<string, unknown>>;
-  rag_knowledge_bases: Array<Record<string, unknown>>;
+  // NOTE (Plan 06.17 task_06_17_14): `mcp_servers` / `rag_knowledge_bases`
+  // are orphan placeholders on the project row (their real tables live
+  // elsewhere). The wizard no longer reads or forwards them — KB grants
+  // come from the template's `default_kb_grants` via the backend.
   worker_config: Record<string, unknown>;
   repository_config: Record<string, unknown> | null;
   human_approval_policy: Record<string, unknown> | null;
@@ -43,12 +49,22 @@ function suggestedName(template: Project): string {
 export default function NewProjectWizardPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { lang } = useLang();
 
-  // Step 1: pick a template. Step 2: customize + create.
+  // Step 1: pick a template (or start blank). Step 2: customize + create.
+  // `selected === null` while in step 2 means a blank project ("proyecto en
+  // blanco") — no template_id is sent and nothing is auto-granted.
   const [step, setStep] = useState<1 | 2>(1);
   const [selected, setSelected] = useState<Project | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  // Plan 06.17 task_06_17_14: when a template is chosen, the operator decides
+  // whether its default_kb_grants are actually applied. Default true (the
+  // template's KBs are the point of picking it); a blank project ignores it.
+  const [applyKbGrants, setApplyKbGrants] = useState(true);
+  // The stack's default runtime template (06.18 GET /runtime-templates). "" =
+  // no default (the run_* tools fall back to per-tool defaults).
+  const [runtime, setRuntime] = useState("");
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const templatesQuery = useQuery({
@@ -66,33 +82,48 @@ export default function NewProjectWizardPage() {
     refetchOnWindowFocus: false,
   });
 
+  const runtimesQuery = useRuntimeTemplates();
+  const runtimeTemplates = runtimesQuery.data ?? [];
+
   const teamsById = new Map((teamsQuery.data ?? []).map((t) => [t.id, t]));
 
   function pickTemplate(template: Project) {
     setSelected(template);
     setName(suggestedName(template));
     setDescription(template.description ?? "");
+    setApplyKbGrants(true);
+    setStep(2);
+    setSubmitError(null);
+  }
+
+  function startBlank() {
+    setSelected(null);
+    setName("");
+    setDescription("");
+    setApplyKbGrants(true);
     setStep(2);
     setSubmitError(null);
   }
 
   const createProject = useMutation({
     mutationFn: async () => {
-      if (!selected) throw new Error("missing template");
-      const created = await apiFetch<Project>("/projects", {
-        method: "POST",
-        body: {
-          name,
-          description: description || null,
-          team_id: selected.team_id,
-          mcp_servers: selected.mcp_servers,
-          rag_knowledge_bases: selected.rag_knowledge_bases,
-          worker_config: selected.worker_config,
-          repository_config: selected.repository_config,
-          human_approval_policy: selected.human_approval_policy,
-        },
-      });
-      return created;
+      // A blank project sends no template_id (and grants nothing). A
+      // template-backed one sends template_id + the apply_template_kb_grants
+      // flag so the backend (routers/projects.py) decides on the grants.
+      const body: Record<string, unknown> = {
+        name,
+        description: description || null,
+        default_runtime_template: runtime || null,
+      };
+      if (selected) {
+        body.template_id = selected.id;
+        body.apply_template_kb_grants = applyKbGrants;
+        body.team_id = selected.team_id;
+        body.worker_config = selected.worker_config;
+        body.repository_config = selected.repository_config;
+        body.human_approval_policy = selected.human_approval_policy;
+      }
+      return apiFetch<Project>("/projects", { method: "POST", body });
     },
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["projects", "tenant"] });
@@ -125,6 +156,35 @@ export default function NewProjectWizardPage() {
       {/* ============ Step 1: pick a template ============ */}
       {step === 1 && (
         <section data-testid="wizard-step-1">
+          {/* Proyecto en blanco — sin plantilla, sin auto-grants de KB. */}
+          <Card
+            data-testid="wizard-blank-project"
+            className="mb-4 flex items-center justify-between gap-4 p-4"
+            interactive
+            onClick={startBlank}
+          >
+            <div className="flex items-center gap-3">
+              <FilePlus2 className="text-muted-foreground h-6 w-6" />
+              <div>
+                <p className="font-semibold">Proyecto en blanco</p>
+                <p className="text-muted-foreground text-sm">
+                  Empieza sin plantilla. No se concede ninguna base de conocimiento por defecto.
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                startBlank();
+              }}
+              data-testid="wizard-blank-project-pick"
+            >
+              Empezar en blanco <ArrowRight className="ml-1 h-3.5 w-3.5" />
+            </Button>
+          </Card>
+
           {templatesQuery.isLoading && (
             <p className="text-muted-foreground text-sm">Cargando plantillas…</p>
           )}
@@ -185,7 +245,7 @@ export default function NewProjectWizardPage() {
       )}
 
       {/* ============ Step 2: customize ============ */}
-      {step === 2 && selected && (
+      {step === 2 && (
         <section data-testid="wizard-step-2" className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <Card className="lg:col-span-2">
             <CardHeader>
@@ -213,6 +273,55 @@ export default function NewProjectWizardPage() {
                   data-testid="wizard-description"
                 />
               </div>
+
+              {/* Runtime por defecto del stack (06.18 GET /runtime-templates). */}
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="wizard-runtime">Runtime por defecto</Label>
+                <Select
+                  id="wizard-runtime"
+                  value={runtime}
+                  disabled={runtimesQuery.isLoading}
+                  onChange={(e) => setRuntime(e.target.value)}
+                  data-testid="wizard-runtime-select"
+                >
+                  <option value="">— Sin runtime por defecto (defaults por-tool) —</option>
+                  {runtimeTemplates.map((rt) => (
+                    <option key={rt.id} value={rt.id}>
+                      {runtimeLabel(rt, lang)}
+                    </option>
+                  ))}
+                </Select>
+                {runtimesQuery.isError && (
+                  <p
+                    className="text-danger-soft-foreground text-xs"
+                    data-testid="wizard-runtime-error"
+                  >
+                    No se pudo cargar el catálogo de runtimes.
+                  </p>
+                )}
+              </div>
+
+              {/* KB grants de la plantilla — solo si hay plantilla elegida. */}
+              {selected && (
+                <label
+                  className="flex cursor-pointer items-start gap-2 text-sm"
+                  data-testid="wizard-apply-kb-grants-label"
+                >
+                  <Checkbox
+                    checked={applyKbGrants}
+                    onChange={(e) => setApplyKbGrants(e.target.checked)}
+                    data-testid="wizard-apply-kb-grants"
+                  />
+                  <span>
+                    Conceder las bases de conocimiento de la plantilla
+                    <span className="text-muted-foreground block text-xs">
+                      Si lo desmarcas, el proyecto adopta la plantilla pero no recibe ninguna KB por
+                      defecto.
+                    </span>
+                  </span>
+                </label>
+              )}
+
               {submitError && (
                 <p
                   className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
@@ -223,7 +332,7 @@ export default function NewProjectWizardPage() {
               )}
               <div className="mt-2 flex items-center justify-between">
                 <Button variant="outline" onClick={() => setStep(1)} data-testid="wizard-back">
-                  ← Cambiar plantilla
+                  ← {selected ? "Cambiar plantilla" : "Volver"}
                 </Button>
                 <Button
                   onClick={() => createProject.mutate()}
@@ -237,7 +346,7 @@ export default function NewProjectWizardPage() {
             </CardContent>
           </Card>
 
-          {/* Preview pane: what the template ships with. */}
+          {/* Preview pane: what the template ships with (o "en blanco"). */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Preview</CardTitle>
@@ -245,15 +354,17 @@ export default function NewProjectWizardPage() {
             <CardContent className="flex flex-col gap-3 text-sm">
               <div>
                 <span className="text-muted-foreground text-xs uppercase">Plantilla</span>
-                <p className="font-medium">{selected.name}</p>
+                <p className="font-medium" data-testid="wizard-preview-template">
+                  {selected ? selected.name : "Proyecto en blanco (sin plantilla)"}
+                </p>
               </div>
-              {selected.team_id && (
+              {selected?.team_id && (
                 <div>
                   <span className="text-muted-foreground text-xs uppercase">Equipo</span>
                   <p>{teamsById.get(selected.team_id)?.name ?? selected.team_id}</p>
                 </div>
               )}
-              {selected.human_approval_policy?.preset != null && (
+              {selected?.human_approval_policy?.preset != null && (
                 <div>
                   <span className="text-muted-foreground text-xs uppercase">Política humana</span>
                   <p>
@@ -261,7 +372,7 @@ export default function NewProjectWizardPage() {
                   </p>
                 </div>
               )}
-              {selected.repository_config && (
+              {selected?.repository_config && (
                 <div>
                   <span className="text-muted-foreground text-xs uppercase">Repositorio</span>
                   <pre className="bg-muted text-muted-foreground overflow-auto rounded p-2 text-xs">

@@ -41,6 +41,28 @@ def _validate_custom_mode_invariants(self: BaseModel) -> BaseModel:
 
 
 # ---------------------------------------------------------------------------
+# Chat-mode catalog (Plan 06.17 task_06_17_11)
+# ---------------------------------------------------------------------------
+class ChatModeResponse(BaseModel):
+    """Una entrada del catálogo de modos de chat para la UI.
+
+    La consume la vista "prompt efectivo" de la sección Persona, que combina el
+    ``system_prompt`` del rol del agente con el del modo elegido (fuente única:
+    el prompt del modo NO se duplica en el frontend). ``available=False`` marca
+    el modo ``custom`` como "No disponible aún" (modos custom de extremo a
+    extremo diferidos): la UI lo muestra pero lo deja deshabilitado.
+    """
+
+    model_config = _BASE_CONFIG
+
+    name: str
+    label_es: str
+    label_en: str
+    system_prompt: str
+    available: bool
+
+
+# ---------------------------------------------------------------------------
 # Conversation
 # ---------------------------------------------------------------------------
 class ConversationCreateRequest(BaseModel):

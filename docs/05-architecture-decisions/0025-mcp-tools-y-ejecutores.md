@@ -190,9 +190,41 @@ ALL + no-new-privileges + read_only + tmpfs /tmp + uid 1000 + mem_limit
 
 ---
 
+## Actualización Plan 06.18 — import discovery→catálogo + threading de `mcp_servers`
+
+> **`06.18-tools-overhaul` (`task_06_18_12`, ADR 0052).** Plan 05 dejó dos
+> huecos que 06.18 cierra: el **discovery era one-shot** (`test-connection`
+> listaba las tools del server pero **no las persistía**, así que no eran
+> asignables a un agente), y **`project.mcp_servers` nunca llegaba al
+> runtime** (un agente con una tool MCP asignada no tenía sesión MCP que la
+> ejecutara).
+
+- **Importación discovery → catálogo.** Tras un `test-connection` exitoso,
+  `POST /projects/{id}/mcp/servers/{server}/import-tools`
+  (`routers/mcp.py`, `tenant_admin`) hace **upsert** de filas `Tool` con
+  `implementation_type='mcp_tool'`, `category='mcp'` y `name` **namespaced
+  `<server>.<tool>`** (así `<server>.read_file` no parece un duplicado del
+  built-in `read_file` — faceta **Origen=MCP** de la taxonomía de ADR 0049).
+  La selección la decide el operador (`tool_names`, **no** se importa todo
+  automáticamente — control de supply-chain); `security_level` arranca en
+  `sandboxed` (mínimo privilegio) y es editable. El upsert es **idempotente**
+  y respeta el `UNIQUE(tenant_id, name)` de `task_06_18_04` (una carrera se
+  traduce en 409 limpio). Tenant-safe: un proyecto de otro tenant → 404; el
+  server debe estar declarado en `project.mcp_servers`.
+- **Threading de `mcp_servers` al runtime.** `project.mcp_servers` viaja por
+  la misma ruta de spec que el allowlist de tools (06.15) y de comandos
+  (06.16): `dispatch` → `ExecutionRequest` → `__main__`, que arranca un
+  `MCPToolRunner`, llama a `register_mcp_server` por cada server y lo cierra
+  en `finally`. Así una tool `<server>.<tool>` asignada se ejecuta de verdad
+  en lugar de morir como `unknown tool`.
+
 ## Referencias
 
 - Plan 05 (`docs/roadmap/05-mcp-tools-avanzadas.md`).
+- **Plan 06.18 (`docs/roadmap/06.18-tools-overhaul.md`):** import
+  discovery→catálogo + threading de `mcp_servers`; ADR 0052
+  (`0052-import-mcp-tools-catalogo.md`); `routers/mcp.py`,
+  `orchestrator/dispatch.py`, `agent_runtime/mcp_tools.py`.
 - Catálogo de plantillas (`docs/04-reference/mcp-servers.md`).
 - ADR 0012 — Aislamiento de contenedores agent-runtime. El envelope
   de `docker_command` Tools deriva de aquí.
