@@ -256,3 +256,100 @@ export function setAssistantEnabled(enabled: boolean): Promise<AssistantToggleSt
     body: { enabled },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Model selection (ADR 0053) — what LLM provider/model the assistant uses.
+//
+// Inheritance: the tenant override (set here) wins over the platform default a
+// System Admin configures. The BACKEND validates the selection against the
+// closed catalogue (active provider + catalogued model) and enforces the
+// gating; these are just the typed contract + thin fetch helpers.
+// ---------------------------------------------------------------------------
+
+/** GET /assistant/model — the effective model resolved for the tenant. */
+export interface AssistantModel {
+  provider_id: string | null;
+  model_id: string | null;
+  /** Which tier won, or null when nothing usable is configured. */
+  source: "tenant_override" | "platform_default" | null;
+  provider_kind: string | null;
+  provider_display_name: string | null;
+  has_tenant_override: boolean;
+}
+
+/** One active provider + the model ids selectable on it (dropdown source). */
+export interface AssistantModelOption {
+  provider_id: string;
+  kind: string;
+  display_name: string;
+  models: string[];
+}
+
+/** GET /assistant/model/options (tenant) and /assistant/default-model/options. */
+export interface AssistantModelOptions {
+  providers: AssistantModelOption[];
+}
+
+/** GET/PUT /assistant/default-model — the platform default (System Admin). */
+export interface AssistantDefaultModel {
+  provider_id: string | null;
+  model_id: string | null;
+  /** False when a stored default no longer resolves (stale provider/model). */
+  is_valid: boolean;
+  provider_display_name: string | null;
+}
+
+/** The effective model for the tenant's assistant (resolved with inheritance). */
+export function getAssistantModel(): Promise<AssistantModel> {
+  return apiFetch<AssistantModel>("/assistant/model");
+}
+
+/** Active providers + their catalogued models — the tenant dropdown source. */
+export function getAssistantModelOptions(): Promise<AssistantModelOptions> {
+  return apiFetch<AssistantModelOptions>("/assistant/model/options");
+}
+
+/** Set the tenant model override (validated server-side; 422 if invalid). */
+export function setAssistantModel(providerId: string, modelId: string): Promise<AssistantModel> {
+  return apiFetch<AssistantModel>("/assistant/model", {
+    method: "PUT",
+    body: { provider_id: providerId, model_id: modelId },
+  });
+}
+
+/** Clear the tenant override (the assistant inherits the platform default). */
+export function clearAssistantModel(): Promise<AssistantModel> {
+  return apiFetch<AssistantModel>("/assistant/model", {
+    method: "PUT",
+    body: { provider_id: null, model_id: null },
+  });
+}
+
+/** The platform default model selection (System Admin). */
+export function getAssistantDefaultModel(): Promise<AssistantDefaultModel> {
+  return apiFetch<AssistantDefaultModel>("/assistant/default-model");
+}
+
+/** Dropdown source for the System-Admin default control (no tenant needed). */
+export function getAssistantDefaultModelOptions(): Promise<AssistantModelOptions> {
+  return apiFetch<AssistantModelOptions>("/assistant/default-model/options");
+}
+
+/** Set the platform default model (System Admin; validated server-side). */
+export function setAssistantDefaultModel(
+  providerId: string,
+  modelId: string,
+): Promise<AssistantDefaultModel> {
+  return apiFetch<AssistantDefaultModel>("/assistant/default-model", {
+    method: "PUT",
+    body: { provider_id: providerId, model_id: modelId },
+  });
+}
+
+/** Clear the platform default (System Admin). */
+export function clearAssistantDefaultModel(): Promise<AssistantDefaultModel> {
+  return apiFetch<AssistantDefaultModel>("/assistant/default-model", {
+    method: "PUT",
+    body: { provider_id: null, model_id: null },
+  });
+}

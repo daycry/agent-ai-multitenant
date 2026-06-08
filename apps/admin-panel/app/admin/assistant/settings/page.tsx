@@ -49,6 +49,8 @@ import {
 } from "@/lib/assistant";
 import { useCurrentUser } from "@/lib/use-current-user";
 
+import { AssistantModelCard, PlatformDefaultModelCard } from "./model-cards";
+
 const EMPTY_VALUES: AssistantIdentityFormValues = {
   name: "",
   avatarUrl: "",
@@ -59,7 +61,7 @@ const EMPTY_VALUES: AssistantIdentityFormValues = {
 };
 
 export default function AssistantSettingsPage() {
-  const { isTenantAdmin, isLoading: userLoading } = useCurrentUser();
+  const { isTenantAdmin, isSystemAdmin, isLoading: userLoading } = useCurrentUser();
   const queryClient = useQueryClient();
 
   const [values, setValues] = useState<AssistantIdentityFormValues>(EMPTY_VALUES);
@@ -397,6 +399,13 @@ export default function AssistantSettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Modelo LLM del asistente (Tenant Admin) — override que hereda del
+          default de plataforma (ADR 0053). */}
+      <AssistantModelCard enabled={assistantEnabled} />
+
+      {/* Modelo por defecto de la plataforma — solo System Admin. */}
+      {isSystemAdmin ? <PlatformDefaultModelCard /> : null}
     </div>
   );
 }
