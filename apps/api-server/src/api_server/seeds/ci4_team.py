@@ -12,7 +12,7 @@ Auth/Security, i18n, QA, Reviewer y DevOps. Replican el patrón de
 
 Diferencias de diseño frente a los built-ins core:
 
-  * **Sin provider/model por fila** (ADR 0055 / commit ``f87ca62``): el
+  * **Sin provider/model por fila** (ADR 0055): el
     ``model_config`` de cada agente CI4 lleva SOLO ``system_prompts``
     (es/en). El modelo lo hereda del default de plataforma
     (``get_default_agent_model``) que el dispatch estampa cuando el
@@ -64,16 +64,16 @@ def _ci4_agent_id(slug: str) -> UUID:
 
 # ---------------------------------------------------------------------------
 # Conjuntos de tools reutilizables (slugs del catálogo built-in
-# `api_server.seeds.builtin_tools`). shell_exec + file + git + semantic-search
-# van a TODOS; run_* a backend/dba/qa/devops; http_* a auth-security/devops.
+# `api_server.seeds.builtin_tools`). shell_exec + file + semantic-search van a
+# TODOS; run_* a backend/dba/qa/devops; http_* a auth-security/devops. La
+# familia git dedicada se retiró en 06.18 (ADR 0049); git se hace vía shell-exec.
 # ---------------------------------------------------------------------------
 _FILE_TOOLS = ("read-file", "write-file", "apply-patch", "list-files", "search-code")
-_GIT_TOOLS = ("git-status", "git-diff", "git-commit", "git-log")
 _RUN_TOOLS = ("run-pytest", "run-lint", "run-typecheck", "run-build")
 # Base que todo agente del equipo recibe: ejecutar comandos del stack
 # (deny-by-default por allowed_commands del proyecto), leer/editar el repo,
-# git y la búsqueda semántica en las KBs concedidas al proyecto.
-_BASE_TOOLS = ("shell-exec", *_FILE_TOOLS, *_GIT_TOOLS, "semantic-search")
+# git vía shell-exec y la búsqueda semántica en las KBs concedidas al proyecto.
+_BASE_TOOLS = ("shell-exec", *_FILE_TOOLS, "semantic-search")
 
 
 @dataclass(frozen=True)
@@ -109,7 +109,7 @@ class CI4Agent:
         """model_config SIN provider/model: sólo prompts bilingües.
 
         El dispatch estampa el default de plataforma (provider/model)
-        porque este config no pinea ambos campos (ADR 0055 / f87ca62).
+        porque este config no pinea ambos campos (ADR 0055).
         """
         return {
             "system_prompts": {
