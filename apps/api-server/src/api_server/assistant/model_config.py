@@ -240,16 +240,20 @@ def synced_models(provider: LlmProvider) -> list[str]:
 async def list_available_models_for_provider(
     admin_session: AsyncSession, provider: LlmProvider
 ) -> list[str]:
-    """Selectable models = the price catalogue PLUS the provider's synced models.
+    """Models selectable for this provider (no network — read from the DB).
 
-    Both come from the DB (no network): the price catalogue (LiteLLM keys) plus
-    the models a System Admin synced from the provider's ``/v1/models`` into
-    ``config.models``. The sync is what makes real Ollama Cloud models
-    (``glm-5.1``, ``gpt-oss:120b``, ...) appear even though the price catalogue
-    only knows local-Ollama keys.
+    The provider's OWN synced list (``config.models``, populated by
+    /sync-models from its ``/v1/models``) is AUTHORITATIVE: it is what the
+    provider actually serves, with the provider's real (bare) names. The price
+    catalogue (``model_prices``, LiteLLM-keyed) is only the fallback when
+    nothing has been synced — it can list models the provider does NOT serve
+    (e.g. local-Ollama keys absent from Ollama Cloud) and with an ``ollama/``
+    prefix, so it must not pollute or override the real list.
     """
-    catalog = await list_catalog_models_for_provider(admin_session, provider)
-    return sorted(set(catalog) | set(synced_models(provider)))
+    synced = synced_models(provider)
+    if synced:
+        return sorted(set(synced))
+    return await list_catalog_models_for_provider(admin_session, provider)
 
 
 async def is_valid_selection(

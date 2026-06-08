@@ -29,8 +29,9 @@ pytestmark = pytest.mark.integration
 
 async def _seed(dsn: str) -> dict[str, UUID]:
     """Two toggle-ON tenants (A, B) each with a Tenant Admin, a member in A,
-    a System Admin user, plus one ACTIVE ollama provider and a current
-    ``model_prices`` row (model ``llama3.1``) so a valid selection exists."""
+    a System Admin user, plus one ACTIVE ollama provider whose synced
+    ``config.models`` (llama3.1, glm-5.1, gemma3:4b) are the selectable models,
+    and a catalog-only price row the selector must exclude."""
     tenant_a, tenant_b = uuid4(), uuid4()
     admin_a, member_a, admin_b, sysadmin = uuid4(), uuid4(), uuid4(), uuid4()
     provider_id = uuid7()
@@ -84,19 +85,21 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             admin_b,
             "tenant_admin",
         )
-        # One active provider with two SYNCED models in config.models (as if a
-        # prior /sync-models ran) + one current price (catalogued 'llama3.1').
+        # Active provider whose SYNCED list (config.models, as if /sync-models
+        # ran) is the authoritative set of selectable models. Plus a price for a
+        # model the provider does NOT serve ('phantom-local-only') — catalog-only,
+        # so it must be EXCLUDED from the selector while a sync exists.
         await conn.execute(
             "INSERT INTO llm_providers (id, kind, display_name, base_url, is_active, config)"
             " VALUES ($1, 'ollama', 'Ollama local', 'http://ollama:11434/v1', true, $2::jsonb)",
             provider_id,
-            '{"models": ["glm-5.1", "gemma3:4b"]}',
+            '{"models": ["llama3.1", "glm-5.1", "gemma3:4b"]}',
         )
         await conn.execute(
             "INSERT INTO model_prices"
             " (id, provider, model_id, input_price, output_price, source, provider_id,"
             "  effective_from)"
-            " VALUES ($1, 'ollama', 'llama3.1', 0, 0, 'manual', $2, now())",
+            " VALUES ($1, 'ollama', 'phantom-local-only', 0, 0, 'manual', $2, now())",
             uuid7(),
             provider_id,
         )
@@ -251,10 +254,53 @@ async def test_model_options_lists_active_provider_and_models(
     assert providers[0]["provider_id"] == str(seeded["provider_id"])
     assert providers[0]["kind"] == "ollama"
     models = providers[0]["models"]
-    # Catalogue model + the two synced models (config.models) all appear.
+    # The provider's synced models are the selectable list…
     assert "llama3.1" in models
     assert "glm-5.1" in models
     assert "gemma3:4b" in models
+    # …and a catalog-only model the provider does NOT serve is excluded.
+    assert "phantom-local-only" not in models
+
+
+@pytest.mark.asyncio
+async def test_model_options_falls_back_to_catalog_without_sync(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """With no synced models (config.models empty), the selector falls back to
+    the price catalogue (LiteLLM-keyed) so there is still a list."""
+    seeded = await _seed(migrations_pg_dsn)
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "UPDATE llm_providers SET config = '{}'::jsonb WHERE id = $1", seeded["provider_id"]
+        )
+    finally:
+        await conn.close()
+
+    token = await _mint(seeded["admin_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with _client(configured_app) as client:
+        resp = await client.get("/assistant/model/options", headers=headers)
+    assert resp.status_code == 200, resp.text
+    models = resp.json()["providers"][0]["models"]
+    # Catalogue is the fallback source now.
+    assert models == ["phantom-local-only"]
+
+
+@pytest.mark.asyncio
+async def test_put_model_catalog_only_model_is_422(configured_app, migrations_pg_dsn: str) -> None:
+    """A model that is only in the price catalogue (the provider does not serve
+    it) is NOT selectable while a sync exists."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint(seeded["admin_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with _client(configured_app) as client:
+        resp = await client.put(
+            "/assistant/model",
+            json={"provider_id": str(seeded["provider_id"]), "model_id": "phantom-local-only"},
+            headers=headers,
+        )
+    assert resp.status_code == 422, resp.text
 
 
 @pytest.mark.asyncio
