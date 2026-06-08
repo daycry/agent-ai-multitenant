@@ -219,6 +219,53 @@ async def test_chat_remember_tool_persists_fact(configured_app, migrations_pg_ds
     assert rows[0]["source"] == "assistant"
 
 
+@pytest.mark.asyncio
+async def test_chat_converges_on_repeated_tool_calls(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """An over-eager model re-calling the SAME tool every round must NOT loop:
+    the tool runs once and the turn converges (not 6 rounds of the same call)."""
+    seeded = await _seed(migrations_pg_dsn)
+    from api_server.assistant.graph import ModelTurn, ScriptedAssistantModel, ToolInvocation
+    from api_server.routers.assistant import get_assistant_model
+
+    same = ToolInvocation(
+        name="remember_about_me", arguments={"content": "Se llama Jose", "type": "semantic"}
+    )
+    scripted = ScriptedAssistantModel(
+        turns=[
+            ModelTurn(tool_calls=(same,)),
+            ModelTurn(tool_calls=(same,)),  # repeat — must be deduped, not re-run
+            ModelTurn(content="Hecho, Jose."),
+        ]
+    )
+    configured_app.dependency_overrides[get_assistant_model] = lambda: scripted
+    token = await _mint(seeded["admin_a"], seeded["tenant"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with _client(configured_app) as client:
+        resp = await client.post(
+            "/assistant/chat", json={"message": "me llamo Jose"}, headers=headers
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # The tool ran exactly once and the loop converged immediately.
+    assert body["tools_called"].count("remember_about_me") == 1
+    assert body["rounds"] == 1
+    assert body["answer"] == "Hecho, Jose."
+
+    # And only one memory row was stored.
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        count = await conn.fetchval(
+            "SELECT count(*) FROM memory_entries WHERE user_id = $1 AND deleted_at IS NULL",
+            seeded["admin_a"],
+        )
+    finally:
+        await conn.close()
+    assert count == 1
+
+
 # ===========================================================================
 # Chat flow — stored facts are injected into the system prompt
 # ===========================================================================

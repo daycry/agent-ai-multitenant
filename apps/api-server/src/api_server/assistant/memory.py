@@ -136,7 +136,10 @@ def augment_system_prompt(
     sections = [base_prompt]
     if known_facts:
         facts = "\n".join(f"- {fact}" for fact in known_facts)
-        sections.append(f"Lo que sé de ti (memorias guardadas):\n{facts}")
+        sections.append(
+            "Lo que sé de ti (son datos CIERTOS sobre el usuario con el que hablas; "
+            "tenlos en cuenta al responder y NUNCA digas que no los sabes):\n" + facts
+        )
     if remember_enabled:
         sections.append(
             "Si el usuario comparte un dato personal duradero (su nombre, una "
