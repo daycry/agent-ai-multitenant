@@ -132,12 +132,22 @@ exclude = [
 ]
 
 # Celery and kombu ship no py.typed marker; treat their imports as
-# untyped rather than vendoring stub packages into the hook. Same for
-# LangGraph — the planning sub-graph imports `langgraph.graph` but the
-# package has no py.typed marker either.
+# untyped rather than vendoring stub packages into the hook.
 [[tool.mypy.overrides]]
-module = ["celery.*", "kombu.*", "langgraph.*"]
+module = ["celery.*", "kombu.*"]
 ignore_missing_imports = true
+
+# LangGraph: the assistant + planning sub-graphs import `langgraph.graph`.
+# Recent releases DO ship a py.typed marker, so a full venv lets mypy analyse
+# `StateGraph.add_node`'s overloads and reject our async node callables
+# (call-overload) — while the pre-commit hook venv doesn't install langgraph at
+# all (it is Any there). Skip following it so BOTH environments agree on Any —
+# the same treatment we give the Docker SDK — instead of per-line ignores that
+# would be "unused" under warn_unused_ignores in the hook env.
+[[tool.mypy.overrides]]
+module = ["langgraph.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
 
 # The Docker SDK's inline types are incomplete (docker.from_env and
 # docker.errors are not visible to mypy). Skip following it entirely —
