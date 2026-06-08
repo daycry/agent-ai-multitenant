@@ -47,7 +47,6 @@ mirar en la UI, criterios de pass/fail.
 | Plan 14 — Evals + estadísticas          | 4 (`human_14_01..04`)             | [`14-evals-estadisticas.md`](./14-evals-estadisticas.md)                       |
 | Plan 15 — Instalador + producción       | 5 (`human_15_01..05`)             | [`15-instalador-produccion.md`](./15-instalador-produccion.md)                 |
 | Plan 16 — Human agents                  | 6 (`human_16_01..06`)             | [`16-human-agents.md`](./16-human-agents.md)                                   |
-| Seed demo-webscorpo-team-kb             | 1 (`human_demo_ws_01`)            | [`demo-webscorpo-team-kb.md`](./demo-webscorpo-team-kb.md)                     |
 
 > El antiguo `docs/03-guides/run-demo-human-tests.md` acumulaba los
 > Plans 02 / 04 / 04.5 en un único documento. La migración a la

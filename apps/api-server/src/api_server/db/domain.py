@@ -652,7 +652,10 @@ class Team(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     default_workflow_template_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), nullable=True
     )
-    shared_memory_namespace: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Plan 06.17 task_06_17_15 / ADR 0053: `shared_memory_namespace` se retiró.
+    # Era un campo muerto (sin lectura productiva en recall/store): la memoria
+    # `team_shared` se resuelve por `project.team_id`, no por un namespace. La
+    # migración 0082 dropea la columna (reversible).
     # Catalog marker -- same pattern as Skill/Tool.is_builtin.
     is_builtin: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 
@@ -1043,6 +1046,14 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     # repetitive_loop_detected, …). NULL on a clean run.
     abort_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     output: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Por qué el Memorizer NO produjo memoria a partir de este run, como código
+    # canónico (:class:`~api_server.memorizer.policy.MemorizeSkipReason`):
+    # ``not_done`` / ``skip_private`` / ``no_team`` / ``no_scope`` / ``llm_empty``
+    # (Plan 06.17 task_06_17_04). NULL cuando se memorizó OK o el Memorizer aún no
+    # ha corrido. Lo escribe el worker dedicado (``workers.memorize_execution``);
+    # un endpoint lo expone para que la UI explique el "por qué no hay memoria".
+    memorize_skip_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # The steps_log: one dict per step (node / model_call / tool_call /
     # memory_read). Stored as JSONB so the shape can evolve migration-free.

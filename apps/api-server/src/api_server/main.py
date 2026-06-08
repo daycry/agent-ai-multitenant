@@ -36,6 +36,7 @@ from api_server.routers.auth import router as auth_router
 from api_server.routers.backup import router as backup_router
 from api_server.routers.budget_pause import router as budget_pause_router
 from api_server.routers.conversations import (
+    chat_modes_router,
     conversations_router,
     project_conversations_router,
 )
@@ -195,6 +196,7 @@ def _register_routers(app: FastAPI) -> None:
         internal_agent_router,
         project_conversations_router,
         conversations_router,
+        chat_modes_router,
         project_plans_router,
         plans_router,
         memories_router,

@@ -6,8 +6,8 @@ High-level function the agent runtime exposes as a tool. It:
      embedder is passed),
   2. runs the hybrid `recall_chunks` against the chunks visible to
      the project,
-  3. reranks the top candidates with the configured `Reranker`
-     (default: noop / deterministic for tests),
+  3. optionally reranks the top candidates with the configured
+     `Reranker` (skipped when ``reranker is None``, the default),
   4. returns the top-`limit` hits with both the RRF score and the
      reranker score so the agent (and the citation viewer) can show
      them.
@@ -28,7 +28,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
-from api_server.rag.reranker import NoopReranker, Reranker, RerankerError
+from api_server.rag.reranker import Reranker, RerankerError
 from api_server.rag.search import ChunkHit, recall_chunks
 
 logger = structlog.get_logger(__name__)
@@ -78,8 +78,10 @@ async def rag_search(
             reranking. Bigger = slower + better.
         embedder: optional. If provided we run the vector path; if
             None, BM25-only retrieval still works.
-        reranker: optional. Defaults to :class:`NoopReranker` (no
-            reordering). Production wires :class:`BGEReranker`.
+        reranker: optional. ``None`` (default) skips reranking
+            entirely — the RRF order is kept and ``rerank_score`` is
+            left unset. Production wires :class:`BGEReranker`; tests
+            pass :class:`NoopReranker` / :class:`DeterministicReranker`.
     """
     # 1. Embed the query if we have an embedder. Failure is OK —
     #    BM25-only retrieval is still useful.
@@ -105,19 +107,23 @@ async def rag_search(
     if not candidates:
         return []
 
-    # 3. Optional rerank.
-    rerank = reranker or NoopReranker()
+    # 3. Optional rerank. ``reranker=None`` means "no reranking" — we keep
+    #    the RRF order and leave ``rerank_score`` unset (honest: a hit is not
+    #    marked reranked if it wasn't). A caller that wants identity-with-scores
+    #    passes :class:`NoopReranker` explicitly. Plan 06.17 task_06_17_02: the
+    #    rag-search endpoint passes None when its operator flag is OFF (default).
     rerank_scores: dict[UUID, float] = {}
-    try:
-        reranked = await rerank.rerank(
-            query=query,
-            items=[(c.chunk_id, c.content) for c in candidates],
-        )
-        rerank_scores = {hit.chunk_id: hit.score for hit in reranked}
-    except RerankerError as exc:
-        # Fall through with the original RRF order — never block on a
-        # reranker hiccup.
-        logger.warning("rag.reranker_failed", error=str(exc))
+    if reranker is not None:
+        try:
+            reranked = await reranker.rerank(
+                query=query,
+                items=[(c.chunk_id, c.content) for c in candidates],
+            )
+            rerank_scores = {hit.chunk_id: hit.score for hit in reranked}
+        except RerankerError as exc:
+            # Fall through with the original RRF order — never block on a
+            # reranker hiccup.
+            logger.warning("rag.reranker_failed", error=str(exc))
 
     # 4. Build final list. If rerank ran we sort by rerank score;
     #    otherwise we keep the RRF order.

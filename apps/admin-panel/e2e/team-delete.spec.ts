@@ -13,7 +13,6 @@ const TEAM_FIXTURE = {
   name: TEAM_NAME,
   description: null,
   default_workflow_template_id: null,
-  shared_memory_namespace: null,
   is_builtin: false,
   members: [],
   created_at: "2026-05-27T12:00:00Z",

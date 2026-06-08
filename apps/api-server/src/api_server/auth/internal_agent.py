@@ -59,6 +59,15 @@ class AgentPrincipal:
     tenant_id: UUID
     # The raw token's `iat` so logs can correlate sandbox runs.
     issued_at: datetime
+    # The task this run is executing, when the worker minted the token for a
+    # task dispatch (Plan 06.17 task_06_17_13 / ADR 0054). It lets the internal
+    # endpoints resolve the EFFECTIVE project_id (``task.project_id``) for a
+    # GLOBAL agent so it can read the RAG/memory of the project it is working
+    # on. ``None`` for tokens minted without a task (chat, ad-hoc, legacy) — the
+    # endpoints then keep the strict ``agent.project_id`` behaviour. The
+    # project is NEVER trusted from the token: the endpoints look the task up
+    # server-side and validate ``task.tenant_id == principal.tenant_id``.
+    task_id: UUID | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +77,7 @@ def mint_agent_token(
     *,
     agent_id: UUID,
     tenant_id: UUID,
+    task_id: UUID | None = None,
     ttl: timedelta | None = None,
 ) -> str:
     """Sign a short-lived bearer token for the agent-runtime sandbox.
@@ -76,6 +86,14 @@ def mint_agent_token(
     right before launching the container. The minted string is
     injected into the container as the ``AGENTIC_INTERNAL_TOKEN``
     env var.
+
+    Plan 06.17 task_06_17_13 / ADR 0054: when the run executes a project
+    task, the worker passes the ``task_id`` so the token carries the run's
+    task context (claim ``task``). The internal endpoints use it to resolve
+    the EFFECTIVE project_id for a global agent (``task.project_id``) — always
+    re-validating ``task.tenant_id == tenant_id`` server-side, never trusting a
+    project from the client. ``None`` (chat / ad-hoc / legacy mints) keeps the
+    claim absent and the endpoints fall back to the strict ``agent.project_id``.
     """
     settings = get_settings()
     now = datetime.now(tz=UTC)
@@ -87,6 +105,8 @@ def mint_agent_token(
         "iat": int(now.timestamp()),
         "exp": int(expires.timestamp()),
     }
+    if task_id is not None:
+        claims["task"] = str(task_id)
     encoded: str = jwt.encode(
         claims,
         settings.jwt_secret.get_secret_value(),
@@ -131,7 +151,20 @@ def decode_agent_token(token: str) -> AgentPrincipal:
     except (KeyError, ValueError, TypeError) as exc:
         raise InvalidAgentTokenError("token missing/invalid sub/tid/iat claim") from exc
 
-    return AgentPrincipal(agent_id=agent_id, tenant_id=tenant_id, issued_at=issued_at)
+    # Optional task context (Plan 06.17 task_06_17_13). A malformed ``task``
+    # claim is rejected (it is a security-relevant pointer); its absence is
+    # normal (chat / legacy mints) and leaves ``task_id`` None.
+    task_id: UUID | None = None
+    raw_task = claims.get("task")
+    if raw_task is not None:
+        try:
+            task_id = UUID(str(raw_task))
+        except (ValueError, TypeError) as exc:
+            raise InvalidAgentTokenError("token has an invalid task claim") from exc
+
+    return AgentPrincipal(
+        agent_id=agent_id, tenant_id=tenant_id, issued_at=issued_at, task_id=task_id
+    )
 
 
 # ---------------------------------------------------------------------------

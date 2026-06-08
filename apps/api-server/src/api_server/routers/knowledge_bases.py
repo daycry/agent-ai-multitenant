@@ -41,9 +41,13 @@ from api_server.db.knowledge import (
     KnowledgeBase,
     KnowledgeBaseProject,
 )
+from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.logging import get_logger
+from api_server.rag.search import search_kb_chunks
 from api_server.routers._helpers import require_tenant_id, soft_delete
+from api_server.routers.docs_viewer import get_query_embedder
 from api_server.schemas.knowledge import (
+    ChunkSearchHit,
     DocumentResponse,
     KnowledgeBaseCreateRequest,
     KnowledgeBaseGrantRequest,
@@ -88,6 +92,20 @@ async def _load_document(session: AsyncSession, document_id: UUID) -> Document:
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
     return doc
+
+
+async def _kb_has_chunks(session: AsyncSession, kb_id: UUID) -> bool:
+    """True si la KB tiene al menos un chunk indexado (vía sus documentos).
+
+    Tenant-scoped por RLS sobre `chunks`/`documents`. Usado por el guard
+    de re-embedding del PUT (Plan 06.17 task_06_17_05)."""
+    result = await session.execute(
+        select(Chunk.id)
+        .join(Document, Document.id == Chunk.document_id)
+        .where(Document.kb_id == kb_id, Document.deleted_at.is_(None))
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
 
 
 async def _verify_project_in_tenant(session: AsyncSession, project_id: UUID) -> None:
@@ -249,6 +267,62 @@ async def get_kb(
     return to_kb_response(kb, await _load_category_for_kb(session, kb))
 
 
+@router.get("/{kb_id}/search", response_model=list[ChunkSearchHit])
+async def search_kb(
+    kb_id: UUID,
+    q: str,
+    limit: int = 8,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+    embedder: Embedder = Depends(get_query_embedder),
+) -> list[ChunkSearchHit]:
+    """Preview/búsqueda de chunks dentro de UNA KB (Plan 06.17 task_06_17_05).
+
+    Híbrida BM25 + vector + RRF, acotada a los documentos de esta KB y
+    aislada por tenant vía RLS. Es la herramienta del operador para
+    verificar *qué* indexó la KB (y que el RAG encontrará algo). El
+    embedder de la query se inyecta (reutiliza ``get_query_embedder``);
+    si está caído, degradamos a BM25-only en vez de fallar.
+
+    Cross-tenant: ``_load_kb`` devuelve 404 para una KB de otro tenant
+    (RLS la oculta), así que la búsqueda nunca filtra contenido ajeno.
+    """
+    await _load_kb(session, kb_id)
+    if not q.strip():
+        return []
+
+    query_embedding: list[float] | None = None
+    try:
+        vectors = await embedder.embed([q])
+        query_embedding = vectors[0] if vectors else None
+    except EmbeddingError as exc:
+        # El path vectorial es nice-to-have — BM25 sigue funcionando sin
+        # embedder. Log + degradación, nunca 5xx por Ollama caído.
+        _logger.warning("kb.search_embedder_failed", kb_id=str(kb_id), error=str(exc))
+
+    hits = await search_kb_chunks(
+        session,
+        kb_id=kb_id,
+        query=q,
+        query_embedding=query_embedding,
+        limit=max(1, min(limit, 50)),
+    )
+    return [
+        ChunkSearchHit(
+            chunk_id=h.chunk_id,
+            document_id=h.document_id,
+            kb_id=h.kb_id,
+            ordinal=h.ordinal,
+            content=h.content,
+            bbox=h.bbox,
+            bm25_rank=h.bm25_rank,
+            vector_rank=h.vector_rank,
+            rrf_score=h.rrf_score,
+        )
+        for h in hits
+    ]
+
+
 @router.put("/{kb_id}", response_model=KnowledgeBaseResponse)
 async def update_kb(
     kb_id: UUID,
@@ -262,7 +336,25 @@ async def update_kb(
         kb.name = payload.name
     if payload.description is not None:
         kb.description = payload.description
-    if payload.embedding_model_id is not None:
+    if (
+        payload.embedding_model_id is not None
+        and payload.embedding_model_id != kb.embedding_model_id
+    ):
+        # Plan 06.17 task_06_17_05: cambiar el modelo de embedding con
+        # chunks ya indexados los dejaría con vectores de OTRO modelo, que
+        # el path vectorial nunca casaría → RAG roto en silencio. El
+        # re-embedding real está diferido a Plan 12; hasta entonces
+        # bloqueamos el cambio (409) si la KB tiene chunks. Una KB vacía sí
+        # puede cambiar de modelo (no hay nada que invalidar).
+        if await _kb_has_chunks(session, kb.id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "no se puede cambiar embedding_model_id: la KB ya tiene chunks"
+                    " indexados (re-embedding diferido a Plan 12). Crea una KB nueva"
+                    " con el modelo deseado y reindexa los documentos."
+                ),
+            )
         kb.embedding_model_id = payload.embedding_model_id
     # Plan 06.10: model_fields_set para distinguir "category_id no
     # enviado" (no tocar) de "category_id explícitamente null" (limpiar).

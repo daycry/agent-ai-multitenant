@@ -32,6 +32,20 @@ from api_server.auth.deps import (
     require_tenant_admin,
     require_tenant_member,
 )
+from api_server.capabilities import (
+    WARN_TEAM_NO_MEMBERS,
+    CapabilitiesResponse,
+    CapabilityHacer,
+    CapabilityKB,
+    CapabilityRecordar,
+    CapabilitySaber,
+    CapabilityWarning,
+    hacer_for_agent,
+    kbs_for_agent_role,
+    kbs_for_project,
+    memory_counts,
+    merge_kbs,
+)
 from api_server.db.domain import Agent, Team, TeamMember
 from api_server.routers._helpers import (
     apply_partial_update,
@@ -148,7 +162,6 @@ async def create_team(
         name=payload.name,
         description=payload.description,
         default_workflow_template_id=payload.default_workflow_template_id,
-        shared_memory_namespace=payload.shared_memory_namespace,
     )
     session.add(team)
     await session.flush()
@@ -284,3 +297,94 @@ async def remove_member(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="membership not found")
     await session.delete(member)
     await session.flush()
+
+
+# ---------------------------------------------------------------------------
+# Plan 06.17 task_06_17_08: GET /teams/{id}/capabilities (ADR 0053)
+# ---------------------------------------------------------------------------
+#
+# El Hub de Capacidad por equipo. Según ADR 0053 (Opción B) NO existe un
+# subsistema TeamKnowledgeBase: la capacidad de equipo es la UNIÓN AGREGADA
+# read-only de lo que ya saben/pueden sus MIEMBROS. SABER = unión de las KBs de
+# rol + stack de cada agente miembro; HACER = unión del set efectivo de tools de
+# cada miembro (delegando en `compute_effective_tools` de 06.18, no recalculando).
+# RECORDAR = memoria `team_shared` del equipo + `global`. Honestidad de estado:
+# un equipo sin miembros lo avisa explícitamente. Read-only, tenant-scoped: RLS
+# oculta equipos cross-tenant, así que un equipo oculto/inexistente → 404.
+@router.get("/{team_id}/capabilities", response_model=CapabilitiesResponse)
+async def get_team_capabilities(
+    team_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> CapabilitiesResponse:
+    """Devuelve la capacidad de equipo AGREGADA de sus miembros (ADR 0053).
+
+    Sin persistencia de equipo nueva: agrega read-only las KBs y tools efectivas
+    de los agentes miembros. Avisa honestamente cuando el equipo no tiene
+    miembros (no finge capacidad).
+    """
+    team_q = await session.execute(
+        select(Team).where(Team.id == team_id, Team.deleted_at.is_(None))
+    )
+    team = team_q.scalar_one_or_none()
+    if team is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team not found")
+
+    # Miembros visibles (built-ins incluidos via RLS de SELECT).
+    member_rows = await session.execute(
+        select(Agent)
+        .join(TeamMember, TeamMember.agent_id == Agent.id)
+        .where(TeamMember.team_id == team_id, Agent.deleted_at.is_(None))
+        .order_by(Agent.name, Agent.id)
+    )
+    members = list(member_rows.scalars().all())
+
+    warnings: list[CapabilityWarning] = []
+    if not members:
+        warnings.append(
+            CapabilityWarning(
+                code=WARN_TEAM_NO_MEMBERS,
+                es=(
+                    "equipo sin miembros: aún no hay conocimiento ni tools de equipo "
+                    "(la capacidad de equipo es la unión de la de sus miembros, ADR 0053)"
+                ),
+                en=(
+                    "team has no members: no team knowledge or tools yet "
+                    "(team capability is the union of its members', ADR 0053)"
+                ),
+            )
+        )
+
+    # SABER agregado: union de rol mas stack de cada miembro.
+    kb_lists: list[list[CapabilityKB]] = []
+    effective_tools: set[str] = set()
+    shell_exec_effective = False
+    for agent in members:
+        kb_lists.append(await kbs_for_agent_role(session, agent_id=agent.id))
+        if agent.project_id is not None:
+            kb_lists.append(await kbs_for_project(session, project_id=agent.project_id))
+        member_hacer, _member_warnings = await hacer_for_agent(session, agent=agent)
+        effective_tools |= set(member_hacer.effective)
+        shell_exec_effective = shell_exec_effective or member_hacer.shell_exec_effective
+
+    saber = CapabilitySaber(knowledge_bases=merge_kbs(*kb_lists) if kb_lists else [])
+
+    # RECORDAR: memoria team_shared del equipo + global.
+    recordar = CapabilityRecordar(
+        memory_scope=None,
+        memory=await memory_counts(session, team_id=team_id),
+    )
+
+    return CapabilitiesResponse(
+        entity_type="team",
+        entity_id=team.id,
+        saber=saber,
+        recordar=recordar,
+        ser=None,
+        hacer=CapabilityHacer(
+            effective=sorted(effective_tools),
+            unrestricted=not members,
+            shell_exec_effective=shell_exec_effective,
+        ),
+        warnings=warnings,
+    )

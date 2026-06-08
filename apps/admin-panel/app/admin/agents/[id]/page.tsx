@@ -18,7 +18,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Home, Pencil, Trash2 } from "lucide-react";
+import { Bot, Copy, Home, Pencil, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
@@ -40,6 +40,23 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useLang } from "@/lib/lang-context";
+import { privateScopeMemoryWarning } from "@/lib/memory/honesty";
+import { CapabilityHub } from "@/components/capability/capability-hub";
+import {
+  PersonaModelFields,
+  PersonaPromptFields,
+  PersonaSection,
+} from "@/components/capability/persona-section";
+import {
+  buildModelConfig,
+  draftFromConfig,
+  resolvePromptSource,
+  validateDraft,
+  type ModelConfig,
+  type ModelConfigDraft,
+  type SystemPrompts,
+} from "@/lib/persona/persona";
 
 import { AgentKbsSection } from "./agent-kbs-section";
 import { AgentSkillsSection } from "./agent-skills-section";
@@ -53,6 +70,9 @@ interface Agent {
   agent_type: string;
   role: string;
   system_prompt: string;
+  // Bilingual persona prompts live under model_config.system_prompts.{es,en}.
+  // The backend exposes the column as `model_config` (alias of llm_config).
+  model_config?: ModelConfig | null;
   memory_scope: string;
   review_capability: boolean;
   max_concurrent_tasks: number;
@@ -67,6 +87,9 @@ interface AgentUpdate {
   description?: string | null;
   role?: string;
   system_prompt?: string;
+  // Sent under the JSON key `model_config` (alias of llm_config). Carries the
+  // persona: provider/model/temperature + bilingual system_prompts.{es,en}.
+  model_config?: ModelConfig;
   memory_scope?: string;
   review_capability?: boolean;
   max_concurrent_tasks?: number;
@@ -106,9 +129,12 @@ export default function AgentHubPage() {
   const agentId = params?.id ?? "";
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { lang } = useLang();
 
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // Plan 06.17 task_06_17_12: fork "Personalizar (crear copia)".
+  const [forkOpen, setForkOpen] = useState(false);
 
   const {
     data: agent,
@@ -141,29 +167,45 @@ export default function AgentHubPage() {
         title={agent?.name ?? "Agente"}
         description={agent?.description ?? "Cargando…"}
         actions={
-          agent && !isReadOnly ? (
-            <div className="flex gap-2">
+          agent ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Plan 06.17 task_06_17_12: "Personalizar (crear copia)" disponible
+                  para CUALQUIER agente (incl. built-ins read-only — forkear es la
+                  vía para personalizar un built-in). El fork hereda KBs/tools/skills. */}
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setEditOpen(true)}
-                data-testid="agent-edit-button"
+                onClick={() => setForkOpen(true)}
+                data-testid="agent-fork-button"
               >
-                <Pencil className="mr-1 h-4 w-4" />
-                Editar
+                <Copy className="mr-1 h-4 w-4" />
+                Personalizar (crear copia)
               </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => setDeleteOpen(true)}
-                data-testid="agent-delete-button"
-              >
-                <Trash2 className="mr-1 h-4 w-4" />
-                Borrar
-              </Button>
+              {!isReadOnly ? (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditOpen(true)}
+                    data-testid="agent-edit-button"
+                  >
+                    <Pencil className="mr-1 h-4 w-4" />
+                    Editar
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setDeleteOpen(true)}
+                    data-testid="agent-delete-button"
+                  >
+                    <Trash2 className="mr-1 h-4 w-4" />
+                    Borrar
+                  </Button>
+                </>
+              ) : (
+                <Badge variant="muted">read-only (built-in)</Badge>
+              )}
             </div>
-          ) : agent && isReadOnly ? (
-            <Badge variant="muted">read-only (built-in)</Badge>
           ) : null
         }
       />
@@ -194,15 +236,33 @@ export default function AgentHubPage() {
             <Badge variant="muted">{agent.agent_type}</Badge>
             {agent.review_capability && <Badge variant="success">puede revisar</Badge>}
             {agent.is_template && <Badge variant="info">plantilla</Badge>}
-            {agent.forked_from_agent_id && <Badge variant="warning">forked</Badge>}
+            {/* Plan 06.17 task_06_17_12: badge Linked/Forked DERIVADO de
+                forked_from_agent_id (no del scope, que mentía). Un agente con
+                origen es "Forked"; sin origen es "Linked" (copia de catálogo). */}
+            {agent.forked_from_agent_id ? (
+              <Badge variant="warning" data-testid="agent-forked-badge">
+                Forked
+              </Badge>
+            ) : (
+              <Badge variant="muted" data-testid="agent-linked-badge">
+                Linked
+              </Badge>
+            )}
           </div>
 
           <div>
             <p className="text-muted-foreground text-xs font-semibold uppercase tracking-wide">
-              System prompt
+              System prompt · {lang}
             </p>
-            <pre className="bg-muted/40 mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded p-3 text-xs">
-              {agent.system_prompt}
+            {/* Fuente ÚNICA (Plan 06.17 task_06_17_11): la MISMA que lee la
+                tarjeta de la lista (model_config.system_prompts), con fallback
+                al campo plano legacy. Cierra la colisión lista vs detalle. */}
+            <pre
+              className="bg-muted/40 mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded p-3 text-xs"
+              data-testid="agent-system-prompt-view"
+            >
+              {resolvePromptSource(agent.model_config, agent.system_prompt, lang).text ||
+                agent.system_prompt}
             </pre>
           </div>
 
@@ -211,7 +271,43 @@ export default function AgentHubPage() {
             <Field label="Max concurrent tasks" value={String(agent.max_concurrent_tasks)} />
             <Field label="Project" value={agent.project_id ? agent.project_id.slice(0, 8) : "—"} />
           </div>
+
+          {/* Honestidad de estado (Plan 06.17 task_06_17_06): un agente IA con
+              memory_scope=private NO memoriza entre runs — el Memorizer hace
+              skip silencioso (skip_private). Avisamos en vez de prometer
+              recuerdo. Solo aplica a agentes IA (un "agente" humano no memoriza
+              vía Memorizer en ningún caso). */}
+          {agent.agent_type === "ai" && privateScopeMemoryWarning(agent.memory_scope, lang) ? (
+            <p
+              className="bg-warning-soft text-warning-soft-foreground rounded p-3 text-xs"
+              data-testid="agent-private-memory-warning"
+              role="status"
+            >
+              {privateScopeMemoryWarning(agent.memory_scope, lang)}
+            </p>
+          ) : null}
         </Card>
+      )}
+
+      {/* Plan 06.17 task_06_17_09: Hub de Capacidad (modelo mental único
+          SABER/RECORDAR/SER/HACER). Vista del set efectivo REAL por encima de
+          las secciones de edición que vienen debajo. */}
+      {agent && (
+        <div className="mt-4">
+          <CapabilityHub entityType="agent" entityId={agent.id} />
+        </div>
+      )}
+
+      {/* Plan 06.17 task_06_17_11: sección Persona (SER) — proveedor/modelo/
+          temperatura del catálogo cerrado + prompt efectivo (rol + modo). */}
+      {agent && (
+        <div className="mt-4">
+          <PersonaSection
+            modelConfig={agent.model_config}
+            systemPrompt={agent.system_prompt}
+            role={agent.role}
+          />
+        </div>
       )}
 
       {/* Plan 06.9: knowledge bases granted to this agent template */}
@@ -263,6 +359,19 @@ export default function AgentHubPage() {
           }}
         />
       )}
+
+      {agent && (
+        <AgentForkDialog
+          agent={agent}
+          open={forkOpen}
+          onOpenChange={setForkOpen}
+          onForked={(newId) => {
+            setForkOpen(false);
+            void queryClient.invalidateQueries({ queryKey: ["agents", "list"] });
+            router.push(`/admin/agents/${newId}`);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -274,6 +383,19 @@ function Field({ label, value }: { label: string; value: string }) {
       <p className="font-medium">{value}</p>
     </div>
   );
+}
+
+/**
+ * Prompts iniciales del editor: prioriza `model_config.system_prompts` (fuente
+ * única) y, si está vacía, siembra el ES con el campo plano legacy para que el
+ * primer guardado migre el agente al formato bilingüe sin perder el prompt.
+ */
+function initialPrompts(agent: Agent): SystemPrompts {
+  const bilingual = agent.model_config?.system_prompts;
+  if (bilingual && (bilingual.es?.trim() || bilingual.en?.trim())) {
+    return { es: bilingual.es ?? "", en: bilingual.en ?? "" };
+  }
+  return { es: agent.system_prompt ?? "", en: "" };
 }
 
 // ---------------------------------------------------------------------------
@@ -291,23 +413,32 @@ function AgentEditDialog({
   onOpenChange: (v: boolean) => void;
   onSaved: () => void;
 }) {
+  const { lang } = useLang();
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
   const [role, setRole] = useState(agent.role);
-  const [systemPrompt, setSystemPrompt] = useState(agent.system_prompt);
   const [memoryScope, setMemoryScope] = useState(agent.memory_scope);
   const [reviewCap, setReviewCap] = useState(agent.review_capability);
   const [maxTasks, setMaxTasks] = useState(agent.max_concurrent_tasks);
+  // Persona (SER): borrador de modelo + prompts bilingües sobre la fuente única.
+  const [draft, setDraft] = useState<ModelConfigDraft>(() => draftFromConfig(agent.model_config));
+  const [prompts, setPrompts] = useState<SystemPrompts>(() => initialPrompts(agent));
+  // Persona válida = modelo del catálogo (sin errores) + al menos un prompt.
+  const hasPrompt = Boolean((prompts.es ?? "").trim() || (prompts.en ?? "").trim());
+  const personaValid = validateDraft(draft, lang).length === 0 && hasPrompt;
+  const privateWarning =
+    agent.agent_type === "ai" ? privateScopeMemoryWarning(memoryScope, lang) : null;
 
   useEffect(() => {
     if (open) {
       setName(agent.name);
       setDescription(agent.description ?? "");
       setRole(agent.role);
-      setSystemPrompt(agent.system_prompt);
       setMemoryScope(agent.memory_scope);
       setReviewCap(agent.review_capability);
       setMaxTasks(agent.max_concurrent_tasks);
+      setDraft(draftFromConfig(agent.model_config));
+      setPrompts(initialPrompts(agent));
     }
   }, [open, agent]);
 
@@ -371,18 +502,15 @@ function AgentEditDialog({
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ae-prompt">System prompt</Label>
-            <textarea
-              id="ae-prompt"
-              value={systemPrompt}
-              onChange={(e) => setSystemPrompt(e.target.value)}
-              rows={6}
-              className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2"
-              data-testid="edit-agent-system-prompt"
-              required
-            />
-          </div>
+          {/* Persona (SER): proveedor/modelo/temperatura del catálogo cerrado
+              (ADR 0021) + system prompt bilingüe es/en sobre la fuente única. */}
+          <fieldset className="border-border space-y-3 rounded-md border p-3">
+            <legend className="px-1 text-sm font-medium">
+              {lang === "es" ? "Persona (modelo y prompt)" : "Persona (model and prompt)"}
+            </legend>
+            <PersonaModelFields draft={draft} onChange={setDraft} idPrefix="edit-agent" />
+            <PersonaPromptFields prompts={prompts} onChange={setPrompts} idPrefix="edit-agent" />
+          </fieldset>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="flex flex-col gap-1.5">
@@ -399,6 +527,15 @@ function AgentEditDialog({
                   </option>
                 ))}
               </Select>
+              {privateWarning ? (
+                <p
+                  className="text-warning-soft-foreground text-xs"
+                  data-testid="edit-agent-private-memory-warning"
+                  role="status"
+                >
+                  {privateWarning}
+                </p>
+              ) : null}
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="ae-tasks">Max concurrent tasks</Label>
@@ -437,18 +574,27 @@ function AgentEditDialog({
             Cancelar
           </Button>
           <Button
-            disabled={!name.trim() || !systemPrompt.trim() || mutation.isPending}
-            onClick={() =>
+            disabled={!name.trim() || !personaValid || mutation.isPending}
+            onClick={() => {
+              // El campo plano `system_prompt` (NOT NULL en backend) se deriva
+              // de la fuente única bilingüe: prioriza ES, cae a EN. El
+              // `model_config` lleva la persona completa (modelo + prompts).
+              const flat = (prompts.es ?? "").trim() || (prompts.en ?? "").trim();
               mutation.mutate({
                 name: name.trim(),
                 description: description.trim() || null,
                 role,
-                system_prompt: systemPrompt,
+                system_prompt: flat,
+                model_config: buildModelConfig({
+                  current: agent.model_config,
+                  draft,
+                  prompts,
+                }),
                 memory_scope: memoryScope,
                 review_capability: reviewCap,
                 max_concurrent_tasks: maxTasks,
-              })
-            }
+              });
+            }}
             data-testid="edit-agent-save"
           >
             {mutation.isPending ? "Guardando…" : "Guardar"}
@@ -532,6 +678,133 @@ function AgentDeleteDialog({
             data-testid="delete-agent-confirm"
           >
             {mutation.isPending ? "Borrando…" : "Borrar definitivamente"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Fork dialog — "Personalizar (crear copia)" (Plan 06.17 task_06_17_12)
+// ---------------------------------------------------------------------------
+//
+// Clona el agente en un proyecto del tenant como copia editable. El backend
+// (POST /agents/{id}/fork) hereda automáticamente KBs/tools/skills del origen.
+// El fork siempre aterriza en un proyecto concreto, por eso el selector de
+// proyecto destino es obligatorio.
+
+interface ForkProject {
+  id: string;
+  name: string;
+  is_template: boolean;
+}
+
+function AgentForkDialog({
+  agent,
+  open,
+  onOpenChange,
+  onForked,
+}: {
+  agent: Agent;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onForked: (newId: string) => void;
+}) {
+  const [projectId, setProjectId] = useState("");
+  const [name, setName] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setProjectId("");
+      setName(`${agent.name} (copia)`);
+    }
+  }, [open, agent.name]);
+
+  const projectsQuery = useQuery<ForkProject[], ApiError>({
+    queryKey: ["projects", "list"],
+    queryFn: () => apiFetch<ForkProject[]>("/projects"),
+    enabled: open,
+    refetchOnWindowFocus: false,
+  });
+  const projects = (projectsQuery.data ?? []).filter((p) => !p.is_template);
+
+  const mutation = useMutation<Agent, ApiError, void>({
+    mutationFn: () =>
+      apiFetch<Agent>(`/agents/${agent.id}/fork`, {
+        method: "POST",
+        body: { project_id: projectId, name: name.trim() || undefined },
+      }),
+    onSuccess: (fork) => onForked(fork.id),
+  });
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) mutation.reset();
+        onOpenChange(v);
+      }}
+    >
+      <DialogContent data-testid="agent-fork-dialog">
+        <DialogHeader>
+          <DialogTitle>Personalizar (crear copia)</DialogTitle>
+          <DialogDescription>
+            Crea una copia editable de <strong>{agent.name}</strong> en uno de tus proyectos. La
+            copia <strong>hereda</strong> el conocimiento, las tools y las skills del original y es
+            independiente: editarla no afecta al agente de origen.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody className="space-y-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="fork-name">Nombre de la copia</Label>
+            <Input
+              id="fork-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              data-testid="fork-agent-name"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="fork-project">Proyecto destino</Label>
+            <Select
+              id="fork-project"
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              data-testid="fork-agent-project"
+            >
+              <option value="">— Selecciona —</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+            {projectsQuery.isSuccess && projects.length === 0 && (
+              <p className="text-muted-foreground text-xs" data-testid="fork-agent-no-projects">
+                No tienes proyectos creados. Crea uno primero para poder personalizar.
+              </p>
+            )}
+          </div>
+          {mutation.isError && (
+            <p
+              className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
+              data-testid="fork-agent-error"
+            >
+              {mutation.error?.message ?? "Error al crear la copia"}
+            </p>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancelar
+          </Button>
+          <Button
+            disabled={!projectId || mutation.isPending}
+            onClick={() => mutation.mutate()}
+            data-testid="fork-agent-submit"
+          >
+            {mutation.isPending ? "Creando…" : "Crear copia"}
           </Button>
         </DialogFooter>
       </DialogContent>

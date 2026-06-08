@@ -69,6 +69,16 @@ para modelos y endpoints, [`../04-reference/`](../04-reference/).
 
 **MemoryEntry**: entrada en la memoria de un agente o equipo. Scopes: private, team_shared, project_shared, global.
 
+## Términos de Capacitación
+
+> El modelo mental único —**SABER + RECORDAR + SER + HACER** y la tabla de NIVELES— vive en [`../04-reference/training-model.md`](../04-reference/training-model.md). Aquí solo los headwords operador-céntricos.
+
+**Capacitar / Capacidad**: dotar a un agente/equipo/proyecto de **capacidad** por cuatro vías —**SABER** (conocimiento/KBs+RAG), **RECORDAR** (memoria por scope), **SER** (persona/modelo/prompt) y **HACER** (tools/comandos/runtime)—. NO es fine-tuning: los LLM son externos y de catálogo cerrado (ADR 0021). El verbo único en UI es **"Asignar/Quitar"** ("grant" queda como término interno de datos). Ver `training-model.md`.
+
+**Persona**: la categoría **SER** del modelo de capacitación: quién es el agente y cómo se comporta = `system_prompt` + `model_config` (provider/model/temperature + prompts es/en) + skills + chat-mode. Distinta de **Capacidad** (que la engloba) y de **Contexto** (lo que el agente consulta o recuerda). Validada contra el catálogo cerrado (ADR 0055).
+
+**Contexto**: lo que un agente **trae** a un run sin que forme parte de su persona — el **SABER** (hits de RAG sobre las KBs visibles) y el **RECORDAR** (memorias por scope). El contexto de proyecto que ve un agente global ejecutando una tarea lo decide el ADR 0054. No confundir con `model_config` (eso es Persona/SER).
+
 ## Términos Operativos
 
 **Kanban de Planes**: vista superior del proyecto, una tarjeta por plan.
@@ -125,6 +135,10 @@ catálogo cerrado de cuatro proveedores.
 **MCP (Model Context Protocol)**: protocolo estándar para que agentes accedan a recursos externos (tools). Cliente genérico (`stdio`/`sse`/`streamable_http`); catálogo de servidores verificados; secretos por Vault `auth_ref: vault:...` (ADR 0025).
 
 ## Términos de Documentación
+
+**Documento** (vs Documentación): unidad **ingerida en una Knowledge Base** para RAG (PDF, Markdown, etc.) — se chunkea, se indexa y el agente lo **consulta** (es **SABER**). Vive en `documents` y se mide en chunks. NO es lo mismo que la **Documentación** del producto.
+
+**Documentación** (vs Documento): las **7 carpetas canónicas de `/docs/`** que describen el sistema (guías, referencia, ADRs, runbooks…) y que renderiza el Visor de Documentación. Es para humanos del proyecto, no un corpus de RAG. Un agente no "consulta" la Documentación salvo que alguien la suba como **Documento** a una KB.
 
 **Estructura Diátaxis adaptada**: las 7 carpetas obligatorias en `/docs/` (01-overview, 02-getting-started, 03-guides, 04-reference, 05-architecture-decisions, 06-runbooks, 07-changelog).
 

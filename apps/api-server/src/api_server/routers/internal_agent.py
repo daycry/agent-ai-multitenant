@@ -21,6 +21,7 @@ Endpoints:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any, Literal
 from uuid import UUID
 
@@ -34,11 +35,18 @@ from api_server.auth.internal_agent import (
     get_agent_principal,
     get_agent_tenant_session,
 )
-from api_server.db.domain import Agent, MemoryScope, Project
+from api_server.db.domain import Agent, MemoryScope, Project, Task
 from api_server.db.knowledge import Chunk, Document, KnowledgeBase, KnowledgeBaseProject
+from api_server.db.platform_settings import (
+    get_global_agent_uses_task_project,
+    get_rag_reranker_enabled,
+)
+from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
 from api_server.memorizer.recall import recall
+from api_server.rag.reranker import BGEReranker, Reranker
 from api_server.rag.tool import rag_search
+from api_server.routers.docs_viewer import get_query_embedder
 
 router = APIRouter(prefix="/internal/agent", tags=["internal-agent"])
 
@@ -128,11 +136,66 @@ async def _resolve_agent_context(
     return agent, project
 
 
+async def _resolve_effective_project(
+    session: AsyncSession,
+    *,
+    agent: Agent,
+    principal: AgentPrincipal,
+) -> Project | None:
+    """Resuelve el proyecto EFECTIVO de LECTURA para RAG/memoria (ADR 0054).
+
+    Reglas (Plan 06.17 task_06_17_13):
+
+      * un agente ligado a un proyecto (``agent.project_id`` no nulo) usa SU
+        proyecto — comportamiento histórico, sin cambio;
+      * un agente GLOBAL (``project_id`` nulo) usa el proyecto de la TAREA en
+        curso (``task.project_id``) SI el flag operator-configurable está ON y
+        el token porta un ``task_id``. El proyecto se resuelve server-side y es
+        **estrictamente tenant-safe**: la tarea se carga con un predicado
+        explícito ``Task.tenant_id == principal.tenant_id`` (bajo RLS además),
+        de modo que un ``task_id`` de OTRO tenant nunca resuelve un proyecto
+        (devuelve ``None``). El alcance es ese ÚNICO proyecto de la tarea —
+        jamás un conjunto, jamás otro tenant.
+
+    Devuelve la fila ``Project`` efectiva, o ``None`` cuando no hay contexto de
+    proyecto (agente global sin tarea, flag OFF, o tarea ajena al tenant). El
+    proyecto NUNCA se toma del cliente: solo de ``agent.project_id`` o de la
+    tarea autenticada.
+    """
+    if agent.project_id is not None:
+        return (
+            await session.execute(select(Project).where(Project.id == agent.project_id))
+        ).scalar_one_or_none()
+
+    # Agente global: solo con el flag ON y un task_id en el token.
+    if principal.task_id is None:
+        return None
+    if not await get_global_agent_uses_task_project(session):
+        return None
+
+    task = (
+        await session.execute(
+            select(Task).where(
+                Task.id == principal.task_id,
+                # Defensa en profundidad sobre RLS: la tarea DEBE ser del tenant
+                # del token; un task_id cross-tenant no resuelve nada.
+                Task.tenant_id == principal.tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if task is None or task.project_id is None:
+        return None
+    return (
+        await session.execute(select(Project).where(Project.id == task.project_id))
+    ).scalar_one_or_none()
+
+
 @router.post("/memory-recall", response_model=MemoryRecallResponse)
 async def memory_recall(
     payload: MemoryRecallRequest,
     principal: AgentPrincipal = Depends(get_agent_principal),
     session: AsyncSession = Depends(get_agent_tenant_session),
+    embedder: Embedder | None = Depends(get_query_embedder),
 ) -> MemoryRecallResponse:
     """Hybrid BM25 + vector recall over memory_entries.
 
@@ -143,11 +206,27 @@ async def memory_recall(
         team's or project's memories;
       - ``private`` is included for forward compatibility but yields
         nothing for an AI agent (no user_id is set on AI principals).
+
+    Plan 06.17 task_06_17_03: el query-embedder se reutiliza de
+    ``docs_viewer.get_query_embedder`` (misma fuente, no se duplica) para que
+    ``query_embedding`` deje de ser ``None`` y el path vectorial+RRF participe
+    (``recall._vector_candidates`` devuelve candidatos). El embed es best-effort:
+    si el embedder no está disponible (Ollama caído ⇒ ``EmbeddingError``) el
+    recall cae a BM25 sin romper.
     """
-    agent, project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+    agent, _project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+    # Proyecto EFECTIVO de lectura (ADR 0054): para un agente ligado a proyecto
+    # es el suyo; para un agente global es el de la tarea en curso (flag ON +
+    # task_id en el token), resuelto server-side y tenant-safe. La memoria
+    # ``project_shared`` (y ``team_shared`` vía ``project.team_id``) usa este
+    # proyecto efectivo, de modo que read = write = ``task.project_id`` para el
+    # agente global — sin la asimetría histórica.
+    project = await _resolve_effective_project(session, agent=agent, principal=principal)
     scopes = payload.scopes or _default_readable_scopes(agent.memory_scope)
     team_id = project.team_id if project is not None else None
-    project_id = agent.project_id
+    project_id = project.id if project is not None else None
+
+    query_embedding = await _embed_query(embedder, payload.query)
 
     hits = await recall(
         session,
@@ -157,7 +236,7 @@ async def memory_recall(
         user_id=None,  # AI agents have no user attribution
         team_id=team_id,
         project_id=project_id,
-        query_embedding=None,  # embedder wire-up: Plan 04 task_04_14
+        query_embedding=query_embedding,
         limit=payload.limit,
     )
     return MemoryRecallResponse(
@@ -213,6 +292,7 @@ async def memory_store(
     payload: MemoryStoreRequest,
     principal: AgentPrincipal = Depends(get_agent_principal),
     session: AsyncSession = Depends(get_agent_tenant_session),
+    embedder: Embedder | None = Depends(get_query_embedder),
 ) -> MemoryStoreResponse:
     """Persist a single memory written by the agent.
 
@@ -220,6 +300,12 @@ async def memory_store(
     pointers (team_id / project_id) are resolved from the agent's
     project, never from the request body — the agent cannot escape
     its own tenant + team + project boundary.
+
+    Plan 06.17 task_06_17_03: el contenido se embebe EN EL MOMENTO DE CREAR
+    (best-effort, reutilizando ``get_query_embedder``) para que el recall
+    vectorial y "similares" funcionen sin esperar al back-fill. Si el embed
+    falla (Ollama caído), la fila nace con ``embedding=NULL`` y el worker de
+    back-fill la rellena después — el store no se bloquea.
     """
     agent, project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
 
@@ -262,6 +348,7 @@ async def memory_store(
         agent_id=agent.id,
         source_execution_id=None,
         extra_metadata={"source": "agent_runtime"},
+        embedder=embedder,
         **owner,
     )
     await session.flush()
@@ -273,6 +360,21 @@ async def memory_store(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+async def _embed_query(embedder: Embedder | None, query: str) -> list[float] | None:
+    """Embebe la query del recall (best-effort).
+
+    Devuelve el vector, o ``None`` cuando no hay embedder, la query está vacía
+    o el embed falla (Ollama caído). En ese caso el recall cae a BM25 — nunca
+    rompe (Plan 06.17 task_06_17_03)."""
+    if embedder is None or not query.strip():
+        return None
+    try:
+        vectors = await embedder.embed([query])
+    except EmbeddingError:
+        return None
+    return list(vectors[0]) if vectors else None
+
+
 def _default_readable_scopes(agent_scope: str) -> list[str]:
     """The scope set an agent reads when it doesn't specify one.
 
@@ -331,11 +433,37 @@ class RagSearchResponse(BaseModel):
     hits: list[RagSearchHitOut]
 
 
+async def get_rag_reranker(
+    session: AsyncSession = Depends(get_agent_tenant_session),
+) -> AsyncIterator[Reranker | None]:
+    """Construye el reranker del rag-search según el flag operator-configurable
+    (Plan 06.17 task_06_17_02).
+
+    Lee ``rag.reranker_enabled`` de ``platform_settings`` (default OFF). Cuando
+    está OFF devuelve ``None`` → ``rag_search`` conserva el orden RRF y no anota
+    ``rerank_score`` (honestidad: no parece reranqueado si no lo está). Cuando
+    está ON construye el :class:`BGEReranker` real; su import pesado (torch +
+    transformers) es ``lazy``, así que un despliegue con el flag en OFF nunca
+    paga el coste. Los tests sobreescriben esta dependencia para inyectar un
+    reranker determinista sin tocar el flag.
+    """
+    if not await get_rag_reranker_enabled(session):
+        yield None
+        return
+    reranker = BGEReranker()
+    try:
+        yield reranker
+    finally:
+        await reranker.aclose()
+
+
 @router.post("/rag-search", response_model=RagSearchResponse)
 async def rag_search_endpoint(
     payload: RagSearchRequest,
     principal: AgentPrincipal = Depends(get_agent_principal),
     session: AsyncSession = Depends(get_agent_tenant_session),
+    embedder: Embedder | None = Depends(get_query_embedder),
+    reranker: Reranker | None = Depends(get_rag_reranker),
 ) -> RagSearchResponse:
     """Project-scoped RAG over KB chunks.
 
@@ -345,19 +473,30 @@ async def rag_search_endpoint(
     (not in the sandbox) so the model weights are never shipped into
     untrusted containers.
 
+    Plan 06.17 task_06_17_02: el query-embedder se reutiliza de
+    ``docs_viewer.get_query_embedder`` (misma fuente, no se duplica) para que
+    ``query_embedding`` deje de ser ``None`` y el path vectorial+RRF participe.
+    El reranker se activa por flag operator-configurable (``rag.reranker_enabled``,
+    default OFF). Si el embedder no está disponible (Ollama caído ⇒ el embed
+    lanza ``EmbeddingError`` que ``rag_search`` captura), el recall cae a BM25
+    sin romper.
+
     Returns ``hits=[]`` (200) when the agent isn't bound to a project;
     a global/builtin agent has nothing to search and ``[]`` is the
     informative response. We could 400 instead, but returning empty
     keeps the tool contract uniform — the agent always sees a hits list.
     """
     agent, _project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
-    if agent.project_id is None:
+    # Proyecto EFECTIVO de búsqueda (ADR 0054): el del agente si está ligado a
+    # uno; el de la TAREA en curso si el agente es global (flag ON + task_id en
+    # el token), resuelto server-side y tenant-safe. Cuando no hay proyecto
+    # efectivo (agente global sin tarea, flag OFF, o tarea ajena al tenant) se
+    # conserva la respuesta informativa ``hits=[]`` (un agente sin contexto de
+    # proyecto no tiene KBs que buscar).
+    project = await _resolve_effective_project(session, agent=agent, principal=principal)
+    if project is None:
         return RagSearchResponse(hits=[])
 
-    # No embedder / reranker injection yet — Plan 04 task_04_14 wires
-    # the embedder, the reranker is configurable per-deployment. For
-    # now we rely on BM25-only recall + NoopReranker, which is what
-    # the integration tests of Plan 04 Fase D already validated.
     # Plan 06.9: KBs visibles = union de KBs del proyecto y KBs del
     # agente template. Pasamos `agent_id` para que el resolver una
     # las dos fuentes en el visibility filter.
@@ -365,12 +504,12 @@ async def rag_search_endpoint(
         session,
         query=payload.query,
         tenant_id=principal.tenant_id,
-        project_id=agent.project_id,
+        project_id=project.id,
         agent_id=principal.agent_id,
         limit=payload.limit,
         recall_k=payload.recall_k,
-        embedder=None,
-        reranker=None,
+        embedder=embedder,
+        reranker=reranker,
     )
     return RagSearchResponse(
         hits=[

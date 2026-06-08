@@ -21,6 +21,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
+  Brain,
   Database,
   FolderKanban,
   Layers,
@@ -52,6 +53,7 @@ import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { Select } from "@/components/ui/select";
 import { StateBlock } from "@/components/shared/state-block";
+import { CapabilityHub } from "@/components/capability/capability-hub";
 import { ApiError, apiFetch } from "@/lib/api";
 
 type ProjectStatus = "active" | "paused" | "archived";
@@ -112,6 +114,12 @@ const SUBSECTIONS = [
     label: "Knowledge Bases",
     description: "Bases de conocimiento + documentos indexados.",
     Icon: Database,
+  },
+  {
+    key: "memories",
+    label: "Memoria",
+    description: "Lo que el equipo recuerda en el scope del proyecto (project_shared).",
+    Icon: Brain,
   },
   {
     key: "mcp-servers",
@@ -230,6 +238,12 @@ export default function ProjectHubPage() {
                 Team: <code>{project.team_id.slice(0, 8)}</code>
               </span>
             )}
+          </div>
+
+          {/* Plan 06.17 task_06_17_09: Hub de Capacidad del proyecto (SABER +
+              RECORDAR; SER no aplica y HACER no restringe a nivel de proyecto). */}
+          <div className="mb-6">
+            <CapabilityHub entityType="project" entityId={projectId} />
           </div>
 
           {/* Sub-sections grid */}
