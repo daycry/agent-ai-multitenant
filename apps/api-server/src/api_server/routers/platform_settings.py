@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_admin_session, require_system_admin
+from api_server.db.llm_providers import list_llm_providers
 from api_server.db.models import PlatformSetting, User
 from api_server.db.platform_settings import set_platform_setting
 from api_server.platform_settings_registry import (
@@ -51,6 +52,33 @@ class PlatformSettingValue(BaseModel):
 class PlatformSettingUpdateRequest(BaseModel):
     model_config = _BASE_CONFIG
     value: Any
+
+
+class ModelOptionsResponse(BaseModel):
+    model_config = _BASE_CONFIG
+    by_kind: dict[str, list[str]]
+    """Selectable model ids per provider kind — fills the model dropdown when a
+    provider (kind) is chosen for ``model.default_config``. Built from the
+    ACTIVE providers' synced/catalogued models (union per kind)."""
+
+
+@admin_router.get("/model-options", response_model=ModelOptionsResponse)
+async def get_model_options(
+    _: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> ModelOptionsResponse:
+    """Models selectable per provider kind (no network — read from the DB).
+
+    Mirrors how the agent dispatch resolves a ``model.default_config`` (by kind),
+    so the UI can offer a real dropdown of models for the chosen provider."""
+    from api_server.assistant.model_config import list_available_models_for_provider
+
+    providers = await list_llm_providers(session, active_only=True)
+    by_kind: dict[str, set[str]] = {}
+    for provider in providers:
+        models = await list_available_models_for_provider(session, provider)
+        by_kind.setdefault(provider.kind, set()).update(models)
+    return ModelOptionsResponse(by_kind={kind: sorted(models) for kind, models in by_kind.items()})
 
 
 @admin_router.get("/_registry")
