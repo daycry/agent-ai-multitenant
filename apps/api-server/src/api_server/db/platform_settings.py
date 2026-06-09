@@ -421,6 +421,25 @@ def is_model_config_empty(cfg: dict[str, Any] | None) -> bool:
     return not cfg
 
 
+def config_needs_default_model(cfg: dict[str, Any] | None) -> bool:
+    """Si un ``model_config`` carece de spec de modelo y debe heredar el default.
+
+    Extensión del ADR 0055: el caso ``{}`` legacy NO es el único que hereda. Un
+    agente SEMBRADO puede traer solo personalidad (``system_prompts``) sin
+    ``provider``/``model`` — p. ej. el equipo built-in de CodeIgniter 4: debe
+    heredar el modelo default conservando sus prompts. Devuelve True cuando el
+    config NO fija modelo: ni el par ``provider``+``model``, ni un marcador
+    ``kind`` (el spec ``scripted`` del runtime de test, que se respeta intacto).
+    ``{}``/``None`` también devuelven True (mismo caso que is_model_config_empty).
+    El dispatch hace ``{**default, **cfg}``: rellena el modelo y preserva el resto.
+    """
+    if not cfg:
+        return True
+    if cfg.get("kind"):
+        return False
+    return not (cfg.get("provider") and cfg.get("model"))
+
+
 async def get_default_model_config(session: AsyncSession) -> dict[str, Any]:
     """El ``model_config`` por defecto seguro para un agente sin spec explícito.
 

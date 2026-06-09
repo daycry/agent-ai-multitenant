@@ -28,7 +28,7 @@ from orchestrator.config import Settings as OrchestratorSettings
 from orchestrator.dispatch import TaskDispatcher
 from orchestrator.events import EVENT_TASK_STATUS_CHANGED, TaskEvent
 from redis.asyncio import Redis
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from workers.celery_app import build_celery_app
 from workers.config import Settings as WorkerSettings
@@ -194,6 +194,56 @@ async def test_dispatch_enqueues_the_worker_celery_task(
         assert request["model"] == _SCRIPTED_FINISH
         assert request["task"]["title"] == "Write a sea poem"
     finally:
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_fills_default_model_for_inherit_only_agent(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """A SEEDED agent that carries only personality (``system_prompts``) and no
+    model pin inherits the platform default at dispatch — provider/model filled,
+    prompts preserved. This is the CodeIgniter 4 built-in team case (ADR 0055)."""
+    engine = create_async_engine(admin_database_url)
+    redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm)
+        await redis.delete("default")
+        prompts = {"system_prompts": {"en": "You are CI4.", "es": "Eres CI4."}}
+        default = {"provider": "ollama", "model": "qwen3-coder:480b", "temperature": 0.2}
+        async with sm() as s, s.begin():
+            await s.execute(
+                update(Agent).where(Agent.id == ids["agent"]).values(model_config=prompts)
+            )
+            await s.execute(
+                text(
+                    "INSERT INTO platform_settings (key, value) VALUES"
+                    " ('model.default_config', CAST(:v AS jsonb))"
+                    " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+                ),
+                {"v": json.dumps(default)},
+            )
+
+        await _dispatcher(sm).handle(_ready_event(ids))
+
+        messages = await _drain_queue(redis, "default")
+        assert len(messages) == 1
+        body = json.loads(base64.b64decode(messages[0]["body"]))
+        _args, kwargs, _embed = body
+        model = kwargs["request"]["model"]
+        # Default model fields filled in...
+        assert model["provider"] == "ollama"
+        assert model["model"] == "qwen3-coder:480b"
+        # ...and the agent's personality preserved.
+        assert model["system_prompts"] == prompts["system_prompts"]
+    finally:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as s, s.begin():
+            await s.execute(
+                text("DELETE FROM platform_settings WHERE key = 'model.default_config'")
+            )
         await redis.delete("default")
         await redis.aclose()
         await engine.dispose()
