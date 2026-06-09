@@ -1,7 +1,7 @@
 ---
 adr_id: "0056"
 title: "Ollama como servicio del stack para embeddings (+ LLM local), con modo Ninguno/CPU/GPU(CUDA)"
-status: proposed
+status: accepted
 date: 2026-06-08
 authors: [system_architect]
 plan_referenced: 15-instalador-produccion
@@ -10,11 +10,11 @@ docs_language: es
 
 # ADR 0056 — Ollama como servicio del stack (embeddings + LLM local), modo Ninguno/CPU/GPU
 
-> **Estado: `proposed`** — pendiente de aprobación del operador. Sucesor natural
-> del trabajo de embeddings (Plan 04) y del instalador (Plan 15). No introduce un
-> quinto proveedor LLM: Ollama ya está en el catálogo cerrado del **ADR 0021**;
-> esto decide **cómo se despliega** (servicio del stack) y **cómo se cablea** para
-> embeddings, no qué proveedores existen.
+> **Estado: `accepted`** — aprobado por el operador e implementado. Sucesor
+> natural del trabajo de embeddings (Plan 04) y del instalador (Plan 15). No
+> introduce un quinto proveedor LLM: Ollama ya está en el catálogo cerrado del
+> **ADR 0021**; esto decide **cómo se despliega** (servicio del stack) y **cómo
+> se cablea** para embeddings, no qué proveedores existen.
 
 ## Contexto
 

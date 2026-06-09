@@ -51,6 +51,12 @@ el problema ya esté documentado.
   — `decodeXLHeaders: Unknown xl meta version N`: el volumen dev lo
   escribió una build más nueva; recrear el volumen o subir el pin.
 
+### ollama / embeddings
+
+- [ollama-embedding-model-naming.md](./ollama-embedding-model-naming.md)
+  — el embedder pide `nomic-embed-text` (NO `-v1.5`) y debe ser de 768 dims;
+  el modelo es configurable (ADR 0056), cambiar de dims es Plan 12.
+
 ### postgres / asyncpg / sqlalchemy
 
 - [postgres-port-clash-with-laragon.md](./postgres-port-clash-with-laragon.md)
