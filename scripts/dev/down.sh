@@ -67,7 +67,9 @@ stop_from_pidfile "$API_PID_FILE"   "api-server"
 
 if [[ "$DOCKER_DOWN" -eq 1 ]]; then
     echo "==> docker compose down"
-    docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml down
+    # --remove-orphans also tears down the monitoring overlay (up.sh --monitoring)
+    # and the one-shot ollama-bootstrap: same project, not in these two files.
+    docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml down --remove-orphans
 fi
 
 echo ""
