@@ -81,14 +81,13 @@ Todos viven en la red `agentic-net`. El puerto **host** es el que abre
 | --------------- | ---------------------------------- | -------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------- |
 | `prometheus`    | `prom/prometheus:v2.54.1`          | Recoge métricas + evalúa reglas de alerta.                                 | **9090**          | http://localhost:9090                                 |
 | `alertmanager`  | `prom/alertmanager:v0.27.0`        | Rutea las alertas de Prometheus al notificador de la plataforma (webhook). | **9093**          | http://localhost:9093                                 |
-| `grafana`       | `grafana/grafana:11.2.0`           | Dashboards (datasource + dashboards provisionados).                        | **3000**          | http://localhost:3000 — `admin` / `changeme-dev-only` |
+| `grafana`       | `grafana/grafana:11.2.0`           | Dashboards (datasource + dashboards provisionados).                        | **3001**          | http://localhost:3001 — `admin` / `changeme-dev-only` |
 | `node-exporter` | `prom/node-exporter:v1.8.2`        | Métricas del host (CPU/RAM/disco/red).                                     | — (no expuesto)   | Scrapeado por Prometheus dentro de la red             |
 | `cadvisor`      | `gcr.io/cadvisor/cadvisor:v0.49.1` | Métricas por contenedor.                                                   | — (no expuesto)   | Scrapeado por Prometheus dentro de la red             |
 
-> ⚠️ **Choque de puerto 3000:** Grafana usa el **3000**, igual que el
-> `admin-panel` en `npm run dev`. Si levantas ambos en el host, exporta
-> `GRAFANA_PORT=3001` (u otro) antes del `up`, o arranca el admin-panel en otro
-> puerto.
+> ℹ️ **Puerto 3000 = admin-panel:** Grafana usa el **3001** por defecto (dev)
+> justamente para no chocar con el `admin-panel` (`npm run dev`, Next.js en 3000).
+> Si prefieres otro puerto para Grafana, exporta `GRAFANA_PORT` antes del `up`.
 >
 > ⚠️ **node-exporter en Windows** no arranca sin el override de Windows (mount
 > `rslave` de `/`). Ver [gotcha](../03-guides/gotchas/node-exporter-rslave-windows.md).
