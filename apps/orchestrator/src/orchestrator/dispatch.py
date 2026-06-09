@@ -42,8 +42,8 @@ from api_server.db.domain import (
     TaskStatus,
 )
 from api_server.db.platform_settings import (
+    config_needs_default_model,
     get_default_model_config,
-    is_model_config_empty,
 )
 from api_server.task_state_machine import transition_task_status
 from celery import Celery
@@ -392,8 +392,13 @@ class TaskDispatcher:
         # el arranque y NO hace auto-retry — solo rellena el spec. Un
         # ``model_config`` completo se forwardea verbatim (el default no pisa).
         model_spec = dict(agent.model_config or {})
-        if is_model_config_empty(model_spec):
-            model_spec = await get_default_model_config(session)
+        if config_needs_default_model(model_spec):
+            # No model pinned (``{}`` legacy, or a SEEDED agent that carries only
+            # ``system_prompts`` and inherits — the CI4 built-in team). Fill the
+            # default's provider/model/temperature while preserving any other keys
+            # (system_prompts). A ``kind`` scripted spec is left untouched.
+            default = await get_default_model_config(session)
+            model_spec = {**default, **model_spec}
 
         request: dict[str, Any] = {
             "tenant_id": str(task.tenant_id),
