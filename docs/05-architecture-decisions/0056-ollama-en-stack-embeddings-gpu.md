@@ -110,6 +110,24 @@ etiqueta** cuál es embedder vs chat.
   está activo y cuáles se recomiendan. **Sin** tocar los workers, **sin** nueva
   migración, **sin** swap en vivo (cambiar de modelo con KBs existentes = Plan 12).
 
+### UI de gestión de Ollama (Open WebUI vs admin nativo)
+
+¿Cómo ve/gestiona el operador los modelos de Ollama (incluido `pull`)?
+
+- **U-A. Open WebUI como servicio del stack.** ❌ Duplica lo que la plataforma ya
+  tiene (admin panel, asistente con selector de modelo, Proveedores LLM) y, sobre
+  todo, es una **puerta paralela sin gobierno**: no respeta `tenant_id`/RLS,
+  guardrails ni budgets (principios 1, 2, 10, 11). Añade otro contenedor + otra
+  auth que asegurar y pediría su propio ADR de servicio. **Rechazada.**
+- **U-B. Admin nativo (ELEGIDA).** Extender el admin propio con lo que el
+  operador necesita de Ollama, reutilizando auth/RLS/guardrails: (1) el **panel
+  de embeddings** (descubrimiento read-only, S-C) y (2) una vista **"Modelos
+  Ollama"** nativa (listar `/api/tags`, **pull** `/api/pull`, borrar
+  `/api/delete`), solo System Admin. Cohesivo y gobernado, sin segunda puerta.
+- **U-C. Documentar Open WebUI standalone (dev).** Para un playground local, el
+  dev lo levanta por su cuenta apuntando a `ollama:11434` — fuera del stack. Se
+  puede mencionar en el runbook como nota opcional; no es parte del producto.
+
 ## Decisión
 
 1. **Ollama es un servicio del stack con modo `none | cpu | gpu`**, disponible
@@ -129,11 +147,16 @@ etiqueta** cuál es embedder vs chat.
    una allowlist curada de embedders, filtra a los **compatibles (768)** y marca
    el activo + reachability; el panel lo muestra en read-only. Sin swap en vivo
    ni migración (cambiar de modelo con KBs existentes ⇒ Plan 12 re-embed).
-6. **Instalador**: el toggle binario `gpu_enabled` evoluciona a un selector
+6. **UI nativa, NO Open WebUI** (opción U-B): la gestión de Ollama vive en el
+   admin propio (panel de embeddings + vista "Modelos Ollama": listar/pull/borrar,
+   System Admin), gobernada por la auth/RLS/guardrails de la plataforma. Open
+   WebUI se rechaza como servicio del stack (puerta paralela sin gobierno);
+   queda como nota opcional del runbook para un dev que quiera un playground.
+7. **Instalador**: el toggle binario `gpu_enabled` evoluciona a un selector
    `ollama_mode ∈ {none, cpu, gpu}` (con `gpu` deshabilitado/avisado si la
    detección de hardware no ve GPU NVIDIA). El compose generado incluye el
    servicio + el bootstrap según el modo, y el arranque usa `--profile` acorde.
-7. **Egress**: el servicio Ollama vive en `agentic-net` (con salida a internet);
+8. **Egress**: el servicio Ollama vive en `agentic-net` (con salida a internet);
    `ollama.com` ya está en la allowlist del egress-proxy. El `pull` del bootstrap
    sale por ahí. (Un futuro modo _air-gapped_ precargaría el volumen — fuera de
    alcance.)

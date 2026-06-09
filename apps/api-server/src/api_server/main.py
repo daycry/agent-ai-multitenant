@@ -75,6 +75,7 @@ from api_server.routers.mfa import router as mfa_router
 from api_server.routers.model_prices import admin_router as model_prices_admin_router
 from api_server.routers.model_prices import router as model_prices_router
 from api_server.routers.notifications import router as notifications_router
+from api_server.routers.ollama import admin_router as ollama_admin_router
 from api_server.routers.plans import plans_router, project_plans_router
 from api_server.routers.projects import router as projects_router
 from api_server.routers.review import router as review_router
@@ -210,6 +211,7 @@ def _register_routers(app: FastAPI) -> None:
         model_prices_admin_router,
         llm_providers_admin_router,
         embeddings_admin_router,
+        ollama_admin_router,
         copilot_device_flow_admin_router,
         mcp_router,
         mcp_catalog_router,
