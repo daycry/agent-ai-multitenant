@@ -435,8 +435,9 @@ _DATA_SUBDIRS: tuple[tuple[str, int, str], ...] = (
     ("worktrees", 0o750, "Per-task git worktrees (transient checkouts)."),
     ("dep-cache", 0o750, "Shared dependency cache across worktrees."),
     ("backups", 0o700, "Backup bundles (Plan 12) — may contain dumps."),
-    ("ollama", 0o750, "Local Ollama models (GPU profile)."),
+    ("ollama", 0o750, "Local Ollama models (ollama_mode cpu/gpu)."),
     ("prometheus", 0o750, "Prometheus TSDB (monitoring overlay)."),
+    ("alertmanager", 0o750, "Alertmanager state (monitoring overlay)."),
     ("grafana", 0o750, "Grafana state (monitoring overlay)."),
 )
 
@@ -450,10 +451,10 @@ def build_data_tree_plan(
 
     The root itself (``cfg.storage.data_root``) comes first at ``0o750``, then
     every sub-directory the stateful services bind-mount. The GPU (``ollama``)
-    and monitoring (``prometheus`` / ``grafana``) dirs are included only when
-    those features are on, mirroring the compose generator's service selection.
-    Returns a pure plan (no ``mkdir`` happens here — that's the
-    :class:`DataTreeProvisioner` seam).
+    and monitoring (``prometheus`` / ``alertmanager`` / ``grafana``) dirs are
+    included only when those features are on, mirroring the compose generator's
+    service selection. Returns a pure plan (no ``mkdir`` happens here — that's
+    the :class:`DataTreeProvisioner` seam).
     """
 
     root = cfg.storage.data_root
@@ -461,7 +462,7 @@ def build_data_tree_plan(
     if cfg.resources.ollama_mode == "none":
         skip.add("ollama")
     if not monitoring:
-        skip.update({"prometheus", "grafana"})
+        skip.update({"prometheus", "alertmanager", "grafana"})
 
     plan: list[DataDir] = [
         DataDir(path=root, mode=0o750, description="Platform data root."),

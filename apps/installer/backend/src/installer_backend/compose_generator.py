@@ -75,6 +75,8 @@ IMAGE_OLLAMA = "ollama/ollama:0.5.7"
 IMAGE_PROMETHEUS = "prom/prometheus:v2.54.1"
 IMAGE_GRAFANA = "grafana/grafana:11.2.0"
 IMAGE_NODE_EXPORTER = "prom/node-exporter:v1.8.2"
+IMAGE_ALERTMANAGER = "prom/alertmanager:v0.27.0"
+IMAGE_CADVISOR = "gcr.io/cadvisor/cadvisor:v0.49.1"
 
 #: The application images the platform builds. The generator references them by
 #: tag (the installer pulls the released images); the build context lives in the
@@ -107,10 +109,15 @@ CORE_SERVICES: tuple[str, ...] = (
     "admin-panel",
 )
 
-#: Services added only when the monitoring overlay is requested.
+#: Services added only when the monitoring overlay is requested. Mirrors
+#: docker/docker-compose.monitoring.yml so a production install has the SAME
+#: observability as dev — including Alertmanager (routes Prometheus' alert rules
+#: to the platform notifier) and cAdvisor (per-container metrics).
 MONITORING_SERVICES: tuple[str, ...] = (
     "prometheus",
     "node-exporter",
+    "alertmanager",
+    "cadvisor",
     "grafana",
 )
 
@@ -593,6 +600,75 @@ def _node_exporter_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any
     return svc
 
 
+def _alertmanager_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    """Alertmanager — routes Prometheus' firing alerts to the platform notifier.
+
+    Mirrors docker/docker-compose.monitoring.yml: the routing/receiver config is
+    the secret-free ``monitoring/alertmanager/alertmanager.yml`` (its default
+    receiver webhooks the api-server's ``/internal/alerts/ingest``, reusing the
+    Plan 10 notifier — no SMTP/Slack secrets here). Without this service the
+    alert RULES Prometheus evaluates would have nowhere to go in production.
+    """
+    svc: dict[str, Any] = {
+        "image": IMAGE_ALERTMANAGER,
+        "user": "65534:65534",
+        "command": [
+            "--config.file=/etc/alertmanager/alertmanager.yml",
+            "--storage.path=/alertmanager",
+        ],
+        "volumes": [
+            "./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro",
+            f"{cfg.storage.data_root}/alertmanager:/alertmanager",
+        ],
+        "healthcheck": {
+            "test": ["CMD-SHELL", "wget -q --spider http://localhost:9093/-/healthy || exit 1"],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 5,
+            "start_period": "30s",
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
+    return svc
+
+
+def _cadvisor_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    """cAdvisor — per-container CPU/memory/network/fs metrics.
+
+    Unlike the other trusted services it MUST run ``privileged`` with host
+    cgroup/Docker mounts to read container stats, so it is NOT cap-dropped and
+    does NOT pin the AppArmor profile (both would deny the host access it needs).
+    All mounts are read-only and ``no-new-privileges`` is still set. Mirrors
+    docker/docker-compose.monitoring.yml.
+    """
+    return {
+        "image": IMAGE_CADVISOR,
+        "command": ["--docker_only=true", "--housekeeping_interval=30s"],
+        "privileged": True,
+        "devices": ["/dev/kmsg"],
+        "volumes": [
+            "/:/rootfs:ro",
+            "/var/run:/var/run:ro",
+            "/sys:/sys:ro",
+            "/var/lib/docker/:/var/lib/docker:ro",
+            "/dev/disk/:/dev/disk:ro",
+        ],
+        "security_opt": ["no-new-privileges:true"],
+        "healthcheck": {
+            "test": ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 5,
+            "start_period": "30s",
+        },
+        "networks": ["agentic-net"],
+        "restart": "unless-stopped",
+        "logging": _logging_block(),
+        "deploy": {"resources": {"limits": {"cpus": "0.5", "memory": "256m"}}},
+    }
+
+
 def _grafana_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     svc: dict[str, Any] = {
         "image": IMAGE_GRAFANA,
@@ -642,6 +718,8 @@ _BUILDERS = {
     "ollama-bootstrap": _ollama_bootstrap_service,
     "prometheus": _prometheus_service,
     "node-exporter": _node_exporter_service,
+    "alertmanager": _alertmanager_service,
+    "cadvisor": _cadvisor_service,
     "grafana": _grafana_service,
 }
 

@@ -273,6 +273,27 @@ def test_no_monitoring_by_default() -> None:
         assert name not in compose["services"]
 
 
+def test_monitoring_includes_alertmanager_and_cadvisor() -> None:
+    # Parity with dev (docker-compose.monitoring.yml): production monitoring must
+    # also ship Alertmanager (alert routing) + cAdvisor (per-container metrics).
+    compose = generate_compose(_config(), monitoring=True)
+    services = compose["services"]
+    assert "alertmanager" in services
+    assert "cadvisor" in services
+
+    am = services["alertmanager"]
+    assert am["image"].startswith("prom/alertmanager:")
+    # Mounts the secret-free routing config (webhooks the platform notifier).
+    assert any("alertmanager.yml" in v for v in am["volumes"])
+
+    cad = services["cadvisor"]
+    assert cad["image"].startswith("gcr.io/cadvisor/cadvisor:")
+    # Privileged metrics collector: read-only host mounts, no cap_drop/apparmor.
+    assert cad["privileged"] is True
+    assert "cap_drop" not in cad
+    assert all("apparmor=" not in o for o in cad["security_opt"])
+
+
 # ---------------------------------------------------------------------------
 # Ports / volumes parametrised from the wizard config.
 # ---------------------------------------------------------------------------
@@ -304,14 +325,22 @@ def test_hardening_defaults_on_every_service() -> None:
     # One-shot init services pull-and-exit, so they CANNOT be unless-stopped —
     # they still carry the rest of the hardening posture.
     one_shots = {"ollama-bootstrap"}
+    # cAdvisor MUST run privileged with host mounts to read container stats, so
+    # it is deliberately NOT cap-dropped and does NOT pin AppArmor (both would
+    # deny the host access it needs). It still sets no-new-privileges + limits.
+    privileged = {"cadvisor"}
     for name, svc in compose["services"].items():
         assert svc["restart"] == ("no" if name in one_shots else "unless-stopped"), name
         opts = svc["security_opt"]
         assert "no-new-privileges:true" in opts, name
-        # AppArmor MAC confinement is pinned on every generated service.
-        assert "apparmor=agentic-default" in opts, name
         limits = svc["deploy"]["resources"]["limits"]
         assert "cpus" in limits and "memory" in limits, name
+        if name in privileged:
+            # Privileged metrics collector: no apparmor, no cap_drop on purpose.
+            assert svc.get("privileged") is True, name
+            continue
+        # AppArmor MAC confinement is pinned on every other generated service.
+        assert "apparmor=agentic-default" in opts, name
         # Vault keeps IPC_LOCK; everything else drops ALL caps.
         if name == "vault":
             assert svc["cap_add"] == ["IPC_LOCK"]
