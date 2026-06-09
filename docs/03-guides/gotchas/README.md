@@ -106,6 +106,9 @@ el problema ya esté documentado.
 
 ### windows
 
+- [node-exporter-rslave-windows.md](./node-exporter-rslave-windows.md)
+  — node-exporter no arranca en Docker Desktop por el mount `rslave` de `/`;
+  override `docker-compose.windows.yml` con `volumes: !override` (no `!reset`).
 - [windows-asyncio-engine-dispose.md](./windows-asyncio-engine-dispose.md)
   — `asyncio.run(engine.dispose())` en teardown crashea el proactor.
 - [windows-git-crlf-vs-hooks.md](./windows-git-crlf-vs-hooks.md)
