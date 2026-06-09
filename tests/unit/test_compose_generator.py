@@ -35,6 +35,8 @@ from installer_backend.compose_generator import (
     CORE_SERVICES,
     GPU_SERVICE,
     MONITORING_SERVICES,
+    OLLAMA_BOOTSTRAP_SERVICE,
+    OLLAMA_SERVICE,
     assert_no_dev_secret_markers,
     enabled_providers,
     generate_compose,
@@ -68,6 +70,8 @@ def _config(
     *,
     environment: Environment = Environment.PRODUCTION,
     gpu_enabled: bool = False,
+    ollama_mode: str | None = None,
+    embedding_model: str = "nomic-embed-text",
     providers: ProvidersConfig | None = None,
     data_root: str = "/data/agent-platform",
     worker_replicas: int = 2,
@@ -81,6 +85,8 @@ def _config(
             worker_replicas=worker_replicas,
             worker_memory_gib=4,
             gpu_enabled=gpu_enabled,
+            ollama_mode=ollama_mode,
+            embedding_model=embedding_model,
         ),
         storage=StorageConfig(
             data_root=data_root,
@@ -137,24 +143,76 @@ def test_rendered_yaml_parses_and_round_trips() -> None:
 
 
 # ---------------------------------------------------------------------------
-# GPU profile / runtime.
+# Ollama mode none / cpu / gpu (ADR 0056).
 # ---------------------------------------------------------------------------
-def test_gpu_enabled_adds_ollama_with_profile_and_reservation() -> None:
-    compose = generate_compose(_config(gpu_enabled=True))
+def test_ollama_mode_none_omits_service_and_bootstrap() -> None:
+    compose = generate_compose(_config(ollama_mode="none"))
     services = compose["services"]
-    assert GPU_SERVICE in services
-    ollama = services[GPU_SERVICE]
-    assert ollama["profiles"] == ["gpu"]
+    assert OLLAMA_SERVICE not in services
+    assert OLLAMA_BOOTSTRAP_SERVICE not in services
+    names = selected_services(_config(ollama_mode="none"), monitoring=False)
+    assert OLLAMA_SERVICE not in names
+    # No embedder wiring is injected when there is no in-stack Ollama.
+    api_env = services["api-server"]["environment"]
+    assert "API_SERVER_OLLAMA_URL" not in api_env
+
+
+def test_ollama_mode_cpu_adds_service_without_reservation() -> None:
+    compose = generate_compose(_config(ollama_mode="cpu"))
+    services = compose["services"]
+    assert OLLAMA_SERVICE in services
+    assert OLLAMA_BOOTSTRAP_SERVICE in services
+    ollama = services[OLLAMA_SERVICE]
+    # CPU mode: NO GPU profile, NO device reservation.
+    assert "profiles" not in ollama
+    assert "reservations" not in ollama["deploy"]["resources"]
+
+
+def test_ollama_mode_gpu_adds_nvidia_reservation() -> None:
+    compose = generate_compose(_config(ollama_mode="gpu"))
+    ollama = compose["services"][OLLAMA_SERVICE]
+    assert "profiles" not in ollama  # inclusion is via selected_services, not a profile
     devices = ollama["deploy"]["resources"]["reservations"]["devices"]
     assert devices[0]["driver"] == "nvidia"
     # Compose schema wants a FLAT list of capability strings.
     assert devices[0]["capabilities"] == ["gpu"]
 
 
-def test_gpu_disabled_omits_ollama() -> None:
-    compose = generate_compose(_config(gpu_enabled=False))
-    assert GPU_SERVICE not in compose["services"]
-    assert GPU_SERVICE not in selected_services(_config(gpu_enabled=False), monitoring=False)
+def test_bootstrap_pulls_configured_embedding_model() -> None:
+    compose = generate_compose(
+        _config(ollama_mode="cpu", embedding_model="snowflake-arctic-embed:110m")
+    )
+    boot = compose["services"][OLLAMA_BOOTSTRAP_SERVICE]
+    assert boot["command"] == ["ollama pull snowflake-arctic-embed:110m"]
+    assert boot["depends_on"] == {OLLAMA_SERVICE: {"condition": "service_healthy"}}
+    assert boot["restart"] == "no"
+
+
+def test_embedder_env_wired_into_app_services_when_ollama_on() -> None:
+    compose = generate_compose(_config(ollama_mode="cpu", embedding_model="nomic-embed-text"))
+    api_env = compose["services"]["api-server"]["environment"]
+    assert api_env["API_SERVER_OLLAMA_URL"] == "http://ollama:11434"
+    assert api_env["API_SERVER_EMBEDDING_MODEL"] == "nomic-embed-text"
+    # The memory back-fill worker is wired too.
+    worker_env = compose["services"]["workers"]["environment"]
+    assert worker_env["WORKERS_MEMORY_EMBEDDER_BASE_URL"] == "http://ollama:11434"
+
+
+def test_legacy_gpu_enabled_maps_to_gpu_mode() -> None:
+    # Backward-compat: an old config with gpu_enabled=True (no ollama_mode)
+    # behaves as ollama_mode='gpu'.
+    cfg = _config(gpu_enabled=True)
+    assert cfg.resources.ollama_mode == "gpu"
+    ollama = generate_compose(cfg)["services"][OLLAMA_SERVICE]
+    assert ollama["deploy"]["resources"]["reservations"]["devices"][0]["driver"] == "nvidia"
+
+
+def test_default_config_has_no_ollama() -> None:
+    # No ollama_mode + no gpu_enabled → mode 'none' (conservative default).
+    cfg = _config()
+    assert cfg.resources.ollama_mode == "none"
+    assert OLLAMA_SERVICE not in generate_compose(cfg)["services"]
+    assert GPU_SERVICE not in selected_services(cfg, monitoring=False)
 
 
 # ---------------------------------------------------------------------------
@@ -243,8 +301,11 @@ def test_worker_replicas_parametrised() -> None:
 # ---------------------------------------------------------------------------
 def test_hardening_defaults_on_every_service() -> None:
     compose = generate_compose(_config(gpu_enabled=True), monitoring=True)
+    # One-shot init services pull-and-exit, so they CANNOT be unless-stopped —
+    # they still carry the rest of the hardening posture.
+    one_shots = {"ollama-bootstrap"}
     for name, svc in compose["services"].items():
-        assert svc["restart"] == "unless-stopped", name
+        assert svc["restart"] == ("no" if name in one_shots else "unless-stopped"), name
         opts = svc["security_opt"]
         assert "no-new-privileges:true" in opts, name
         # AppArmor MAC confinement is pinned on every generated service.

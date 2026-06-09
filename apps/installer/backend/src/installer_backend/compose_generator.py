@@ -114,8 +114,12 @@ MONITORING_SERVICES: tuple[str, ...] = (
     "grafana",
 )
 
-#: The GPU service (local Ollama on the GPU) added only when gpu_enabled.
-GPU_SERVICE = "ollama"
+#: The in-stack Ollama service + its model-pull one-shot, added when
+#: ``ollama_mode != "none"`` (ADR 0056). ``GPU_SERVICE`` is kept as a
+#: backward-compatible alias of ``OLLAMA_SERVICE``.
+OLLAMA_SERVICE = "ollama"
+OLLAMA_BOOTSTRAP_SERVICE = "ollama-bootstrap"
+GPU_SERVICE = OLLAMA_SERVICE
 
 #: Name of the AppArmor MAC profile every generated service pins via
 #: ``security_opt: apparmor=…`` (Plan 15 task_15_16). Unlike seccomp (a path),
@@ -477,16 +481,19 @@ def _admin_panel_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
 
 
 def _ollama_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
-    """Local Ollama on the GPU — added only when ``gpu_enabled``.
+    """In-stack Ollama for embeddings (+ optional local LLMs) — added when
+    ``ollama_mode != "none"`` (ADR 0056).
 
-    Reserves the NVIDIA GPU via ``deploy.resources.reservations.devices`` (the
-    Compose-native GPU request) so ``docker compose --profile gpu up`` schedules
-    it on the GPU. Hardened like the rest of the stack.
+    On ``cpu`` it runs without any device reservation (enough for embeddings and
+    small models). On ``gpu`` it adds the Compose-native NVIDIA reservation
+    (``deploy.resources.reservations.devices``) so Docker schedules it on the GPU
+    — requires the NVIDIA Container Toolkit. Hardened like the rest of the stack;
+    the model lives under ``{data_root}/ollama`` (bind mount).
     """
 
     svc: dict[str, Any] = {
         "image": IMAGE_OLLAMA,
-        "profiles": ["gpu"],
+        "environment": {"OLLAMA_HOST": "0.0.0.0:11434"},
         "volumes": [f"{cfg.storage.data_root}/ollama:/root/.ollama"],
         "healthcheck": {
             "test": ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"],
@@ -498,11 +505,42 @@ def _ollama_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # n
         "networks": ["agentic-net"],
     }
     svc.update(_hardening(limits_cpus="4.0", limits_memory="8g"))
-    # Compose-native GPU reservation (requires the NVIDIA Container Toolkit).
-    # `capabilities` is a flat list of strings per the Compose schema.
-    svc["deploy"]["resources"]["reservations"] = {
-        "devices": [{"driver": "nvidia", "count": "all", "capabilities": ["gpu"]}],
+    if cfg.resources.ollama_mode == "gpu":
+        # Compose-native GPU reservation (requires the NVIDIA Container Toolkit).
+        # `capabilities` is a flat list of strings per the Compose schema.
+        svc["deploy"]["resources"]["reservations"] = {
+            "devices": [{"driver": "nvidia", "count": "all", "capabilities": ["gpu"]}],
+        }
+    return svc
+
+
+def _ollama_bootstrap_service(
+    cfg: InstallerConfig,
+    *,
+    prod: bool,  # noqa: ARG001 — uniform builder signature; the bootstrap ignores prod
+) -> dict[str, Any]:
+    """One-shot that pulls the embedding model into the Ollama volume once the
+    server is healthy, then exits (ADR 0056 option B-A).
+
+    Without it the first ``/api/embed`` fails with ``model not found``. Idempotent
+    (a re-run with the model present is a fast no-op; the model persists in the
+    bind mount). Not hardened/limited like the long-lived services — it is a
+    short-lived init that shares the model name with the api-server embedder.
+    """
+
+    model = cfg.resources.embedding_model
+    svc: dict[str, Any] = {
+        "image": IMAGE_OLLAMA,
+        "depends_on": {OLLAMA_SERVICE: {"condition": "service_healthy"}},
+        "environment": {"OLLAMA_HOST": "http://ollama:11434"},
+        "entrypoint": ["/bin/sh", "-c"],
+        "command": [f"ollama pull {model}"],
+        "networks": ["agentic-net"],
     }
+    # Same hardening posture as the long-lived services, but a one-shot must not
+    # restart (it pulls once and exits) — override the restart policy to "no".
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="2g"))
+    svc["restart"] = "no"
     return svc
 
 
@@ -601,6 +639,7 @@ _BUILDERS = {
     "notification-dispatcher": _notification_dispatcher_service,
     "admin-panel": _admin_panel_service,
     "ollama": _ollama_service,
+    "ollama-bootstrap": _ollama_bootstrap_service,
     "prometheus": _prometheus_service,
     "node-exporter": _node_exporter_service,
     "grafana": _grafana_service,
@@ -628,12 +667,21 @@ def _provider_env_for(cfg: InstallerConfig) -> dict[str, str]:
             env["LLM_AZURE_FOUNDRY_ENDPOINT"] = providers.azure_foundry.apim_endpoint
     if providers.ollama.enabled:
         env["LLM_OLLAMA_ENABLED"] = "true"
-        # Prefer an explicit endpoint; default to the in-stack GPU service when
-        # the GPU profile is on, otherwise leave the wizard-provided endpoint.
+        # Prefer an explicit endpoint; default to the in-stack service when one
+        # is deployed (cpu or gpu), otherwise leave the wizard-provided endpoint.
         if providers.ollama.endpoint:
             env["LLM_OLLAMA_ENDPOINT"] = providers.ollama.endpoint
-        elif cfg.resources.gpu_enabled:
+        elif cfg.resources.ollama_mode != "none":
             env["LLM_OLLAMA_ENDPOINT"] = "http://ollama:11434"
+
+    # Embedder wiring (ADR 0056): when the in-stack Ollama is deployed, point the
+    # api-server embedder (and the memory back-fill worker) at it and pin the
+    # model to the same one the bootstrap pulls. API_SERVER_* are read only by
+    # the api-server; WORKERS_* only by the workers — harmless on the others.
+    if cfg.resources.ollama_mode != "none":
+        env["API_SERVER_OLLAMA_URL"] = "http://ollama:11434"
+        env["API_SERVER_EMBEDDING_MODEL"] = cfg.resources.embedding_model
+        env["WORKERS_MEMORY_EMBEDDER_BASE_URL"] = "http://ollama:11434"
     return env
 
 
@@ -655,13 +703,15 @@ def enabled_providers(cfg: InstallerConfig) -> tuple[LLMProviderKind, ...]:
 def selected_services(cfg: InstallerConfig, *, monitoring: bool) -> list[str]:
     """The ordered list of service names the generated compose will contain.
 
-    Core services are always present; the GPU ``ollama`` service is added only
-    when ``gpu_enabled``; the monitoring overlay services only when requested.
+    Core services are always present; the in-stack ``ollama`` service + its
+    ``ollama-bootstrap`` one-shot are added when ``ollama_mode != "none"`` (ADR
+    0056); the monitoring overlay services only when requested.
     """
 
     services = list(CORE_SERVICES)
-    if cfg.resources.gpu_enabled:
-        services.append(GPU_SERVICE)
+    if cfg.resources.ollama_mode != "none":
+        services.append(OLLAMA_SERVICE)
+        services.append(OLLAMA_BOOTSTRAP_SERVICE)
     if monitoring:
         services.extend(MONITORING_SERVICES)
     return services

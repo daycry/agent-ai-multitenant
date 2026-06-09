@@ -266,11 +266,11 @@ def build_env_vars(
         env["LLM_OLLAMA_ENABLED"] = "true"
         if providers.ollama.endpoint:
             env["LLM_OLLAMA_ENDPOINT"] = providers.ollama.endpoint
-        elif cfg.resources.gpu_enabled:
+        elif cfg.resources.ollama_mode != "none":
             env["LLM_OLLAMA_ENDPOINT"] = "http://ollama:11434"
 
-    # GPU / Ollama in-stack service.
-    if cfg.resources.gpu_enabled:
+    # In-stack Ollama service (ADR 0056 — cpu or gpu).
+    if cfg.resources.ollama_mode != "none":
         env["OLLAMA_PORT"] = "11434"
 
     # Monitoring overlay (Grafana admin password only when the overlay is on).
@@ -372,6 +372,8 @@ def generate_global_config(
         "resources": {
             "worker_replicas": cfg.resources.worker_replicas,
             "worker_memory_gib": cfg.resources.worker_memory_gib,
+            "ollama_mode": cfg.resources.ollama_mode,
+            "embedding_model": cfg.resources.embedding_model,
             "gpu_enabled": cfg.resources.gpu_enabled,
         },
         "storage": {
@@ -456,7 +458,7 @@ def build_data_tree_plan(
 
     root = cfg.storage.data_root
     skip: set[str] = set()
-    if not cfg.resources.gpu_enabled:
+    if cfg.resources.ollama_mode == "none":
         skip.add("ollama")
     if not monitoring:
         skip.update({"prometheus", "grafana"})

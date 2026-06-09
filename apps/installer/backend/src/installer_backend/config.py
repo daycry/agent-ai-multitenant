@@ -37,8 +37,25 @@ from __future__ import annotations
 import ipaddress
 import re
 from enum import Enum
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
+
+#: The three deployment modes for the in-stack Ollama (ADR 0056):
+#:   * ``none`` — no Ollama service; embeddings use an external/cloud Ollama or
+#:     stay on BM25 keyword search.
+#:   * ``cpu``  — Ollama service without a GPU reservation (enough for embeddings
+#:     and small local LLMs).
+#:   * ``gpu``  — adds the NVIDIA device reservation for accelerated local LLMs.
+OllamaMode = Literal["none", "cpu", "gpu"]
 
 # ---------------------------------------------------------------------------
 # Small shared validators / patterns.
@@ -110,19 +127,42 @@ class SystemConfig(BaseModel):
 # Step 3 — resources / GPU.
 # ---------------------------------------------------------------------------
 class ResourceConfig(BaseModel):
-    """Step 3: resource allocation for the stack + GPU enablement.
+    """Step 3: resource allocation for the stack + in-stack Ollama mode.
 
     ``worker_replicas`` and ``worker_memory_gib`` size the Celery workers; the
     real prereq probe (task 15_02) already told the operator whether the host
-    can host them. ``gpu_enabled`` opts into GPU acceleration (e.g. local
-    Ollama) and is only meaningful when a GPU was detected.
+    can host them.
+
+    ``ollama_mode`` (ADR 0056) selects how the in-stack Ollama is deployed —
+    ``none`` / ``cpu`` / ``gpu``. ``gpu`` is only meaningful when an NVIDIA GPU +
+    the Container Toolkit were detected. ``embedding_model`` is the model the
+    bootstrap pulls and the api-server requests (the REAL Ollama registry name,
+    default ``nomic-embed-text``; 768 dims).
+
+    ``gpu_enabled`` is DEPRECATED (superseded by ``ollama_mode``) but still
+    accepted so older saved configs load: when ``ollama_mode`` is omitted it is
+    derived from ``gpu_enabled`` (True → ``gpu``, else ``none``), and the boolean
+    is then kept in lockstep with ``ollama_mode == "gpu"``.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     worker_replicas: int = Field(default=2, ge=1, le=64)
     worker_memory_gib: int = Field(default=4, ge=1, le=512)
+    # Deprecated alias — see the model validator below + ollama_mode.
     gpu_enabled: bool = False
+    ollama_mode: OllamaMode | None = None
+    embedding_model: str = Field(default="nomic-embed-text", min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def _resolve_ollama_mode(self) -> ResourceConfig:
+        """Back-compat bridge: derive ``ollama_mode`` from the legacy
+        ``gpu_enabled`` when it was not given, then keep the boolean in lockstep
+        so any remaining ``gpu_enabled`` reader still sees the GPU truth."""
+        if self.ollama_mode is None:
+            self.ollama_mode = "gpu" if self.gpu_enabled else "none"
+        self.gpu_enabled = self.ollama_mode == "gpu"
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +475,9 @@ def normalized_summary(config: InstallerConfig) -> dict[str, object]:
         "resources": {
             "worker_replicas": config.resources.worker_replicas,
             "worker_memory_gib": config.resources.worker_memory_gib,
+            "ollama_mode": config.resources.ollama_mode,
+            "embedding_model": config.resources.embedding_model,
+            # Deprecated mirror, kept for any consumer still reading it.
             "gpu_enabled": config.resources.gpu_enabled,
         },
         "storage": {
