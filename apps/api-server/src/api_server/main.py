@@ -46,6 +46,7 @@ from api_server.routers.copilot_device_flow import (
 from api_server.routers.cross_tenant_stats import router as cross_tenant_stats_router
 from api_server.routers.dep_cache import router as dep_cache_router
 from api_server.routers.docs_viewer import router as docs_viewer_router
+from api_server.routers.embeddings import admin_router as embeddings_admin_router
 from api_server.routers.eval_quality import router as eval_quality_router
 from api_server.routers.evals import router as evals_router
 from api_server.routers.executions import router as executions_router
@@ -74,6 +75,7 @@ from api_server.routers.mfa import router as mfa_router
 from api_server.routers.model_prices import admin_router as model_prices_admin_router
 from api_server.routers.model_prices import router as model_prices_router
 from api_server.routers.notifications import router as notifications_router
+from api_server.routers.ollama import admin_router as ollama_admin_router
 from api_server.routers.plans import plans_router, project_plans_router
 from api_server.routers.projects import router as projects_router
 from api_server.routers.review import router as review_router
@@ -208,6 +210,8 @@ def _register_routers(app: FastAPI) -> None:
         model_prices_router,
         model_prices_admin_router,
         llm_providers_admin_router,
+        embeddings_admin_router,
+        ollama_admin_router,
         copilot_device_flow_admin_router,
         mcp_router,
         mcp_catalog_router,

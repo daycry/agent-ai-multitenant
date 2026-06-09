@@ -51,6 +51,12 @@ el problema ya esté documentado.
   — `decodeXLHeaders: Unknown xl meta version N`: el volumen dev lo
   escribió una build más nueva; recrear el volumen o subir el pin.
 
+### ollama / embeddings
+
+- [ollama-embedding-model-naming.md](./ollama-embedding-model-naming.md)
+  — el embedder pide `nomic-embed-text` (NO `-v1.5`) y debe ser de 768 dims;
+  el modelo es configurable (ADR 0056), cambiar de dims es Plan 12.
+
 ### postgres / asyncpg / sqlalchemy
 
 - [postgres-port-clash-with-laragon.md](./postgres-port-clash-with-laragon.md)
@@ -100,6 +106,9 @@ el problema ya esté documentado.
 
 ### windows
 
+- [node-exporter-rslave-windows.md](./node-exporter-rslave-windows.md)
+  — node-exporter no arranca en Docker Desktop por el mount `rslave` de `/`;
+  override `docker-compose.windows.yml` con `volumes: !override` (no `!reset`).
 - [windows-asyncio-engine-dispose.md](./windows-asyncio-engine-dispose.md)
   — `asyncio.run(engine.dispose())` en teardown crashea el proactor.
 - [windows-git-crlf-vs-hooks.md](./windows-git-crlf-vs-hooks.md)

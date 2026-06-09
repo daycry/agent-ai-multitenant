@@ -20,7 +20,14 @@
  * app-tier services from CLAUDE.md (api-server, orchestrator, workers, …).
  */
 
-import type { InstallerConfig } from "./config";
+import type { InstallerConfig, OllamaMode } from "./config";
+
+/** Human labels for the in-stack Ollama mode (ADR 0056). */
+const OLLAMA_MODE_LABEL: Record<OllamaMode, string> = {
+  none: "Ninguno (externo/cloud o BM25)",
+  cpu: "CPU",
+  gpu: "GPU (CUDA)",
+};
 
 /** A single service that will be brought up by the generated compose. */
 export interface PreviewService {
@@ -52,8 +59,8 @@ export interface ResourcePreview {
   readonly estimatedRamGib: number;
   /** Estimated total disk footprint in GiB. */
   readonly estimatedDiskGib: number;
-  /** True when the GPU runtime add-on is included. */
-  readonly gpuEnabled: boolean;
+  /** In-stack Ollama deployment mode (ADR 0056). */
+  readonly ollamaMode: OllamaMode;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +118,7 @@ function roundUp1(value: number): number {
  * estimate uses the per-worker memory they chose.
  */
 export function buildPreview(config: InstallerConfig): ResourcePreview {
-  const { workerReplicas, workerMemoryGib, gpuEnabled } = config.resources;
+  const { workerReplicas, workerMemoryGib, ollamaMode } = config.resources;
 
   const workers: PreviewService[] = Array.from({ length: workerReplicas }, (_, i) => ({
     name: `worker-${i + 1}`,
@@ -132,7 +139,7 @@ export function buildPreview(config: InstallerConfig): ResourcePreview {
     volumes,
     estimatedRamGib: roundUp1(totalRamMib / 1024),
     estimatedDiskGib: totalDiskGib,
-    gpuEnabled,
+    ollamaMode,
   };
 }
 
@@ -233,7 +240,10 @@ export function buildConfigGroups(config: InstallerConfig): readonly ConfigGroup
       rows: [
         { label: "Réplicas de worker", value: String(resources.workerReplicas) },
         { label: "Memoria por worker", value: `${resources.workerMemoryGib} GiB` },
-        { label: "GPU", value: resources.gpuEnabled ? "Habilitada" : "Deshabilitada" },
+        { label: "Ollama", value: OLLAMA_MODE_LABEL[resources.ollamaMode] },
+        ...(resources.ollamaMode !== "none"
+          ? [{ label: "Modelo de embeddings", value: resources.embeddingModel }]
+          : []),
       ],
     },
     {

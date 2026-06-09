@@ -1,0 +1,38 @@
+# Windows / Docker Desktop (WSL2) dev overrides.
+#
+# Some services in the Linux-shaped compose use mount semantics that Docker
+# Desktop's WSL2 VM does not support. Layer this file LAST, only on Windows, so
+# the Linux dev/prod compose stays untouched (Linux devs keep the full setup).
+#
+# Usage (Windows dev, with monitoring):
+#   docker compose -f docker/docker-compose.yml `
+#                  -f docker/docker-compose.dev.yml `
+#                  -f docker/docker-compose.monitoring.yml `
+#                  -f docker/docker-compose.monitoring.dev.yml `
+#                  -f docker/docker-compose.windows.yml up -d
+#
+# node-exporter: the base service binds the host rootfs with `rslave` mount
+# propagation (`/:/host/root:ro,rslave`) to report every host filesystem. The
+# WSL2 VM's `/` is a PRIVATE mount, so Docker rejects that bind with
+# "path / is mounted on / but it is not a shared or slave mount" and the
+# container never starts. We drop the host-rootfs mount here (and the matching
+# `--path.rootfs` flag) so node-exporter BOOTS on Windows: CPU / load / memory /
+# network metrics work; host *filesystem* metrics (node_filesystem_*) are absent
+# — acceptable for local dev (the real host metrics live on the Linux deploy).
+# See docs/03-guides/gotchas/node-exporter-rslave-windows.md.
+
+services:
+  node-exporter:
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+      - --collector.textfile.directory=/host/textfile
+    # `!override` REPLACES the base volumes list (which includes the unsupported
+    # `/:/host/root:ro,rslave`) with this shorter one — `!reset` would only blank
+    # it to null (the list under it is discarded), leaving node-exporter with no
+    # /host/proc and a panic.
+    volumes: !override
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - node_exporter_textfile:/host/textfile:ro

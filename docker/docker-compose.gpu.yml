@@ -1,0 +1,28 @@
+# GPU (NVIDIA/CUDA) overlay for the in-stack Ollama (ADR 0056).
+#
+# Overlays the Compose-native GPU reservation onto the `ollama` service so it
+# is scheduled on the NVIDIA GPU — the same reservation the installer emits for
+# mode `gpu`. CPU is the default (base compose); add this file ONLY when the
+# host has an NVIDIA GPU + the NVIDIA Container Toolkit (on Windows: Docker
+# Desktop + WSL2 + the toolkit inside the WSL distro). Without that toolkit
+# Docker rejects the device request and the service won't start — stay on CPU.
+#
+# Usage (dev, with GPU):
+#   docker compose -f docker/docker-compose.yml \
+#                  -f docker/docker-compose.dev.yml \
+#                  -f docker/docker-compose.gpu.yml up -d
+#
+# Verify the model is using the GPU after `up`:
+#   docker exec agentic-platform-ollama-1 ollama ps   # PROCESSOR should read GPU
+#
+# See docs/06-runbooks/ollama-gpu-setup.md for the full setup + troubleshooting.
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]

@@ -253,7 +253,17 @@ class Settings(BaseSettings):
         default="http://localhost:11434",
         description=(
             "Ollama HTTP base URL — used for local embeddings"
-            " (default nomic-embed-text-v1.5, Plan 04 task_04_14)."
+            " (Plan 04 task_04_14). In the docker stack this points at the"
+            " in-stack `ollama` service (http://ollama:11434), ADR 0056."
+        ),
+    )
+    embedding_model: str = Field(
+        default="nomic-embed-text",
+        description=(
+            "Model the embedder requests from Ollama's /api/embed (ADR 0056)."
+            " Default is the REAL registry name `nomic-embed-text` (== v1.5,"
+            " 768 dims); the older `-v1.5` suffix is not a valid Ollama tag and"
+            " yields `model not found`. Overridable via API_SERVER_EMBEDDING_MODEL."
         ),
     )
     clamav_host: str = Field(default="localhost", description="ClamAV TCP host.")
