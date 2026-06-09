@@ -142,6 +142,12 @@ const NAV_GROUPS: NavGroup[] = [
         systemAdminOnly: true,
       },
       {
+        href: "/admin/settings/platform-defaults",
+        label: "Valores por defecto",
+        Icon: SlidersHorizontal,
+        systemAdminOnly: true,
+      },
+      {
         href: "/admin/model-prices",
         label: "Modelos & Precios",
         Icon: Coins,

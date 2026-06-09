@@ -1,0 +1,276 @@
+"""Registry of operator-tunable PLATFORM settings that lack a dedicated page.
+
+Mirror of :mod:`api_server.settings_registry` (which serves the per-tenant
+``tenant_settings``) but for the **platform-global** ``platform_settings`` table
+(ADR 0028 — System-Admin only). Several platform defaults were operator-tunable
+*by design* (e.g. ``model.default_config`` per ADR 0055) but never got a write
+endpoint / UI; this registry is the single source of truth that backs a generic
+``/admin/platform-settings`` surface so they can be edited from the panel without
+hardcoding anything in the frontend.
+
+Settings that ALREADY own a dedicated page (backups, SSO, notifications, the
+per-tenant memories page, model prices) are deliberately NOT listed here — this
+registry covers only the gap.
+
+Adding a setting: add the entry to :data:`PLATFORM_KNOWN_SETTINGS`. The value is
+read with :func:`api_server.db.platform_settings.get_platform_setting` (its own
+``get_*`` helper keeps applying its clamping/validation on the read path).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
+from typing import Any, Literal
+
+from api_server.db.llm_providers import LLM_PROVIDER_KINDS
+from api_server.db.platform_settings import (
+    DEFAULT_MODEL_CONFIG,
+    InvalidModelConfigError,
+    validate_model_config,
+)
+
+# ``model_config`` is the structured agent-default spec (provider/model/temperature);
+# the rest are scalars. The UI renders a control per type.
+PlatformSettingType = Literal["bool", "int", "decimal", "model_config"]
+
+
+@dataclass(frozen=True)
+class PlatformSettingDef:
+    """One tunable platform setting (keyed by its real ``platform_settings`` key)."""
+
+    type: PlatformSettingType
+    default: Any
+    label_es: str
+    description_es: str
+    min_value: float | int | None = None
+    max_value: float | int | None = None
+
+
+@dataclass(frozen=True)
+class PlatformCategoryDef:
+    """A UI grouping. ``platform_settings`` is flat (key→value); the category is
+    presentation-only — the key is the globally-unique platform setting key."""
+
+    label_es: str
+    icon: str  # lucide-react component name, resolved by the frontend
+    description_es: str = ""
+    settings: dict[str, PlatformSettingDef] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Registry — the source of truth (only settings WITHOUT a dedicated page)
+# ---------------------------------------------------------------------------
+PLATFORM_KNOWN_SETTINGS: dict[str, PlatformCategoryDef] = {
+    "modelos": PlatformCategoryDef(
+        label_es="Modelos",
+        icon="Cpu",
+        description_es="Modelo que heredan los agentes que no fijan uno propio.",
+        settings={
+            "model.default_config": PlatformSettingDef(
+                type="model_config",
+                default=DEFAULT_MODEL_CONFIG,
+                label_es="Modelo por defecto de agentes",
+                description_es=(
+                    "Proveedor (kind) + modelo + temperatura que heredan los agentes sin "
+                    "modelo propio (ADR 0055). El dispatch resuelve el proveedor más nuevo "
+                    "ACTIVO de ese kind."
+                ),
+            ),
+        },
+    ),
+    "ejecucion": PlatformCategoryDef(
+        label_es="Ejecución",
+        icon="Gauge",
+        description_es="Límites y reintentos de las ejecuciones de agentes.",
+        settings={
+            "max_review_retries": PlatformSettingDef(
+                type="int",
+                default=3,
+                label_es="Reintentos máximos de revisión",
+                description_es="Cuántas veces un agente puede reworkear su salida tras un reject.",
+                min_value=0,
+                max_value=10,
+            ),
+            "execution_soft_time_limit_s": PlatformSettingDef(
+                type="int",
+                default=1800,
+                label_es="Límite de tiempo soft (s)",
+                description_es="SoftTimeLimit por ejecución; el agente puede capturarlo.",
+                min_value=60,
+                max_value=86400,
+            ),
+            "execution_hard_time_limit_s": PlatformSettingDef(
+                type="int",
+                default=2100,
+                label_es="Límite de tiempo hard (s)",
+                description_es="HardTimeLimit por ejecución (SIGKILL). Debe ser > soft.",
+                min_value=60,
+                max_value=86400,
+            ),
+        },
+    ),
+    "planes": PlatformCategoryDef(
+        label_es="Planes",
+        icon="ClipboardCheck",
+        description_es="Política de aprobación de planes.",
+        settings={
+            "plan_approval_double_signature_threshold": PlatformSettingDef(
+                type="decimal",
+                default="0",
+                label_es="Umbral de doble firma",
+                description_es=(
+                    "Coste estimado (IA) por encima del cual un plan exige una SEGUNDA "
+                    "firma. 0 = siempre basta una firma."
+                ),
+                min_value=0,
+            ),
+        },
+    ),
+    "rag": PlatformCategoryDef(
+        label_es="RAG",
+        icon="Search",
+        description_es="Recuperación aumentada (búsqueda en KBs).",
+        settings={
+            "rag.reranker_enabled": PlatformSettingDef(
+                type="bool",
+                default=False,
+                label_es="Reranker del RAG",
+                description_es=(
+                    "Aplica un cross-encoder sobre el recall híbrido (BM25+vector). OFF por "
+                    "defecto: el reranker real es una dependencia pesada (torch)."
+                ),
+            ),
+        },
+    ),
+    "mantenimiento": PlatformCategoryDef(
+        label_es="Mantenimiento",
+        icon="Wrench",
+        description_es="Palancas de los jobs programados.",
+        settings={
+            "cred_rotation_enabled": PlatformSettingDef(
+                type="bool",
+                default=True,
+                label_es="Rotación de credenciales",
+                description_es="Job periódico que rota secretos/leases en Vault.",
+            ),
+            "human_escalation_enabled": PlatformSettingDef(
+                type="bool",
+                default=True,
+                label_es="Escalado de tareas humanas",
+                description_es="Sweep que reasigna/bloquea tareas humanas vencidas por timeout.",
+            ),
+        },
+    ),
+}
+
+
+class UnknownPlatformSettingError(KeyError):
+    """The platform setting key is not registered as tunable here."""
+
+
+def _find_def(key: str) -> PlatformSettingDef:
+    for cat in PLATFORM_KNOWN_SETTINGS.values():
+        if key in cat.settings:
+            return cat.settings[key]
+    raise UnknownPlatformSettingError(f"unknown platform setting {key!r}")
+
+
+def all_setting_keys() -> list[str]:
+    """Every tunable key in the registry (flat)."""
+    return [key for cat in PLATFORM_KNOWN_SETTINGS.values() for key in cat.settings]
+
+
+def validate_platform_setting_value(key: str, value: Any) -> Any:
+    """Validate + coerce a value against the registry entry for ``key``.
+
+    Returns the value ready for JSONB storage. Raises :class:`ValueError`
+    (the router maps it to 422) on any mismatch."""
+    sdef = _find_def(key)
+    if sdef.type == "bool":
+        if not isinstance(value, bool):
+            raise ValueError(f"{key}: expected a boolean")
+        return value
+    if sdef.type == "int":
+        as_int = _coerce_int(value)
+        _check_bounds(key, as_int, sdef)
+        return as_int
+    if sdef.type == "decimal":
+        as_str = _coerce_decimal(value)
+        if sdef.min_value is not None and Decimal(as_str) < Decimal(str(sdef.min_value)):
+            raise ValueError(f"{key}: value {as_str} below minimum {sdef.min_value}")
+        return as_str
+    if sdef.type == "model_config":
+        if not isinstance(value, dict):
+            raise ValueError(f"{key}: expected a model config object")
+        try:
+            return dict(validate_model_config(value))
+        except InvalidModelConfigError as exc:
+            raise ValueError(str(exc)) from exc
+    raise ValueError(f"unknown setting type {sdef.type!r}")  # pragma: no cover
+
+
+def _coerce_int(value: Any) -> int:
+    f = float(value)
+    if not f.is_integer():
+        raise ValueError(f"expected an integer, got {value!r}")
+    return int(f)
+
+
+def _coerce_decimal(value: Any) -> str:
+    """Return the value as a normalised decimal STRING (how it is stored)."""
+    try:
+        return str(Decimal(str(value)))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"expected a decimal number, got {value!r}") from exc
+
+
+def _check_bounds(key: str, value: int | float, sdef: PlatformSettingDef) -> None:
+    if sdef.min_value is not None and value < sdef.min_value:
+        raise ValueError(f"{key}: value {value} below minimum {sdef.min_value}")
+    if sdef.max_value is not None and value > sdef.max_value:
+        raise ValueError(f"{key}: value {value} above maximum {sdef.max_value}")
+
+
+def platform_registry_to_dict() -> dict[str, Any]:
+    """Serialise the registry for ``GET /admin/platform-settings/_registry``.
+
+    For ``model_config`` entries the valid provider kinds (ADR 0021 closed
+    catalogue) are inlined so the UI can render the provider select without a
+    second round-trip."""
+    return {
+        category: {
+            "label_es": cat.label_es,
+            "icon": cat.icon,
+            "description_es": cat.description_es,
+            "settings": {
+                key: {
+                    "type": sdef.type,
+                    "default": sdef.default,
+                    "label_es": sdef.label_es,
+                    "description_es": sdef.description_es,
+                    "min_value": sdef.min_value,
+                    "max_value": sdef.max_value,
+                    **(
+                        {"provider_kinds": list(LLM_PROVIDER_KINDS)}
+                        if sdef.type == "model_config"
+                        else {}
+                    ),
+                }
+                for key, sdef in cat.settings.items()
+            },
+        }
+        for category, cat in PLATFORM_KNOWN_SETTINGS.items()
+    }
+
+
+__all__ = [
+    "PLATFORM_KNOWN_SETTINGS",
+    "PlatformCategoryDef",
+    "PlatformSettingDef",
+    "PlatformSettingType",
+    "UnknownPlatformSettingError",
+    "all_setting_keys",
+    "platform_registry_to_dict",
+    "validate_platform_setting_value",
+]
