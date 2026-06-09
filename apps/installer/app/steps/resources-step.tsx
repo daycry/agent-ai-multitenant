@@ -1,9 +1,24 @@
 "use client";
 
-import { type FieldErrors, type ResourceConfig } from "@/lib/config";
+import { type FieldErrors, type OllamaMode, type ResourceConfig } from "@/lib/config";
 
 import { PrereqPanel } from "../prereq-panel";
-import { Checkbox, Field, NumberInput } from "./fields";
+import { Field, NumberInput, Select, TextInput } from "./fields";
+
+const OLLAMA_MODE_OPTIONS: ReadonlyArray<{ value: OllamaMode; label: string }> = [
+  { value: "none", label: "Ninguno — usar Ollama externo/cloud o solo BM25" },
+  { value: "cpu", label: "CPU — embeddings locales (recomendado)" },
+  { value: "gpu", label: "GPU (CUDA) — además LLMs locales acelerados" },
+];
+
+// Embedders del catálogo curado compatibles (768 dims) — sugerencias para el
+// campo (en lockstep con ingestion/embedding_models.recommended_models).
+const RECOMMENDED_EMBEDDERS = [
+  "nomic-embed-text",
+  "snowflake-arctic-embed:110m",
+  "granite-embedding:278m",
+  "paraphrase-multilingual",
+];
 
 interface ResourcesStepProps {
   value: ResourceConfig;
@@ -62,12 +77,36 @@ export function ResourcesStep({ value, errors, onChange, onGateChange }: Resourc
           </Field>
         </div>
 
-        <Checkbox
-          id="gpuEnabled"
-          checked={value.gpuEnabled}
-          onChange={(gpuEnabled) => onChange({ gpuEnabled })}
-          label="Habilitar aceleración por GPU (requiere GPU NVIDIA detectada)"
-        />
+        <Field
+          id="ollamaMode"
+          label="Ollama en el stack"
+          error={errors.ollamaMode}
+          hint="CPU basta para embeddings locales; GPU (CUDA) requiere GPU NVIDIA + NVIDIA Container Toolkit (en Windows: Docker Desktop + WSL2). «Ninguno» usa un Ollama externo/cloud o se queda en búsqueda BM25."
+        >
+          <Select
+            id="ollamaMode"
+            value={value.ollamaMode}
+            onChange={(ollamaMode) => onChange({ ollamaMode })}
+            options={OLLAMA_MODE_OPTIONS}
+          />
+        </Field>
+
+        {value.ollamaMode !== "none" && (
+          <Field
+            id="embeddingModel"
+            label="Modelo de embeddings (se descargará al instalar)"
+            error={errors.embeddingModel}
+            hint={`Nombre real del registro Ollama, 768 dims. Recomendados: ${RECOMMENDED_EMBEDDERS.join(", ")}.`}
+          >
+            <TextInput
+              id="embeddingModel"
+              value={value.embeddingModel}
+              onChange={(embeddingModel) => onChange({ embeddingModel })}
+              placeholder="nomic-embed-text"
+              error={Boolean(errors.embeddingModel)}
+            />
+          </Field>
+        )}
       </div>
     </section>
   );

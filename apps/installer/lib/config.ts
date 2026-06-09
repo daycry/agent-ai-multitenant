@@ -26,10 +26,16 @@ export interface SystemConfig {
   environment: Environment;
 }
 
+/** In-stack Ollama deployment mode (ADR 0056): none / cpu / gpu(CUDA). */
+export type OllamaMode = "none" | "cpu" | "gpu";
+
 export interface ResourceConfig {
   workerReplicas: number;
   workerMemoryGib: number;
-  gpuEnabled: boolean;
+  /** How the in-stack Ollama is deployed (ADR 0056). */
+  ollamaMode: OllamaMode;
+  /** Embedding model the bootstrap pulls + the api-server requests. */
+  embeddingModel: string;
 }
 
 export interface StorageConfig {
@@ -102,7 +108,14 @@ export function isConfigStep(step: string): step is ConfigStepId {
 export function emptyConfig(): InstallerConfig {
   return {
     system: { domain: "", environment: "production" },
-    resources: { workerReplicas: 2, workerMemoryGib: 4, gpuEnabled: false },
+    resources: {
+      workerReplicas: 2,
+      workerMemoryGib: 4,
+      // CPU by default so local embeddings work out-of-the-box (ADR 0056); the
+      // operator can switch to none (external/cloud Ollama or BM25) or gpu.
+      ollamaMode: "cpu",
+      embeddingModel: "nomic-embed-text",
+    },
     storage: {
       dataRoot: "/data/agent-platform",
       minioBucket: "agentic-platform",
@@ -166,6 +179,14 @@ export function validateResources(resources: ResourceConfig): FieldErrors {
     resources.workerMemoryGib > 512
   ) {
     errors.workerMemoryGib = "La memoria por worker debe estar entre 1 y 512 GiB.";
+  }
+  if (!["none", "cpu", "gpu"].includes(resources.ollamaMode)) {
+    errors.ollamaMode = "Modo de Ollama no válido.";
+  }
+  // The embedding model only matters when Ollama is deployed; when it is, it
+  // must be non-empty (the bootstrap pulls it).
+  if (resources.ollamaMode !== "none" && resources.embeddingModel.trim().length === 0) {
+    errors.embeddingModel = "Indica el modelo de embeddings a descargar.";
   }
   return errors;
 }
@@ -285,7 +306,9 @@ export function toWireConfig(config: InstallerConfig): Record<string, unknown> {
     resources: {
       worker_replicas: config.resources.workerReplicas,
       worker_memory_gib: config.resources.workerMemoryGib,
-      gpu_enabled: config.resources.gpuEnabled,
+      // ADR 0056: the backend derives the legacy gpu_enabled from ollama_mode.
+      ollama_mode: config.resources.ollamaMode,
+      embedding_model: config.resources.embeddingModel.trim(),
     },
     storage: {
       data_root: config.storage.dataRoot.trim(),

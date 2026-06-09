@@ -112,12 +112,15 @@ export function SummaryStep({ config, confirmed, onConfirmChange }: SummaryStepP
           />
         </div>
 
-        {preview.gpuEnabled && (
+        {preview.ollamaMode !== "none" && (
           <p
             data-testid="estimate-gpu"
             className="text-muted-foreground inline-flex items-center gap-2 text-sm"
           >
-            <Cpu className="h-4 w-4" /> Aceleración por GPU habilitada (runtime NVIDIA incluido).
+            <Cpu className="h-4 w-4" />{" "}
+            {preview.ollamaMode === "gpu"
+              ? "Ollama en el stack con aceleración por GPU (runtime NVIDIA incluido)."
+              : "Ollama en el stack (CPU) para embeddings locales."}
           </p>
         )}
 

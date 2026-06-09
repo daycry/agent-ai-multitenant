@@ -166,19 +166,26 @@ test("going back from summary un-confirms the gate", async ({ page }) => {
   await expect(page.getByTestId("wizard-next")).toBeDisabled();
 });
 
-test("GPU note appears only when GPU acceleration is enabled", async ({ page }) => {
+test("Ollama note reflects the selected mode (none/cpu/gpu)", async ({ page }) => {
   await mockBackend(page);
 
-  // First pass: GPU disabled (default) -> no GPU note.
+  // Default is CPU (embeddings out-of-the-box, ADR 0056) -> the note shows.
   await advanceToSummary(page);
-  await expect(page.getByTestId("estimate-gpu")).toHaveCount(0);
+  await expect(page.getByTestId("estimate-gpu")).toBeVisible();
 
-  // Enable GPU on the resources step, then return to summary.
+  // Switch to "none" -> the note disappears.
   await page.getByTestId("stepper-item-resources").click();
   await expect(page.getByTestId("step-resources")).toBeVisible();
-  await page.getByTestId("input-gpuEnabled").check();
+  await page.getByTestId("input-ollamaMode").selectOption("none");
   await page.getByTestId("stepper-item-summary").click();
+  await expect(page.getByTestId("step-summary")).toBeVisible();
+  await expect(page.getByTestId("estimate-gpu")).toHaveCount(0);
 
+  // Switch to GPU -> the note shows again.
+  await page.getByTestId("stepper-item-resources").click();
+  await expect(page.getByTestId("step-resources")).toBeVisible();
+  await page.getByTestId("input-ollamaMode").selectOption("gpu");
+  await page.getByTestId("stepper-item-summary").click();
   await expect(page.getByTestId("step-summary")).toBeVisible();
   await expect(page.getByTestId("estimate-gpu")).toBeVisible();
 });
