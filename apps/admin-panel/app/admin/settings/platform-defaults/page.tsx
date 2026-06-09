@@ -245,11 +245,29 @@ function ModelConfigControl({
   pending: boolean;
 }) {
   const set = (patch: Partial<ModelConfig>) => onChange({ ...value, ...patch });
+
+  // Models available per provider kind (active providers' synced/catalogued
+  // list) — fills the model dropdown when a provider is chosen.
+  const optionsQuery = useQuery<{ by_kind: Record<string, string[]> }, ApiError>({
+    queryKey: ["platform-settings", "model-options"],
+    queryFn: () => apiFetch("/admin/platform-settings/model-options"),
+    refetchOnWindowFocus: false,
+  });
+  const byKind = optionsQuery.data?.by_kind ?? {};
+  const kindModels = value.provider ? (byKind[value.provider] ?? []) : [];
+  // Keep the saved model selectable even if it's not (or no longer) in the
+  // synced list, so editing another field never silently drops it.
+  const modelOptions =
+    value.model && !kindModels.includes(value.model) ? [value.model, ...kindModels] : kindModels;
+
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
       <div className="space-y-1">
         <Label className="text-xs">Proveedor (kind)</Label>
-        <Select value={value.provider ?? ""} onChange={(e) => set({ provider: e.target.value })}>
+        <Select
+          value={value.provider ?? ""}
+          onChange={(e) => set({ provider: e.target.value, model: "" })}
+        >
           <option value="">—</option>
           {providerKinds.map((k) => (
             <option key={k} value={k}>
@@ -260,11 +278,29 @@ function ModelConfigControl({
       </div>
       <div className="space-y-1">
         <Label className="text-xs">Modelo</Label>
-        <Input
-          value={value.model ?? ""}
-          onChange={(e) => set({ model: e.target.value })}
-          placeholder="qwen3-coder:480b"
-        />
+        {modelOptions.length > 0 ? (
+          <Select value={value.model ?? ""} onChange={(e) => set({ model: e.target.value })}>
+            <option value="">—</option>
+            {modelOptions.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </Select>
+        ) : (
+          <>
+            <Input
+              value={value.model ?? ""}
+              onChange={(e) => set({ model: e.target.value })}
+              placeholder="qwen3-coder:480b"
+            />
+            <p className="text-muted-foreground text-[11px]">
+              {value.provider
+                ? "Sin modelos sincronizados — sincroniza el proveedor o escribe el nombre."
+                : "Elige un proveedor para ver sus modelos."}
+            </p>
+          </>
+        )}
       </div>
       <div className="space-y-1">
         <Label className="text-xs">Temperatura</Label>

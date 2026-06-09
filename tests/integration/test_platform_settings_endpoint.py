@@ -117,6 +117,31 @@ async def test_put_unknown_key_is_404(configured_app, migrations_pg_dsn: str) ->
 
 
 @pytest.mark.asyncio
+async def test_model_options_grouped_by_kind(configured_app, migrations_pg_dsn: str) -> None:
+    """The model dropdown source: active providers' models grouped by kind."""
+    user = await _seed_sysadmin(migrations_pg_dsn)
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute("TRUNCATE llm_providers RESTART IDENTITY CASCADE")
+        await conn.execute(
+            "INSERT INTO llm_providers (id, kind, slug, display_name, base_url, is_active, config)"
+            " VALUES ($1, 'ollama', 'ollama-cloud', 'Ollama Cloud',"
+            " 'https://ollama.com/v1', true, $2::jsonb)",
+            uuid4(),
+            '{"models": ["qwen3-coder:480b", "glm-5"]}',
+        )
+    finally:
+        await conn.close()
+    headers = await _sysadmin_headers(user)
+    async with _client(configured_app) as client:
+        resp = await client.get("/admin/platform-settings/model-options", headers=headers)
+    assert resp.status_code == 200, resp.text
+    by_kind = resp.json()["by_kind"]
+    assert "qwen3-coder:480b" in by_kind["ollama"]
+    assert "glm-5" in by_kind["ollama"]
+
+
+@pytest.mark.asyncio
 async def test_requires_system_admin(configured_app) -> None:
     async with _client(configured_app) as client:
         resp = await client.get("/admin/platform-settings/_registry")
