@@ -132,13 +132,14 @@ def _seed_provider(
         _execute(
             dsn,
             "INSERT INTO llm_providers"
-            " (id, kind, display_name, base_url, secret_vault_path)"
-            " VALUES ($1, $2, $3, $4, $5)",
+            " (id, kind, slug, display_name, base_url, secret_vault_path)"
+            " VALUES ($1, $2, $6, $3, $4, $5)",
             provider_id,
             kind,
             display_name,
             base_url,
             secret_vault_path,
+            str(provider_id),
         )
     )
 
@@ -156,6 +157,7 @@ def test_table_and_columns_exist(alembic_config: object, admin_pg_dsn: str) -> N
     expected = {
         "id",
         "kind",
+        "slug",
         "display_name",
         "base_url",
         "secret_vault_path",
@@ -281,12 +283,13 @@ def test_round_trip_config_and_endpoint(
         _execute(
             migrations_pg_dsn,
             "INSERT INTO llm_providers"
-            " (id, kind, display_name, base_url, secret_vault_path, config, is_active)"
-            " VALUES ($1, 'azure_foundry', 'Azure (prod)', $2, $3, $4::jsonb, false)",
+            " (id, kind, slug, display_name, base_url, secret_vault_path, config, is_active)"
+            " VALUES ($1, 'azure_foundry', $5, 'Azure (prod)', $2, $3, $4::jsonb, false)",
             provider_id,
             "https://apim.example.test/openai",
             "platform/llm/" + str(provider_id),
             json.dumps(config),
+            str(provider_id),
         )
     )
     row = asyncio.run(

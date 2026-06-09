@@ -131,6 +131,9 @@ class AssistantModelOption(BaseModel):
 
     provider_id: str
     kind: str
+    # Unique kebab-case handle — disambiguates same-kind providers in the
+    # dropdown (e.g. ``ollama-local`` vs ``ollama-cloud``).
+    slug: str
     display_name: str
     models: list[str]
 

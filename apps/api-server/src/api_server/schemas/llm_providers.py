@@ -36,9 +36,15 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
-from api_server.db.llm_providers import LlmProvider, LLMProviderKind
+from api_server.db.llm_providers import (
+    SLUG_MAX_LENGTH,
+    InvalidProviderSlugError,
+    LlmProvider,
+    LLMProviderKind,
+    validate_provider_slug,
+)
 from api_server.llm_providers.vault import (
     SECRET_FIELD_API_KEY,
     SECRET_FIELD_BEARER_TOKEN,
@@ -65,6 +71,8 @@ class LLMProviderResponse(BaseModel):
 
     id: UUID
     kind: str
+    # Stable, unique kebab-case handle (ollama-local / ollama-cloud / …).
+    slug: str
     display_name: str
     base_url: str | None
     is_active: bool
@@ -87,6 +95,7 @@ def to_provider_response(provider: LlmProvider, *, has_credential: bool) -> LLMP
     return LLMProviderResponse(
         id=provider.id,
         kind=provider.kind,
+        slug=provider.slug,
         display_name=provider.display_name,
         base_url=provider.base_url,
         is_active=provider.is_active,
@@ -115,6 +124,9 @@ class LLMProviderCreateRequest(BaseModel):
     model_config = _BASE_CONFIG
 
     kind: LLMProviderKind
+    # REQUIRED unique handle. Normalised (trim/lower) + validated as kebab-case
+    # by the shared validator — the single source of truth for the slug shape.
+    slug: str = Field(min_length=1, max_length=SLUG_MAX_LENGTH)
     display_name: str = Field(min_length=1, max_length=255)
     base_url: str | None = Field(default=None, max_length=2048)
     is_active: bool = True
@@ -125,6 +137,14 @@ class LLMProviderCreateRequest(BaseModel):
     oauth_token: SecretStr | None = None
     api_key: SecretStr | None = None
     bearer_token: SecretStr | None = None
+
+    @field_validator("slug")
+    @classmethod
+    def _normalise_slug(cls, value: str) -> str:
+        try:
+            return validate_provider_slug(value)
+        except InvalidProviderSlugError as exc:
+            raise ValueError(str(exc)) from exc
 
     @model_validator(mode="after")
     def _check_kind_requirements(self) -> LLMProviderCreateRequest:
@@ -159,6 +179,8 @@ class LLMProviderUpdateRequest(BaseModel):
 
     model_config = _BASE_CONFIG
 
+    # Optional rename of the unique handle; validated when supplied.
+    slug: str | None = Field(default=None, min_length=1, max_length=SLUG_MAX_LENGTH)
     display_name: str | None = Field(default=None, min_length=1, max_length=255)
     base_url: str | None = Field(default=None, max_length=2048)
     is_active: bool | None = None
@@ -168,6 +190,16 @@ class LLMProviderUpdateRequest(BaseModel):
     oauth_token: SecretStr | None = None
     api_key: SecretStr | None = None
     bearer_token: SecretStr | None = None
+
+    @field_validator("slug")
+    @classmethod
+    def _normalise_slug(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            return validate_provider_slug(value)
+        except InvalidProviderSlugError as exc:
+            raise ValueError(str(exc)) from exc
 
     def has_changes(self) -> bool:
         """True when at least one field was supplied on the wire."""

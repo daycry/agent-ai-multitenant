@@ -46,6 +46,7 @@ from api_server.db.llm_providers import (
     PROVIDER_SYNCED_MODELS_KEY,
     LlmProvider,
     get_llm_provider,
+    get_llm_provider_by_slug,
     list_llm_providers,
 )
 from api_server.llm_providers.factory import list_provider_models
@@ -179,8 +180,17 @@ async def create_provider(
     """
     store = _require_store(vault)
 
+    # The slug is the unique handle — reject a duplicate with a clean 409 before
+    # relying on the uq_llm_providers_slug constraint as the DB backstop.
+    if await get_llm_provider_by_slug(session, payload.slug) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"a provider with slug '{payload.slug}' already exists",
+        )
+
     provider = LlmProvider(
         kind=payload.kind.value,
+        slug=payload.slug,
         display_name=payload.display_name,
         base_url=payload.base_url,
         is_active=payload.is_active,
@@ -251,6 +261,14 @@ async def update_provider(
     provider = await _load_provider(session, provider_id)
 
     fields = payload.model_dump(exclude_unset=True)
+    if "slug" in fields and fields["slug"] is not None and fields["slug"] != provider.slug:
+        existing = await get_llm_provider_by_slug(session, fields["slug"])
+        if existing is not None and existing.id != provider.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"a provider with slug '{fields['slug']}' already exists",
+            )
+        provider.slug = fields["slug"]
     if "display_name" in fields and fields["display_name"] is not None:
         provider.display_name = fields["display_name"]
     if "base_url" in fields:

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -84,6 +84,7 @@ async def _seed_provider(
 
     provider = LlmProvider(
         kind=kind,
+        slug=f"{kind}-{uuid4().hex[:8]}",
         display_name=f"{kind} test",
         base_url=base_url,
         is_active=is_active,

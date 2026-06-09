@@ -92,6 +92,7 @@ type ProviderKind = "claude_sdk" | "copilot" | "azure_foundry" | "ollama";
 interface LlmProvider {
   id: string;
   kind: string;
+  slug: string;
   display_name: string;
   base_url: string | null;
   is_active: boolean;
@@ -297,6 +298,7 @@ function LlmProvidersContent() {
               <TableHeader className="bg-muted">
                 <TableRow>
                   <TableHead className="px-3">Tipo</TableHead>
+                  <TableHead className="px-3">Slug</TableHead>
                   <TableHead className="px-3">Nombre</TableHead>
                   <TableHead className="px-3">Endpoint</TableHead>
                   <TableHead className="px-3">Credencial</TableHead>
@@ -317,6 +319,7 @@ function LlmProvidersContent() {
                       <TableCell className="px-3">
                         <Badge variant={KIND_BADGE[p.kind] ?? "muted"}>{kindLabel}</Badge>
                       </TableCell>
+                      <TableCell className="px-3 font-mono text-xs">{p.slug}</TableCell>
                       <TableCell className="px-3 font-medium">{p.display_name}</TableCell>
                       <TableCell className="px-3 font-mono text-xs">{p.base_url ?? "—"}</TableCell>
                       <TableCell className="px-3" data-testid={`provider-credential-${p.id}`}>
@@ -512,6 +515,7 @@ function ProviderFormDialog({ mode, provider, onClose, onSaved }: ProviderFormDi
   const [kind, setKind] = useState<ProviderKind>(
     provider && isKind(provider.kind) ? provider.kind : "claude_sdk",
   );
+  const [slug, setSlug] = useState(provider?.slug ?? "");
   const [displayName, setDisplayName] = useState(provider?.display_name ?? "");
   const [baseUrl, setBaseUrl] = useState(provider?.base_url ?? "");
   const [isActive, setIsActive] = useState(provider?.is_active ?? true);
@@ -530,6 +534,7 @@ function ProviderFormDialog({ mode, provider, onClose, onSaved }: ProviderFormDi
         // PUT: send only what changed; `kind` is immutable. A blank secret
         // input means "keep the current Vault secret" (omit it).
         const body: Record<string, unknown> = {
+          slug: slug.trim(),
           display_name: displayName.trim(),
           base_url: trimmedBase === "" ? null : trimmedBase,
           is_active: isActive,
@@ -542,6 +547,7 @@ function ProviderFormDialog({ mode, provider, onClose, onSaved }: ProviderFormDi
       }
       const body: Record<string, unknown> = {
         kind,
+        slug: slug.trim(),
         display_name: displayName.trim(),
         base_url: trimmedBase === "" ? null : trimmedBase,
         is_active: isActive,
@@ -567,7 +573,10 @@ function ProviderFormDialog({ mode, provider, onClose, onSaved }: ProviderFormDi
   const credentialFilled =
     (kind === "claude_sdk" || kind === "copilot") && oauthToken.trim() !== "";
   const apiKeyFilled = kind === "azure_foundry" && apiKey.trim() !== "";
+  // Mirror the backend slug rule (kebab-case) for instant feedback.
+  const slugValid = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(slug.trim());
   const canSave =
+    slugValid &&
     displayName.trim() !== "" &&
     // base_url required for azure_foundry + ollama.
     (!needsBaseUrl || baseUrl.trim() !== "") &&
@@ -614,6 +623,21 @@ function ProviderFormDialog({ mode, provider, onClose, onSaved }: ProviderFormDi
                 placeholder="Claude (prod)"
                 data-testid="form-display-name"
               />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="form-slug">Slug (único)</Label>
+              <Input
+                id="form-slug"
+                value={slug}
+                onChange={(e) => setSlug(e.target.value)}
+                placeholder="ollama-local"
+                data-testid="form-slug"
+              />
+              <p className="text-muted-foreground text-xs">
+                Handle único para distinguir proveedores del mismo tipo (p. ej.{" "}
+                <code>ollama-local</code> vs <code>ollama-cloud</code>). Minúsculas, números y
+                guiones.
+              </p>
             </div>
           </div>
 

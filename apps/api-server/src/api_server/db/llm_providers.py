@@ -43,10 +43,11 @@ rest of the plan builds against a stable contract.
 from __future__ import annotations
 
 import enum
+import re
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, CheckConstraint, String, Text, text
+from sqlalchemy import Boolean, CheckConstraint, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -83,6 +84,29 @@ LLM_PROVIDER_KINDS: tuple[str, ...] = tuple(k.value for k in LLMProviderKind)
 # poll the provider on every dropdown open).
 PROVIDER_SYNCED_MODELS_KEY = "models"
 
+# A provider slug is kebab-case: lowercase alphanumerics separated by single
+# hyphens, no leading/trailing/double hyphen. Stable, readable, UNIQUE handle
+# (e.g. ``ollama-local`` / ``ollama-cloud``). Width capped to the column (64).
+SLUG_MAX_LENGTH = 64
+SLUG_PATTERN = r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+_SLUG_RE = re.compile(SLUG_PATTERN)
+
+
+class InvalidProviderSlugError(ValueError):
+    """Raised when a proposed provider slug is not valid kebab-case / too long."""
+
+
+def validate_provider_slug(slug: str) -> str:
+    """Validate + normalise a provider slug (trim, lower). Returns it on success;
+    raises :class:`InvalidProviderSlugError` otherwise. The single source of
+    truth for the slug shape, shared by the schema and the router."""
+    candidate = (slug or "").strip().lower()
+    if not candidate or len(candidate) > SLUG_MAX_LENGTH or not _SLUG_RE.match(candidate):
+        raise InvalidProviderSlugError(
+            f"slug must be kebab-case (^{SLUG_PATTERN}$), 1..{SLUG_MAX_LENGTH} chars"
+        )
+    return candidate
+
 
 # =============================================================================
 # llm_providers — platform-global provider configuration (no tenant_id, no RLS)
@@ -114,12 +138,21 @@ class LlmProvider(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "kind IN ('claude_sdk', 'copilot', 'azure_foundry', 'ollama')",
             name="ck_llm_providers_kind",
         ),
+        # The slug is the stable, human-readable UNIQUE handle that
+        # disambiguates providers of the same kind (e.g. ``ollama-local`` vs
+        # ``ollama-cloud``) — platform-global, so unique across the whole table.
+        UniqueConstraint("slug", name="uq_llm_providers_slug"),
     )
 
     # One of the four ADR-0021 provider paths (an LLMProviderKind value).
     # TEXT + CHECK (not a PG ENUM) so adding a path later is a CHECK swap,
     # not a fragile enum ALTER. Width matches the longest value comfortably.
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Stable, unique, human-readable identifier (kebab-case) the operator sets
+    # at creation — the canonical way to tell two providers of the same kind
+    # apart (``ollama-local`` / ``ollama-cloud`` / ``azure-prod`` …). Unlike the
+    # UUID it is readable, and unlike ``display_name`` it is unique.
+    slug: Mapped[str] = mapped_column(String(64), nullable=False)
     # Operator-facing label ("Claude (prod)", "Ollama local", ...).
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     # The provider endpoint: the APIM gateway URL (azure_foundry) or the
@@ -141,7 +174,7 @@ class LlmProvider(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
-            f"LlmProvider(id={self.id!r}, kind={self.kind!r}, "
+            f"LlmProvider(id={self.id!r}, kind={self.kind!r}, slug={self.slug!r}, "
             f"display_name={self.display_name!r}, is_active={self.is_active!r})"
         )
 
@@ -156,6 +189,17 @@ class LlmProvider(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 async def get_llm_provider(session: AsyncSession, provider_id: UUID) -> LlmProvider | None:
     """Fetch one provider by id, or ``None`` when it does not exist."""
     return await session.get(LlmProvider, provider_id)
+
+
+async def get_llm_provider_by_slug(session: AsyncSession, slug: str) -> LlmProvider | None:
+    """Fetch one provider by its unique ``slug``, or ``None`` when unknown.
+
+    Used by the create/update endpoints to reject a duplicate slug with a clean
+    409 before relying on the ``uq_llm_providers_slug`` constraint as backstop."""
+    from sqlalchemy import select
+
+    result = await session.execute(select(LlmProvider).where(LlmProvider.slug == slug))
+    return result.scalar_one_or_none()
 
 
 async def list_llm_providers(
@@ -201,9 +245,14 @@ async def list_active_llm_providers_by_kind(
 __all__ = [
     "LLM_PROVIDER_KINDS",
     "PROVIDER_SYNCED_MODELS_KEY",
+    "SLUG_MAX_LENGTH",
+    "SLUG_PATTERN",
+    "InvalidProviderSlugError",
     "LLMProviderKind",
     "LlmProvider",
     "get_llm_provider",
+    "get_llm_provider_by_slug",
     "list_active_llm_providers_by_kind",
     "list_llm_providers",
+    "validate_provider_slug",
 ]
