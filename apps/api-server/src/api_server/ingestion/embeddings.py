@@ -8,9 +8,10 @@ Two callers consume this:
 
 A Protocol abstracts the backend so tests inject a deterministic
 :class:`HashEmbedder` and production wires the real Ollama HTTP
-client (default model: ``nomic-embed-text-v1.5``, 768 dims). The
-hash-based fake produces stable vectors keyed by content, which is
-all the integration test needs to assert ranking behaviour.
+client. The model defaults to ``settings.embedding_model``
+(``nomic-embed-text``, 768 dims; ADR 0056). The hash-based fake
+produces stable vectors keyed by content, which is all the
+integration test needs to assert ranking behaviour.
 
 Why a separate module from `shared-llm`:
 
@@ -71,7 +72,7 @@ class OllamaEmbedder:
     def __init__(
         self,
         *,
-        model_id: str = "nomic-embed-text-v1.5",
+        model_id: str | None = None,
         dim: int = CHUNK_EMBEDDING_DIM,
         base_url: str | None = None,
         client: httpx.AsyncClient | None = None,
@@ -79,7 +80,9 @@ class OllamaEmbedder:
         settings: Settings | None = None,
     ) -> None:
         cfg = settings or get_settings()
-        self._model_id = model_id
+        # An explicit model_id wins (per-KB re-embed); otherwise fall back to
+        # the configured default (ADR 0056 — the real registry name, no -v1.5).
+        self._model_id = model_id or cfg.embedding_model
         self._dim = dim
         self._base_url = (base_url or cfg.ollama_url).rstrip("/")
         self._owns_client = client is None

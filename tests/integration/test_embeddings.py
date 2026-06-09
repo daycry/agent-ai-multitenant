@@ -150,3 +150,65 @@ async def test_ollama_embedder_raises_on_wrong_dim() -> None:
             await emb.embed(["x"])
     finally:
         await client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Configurable embedding model (ADR 0056)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_ollama_embedder_default_model_is_real_registry_name() -> None:
+    """With no explicit ``model_id``, the embedder asks Ollama for the model
+    named in settings — whose default is the REAL registry name
+    ``nomic-embed-text`` (not the ``-v1.5`` suffix that yields ``model not
+    found``). ADR 0056 N-B."""
+    from api_server.config import Settings
+
+    cfg = Settings()
+    client = _mock_ollama(embeddings=[[0.0] * CHUNK_EMBEDDING_DIM])
+    emb = OllamaEmbedder(base_url="http://test", client=client, settings=cfg)
+    try:
+        assert emb.model_id == "nomic-embed-text"
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ollama_embedder_honours_configured_model() -> None:
+    """``API_SERVER_EMBEDDING_MODEL`` (settings.embedding_model) drives the
+    model the embedder sends when no explicit override is given."""
+    from api_server.config import Settings
+
+    cfg = Settings(embedding_model="mxbai-embed-large")
+    sent: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={"embeddings": [[0.0] * CHUNK_EMBEDDING_DIM]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    emb = OllamaEmbedder(base_url="http://test", client=client, settings=cfg)
+    try:
+        assert emb.model_id == "mxbai-embed-large"
+        await emb.embed(["x"])
+    finally:
+        await client.aclose()
+    assert sent["model"] == "mxbai-embed-large"
+
+
+@pytest.mark.asyncio
+async def test_ollama_embedder_explicit_model_id_overrides_settings() -> None:
+    """An explicit ``model_id`` still wins over the configured default —
+    callers that pin a model (per-KB re-embed) keep that power."""
+    from api_server.config import Settings
+
+    cfg = Settings(embedding_model="nomic-embed-text")
+    client = _mock_ollama(embeddings=[[0.0] * CHUNK_EMBEDDING_DIM])
+    emb = OllamaEmbedder(
+        model_id="text-embedding-3-small", base_url="http://test", client=client, settings=cfg
+    )
+    try:
+        assert emb.model_id == "text-embedding-3-small"
+    finally:
+        await client.aclose()

@@ -85,6 +85,31 @@ opcional** para quien quiera además servir LLMs locales con aceleración.
   hace `pull` de ese mismo nombre. Mismo modelo, mismas 768 dims → sin cambio de
   esquema ni re-embed forzado.
 
+### Selección del modelo entre los embedders del Ollama local
+
+Ollama puede tener varios embedders instalados (`nomic-embed-text`,
+`mxbai-embed-large`, `snowflake-arctic-embed`, `all-minilm`…). ¿Cómo elige el
+operador? **Tope duro:** la columna pgvector es `Vector(768)`
+(`CHUNK_EMBEDDING_DIM`) y `knowledge_bases.embedding_model_id` es inmutable una
+vez la KB tiene chunks (re-embed masivo diferido al Plan 12). Solo sirven
+embedders de **768 dims** (`nomic-embed-text` sí; `mxbai`/`bge`/`arctic-335m`
+→1024; `all-minilm`→384, NO). Y `/api/tags` lista lo instalado pero **no
+etiqueta** cuál es embedder vs chat.
+
+- **S-A. Selección libre de cualquier modelo instalado.** ❌ Rompe el esquema:
+  un modelo ≠768 dims hace fallar el embedder (`EmbeddingError`). **Rechazada.**
+- **S-B. Dimensión dinámica + re-embed al cambiar.** ❌ Mucho mayor; es justo el
+  Plan 12 (re-embedding masivo). Fuera de alcance — pediría su propio ADR.
+- **S-C. Descubrir + fijar (env), panel informativo (ELEGIDA).** Un endpoint
+  `GET /admin/embeddings/available-models` sondea `{ollama_url}/api/tags`, lo
+  cruza con una **allowlist curada** de embedders conocidos (nombre→dims) y
+  marca los **compatibles (768)**, el modelo **activo** y la **reachability**. El
+  modelo se **fija por env** (`API_SERVER_EMBEDDING_MODEL`, elegido en el
+  instalador/config; el bootstrap lo `pull`ea). El panel de admin es
+  **informativo** (read-only): muestra qué embedders 768 hay instalados, cuál
+  está activo y cuáles se recomiendan. **Sin** tocar los workers, **sin** nueva
+  migración, **sin** swap en vivo (cambiar de modelo con KBs existentes = Plan 12).
+
 ## Decisión
 
 1. **Ollama es un servicio del stack con modo `none | cpu | gpu`**, disponible
@@ -99,6 +124,11 @@ opcional** para quien quiera además servir LLMs locales con aceleración.
    El `LLM_OLLAMA_ENDPOINT` existente sigue para el provider LLM del runtime.
 4. **Bootstrap del modelo** vía init one-shot `ollama-bootstrap` (opción B-A).
 5. **Modelo de embeddings configurable** (opción N-B), default `nomic-embed-text`.
+   Se **fija por env** y se **descubre** desde el Ollama local (opción S-C): un
+   endpoint admin `GET /admin/embeddings/available-models` cruza `/api/tags` con
+   una allowlist curada de embedders, filtra a los **compatibles (768)** y marca
+   el activo + reachability; el panel lo muestra en read-only. Sin swap en vivo
+   ni migración (cambiar de modelo con KBs existentes ⇒ Plan 12 re-embed).
 6. **Instalador**: el toggle binario `gpu_enabled` evoluciona a un selector
    `ollama_mode ∈ {none, cpu, gpu}` (con `gpu` deshabilitado/avisado si la
    detección de hardware no ve GPU NVIDIA). El compose generado incluye el
@@ -120,6 +150,11 @@ capabilities: [gpu]}]`. Servicio `ollama-bootstrap` (misma imagen, `entrypoint`
 - **api-server**: `config.py` añade `embedding_model` (default `nomic-embed-text`);
   `embeddings.py` toma el `model_id` de settings. El compose inyecta
   `API_SERVER_OLLAMA_URL` + `API_SERVER_EMBEDDING_MODEL` cuando el modo ≠ `none`.
+  Nuevo módulo `ingestion/embedding_models.py` con la **allowlist curada**
+  (nombre→dims) + helper de compatibilidad (dim == `CHUNK_EMBEDDING_DIM`) y un
+  `fetch_installed_embedding_models()` que sondea `{ollama_url}/api/tags`. Router
+  admin `GET /admin/embeddings/available-models` (System Admin) que devuelve
+  `{ollama_reachable, active_model, required_dim, installed[], recommended[]}`.
 - **Instalador**: `ResourceConfig.gpuEnabled` → `ollamaMode` (`none|cpu|gpu`) en
   `lib/config.ts` + paso Resources; `compose_generator.selected_services` y
   `_ollama_service` parametrizan CPU vs GPU + emiten el bootstrap; detección de
@@ -150,6 +185,9 @@ capabilities: [gpu]}]`. Servicio `ollama-bootstrap` (misma imagen, `entrypoint`
 ## Plan de implementación (resumen)
 
 1. `config.py` + `embeddings.py`: `embedding_model` configurable (default real).
+   1b. `ingestion/embedding_models.py` (allowlist curada + compat 768 + sonda
+   `/api/tags`) + router admin `GET /admin/embeddings/available-models`
+   (descubrimiento, opción S-C); panel admin informativo (read-only).
 2. `docker/docker-compose.yml` (+ `.dev`): servicio `ollama` (CPU) + `ollama-bootstrap`
    - volumen + wiring `API_SERVER_OLLAMA_URL`/`API_SERVER_EMBEDDING_MODEL`.
 3. `compose_generator.py`: `ollama_mode` (none/cpu/gpu), reserva NVIDIA solo gpu,
