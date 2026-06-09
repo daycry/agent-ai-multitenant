@@ -136,6 +136,12 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/admin/users", label: "Usuarios", Icon: Users, systemAdminOnly: true },
       { href: "/admin/llm-providers", label: "Proveedores LLM", Icon: Cpu, systemAdminOnly: true },
       {
+        href: "/admin/ollama",
+        label: "Ollama & Embeddings",
+        Icon: Sparkles,
+        systemAdminOnly: true,
+      },
+      {
         href: "/admin/model-prices",
         label: "Modelos & Precios",
         Icon: Coins,
