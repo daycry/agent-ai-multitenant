@@ -90,8 +90,9 @@ async def _seed(dsn: str) -> dict[str, UUID]:
         # model the provider does NOT serve ('phantom-local-only') — catalog-only,
         # so it must be EXCLUDED from the selector while a sync exists.
         await conn.execute(
-            "INSERT INTO llm_providers (id, kind, display_name, base_url, is_active, config)"
-            " VALUES ($1, 'ollama', 'Ollama local', 'http://ollama:11434/v1', true, $2::jsonb)",
+            "INSERT INTO llm_providers (id, kind, slug, display_name, base_url, is_active, config)"
+            " VALUES ($1, 'ollama', 'ollama-local', 'Ollama local',"
+            " 'http://ollama:11434/v1', true, $2::jsonb)",
             provider_id,
             '{"models": ["llama3.1", "glm-5.1", "gemma3:4b"]}',
         )

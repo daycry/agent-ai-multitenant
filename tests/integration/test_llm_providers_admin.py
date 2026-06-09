@@ -200,7 +200,7 @@ async def test_tenant_admin_forbidden(configured_app, migrations_pg_dsn: str) ->
         listed = await client.get("/admin/llm-providers", headers=headers)
         created = await client.post(
             "/admin/llm-providers",
-            json={"kind": "ollama", "display_name": "X", "base_url": "http://o:11434"},
+            json={"kind": "ollama", "slug": "x", "display_name": "X", "base_url": "http://o:11434"},
             headers=headers,
         )
     assert listed.status_code == 403
@@ -229,6 +229,7 @@ async def test_create_ollama_persists_no_secret(configured_app, migrations_pg_ds
             "/admin/llm-providers",
             json={
                 "kind": "ollama",
+                "slug": "ollama-local",
                 "display_name": "Ollama local",
                 "base_url": "http://ollama:11434",
                 "bearer_token": _BEARER,
@@ -261,6 +262,7 @@ async def test_create_writes_secret_to_vault(
             "/admin/llm-providers",
             json={
                 "kind": "azure_foundry",
+                "slug": "azure-prod",
                 "display_name": "Azure prod",
                 "base_url": "https://apim.example.test",
                 "api_key": _API_KEY,
@@ -284,6 +286,7 @@ async def test_secret_absent_from_db_row(configured_app, migrations_pg_dsn: str)
             "/admin/llm-providers",
             json={
                 "kind": "claude_sdk",
+                "slug": "claude-prod",
                 "display_name": "Claude prod",
                 "oauth_token": _OAUTH_TOKEN,
             },
@@ -311,7 +314,11 @@ async def test_create_claude_requires_oauth_token(configured_app, migrations_pg_
     async with _client(configured_app) as client:
         resp = await client.post(
             "/admin/llm-providers",
-            json={"kind": "claude_sdk", "display_name": "Claude no-creds"},
+            json={
+                "kind": "claude_sdk",
+                "slug": "claude-no-creds",
+                "display_name": "Claude no-creds",
+            },
             headers=headers,
         )
     assert resp.status_code == 422
@@ -326,13 +333,14 @@ async def test_create_azure_requires_base_url_and_key(
     async with _client(configured_app) as client:
         no_url = await client.post(
             "/admin/llm-providers",
-            json={"kind": "azure_foundry", "display_name": "Az", "api_key": _API_KEY},
+            json={"kind": "azure_foundry", "slug": "az", "display_name": "Az", "api_key": _API_KEY},
             headers=headers,
         )
         no_key = await client.post(
             "/admin/llm-providers",
             json={
                 "kind": "azure_foundry",
+                "slug": "az",
                 "display_name": "Az",
                 "base_url": "https://apim.example.test",
             },
@@ -340,6 +348,62 @@ async def test_create_azure_requires_base_url_and_key(
         )
     assert no_url.status_code == 422
     assert no_key.status_code == 422
+
+
+# ===========================================================================
+# Slug — unique handle that differentiates same-kind providers
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_create_duplicate_slug_is_409(configured_app, migrations_pg_dsn: str) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    headers = await _sysadmin_headers(seeded)
+    body = {"kind": "ollama", "slug": "dup", "display_name": "A", "base_url": "http://o:11434"}
+    async with _client(configured_app) as client:
+        first = await client.post("/admin/llm-providers", json=body, headers=headers)
+        second = await client.post(
+            "/admin/llm-providers",
+            json={**body, "display_name": "B", "base_url": "http://o2:11434"},
+            headers=headers,
+        )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 409, second.text
+
+
+@pytest.mark.asyncio
+async def test_create_invalid_slug_is_422(configured_app, migrations_pg_dsn: str) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    headers = await _sysadmin_headers(seeded)
+    async with _client(configured_app) as client:
+        resp = await client.post(
+            "/admin/llm-providers",
+            json={
+                "kind": "ollama",
+                "slug": "Not A Slug!",
+                "display_name": "X",
+                "base_url": "http://o:11434",
+            },
+            headers=headers,
+        )
+    assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.asyncio
+async def test_create_response_carries_slug(configured_app, migrations_pg_dsn: str) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    headers = await _sysadmin_headers(seeded)
+    async with _client(configured_app) as client:
+        resp = await client.post(
+            "/admin/llm-providers",
+            json={
+                "kind": "ollama",
+                "slug": "ollama-cloud",
+                "display_name": "Cloud",
+                "base_url": "https://ollama.com/v1",
+            },
+            headers=headers,
+        )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["slug"] == "ollama-cloud"
 
 
 # ===========================================================================
@@ -352,7 +416,12 @@ async def test_list_and_get(configured_app, migrations_pg_dsn: str) -> None:
     async with _client(configured_app) as client:
         created = await client.post(
             "/admin/llm-providers",
-            json={"kind": "ollama", "display_name": "O1", "base_url": "http://o:11434"},
+            json={
+                "kind": "ollama",
+                "slug": "o1",
+                "display_name": "O1",
+                "base_url": "http://o:11434",
+            },
             headers=headers,
         )
         assert created.status_code == 201, created.text
@@ -385,7 +454,12 @@ async def test_update_fields(configured_app, migrations_pg_dsn: str) -> None:
     async with _client(configured_app) as client:
         created = await client.post(
             "/admin/llm-providers",
-            json={"kind": "ollama", "display_name": "O1", "base_url": "http://o:11434"},
+            json={
+                "kind": "ollama",
+                "slug": "o1",
+                "display_name": "O1",
+                "base_url": "http://o:11434",
+            },
             headers=headers,
         )
         pid = created.json()["id"]
@@ -410,7 +484,12 @@ async def test_update_rotates_credential_in_vault(
     async with _client(configured_app) as client:
         created = await client.post(
             "/admin/llm-providers",
-            json={"kind": "claude_sdk", "display_name": "Claude", "oauth_token": "old-token"},
+            json={
+                "kind": "claude_sdk",
+                "slug": "claude",
+                "display_name": "Claude",
+                "oauth_token": "old-token",
+            },
             headers=headers,
         )
         pid = created.json()["id"]
@@ -433,7 +512,7 @@ async def test_empty_update_is_422(configured_app, migrations_pg_dsn: str) -> No
     async with _client(configured_app) as client:
         created = await client.post(
             "/admin/llm-providers",
-            json={"kind": "ollama", "display_name": "O", "base_url": "http://o:11434"},
+            json={"kind": "ollama", "slug": "o", "display_name": "O", "base_url": "http://o:11434"},
             headers=headers,
         )
         pid = created.json()["id"]
@@ -453,7 +532,12 @@ async def test_delete_removes_row_and_secret(
     async with _client(configured_app) as client:
         created = await client.post(
             "/admin/llm-providers",
-            json={"kind": "claude_sdk", "display_name": "Claude", "oauth_token": _OAUTH_TOKEN},
+            json={
+                "kind": "claude_sdk",
+                "slug": "claude",
+                "display_name": "Claude",
+                "oauth_token": _OAUTH_TOKEN,
+            },
             headers=headers,
         )
         pid = created.json()["id"]
@@ -498,7 +582,7 @@ async def test_probe_ok(configured_app, migrations_pg_dsn: str, monkeypatch) -> 
     async with _client(configured_app) as client:
         created = await client.post(
             "/admin/llm-providers",
-            json={"kind": "ollama", "display_name": "O", "base_url": "http://o:11434"},
+            json={"kind": "ollama", "slug": "o", "display_name": "O", "base_url": "http://o:11434"},
             headers=headers,
         )
         pid = created.json()["id"]
@@ -532,6 +616,7 @@ async def test_probe_auth_error(configured_app, migrations_pg_dsn: str, monkeypa
             "/admin/llm-providers",
             json={
                 "kind": "azure_foundry",
+                "slug": "az",
                 "display_name": "Az",
                 "base_url": "https://apim.example.test",
                 "api_key": _API_KEY,
@@ -569,7 +654,12 @@ async def test_probe_connection_error(configured_app, migrations_pg_dsn: str, mo
     async with _client(configured_app) as client:
         created = await client.post(
             "/admin/llm-providers",
-            json={"kind": "ollama", "display_name": "O", "base_url": "http://unreachable:11434"},
+            json={
+                "kind": "ollama",
+                "slug": "o",
+                "display_name": "O",
+                "base_url": "http://unreachable:11434",
+            },
             headers=headers,
         )
         pid = created.json()["id"]
@@ -586,7 +676,12 @@ async def test_probe_claude_credential_present(configured_app, migrations_pg_dsn
     async with _client(configured_app) as client:
         created = await client.post(
             "/admin/llm-providers",
-            json={"kind": "claude_sdk", "display_name": "Claude", "oauth_token": _OAUTH_TOKEN},
+            json={
+                "kind": "claude_sdk",
+                "slug": "claude",
+                "display_name": "Claude",
+                "oauth_token": _OAUTH_TOKEN,
+            },
             headers=headers,
         )
         pid = created.json()["id"]

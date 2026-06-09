@@ -58,6 +58,7 @@ const SYSTEM_ADMIN = {
 const OLLAMA_PROVIDER = {
   id: OLLAMA_ID,
   kind: "ollama",
+  slug: "ollama-local",
   display_name: "Ollama local",
   base_url: "http://localhost:11434",
   is_active: true,
@@ -71,6 +72,7 @@ const OLLAMA_PROVIDER = {
 const COPILOT_PROVIDER = {
   id: COPILOT_ID,
   kind: "copilot",
+  slug: "copilot-empresa",
   display_name: "Copilot empresa",
   base_url: null,
   is_active: false,
@@ -169,6 +171,7 @@ test("creates an azure_foundry provider; api_key + base_url ride in the POST", a
   await expect(page.getByTestId("provider-form-dialog")).toBeVisible();
 
   await page.getByTestId("form-kind").selectOption("azure_foundry");
+  await page.getByTestId("form-slug").fill("azure-prod");
   await page.getByTestId("form-display-name").fill("Azure prod");
   await page.getByTestId("form-base-url").fill("https://apim.example.com/openai");
   // The credential field is the API key for azure_foundry.
@@ -177,6 +180,7 @@ test("creates an azure_foundry provider; api_key + base_url ride in the POST", a
   await page.getByTestId("provider-form-submit").click();
 
   await expect.poll(() => posted.kind).toBe("azure_foundry");
+  expect(posted.slug).toBe("azure-prod");
   expect(posted.display_name).toBe("Azure prod");
   expect(posted.base_url).toBe("https://apim.example.com/openai");
   // The secret rides in the POST so the backend can write it to Vault.

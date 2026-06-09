@@ -355,6 +355,7 @@ async def _build_model_options(admin_session: AsyncSession) -> AssistantModelOpt
         AssistantModelOption(
             provider_id=str(provider.id),
             kind=provider.kind,
+            slug=provider.slug,
             display_name=provider.display_name,
             models=await list_available_models_for_provider(admin_session, provider),
         )

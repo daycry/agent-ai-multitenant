@@ -84,7 +84,7 @@ function ProviderModelSelects({
           <option value="">— Selecciona un proveedor —</option>
           {providers.map((p) => (
             <option key={p.provider_id} value={p.provider_id}>
-              {p.display_name} ({p.kind})
+              {p.display_name} ({p.slug})
             </option>
           ))}
         </Select>

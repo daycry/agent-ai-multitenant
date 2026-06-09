@@ -91,11 +91,12 @@ async def _seed(dsn: str) -> dict[str, UUID]:
         # the only skip).
         for kind in ("claude_sdk", "azure_foundry"):
             await conn.execute(
-                "INSERT INTO llm_providers (id, kind, display_name, is_active)"
-                " VALUES ($1, $2, $3, true)",
-                uuid4(),
+                "INSERT INTO llm_providers (id, kind, slug, display_name, is_active)"
+                " VALUES ($1, $2, $4, $3, true)",
+                (pid := uuid4()),
                 kind,
                 f"{kind} (test)",
+                str(pid),
             )
         await conn.execute(
             "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3), ($4, $5, $6)",

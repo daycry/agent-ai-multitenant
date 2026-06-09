@@ -287,6 +287,8 @@ export interface AssistantModel {
 export interface AssistantModelOption {
   provider_id: string;
   kind: string;
+  /** Unique kebab-case handle — disambiguates same-kind providers. */
+  slug: string;
   display_name: string;
   models: string[];
 }

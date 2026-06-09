@@ -109,12 +109,13 @@ async def _seed_provider(
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
-            "INSERT INTO llm_providers (id, kind, display_name, base_url)"
-            " VALUES ($1, $2, $3, $4)",
+            "INSERT INTO llm_providers (id, kind, slug, display_name, base_url)"
+            " VALUES ($1, $2, $5, $3, $4)",
             provider_id,
             kind,
             display_name,
             base_url,
+            str(provider_id),
         )
     finally:
         await conn.close()
