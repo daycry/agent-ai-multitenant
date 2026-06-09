@@ -49,9 +49,31 @@ docker compose \
   up -d
 ```
 
-Esto arranca los cinco servicios de infraestructura: PostgreSQL,
-Redis, MinIO, Vault (modo dev), ClamAV. Espera 30-60 segundos a que
-todos estén healthy (`docker compose ps`).
+Esto arranca la infraestructura: **PostgreSQL** (+pgvector), **Redis**,
+**MinIO**, **Vault** (modo dev), **ClamAV**, **docling-serve** (parseo de
+documentos), **egress-proxy** y **Ollama** (embeddings; un init
+`ollama-bootstrap` descarga el modelo y termina — `Exited (0)` es normal).
+Espera 30-60 segundos a que estén healthy (`docker compose ps`).
+
+Para añadir la **observabilidad** (Prometheus + Alertmanager + Grafana +
+cAdvisor) suma el overlay de monitoring; en **Windows** añade además el override
+de Windows (necesario para `node-exporter`):
+
+```bash
+# Linux/macOS
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
+  -f docker/docker-compose.monitoring.yml -f docker/docker-compose.monitoring.dev.yml up -d
+
+# Windows (Docker Desktop / WSL2)
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
+  -f docker/docker-compose.monitoring.yml -f docker/docker-compose.monitoring.dev.yml \
+  -f docker/docker-compose.windows.yml up -d
+```
+
+**Qué hace cada contenedor, en qué puerto y cómo acceder (URLs + credenciales
+dev)** está en la referencia:
+[`docs/04-reference/stack-services.md`](../04-reference/stack-services.md).
+GPU (CUDA) opcional: [runbook Ollama](../06-runbooks/ollama-gpu-setup.md).
 
 Si Vault se queda en `Restarting`, mira
 [`docs/03-guides/gotchas/vault-dev-mode-port-conflict.md`](../03-guides/gotchas/vault-dev-mode-port-conflict.md).
@@ -80,7 +102,7 @@ el instalador de Fase 15.
 
 ## 6. Tests
 
-Suite completo (94 tests):
+Suite completa (unit + integración):
 
 ```bash
 .venv/Scripts/python -m pytest tests/ -v        # Windows
@@ -95,5 +117,5 @@ Suite completo (94 tests):
 ## Si algo falla
 
 Antes de inventar nada, **busca primero** en
-[`docs/03-guides/gotchas/`](../03-guides/gotchas/). Hay 17 trampas
-ya documentadas (puertos, RLS, asyncpg, mypy, OTEL, Windows...).
+[`docs/03-guides/gotchas/`](../03-guides/gotchas/) — un catálogo de trampas
+ya documentadas (puertos, RLS, asyncpg, mypy, OTEL, Docker, Windows...).

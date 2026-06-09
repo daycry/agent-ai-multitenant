@@ -39,10 +39,11 @@ los reflejan.
 
 ## Instalación y portal
 
-| Documento                            | Cubre                                            |
-| ------------------------------------ | ------------------------------------------------ |
-| [installation.md](./installation.md) | Parámetros y artefactos de instalación.          |
-| [dev-portal.md](./dev-portal.md)     | Portal de desarrollador y documentación pública. |
+| Documento                                | Cubre                                                                                                                     |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [stack-services.md](./stack-services.md) | **Cada contenedor del stack**: qué hace, puerto, cómo acceder (URL + credenciales dev), capas compose, redes y volúmenes. |
+| [installation.md](./installation.md)     | Parámetros y artefactos de instalación.                                                                                   |
+| [dev-portal.md](./dev-portal.md)         | Portal de desarrollador y documentación pública.                                                                          |
 
 ## Cómo se relacionan con el resto
 
