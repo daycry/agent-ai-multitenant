@@ -73,3 +73,11 @@ services:
   egress-proxy:
     ports:
       - "${EGRESS_PROXY_PORT:-8888}:8888"
+
+  # Ollama is exposed to the host in dev so an api-server running OUTSIDE
+  # docker (the usual dev setup) reaches it at localhost:11434 — the
+  # default of API_SERVER_OLLAMA_URL. Inside the stack other services use
+  # http://ollama:11434.
+  ollama:
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
