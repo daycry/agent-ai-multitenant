@@ -52,7 +52,10 @@ Stop-FromPidFile -PidFile $ApiPidFile   -Name "api-server"
 
 if ($Docker) {
     Write-Host "==> docker compose down" -ForegroundColor Cyan
-    & docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml down
+    # --remove-orphans también para los servicios del overlay de monitoring
+    # (up.ps1 -Monitoring) y el one-shot ollama-bootstrap, que no están en estos
+    # dos ficheros pero sí en el mismo proyecto.
+    & docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml down --remove-orphans
 }
 
 Write-Host ""

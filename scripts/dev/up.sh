@@ -9,17 +9,21 @@
 # Usage:
 #   ./scripts/dev/up.sh
 #   ./scripts/dev/up.sh --api-port 8002 --admin-port 3001
+#   ./scripts/dev/up.sh --monitoring   # + Prometheus/Alertmanager/Grafana/cAdvisor
 # -----------------------------------------------------------------------------
 set -euo pipefail
 
 API_PORT="${API_PORT:-8001}"
 ADMIN_PORT="${ADMIN_PORT:-3000}"
+MONITORING=0
 
 usage() {
     cat <<EOF
 Usage: $0 [options]
   --api-port <port>     uvicorn port (default: 8001)
   --admin-port <port>   Next dev port (default: 3000)
+  --monitoring          add the observability overlay (Prometheus + Alertmanager
+                        + Grafana + cAdvisor + node-exporter)
   -h, --help            Show this help
 EOF
 }
@@ -27,6 +31,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --api-port)   API_PORT="$2"; shift 2 ;;
         --admin-port) ADMIN_PORT="$2"; shift 2 ;;
+        --monitoring) MONITORING=1; shift ;;
         -h|--help)    usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage >&2; exit 1 ;;
     esac
@@ -46,6 +51,9 @@ ADMIN_LOG="$DEV_DIR/admin-panel.log"
 ADMIN_ERR="$DEV_DIR/admin-panel.err.log"
 
 COMPOSE_ARGS=(-f docker/docker-compose.yml -f docker/docker-compose.dev.yml)
+if [[ "$MONITORING" -eq 1 ]]; then
+    COMPOSE_ARGS+=(-f docker/docker-compose.monitoring.yml -f docker/docker-compose.monitoring.dev.yml)
+fi
 VENV_PY="$REPO_ROOT/.venv/bin/python"
 if [[ ! -x "$VENV_PY" ]]; then
     echo "ERROR: .venv missing. Run ./scripts/dev/bootstrap.sh first." >&2
@@ -221,6 +229,18 @@ Dev stack is up. You can close this terminal.
   API healthz:   http://127.0.0.1:$API_PORT/healthz
   MinIO:         http://localhost:9001 (minioadmin / changeme-dev-only)
   Vault UI:      http://localhost:8200/ui (token: dev-root-token)
+  Ollama:        http://localhost:11434 (embeddings; sin auth)
+EOF
+if [[ "$MONITORING" -eq 1 ]]; then
+    cat <<EOF
+  Grafana:       http://localhost:3001 (admin / changeme-dev-only)
+  Prometheus:    http://localhost:9090
+  Alertmanager:  http://localhost:9093
+EOF
+else
+    echo "  Monitoring:    (opcional) re-lanza con  --monitoring"
+fi
+cat <<EOF
 
   Logs:   $DEV_DIR/*.log
   Stop:   ./scripts/dev/down.sh

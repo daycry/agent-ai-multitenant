@@ -53,6 +53,28 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
 Comprueba el estado con `docker compose ps` (espera 30-60 s a que estén
 `healthy`).
 
+### Atajo: scripts de dev (recomendado)
+
+`scripts/dev/up.*` levanta **docker + api-server + admin-panel** de una vez
+(aplica migraciones, espera healthchecks) y al terminar **imprime las URLs y
+credenciales de acceso** (admin-panel, API, MinIO, Vault, Ollama…). Con
+`-Monitoring` / `--monitoring` añade el overlay de observabilidad (y en Windows
+el override de node-exporter) y muestra también Grafana/Prometheus/Alertmanager:
+
+```powershell
+# Windows
+.\scripts\dev\up.ps1                 # stack base + Ollama
+.\scripts\dev\up.ps1 -Monitoring     # + Prometheus/Alertmanager/Grafana/cAdvisor
+.\scripts\dev\down.ps1 -Docker       # parar (incl. monitoring, --remove-orphans)
+```
+
+```bash
+# Linux / macOS
+./scripts/dev/up.sh                   # stack base + Ollama
+./scripts/dev/up.sh --monitoring      # + Prometheus/Alertmanager/Grafana/cAdvisor
+./scripts/dev/down.sh --docker        # parar (incl. monitoring, --remove-orphans)
+```
+
 ## Servicios base (`docker-compose.yml`)
 
 Todos viven en la red `agentic-net`. El puerto **host** es el que abre

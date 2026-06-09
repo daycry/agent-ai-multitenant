@@ -11,12 +11,17 @@
 # Usage:
 #   .\scripts\dev\up.ps1
 #   .\scripts\dev\up.ps1 -ApiPort 8002 -AdminPort 3001
+#   .\scripts\dev\up.ps1 -Monitoring     # + Prometheus/Alertmanager/Grafana/cAdvisor
 # -----------------------------------------------------------------------------
 
 [CmdletBinding()]
 param(
     [int]$ApiPort = 8001,
-    [int]$AdminPort = 3000
+    [int]$AdminPort = 3000,
+    # Add the observability overlay (Prometheus + Alertmanager + Grafana +
+    # cAdvisor + node-exporter). On Windows the node-exporter override is added
+    # automatically so it actually boots (rslave mount). Off by default.
+    [switch]$Monitoring
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,6 +43,15 @@ $ComposeArgs = @(
     "-f", "docker/docker-compose.yml",
     "-f", "docker/docker-compose.dev.yml"
 )
+if ($Monitoring) {
+    # monitoring.yml = service defs; monitoring.dev.yml = host ports; windows.yml
+    # = node-exporter override (needed on Docker Desktop/WSL2).
+    $ComposeArgs += @(
+        "-f", "docker/docker-compose.monitoring.yml",
+        "-f", "docker/docker-compose.monitoring.dev.yml",
+        "-f", "docker/docker-compose.windows.yml"
+    )
+}
 
 function Test-PortBindable {
     param([int]$Port)
@@ -196,6 +210,14 @@ Write-Host "  API docs:      http://127.0.0.1:$ApiPort/docs"
 Write-Host "  API healthz:   http://127.0.0.1:$ApiPort/healthz"
 Write-Host "  MinIO:         http://localhost:9001 (minioadmin / changeme-dev-only)"
 Write-Host "  Vault UI:      http://localhost:8200/ui (token: dev-root-token)"
+Write-Host "  Ollama:        http://localhost:11434 (embeddings; sin auth)"
+if ($Monitoring) {
+    Write-Host "  Grafana:       http://localhost:3001 (admin / changeme-dev-only)"
+    Write-Host "  Prometheus:    http://localhost:9090"
+    Write-Host "  Alertmanager:  http://localhost:9093"
+} else {
+    Write-Host "  Monitoring:    (opcional) re-lanza con  -Monitoring"
+}
 Write-Host ""
 Write-Host "  Logs:   $DevDir\*.log"
 Write-Host "  Stop:   .\scripts\dev\down.ps1"
