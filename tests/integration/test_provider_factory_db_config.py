@@ -331,6 +331,55 @@ async def test_factory_without_resolver_uses_spec_only(
 
 
 # ===========================================================================
+# build_llm_provider targets the REQUESTED provider, not the newest of the kind
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_build_llm_provider_targets_requested_row_not_newest_of_kind(
+    admin_sessionmaker: async_sessionmaker[AsyncSession], in_memory_vault: Any
+) -> None:
+    """Regression: ``build_llm_provider(provider_id)`` must use THAT row's
+    endpoint, not the newest-active provider of its kind.
+
+    With two active ``ollama`` rows (cloud + a newer local), building for the
+    older cloud id used to resolve by kind → the newer local row, so
+    sync-models/assistant cross-wired ``ollama-cloud`` to ``ollama-local`` and
+    returned the wrong models. The build must target the requested row.
+    """
+    from api_server.llm_providers.factory import build_llm_provider
+
+    # Older row — the one we target.
+    async with admin_sessionmaker() as session, session.begin():
+        cloud = await _seed_provider(
+            session,
+            kind="ollama",
+            base_url="https://cloud-target.example/v1",
+            secret_field=None,
+            secret_value=None,
+            is_active=True,
+            vault=in_memory_vault,
+        )
+    # Newer active row of the SAME kind — would win the kind resolver.
+    async with admin_sessionmaker() as session, session.begin():
+        await _seed_provider(
+            session,
+            kind="ollama",
+            base_url="http://local-newer.example:11434/v1",
+            secret_field=None,
+            secret_value=None,
+            is_active=True,
+            vault=in_memory_vault,
+        )
+
+    async with admin_sessionmaker() as session:
+        provider = await build_llm_provider(
+            session, provider_id=cloud, model="m", vault=in_memory_vault
+        )
+    assert provider is not None
+    # The built client targets the REQUESTED (cloud) row, not the newer local.
+    assert provider.base_url == "https://cloud-target.example/v1"  # type: ignore[attr-defined]
+
+
+# ===========================================================================
 # resolve_provider_config tolerates a missing Vault store (base_url still wins)
 # ===========================================================================
 @pytest.mark.asyncio
