@@ -1,7 +1,7 @@
 ---
 adr_id: "0057"
 title: "Resolución de modelo de agentes por proveedor concreto (provider_id) + cableado del resolver en el worker (los agentes usan su modelo real)"
-status: proposed
+status: accepted
 date: 2026-06-10
 authors: [system_architect]
 plan_referenced: 06.17-capacitacion-agentes
@@ -11,7 +11,7 @@ docs_language: es
 
 # ADR 0057 — Resolución de modelo de agentes por proveedor concreto + cableado del resolver
 
-> **Estado: `proposed`** — pendiente de aprobación del operador. Extiende el ADR
+> **Estado: `accepted`** (aprobado por el operador 2026-06-10). Extiende el ADR
 > 0055 (validación de `model_config`) y replica el patrón del ADR 0053 (modelo
 > del asistente personal por `provider_id`). Lo motiva un hallazgo **crítico**
 > de la auditoría de resolución de modelo (2026-06-10).
@@ -168,11 +168,11 @@ concreto:
 ## Plan de implementación (por fases)
 
 1. **Fase 1 (URGENTE, P0): los agentes ejecutan su modelo real.** Worker resuelve
-   `model_config`→spec concreto (kind + nombre nativo + base_url + credencial vía
+   `model_config`→spec concreto (kind + nombre nativo + base*url + credencial vía
    `build_llm_provider`/`resolve_provider_config`) e inyecta en `AGENT_TASK_SPEC`;
    `model_from_spec` deja de caer a `scripted` con specs de proveedor real. Test
-   e2e (agente real ≠ scripted). _Esta fase ya quita el bug crítico aunque siga
-   siendo por kind._
+   e2e (agente real ≠ scripted). \_Esta fase ya quita el bug crítico aunque siga
+   siendo por kind.*
 2. **Fase 2: `provider_id` en `model_config`** + validación DB-aware + predicados
    de herencia (`config_needs_default_model`) conscientes de `provider_id` +
    cadena de resolución override→(proyecto)→default.
