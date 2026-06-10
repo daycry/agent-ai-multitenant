@@ -464,7 +464,10 @@ def build_provider_client(
     The `scripted` kind is handled by `agent_runtime.model.model_from_spec`.
     The historical `litellm` kind is rejected (see ADR 0021).
     """
-    kind = spec.get("kind")
+    # `provider` is the agents' model_config key (catalog kind, ADR 0055) —
+    # honoured as a fallback so an unresolved dispatch spec targets the real
+    # provider (and fails loudly on missing fields) instead of `kind=None`.
+    kind = spec.get("kind") or spec.get("provider")
     if resolver is not None and isinstance(kind, str):
         resolved = resolver(kind)
         if resolved is not None:

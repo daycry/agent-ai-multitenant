@@ -41,6 +41,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from workers.config import Settings
 from workers.container import AgentContainerRunner, ContainerSpec
 from workers.memorizer import trigger_memorize
+from workers.model_resolver import (
+    ModelResolutionError,
+    resolve_model_spec,
+    safe_spec_summary,
+)
 
 _log = structlog.get_logger("workers.execution")
 
@@ -207,10 +212,18 @@ class _RuntimeResult:
 
 
 def _agent_spec(
-    request: ExecutionRequest, approval_policy: dict[str, Any] | None
+    request: ExecutionRequest,
+    approval_policy: dict[str, Any] | None,
+    *,
+    model_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The `AGENT_TASK_SPEC` payload for the container."""
-    spec: dict[str, Any] = {"task": request.task, "model": request.model}
+    """The `AGENT_TASK_SPEC` payload for the container.
+
+    ``model_spec`` is the RESOLVED model (kind + endpoint + credential,
+    ADR 0057 F1) the worker computed from ``request.model``; ``None`` keeps
+    the request's spec verbatim (pure-function callers / scripted tests).
+    """
+    spec: dict[str, Any] = {"task": request.task, "model": model_spec or request.model}
     if request.budgets:
         spec["budgets"] = request.budgets
     # With a policy the loop gates sensitive tool calls (task_02_33).
@@ -262,6 +275,7 @@ def _build_runtime_env(
     approval_policy: dict[str, Any] | None,
     *,
     agent_internal_api_url: str,
+    model_spec: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """El env del contenedor `agent-runtime` para una ejecución (función PURA).
 
@@ -287,7 +301,7 @@ def _build_runtime_env(
     gracia si el token expira o el api-server no responde.
     """
     env: dict[str, str] = {
-        "AGENT_TASK_SPEC": json.dumps(_agent_spec(request, approval_policy)),
+        "AGENT_TASK_SPEC": json.dumps(_agent_spec(request, approval_policy, model_spec=model_spec)),
     }
     # Sin agente asignado no hay sujeto para el token: lo dejamos fuera y el
     # runtime mantiene su comportamiento sin API interna (backward-compat).
@@ -399,12 +413,24 @@ def _assemble_result(
     )
 
 
+def _default_vault_store() -> Any:
+    """El store de Vault del worker — el mismo builder cacheado del api-server.
+
+    Lazy-import para no cargar el módulo router (FastAPI) al importar el
+    worker. Devuelve ``None`` si Vault no está configurado (la resolución
+    degrada a sin-credencial, suficiente para Ollama local)."""
+    from api_server.routers.llm_providers import get_provider_vault_store
+
+    return get_provider_vault_store()
+
+
 async def conduct_execution(  # noqa: PLR0915 - tramos lineales (seed/run/finalize/publish)
     request: ExecutionRequest,
     *,
     settings: Settings,
     sessionmaker: async_sessionmaker[AsyncSession],
     redis: Redis,
+    vault_store: Any | None = None,
 ) -> ExecutionOutcome:
     """Run one task end to end: container → Redis stream → `executions` row."""
     task_id = UUID(request.task_id)
@@ -444,63 +470,104 @@ async def conduct_execution(  # noqa: PLR0915 - tramos lineales (seed/run/finali
         execution_id = execution.id
         project = await session.get(Project, task.project_id)
         approval_policy = project.human_approval_policy if project is not None else None
+        # ADR 0057 F1: resolver el model_config (clave `provider` = kind, sin
+        # endpoint/credencial) a un spec EJECUTABLE (kind + base_url +
+        # credencial de Vault) ANTES de lanzar el contenedor — el sandbox no
+        # tiene BD/Vault. Un fallo de resolución NO degrada a scripted: la
+        # ejecución se finaliza como fallida con motivo explícito.
+        resolved_model: dict[str, Any] | None = None
+        resolution_error: str | None = None
+        try:
+            resolved_model = await resolve_model_spec(
+                session,
+                dict(request.model or {}),
+                vault=vault_store if vault_store is not None else _default_vault_store(),
+            )
+        except ModelResolutionError as exc:
+            resolution_error = str(exc)
     exec_id = str(execution_id)
     _log.info("workers.execution_started", execution_id=exec_id, task_id=request.task_id)
+    if resolved_model is not None:
+        # Solo claves no sensibles (safe_spec_summary) — la credencial vive en
+        # el env del contenedor efímero y nunca se loguea.
+        _log.info(
+            "workers.model_resolved", execution_id=exec_id, **safe_spec_summary(resolved_model)
+        )
 
-    # The container's stdout is pumped by a background thread; bridge
-    # each line onto an asyncio queue so the live Redis publishing (and
-    # event collection) happens on the running loop.
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
-    steps: list[dict[str, Any]] = []
-    final_result: dict[str, Any] | None = None
-    runtime_error: str | None = None
+    approval: dict[str, Any] | None = None
+    if resolution_error is not None:
+        # Fail-fast (ADR 0057 F1): sin proveedor resoluble NO se lanza el
+        # contenedor — la ejecución termina `failed` con motivo explícito en
+        # vez de correr en silencio con el cliente scripted.
+        _log.error("workers.model_resolution_failed", execution_id=exec_id, error=resolution_error)
+        await publish_execution_event(
+            redis, exec_id, event_type="execution.error", payload={"error": resolution_error}
+        )
+        result = _RuntimeResult(
+            status="failed",
+            abort_code="model_unresolved",
+            output=resolution_error,
+            iterations=0,
+            steps=[],
+            usage=dict(_EMPTY_USAGE),
+        )
+    else:
+        # The container's stdout is pumped by a background thread; bridge
+        # each line onto an asyncio queue so the live Redis publishing (and
+        # event collection) happens on the running loop.
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        steps: list[dict[str, Any]] = []
+        final_result: dict[str, Any] | None = None
+        runtime_error: str | None = None
 
-    def on_line(line: str) -> None:
-        loop.call_soon_threadsafe(queue.put_nowait, line)
+        def on_line(line: str) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, line)
 
-    async def drain() -> None:
-        nonlocal final_result, runtime_error
-        while True:
-            line = await queue.get()
-            if line is None:
-                return
-            event = _parse_line(line)
-            if event is None or not event.get("event"):
-                continue
-            kind = str(event["event"])
-            if kind == "step" and isinstance(event.get("step"), dict):
-                steps.append(event["step"])
-            elif kind == "execution.finished":
-                final_result = event.get("result")
-            elif kind == "execution.error":
-                runtime_error = event.get("error")
-            payload = {key: value for key, value in event.items() if key != "event"}
-            await publish_execution_event(redis, exec_id, event_type=kind, payload=payload)
+        async def drain() -> None:
+            nonlocal final_result, runtime_error
+            while True:
+                line = await queue.get()
+                if line is None:
+                    return
+                event = _parse_line(line)
+                if event is None or not event.get("event"):
+                    continue
+                kind = str(event["event"])
+                if kind == "step" and isinstance(event.get("step"), dict):
+                    steps.append(event["step"])
+                elif kind == "execution.finished":
+                    final_result = event.get("result")
+                elif kind == "execution.error":
+                    runtime_error = event.get("error")
+                payload = {key: value for key, value in event.items() if key != "event"}
+                await publish_execution_event(redis, exec_id, event_type=kind, payload=payload)
 
-    drainer = asyncio.create_task(drain())
-    container_spec = ContainerSpec(
-        image=settings.agent_runtime_image,
-        env=_build_runtime_env(
-            request,
-            approval_policy,
-            agent_internal_api_url=settings.agent_internal_api_url,
-        ),
-        labels={"com.agentic-platform.execution-id": exec_id},
-    )
-    runner = AgentContainerRunner(settings)
-    container_result = await asyncio.to_thread(runner.run_streamed, container_spec, on_line)
-    await queue.put(None)
-    await drainer
+        drainer = asyncio.create_task(drain())
+        container_spec = ContainerSpec(
+            image=settings.agent_runtime_image,
+            env=_build_runtime_env(
+                request,
+                approval_policy,
+                agent_internal_api_url=settings.agent_internal_api_url,
+                # El spec RESUELTO (kind + endpoint + credencial) — ADR 0057 F1.
+                model_spec=resolved_model,
+            ),
+            labels={"com.agentic-platform.execution-id": exec_id},
+        )
+        runner = AgentContainerRunner(settings)
+        container_result = await asyncio.to_thread(runner.run_streamed, container_spec, on_line)
+        await queue.put(None)
+        await drainer
 
-    result = _assemble_result(
-        final_result,
-        steps,
-        timed_out=container_result.timed_out,
-        exit_code=container_result.exit_code,
-        runtime_error=runtime_error,
-    )
-    approval = final_result.get("approval") if final_result else None
+        result = _assemble_result(
+            final_result,
+            steps,
+            timed_out=container_result.timed_out,
+            exit_code=container_result.exit_code,
+            runtime_error=runtime_error,
+        )
+        approval = final_result.get("approval") if final_result else None
     task_event: tuple[Any, str, str] | None = None
     async with sessionmaker() as session, session.begin():
         await finalize_execution(session, execution_id, result=result)

@@ -151,7 +151,13 @@ def model_from_spec(spec: dict[str, Any], *, resolver: Any | None = None) -> Mod
     DB/Vault access) and every existing caller keep the historical
     behaviour unchanged.
     """
-    kind = spec.get("kind", "scripted")
+    # `provider` is the agents' model_config key (the ADR 0021/0055 catalog
+    # kind); the worker resolves it to `kind` + endpoint/credential BEFORE the
+    # container (ADR 0057 F1). If an unresolved spec slips through, honour the
+    # real-provider INTENT — fail loudly downstream on a missing endpoint or
+    # credential — instead of silently degrading to the scripted client (the
+    # critical bug behind ADR 0057). A bare `{}` spec stays scripted.
+    kind = spec.get("kind") or spec.get("provider") or "scripted"
     if kind == "scripted":
         return ScriptedModelClient(
             decisions=[_decision_response(d) for d in spec.get("decisions", [])],

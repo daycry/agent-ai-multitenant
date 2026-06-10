@@ -254,6 +254,14 @@ module = [
     # generation; the pre-commit mypy venv has no api_server package. Same
     # cross-app lazy-import story as the rest.
     "api_server.routers.api_v1.openapi",
+    # workers.model_resolver (ADR 0057 F1) resolves the agent's model_config
+    # to an executable spec (kind + endpoint + Vault credential) before the
+    # container launch; it imports the provider resolver/vault/model-name
+    # helpers from api_server. Same cross-app lazy-import story as the rest.
+    "api_server.assistant.model_config",
+    "api_server.llm_providers.factory_resolver",
+    "api_server.llm_providers.vault",
+    "api_server.routers.llm_providers",
 ]
 ignore_missing_imports = true
 
