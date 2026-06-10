@@ -26,7 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_admin_session, require_system_admin
-from api_server.db.llm_providers import list_llm_providers
+from api_server.db.llm_providers import LLM_PROVIDER_KINDS, list_active_llm_providers_by_kind
 from api_server.db.models import PlatformSetting, User
 from api_server.db.platform_settings import set_platform_setting
 from api_server.platform_settings_registry import (
@@ -58,8 +58,9 @@ class ModelOptionsResponse(BaseModel):
     model_config = _BASE_CONFIG
     by_kind: dict[str, list[str]]
     """Selectable model ids per provider kind — fills the model dropdown when a
-    provider (kind) is chosen for ``model.default_config``. Built from the
-    ACTIVE providers' synced/catalogued models (union per kind)."""
+    provider (kind) is chosen for ``model.default_config``. Per kind these are
+    the models of the SINGLE provider the dispatch will resolve to (the newest
+    active row), NOT a union across same-kind providers."""
 
 
 @admin_router.get("/model-options", response_model=ModelOptionsResponse)
@@ -69,16 +70,24 @@ async def get_model_options(
 ) -> ModelOptionsResponse:
     """Models selectable per provider kind (no network — read from the DB).
 
-    Mirrors how the agent dispatch resolves a ``model.default_config`` (by kind),
-    so the UI can offer a real dropdown of models for the chosen provider."""
+    ``model.default_config`` is resolved BY KIND at dispatch:
+    ``resolve_provider_config`` picks ``list_active_llm_providers_by_kind(kind)[0]``
+    — the newest active row. So per kind we expose ONLY that provider's models,
+    never a union across same-kind providers (e.g. ollama-cloud vs ollama-local):
+    the dropdown must offer exactly what dispatch will run, or it would let the
+    operator pick a model from a provider the dispatch never selects."""
     from api_server.assistant.model_config import list_available_models_for_provider
 
-    providers = await list_llm_providers(session, active_only=True)
-    by_kind: dict[str, set[str]] = {}
-    for provider in providers:
-        models = await list_available_models_for_provider(session, provider)
-        by_kind.setdefault(provider.kind, set()).update(models)
-    return ModelOptionsResponse(by_kind={kind: sorted(models) for kind, models in by_kind.items()})
+    by_kind: dict[str, list[str]] = {}
+    for kind in LLM_PROVIDER_KINDS:
+        rows = await list_active_llm_providers_by_kind(session, kind)
+        if not rows:
+            continue
+        # rows[0] = newest active — exactly what the agent dispatch resolves to.
+        models = await list_available_models_for_provider(session, rows[0])
+        if models:
+            by_kind[kind] = sorted(set(models))
+    return ModelOptionsResponse(by_kind=by_kind)
 
 
 @admin_router.get("/_registry")
