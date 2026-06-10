@@ -117,18 +117,28 @@ async def test_put_unknown_key_is_404(configured_app, migrations_pg_dsn: str) ->
 
 
 @pytest.mark.asyncio
-async def test_model_options_grouped_by_kind(configured_app, migrations_pg_dsn: str) -> None:
-    """The model dropdown source: active providers' models grouped by kind."""
+async def test_model_options_uses_newest_active_provider_per_kind(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Per kind the dropdown shows ONLY the newest-active provider's models (what
+    the agent dispatch resolves to), NOT a union across same-kind providers."""
     user = await _seed_sysadmin(migrations_pg_dsn)
+    older, newer = uuid7(), uuid7()  # newer id => newest-active (id DESC) => dispatch target
+    assert newer > older
     conn = await asyncpg.connect(migrations_pg_dsn)
     try:
         await conn.execute("TRUNCATE llm_providers RESTART IDENTITY CASCADE")
         await conn.execute(
             "INSERT INTO llm_providers (id, kind, slug, display_name, base_url, is_active, config)"
-            " VALUES ($1, 'ollama', 'ollama-cloud', 'Ollama Cloud',"
-            " 'https://ollama.com/v1', true, $2::jsonb)",
-            uuid4(),
+            " VALUES ($1,'ollama','ollama-cloud','Ollama Cloud','https://ollama.com/v1',true,$2::jsonb)",
+            older,
             '{"models": ["qwen3-coder:480b", "glm-5"]}',
+        )
+        await conn.execute(
+            "INSERT INTO llm_providers (id, kind, slug, display_name, base_url, is_active, config)"
+            " VALUES ($1,'ollama','ollama-local','Ollama Local','http://localhost:11434/v1',true,$2::jsonb)",
+            newer,
+            '{"models": ["llama3.2:1b"]}',
         )
     finally:
         await conn.close()
@@ -136,9 +146,11 @@ async def test_model_options_grouped_by_kind(configured_app, migrations_pg_dsn: 
     async with _client(configured_app) as client:
         resp = await client.get("/admin/platform-settings/model-options", headers=headers)
     assert resp.status_code == 200, resp.text
-    by_kind = resp.json()["by_kind"]
-    assert "qwen3-coder:480b" in by_kind["ollama"]
-    assert "glm-5" in by_kind["ollama"]
+    ollama_models = resp.json()["by_kind"]["ollama"]
+    # Newest active = ollama-local -> only its model; cloud's are NOT unioned in.
+    assert ollama_models == ["llama3.2:1b"]
+    assert "glm-5" not in ollama_models
+    assert "qwen3-coder:480b" not in ollama_models
 
 
 @pytest.mark.asyncio

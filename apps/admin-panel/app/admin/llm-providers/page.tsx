@@ -237,6 +237,13 @@ function LlmProvidersContent() {
       }),
     onSuccess: (result, id) => {
       setSyncResults((prev) => ({ ...prev, [id]: `${result.count} modelos sincronizados` }));
+      // Refresh every provider+model dropdown so the freshly-synced models show
+      // up without a manual page reload: the assistant (tenant + platform
+      // default) and the platform-defaults agent-model surface all read the
+      // provider's config.models.
+      void queryClient.invalidateQueries({ queryKey: ["assistant-model-options"] });
+      void queryClient.invalidateQueries({ queryKey: ["assistant-default-model-options"] });
+      void queryClient.invalidateQueries({ queryKey: ["platform-settings", "model-options"] });
     },
     onError: (err, id) => {
       setSyncResults((prev) => ({ ...prev, [id]: errorText(err) }));
