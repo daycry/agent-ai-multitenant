@@ -34,11 +34,11 @@ from shared_llm.base import LLMProvider
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.db.llm_providers import get_llm_provider
-from api_server.llm_providers.factory_resolver import resolve_provider_config
 from api_server.llm_providers.vault import (
     SECRET_FIELD_API_KEY,
     SECRET_FIELD_BEARER_TOKEN,
     SECRET_FIELD_OAUTH_TOKEN,
+    LLMProviderVaultError,
     LLMProviderVaultStore,
 )
 
@@ -165,10 +165,22 @@ async def build_llm_provider(
     row = await get_llm_provider(admin_session, provider_id)
     if row is None or not row.is_active:
         return None
-    resolved = await resolve_provider_config(admin_session, row.kind, vault=vault)
-    base_url = (resolved.base_url if resolved else None) or row.base_url
-    secret = resolved.secret if resolved else {}
-    return build_provider_from_kind(row.kind, base_url=base_url, secret=secret, model=model)
+    # Use THIS row's own endpoint + credential. NOT the kind resolver
+    # (``resolve_provider_config``): that returns the newest-active provider of
+    # the kind, which cross-wires providers that share a kind — e.g. syncing
+    # ``ollama-cloud`` would hit ``ollama-local`` (the newer active row) and
+    # bring back the wrong models. A provider_id operation must target THAT
+    # provider. (Kind resolution stays correct for the agent-dispatch path,
+    # which selects by kind and does not go through here.)
+    secret: dict[str, str] = {}
+    if row.secret_vault_path and vault is not None:
+        try:
+            secret = vault.read_secret(row.secret_vault_path)
+        except LLMProviderVaultError:
+            # Degrade to no-credential rather than fail the build; the concrete
+            # provider may still use an env credential. Nothing sensitive logged.
+            secret = {}
+    return build_provider_from_kind(row.kind, base_url=row.base_url, secret=secret, model=model)
 
 
 async def list_provider_models(
