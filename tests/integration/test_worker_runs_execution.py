@@ -227,3 +227,45 @@ async def test_conduct_execution_records_an_aborted_run(
     finally:
         await redis.aclose()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_model_fails_fast_without_launching_a_container(
+    _migrated: None, admin_database_url: str, test_redis_url: str
+) -> None:
+    """ADR 0057 F1: un model_config con `provider` (kind) pero SIN proveedor
+    activo de ese kind NO degrada a scripted ni lanza el contenedor — la
+    ejecución se finaliza `failed` con abort_code='model_unresolved'."""
+    engine = create_async_engine(admin_database_url)
+    redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed_task(sm)
+        async with sm() as s, s.begin():
+            await s.execute(text("TRUNCATE llm_providers RESTART IDENTITY CASCADE"))
+
+        outcome = await conduct_execution(
+            _request(ids, model={"provider": "ollama", "model": "qwen3-coder:480b"}),
+            settings=Settings(),
+            sessionmaker=sm,
+            redis=redis,
+        )
+
+        assert outcome.status == ExecutionStatus.FAILED
+        assert outcome.abort_code == "model_unresolved"
+
+        async with sm() as s:
+            executions = await list_executions_for_task(s, ids["task"])
+        assert len(executions) == 1
+        row = executions[0]
+        assert row.status == ExecutionStatus.FAILED
+        assert row.abort_code == "model_unresolved"
+        # El motivo es explícito para el operador (nunca un scripted silencioso).
+        assert "no active llm_providers row" in (row.output or "")
+        assert row.completed_at is not None
+        # El stream recibió el error (lo que el WS de la UI tailea).
+        entries = await redis.xrange(execution_stream_key(outcome.execution_id))
+        assert any("execution.error" in str(entry) for entry in entries)
+    finally:
+        await redis.aclose()
+        await engine.dispose()
