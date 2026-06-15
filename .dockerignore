@@ -37,3 +37,15 @@ playwright-report/
 
 # Docs are not needed inside images.
 docs/
+
+# SECURITY (Plan prod-01 task_01): never let secrets or local artefacts enter
+# the build context — they would be readable in image layers. vault-init-output/
+# holds the Vault root token + unseal keys (finding secrets-1); .env* hold
+# credentials; logs may carry tokens. The apps receive all config via the
+# environment at runtime, never from files baked into the image.
+vault-init-output/
+.env
+.env.*
+*.env
+!*.env.example
+*.log
