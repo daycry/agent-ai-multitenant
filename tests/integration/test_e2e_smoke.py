@@ -40,7 +40,7 @@ from workers.config import reset_settings_cache
 
 import docker
 
-from ._docker_helpers import docker_client, requires_docker
+from ._docker_helpers import docker_client, requires_docker, skip_or_fail
 
 pytestmark = pytest.mark.integration
 
@@ -65,12 +65,14 @@ def _migrated(alembic_config: object) -> None:
 
 @pytest.fixture()
 def _agent_runtime_image() -> None:
-    """Skip cleanly if agent-runtime:v1 has not been built on this host."""
+    """Skip locally if agent-runtime:v1 is not built; FAIL under CI (the CI
+    integration job builds it, so a missing image there is a real regression —
+    finding tests-6, the e2e gate must not vanish silently)."""
     client = docker_client()
     try:
         client.images.get(_IMAGE)
     except docker.errors.ImageNotFound:  # pragma: no cover - env-dependent
-        pytest.skip(f"{_IMAGE} not built — run: docker build -t {_IMAGE} ...")
+        skip_or_fail(f"{_IMAGE} not built — run: docker build -t {_IMAGE} ...")
     finally:
         client.close()
 

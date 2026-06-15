@@ -156,7 +156,8 @@ Este plan resucita CI y lo convierte en gate real:
 
 #### `task_prod_02_07` — agent-runtime:v1 disponible en el job de integración + skips→fallos en CI
 
-- [ ] **Título**: En el job `test-integration`, construir `agent-runtime:v1` antes de pytest (`docker build -f docker/agent-runtimes/agent-runtime/Dockerfile -t agent-runtime:v1 .`, con caché de buildx para no penalizar ~cada run) de modo que `tests/integration/test_e2e_smoke.py:71-73` deje de saltarse; añadir helper de conftest que en `CI=true` convierta los `pytest.skip` por precondición ausente (imagen, daemon Docker — 22 ficheros `requires_docker`) en `pytest.fail`.
+- [x] **Título**: En el job `test-integration`, construir `agent-runtime:v1` antes de pytest (`docker build -f docker/agent-runtimes/agent-runtime/Dockerfile -t agent-runtime:v1 .`, con caché de buildx para no penalizar ~cada run) de modo que `tests/integration/test_e2e_smoke.py:71-73` deje de saltarse; añadir helper de conftest que en `CI=true` convierta los `pytest.skip` por precondición ausente (imagen, daemon Docker — 22 ficheros `requires_docker`) en `pytest.fail`.
+  - **Implementación**: paso `setup-buildx` + `build-push-action` (context=raíz, `agent-runtime:v1`, `load:true`, caché gha) antes de los pytest del job. Skip→fail en `_docker_helpers.py`: `requires_docker` skipea solo `not DOCKER_AVAILABLE and not IN_CI` (en CI sin Docker → corre y falla, no skip silencioso); nuevo helper `skip_or_fail()` (fail en CI, skip en local) usado por el fixture `_agent_runtime_image` del e2e smoke. **Verificado en local: test_e2e_smoke PASSED** (13s, worker in-process + contenedor agent-runtime:v1 real).
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Depende de**: `task_prod_02_03` (el stack debe arrancar primero).
 - **Tests automáticos**:
