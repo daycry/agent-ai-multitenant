@@ -1,0 +1,124 @@
+name: Release images
+
+# Plan prod-01 task_03 (finding deploy-2 / quality-2): build & push the five
+# application images the installer's compose references
+# (ghcr.io/agentic-platform/<app>:<tag>, see compose_generator.APP_IMAGE_*).
+# They did not exist and there was no pipeline to publish them.
+#
+# Triggered by a release tag (v*) or manual dispatch — NOT on every push (that
+# is ci.yml's gate). api-server is the heavy BASE image (shared-* + native
+# xmlsec); workers/orchestrator/notification-dispatcher reuse it via BASE_IMAGE,
+# so they must build AFTER it (the `needs:` chain enforces the order task_01
+# documented). admin-panel is independent.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish (defaults to the git ref name)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io/agentic-platform
+
+jobs:
+  prep:
+    name: Resolve image tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - id: resolve
+        run: |
+          tag="${{ github.event.inputs.tag }}"
+          if [ -z "$tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Publishing tag: $tag"
+
+  api-server:
+    name: Build & push api-server (base)
+    needs: prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & push api-server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api-server/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/api-server:${{ needs.prep.outputs.tag }}
+            ${{ env.REGISTRY }}/api-server:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  backend:
+    name: Build & push ${{ matrix.app }}
+    needs: [prep, api-server]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        app: [workers, orchestrator, notification-dispatcher]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & push ${{ matrix.app }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/${{ matrix.app }}/Dockerfile
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ env.REGISTRY }}/api-server:${{ needs.prep.outputs.tag }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ matrix.app }}:${{ needs.prep.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ matrix.app }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  admin-panel:
+    name: Build & push admin-panel
+    needs: prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & push admin-panel
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/admin-panel
+          file: apps/admin-panel/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/admin-panel:${{ needs.prep.outputs.tag }}
+            ${{ env.REGISTRY }}/admin-panel:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

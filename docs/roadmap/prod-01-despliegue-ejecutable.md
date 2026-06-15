@@ -107,7 +107,8 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_03` — Workflow de publicación de imágenes
 
-- [ ] **Título**: `release-images.yml` — build & push de las 5 apps al registro
+- [x] **Título**: `release-images.yml` — build & push de las 5 apps al registro
+  - **Implementación**: `.github/workflows/release-images.yml` (trigger tag `v*` + `workflow_dispatch`): job `prep` resuelve el tag, `api-server` (base) hace build&push, `backend` (matrix workers/orchestrator/notification-dispatcher) `needs: api-server` y pasa `BASE_IMAGE`, `admin-panel` en paralelo; push a `ghcr.io/agentic-platform/<app>:<tag>` + `:sha`, caché gha, timeouts en todo job. Test `tests/unit/test_release_images_workflow.py` (4 asserts). **Verificado: 4 passed.** **Coordinación prod-02**: el sub-punto «`Build each app` de ci.yml construye los nuevos Dockerfiles como gate de PR» NO se toca aquí para no chocar con los cambios de ci.yml de prod-02 (ambos planes editan ci.yml en ramas separadas); se reconcilia al integrar prod-01↔prod-02 (la build con contexto=raíz de los Dockerfiles backend va ahí).
 - **Descripción**: nuevo workflow `.github/workflows/release-images.yml` disparado por tag `v*`: `docker buildx build --push` de las 5 imágenes a `ghcr.io/agentic-platform/<app>:<tag>` (+ `:sha`), alineado con `APP_IMAGE_REGISTRY`/`APP_IMAGE_TAG` que espera `compose_generator.py:84-85`. El job `Build each app` de `ci.yml:334-354` pasa a encontrar y construir (sin push) los nuevos Dockerfiles como gate de PR. **Coordinación prod-02**: este workflow se integra en la reestructuración de CI; **prod-11** añadirá después SCA y pin por digest.
 - **Depende de**: task_prod01_01, task_prod01_02
 - **Tiempo**: 1,5 días · **Complejidad**: m
@@ -120,7 +121,8 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_04` — Test de contrato imágenes ↔ compose
 
-- [ ] **Título**: Toda imagen referenciada por el compose generado tiene Dockerfile y entrada en el workflow
+- [x] **Título**: Toda imagen referenciada por el compose generado tiene Dockerfile y entrada en el workflow
+  - **Implementación**: `tests/unit/test_compose_images_contract.py` — invoca `generate_compose`, extrae las imágenes con prefijo `APP_IMAGE_REGISTRY`, y exige que cada app tenga `apps/<app>/Dockerfile` y aparezca en `release-images.yml`. **Verificado: 1 passed** (5 apps: api-server, workers, orchestrator, notification-dispatcher, admin-panel).
 - **Descripción**: test que parsea los `image:` emitidos por `generate_compose` (compose_generator) y verifica que cada app referenciada tiene `apps/<app>/Dockerfile` y aparece en la matriz de `release-images.yml`. Evita que quality-2/deploy-2 reaparezcan en silencio.
 - **Depende de**: task_prod01_03
 - **Tiempo**: 0,5 días · **Complejidad**: s
