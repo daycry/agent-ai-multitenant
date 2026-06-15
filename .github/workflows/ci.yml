@@ -136,6 +136,14 @@ jobs:
         working-directory: apps/admin-panel
         run: npm run build
 
+      # Frontend unit/component tests (Plan prod-02 task_09, finding frontend-7):
+      # the 82 vitest specs (lib/*.test.ts, components/**/*.test.ts) never ran in
+      # CI. `vitest run` exits non-zero on failure, gating the job.
+      - name: vitest (admin-panel)
+        if: steps.detect.outputs.has_node == 'true'
+        working-directory: apps/admin-panel
+        run: npm run test
+
   # ---------------------------------------------------------------------------
   # Python unit tests. Need the local editable installs so the imports
   # `from api_server.* import ...` and `from watchdog.* import ...` work.

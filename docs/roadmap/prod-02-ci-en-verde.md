@@ -182,7 +182,8 @@ Este plan resucita CI y lo convierte en gate real:
 
 #### `task_prod_02_09` — Job de vitest del admin-panel
 
-- [ ] **Título**: Añadir paso `npm run test` (vitest, `lib/*.test.ts`) al job `lint-typescript` de `ci.yml:120-133` (o job propio `test-frontend`), con `npm ci` cacheado.
+- [x] **Título**: Añadir paso `npm run test` (vitest, `lib/*.test.ts`) al job `lint-typescript` de `ci.yml:120-133` (o job propio `test-frontend`), con `npm ci` cacheado.
+  - **Implementación**: paso `vitest (admin-panel)` añadido al job `lint-typescript` (reutiliza su `npm ci` cacheado), gated en `has_node`. Verificado en local: `npm run test` → **82 passed** (5 ficheros: memory-honesty, capability-hub, tools-taxonomy, persona, assistant).
 - **Tiempo**: 3 h · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
