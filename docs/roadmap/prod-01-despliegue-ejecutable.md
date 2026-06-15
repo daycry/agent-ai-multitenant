@@ -91,9 +91,11 @@ Este plan convierte el simulacro en un despliegue real:
     command: "pytest tests/smoke/test_app_images_build.py -v"
   ```
 
-#### `task_prod01_02` — Dockerfile del admin-panel
+#### `task_prod01_02` — Dockerfile del admin-panel ✅
 
-- [ ] **Título**: Imagen Next.js standalone del admin-panel
+> **Implementación**: `apps/admin-panel/Dockerfile` multi-stage (deps → builder → runner) sobre la salida `output:'standalone'` de Next 14 (ya configurada). Contexto = el dir del app (el frontend no importa los paquetes Python). Reusa el usuario `node` (uid/gid 1000) de `node:20-slim` — NO crea uno (GID 1000 ya existe). `NEXT_PUBLIC_API_URL` como ARG inyectable (fallback → frontend-8/prod-09). **Verificado en local: build 337MB + `docker run` sirve HTTP / → 200 ("Ready in 182ms").**
+
+- [x] **Título**: Imagen Next.js standalone del admin-panel
 - **Descripción**: `apps/admin-panel/Dockerfile` con `output: 'standalone'` en `next.config`, build args para la URL pública del API, usuario no root, puerto 3000. Verificar que `npm ci` usa el `package-lock.json` existente.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
