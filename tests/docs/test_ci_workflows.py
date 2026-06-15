@@ -112,3 +112,21 @@ def test_triggers_allow_manual_dispatch(workflows: dict[str, dict[str, Any]]) ->
         if not isinstance(on_block, dict) or "workflow_dispatch" not in on_block:
             problems.append(f"{name}: missing 'workflow_dispatch' trigger")
     assert not problems, "Workflows without manual dispatch:\n" + "\n".join(problems)
+
+
+def test_integration_job_loads_apparmor_profile() -> None:
+    """The test-integration job must load the agentic-default AppArmor profile
+    before `docker compose up`, or the stack aborts on the runner with
+    "AppArmor profile agentic-default not found" — the regression that left the
+    cross-tenant gate unexecuted for 12 days (finding tests-3)."""
+    ci = _load(WORKFLOWS_DIR / "ci.yml")
+    job = ci.get("jobs", {}).get("test-integration")
+    assert job is not None, "ci.yml has no 'test-integration' job"
+    run_blocks = "\n".join(
+        step.get("run", "") for step in job.get("steps", []) if isinstance(step, dict)
+    )
+    assert "apparmor_parser" in run_blocks and "agentic-default" in run_blocks, (
+        "test-integration must load the agentic-default AppArmor profile "
+        "(apparmor_parser -r -W docker/apparmor/agentic-default.profile) before "
+        "`docker compose up`, or the integration stack will not start in CI"
+    )

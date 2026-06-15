@@ -227,6 +227,19 @@ jobs:
         if: steps.detect.outputs.has_compose == 'true'
         run: docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml config
 
+      # The compose services carry `apparmor=agentic-default` (x-seccomp
+      # anchor in docker-compose.yml). On a fresh GitHub Ubuntu runner that
+      # profile is NOT loaded into the kernel, so `docker compose up` aborts
+      # with "AppArmor profile agentic-default not found" — the exact reason
+      # the integration stack (and the cross-tenant gate) stopped running in
+      # CI since 2026-05-29 (finding tests-3). Load the REAL production
+      # profile so CI also verifies the profile parses (Decisión clave 2 de
+      # prod-02). If a future runner's parser rejects it, fall back to the
+      # documented overlay docker/docker-compose.ci.yml (apparmor=unconfined).
+      - name: Load AppArmor profile (agentic-default)
+        if: steps.detect.outputs.has_compose == 'true'
+        run: sudo apparmor_parser -r -W docker/apparmor/agentic-default.profile
+
       - name: Bring up test stack
         if: steps.detect.outputs.has_compose == 'true'
         run: |

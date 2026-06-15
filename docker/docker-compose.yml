@@ -36,7 +36,13 @@ x-logging: &default-logging
 #     broke postgres (signalfd/shmget) — net negative for trusted services.
 #   * apparmor=agentic-default — host MAC confinement (loaded via
 #     `apparmor_parser -r -W docker/apparmor/agentic-default.profile`; see
-#     docs/06-runbooks/apparmor-profiles.md; a no-op where AppArmor is absent).
+#     docs/06-runbooks/apparmor-profiles.md). On Linux hosts (incl. GitHub
+#     Ubuntu runners) the profile MUST be loaded before `up`, or Docker
+#     aborts with "AppArmor profile agentic-default not found"; it is only a
+#     no-op where AppArmor is genuinely absent (e.g. Docker Desktop on WSL2).
+#     CI loads it (ci.yml test-integration); docker-compose.ci.yml
+#     (apparmor=unconfined) is the documented fallback if a runner's parser
+#     rejects the profile.
 # The UNTRUSTED agent/test runtime sandbox DOES use the STRICT default-deny
 # docker/seccomp/agent-runtime.json + docker/apparmor/agent-runtime.profile,
 # applied by the worker at launch (workers.isolation), where it matters most.
