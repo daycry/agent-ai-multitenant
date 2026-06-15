@@ -1,9 +1,9 @@
 ---
 plan_id: prod-02-ci-en-verde
 title: CI resucitado y en verde — triggers, gates obligatorios y cobertura
-status: pending_approval
+status: in_progress
 blocking_plan: null
-started_at: null
+started_at: 2026-06-11
 completed_at: null
 estimated_duration_calendar: 2-3 semanas
 estimated_effort_person_days: 9
@@ -22,7 +22,7 @@ priority: P0
 | Campo                              | Valor                      |
 | ---------------------------------- | -------------------------- |
 | **ID del Plan**                    | `prod-02-ci-en-verde`      |
-| **Estado**                         | `pending_approval`         |
+| **Estado**                         | `in_progress`              |
 | **Prioridad**                      | P0                         |
 | **Bloqueado por**                  | — (null)                   |
 | **Tiempo estimado (calendario)**   | 2-3 semanas                |
