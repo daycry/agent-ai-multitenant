@@ -115,7 +115,16 @@ async def _drop_db() -> None:
 
 @pytest.fixture(scope="session")
 def test_database_url() -> Iterator[str]:
-    """Session-scoped: create the test DB, yield its URL, drop on teardown."""
+    """Session-scoped: create the test DB, yield its URL, drop on teardown.
+
+    DO NOT run this suite under pytest-xdist (``-n``). The whole integration
+    suite shares this ONE session-scoped database, and some tests depend on
+    execution order (e.g. ``test_migrations.py`` asserts on the shared schema
+    after its upgrade->downgrade->upgrade round-trip). Parallel workers would
+    race on both the shared DB and that ordering, producing flaky failures.
+    Follow-up (Plan prod-02 task_12, finding tests-8): give each xdist worker
+    its own throwaway database (worker-id-suffixed name) before enabling ``-n``.
+    """
     asyncio.run(_drop_create_db())
     url = (
         f"postgresql+asyncpg://{PG_MIG_USER}:{PG_MIG_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
