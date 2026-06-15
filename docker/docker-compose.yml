@@ -330,7 +330,12 @@ services:
       - "ollama pull ${EMBEDDING_MODEL:-nomic-embed-text}"
     restart: "no"
     networks: [agentic-net]
-    <<: [*default-logging]
+    # One-shot bootstrap, but it still runs `ollama pull` over the network as a
+    # long-ish process: carry the same trusted hardening baseline as every
+    # other service (no-new-privileges + apparmor=agentic-default via the
+    # x-seccomp anchor). It was added without it in the Ollama feature (ADR
+    # 0056) — tests/security/test_{apparmor,seccomp_profiles}.py flag the gap.
+    <<: [*default-logging, *default-seccomp]
 
 volumes:
   postgres_data:

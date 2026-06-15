@@ -637,10 +637,16 @@ def _cadvisor_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  #
     """cAdvisor — per-container CPU/memory/network/fs metrics.
 
     Unlike the other trusted services it MUST run ``privileged`` with host
-    cgroup/Docker mounts to read container stats, so it is NOT cap-dropped and
-    does NOT pin the AppArmor profile (both would deny the host access it needs).
-    All mounts are read-only and ``no-new-privileges`` is still set. Mirrors
-    docker/docker-compose.monitoring.yml.
+    cgroup/Docker mounts to read container stats, so it is NOT cap-dropped.
+    It pins ``no-new-privileges`` + ``apparmor=agentic-default`` to match
+    docker/docker-compose.monitoring.yml EXACTLY (the committed compose applies
+    the profile to cAdvisor and it runs healthy). The generator previously
+    omitted the AppArmor pin, so an installed stack got a LESS-hardened cAdvisor
+    than the committed one — the drift tests/security/test_apparmor.py flagged.
+    Whether AppArmor is the right posture for a privileged container at all is a
+    separate question owned by the monitoring/sandbox hardening plans (finding
+    sandbox-8); this change only removes the generator↔compose drift. All
+    mounts are read-only.
     """
     return {
         "image": IMAGE_CADVISOR,
@@ -654,7 +660,7 @@ def _cadvisor_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  #
             "/var/lib/docker/:/var/lib/docker:ro",
             "/dev/disk/:/dev/disk:ro",
         ],
-        "security_opt": ["no-new-privileges:true"],
+        "security_opt": ["no-new-privileges:true", f"apparmor={APPARMOR_DEFAULT_PROFILE}"],
         "healthcheck": {
             "test": ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"],
             "interval": "30s",

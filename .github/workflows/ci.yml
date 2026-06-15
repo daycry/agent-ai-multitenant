@@ -197,6 +197,21 @@ jobs:
         if: steps.detect.outputs.has_tests == 'true'
         run: pytest tests/unit -v
 
+      # Static hardening + documentation invariants (Plan prod-02 task_05,
+      # findings tests-4). Both suites are static (no stack): tests/security
+      # asserts the compose/seccomp/apparmor/secrets invariants, tests/docs the
+      # ADR/training/CI-workflow invariants. A plain `pytest` exits non-zero on
+      # failure AND exits 5 ("no tests collected") if the suite is ever emptied
+      # — both fail the job, so the safety net cannot be silently removed (same
+      # contract as the cross-tenant gate below).
+      - name: pytest tests/security
+        if: steps.detect.outputs.has_tests == 'true'
+        run: pytest tests/security -v
+
+      - name: pytest tests/docs
+        if: steps.detect.outputs.has_tests == 'true'
+        run: pytest tests/docs -v
+
   # ---------------------------------------------------------------------------
   # Integration tests against docker-compose. Brings up the stack and
   # runs the tenant/auth/admin/tracing tests against real Postgres + Redis.

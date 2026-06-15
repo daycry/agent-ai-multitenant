@@ -128,7 +128,8 @@ Este plan resucita CI y lo convierte en gate real:
 
 #### `task_prod_02_05` — Cablear tests/security y tests/docs a CI
 
-- [ ] **Título**: Añadir al job `test-unit` de `ci.yml` los pasos `pytest tests/security -v` y `pytest tests/docs -v`, tratando exit 5 (colección vacía) como fallo — mismo patrón que el gate cross-tenant (`ci.yml:277-282`). `tests/security` (4 ficheros: invariantes de socket Docker, cap_drop, privileged, RLS, egress, secretos) y `tests/docs` (3 ficheros) son estáticos: no necesitan stack.
+- [x] **Título**: Añadir al job `test-unit` de `ci.yml` los pasos `pytest tests/security -v` y `pytest tests/docs -v`, tratando exit 5 (colección vacía) como fallo — mismo patrón que el gate cross-tenant (`ci.yml:277-282`). `tests/security` (4 ficheros: invariantes de socket Docker, cap_drop, privileged, RLS, egress, secretos) y `tests/docs` (3 ficheros) son estáticos: no necesitan stack.
+  - **Nota de implementación**: al cablearlo se descubrió que `tests/security` llevaba ROJO (nunca se ejecutó en CI — hallazgo tests-4). 2 gaps reales de hardening cerrados aquí por estar en alcance de «poner el gate en verde»: (a) `ollama-bootstrap` añadido sin el baseline (no-new-privileges + apparmor) en el feature Ollama (ADR 0056); (b) el generador del installer (`_cadvisor_service`) emitía cadvisor SIN `apparmor=agentic-default`, produciendo un stack menos endurecido que el `docker-compose.monitoring.yml` comiteado. La pregunta de fondo «¿apparmor en un contenedor privilegiado es la postura correcta?» queda para prod-08/prod-12 (sandbox-8); este plan solo elimina la divergencia generador↔compose.
 - **Tiempo**: 3 h · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
