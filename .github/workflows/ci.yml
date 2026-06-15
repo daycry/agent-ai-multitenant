@@ -413,25 +413,46 @@ jobs:
       - name: Build each app
         if: steps.detect.outputs.has_dockerfiles == 'true'
         run: |
+          set -euo pipefail
+          # Backend apps import the local packages/ (shared-* + api_server), so
+          # their build context is the repo ROOT (Plan prod-01 task_01).
+          # api-server is the heavy BASE image the other three reuse via
+          # BASE_IMAGE, so it builds FIRST.
+          if [ -f apps/api-server/Dockerfile ]; then
+            echo "::group::Building api-server (base)"
+            docker buildx build --load -f apps/api-server/Dockerfile \
+              -t agentic-platform/api-server:ci .
+            echo "::endgroup::"
+            for app in workers orchestrator notification-dispatcher; do
+              [ -f "apps/$app/Dockerfile" ] || continue
+              echo "::group::Building $app"
+              docker buildx build --load -f "apps/$app/Dockerfile" \
+                --build-arg BASE_IMAGE=agentic-platform/api-server:ci \
+                -t "agentic-platform/$app:ci" .
+              echo "::endgroup::"
+            done
+          fi
+          # Self-contained apps (admin-panel frontend, installer) build with
+          # their own directory as the context.
           for f in $(find apps -name Dockerfile); do
             app_dir="$(dirname "$f")"
             app_name="$(basename "$app_dir")"
+            case "$app_name" in
+              api-server|workers|orchestrator|notification-dispatcher) continue ;;
+            esac
             echo "::group::Building $app_name"
             docker buildx build --load -t "agentic-platform/$app_name:ci" "$app_dir"
             echo "::endgroup::"
           done
 
       # Smoke the api-server image (Plan prod-02 task_08, finding tests-7).
-      # PARAMETRIZED + NON-BLOCKING on prod-01: the core app Dockerfiles
-      # (api-server, workers, orchestrator) do NOT exist yet (quality-2 ->
-      # prod-01-despliegue-ejecutable), so "Build each app" above only builds
-      # what exists (today: the installer images, which are NOT python — hence
-      # we smoke ONLY api-server by name, never a blind `python -c` over every
-      # image). When prod-01 adds apps/api-server/Dockerfile, its image gets
-      # built above and this step imports it. The live /healthz + `pytest
-      # tests/smoke` (SMOKE_BASE_URL) smoke needs the infra stack and lands in
-      # prod-01 (tests/smoke/conftest.py skips cleanly until SMOKE_BASE_URL is
-      # set, so nothing fails in the meantime).
+      # "Build each app" above builds api-server (when its Dockerfile exists —
+      # prod-01); this imports it as a minimal liveness check. We smoke ONLY
+      # api-server by name (never a blind `python -c` over every image — the
+      # installer/admin-panel images are not python). The live /healthz +
+      # `pytest tests/smoke` (SMOKE_BASE_URL) smoke needs the infra stack and
+      # lands in prod-01 Fase F (tests/smoke/conftest.py skips cleanly until
+      # SMOKE_BASE_URL is set, so nothing fails in the meantime).
       - name: Smoke api-server image (if built)
         if: steps.detect.outputs.has_dockerfiles == 'true'
         run: |
