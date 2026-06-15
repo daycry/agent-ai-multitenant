@@ -197,9 +197,13 @@ jobs:
           python -m pip install -e "packages/shared-guardrails[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
 
-      - name: pytest tests/unit
+      - name: pytest tests/unit (+ coverage ratchet gate)
         if: steps.detect.outputs.has_tests == 'true'
-        run: pytest tests/unit -v
+        # --cov-fail-under is a RATCHET floor (Plan prod-02 task_06): set to the
+        # value the unit suite reaches today over these packages; raise over time
+        # toward conventions.md (70%/80%). Never lower. See [tool.coverage] in
+        # pyproject.toml.
+        run: pytest tests/unit -v --cov=api_server --cov=workers --cov=orchestrator --cov-report=term --cov-fail-under=19
 
       # Static hardening + documentation invariants (Plan prod-02 task_05,
       # findings tests-4). Both suites are static (no stack): tests/security

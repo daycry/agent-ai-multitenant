@@ -140,7 +140,8 @@ Este plan resucita CI y lo convierte en gate real:
 
 #### `task_prod_02_06` — Gate de cobertura con umbral ratchet (tests-5 + quality-6)
 
-- [ ] **Título**: Añadir `--cov=api_server --cov=workers --cov=orchestrator --cov-report=term --cov-fail-under=<valor medido>` al paso de unit tests de `ci.yml:197`; configurar `[tool.coverage.report]`/`[tool.coverage.paths]` en `pyproject.toml`; documentar el plan de subida gradual hasta 70% global / 80% dominio crítico (auth, multi-tenancy, agent loop, orchestrator) o, si el humano lo decide, corregir `conventions.md:233-236` para que la regla escrita sea la real.
+- [x] **Título**: Añadir `--cov=api_server --cov=workers --cov=orchestrator --cov-report=term --cov-fail-under=<valor medido>` al paso de unit tests de `ci.yml:197`; configurar `[tool.coverage.report]`/`[tool.coverage.paths]` en `pyproject.toml`; documentar el plan de subida gradual hasta 70% global / 80% dominio crítico (auth, multi-tenancy, agent loop, orchestrator) o, si el humano lo decide, corregir `conventions.md:233-236` para que la regla escrita sea la real.
+  - **Implementación**: floor de arranque del ratchet = **19%** (cobertura real línea+rama de la suite unit sobre los 3 paquetes = 19.4%; integración/e2e cubren mucho más pero corren en otros jobs). `[tool.coverage.run]`/`[tool.coverage.report]` en pyproject con `branch=true`. Meta-test `test_unit_job_enforces_a_coverage_floor` exige que el flag exista. El objetivo 70/80 de `conventions.md` se mantiene como meta del ratchet, a subir gradualmente — NO se relaja la convención escrita.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Depende de**: `task_prod_02_02`.
 - **Tests automáticos**:

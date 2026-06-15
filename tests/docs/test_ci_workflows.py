@@ -142,3 +142,19 @@ def test_every_job_declares_a_timeout(workflows: dict[str, dict[str, Any]]) -> N
             if isinstance(job, dict) and "timeout-minutes" not in job:
                 problems.append(f"{name}:{job_name}")
     assert not problems, "jobs without timeout-minutes (default 6h): " + ", ".join(problems)
+
+
+def test_unit_job_enforces_a_coverage_floor() -> None:
+    """The unit-test job must run pytest with `--cov-fail-under` so coverage
+    cannot silently rot (findings tests-5 / quality-6). This pins only that the
+    gate EXISTS — the floor itself is a ratchet raised over time in the workflow
+    and documented in pyproject.toml [tool.coverage]."""
+    ci = _load(WORKFLOWS_DIR / "ci.yml")
+    job = ci.get("jobs", {}).get("test-unit")
+    assert job is not None, "ci.yml has no 'test-unit' job"
+    run_blocks = "\n".join(
+        step.get("run", "") for step in job.get("steps", []) if isinstance(step, dict)
+    )
+    assert (
+        "--cov-fail-under" in run_blocks
+    ), "the test-unit job must gate coverage with pytest --cov-fail-under=<floor>"

@@ -386,3 +386,31 @@ markers = [
   "cross_tenant: multi-tenant isolation tests — assert cross-tenant denial (CI-gated, Plan 06.14)",
   "security: security-invariant tests — assert the hardening posture holds (Plan 15 internal pentest, task_15_14)",
 ]
+
+# Coverage gate (Plan prod-02 task_06, findings tests-5 / quality-6). Coverage is
+# NOT in the default addopts: only the CI unit-test step turns it on explicitly
+# (--cov=api_server --cov=workers --cov=orchestrator --cov-fail-under=N) so local
+# `pytest` stays fast. The floor is a RATCHET: it starts at the value the unit
+# suite actually reaches today (~21% over those packages — integration tests, not
+# counted here, cover much more) and is raised over time toward the
+# conventions.md target (70% global / 80% critical domain). Never lower it.
+# Starting floor: 19% (the unit suite's measured line+branch coverage over the
+# three packages is 19.4%; integration/e2e suites cover much more but run in
+# other jobs and are not counted here).
+[tool.coverage.run]
+branch = true
+omit = [
+  "*/tests/*",
+  "*/migrations/*",
+  "*/__main__.py",
+]
+
+[tool.coverage.report]
+precision = 1
+show_missing = false
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "@(abc\\.)?abstractmethod",
+]
