@@ -13,7 +13,7 @@ name: Eval on prompt change
 
 on:
   push:
-    branches: [main, "plan/**"]
+    branches: [master, "plan/**"]
     paths:
       # Agent prompt definitions (the built-in agents ship bilingual
       # system_prompt text here; promotion/eval grades against these).
@@ -24,12 +24,13 @@ on:
       - "apps/api-server/src/api_server/evals/**"
       - ".github/workflows/eval-on-prompt-change.yml"
   pull_request:
-    branches: [main]
+    branches: [master]
     paths:
       - "apps/api-server/src/api_server/seeds/builtin_agents.py"
       - "apps/api-server/src/api_server/seeds/qa_e2e_automator.py"
       - "apps/api-server/src/api_server/evals/**"
       - ".github/workflows/eval-on-prompt-change.yml"
+  workflow_dispatch:
 
 # Cancel in-progress runs of the same workflow on the same branch.
 concurrency:

@@ -10,17 +10,18 @@ name: Build runtime templates
 
 on:
   push:
-    branches: [main, "plan/**"]
+    branches: [master, "plan/**"]
     paths:
       - "docker/agent-runtimes/**"
       - "packages/shared-test-runtimes/**"
       - ".github/workflows/build-runtime-templates.yml"
   pull_request:
-    branches: [main]
+    branches: [master]
     paths:
       - "docker/agent-runtimes/**"
       - "packages/shared-test-runtimes/**"
       - ".github/workflows/build-runtime-templates.yml"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

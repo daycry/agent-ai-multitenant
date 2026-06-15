@@ -81,7 +81,7 @@ Este plan resucita CI y lo convierte en gate real:
 
 #### `task_prod_02_01` — Triggers main→master en los 3 workflows
 
-- [ ] **Título**: Cambiar `branches: [main, "plan/**"]` / `pull_request: [main]` por `[master, "plan/**"]` / `[master]` en `ci.yml:3-7`, `build-runtime-templates.yml:11-19` y `eval-on-prompt-change.yml:14-27`; añadir `workflow_dispatch` a los tres.
+- [x] **Título**: Cambiar `branches: [main, "plan/**"]` / `pull_request: [main]` por `[master, "plan/**"]` / `[master]` en `ci.yml:3-7`, `build-runtime-templates.yml:11-19` y `eval-on-prompt-change.yml:14-27`; añadir `workflow_dispatch` a los tres.
 - **Tiempo**: 2 h · **Complejidad**: s
 - Añadir meta-test estático `tests/docs/test_ci_workflows.py` que parsea los YAML de `.github/workflows/` y falla si algún trigger referencia una rama que no existe en el remoto por defecto (`master`) — evita la regresión inversa.
 - **Tests automáticos**:

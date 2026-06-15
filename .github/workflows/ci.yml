@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main, "plan/**"]
+    branches: [master, "plan/**"]
   pull_request:
-    branches: [main]
+    branches: [master]
+  workflow_dispatch:
 
 # Cancel in-progress runs of the same workflow on the same branch.
 concurrency:
