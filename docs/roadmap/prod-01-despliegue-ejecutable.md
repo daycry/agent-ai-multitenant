@@ -1,9 +1,9 @@
 ---
 plan_id: prod-01-despliegue-ejecutable
 title: Despliegue ejecutable — imágenes, compose de apps, migraciones y TLS
-status: pending_approval
+status: in_progress
 blocking_plan: null
-started_at: null
+started_at: 2026-06-11
 completed_at: null
 estimated_duration_calendar: 5-6 semanas
 estimated_effort_person_days: 23
