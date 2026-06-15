@@ -438,3 +438,59 @@ jobs:
             docker build -t "agentic-$name:v1" "$d"
             echo "::endgroup::"
           done
+
+  # ---------------------------------------------------------------------------
+  # Frontend e2e (Plan prod-02 task_10, finding frontend-7): the 99 Playwright
+  # specs never ran in CI. This job runs the SELF-CONTAINED subset — the specs
+  # that mock the API with `page.route`, so they need no live api-server.
+  # Playwright's webServer starts `npm run dev` itself (reuseExistingServer is
+  # false under CI). The ~11 specs that need a live backend are NOT run here;
+  # a backed e2e job is prod-09 territory. No `--project` flag: the config
+  # defines no named projects (single default chromium project).
+  # ---------------------------------------------------------------------------
+  test-frontend-e2e:
+    name: Frontend e2e (Playwright, mocked subset)
+    runs-on: ubuntu-latest
+    # 60min: the mocked subset (245 cases over 88 specs) takes ~44min locally
+    # under `npm run dev` (on-demand page compilation dominates). FOLLOW-UP:
+    # switch the webServer to `next build` + `next start` (pre-compiled) to cut
+    # this to ~10-15min; deferred to keep this task on the verified-green path.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Detect Node workspace
+        id: detect
+        run: |
+          if [ -f apps/admin-panel/package.json ]; then
+            echo "has_node=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_node=false" >> "$GITHUB_OUTPUT"
+            echo "No apps/admin-panel/package.json yet — skipping e2e."
+          fi
+
+      - uses: actions/setup-node@v5
+        if: steps.detect.outputs.has_node == 'true'
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/admin-panel/package-lock.json
+
+      - name: npm ci
+        if: steps.detect.outputs.has_node == 'true'
+        working-directory: apps/admin-panel
+        run: npm ci
+
+      - name: Install Playwright chromium
+        if: steps.detect.outputs.has_node == 'true'
+        working-directory: apps/admin-panel
+        run: npx playwright install --with-deps chromium
+
+      - name: Playwright e2e (mocked subset — no live backend)
+        if: steps.detect.outputs.has_node == 'true'
+        working-directory: apps/admin-panel
+        run: |
+          # Self-contained specs only: those that mock the API via page.route.
+          mapfile -t specs < <(grep -rlE "page\.route|\.route\(" e2e)
+          echo "Running ${#specs[@]} mocked Playwright specs (no api-server)"
+          npm run e2e -- "${specs[@]}"
