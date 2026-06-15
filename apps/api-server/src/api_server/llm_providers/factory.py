@@ -28,6 +28,7 @@ as their default model and the per-call ``model`` overrides it.
 from __future__ import annotations
 
 import contextlib
+from typing import Any
 from uuid import UUID
 
 from shared_llm.base import LLMProvider
@@ -108,7 +109,7 @@ def _build_ollama(
     except ImportError:
         return None
     token = secret.get(SECRET_FIELD_BEARER_TOKEN)
-    kwargs: dict[str, str] = {"default_model": model}
+    kwargs: dict[str, Any] = {"default_model": model}
     if base_url:
         kwargs["base_url"] = base_url
     if token:

@@ -145,7 +145,7 @@ concreto:
 
 ## Consecuencias
 
-**Positivas**
+### Positivas
 
 - Los agentes **usan de verdad** su modelo configurado (fin del scripted
   silencioso).
@@ -154,7 +154,7 @@ concreto:
 - Reutiliza piezas ya probadas del asistente (validación, build por fila,
   endpoints de opciones).
 
-**Costes / riesgos**
+### Costes / riesgos
 
 - Toca: esquema `model_config` + validadores (`validate_model_config`,
   `config_needs_default_model`, schemas de agente), `model.default_config`,
@@ -168,11 +168,11 @@ concreto:
 ## Plan de implementación (por fases)
 
 1. **Fase 1 (URGENTE, P0): los agentes ejecutan su modelo real.** Worker resuelve
-   `model_config`→spec concreto (kind + nombre nativo + base_url + credencial vía
+   `model_config`→spec concreto (kind + nombre nativo + base*url + credencial vía
    `build_llm_provider`/`resolve_provider_config`) e inyecta en `AGENT_TASK_SPEC`;
    `model_from_spec` deja de caer a `scripted` con specs de proveedor real. Test
-   e2e (agente real ≠ scripted). _Esta fase ya quita el bug crítico aunque siga
-   siendo por kind._
+   e2e (agente real ≠ scripted). \_Esta fase ya quita el bug crítico aunque siga
+   siendo por kind.*
 2. **Fase 2: `provider_id` en `model_config`** + validación DB-aware + predicados
    de herencia (`config_needs_default_model`) conscientes de `provider_id` +
    cadena de resolución override→(proyecto)→default.

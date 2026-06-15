@@ -93,7 +93,7 @@ Este plan resucita CI y lo convierte en gate real:
 
 #### `task_prod_02_02` — Arreglar los fallos reales que tienen CI en rojo (mypy, prettier, markdownlint)
 
-- [ ] **Título**: Corregir `factory.py:111-116` (tipar `kwargs: dict[str, Any]` o pasar argumentos explícitos a `OllamaProvider` — 2 errores arg-type bajo mypy strict), los ficheros con fallos de prettier, y los MD001/MD004 de `docs/roadmap/06.17-*` y `docs/07-changelog/06.17-*`, hasta que `pre-commit run --all-files` y `markdownlint docs/**/*.md` salgan a 0 en local.
+- [x] **Título**: Corregir `factory.py:111-116` (tipar `kwargs: dict[str, Any]` o pasar argumentos explícitos a `OllamaProvider` — 2 errores arg-type bajo mypy strict), los ficheros con fallos de prettier, y los MD001/MD004 de `docs/roadmap/06.17-*` y `docs/07-changelog/06.17-*`, hasta que `pre-commit run --all-files` y `markdownlint docs/**/*.md` salgan a 0 en local.
 - **Tiempo**: 1 día · **Complejidad**: m
 - Incluye re-ejecutar la suite completa en local para auditar qué se mergeó en rojo desde 2026-05-29 (recomendación del hallazgo tests-2); las regresiones encontradas se registran y, si exceden este plan, se derivan al plan correctivo correspondiente.
 - **Tests automáticos**:
