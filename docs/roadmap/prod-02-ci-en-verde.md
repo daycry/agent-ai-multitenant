@@ -108,7 +108,7 @@ Este plan resucita CI y lo convierte en gate real:
 
 #### `task_prod_02_03` — Stack de integración arrancable en runners: perfil AppArmor
 
-- [ ] **Título**: Añadir al job `test-integration` (antes de `docker compose up --wait`, `ci.yml:229-232`) el paso `sudo apparmor_parser -r -W docker/apparmor/agentic-default.profile`; crear como fallback documentado `docker/docker-compose.ci.yml` con `apparmor=unconfined` solo para CI. Corregir el comentario engañoso de `docker-compose.yml:39` («a no-op where AppArmor is absent» — en runners Ubuntu AppArmor SÍ está presente).
+- [x] **Título**: Añadir al job `test-integration` (antes de `docker compose up --wait`, `ci.yml:229-232`) el paso `sudo apparmor_parser -r -W docker/apparmor/agentic-default.profile`; crear como fallback documentado `docker/docker-compose.ci.yml` con `apparmor=unconfined` solo para CI. Corregir el comentario engañoso de `docker-compose.yml:39` («a no-op where AppArmor is absent» — en runners Ubuntu AppArmor SÍ está presente).
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Depende de**: `task_prod_02_01` (sin triggers correctos no hay run donde verificarlo).
 - **Tests automáticos**:
