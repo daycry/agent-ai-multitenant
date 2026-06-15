@@ -120,7 +120,7 @@ Este plan resucita CI y lo convierte en gate real:
 
 #### `task_prod_02_04` — Protección de master: ADR + medida puente
 
-- [ ] **Título**: Redactar ADR (proposed) con las 3 opciones de protección de rama (Pro/público/disciplina, ver Decisiones clave) para decisión humana; aplicar de inmediato la medida puente: documentar en `docs/context/conventions.md` la regla «ningún merge a master con CI en rojo» con el comando de verificación (`gh pr checks <pr> --watch`), y activar la protección server-side en cuanto el humano decida.
+- [x] **Título**: Redactar ADR (proposed) con las 3 opciones de protección de rama (Pro/público/disciplina, ver Decisiones clave) para decisión humana; aplicar de inmediato la medida puente: documentar en `docs/context/conventions.md` la regla «ningún merge a master con CI en rojo» con el comando de verificación (`gh pr checks <pr> --watch`), y activar la protección server-side en cuanto el humano decida.
 - **Tiempo**: 4 h · **Complejidad**: s
 - **Depende de**: `task_prod_02_02` (no tiene sentido exigir verde antes de que verde sea alcanzable).
 
