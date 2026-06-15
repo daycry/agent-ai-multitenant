@@ -21,6 +21,7 @@ jobs:
   lint-python:
     name: Lint Python
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -77,6 +78,7 @@ jobs:
   lint-markdown:
     name: Lint Markdown
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -93,6 +95,7 @@ jobs:
   lint-typescript:
     name: Lint TypeScript
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -140,6 +143,7 @@ jobs:
   test-unit:
     name: Unit tests (Python)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -219,6 +223,7 @@ jobs:
   test-integration:
     name: Integration tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -355,6 +360,7 @@ jobs:
   build-images:
     name: Build Docker images
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
 

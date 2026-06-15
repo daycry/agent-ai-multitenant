@@ -31,6 +31,7 @@ jobs:
   build:
     name: Build ${{ matrix.template }}
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       # Don't stop the other thirteen if one fails — we want the full
       # signal of which templates are broken, not the first one.
@@ -83,6 +84,7 @@ jobs:
   summary:
     name: summary
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: build
     if: always()
     steps:

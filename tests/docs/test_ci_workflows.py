@@ -130,3 +130,15 @@ def test_integration_job_loads_apparmor_profile() -> None:
         "(apparmor_parser -r -W docker/apparmor/agentic-default.profile) before "
         "`docker compose up`, or the integration stack will not start in CI"
     )
+
+
+def test_every_job_declares_a_timeout(workflows: dict[str, dict[str, Any]]) -> None:
+    """Every job must set `timeout-minutes`. GitHub's default is 6h, so a hung
+    job (deadlocked test, stuck `docker compose up --wait`) would burn a runner
+    for hours before being killed (finding tests-8)."""
+    problems: list[str] = []
+    for name, data in workflows.items():
+        for job_name, job in (data.get("jobs") or {}).items():
+            if isinstance(job, dict) and "timeout-minutes" not in job:
+                problems.append(f"{name}:{job_name}")
+    assert not problems, "jobs without timeout-minutes (default 6h): " + ", ".join(problems)

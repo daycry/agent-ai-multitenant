@@ -206,7 +206,7 @@ Este plan resucita CI y lo convierte en gate real:
 
 #### `task_prod_02_11` — timeout-minutes en todos los jobs
 
-- [ ] **Título**: Añadir `timeout-minutes: 30` a cada job de los 3 workflows (`60` para build-images) — hoy ninguno lo define (default 6 h; los runs sanos tardaban 9-11 min). Extender `tests/docs/test_ci_workflows.py` para exigir el campo en todo job.
+- [x] **Título**: Añadir `timeout-minutes: 30` a cada job de los 3 workflows (`60` para build-images) — hoy ninguno lo define (default 6 h; los runs sanos tardaban 9-11 min). Extender `tests/docs/test_ci_workflows.py` para exigir el campo en todo job.
 - **Tiempo**: 1 h · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
