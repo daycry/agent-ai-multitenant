@@ -421,6 +421,28 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Smoke the api-server image (Plan prod-02 task_08, finding tests-7).
+      # PARAMETRIZED + NON-BLOCKING on prod-01: the core app Dockerfiles
+      # (api-server, workers, orchestrator) do NOT exist yet (quality-2 ->
+      # prod-01-despliegue-ejecutable), so "Build each app" above only builds
+      # what exists (today: the installer images, which are NOT python — hence
+      # we smoke ONLY api-server by name, never a blind `python -c` over every
+      # image). When prod-01 adds apps/api-server/Dockerfile, its image gets
+      # built above and this step imports it. The live /healthz + `pytest
+      # tests/smoke` (SMOKE_BASE_URL) smoke needs the infra stack and lands in
+      # prod-01 (tests/smoke/conftest.py skips cleanly until SMOKE_BASE_URL is
+      # set, so nothing fails in the meantime).
+      - name: Smoke api-server image (if built)
+        if: steps.detect.outputs.has_dockerfiles == 'true'
+        run: |
+          img="agentic-platform/api-server:ci"
+          if docker image inspect "$img" >/dev/null 2>&1; then
+            echo "Smoking $img"
+            docker run --rm "$img" python -c "import api_server; print('api_server import OK')"
+          else
+            echo "api-server image not built yet (apps/api-server/Dockerfile is prod-01); skipping smoke."
+          fi
+
       # Agent runtime images live under docker/agent-runtimes/, not apps/.
       # This step is the automated check for task_02_05 — it runs the
       # exact `docker build` the roadmap task expects.
