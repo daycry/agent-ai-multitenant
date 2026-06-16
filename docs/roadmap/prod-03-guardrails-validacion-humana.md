@@ -223,7 +223,7 @@ candados, definiendo de paso la política fail-open/fail-closed del motor.
 - [ ] **Título**: Reescribir `resolve_approval`
       (`apps/api-server/src/api_server/db/approval_repo.py:98-147`) como
       `UPDATE approval_requests SET status=... WHERE id=:id AND
-  status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
+status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       transacción); 0 filas afectadas → 409 en
       `POST /approvals/{id}/resolve`
       (`apps/api-server/src/api_server/routers/approvals.py:60-69`). Las

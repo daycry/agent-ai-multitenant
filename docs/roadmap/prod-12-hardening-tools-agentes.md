@@ -262,7 +262,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 - [ ] **Título**: Nueva tarea beat en apps/workers/src/workers/maintenance.py (registrada
       en beat_schedule.py) que liste `containers.list(filters={'label':
-    'com.agentic-platform.managed=true'})` (el label ya se estampa en container.py:31
+  'com.agentic-platform.managed=true'})` (el label ya se estampa en container.py:31
       "para encontrar y reapear huérfanos"), identifique los que no tienen ejecución viva
       asociada (label execution-id + margen de edad) y los elimine; análogamente las
       redes bridge de test-runtime huérfanas. Sustituir el no-op `idle_sweep_pools`
@@ -285,8 +285,8 @@ de ingestión es fail-open si ClamAV está caído (api-1).
       hace `docker.from_env()` dentro del sandbox, pero la imagen no instala el paquete
       `docker` (pyproject.toml:6) ni recibe socket por diseño (Dockerfile:8 "carries NO
       Docker client") — hoy los `run*\*`(run_pytest/run_lint/…) inyectados por esta vía
-    fallan en la primera llamada. Opción (a): retirarla del catálogo y del wiring,
-    documentando que la ejecución real de tests va por`TestRuntimeRunner` del worker.
+  fallan en la primera llamada. Opción (a): retirarla del catálogo y del wiring,
+  documentando que la ejecución real de tests va por`TestRuntimeRunner` del worker.
       Opción (b): error explícito "no soportado en sandbox" en boot. Actualizar la
       asignación de tools en seeds/catálogo para que el operador no pueda asignar una
       tool muerta.

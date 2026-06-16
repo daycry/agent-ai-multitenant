@@ -191,7 +191,7 @@ dependa de la disciplina de código en cada query futura:
 
 - [ ] **Título**: En `docker/postgres/init/02-roles.sh`, crear
       `service_user WITH LOGIN BYPASSRLS NOCREATEDB NOCREATEROLE`; `GRANT
-  SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `USAGE/SELECT ON SEQUENCES` +
+SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `USAGE/SELECT ON SEQUENCES` +
       `ALTER DEFAULT PRIVILEGES FOR ROLE migrations_user ... TO service_user`;
       **sin** `CREATE` en el schema ni ownership. Como el init solo corre en
       contenedores nuevos, añadir `docker/postgres/upgrade/2026xx-service-user.sh`
@@ -232,7 +232,7 @@ dependa de la disciplina de código en cada query futura:
 - [ ] **Título**: `tests/integration/test_db_roles_service_user.py`: conectado
       como `service_user`, (a) `ALTER TABLE agents DISABLE ROW LEVEL SECURITY`
       falla con `InsufficientPrivilege`; (b) `DROP POLICY`/`DROP TABLE`/`CREATE
-  TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
+TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
       (su razón de ser). Marcar `@cross_tenant` para entrar en el gate CI.
 - **Tiempo**: 3 h · **Complejidad**: s
 - **Depende de**: `task_prod14_04`

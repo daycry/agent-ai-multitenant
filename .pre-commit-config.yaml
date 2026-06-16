@@ -117,11 +117,6 @@ repos:
     rev: v4.0.0-alpha.8
     hooks:
       - id: prettier
-        # Pin prettier EXACTLY (Plan prod-01/prod-02): mirrors-prettier's tag
-        # floats its bundled prettier, so a fresh CI install resolved a
-        # different alpha than the cached local one and reformatted 4 docs that
-        # were locally clean. Pinning makes the lint reproducible (CI == local).
-        additional_dependencies: ["prettier@4.0.0-alpha.8"]
         types_or: [javascript, jsx, ts, tsx, json, yaml, markdown]
         exclude: |
           (?x)^(
