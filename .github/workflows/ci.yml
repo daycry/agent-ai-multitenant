@@ -257,25 +257,29 @@ jobs:
 
       - name: docker compose config
         if: steps.detect.outputs.has_compose == 'true'
-        run: docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml config
+        run: docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml -f docker/docker-compose.ci.yml config
 
-      # The compose services carry `apparmor=agentic-default` (x-seccomp
-      # anchor in docker-compose.yml). On a fresh GitHub Ubuntu runner that
-      # profile is NOT loaded into the kernel, so `docker compose up` aborts
-      # with "AppArmor profile agentic-default not found" — the exact reason
-      # the integration stack (and the cross-tenant gate) stopped running in
-      # CI since 2026-05-29 (finding tests-3). Load the REAL production
-      # profile so CI also verifies the profile parses (Decisión clave 2 de
-      # prod-02). If a future runner's parser rejects it, fall back to the
-      # documented overlay docker/docker-compose.ci.yml (apparmor=unconfined).
-      - name: Load AppArmor profile (agentic-default)
+      # The compose services carry `apparmor=agentic-default` (x-seccomp anchor
+      # in docker-compose.yml), the reason the integration stack stopped running
+      # in CI since 2026-05-29 (finding tests-3). GitHub HOSTED runners do not
+      # allow loading custom AppArmor profiles (`apparmor_parser` exits non-zero),
+      # so we (1) ATTEMPT the real profile best-effort — keeps the intent and
+      # works on self-hosted runners that permit it — and (2) bring the stack up
+      # through the documented docker/docker-compose.ci.yml overlay
+      # (apparmor=unconfined for the infra services) so it starts regardless.
+      # Trade-off (deuda): on hosted runners CI no longer proves the profile
+      # loads; the UNTRUSTED agent/test sandbox is unaffected (its strict profile
+      # is applied by the worker at launch, not via compose).
+      - name: Load AppArmor profile (agentic-default, best-effort)
         if: steps.detect.outputs.has_compose == 'true'
-        run: sudo apparmor_parser -r -W docker/apparmor/agentic-default.profile
+        run: |
+          sudo apparmor_parser -r -W docker/apparmor/agentic-default.profile \
+            || echo "apparmor_parser failed (expected on GitHub hosted runners); the docker-compose.ci.yml overlay applies apparmor=unconfined so the stack still starts."
 
       - name: Bring up test stack
         if: steps.detect.outputs.has_compose == 'true'
         run: |
-          docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d --wait postgres redis vault minio
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml -f docker/docker-compose.ci.yml up -d --wait postgres redis vault minio
 
       - name: Install project (editable) + test deps
         if: steps.detect.outputs.has_compose == 'true'
@@ -379,11 +383,11 @@ jobs:
 
       - name: Stack logs on failure
         if: failure() && steps.detect.outputs.has_compose == 'true'
-        run: docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml logs --tail=200
+        run: docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml -f docker/docker-compose.ci.yml logs --tail=200
 
       - name: Tear down
         if: always() && steps.detect.outputs.has_compose == 'true'
-        run: docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml down -v
+        run: docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml -f docker/docker-compose.ci.yml down -v
 
   # ---------------------------------------------------------------------------
   # Docker image build smoke test (per app with a Dockerfile).
@@ -414,19 +418,25 @@ jobs:
         if: steps.detect.outputs.has_dockerfiles == 'true'
         run: |
           set -euo pipefail
+          # Plain `docker build` (default daemon builder), NOT `docker buildx
+          # build`: the buildx docker-container driver (setup-buildx-action)
+          # resolves `FROM` only from registries, so the dependent backend
+          # images FROM the locally-built api-server base failed with "pull
+          # access denied". The default builder resolves FROM from the local
+          # image store.
+          #
           # Backend apps import the local packages/ (shared-* + api_server), so
           # their build context is the repo ROOT (Plan prod-01 task_01).
           # api-server is the heavy BASE image the other three reuse via
           # BASE_IMAGE, so it builds FIRST.
           if [ -f apps/api-server/Dockerfile ]; then
             echo "::group::Building api-server (base)"
-            docker buildx build --load -f apps/api-server/Dockerfile \
-              -t agentic-platform/api-server:ci .
+            docker build -f apps/api-server/Dockerfile -t agentic-platform/api-server:ci .
             echo "::endgroup::"
             for app in workers orchestrator notification-dispatcher; do
               [ -f "apps/$app/Dockerfile" ] || continue
               echo "::group::Building $app"
-              docker buildx build --load -f "apps/$app/Dockerfile" \
+              docker build -f "apps/$app/Dockerfile" \
                 --build-arg BASE_IMAGE=agentic-platform/api-server:ci \
                 -t "agentic-platform/$app:ci" .
               echo "::endgroup::"
@@ -441,7 +451,7 @@ jobs:
               api-server|workers|orchestrator|notification-dispatcher) continue ;;
             esac
             echo "::group::Building $app_name"
-            docker buildx build --load -t "agentic-platform/$app_name:ci" "$app_dir"
+            docker build -t "agentic-platform/$app_name:ci" "$app_dir"
             echo "::endgroup::"
           done
 
@@ -548,9 +558,20 @@ jobs:
         working-directory: apps/admin-panel
         run: npx playwright install --with-deps chromium
 
+      # Build the production bundle so Playwright serves it via `next start`
+      # (E2E_WEBSERVER_CMD below). Under `next dev` Next compiles each route on
+      # first hit and that latency made the mocked subset time out on the runner
+      # (Plan prod-01). Pre-building eliminates it.
+      - name: next build (for e2e)
+        if: steps.detect.outputs.has_node == 'true'
+        working-directory: apps/admin-panel
+        run: npm run build
+
       - name: Playwright e2e (mocked subset — no live backend)
         if: steps.detect.outputs.has_node == 'true'
         working-directory: apps/admin-panel
+        env:
+          E2E_WEBSERVER_CMD: npm run start
         run: |
           # Self-contained specs only: those that mock the API via page.route.
           mapfile -t specs < <(grep -rlE "page\.route|\.route\(" e2e)

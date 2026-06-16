@@ -32,7 +32,10 @@ export default defineConfig({
   // can blow past the 5 s default toHaveURL timeout. Serial keeps the
   // suite small-and-fast and predictable.
   workers: 1,
-  retries: 0,
+  // One retry under CI: even against a pre-built `next start` server the first
+  // hit to a route can be marginally slow on a cold runner (Plan prod-01 — the
+  // mocked subset timed out under `next dev`; CI now builds + serves prod).
+  retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? "github" : "list",
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
@@ -43,14 +46,19 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: "npm run dev",
+    // Configurable so CI can serve a PRE-BUILT production server
+    // (E2E_WEBSERVER_CMD="npm run start" after `npm run build`) instead of
+    // `next dev`. Under `next dev` Next compiles each route on first hit, and
+    // on a CI runner that latency blew past the per-spec timeouts (Plan
+    // prod-01: the mocked subset failed in CI). `next start` is pre-compiled.
+    command: process.env.E2E_WEBSERVER_CMD ?? "npm run dev",
     url: "http://localhost:3000",
-    // If you already have `npm run dev` open in another terminal,
-    // reuse it instead of failing or starting a second one.
+    // If you already have a server open in another terminal, reuse it instead
+    // of failing or starting a second one.
     reuseExistingServer: !process.env.CI,
-    // First boot of Next.js dev mode can take a moment (compiling
-    // tailwind, type-checking pages). 90s leaves slack.
-    timeout: 90_000,
+    // Boot slack (next dev compiles tailwind/types on first boot; next start
+    // is fast). 120s is comfortable for either.
+    timeout: 120_000,
     stdout: "pipe",
     stderr: "pipe",
   },
