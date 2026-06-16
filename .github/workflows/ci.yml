@@ -315,6 +315,13 @@ jobs:
           # resolve in both pytest and pre-commit's mypy hook.
           python -m pip install -e "packages/shared-guardrails[dev]"
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
+          # Generated Python SDK (Plan 13 task_13_13). Landed after CI went
+          # dark on 2026-05-29, so the integration job never installed it and
+          # tests/integration/test_sdk_python.py failed with ModuleNotFoundError
+          # (finding prod-01 CI). The package ships the committed generated code
+          # under src/agentic_platform_sdk; an editable install exposes it for
+          # import without a regeneration step.
+          python -m pip install -e "packages/sdk-python"
 
       # Build agent-runtime:v1 so the e2e agent-pipeline smoke (and the other
       # Docker-backed integration tests) actually RUN instead of skipping —
@@ -381,6 +388,10 @@ jobs:
           # to the standard port for ergonomic conftest defaults.
           TEST_PG_PORT: "15432"
           TEST_REDIS_URL: redis://localhost:6379/15
+          # FORENSICS (Plan prod-01, temporal): print which test drops
+          # user_mfa_totp in CI (see conftest.pytest_runtest_teardown). Grep
+          # the log for "[MFA-DROP]". Remove with the diag once fixed.
+          MFA_FORENSICS: "1"
         run: |
           if find tests/integration -type f -name "test_*.py" | grep -q .; then
             pytest tests/integration -v

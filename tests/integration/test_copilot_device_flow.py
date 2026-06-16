@@ -216,7 +216,12 @@ async def _create_copilot_provider(client: AsyncClient, headers: dict[str, str])
     """Create a copilot provider via the CRUD surface; return its id."""
     resp = await client.post(
         "/admin/llm-providers",
-        json={"kind": "copilot", "display_name": "Copilot", "oauth_token": "bootstrap"},
+        json={
+            "kind": "copilot",
+            "slug": "copilot",
+            "display_name": "Copilot",
+            "oauth_token": "bootstrap",
+        },
         headers=headers,
     )
     assert resp.status_code == 201, resp.text
@@ -279,7 +284,12 @@ async def test_start_rejects_non_copilot_provider(configured_app, migrations_pg_
     async with _client(configured_app) as client:
         created = await client.post(
             "/admin/llm-providers",
-            json={"kind": "ollama", "display_name": "O", "base_url": "http://o:11434"},
+            json={
+                "kind": "ollama",
+                "slug": "o",
+                "display_name": "O",
+                "base_url": "http://o:11434",
+            },
             headers=headers,
         )
         pid = created.json()["id"]
