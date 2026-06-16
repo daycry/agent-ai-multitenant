@@ -350,18 +350,21 @@ jobs:
       # ANTES de la 0037 que crea user_mfa_totp) y LUEGO test_auth => ¿el
       # downgrade/restore deja la BD de sesión compartida inconsistente en CI?
       # No fatal (continue-on-error); se retira al cerrar el diagnóstico.
-      - name: FORENSICS — auth ordering (non-fatal, temporal)
+      # FORENSICS round 2 (Plan prod-01, temporal): A confirmó que NO es orden
+      # (test_auth falla AISLADO en CI). Este diag corre primero sobre una BD de
+      # sesión FRESCA: tras un `upgrade head` limpio, imprime alembic_version +
+      # qué tablas (users/scim/user_mfa_totp/webauthn) existen físicamente. En
+      # local: 0083 + 70 tablas + todas presentes. En CI esperamos ver dónde
+      # diverge (¿version en head pero user_mfa_totp ausente?). No fatal.
+      - name: FORENSICS — mfa migration diag (non-fatal, temporal)
         if: steps.detect.outputs.has_compose == 'true'
         continue-on-error: true
         env:
           TEST_PG_PORT: "15432"
           TEST_REDIS_URL: redis://localhost:6379/15
         run: |
-          echo "::group::A: test_auth ISOLATED"
-          pytest tests/integration/test_auth.py -v 2>&1 | tail -15 || true
-          echo "::endgroup::"
-          echo "::group::B: approval_timeout THEN test_auth (ordering repro)"
-          pytest tests/integration/test_approval_timeout.py tests/integration/test_auth.py -v 2>&1 | tail -25 || true
+          echo "::group::DIAG: clean upgrade head -> mfa table state"
+          pytest tests/integration/test_aaa_mfa_diag.py -v -s 2>&1 | tail -25 || true
           echo "::endgroup::"
 
       - name: pytest cross-tenant isolation gate
