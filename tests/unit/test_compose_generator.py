@@ -128,11 +128,13 @@ def test_minimal_compose_top_level_shape() -> None:
     compose = generate_compose(_config())
     assert compose["name"] == "agentic-platform"
     assert "services" in compose
-    # The two canonical networks are declared.
+    # The canonical networks are declared: agentic-net + the two internal ones
+    # (agentic-agents for the sandbox, agentic-docker for the socket-proxy lane).
     networks = compose["networks"]
     assert isinstance(networks, dict)
-    assert set(networks) == {"agentic-net", "agentic-agents"}
+    assert set(networks) == {"agentic-net", "agentic-agents", "agentic-docker"}
     assert networks["agentic-agents"]["internal"] is True
+    assert networks["agentic-docker"]["internal"] is True
 
 
 def test_rendered_yaml_parses_and_round_trips() -> None:
@@ -561,3 +563,45 @@ def test_workers_emit_backup_env_prefixed() -> None:
         "WORKERS_BACKUP_ENCRYPTION_VAULT_KEY",
     ):
         assert key in env, f"workers is missing backup env {key}"
+
+
+# ---------------------------------------------------------------------------
+# task_prod01_09 — docker-socket-proxy (ACL minima) + red agentic-agents en los
+# workers. El sandbox NUNCA recibe el socket Docker directo (Principio 2).
+# ---------------------------------------------------------------------------
+def test_docker_socket_proxy_has_minimal_acl_and_mounts_the_socket() -> None:
+    proxy = generate_compose(_config())["services"]["docker-socket-proxy"]
+    env = proxy["environment"]
+    # The worker needs to create/list containers, reference images, attach
+    # networks — and POST to create them. Everything else is denied.
+    for on in ("CONTAINERS", "IMAGES", "NETWORKS", "POST"):
+        assert str(env.get(on)) == "1", f"socket-proxy ACL should allow {on}"
+    for off in ("EXEC", "VOLUMES", "SWARM"):
+        assert str(env.get(off)) == "0", f"socket-proxy ACL must deny {off}"
+    vols = " ".join(proxy.get("volumes", []))
+    assert "/var/run/docker.sock" in vols, "socket-proxy must mount the docker socket"
+
+
+def test_socket_proxy_lives_on_a_dedicated_internal_network_only() -> None:
+    compose = generate_compose(_config())
+    proxy = compose["services"]["docker-socket-proxy"]
+    nets = proxy["networks"]
+    # Dedicated + internal: ONLY the workers reach the Docker API, never the
+    # untrusted agent runtimes (which sit on agentic-agents) nor the internet.
+    assert nets == ["agentic-docker"], f"socket-proxy must be on the dedicated net only: {nets}"
+    netblock = compose["networks"]["agentic-docker"]
+    assert netblock.get("internal") is True, "agentic-docker must be internal"
+    assert compose["networks"]["agentic-net"], "agentic-net still declared"
+
+
+@pytest.mark.parametrize("service_name", ["workers", "workers-privileged"])
+def test_workers_reach_docker_via_proxy_and_join_agents_network(service_name: str) -> None:
+    svc = generate_compose(_config())["services"][service_name]
+    env = svc["environment"]
+    assert (
+        env.get("DOCKER_HOST") == "tcp://docker-socket-proxy:2375"
+    ), f"{service_name} must talk to the Docker API through the proxy, not the raw socket"
+    assert "WORKERS_EGRESS_PROXY_URL" in env, f"{service_name} must get WORKERS_EGRESS_PROXY_URL"
+    nets = svc["networks"]
+    assert "agentic-agents" in nets, f"{service_name} must join agentic-agents (launch runtimes)"
+    assert "agentic-docker" in nets, f"{service_name} must join the socket-proxy network"

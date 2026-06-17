@@ -77,6 +77,10 @@ IMAGE_GRAFANA = "grafana/grafana:11.2.0"
 IMAGE_NODE_EXPORTER = "prom/node-exporter:v1.8.2"
 IMAGE_ALERTMANAGER = "prom/alertmanager:v0.27.0"
 IMAGE_CADVISOR = "gcr.io/cadvisor/cadvisor:v0.49.1"
+# Read-only Docker API gateway with a per-endpoint ACL (Plan prod-01 task_09,
+# ADR 0060). The workers reach the daemon ONLY through this, never the raw
+# socket (Principio 2).
+IMAGE_DOCKER_SOCKET_PROXY = "tecnativa/docker-socket-proxy:0.3.0"
 
 #: The application images the platform builds. The generator references them by
 #: tag (the installer pulls the released images); the build context lives in the
@@ -102,6 +106,7 @@ CORE_SERVICES: tuple[str, ...] = (
     "clamav",
     "docling-serve",
     "egress-proxy",
+    "docker-socket-proxy",
     "api-server",
     "orchestrator",
     "workers",
@@ -394,6 +399,54 @@ def _egress_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
     return svc
 
 
+def _docker_socket_proxy_service(
+    cfg: InstallerConfig,  # noqa: ARG001 — uniform builder signature
+    *,
+    prod: bool,  # noqa: ARG001 — uniform builder signature
+) -> dict[str, Any]:
+    """Least-privilege Docker API gateway (Plan prod-01 task_09 / sandbox-1, ADR
+    0060). The workers must launch ephemeral runtime containers, but handing them
+    the raw ``/var/run/docker.sock`` is a full host-root escape (Principio 2). So
+    this proxy holds the socket (read-only mount) and exposes a TCP API on a
+    DEDICATED internal network with a per-endpoint ACL: containers/images/
+    networks + POST are allowed (create + wire runtimes); exec/volumes/swarm and
+    everything else are denied (no `docker exec`, no host bind-mounts, no swarm).
+    """
+
+    svc: dict[str, Any] = {
+        "image": IMAGE_DOCKER_SOCKET_PROXY,
+        "environment": {
+            # Allow only what launching a sandbox runtime needs.
+            "CONTAINERS": "1",
+            "IMAGES": "1",
+            "NETWORKS": "1",
+            "POST": "1",
+            # Deny the dangerous surface explicitly (defaults are 0, pinned for
+            # clarity + as a regression guard).
+            "EXEC": "0",
+            "VOLUMES": "0",
+            "SWARM": "0",
+            "SECRETS": "0",
+            "CONFIGS": "0",
+            "NODES": "0",
+            "SERVICES": "0",
+            "TASKS": "0",
+            "PLUGINS": "0",
+            "SYSTEM": "0",
+            "INFO": "0",
+        },
+        "volumes": ["/var/run/docker.sock:/var/run/docker.sock:ro"],
+        "healthcheck": _healthcheck(
+            "wget -q --spider http://localhost:2375/_ping || exit 1", start_period="10s"
+        ),
+        # Dedicated internal net ONLY (no agentic-net, no agentic-agents): only
+        # the workers reach the Docker API, never the untrusted runtimes.
+        "networks": ["agentic-docker"],
+    }
+    svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
+    return svc
+
+
 def _app_environment(cfg: InstallerConfig, prefix: str, *, prod: bool) -> dict[str, Any]:
     """Config EVERY platform app service reads, emitted PREFIXED with that
     service's pydantic ``env_prefix`` (``API_SERVER_`` / ``ORCHESTRATOR_`` /
@@ -508,6 +561,11 @@ def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
 _WORKER_GENERIC_QUEUES = "default,heavy,gpu,ingestion,test,review"
 _WORKER_PRIVILEGED_QUEUE = "privileged"
 
+# Both worker lanes sit on three nets (task_09): agentic-net (general), the
+# internal agentic-agents (reach the egress-proxy + the runtimes they launch),
+# and the internal agentic-docker (reach the docker-socket-proxy).
+_WORKER_NETWORKS = ["agentic-net", "agentic-agents", "agentic-docker"]
+
 
 def _workers_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     """The WORKERS_* environment shared by both worker lanes (same Settings)."""
@@ -518,6 +576,13 @@ def _workers_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             "WORKERS_RESULT_BACKEND": "redis://redis:6379/2",
             "WORKERS_EVENTS_REDIS_URL": "redis://redis:6379/3",
             "WORKERS_DATA_ROOT": cfg.storage.data_root,
+            # Docker API via the least-privilege proxy, never the raw socket
+            # (task_09, ADR 0060). DOCKER_HOST is read by the docker SDK itself,
+            # not a WORKERS_ Settings field, so it stays unprefixed.
+            "DOCKER_HOST": "tcp://docker-socket-proxy:2375",
+            # Launched runtimes reach LLM providers only through the egress
+            # allowlist proxy (field egress_proxy_url).
+            "WORKERS_EGRESS_PROXY_URL": "http://egress-proxy:8888",
             # Backup wiring (workers-6 / prod-04). The NAMES are pinned here so
             # the .env contract holds; the correct VALUES (a dedicated pg_dump
             # DSN, the bind-mount capture path) are prod-04's job — TODO(prod-04).
@@ -559,7 +624,7 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},
         },
-        "networks": ["agentic-net"],
+        "networks": _WORKER_NETWORKS,
     }
     svc.update(_hardening(limits_cpus="4.0", limits_memory=mem))
     # Scale the GENERIC Celery worker pool per the wizard's resource choice.
@@ -584,7 +649,7 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},
         },
-        "networks": ["agentic-net"],
+        "networks": _WORKER_NETWORKS,
     }
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
     svc["deploy"]["replicas"] = 1
@@ -866,6 +931,7 @@ _BUILDERS = {
     "clamav": _clamav_service,
     "docling-serve": _docling_service,
     "egress-proxy": _egress_proxy_service,
+    "docker-socket-proxy": _docker_socket_proxy_service,
     "api-server": _api_server_service,
     "orchestrator": _orchestrator_service,
     "workers": _workers_service,
@@ -954,7 +1020,11 @@ def selected_services(cfg: InstallerConfig, *, monitoring: bool) -> list[str]:
 
 
 def _networks_block() -> dict[str, Any]:
-    """The two canonical networks (agentic-net + the internal agentic-agents)."""
+    """The platform networks: agentic-net (egress), the internal agentic-agents
+    (sandbox ↔ egress-proxy), and the internal agentic-docker — a DEDICATED net
+    that carries ONLY the workers ↔ docker-socket-proxy traffic so the Docker
+    API is never reachable from the untrusted agent runtimes (Plan prod-01
+    task_09, ADR 0060)."""
 
     return {
         "agentic-net": {"name": "agentic-net", "driver": "bridge"},
@@ -963,6 +1033,11 @@ def _networks_block() -> dict[str, Any]:
             "driver": "bridge",
             "internal": True,
             "driver_opts": {"com.docker.network.bridge.enable_icc": "true"},
+        },
+        "agentic-docker": {
+            "name": "agentic-docker",
+            "driver": "bridge",
+            "internal": True,
         },
     }
 

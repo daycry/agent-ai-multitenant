@@ -189,7 +189,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_09` — Acceso al daemon Docker + red `agentic-agents` para workers
 
-- [ ] **Título**: docker-socket-proxy con ACL mínima y red de agentes en los servicios workers
+- [x] **Título**: docker-socket-proxy con ACL mínima y red de agentes en los servicios workers
 - **Descripción**: añadir a `_BUILDERS`/`CORE_SERVICES` un servicio `docker-socket-proxy` (ACL: containers/images/networks ON, exec/volumes/swarm OFF) en una red dedicada; los servicios `workers`/`workers-privileged` reciben `DOCKER_HOST=tcp://docker-socket-proxy:2375` y se unen a `agentic-agents` (arreglando el comentario contradictorio de `compose_generator.py:450-452`). Inyectar `WORKERS_EGRESS_PROXY_URL` apuntando al egress-proxy. Redactar el **ADR propuesto** de la decisión clave 1. Cierra sandbox-1 y la pata Docker de workers-6 y deploy-3.
 - **Depende de**: task_prod01_06
 - **Tiempo**: 1,5 días · **Complejidad**: m
