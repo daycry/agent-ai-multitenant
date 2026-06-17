@@ -90,57 +90,6 @@ async def load_webauthn_credentials(
     return list(result.scalars().all())
 
 
-async def _mfa_diag_on_failure() -> None:
-    """TEMP (prod-01 CI forensics): on a ``user_mfa_totp does not exist`` error,
-    probe a FRESH migrations_user connection (same role the admin engine uses)
-    so we can tell whether the table is globally invisible to that role
-    (search_path/schema) or the failing pooled session was stale. Remove with
-    the other diagnostics once the CI-only failure is fixed."""
-    import os
-
-    import structlog
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from api_server.config import get_settings
-
-    log = structlog.get_logger("mfa.forensics")
-
-    def _record(line: str) -> None:
-        # Write to a file too: pytest discards captured logs unless the run
-        # reaches its end-of-run failure report (a timeout-cancelled run loses
-        # them). The CI job cats MFA_FORENSICS_FILE in an always() step.
-        log.error("mfa.forensics", detail=line)
-        path = os.environ.get("MFA_FORENSICS_FILE")
-        if path:
-            with open(path, "a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-
-    try:
-        # FRESH engine/connection (not the pooled admin engine) as the same
-        # migrations_user role, to compare its view against the failing session.
-        eng = create_async_engine(get_settings().admin_database_url)
-        try:
-            async with eng.connect() as conn:
-
-                async def _one(sql: str) -> object:
-                    return (await conn.execute(text(sql))).scalar()
-
-                cu = await _one("SELECT current_user")
-                sp = await _one("SHOW search_path")
-                mfa = await _one("SELECT to_regclass('public.user_mfa_totp')::text")
-                usr = await _one("SELECT to_regclass('public.users')::text")
-                ver = await _one("SELECT version_num FROM alembic_version")
-                _record(
-                    f"[MFA-PROBE] fresh migrations_user conn: current_user={cu!r} "
-                    f"search_path={sp!r} user_mfa_totp={mfa!r} users={usr!r} alembic={ver!r}"
-                )
-        finally:
-            await eng.dispose()
-    except Exception as exc:  # pragma: no cover - diagnostic
-        _record(f"[MFA-PROBE] probe_failed: {exc!r}")
-
-
 async def user_mfa_methods(user_id: UUID) -> list[str]:
     """Second-factor methods ``user_id`` has confirmed in ANY tenant.
 
@@ -153,18 +102,14 @@ async def user_mfa_methods(user_id: UUID) -> list[str]:
     sessionmaker = get_admin_sessionmaker()
     methods: list[str] = []
     async with sessionmaker() as session, session.begin():
-        try:
-            has_totp = await session.execute(
-                select(
-                    exists().where(
-                        UserMfaTotp.user_id == user_id,
-                        UserMfaTotp.confirmed_at.is_not(None),
-                    )
+        has_totp = await session.execute(
+            select(
+                exists().where(
+                    UserMfaTotp.user_id == user_id,
+                    UserMfaTotp.confirmed_at.is_not(None),
                 )
             )
-        except Exception:  # pragma: no cover - TEMP prod-01 CI forensics
-            await _mfa_diag_on_failure()
-            raise
+        )
         if bool(has_totp.scalar()):
             methods.append(MFA_METHOD_TOTP)
         has_webauthn = await session.execute(

@@ -96,6 +96,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
 def configured_app(
     alembic_config,
     app_database_url: str,
+    admin_database_url: str,
     test_redis_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -112,6 +113,11 @@ def configured_app(
     asyncio.run(_flush_redis(test_redis_url))
 
     monkeypatch.setenv("API_SERVER_DATABASE_URL", app_database_url)
+    # Pin the ADMIN engine (BYPASSRLS) at the throwaway test DB too — otherwise
+    # admin-engine reads (e.g. the local-login MFA probe) fall back to the
+    # default DSN, which is only migrated locally (the dev DB) and is empty in
+    # CI. See the matching note in test_auth.py / conftest.py.
+    monkeypatch.setenv("API_SERVER_ADMIN_DATABASE_URL", admin_database_url)
     monkeypatch.setenv("API_SERVER_REDIS_URL", test_redis_url)
     monkeypatch.setenv("API_SERVER_JWT_SECRET", "test-secret")
 
