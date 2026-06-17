@@ -242,6 +242,7 @@ def build_env_vars(
         "WORKERS_BACKUP_ROOT": f"{cfg.storage.data_root}/backups",
         # --- orchestrator (ORCHESTRATOR_ prefixed) ---
         "ORCHESTRATOR_ENVIRONMENT": runtime_env,
+        "ORCHESTRATOR_DATABASE_URL": db_urls["DATABASE_URL"],
         # --- notification-dispatcher (NOTIFY_ prefixed) ---
         # MUST match API_SERVER_NOTIFICATION_ENCRYPTION_KEY (write/read pair).
         "NOTIFY_ENVIRONMENT": runtime_env,

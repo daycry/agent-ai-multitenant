@@ -378,31 +378,70 @@ def _egress_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
     return svc
 
 
-def _app_environment(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
-    """Shared environment for the platform application services.
+def _app_environment(cfg: InstallerConfig, prefix: str, *, prod: bool) -> dict[str, Any]:
+    """Config EVERY platform app service reads, emitted PREFIXED with that
+    service's pydantic ``env_prefix`` (``API_SERVER_`` / ``ORCHESTRATOR_`` /
+    ``WORKERS_`` / ``NOTIFY_``).
 
-    Wires the DB/Redis/MinIO/Vault references + the deployment environment so
-    the runtime services' prod secret guard sees a real ``environment`` value.
-    Secrets are ``${ENV}`` references only.
+    Emitting these UNprefixed (the old behaviour) meant the runtime — which reads
+    ``<PREFIX><FIELD>`` — silently fell back to its dev default and the prod
+    dev-secret guard never even saw ``environment=prod`` (finding secrets-2,
+    deploy-3 pata 1). Only the two keys read by every service live here; each
+    service builder adds its own keys (see ``_app_env`` usage). Secrets are
+    ``${ENV}`` references only (no ``:-default`` in prod → fail loud).
     """
 
     return {
-        "ENVIRONMENT": cfg.system.environment.value,
-        "PLATFORM_DOMAIN": cfg.system.domain,
-        "DATABASE_URL": _env_ref("DATABASE_URL", None, prod=prod),
-        "ADMIN_DATABASE_URL": _env_ref("ADMIN_DATABASE_URL", None, prod=prod),
-        "REDIS_URL": _env_ref("REDIS_URL", "redis://redis:6379/0", prod=prod),
-        "MINIO_ENDPOINT": "minio:9000",
-        "MINIO_ACCESS_KEY": _env_ref("MINIO_ACCESS_KEY", None, prod=prod),
-        "MINIO_SECRET_KEY": _env_ref("MINIO_SECRET_KEY", None, prod=prod),
-        "VAULT_ADDR": "http://vault:8200",
+        f"{prefix}ENVIRONMENT": cfg.system.environment.value,
+        # Reference the per-service DSN the .env carries (config_generators
+        # writes one per service: api-server gets the app role, workers/notify
+        # the migrations role, etc.) — NOT a shared bare var.
+        f"{prefix}DATABASE_URL": _env_ref(f"{prefix}DATABASE_URL", None, prod=prod),
     }
 
 
 def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    env = _app_environment(cfg, "API_SERVER_", prod=prod)
+    env.update(
+        {
+            "API_SERVER_ADMIN_DATABASE_URL": _env_ref(
+                "API_SERVER_ADMIN_DATABASE_URL", None, prod=prod
+            ),
+            # In-stack service URLs are fixed by this compose → literals (no .env
+            # ref needed). Redis logical DBs: 0 cache, 1 broker, 2 result.
+            "API_SERVER_REDIS_URL": "redis://redis:6379/0",
+            "API_SERVER_BROKER_URL": "redis://redis:6379/1",
+            "API_SERVER_RESULT_BACKEND": "redis://redis:6379/2",
+            "API_SERVER_VAULT_URL": "http://vault:8200",
+            "API_SERVER_MINIO_URL": "http://minio:9000",
+            # Secrets: reference the per-service prefixed .env var that
+            # config_generators.build_env_vars writes (the compose↔.env contract
+            # is asserted by tests/unit/test_compose_env_contract.py). VAULT_TOKEN
+            # is NOT here: it is optional (default None) and injected by the Vault
+            # bootstrap (task 15_09), not the .env.
+            "API_SERVER_JWT_SECRET": _env_ref("API_SERVER_JWT_SECRET", None, prod=prod),
+            "API_SERVER_MINIO_ACCESS_KEY": _env_ref("API_SERVER_MINIO_ACCESS_KEY", None, prod=prod),
+            "API_SERVER_MINIO_SECRET_KEY": _env_ref("API_SERVER_MINIO_SECRET_KEY", None, prod=prod),
+            "API_SERVER_SSO_ENCRYPTION_KEY": _env_ref(
+                "API_SERVER_SSO_ENCRYPTION_KEY", None, prod=prod
+            ),
+            "API_SERVER_NOTIFICATION_ENCRYPTION_KEY": _env_ref(
+                "API_SERVER_NOTIFICATION_ENCRYPTION_KEY", None, prod=prod
+            ),
+            "API_SERVER_REVIEW_URL_SIGNING_SECRET": _env_ref(
+                "API_SERVER_REVIEW_URL_SIGNING_SECRET", None, prod=prod
+            ),
+            "API_SERVER_INCOMING_WEBHOOK_ENCRYPTION_KEY": _env_ref(
+                "API_SERVER_INCOMING_WEBHOOK_ENCRYPTION_KEY", None, prod=prod
+            ),
+            # Public base URL the IdP redirects back to — derived from the wizard
+            # domain (the app's dev default localhost:8001 is wrong for prod).
+            "API_SERVER_SSO_REDIRECT_BASE_URL": f"https://{cfg.system.domain}",
+        }
+    )
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/api-server:{APP_IMAGE_TAG}",
-        "environment": _app_environment(cfg, prod=prod),
+        "environment": env,
         "ports": [f"{cfg.ports.api_server}:8000"],
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
@@ -423,9 +462,16 @@ def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
 
 
 def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    env = _app_environment(cfg, "ORCHESTRATOR_", prod=prod)
+    env.update(
+        {
+            "ORCHESTRATOR_REDIS_URL": "redis://redis:6379/0",
+            "ORCHESTRATOR_BROKER_URL": "redis://redis:6379/1",
+        }
+    )
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/orchestrator:{APP_IMAGE_TAG}",
-        "environment": _app_environment(cfg, prod=prod),
+        "environment": env,
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},
@@ -440,9 +486,18 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     # worker_replicas / worker_memory_gib come from the wizard's ResourceConfig
     # (parametrised resource allocation, task 15_03).
     mem = f"{cfg.resources.worker_memory_gib}g"
+    env = _app_environment(cfg, "WORKERS_", prod=prod)
+    env.update(
+        {
+            "WORKERS_BROKER_URL": "redis://redis:6379/1",
+            "WORKERS_RESULT_BACKEND": "redis://redis:6379/2",
+            "WORKERS_EVENTS_REDIS_URL": "redis://redis:6379/3",
+            "WORKERS_DATA_ROOT": cfg.storage.data_root,
+        }
+    )
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
-        "environment": _app_environment(cfg, prod=prod),
+        "environment": env,
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},
@@ -458,9 +513,20 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
 
 
 def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    env = _app_environment(cfg, "NOTIFY_", prod=prod)
+    env.update(
+        {
+            "NOTIFY_BROKER_URL": "redis://redis:6379/1",
+            "NOTIFY_RESULT_BACKEND": "redis://redis:6379/2",
+            "NOTIFY_EVENTS_REDIS_URL": "redis://redis:6379/3",
+            "NOTIFY_NOTIFICATION_ENCRYPTION_KEY": _env_ref(
+                "NOTIFY_NOTIFICATION_ENCRYPTION_KEY", None, prod=prod
+            ),
+        }
+    )
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/notification-dispatcher:{APP_IMAGE_TAG}",
-        "environment": _app_environment(cfg, prod=prod),
+        "environment": env,
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},

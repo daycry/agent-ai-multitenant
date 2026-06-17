@@ -137,7 +137,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_05` — Envs prefijadas por servicio en el compose generado
 
-- [ ] **Título**: `_app_environment` emite las claves que cada Settings lee de verdad
+- [x] **Título**: `_app_environment` emite las claves que cada Settings lee de verdad
 - **Descripción**: reescribir `_app_environment` y los builders por servicio (`compose_generator.py:389-399, 402-422`) para emitir nombres prefijados: `API_SERVER_*` (incl. `API_SERVER_JWT_SECRET`, `API_SERVER_VAULT_TOKEN`, `API_SERVER_ENVIRONMENT=prod`, `API_SERVER_DATABASE_URL`...), `WORKERS_*`, `ORCHESTRATOR_*`, `NOTIFY_*`, vía `_env_ref` sin fallback (fail-loud si falta en `.env`). Añadir **test de contrato** que cruce las claves emitidas por `config_generators.py:228-249` y por cada builder contra el `env_prefix` real de cada Settings (`api_server/config.py:412`, `workers/config.py:619`, etc.) para que no vuelvan a divergir. Cierra secrets-2 y la pata (1) de deploy-3; al llegar `API_SERVER_ENVIRONMENT=prod` el guard anti-defaults se activa (el rediseño fail-closed del guard es prod-10).
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
