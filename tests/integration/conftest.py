@@ -262,35 +262,66 @@ def configured_app(
 # In CI the full integration suite fails 3 test_auth tests with
 # `relation "user_mfa_totp" does not exist`, yet test_aaa_mfa_diag shows the
 # table present at suite start and a local full run does not reproduce it.
-# This teardown hook polls the shared session DB after every test and prints a
-# loud marker the moment the table transitions present -> absent, naming the
-# test whose teardown first observes it gone. Enabled only when MFA_FORENSICS=1
-# so it never slows normal/local runs. One admin connection per teardown is
-# cheap enough for a single diagnostic CI run.
+# This teardown hook polls the shared session DB after every test and records
+# the moment the table transitions present -> absent, naming the test whose
+# teardown first observes it gone, plus the alembic_version / users-table /
+# table-count at that instant (so we can tell raw-drop from
+# downgrade-not-restored from cascade). Enabled only when MFA_FORENSICS=1.
+#
+# CRITICAL: it writes to a FILE (MFA_FORENSICS_FILE), not stdout — the dropper
+# test PASSES, and pytest discards captured stdout for passing tests (the first
+# run's `print` marker was lost this way). The CI job cats the file in an
+# always() step after the suite.
 # ---------------------------------------------------------------------------
 _MFA_FORENSICS = os.environ.get("MFA_FORENSICS") == "1"
+_MFA_FORENSICS_FILE = os.environ.get("MFA_FORENSICS_FILE", "mfa_forensics.log")
 # Mutable container (not a module global reassigned via `global`, which ruff
 # PLW0603 forbids) holding the table's presence as last observed.
 _mfa_state: dict[str, bool | None] = {"prev": None}
+
+
+def _mfa_record(line: str) -> None:
+    with open(_MFA_FORENSICS_FILE, "a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+    print(f"\n{line}")  # best-effort; survives only for failing tests
 
 
 def pytest_runtest_teardown(item: pytest.Item, nextitem: object) -> None:
     if not _MFA_FORENSICS:
         return
 
-    async def _present() -> bool:
+    async def _probe() -> dict[str, object]:
         conn = await asyncpg.connect(_admin_dsn(PG_TEST_DB))
         try:
-            reg = await conn.fetchval("SELECT to_regclass('public.user_mfa_totp')::text")
-            return reg is not None
+            present = (
+                await conn.fetchval("SELECT to_regclass('public.user_mfa_totp')::text")
+            ) is not None
+            out: dict[str, object] = {"present": present}
+            if not present:
+                # Gather mechanism evidence only when the table is gone.
+                out["alembic_version"] = await conn.fetchval(
+                    "SELECT version_num FROM alembic_version"
+                )
+                out["users"] = (
+                    await conn.fetchval("SELECT to_regclass('public.users')::text")
+                ) is not None
+                out["tables"] = await conn.fetchval(
+                    "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"
+                )
+            return out
         finally:
             await conn.close()
 
     try:
-        present = asyncio.run(_present())
+        probe = asyncio.run(_probe())
     except Exception as exc:  # pragma: no cover - diagnostic only
-        print(f"\n[MFA-FORENSICS] check failed after {item.nodeid}: {exc!r}")
+        _mfa_record(f"[MFA-FORENSICS] check failed after {item.nodeid}: {exc!r}")
         return
+    present = bool(probe["present"])
     if _mfa_state["prev"] is True and not present:
-        print(f"\n[MFA-DROP] user_mfa_totp DISAPPEARED after test: {item.nodeid}")
+        _mfa_record(
+            f"[MFA-DROP] user_mfa_totp DISAPPEARED after test: {item.nodeid} | "
+            f"alembic_version={probe.get('alembic_version')!r} "
+            f"users={probe.get('users')} public_tables={probe.get('tables')}"
+        )
     _mfa_state["prev"] = present

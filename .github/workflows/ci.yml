@@ -388,16 +388,27 @@ jobs:
           # to the standard port for ergonomic conftest defaults.
           TEST_PG_PORT: "15432"
           TEST_REDIS_URL: redis://localhost:6379/15
-          # FORENSICS (Plan prod-01, temporal): print which test drops
-          # user_mfa_totp in CI (see conftest.pytest_runtest_teardown). Grep
-          # the log for "[MFA-DROP]". Remove with the diag once fixed.
+          # FORENSICS (Plan prod-01, temporal): record which test drops
+          # user_mfa_totp in CI (see conftest.pytest_runtest_teardown). The
+          # marker goes to MFA_FORENSICS_FILE (NOT stdout — pytest discards
+          # captured stdout for the passing dropper test). The next step cats
+          # it. Remove with the diag once fixed.
           MFA_FORENSICS: "1"
+          MFA_FORENSICS_FILE: ${{ github.workspace }}/mfa_forensics.log
         run: |
           if find tests/integration -type f -name "test_*.py" | grep -q .; then
             pytest tests/integration -v
           else
             echo "No integration tests yet."
           fi
+
+      - name: FORENSICS — print MFA drop marker (always, temporal)
+        if: always() && steps.detect.outputs.has_compose == 'true'
+        run: |
+          echo "::group::MFA forensics file"
+          cat "${{ github.workspace }}/mfa_forensics.log" 2>/dev/null \
+            || echo "no mfa_forensics.log written (table never observed dropping)"
+          echo "::endgroup::"
 
       # Migration tests (Plan 16 task_16_01 onward) live in tests/migrations/
       # and reuse the integration DB fixtures (throwaway PG + Alembic), so they
