@@ -524,6 +524,35 @@ def test_workers_lanes_bind_data_root_and_seccomp_profiles() -> None:
         ), f"{name} does not bind the seccomp profiles (for launched runtimes)"
 
 
+@pytest.mark.parametrize(
+    "service_name",
+    ["orchestrator", "workers", "workers-privileged", "notification-dispatcher"],
+)
+def test_background_services_have_a_healthcheck(service_name: str) -> None:
+    """task_prod01_07 (deploy-3 pata 3): the long-lived background services need
+    a healthcheck so depends_on conditions + restart policy actually mean
+    'ready', not just 'process started'."""
+    svc = generate_compose(_config())["services"][service_name]
+    hc = svc.get("healthcheck") or {}
+    assert hc.get("test"), f"{service_name} has no healthcheck"
+
+
+def test_background_healthcheck_uses_the_right_probe() -> None:
+    services = generate_compose(_config())["services"]
+
+    def _probe(name: str) -> str:
+        test = services[name]["healthcheck"]["test"]
+        return test if isinstance(test, str) else " ".join(test)
+
+    # Celery workers answer `inspect ping`; the orchestrator is a FastAPI app.
+    assert "celery" in _probe("workers") and "ping" in _probe("workers")
+    assert "celery" in _probe("workers-privileged")
+    assert "celery" in _probe("notification-dispatcher") and "ping" in _probe(
+        "notification-dispatcher"
+    )
+    assert "/healthz" in _probe("orchestrator")
+
+
 def test_workers_emit_backup_env_prefixed() -> None:
     env = generate_compose(_config())["services"]["workers"]["environment"]
     for key in (

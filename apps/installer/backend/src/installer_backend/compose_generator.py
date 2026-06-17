@@ -188,6 +188,19 @@ def _hardening(
     return block
 
 
+def _healthcheck(test: str, *, start_period: str = "30s", timeout: str = "10s") -> dict[str, Any]:
+    """A CMD-SHELL healthcheck block (task_prod01_07). ``start_period`` gives a
+    grace window for boot before failures count (Celery workers take longer)."""
+
+    return {
+        "test": ["CMD-SHELL", test],
+        "interval": "30s",
+        "timeout": timeout,
+        "retries": 5,
+        "start_period": start_period,
+    }
+
+
 def _env_ref(var: str, dev_default: str | None, *, prod: bool) -> str:
     """A ``${VAR}`` reference, keeping a dev fallback only outside prod.
 
@@ -473,6 +486,7 @@ def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/orchestrator:{APP_IMAGE_TAG}",
         "environment": env,
+        "healthcheck": _healthcheck("wget -q --spider http://localhost:8002/healthz || exit 1"),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},
@@ -536,6 +550,9 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
         "command": f"celery -A workers worker --queues={_WORKER_GENERIC_QUEUES}",
         "environment": _workers_env(cfg, prod=prod),
         "volumes": _workers_volumes(cfg),
+        "healthcheck": _healthcheck(
+            "celery -A workers inspect ping -t 5 || exit 1", start_period="40s"
+        ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},
@@ -558,6 +575,9 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
         "command": f"celery -A workers worker --queues={_WORKER_PRIVILEGED_QUEUE} --concurrency=1",
         "environment": _workers_env(cfg, prod=prod),
         "volumes": _workers_volumes(cfg),
+        "healthcheck": _healthcheck(
+            "celery -A workers inspect ping -t 5 || exit 1", start_period="40s"
+        ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},
@@ -584,6 +604,9 @@ def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dic
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/notification-dispatcher:{APP_IMAGE_TAG}",
         "environment": env,
+        "healthcheck": _healthcheck(
+            "celery -A notification_dispatcher inspect ping -t 5 || exit 1", start_period="40s"
+        ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},

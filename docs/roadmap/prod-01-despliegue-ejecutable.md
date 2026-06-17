@@ -162,7 +162,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_07` — Healthchecks y depends_on de las apps de fondo
 
-- [ ] **Título**: orchestrator/workers/notification-dispatcher con healthcheck y arranque ordenado
+- [x] **Título**: orchestrator/workers/notification-dispatcher con healthcheck y arranque ordenado
 - **Descripción**: añadir healthchecks (p. ej. `celery inspect ping` para workers, probe HTTP/propio para orchestrator y dispatcher) y `depends_on` con condiciones a los tres servicios de fondo del compose generado (pata (3) de deploy-3). Incluir límites de memoria/cpu coherentes con `_hardening`.
 - **Depende de**: task_prod01_06
 - **Tiempo**: 0,5 días · **Complejidad**: s
