@@ -107,6 +107,7 @@ CORE_SERVICES: tuple[str, ...] = (
     "docling-serve",
     "egress-proxy",
     "docker-socket-proxy",
+    "migrations",
     "api-server",
     "orchestrator",
     "workers",
@@ -467,6 +468,29 @@ def _app_environment(cfg: InstallerConfig, prefix: str, *, prod: bool) -> dict[s
         # the migrations role, etc.) — NOT a shared bare var.
         f"{prefix}DATABASE_URL": _env_ref(f"{prefix}DATABASE_URL", None, prod=prod),
     }
+
+
+def _migrations_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    """One-shot that runs ``alembic upgrade head`` before the apps start (Plan
+    prod-01 task_12 / deploy-6). Uses the api-server image (it ships the
+    migrations + alembic) as the migrations role (``ADMIN_DATABASE_URL``,
+    BYPASSRLS). env.py takes a ``pg_advisory_xact_lock`` so concurrent runs
+    serialize. The app services ``depends_on`` it with
+    ``service_completed_successfully`` (wired in :func:`generate_compose`)."""
+
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/api-server:{APP_IMAGE_TAG}",
+        "command": "alembic upgrade head",
+        "environment": {
+            # Alembic reads DATABASE_URL; migrations run as the migrations role.
+            "DATABASE_URL": _env_ref("ADMIN_DATABASE_URL", None, prod=prod),
+        },
+        "depends_on": {"postgres": {"condition": "service_healthy"}},
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
+    svc["restart"] = "no"  # one-shot: run once and exit
+    return svc
 
 
 def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
@@ -944,6 +968,7 @@ _BUILDERS = {
     "docling-serve": _docling_service,
     "egress-proxy": _egress_proxy_service,
     "docker-socket-proxy": _docker_socket_proxy_service,
+    "migrations": _migrations_service,
     "api-server": _api_server_service,
     "orchestrator": _orchestrator_service,
     "workers": _workers_service,
@@ -1080,6 +1105,16 @@ def generate_compose(
     service_names = selected_services(cfg, monitoring=monitoring)
     provider_env = _provider_env_for(cfg)
 
+    # The platform app services that read the schema → must wait for the
+    # one-shot migrations to finish (task_12 / deploy-6).
+    migration_dependents = (
+        "api-server",
+        "orchestrator",
+        "workers",
+        "workers-privileged",
+        "notification-dispatcher",
+    )
+
     services: dict[str, Any] = {}
     for name in service_names:
         builder = _BUILDERS[name]
@@ -1089,6 +1124,11 @@ def generate_compose(
             env = svc.setdefault("environment", {})
             assert isinstance(env, dict)
             env.update(provider_env)
+        # Gate the apps on the schema being migrated.
+        if name in migration_dependents:
+            deps = svc.setdefault("depends_on", {})
+            assert isinstance(deps, dict)
+            deps["migrations"] = {"condition": "service_completed_successfully"}
         services[name] = svc
 
     compose: dict[str, Any] = {

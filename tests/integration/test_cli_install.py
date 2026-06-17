@@ -250,6 +250,7 @@ def test_provisioning_failure_halts_with_provision_exit() -> None:
         InstallStep.GENERATE_CONFIG,
         InstallStep.PULL_IMAGES,
         InstallStep.START_STACK,
+        InstallStep.RUN_MIGRATIONS,
         InstallStep.BOOTSTRAP_VAULT,
     ]
     assert InstallStep.SEED_TENANT not in executor.executed

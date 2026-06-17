@@ -97,33 +97,39 @@ docker compose -f docker/docker-compose.yml down       # SIN -v
 
 ### 4. Migraciones de esquema (Alembic, reversibles)
 
-El esquema lo gestiona Alembic desde `apps/api-server/` con el rol de
-migraciones (`migrations_user`, no el rol de aplicación). En dev,
-`scripts/dev/up` aplica `upgrade head` automáticamente; en un upgrade de
-producción lo aplicas tú **antes** de levantar la API:
+El esquema lo aplica el **servicio one-shot `migrations`** del propio
+stack — no un Python local desde un checkout. La imagen `api-server` que
+acabas de traer en el paso 2 ya trae Alembic y los modelos, así que el
+host de producción **no** necesita Python ni el repo instalado. El
+servicio corre `alembic upgrade head` con el rol `migrations_user` (no el
+rol de aplicación), toma su DSN (`ADMIN_DATABASE_URL`) del `.env` generado
+y termina (`restart: no`). Aplícalo **antes** de levantar la aplicación:
 
 ```bash
-# Arranca solo PostgreSQL para poder migrar contra él.
-docker compose -f docker/docker-compose.yml up -d postgres
-
-# Aplica las migraciones hasta la última revisión.
-cd <repo>/apps/api-server
-DATABASE_URL="postgresql+asyncpg://migrations_user:<password>@<host>:<port>/agentic_platform" \
-  python -m alembic upgrade head
+docker compose -f docker/docker-compose.yml run --rm migrations
 ```
 
-(`<password>`/`<host>`/`<port>` salen del `.env` generado, sección de
-PostgreSQL. La DSN usa el rol `migrations_user`, que es quien tiene
-permisos DDL.)
+`run --rm` arranca PostgreSQL como dependencia, ejecuta el one-shot y
+**propaga el exit code** de Alembic: `0` = esquema al día. El servicio toma
+además un **advisory lock** (`pg_advisory_xact_lock`), de modo que dos
+`upgrade head` concurrentes (réplicas, un run manual a la vez que el del
+arranque) se serializan en vez de colisionar.
+
+> En un `up -d` normal este servicio corre **solo**: los servicios de
+> aplicación dependen de él con `service_completed_successfully`, así que
+> el paso 5 lo dispararía igualmente. Lo lanzamos aquí aparte para **ver el
+> resultado de la migración antes** de arrancar la aplicación: si falla, el
+> stack no llega a subir a medias.
 
 **Reversibilidad — invariante del proyecto.** CLAUDE.md prohíbe promover
-una migración sin `downgrade` probado. Antes de dar por buena una
-revisión nueva, su round-trip tiene que estar limpio:
+una migración sin `downgrade` probado. Ese round-trip se valida en
+**dev/CI** (donde sí hay Python + repo) antes de cortar la release, no en
+el host de producción; el guard de CI lo ejecuta sobre el mismo one-shot:
 
 ```bash
-python -m alembic upgrade head      # aplica
-python -m alembic downgrade -1      # revierte la última revisión
-python -m alembic upgrade head      # la vuelve a aplicar (round-trip OK)
+docker compose -f docker/docker-compose.yml run --rm migrations alembic upgrade head    # aplica
+docker compose -f docker/docker-compose.yml run --rm migrations alembic downgrade -1     # revierte la última
+docker compose -f docker/docker-compose.yml run --rm migrations alembic upgrade head    # round-trip OK
 ```
 
 Si una migración de la versión destino **no es reversible** (lo dice el
@@ -190,9 +196,13 @@ de salida en [01-installation-from-scratch.md](./01-installation-from-scratch.md
    recién actualizado **sí** corren y validan el upgrade. Si fallan,
    revisa el servicio implicado en [02-troubleshooting.md](./02-troubleshooting.md).
 
-3. **Vault desellado** — `docker compose exec vault vault status` →
+3. **Esquema al día** — confirma que la BD quedó en la última revisión:
+   `docker compose run --rm migrations alembic current` debe imprimir la
+   misma revisión que `alembic heads` (sufijo `(head)`), sin revisiones
+   pendientes.
+4. **Vault desellado** — `docker compose exec vault vault status` →
    `Sealed: false`.
-4. **Login y datos intactos** — entra al panel admin y confirma que un
+5. **Login y datos intactos** — entra al panel admin y confirma que un
    tenant existente puede hacer login con sus credenciales previas y que
    sus proyectos/planes siguen ahí (los datos no se tocan en un upgrade).
 
@@ -201,12 +211,12 @@ de salida en [01-installation-from-scratch.md](./01-installation-from-scratch.md
 El plan de rollback depende de **qué** falló y de si las migraciones de la
 versión destino eran reversibles:
 
-| Situación                                                              | Cómo revertir                                                                                                                                     |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Falló el `pull` o un servicio no arranca, **sin** haber migrado aún    | `git checkout` del tag anterior + `docker compose up -d` con las imágenes previas. No hubo cambio de esquema: nada que deshacer en la BD.         |
-| Migraste, la release **es reversible** y quieres volver a la previa    | `alembic downgrade` a la revisión de la versión anterior (la base previa al `upgrade`), luego `git checkout` del tag anterior + `up -d`.          |
-| Migraste, la release **NO es reversible**, o el esquema quedó a medias | Restaura el **backup pre-upgrade** del paso 1 con [04-disaster-recovery.md](./04-disaster-recovery.md): vuelve al punto exacto antes del upgrade. |
-| Dudas sobre el estado del esquema                                      | No improvises: restaura el backup pre-upgrade. Es el único camino con garantía de consistencia.                                                   |
+| Situación                                                              | Cómo revertir                                                                                                                                              |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Falló el `pull` o un servicio no arranca, **sin** haber migrado aún    | `git checkout` del tag anterior + `docker compose up -d` con las imágenes previas. No hubo cambio de esquema: nada que deshacer en la BD.                  |
+| Migraste, la release **es reversible** y quieres volver a la previa    | `docker compose run --rm migrations alembic downgrade <rev-previa>` a la revisión de la versión anterior, luego `git checkout` del tag anterior + `up -d`. |
+| Migraste, la release **NO es reversible**, o el esquema quedó a medias | Restaura el **backup pre-upgrade** del paso 1 con [04-disaster-recovery.md](./04-disaster-recovery.md): vuelve al punto exacto antes del upgrade.          |
+| Dudas sobre el estado del esquema                                      | No improvises: restaura el backup pre-upgrade. Es el único camino con garantía de consistencia.                                                            |
 
 > Por eso el paso 1 (backup verificado) es **obligatorio**: es la única
 > red de seguridad que cubre todos los casos, incluido el de una migración

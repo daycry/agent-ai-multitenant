@@ -326,7 +326,7 @@ def test_hardening_defaults_on_every_service() -> None:
     compose = generate_compose(_config(gpu_enabled=True), monitoring=True)
     # One-shot init services pull-and-exit, so they CANNOT be unless-stopped —
     # they still carry the rest of the hardening posture.
-    one_shots = {"ollama-bootstrap"}
+    one_shots = {"ollama-bootstrap", "migrations"}
     # cAdvisor MUST run privileged with host mounts to read container stats, so
     # it is deliberately NOT cap-dropped and does NOT pin AppArmor (both would
     # deny the host access it needs). It still sets no-new-privileges + limits.
@@ -592,6 +592,32 @@ def test_socket_proxy_lives_on_a_dedicated_internal_network_only() -> None:
     netblock = compose["networks"]["agentic-docker"]
     assert netblock.get("internal") is True, "agentic-docker must be internal"
     assert compose["networks"]["agentic-net"], "agentic-net still declared"
+
+
+# ---------------------------------------------------------------------------
+# task_prod01_12 — one-shot `migrations` service + apps wait for it.
+# ---------------------------------------------------------------------------
+def test_migrations_is_a_oneshot_alembic_upgrade() -> None:
+    svc = generate_compose(_config())["services"]["migrations"]
+    cmd = svc["command"] if isinstance(svc["command"], str) else " ".join(svc["command"])
+    assert "alembic" in cmd and "upgrade" in cmd and "head" in cmd
+    assert svc["restart"] == "no", "migrations is a one-shot, it must not restart"
+    assert "api-server" in svc["image"], "runs from the api-server image (it ships the migrations)"
+    # Runs as the migrations role (BYPASSRLS) and only needs postgres up.
+    assert svc["environment"]["DATABASE_URL"] == "${ADMIN_DATABASE_URL}"
+    assert svc["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+
+@pytest.mark.parametrize(
+    "service_name",
+    ["api-server", "orchestrator", "workers", "workers-privileged", "notification-dispatcher"],
+)
+def test_app_services_wait_for_migrations_to_complete(service_name: str) -> None:
+    svc = generate_compose(_config())["services"][service_name]
+    dep = svc.get("depends_on", {}).get("migrations")
+    assert dep == {
+        "condition": "service_completed_successfully"
+    }, f"{service_name} must wait for migrations to finish before starting"
 
 
 @pytest.mark.parametrize("service_name", ["workers", "workers-privileged"])

@@ -24,11 +24,19 @@ from alembic import context
 # Import models so Base.metadata is fully populated.
 from api_server.db import models as _models  # noqa: F401
 from api_server.db.base import Base
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 config = context.config
+
+#: Cross-process advisory lock so two concurrent ``alembic upgrade`` runs (app
+#: replicas, the install one-shot + a manual run, …) cannot apply migrations at
+#: the same time (Plan prod-01 task_12 / deploy-6). A transaction-scoped lock
+#: (``pg_advisory_xact_lock``) auto-releases at COMMIT; the loser blocks, then
+#: sees an up-to-date DB and no-ops. Arbitrary fixed key for the "agentic
+#: migrations" namespace.
+_MIGRATION_LOCK_KEY = 0x4147454E54  # "AGENT"
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -74,6 +82,9 @@ def do_run_migrations(connection: Connection) -> None:
         compare_server_default=True,
     )
     with context.begin_transaction():
+        # Serialize concurrent upgrades within this same transaction; released
+        # automatically on COMMIT (Plan prod-01 task_12).
+        connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _MIGRATION_LOCK_KEY})
         context.run_migrations()
 
 

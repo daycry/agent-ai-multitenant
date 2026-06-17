@@ -230,7 +230,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_12` — Paso `run_migrations` en el pipeline del instalador
 
-- [ ] **Título**: one-shot container `alembic upgrade head` entre el arranque de postgres y el de las apps
+- [x] **Título**: one-shot container `alembic upgrade head` entre el arranque de postgres y el de las apps
 - **Descripción**: añadir `RUN_MIGRATIONS` a `INSTALL_STEP_ORDER` (`install.py:86-92`, hoy: generate_config → pull_images → start_stack → bootstrap_vault → seed_tenant — sin migraciones, `seed_tenant` no tendría esquema). Implementación: servicio one-shot `migrations` en el compose generado con la imagen del api-server, `ADMIN_DATABASE_URL`, `pg_advisory_lock` en `alembic/env.py` contra upgrades concurrentes, y las apps con `depends_on: migrations: condition: service_completed_successfully`. Cierra deploy-6 (instalación).
 - **Depende de**: task_prod01_01, task_prod01_05
 - **Tiempo**: 1 día · **Complejidad**: m
@@ -243,7 +243,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_13` — Procedimiento de upgrade: backup → pull → migrate → up
 
-- [ ] **Título**: Runbook de upgrade sin checkout local del repo
+- [x] **Título**: Runbook de upgrade sin checkout local del repo
 - **Descripción**: reescribir `docs/06-runbooks/03-system-upgrade.md:112-126` para que el upgrade use el mismo one-shot container (no `python -m alembic` desde un checkout en la máquina del operador), con el orden backup → pull → migrate → up y verificación post-upgrade. Cierra deploy-6 (upgrade).
 - **Depende de**: task_prod01_12
 - **Tiempo**: 0,5 días · **Complejidad**: s
