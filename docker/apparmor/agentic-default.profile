@@ -69,6 +69,9 @@ profile agentic-default flags=(attach_disconnected,mediate_deleted) {
   /vault/**                 rwk,
   /prometheus/**            rwk,
   /alertmanager/**          rwk,
+  # Caddy autosaves its JSON config under XDG_CONFIG_HOME=/config (ADR 0061).
+  /config/                  rw,
+  /config/**                rwk,
   /proc/*/fd/**             rw,
   owner /proc/*/**          rw,
 

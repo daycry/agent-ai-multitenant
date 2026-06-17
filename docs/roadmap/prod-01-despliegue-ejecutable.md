@@ -258,15 +258,15 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_14` — ADR: reverse proxy y terminación TLS
 
-- [ ] **Título**: ADR propuesto — Caddy vs nginx, gestión de certificados, superficie publicada
+- [x] **Título**: ADR propuesto — Caddy vs nginx, gestión de certificados, superficie publicada
 - **Descripción**: redactar `docs/05-architecture-decisions/00XX-reverse-proxy-tls.md` con opciones (Caddy con TLS interno/ACME, nginx con cert corporativo, proxy externo preexistente como prerequisito), recomendación (Caddy) y la decisión pendiente de humano. Incluye política de puertos: solo el proxy publica al host; api-server/admin-panel quedan en redes internas (hoy publican en 0.0.0.0 en HTTP plano, `compose_generator.py:406,482`, mientras `docker/vault/config.hcl:2-12` asume un proxy "de fase 15" que no existe).
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**: no aplica (documento); la revisión humana del ADR es el gate.
 
 #### `task_prod01_15` — Servicio proxy TLS en el compose generado
 
-- [ ] **Título**: Proxy como única superficie publicada, api-server/admin-panel solo en red interna
-- **Descripción**: añadir el builder del proxy a `CORE_SERVICES`/`_BUILDERS` (`compose_generator.py:97-110, 704-724`) según el ADR aprobado: terminación TLS (cert corporativo o autofirmado con aviso explícito en el instalador), HSTS, proxy_pass a api-server:8000 y admin-panel:3000, retirada de los `ports:` directos de ambos servicios. El instalador pide dominio/cert en el wizard o genera autofirmado marcándolo como acción pendiente. Cierra deploy-7.
+- [x] **Título**: Proxy como única superficie publicada, api-server/admin-panel solo en red interna
+- **Descripción**: añadir el builder del proxy a `CORE_SERVICES`/`_BUILDERS` (`compose_generator.py`, builder `_reverse_proxy_service`) según el ADR aprobado: terminación TLS (cert corporativo o autofirmado con aviso explícito en el instalador), HSTS, proxy_pass a api-server:8000 y admin-panel:3000, retirada de los `ports:` directos de ambos servicios. El instalador pide dominio/cert en el wizard o genera autofirmado marcándolo como acción pendiente. Cierra deploy-7.
 - **Depende de**: task_prod01_14
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:

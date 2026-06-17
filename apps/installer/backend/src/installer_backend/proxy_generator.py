@@ -1,0 +1,122 @@
+"""Reverse-proxy (Caddy) config generator — Plan prod-01 task_15 / deploy-7.
+
+Pure functions that render the ``Caddyfile`` the installer materialises next to
+the generated ``docker-compose.yml``. The single Caddy service is the only
+host-published surface (ADR 0061): it terminates TLS, adds HSTS, and routes a
+single origin ``https://{domain}`` to the two internal apps.
+
+Routing (the order is load-bearing — Caddy evaluates ``handle`` blocks top-down,
+first match wins):
+
+  1. ``handle /api/v1/*``   → ``api-server`` INTACT (the public versioned API is
+     the only backend route that already starts with ``/api``; stripping it
+     would yield ``/v1/*`` which the backend does not serve).
+  2. ``handle_path /api/*`` → ``api-server`` with ``/api`` STRIPPED (the UI API +
+     SSO callback + SCIM + incoming webhooks all live here, reached as bare
+     backend paths once the prefix is removed).
+  3. ``handle``             → ``admin-panel`` (the Next.js SPA catch-all).
+
+No host access, no secrets, no ``${ENV}`` references: the domain and TLS choice
+are baked into the text. The e2e (task_20) is what runs Caddy for real; these
+helpers are unit-tested on the rendered string only.
+"""
+
+from __future__ import annotations
+
+from .config import InstallerConfig
+
+#: Where the corporate cert/key are mounted in the container when
+#: ``tls_mode == "provided"`` (the host dir is ``{data_root}/caddy/tls``).
+_PROVIDED_CERT = "/etc/caddy/tls/server.crt"
+_PROVIDED_KEY = "/etc/caddy/tls/server.key"
+
+
+def _global_block(cfg: InstallerConfig) -> str:
+    """The Caddy global options block. ``admin off`` keeps the admin API off the
+    wire; the ACME email/CA are emitted ONLY in ``acme`` mode."""
+
+    lines = ["\tadmin off"]
+    if cfg.system.tls_mode == "acme":
+        # tls_acme_email is required by the SystemConfig validator in acme mode.
+        lines.append(f"\temail {cfg.system.tls_acme_email}")
+        if cfg.system.tls_acme_ca:
+            lines.append(f"\tacme_ca {cfg.system.tls_acme_ca}")
+    body = "\n".join(lines)
+    return "{\n" + body + "\n}"
+
+
+def _tls_directive(cfg: InstallerConfig) -> str:
+    """The site's TLS directive, one per mode.
+
+    * ``internal`` → ``tls internal`` (Caddy's local CA, self-signed).
+    * ``provided`` → ``tls <crt> <key>`` (the bind-mounted corporate cert).
+    * ``acme``     → no directive (Caddy does ACME by default for a public host;
+      the email lives in the global block).
+    """
+
+    mode = cfg.system.tls_mode
+    if mode == "internal":
+        return "\ttls internal"
+    if mode == "provided":
+        return f"\ttls {_PROVIDED_CERT} {_PROVIDED_KEY}"
+    return "\t# tls: gestionado por ACME (ver el bloque global: email/acme_ca)"
+
+
+def generate_caddyfile(cfg: InstallerConfig) -> str:
+    """Render the Caddyfile for the configured domain + TLS mode (ADR 0061)."""
+
+    domain = cfg.system.domain
+    return f"""\
+# Caddyfile — GENERADO por el instalador (installer_backend.proxy_generator).
+# NO editar a mano: se regenera en cada install/reinstall. Origen único:
+# el admin-panel en / y el api-server bajo /api/* (ADR 0061, prod-01 task_15).
+
+{_global_block(cfg)}
+
+# Puerto 80: endpoint de salud PLANO (sin redirección a https, para que el
+# healthcheck del contenedor no caiga por el 308 + cert autofirmado) y
+# redirección del resto del tráfico a https.
+:80 {{
+\thandle /healthz {{
+\t\trespond "OK" 200
+\t}}
+\thandle {{
+\t\tredir https://{{host}}{{uri}} permanent
+\t}}
+}}
+
+{domain} {{
+{_tls_directive(cfg)}
+
+\t# Cabeceras de seguridad en todas las respuestas.
+\theader {{
+\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains"
+\t\tX-Content-Type-Options "nosniff"
+\t\tX-Frame-Options "DENY"
+\t\tReferrer-Policy "strict-origin-when-cross-origin"
+\t\t-Server
+\t}}
+
+\tencode zstd gzip
+
+\t# 1) API pública versionada — SIN strip (ya nace en /api). DEBE ir antes del
+\t#    handle_path genérico o /api/v1/* se rompería a /v1/*. Se incluye la ruta
+\t#    desnuda `/api/v1` (sin sufijo) además de `/api/v1/*` para que tampoco caiga
+\t#    al strip genérico.
+\thandle /api/v1 /api/v1/* {{
+\t\treverse_proxy api-server:8000
+\t}}
+
+\t# 2) Resto del backend bajo /api/* — Caddy RETIRA el prefijo /api. Aquí entran
+\t#    la API interactiva del SPA, el callback SSO (/api/auth/sso/oidc/callback),
+\t#    SCIM (/api/scim/v2/*) y los webhooks entrantes (/api/webhooks/incoming/*).
+\thandle_path /api/* {{
+\t\treverse_proxy api-server:8000
+\t}}
+
+\t# 3) Todo lo demás → el SPA admin-panel (incluye /admin/*, /login, _next/*).
+\thandle {{
+\t\treverse_proxy admin-panel:3000
+\t}}
+}}
+"""

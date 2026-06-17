@@ -117,6 +117,13 @@ jobs:
           context: apps/admin-panel
           file: apps/admin-panel/Dockerfile
           push: true
+          # Bake the single-origin API prefix (ADR 0061): the published image
+          # talks to the backend at the same origin under /api, behind the TLS
+          # reverse proxy. The prefix is domain-independent so it CAN be baked
+          # here; the remaining same-origin JS fixes (wsUrl, review page) are
+          # prod-09 (frontend-8).
+          build-args: |
+            NEXT_PUBLIC_API_URL=/api
           tags: |
             ${{ env.REGISTRY }}/admin-panel:${{ needs.prep.outputs.tag }}
             ${{ env.REGISTRY }}/admin-panel:${{ github.sha }}

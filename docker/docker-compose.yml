@@ -7,7 +7,8 @@
 #
 # Named volumes are used so the stack is portable across Linux/Windows
 # hosts. For production hardening (bind-mount to /data/agent-platform,
-# TLS, secrets from Vault), see the installer rolled out in phase 15.
+# TLS termination via the Caddy reverse proxy, secrets from Vault), see the
+# installer-generated compose (apps/installer, ADR 0061).
 
 name: agentic-platform
 

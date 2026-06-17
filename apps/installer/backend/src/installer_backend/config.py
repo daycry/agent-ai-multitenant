@@ -57,6 +57,12 @@ from pydantic import (
 #:   * ``gpu``  — adds the NVIDIA device reservation for accelerated local LLMs.
 OllamaMode = Literal["none", "cpu", "gpu"]
 
+#: How the single reverse proxy terminates TLS (ADR 0061):
+#:   * ``internal`` — Caddy's local CA, self-signed (default; flagged pending).
+#:   * ``provided`` — operator-supplied corporate cert (cert+key bind-mounted).
+#:   * ``acme``     — Caddy obtains a public cert via ACME (needs email, non-IP).
+TlsMode = Literal["internal", "provided", "acme"]
+
 # ---------------------------------------------------------------------------
 # Small shared validators / patterns.
 # ---------------------------------------------------------------------------
@@ -104,12 +110,27 @@ class Environment(str, Enum):
 
 
 class SystemConfig(BaseModel):
-    """Step 2: domain the platform is served on + the environment profile."""
+    """Step 2: domain the platform is served on + environment + how the single
+    reverse proxy terminates TLS (ADR 0061).
+
+    ``tls_mode`` defaults to ``internal`` (Caddy's local CA, self-signed) so a
+    fresh install boots with HTTPS and zero external dependencies; the installer
+    flags the self-signed cert as a pending action. ``provided`` consumes a
+    corporate cert (``tls_cert_path``/``tls_key_path``); ``acme`` lets Caddy
+    obtain a public cert (needs ``tls_acme_email`` and a non-IP domain). The new
+    fields all default to ``None`` so configs that only set ``domain`` (and the
+    test fixtures) keep loading unchanged.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     domain: str = Field(..., min_length=1, max_length=253)
     environment: Environment = Environment.PRODUCTION
+    tls_mode: TlsMode = "internal"
+    tls_cert_path: str | None = None
+    tls_key_path: str | None = None
+    tls_acme_email: str | None = None
+    tls_acme_ca: str | None = None
 
     @field_validator("domain")
     @classmethod
@@ -121,6 +142,34 @@ class SystemConfig(BaseModel):
                 "o una dirección IP, sin esquema (http://) ni ruta."
             )
         return value
+
+    @model_validator(mode="after")
+    def _validate_tls(self) -> SystemConfig:
+        if self.tls_mode == "provided":
+            if not self.tls_cert_path or not self.tls_key_path:
+                raise ValueError(
+                    "tls_mode='provided' requiere tls_cert_path y tls_key_path "
+                    "(el certificado corporativo y su clave privada)."
+                )
+        elif self.tls_mode == "acme":
+            if not self.tls_acme_email:
+                raise ValueError(
+                    "tls_mode='acme' requiere tls_acme_email (la CA ACME exige un "
+                    "contacto para emitir y avisar de caducidades)."
+                )
+            try:
+                ipaddress.ip_address(self.domain)
+            except ValueError:
+                pass
+            else:
+                raise ValueError(
+                    "tls_mode='acme' no es válido con un dominio que es una IP: "
+                    "las CA ACME no emiten certificados para IPs. Usa 'internal' "
+                    "o 'provided'."
+                )
+            if self.tls_acme_ca and not _HTTP_URL_RE.match(self.tls_acme_ca):
+                raise ValueError("tls_acme_ca debe ser la URL http(s) del directorio ACME.")
+        return self
 
 
 # ---------------------------------------------------------------------------

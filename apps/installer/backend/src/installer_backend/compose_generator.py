@@ -81,6 +81,7 @@ IMAGE_CADVISOR = "gcr.io/cadvisor/cadvisor:v0.49.1"
 # ADR 0060). The workers reach the daemon ONLY through this, never the raw
 # socket (Principio 2).
 IMAGE_DOCKER_SOCKET_PROXY = "tecnativa/docker-socket-proxy:0.3.0"
+IMAGE_CADDY = "caddy:2.8-alpine"
 
 #: The application images the platform builds. The generator references them by
 #: tag (the installer pulls the released images); the build context lives in the
@@ -114,6 +115,7 @@ CORE_SERVICES: tuple[str, ...] = (
     "workers-privileged",
     "notification-dispatcher",
     "admin-panel",
+    "caddy",
 )
 
 #: Services added only when the monitoring overlay is requested. Mirrors
@@ -527,15 +529,20 @@ def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             "API_SERVER_INCOMING_WEBHOOK_ENCRYPTION_KEY": _env_ref(
                 "API_SERVER_INCOMING_WEBHOOK_ENCRYPTION_KEY", None, prod=prod
             ),
-            # Public base URL the IdP redirects back to — derived from the wizard
-            # domain (the app's dev default localhost:8001 is wrong for prod).
-            "API_SERVER_SSO_REDIRECT_BASE_URL": f"https://{cfg.system.domain}",
+            # Public base URL the IdP redirects the BROWSER back to. Carries the
+            # reverse proxy's /api prefix (ADR 0061): the IdP returns to
+            # https://{domain}/api/auth/sso/oidc/callback and Caddy's
+            # handle_path /api/* strips /api before reaching the api-server (the
+            # app's dev default localhost:8001 is wrong for prod).
+            "API_SERVER_SSO_REDIRECT_BASE_URL": f"https://{cfg.system.domain}/api",
         }
     )
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/api-server:{APP_IMAGE_TAG}",
         "environment": env,
-        "ports": [f"{cfg.ports.api_server}:8000"],
+        # No host ports: the TLS reverse proxy (caddy) is the only published
+        # surface (ADR 0061 / deploy-7); api-server is reached internally on
+        # agentic-net as api-server:8000.
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},
@@ -721,18 +728,65 @@ def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dic
 
 
 def _admin_panel_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
-    admin_port = cfg.ports.admin_panel
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/admin-panel:{APP_IMAGE_TAG}",
         "environment": {
             "NODE_ENV": "production" if prod else "development",
             "PLATFORM_DOMAIN": cfg.system.domain,
         },
-        "ports": [f"{admin_port}:3000"],
+        # No host ports: the SPA is served through the TLS reverse proxy (caddy),
+        # reached internally as admin-panel:3000 (ADR 0061 / deploy-7). NOTE: the
+        # caddy service depends_on this one with condition=service_healthy; that
+        # is satisfied by the HEALTHCHECK baked into the admin-panel image
+        # (apps/admin-panel/Dockerfile), not a compose-level healthcheck here.
         "depends_on": {"api-server": {"condition": "service_healthy"}},
         "networks": ["agentic-net"],
     }
     svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
+    return svc
+
+
+def _reverse_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    """The single TLS-terminating reverse proxy — and the ONLY service that
+    publishes host ports (ADR 0061, Plan prod-01 task_15 / deploy-7).
+
+    Caddy serves one origin ``https://{domain}``: the admin-panel SPA at ``/``
+    and the api-server under ``/api/*`` (see :mod:`installer_backend.proxy_generator`
+    for the routing). The generated ``Caddyfile`` is bind-mounted read-only; the
+    internal CA / ACME material persists under ``{data_root}/caddy/data`` so the
+    self-signed root is not regenerated on every restart. With ``cap_drop:[ALL]``
+    the process cannot bind 80/443, so ``NET_BIND_SERVICE`` is added back — the
+    single capability needed, mirroring Vault's ``IPC_LOCK`` exception.
+    """
+
+    data_root = cfg.storage.data_root
+    volumes = [
+        "./caddy/Caddyfile:/etc/caddy/Caddyfile:ro",
+        f"{data_root}/caddy/data:/data",
+        f"{data_root}/caddy/config:/config",
+    ]
+    if cfg.system.tls_mode == "provided":
+        # The corporate cert+key the operator dropped under {data_root}/caddy/tls.
+        volumes.append(f"{data_root}/caddy/tls:/etc/caddy/tls:ro")
+
+    svc: dict[str, Any] = {
+        "image": IMAGE_CADDY,
+        # The ONLY published surface. Caddy listens on 80/443 inside the container.
+        "ports": ["80:80", "443:443"],
+        "volumes": volumes,
+        "depends_on": {
+            "api-server": {"condition": "service_healthy"},
+            "admin-panel": {"condition": "service_healthy"},
+        },
+        # Plain-HTTP /healthz on :80 (no redirect to https) so the self-signed
+        # cert + 308 don't mark the proxy unhealthy.
+        "healthcheck": _healthcheck(
+            "wget -q --spider http://127.0.0.1:80/healthz || exit 1", start_period="15s"
+        ),
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
+    svc["cap_add"] = ["NET_BIND_SERVICE"]
     return svc
 
 
@@ -975,6 +1029,7 @@ _BUILDERS = {
     "workers-privileged": _workers_privileged_service,
     "notification-dispatcher": _notification_dispatcher_service,
     "admin-panel": _admin_panel_service,
+    "caddy": _reverse_proxy_service,
     "ollama": _ollama_service,
     "ollama-bootstrap": _ollama_bootstrap_service,
     "prometheus": _prometheus_service,
@@ -1091,7 +1146,10 @@ def generate_compose(
         ``gpu``) with an NVIDIA device reservation.
       * ``cfg.providers`` → only the enabled ADR-0021 providers get their wiring
         injected into the application services' environment.
-      * ``cfg.ports`` → host port mappings (admin panel, etc.).
+      * ``cfg.ports`` → retained in the wizard model for back-compat / dev
+        overrides, but NO LONGER mapped to the host in the generated production
+        compose: the TLS reverse proxy (``caddy``) is the only published surface
+        (ADR 0061).
       * ``cfg.storage.data_root`` → the bind-mount base for every stateful
         service.
       * ``monitoring`` → adds the Prometheus/Grafana/node-exporter overlay.

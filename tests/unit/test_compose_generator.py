@@ -76,11 +76,12 @@ def _config(
     data_root: str = "/data/agent-platform",
     worker_replicas: int = 2,
     ports: PortsConfig | None = None,
+    system: SystemConfig | None = None,
 ) -> InstallerConfig:
     if providers is None:
         providers = ProvidersConfig(ollama=OllamaProvider(enabled=True, endpoint="http://o:11434"))
     return InstallerConfig(
-        system=SystemConfig(domain="agentic.example.com", environment=environment),
+        system=system or SystemConfig(domain="agentic.example.com", environment=environment),
         resources=ResourceConfig(
             worker_replicas=worker_replicas,
             worker_memory_gib=4,
@@ -299,11 +300,81 @@ def test_monitoring_includes_alertmanager_and_cadvisor() -> None:
 # ---------------------------------------------------------------------------
 # Ports / volumes parametrised from the wizard config.
 # ---------------------------------------------------------------------------
-def test_ports_are_parametrised() -> None:
+def test_proxy_is_the_only_service_publishing_host_ports() -> None:
+    # ADR 0061 / deploy-7: after Fase E the single TLS reverse proxy (caddy) is
+    # the ONLY service mapping host ports; everything else is internal-only.
+    compose = generate_compose(_config())
+    publishers = {name for name, svc in compose["services"].items() if "ports" in svc}
+    assert publishers == {"caddy"}
+    assert compose["services"]["caddy"]["ports"] == ["80:80", "443:443"]
+
+
+def test_api_server_and_admin_panel_publish_no_host_ports() -> None:
+    # Both used to publish on 0.0.0.0 (HTTP plano); now they live only on the
+    # internal network behind the proxy. PortsConfig stays in the model but no
+    # longer maps to the host in the generated production compose.
     ports = PortsConfig(admin_panel=18080, api_server=18000)
     compose = generate_compose(_config(ports=ports))
-    assert compose["services"]["admin-panel"]["ports"] == ["18080:3000"]
-    assert compose["services"]["api-server"]["ports"] == ["18000:8000"]
+    assert "ports" not in compose["services"]["api-server"]
+    assert "ports" not in compose["services"]["admin-panel"]
+
+
+def test_proxy_sso_redirect_base_url_carries_api_prefix() -> None:
+    # The IdP redirects the browser to {base}/auth/sso/oidc/callback; the base
+    # must carry the proxy's /api prefix so handle_path strips it to the backend.
+    compose = generate_compose(_config())
+    env = compose["services"]["api-server"]["environment"]
+    assert env["API_SERVER_SSO_REDIRECT_BASE_URL"] == "https://agentic.example.com/api"
+
+
+def test_caddy_proxy_in_core_services_and_hardened() -> None:
+    compose = generate_compose(_config())
+    assert "caddy" in CORE_SERVICES
+    caddy = compose["services"]["caddy"]
+    assert caddy["image"].startswith("caddy:")
+    assert caddy["cap_drop"] == ["ALL"]
+    assert "no-new-privileges:true" in caddy["security_opt"]
+    assert caddy["restart"] == "unless-stopped"
+    assert "limits" in caddy["deploy"]["resources"]
+
+
+def test_caddy_proxy_adds_net_bind_service_cap() -> None:
+    # cap_drop:[ALL] removes the ability to bind 80/443; NET_BIND_SERVICE is the
+    # single capability added back (same pattern as Vault's IPC_LOCK).
+    compose = generate_compose(_config())
+    assert compose["services"]["caddy"]["cap_add"] == ["NET_BIND_SERVICE"]
+
+
+def test_caddy_proxy_on_agentic_net_only() -> None:
+    compose = generate_compose(_config())
+    assert compose["services"]["caddy"]["networks"] == ["agentic-net"]
+
+
+def test_caddy_proxy_depends_on_api_server_and_admin_panel() -> None:
+    compose = generate_compose(_config())
+    deps = compose["services"]["caddy"]["depends_on"]
+    assert deps["api-server"]["condition"] == "service_healthy"
+    assert deps["admin-panel"]["condition"] == "service_healthy"
+
+
+def test_caddy_proxy_mounts_the_generated_caddyfile_readonly() -> None:
+    compose = generate_compose(_config())
+    volumes = compose["services"]["caddy"]["volumes"]
+    assert "./caddy/Caddyfile:/etc/caddy/Caddyfile:ro" in volumes
+    # The internal CA / ACME material persists across restarts.
+    assert any(v.endswith("/caddy/data:/data") for v in volumes)
+
+
+def test_tls_provided_mode_mounts_the_cert_dir_readonly() -> None:
+    sys_cfg = SystemConfig(
+        domain="agentic.example.com",
+        tls_mode="provided",
+        tls_cert_path="/etc/ssl/server.crt",
+        tls_key_path="/etc/ssl/server.key",
+    )
+    compose = generate_compose(_config(system=sys_cfg))
+    volumes = compose["services"]["caddy"]["volumes"]
+    assert any(v.endswith("/caddy/tls:/etc/caddy/tls:ro") for v in volumes)
 
 
 def test_volumes_use_configured_data_root() -> None:
