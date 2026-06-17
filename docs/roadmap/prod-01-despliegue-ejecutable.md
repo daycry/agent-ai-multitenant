@@ -1,7 +1,7 @@
 ---
 plan_id: prod-01-despliegue-ejecutable
 title: Despliegue ejecutable — imágenes, compose de apps, migraciones y TLS
-status: in_progress
+status: pending_human_validation
 blocking_plan: null
 started_at: 2026-06-11
 completed_at: null
@@ -280,7 +280,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_16` — StepExecutor real
 
-- [ ] **Título**: Sustituir `FakeStepExecutor` por un ejecutor que aprovisiona de verdad
+- [x] **Título**: Sustituir `FakeStepExecutor` por un ejecutor que aprovisiona de verdad
 - **Descripción**: implementar el `StepExecutor` real que `build_default_installer` (`cli.py:415-430`) cableará por defecto: escribe `.env` + compose generados en el destino, ejecuta `docker compose pull` / `up -d` por subprocess con streaming de salida, corre `run_migrations`, bootstrapea Vault (reutilizando `vault_bootstrap.py`) y siembra el tenant. `FakeStepExecutor` queda solo para tests y `--dry-run`.
 - **Depende de**: task_prod01_03, task_prod01_05, task_prod01_12
 - **Tiempo**: 2 días · **Complejidad**: l
@@ -293,7 +293,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_17` — PrereqChecker y CredentialBuilder reales
 
-- [ ] **Título**: Prerequisitos verificados de verdad y credenciales reales del bootstrap
+- [x] **Título**: Prerequisitos verificados de verdad y credenciales reales del bootstrap
 - **Descripción**: `StubPrereqChecker` → checks reales (docker/compose version, espacio en disco, puertos libres, AppArmor disponible — coordinado con task_prod01_10); `StubCredentialBuilder` (`cli.py:165-173`, imprime `stub-admin-password`/`stub-root-token`/`stub-unseal-1..5`) → credenciales reales producidas por el bootstrap de Vault y la siembra del tenant, mostradas una sola vez sin persistirlas en claro en el árbol del repo (coordinación prod-10 para deploy-11/secrets-1).
 - **Depende de**: task_prod01_16
 - **Tiempo**: 1 día · **Complejidad**: m
@@ -306,7 +306,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_18` — StackTeardown y DataPurger reales
 
-- [ ] **Título**: uninstall/reinstall dejan de ser no-ops protegidos por dobles confirmaciones
+- [x] **Título**: uninstall/reinstall dejan de ser no-ops protegidos por dobles confirmaciones
 - **Descripción**: implementar `StackTeardown` (compose down, retirada de unidades/cron si los hay) y `DataPurger` (purga de `{data_root}` con confirmación explícita por categoría: BD, repos git, MinIO, Vault) que `build_default_uninstaller` (`uninstall.py:358-370`) cablea por defecto. Las dobles confirmaciones existentes pasan a proteger acciones reales.
 - **Depende de**: task_prod01_16
 - **Tiempo**: 1 día · **Complejidad**: m
@@ -319,7 +319,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_19` — Fallo ruidoso transicional + sinceramiento del runbook
 
-- [ ] **Título**: Ningún seam stub puede ejecutarse en silencio; el runbook no documenta un simulacro como real
+- [x] **Título**: Ningún seam stub puede ejecutarse en silencio; el runbook no documenta un simulacro como real
 - **Descripción**: guard en `run_install`/`run_uninstall` (`cli.py:596,717`): si algún seam cableado es stub/fake y no se pasó `--dry-run`, exit≠0 con mensaje inequívoco. Corregir `docs/06-runbooks/01-installation-from-scratch.md:62` para reflejar el estado real en cada momento del plan (hoy documenta el simulacro como proceso real). Cierra la pata documental de deploy-1; **coordinación prod-15** (gobernanza/sinceramiento documental).
 - **Depende de**: task_prod01_16
 - **Tiempo**: 0,5 días · **Complejidad**: s
@@ -332,7 +332,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_20` — E2E de instalación sobre máquina limpia
 
-- [ ] **Título**: install.sh → stack vivo → smoke de agente → uninstall
+- [x] **Título**: install.sh → stack vivo → smoke de agente → uninstall (harness; ejecución real = test humano en runner Linux)
 - **Descripción**: test e2e (runner Linux con Docker, nightly o manual por lo pesado — coordinación prod-02): ejecutar `scripts/install.sh` contra imágenes publicadas, verificar `/healthz` del api-server tras `https://` del proxy, login con la credencial real impresa, lanzamiento de una tarea de agente que ejercite el sandbox (socket-proxy + `agentic-agents` + API interna), y `uninstall.sh` con purga verificada. Es el test que la auditoría pide explícitamente para deploy-1/deploy-2/deploy-3.
 - **Depende de**: task_prod01_15, task_prod01_17, task_prod01_18, task_prod01_19, task_prod01_09, task_prod01_11
 - **Tiempo**: 2 días · **Complejidad**: l
