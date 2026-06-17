@@ -149,7 +149,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_06` — Servicio `workers` funcional en el compose generado
 
-- [ ] **Título**: command explícito, volúmenes, lane `privileged` separada
+- [x] **Título**: command explícito, volúmenes, lane `privileged` separada
 - **Descripción**: en `_workers_service` (`compose_generator.py:439-457`): (a) `command` explícito `celery -A workers worker --queues=...`; (b) bind de `{data_root}` (repos bare/worktrees) y de los perfiles seccomp; (c) envs `WORKERS_*` completas (broker DB1, result DB2, database*url, data_root) — ya prefijadas por task_prod01_05; (d) **servicio separado** `workers-privileged` para la cola `privileged` (backups, rotación) con hardening propio, como exige el propio runbook `06-capacity-management.md:160-166`; (e) emitir `WORKERS_BACKUP*\*` con nombres correctos (los **valores** correctos — DSN al servicio postgres, captura por bind-mount — son de **prod-04**, anotar TODO cruzado). Cierra workers-6 junto con task_prod01_09.
 - **Depende de**: task_prod01_05
 - **Tiempo**: 1,5 días · **Complejidad**: m

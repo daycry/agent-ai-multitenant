@@ -105,6 +105,7 @@ CORE_SERVICES: tuple[str, ...] = (
     "api-server",
     "orchestrator",
     "workers",
+    "workers-privileged",
     "notification-dispatcher",
     "admin-panel",
 )
@@ -482,10 +483,18 @@ def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
     return svc
 
 
-def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
-    # worker_replicas / worker_memory_gib come from the wizard's ResourceConfig
-    # (parametrised resource allocation, task 15_03).
-    mem = f"{cfg.resources.worker_memory_gib}g"
+# Celery queue split (mirror of workers.celery_app.QUEUE_NAMES — the unit test
+# cross-checks this against the real 7-queue topology so it cannot drift). The
+# generic pool drains every non-privileged queue; the ``privileged`` queue
+# (backups, key rotation — touches Vault/secrets) is drained ONLY by the
+# singleton workers-privileged lane under the strictest profile, never the
+# generic pool (runbook 06-capacity-management.md).
+_WORKER_GENERIC_QUEUES = "default,heavy,gpu,ingestion,test,review"
+_WORKER_PRIVILEGED_QUEUE = "privileged"
+
+
+def _workers_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    """The WORKERS_* environment shared by both worker lanes (same Settings)."""
     env = _app_environment(cfg, "WORKERS_", prod=prod)
     env.update(
         {
@@ -493,22 +502,70 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             "WORKERS_RESULT_BACKEND": "redis://redis:6379/2",
             "WORKERS_EVENTS_REDIS_URL": "redis://redis:6379/3",
             "WORKERS_DATA_ROOT": cfg.storage.data_root,
+            # Backup wiring (workers-6 / prod-04). The NAMES are pinned here so
+            # the .env contract holds; the correct VALUES (a dedicated pg_dump
+            # DSN, the bind-mount capture path) are prod-04's job — TODO(prod-04).
+            # Default the backup DSN to the migrations-role DSN the workers
+            # already carry (pg_dump needs broad read).
+            "WORKERS_BACKUP_DATABASE_URL": _env_ref("WORKERS_DATABASE_URL", None, prod=prod),
+            "WORKERS_BACKUP_ENCRYPTION_ENABLED": "true",
+            "WORKERS_BACKUP_ENCRYPTION_VAULT_KEY": "agentic-platform/backups/encryption-key",
         }
     )
+    return env
+
+
+def _workers_volumes(cfg: InstallerConfig) -> list[str]:
+    """Binds both worker lanes need: the data root (bare repos + per-task git
+    worktrees, same path in/out so worktree paths resolve) and the seccomp
+    profiles the worker pins onto the UNTRUSTED runtimes it launches
+    (``docker/seccomp/agent-runtime.json``; ``WORKERS_SECCOMP_PROFILE`` points
+    at it — set in task_prod01_10)."""
+    return [
+        f"{cfg.storage.data_root}:{cfg.storage.data_root}",
+        "./docker/seccomp:/etc/agentic/seccomp:ro",
+    ]
+
+
+def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    # worker_replicas / worker_memory_gib come from the wizard's ResourceConfig
+    # (parametrised resource allocation, task 15_03).
+    mem = f"{cfg.resources.worker_memory_gib}g"
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
-        "environment": env,
+        "command": f"celery -A workers worker --queues={_WORKER_GENERIC_QUEUES}",
+        "environment": _workers_env(cfg, prod=prod),
+        "volumes": _workers_volumes(cfg),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},
         },
-        # Connected to the internal agents network too so workers can launch
-        # the egress-proxied agent runtimes.
         "networks": ["agentic-net"],
     }
     svc.update(_hardening(limits_cpus="4.0", limits_memory=mem))
-    # Scale the Celery worker pool per the wizard's resource choice.
+    # Scale the GENERIC Celery worker pool per the wizard's resource choice.
     svc["deploy"]["replicas"] = cfg.resources.worker_replicas
+    return svc
+
+
+def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    """Separate lane that drains ONLY the ``privileged`` queue (backups, key
+    rotation). Singleton (replicas=1) — its periodic jobs must not double-run —
+    and meant to carry the strictest sandbox profile (set in task_prod01_10).
+    Same image + WORKERS_* env as the generic pool; different queue + scale."""
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
+        "command": f"celery -A workers worker --queues={_WORKER_PRIVILEGED_QUEUE} --concurrency=1",
+        "environment": _workers_env(cfg, prod=prod),
+        "volumes": _workers_volumes(cfg),
+        "depends_on": {
+            "postgres": {"condition": "service_healthy"},
+            "redis": {"condition": "service_healthy"},
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    svc["deploy"]["replicas"] = 1
     return svc
 
 
@@ -787,6 +844,7 @@ _BUILDERS = {
     "api-server": _api_server_service,
     "orchestrator": _orchestrator_service,
     "workers": _workers_service,
+    "workers-privileged": _workers_privileged_service,
     "notification-dispatcher": _notification_dispatcher_service,
     "admin-panel": _admin_panel_service,
     "ollama": _ollama_service,

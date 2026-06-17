@@ -458,3 +458,77 @@ def test_docker_compose_config_accepts_generated_file(written_compose: str) -> N
     # Unset ${ENV} placeholders only produce warnings on stderr; exit 0 means
     # the schema + structure are valid.
     assert result.returncode == 0, result.stderr
+
+
+# ---------------------------------------------------------------------------
+# task_prod01_06 — workers funcional: command celery explícito, lane privileged
+# separada, binds (data_root + seccomp), envs de backup.
+# ---------------------------------------------------------------------------
+def _queues_of(service: dict) -> set[str]:
+    """Extract the ``--queues=a,b,c`` set from a service's celery command
+    (accepts the command as a string or an argv list)."""
+    command = service.get("command")
+    text = command if isinstance(command, str) else " ".join(command or [])
+    import re
+
+    m = re.search(r"--queues[=\s]+([A-Za-z0-9_,]+)", text)
+    return set(m.group(1).split(",")) if m else set()
+
+
+def test_workers_has_explicit_celery_command_for_generic_queues() -> None:
+    workers = generate_compose(_config())["services"]["workers"]
+    text = (
+        workers["command"] if isinstance(workers["command"], str) else " ".join(workers["command"])
+    )
+    assert (
+        "celery" in text and "worker" in text
+    ), f"workers command is not a celery worker: {text!r}"
+    queues = _queues_of(workers)
+    assert queues, "workers has no --queues"
+    assert "privileged" not in queues, "the generic pool must NOT drain the privileged queue"
+
+
+def test_workers_privileged_lane_drains_only_privileged_as_singleton() -> None:
+    services = generate_compose(_config())["services"]
+    assert "workers-privileged" in services, "no separate workers-privileged service"
+    priv = services["workers-privileged"]
+    assert _queues_of(priv) == {
+        "privileged"
+    }, "workers-privileged must drain exactly the privileged queue"
+    # Singleton: periodic privileged jobs (backup/rotation) must not double-run.
+    assert (
+        priv.get("deploy", {}).get("replicas") == 1
+    ), "workers-privileged must be a singleton (replicas=1)"
+
+
+def test_workers_lanes_cover_every_queue_with_no_orphan() -> None:
+    from workers.celery_app import QUEUE_NAMES
+
+    services = generate_compose(_config())["services"]
+    covered = _queues_of(services["workers"]) | _queues_of(services["workers-privileged"])
+    assert covered == set(QUEUE_NAMES), (
+        f"queues drained {covered} != topology {set(QUEUE_NAMES)} — an orphan queue would "
+        "be enqueued forever (runbook 06-capacity-management)"
+    )
+
+
+def test_workers_lanes_bind_data_root_and_seccomp_profiles() -> None:
+    services = generate_compose(_config(data_root="/data/agent-platform"))["services"]
+    for name in ("workers", "workers-privileged"):
+        vols = " ".join(services[name].get("volumes", []))
+        assert (
+            "/data/agent-platform" in vols
+        ), f"{name} does not bind the data_root (repos/worktrees)"
+        assert (
+            "seccomp" in vols
+        ), f"{name} does not bind the seccomp profiles (for launched runtimes)"
+
+
+def test_workers_emit_backup_env_prefixed() -> None:
+    env = generate_compose(_config())["services"]["workers"]["environment"]
+    for key in (
+        "WORKERS_BACKUP_DATABASE_URL",
+        "WORKERS_BACKUP_ENCRYPTION_ENABLED",
+        "WORKERS_BACKUP_ENCRYPTION_VAULT_KEY",
+    ):
+        assert key in env, f"workers is missing backup env {key}"
