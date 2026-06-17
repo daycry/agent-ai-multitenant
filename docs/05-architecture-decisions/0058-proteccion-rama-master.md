@@ -1,8 +1,10 @@
 ---
 adr_id: "0058"
 title: "Protección de la rama master: mecanismo para impedir merges con CI en rojo"
-status: proposed
+status: accepted
 date: 2026-06-11
+decided_at: 2026-06-17
+decided_by: claude-code (delegación explícita del operador)
 authors: [auditoria-claude-2026-06]
 plan_referenced: prod-02-ci-en-verde
 docs_language: es
@@ -10,11 +12,18 @@ docs_language: es
 
 # ADR 0058 — Protección de la rama `master`
 
-> **Estado: `proposed`** — requiere decisión del operador. Lo motiva el plan
-> prod-02 (hallazgos `tests-1`/`tests-2` de la auditoría de producción
-> 2026-06): el CI llevaba ~19 runs consecutivos en rojo mergeados a `master`
-> desde 2026-05-29, y el bug de triggers (`main` vs `master`) hacía que la
-> mayoría de PRs no ejecutara CI en absoluto.
+> **Estado: `accepted`** (2026-06-17, por delegación del operador). Decisión:
+> **Opción A** (GitHub Pro/Team + branch protection con required status checks)
+> como solución definitiva, con la **Opción C** (disciplina + `gh pr checks`,
+> ya en `docs/context/conventions.md`) como medida puente activa. **La ejecución
+> de A es una acción del dueño del repositorio** (subir de plan + configurar la
+> protección): implica coste recurrente y permisos de administración de la cuenta
+> GitHub, así que **no puede realizarla un agente** — queda como tarea humana
+> documentada abajo. La Opción B (repo público) queda descartada (decisión de
+> visibilidad/producto, fuera de alcance). Lo motiva el plan prod-02 (hallazgos
+> `tests-1`/`tests-2`): el CI llevaba ~19 runs en rojo mergeados a `master` desde
+> 2026-05-29, y el bug de triggers (`main` vs `master`) hacía que la mayoría de
+> PRs no ejecutara CI.
 
 ## Contexto
 
@@ -33,11 +42,25 @@ mergeado» y «todo va por PR», pero **nada lo impide técnicamente hoy**:
 
 ## Decisión
 
-Pendiente de elección humana entre las tres opciones de abajo. La
-**recomendación de la auditoría es la Opción A** (GitHub Pro/Team + required
-status checks), con la **Opción C activa desde el día 1** como medida puente
-mientras se decide (ya documentada en `docs/context/conventions.md`,
-sección «Regla de salida»).
+**Ratificada (2026-06-17, delegación del operador): Opción A** como solución
+definitiva + **Opción C** como puente activo. Opción B descartada.
+
+**Acción pendiente del DUEÑO del repositorio** (no ejecutable por un agente —
+requiere plan de pago + admin de la cuenta GitHub):
+
+1. Subir el repositorio a **GitHub Pro** (o Team).
+2. En `Settings → Branches → Branch protection rules`, añadir una regla para
+   `master` con: _Require a pull request before merging_, _Require status checks
+   to pass before merging_ (seleccionar los jobs de `ci.yml`: unit, lint,
+   integration, build-images), y _Require branches to be up to date before
+   merging_. Opcional: _Require linear history_.
+3. Equivalente por CLI cuando el plan lo permita:
+   `gh api -X PUT repos/{owner}/{repo}/branches/master/protection ...` (hoy da
+   `403 Upgrade to GitHub Pro` en repo privado Free).
+
+Hasta que el dueño complete lo anterior, rige la **Opción C** (medida puente, ya
+activa en `docs/context/conventions.md` § «Regla de salida»): ningún merge a
+`master` con CI en rojo, verificado con `gh pr checks <pr> --watch`.
 
 ## Opciones consideradas
 

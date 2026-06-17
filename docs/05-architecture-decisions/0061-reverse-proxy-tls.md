@@ -1,8 +1,10 @@
 ---
 adr_id: "0061"
 title: "Reverse proxy y terminación TLS: Caddy como única superficie publicada"
-status: proposed
+status: accepted
 date: 2026-06-17
+decided_at: 2026-06-17
+decided_by: claude-code (delegación explícita del operador)
 authors: [claude-code-2026-06]
 plan_referenced: prod-01-despliegue-ejecutable
 docs_language: es
@@ -10,12 +12,14 @@ docs_language: es
 
 # ADR 0061 — Reverse proxy y terminación TLS
 
-> **Estado: `proposed`** — requiere decisión del operador. Es la "decisión clave
-> 2" del plan prod-01 (tasks 14 y 15). Hoy `api-server` y `admin-panel`
-> publican en `0.0.0.0` en **HTTP plano** (`compose_generator.py`, builders
-> `_api_server_service`/`_admin_panel_service`), y `docker/vault/config.hcl:2-4`
-> asume un reverse proxy "de fase 15" que nunca se construyó. Este ADR cierra
-> ese hueco (deploy-7).
+> **Estado: `accepted`** (2026-06-17, por delegación del operador) e
+> **implementado** en prod-01 Fase E (tasks 14-15): servicio `caddy`
+> (caddy:2.8-alpine) como única superficie publicada (80/443), terminación TLS
+> (internal/provided/acme) + HSTS, enrutado single-origin (`/api/*` al backend
+> con `/api/v1` sin strip, SPA en `/`); retirados los `ports` de api-server y
+> admin-panel. **Dependencia delegada a prod-09:** los fixes JS de frontend
+> same-origin (`wsUrl`, review page, fetches inline, preview del wizard). Es la
+> "decisión clave 2" del plan prod-01; cierra deploy-7.
 
 ## Contexto
 

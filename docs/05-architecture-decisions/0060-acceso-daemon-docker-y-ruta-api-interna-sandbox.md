@@ -1,8 +1,10 @@
 ---
 adr_id: "0060"
 title: "Acceso de los workers al daemon Docker y ruta de red de la API interna del sandbox"
-status: proposed
+status: accepted
 date: 2026-06-17
+decided_at: 2026-06-17
+decided_by: claude-code (delegación explícita del operador)
 authors: [claude-code-2026-06]
 plan_referenced: prod-01-despliegue-ejecutable
 docs_language: es
@@ -10,10 +12,15 @@ docs_language: es
 
 # ADR 0060 — Daemon Docker para los workers + ruta de la API interna del sandbox
 
-> **Estado: `proposed`** — requiere decisión del operador. Es la "decisión clave
-> 1" del plan prod-01 (tasks 09 y 11). Afecta al Principio Rector nº2
-> (aislamiento por contenedor): los workers lanzan runtimes de agente efímeros,
-> pero **no pueden recibir el socket Docker directo** (= escape a root del host).
+> **Estado: `accepted`** (2026-06-17, por delegación del operador) e
+> **implementado** en prod-01 Fase C (tasks 09-11): `docker-socket-proxy`
+> (tecnativa, ACL mínima) en la red interna dedicada `agentic-docker`; los
+> workers hablan al daemon vía `DOCKER_HOST=tcp://docker-socket-proxy:2375`; el
+> `agent-runtime` alcanza la API interna del api-server por `agentic-agents`
+> (Parte B1) con fallo ruidoso. Es la "decisión clave 1" del plan prod-01.
+> Afecta al Principio Rector nº2 (aislamiento por contenedor): los workers lanzan
+> runtimes efímeros pero **no pueden recibir el socket Docker directo** (= escape
+> a root del host).
 
 ## Contexto
 

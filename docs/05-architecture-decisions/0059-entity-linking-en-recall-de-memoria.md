@@ -1,22 +1,30 @@
 ---
 adr_id: "0059"
 title: "Entity linking como señal extra en el recall de memoria de agentes"
-status: proposed
+status: accepted
 date: 2026-06-17
-authors: [claude-code-2026-06]
+decided_at: 2026-06-17
+decided_by: claude-code (delegación explícita del operador)
 plan_referenced: null
+authors: [claude-code-2026-06]
 docs_language: es
 ---
 
 # ADR 0059 — Entity linking en el recall de memoria
 
-> **Estado: `proposed`** — idea capturada, NO en el camino crítico. Surge al
-> evaluar la librería [mem0](https://github.com/mem0ai/mem0) (2026-06-17): se
-> descartó adoptarla como dependencia, pero una de sus ideas —enlazar entidades
-> entre memorias para boostear la recuperación— es la única genuinamente
-> aditiva sobre lo que ya existe. Este ADR la registra para no perderla; se
-> decide/implementa **solo si la calidad del recall se mide como un dolor
-> real**, post-producción.
+> **Estado: `accepted`** (2026-06-17, por delegación del operador). Decisión:
+> **Opción C — NO implementar ahora** (el default documentado). El recall actual
+> (BM25 + pgvector fusionados con RRF) es sólido y aceptable para producción; el
+> entity-linking es una mejora **especulativa** sin métricas que la respalden, y
+> el propio ADR establece que NO debe implementarse de forma proactiva.
+> Implementarla ahora sería optimización prematura (coste LLM extra en la
+> distilación + esquema + complejidad de recall) contra un problema no medido.
+> La **Opción A** (entidades en JSONB + señal de entity-match en el RRF) queda
+> como el camino preferido **si y cuando** se dispare la condición de activación
+> (evals de calidad de recall o feedback de operador — ver abajo). Surge al
+> evaluar [mem0](https://github.com/mem0ai/mem0): se descartó adoptarla como
+> dependencia (rompe RLS/multi-tenancy + proveedores fuera de ADR 0021); solo la
+> idea de enlazar entidades se registra aquí.
 
 ## Contexto
 
@@ -48,9 +56,10 @@ como señal adicional de recuperación ("entity match") junto a semántico y BM2
 
 ## Decisión
 
-**Propuesta (pendiente de decisión humana + de que el recall sea un dolor
-medido):** añadir una capa ligera de entidades, reutilizando el stack actual y
-**sin dependencias externas ni segundo almacén**:
+**Ratificada (2026-06-17, delegación del operador): Opción C — diferir.** No se
+implementa ahora. Si la condición de activación se cumple, la implementación
+preferida es la **Opción A** descrita abajo: añadir una capa ligera de entidades,
+reutilizando el stack actual y **sin dependencias externas ni segundo almacén**:
 
 1. **Extracción de entidades en la distilación.** Ya hay una llamada LLM en
    `distillation.py`; ampliar su prompt para devolver, por candidato, una lista

@@ -1,8 +1,10 @@
 ---
 adr_id: "0057"
 title: "Resolución de modelo de agentes por proveedor concreto (provider_id) + cableado del resolver en el worker (los agentes usan su modelo real)"
-status: proposed
+status: accepted
 date: 2026-06-10
+decided_at: 2026-06-17
+decided_by: claude-code (delegación explícita del operador)
 authors: [system_architect]
 plan_referenced: 06.17-capacitacion-agentes
 supersedes_partially: ["0055"]
@@ -11,10 +13,13 @@ docs_language: es
 
 # ADR 0057 — Resolución de modelo de agentes por proveedor concreto + cableado del resolver
 
-> **Estado: `proposed`** — pendiente de aprobación del operador. Extiende el ADR
-> 0055 (validación de `model_config`) y replica el patrón del ADR 0053 (modelo
-> del asistente personal por `provider_id`). Lo motiva un hallazgo **crítico**
-> de la auditoría de resolución de modelo (2026-06-10).
+> **Estado: `accepted`** (2026-06-17, por delegación del operador). El núcleo
+> **ya está implementado y mergeado** (commit f87ca62): el worker resuelve el
+> `model_config` a un spec EJECUTABLE (`resolve_model_spec` en
+> `workers/execution.py`) e inyecta `kind`+endpoint+credencial en
+> `AGENT_TASK_SPEC` — **fin del `scripted` silencioso** (Problema 1 crítico). La
+> selección por `provider_id` + validación DB-aware replican el patrón del ADR 0053. Extiende el ADR 0055 (validación de `model_config`). Lo motivó un
+> hallazgo crítico de la auditoría de resolución de modelo (2026-06-10).
 
 ## Contexto
 
