@@ -60,8 +60,9 @@ def test_admin_login_with_the_revealed_credential(installed_stack: dict[str, str
         verify=False,
         timeout=30,
     )
-    # A real admin user exists (seed step) → login returns a token or an MFA
-    # challenge (both prove the credential is valid, not a 401).
-    assert resp.status_code in (200, 401)
-    if resp.status_code == 200:
-        assert resp.json().get("access_token") or resp.json().get("mfa_required")
+    # The revealed credential MUST authenticate: a real seeded admin → 200 with a
+    # token (or an MFA challenge). A 401 means the seed credential is wrong — that
+    # is a FAILURE, not an accepted outcome.
+    assert resp.status_code == 200, f"login con la credencial revelada falló: {resp.status_code}"
+    body = resp.json()
+    assert body.get("access_token") or body.get("mfa_required"), "login 200 sin token ni MFA"

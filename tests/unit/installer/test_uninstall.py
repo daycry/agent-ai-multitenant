@@ -32,22 +32,35 @@ _COMPOSE_FILE = f"{_COMPOSE_DIR}/docker-compose.yml"
 _DATA_ROOT = "/data/agent-platform"
 
 
+def _teardown(runner: FakeCommandRunner, *, compose_exists: bool = True) -> RealStackTeardown:
+    existing = {_COMPOSE_FILE} if compose_exists else set()
+    return RealStackTeardown(_COMPOSE_DIR, runner, fs=FakeFileSystem(existing=existing))
+
+
 def test_stack_teardown_runs_compose_down_without_volumes_by_default() -> None:
     runner = FakeCommandRunner()
-    RealStackTeardown(_COMPOSE_DIR, runner).down(PROJECT_NAME, remove_volumes=False)
+    _teardown(runner).down(PROJECT_NAME, remove_volumes=False)
     assert runner.calls == [("docker", "compose", "-p", PROJECT_NAME, "-f", _COMPOSE_FILE, "down")]
 
 
 def test_stack_teardown_adds_dash_v_when_remove_volumes() -> None:
     runner = FakeCommandRunner()
-    RealStackTeardown(_COMPOSE_DIR, runner).down(PROJECT_NAME, remove_volumes=True)
+    _teardown(runner).down(PROJECT_NAME, remove_volumes=True)
     assert runner.calls[0][-1] == "-v"
+
+
+def test_stack_teardown_falls_back_without_f_when_compose_missing() -> None:
+    # Install aborted before GENERATE_CONFIG → no docker-compose.yml: tear down
+    # by project name (Compose uses the container labels), not a failing -f.
+    runner = FakeCommandRunner()
+    _teardown(runner, compose_exists=False).down(PROJECT_NAME, remove_volumes=False)
+    assert runner.calls == [("docker", "compose", "-p", PROJECT_NAME, "down")]
 
 
 def test_stack_teardown_is_tolerant_of_a_nonzero_down() -> None:
     runner = FakeCommandRunner(fail_on=("docker", "compose"))
     # Must NOT raise — teardown is best-effort.
-    lines = RealStackTeardown(_COMPOSE_DIR, runner).down(PROJECT_NAME, remove_volumes=False)
+    lines = _teardown(runner).down(PROJECT_NAME, remove_volumes=False)
     assert any("rc=" in line for line in lines)
 
 

@@ -11,18 +11,22 @@ Instalar la plataforma agéntica en una **máquina virgen** (Docker Compose
 en una sola máquina), por cualquiera de los dos caminos que entrega el
 Plan 15:
 
+- **CLI desatendido** (camino REAL) — `scripts/install.sh --config
+install.yaml`, la orquestación headless desde un fichero YAML. Aprovisiona
+  **de verdad** (escribe config, levanta el stack, migra, bootstrapea Vault y
+  siembra el tenant + catálogo). Es el camino soportado para una instalación
+  real (perfiles `minimal` / `recommended` / `gpu`) y para automatización.
 - **Wizard** — UI temporal y autodestructiva, nueve pasos guiados
-  (`apps/installer`). Recomendado para una primera instalación o cuando
-  quieres detección de GPU y validaciones visuales.
-- **CLI desatendido** — `scripts/install.sh --config install.yaml`, la
-  misma orquestación headless desde un fichero YAML. Recomendado para
-  reproducir instalaciones (perfiles `minimal` / `recommended` / `gpu`) y
-  para automatización.
+  (`apps/installer`). ⚠️ **HOY es una SIMULACIÓN**: conduce los nueve pasos por
+  HTTP+SSE pero el `StepExecutor` del wizard **no aprovisiona nada** y las
+  credenciales que muestra **no son reales**. Cablear el wizard al ejecutor real
+  es un follow-up de la UI del instalador (prod-09). Úsalo para validar el flujo
+  y la detección de GPU, **no** como instalación real.
 
-Ambos caminos ejecutan **exactamente el mismo pipeline** de
-aprovisionamiento (mismas tareas de Fase B), así que el resultado no
-diverge entre ellos. El wizard lo conduce por HTTP+SSE; el CLI por stdout
-y un código de salida.
+> El camino REAL de instalación es el **CLI** (`scripts/install.sh`), que cablea
+> los bindings reales por defecto y **aborta con error** si detecta seams de
+> simulación sin `--dry-run` (no existe una instalación falsa silenciosa —
+> deploy-1). El wizard HTTP queda como simulación hasta prod-09.
 
 > Alcance: **Docker Compose en una sola máquina** (CLAUDE.md). No
 > Kubernetes, no multi-máquina, no HA multi-instancia.
@@ -42,13 +46,14 @@ El paso 1 del wizard y el gate previo del CLI validan todo esto y abortan
 **antes de aprovisionar** si algo falla
 (`apps/installer/backend/src/installer_backend/prereqs.py`):
 
-| Prerequisito        | Mínimo                    | Notas                                                               |
-| ------------------- | ------------------------- | ------------------------------------------------------------------- |
-| Docker Engine       | **24.0+**                 | cap-drop / seccomp / rootfs read-only estables desde 24.x.          |
-| Docker Compose      | **v2** (`docker compose`) | NO el `docker-compose` v1 legado.                                   |
-| RAM total           | **8 GiB** (suelo)         | PostgreSQL+pgvector, Redis, MinIO, Vault, API, workers.             |
-| Disco libre (datos) | **50 GiB**                | Imágenes + `pgdata` + object storage + backups.                     |
-| GPU NVIDIA          | opcional                  | Detección automática; habilita el perfil `gpu` (servicio `ollama`). |
+| Prerequisito        | Mínimo            | Notas                                                                                                                             |
+| ------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Docker Engine       | **24.0+**         | cap-drop / seccomp / rootfs read-only estables desde 24.x.                                                                        |
+| Docker Compose      | **v2.21+**        | `up --wait` con el one-shot `migrations` (service_completed_successfully) es fiable desde 2.21. NO el `docker-compose` v1 legado. |
+| RAM total           | **8 GiB** (suelo) | PostgreSQL+pgvector, Redis, MinIO, Vault, API, workers.                                                                           |
+| Disco libre (datos) | **50 GiB**        | Imágenes + `pgdata` + object storage + backups.                                                                                   |
+| Puertos 80/443      | **libres**        | Única superficie publicada = el proxy Caddy (ADR 0061). El prereq bloquea si están ocupados.                                      |
+| GPU NVIDIA          | opcional          | Detección automática; habilita el perfil `gpu` (servicio `ollama`).                                                               |
 
 Además, antes de empezar:
 
@@ -63,6 +68,11 @@ Además, antes de empezar:
   [Guardar las credenciales](#guardar-las-credenciales-y-las-unseal-keys).
 
 ## Camino A — Wizard (9 pasos)
+
+> ⚠️ **SIMULACIÓN (hoy).** El wizard recorre los nueve pasos pero **no
+> aprovisiona** el stack y las credenciales del paso 9 **son falsas**. Para una
+> instalación real usa el **Camino B (CLI)**. El cableado real del wizard es un
+> follow-up de prod-09.
 
 El instalador es un contenedor separado que sirve la UI temporal y se
 **autodestruye** al terminar (`apps/installer`,
@@ -130,6 +140,19 @@ un `install.yaml`, sin navegador
 > simulación; el camino REAL de instalación es este CLI (`scripts/install.sh`).
 > Cablear el wizard al ejecutor real es un follow-up de la UI del instalador
 > (prod-09).
+>
+> **Vault tras el install (alcance prod-01).** El paso de Vault solo
+> **orquesta** (init → unseal → KV v2 → políticas): Vault queda inicializado
+> pero **sin secretos escritos** y los servicios arrancan leyendo el `.env`
+> generado (0600) como fuente de secretos. Escribir los valores en el KV y
+> mintar tokens por servicio es de **prod-10** — no asumas que los secretos ya
+> viven en Vault tras este install.
+>
+> **Si el install falla después del paso de Vault.** Vault ya quedó
+> inicializado, así que **re-ejecutar `install.sh` no vuelve a revelar** las
+> unseal keys / root token (no hay recuperación: se mostraron una vez). Para
+> reintentar limpio: `scripts/uninstall.sh --purge-data` (borra `vault/file`) y
+> reinstala, o usa `scripts/reinstall.sh --fresh`.
 
 ### Perfiles
 

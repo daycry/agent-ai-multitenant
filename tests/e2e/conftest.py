@@ -77,7 +77,7 @@ def installed_stack(docker_available: None) -> Iterator[dict[str, str]]:
         yield creds
     finally:
         uninstall_sh = REPO_ROOT / "scripts" / "uninstall.sh"
-        subprocess.run(
+        un = subprocess.run(
             [
                 "bash",
                 str(uninstall_sh),
@@ -91,6 +91,22 @@ def installed_stack(docker_available: None) -> Iterator[dict[str, str]]:
             timeout=600,
             check=False,
         )
+        # Verify the purge actually happened (deploy-3): uninstall succeeded AND
+        # the data root no longer exists.
+        assert (
+            un.returncode == 0
+        ), f"uninstall.sh falló (rc={un.returncode}):\n{un.stdout}\n{un.stderr}"
+        data_root = _profile_data_root()
+        assert not Path(data_root).exists(), f"la purga no eliminó la raíz de datos {data_root}"
+
+
+def _profile_data_root() -> str:
+    """The ``storage.data_root`` declared in the e2e install profile."""
+
+    import yaml
+
+    doc = yaml.safe_load(E2E_PROFILE.read_text(encoding="utf-8"))
+    return str(doc["storage"]["data_root"])
 
 
 def _parse_reveal(stdout: str) -> dict[str, str]:

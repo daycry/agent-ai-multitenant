@@ -15,13 +15,11 @@ uninstall tests are migrated in lockstep and never run a real teardown in CI.
 from __future__ import annotations
 
 import shutil
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from .command_runner import CommandRunner
-from .compose_generator import PROJECT_NAME
 
 #: Human-facing categories for the purge log, grouped by the top-level data
 #: sub-dirs the compose generator bind-mounts (kept in step with
@@ -82,30 +80,29 @@ class RealStackTeardown:
     """``docker compose down`` (no ``-v`` by default — data lives in the bind mount).
 
     Teardown is tolerant: a non-zero ``down`` is logged but does NOT raise (the
-    stack may be partially up; the operator still wants the rest removed).
+    stack may be partially up; the operator still wants the rest removed). If the
+    generated ``docker-compose.yml`` is missing (an install aborted at
+    GENERATE_CONFIG), it falls back to ``-p <project> down`` (Compose can destroy
+    a project by name via its labels) instead of failing on a missing ``-f``.
     """
 
     compose_dir: str
     runner: CommandRunner
-    project_name: str = PROJECT_NAME
+    fs: FileSystem = field(default_factory=RealFileSystem)
 
     @property
     def _compose_file(self) -> str:
         return f"{self.compose_dir}/docker-compose.yml"
 
     def down(self, project_name: str, *, remove_volumes: bool) -> list[str]:
-        args: Sequence[str] = [
-            "docker",
-            "compose",
-            "-p",
-            project_name,
-            "-f",
-            self._compose_file,
-            "down",
-            *(["-v"] if remove_volumes else []),
-        ]
+        args: list[str] = ["docker", "compose", "-p", project_name]
+        if self.fs.exists(self._compose_file):
+            args += ["-f", self._compose_file]
+        args.append("down")
+        if remove_volumes:
+            args.append("-v")
         lines: list[str] = []
-        result = self.runner.run(list(args), cwd=self.compose_dir, on_line=lines.append)
+        result = self.runner.run(args, cwd=self.compose_dir, on_line=lines.append)
         if result.returncode != 0:
             lines.append(f"aviso: 'docker compose down' devolvió rc={result.returncode}")
         return lines
@@ -133,8 +130,10 @@ class RealDataPurger:
                     removed_any = True
             if removed_any:
                 lines.append(f"{category}: eliminada")
-        # Finally the root itself (anything left + the now-empty tree).
+        # Finally the root itself: this also wipes the generated config + the
+        # secret-bearing .env (0600) + the Caddyfile that live directly under it.
         if self.fs.exists(data_root):
+            lines.append("config + secretos en disco (.env / compose / Caddyfile): eliminados")
             self.fs.rmtree(data_root)
             lines.append(f"raíz de datos eliminada: {data_root}")
         return lines

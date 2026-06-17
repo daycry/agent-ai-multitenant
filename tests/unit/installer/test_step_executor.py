@@ -136,10 +136,14 @@ def test_seed_tenant_captures_password_and_never_puts_it_in_argv(
     # The password is passed via env pass-through, NEVER on the command line.
     for argv in runner.calls:
         assert pw not in argv, "admin password leaked into argv"
-    # The init_tenant entrypoint was invoked.
+    # The built-in catalog seed ran (platform tenant + builtins) before init_tenant.
+    assert any("api_server.seeds" in c and "init_tenant" not in " ".join(c) for c in runner.calls)
+    # The init_tenant entrypoint was invoked as the last call.
     seed_call = runner.calls[-1]
     assert "api_server.seeds.init_tenant" in seed_call
     assert "INIT_ADMIN_PASSWORD" in seed_call  # the -e pass-through flag (no value)
+    # The password is actually handed over as an ENV var (not argv).
+    assert runner.envs[-1] == {"INIT_ADMIN_PASSWORD": pw}
 
 
 def test_no_step_returns_a_log_line_containing_a_secret(

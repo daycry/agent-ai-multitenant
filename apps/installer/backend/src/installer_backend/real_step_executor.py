@@ -52,12 +52,20 @@ from .vault_bootstrap import (
     bootstrap_vault,
 )
 
+#: ``Organization.slug`` is ``String(64)``; ``tenant_name`` allows up to 120
+#: chars, so the slug MUST be capped or the SEED_TENANT INSERT fails late.
+_MAX_SLUG_LEN = 64
+
 
 def _slugify(name: str) -> str:
-    """A conservative URL-safe slug for the tenant org (lowercase, dash-joined)."""
+    """A conservative URL-safe slug for the tenant org (lowercase, dash-joined).
+
+    Capped at 64 chars (the ``organizations.slug`` column width) so a long
+    tenant name can't blow up the INSERT at the very last install step.
+    """
 
     slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
-    return slug or "tenant"
+    return (slug[:_MAX_SLUG_LEN].rstrip("-")) or "tenant"
 
 
 @dataclass
@@ -105,6 +113,11 @@ class RealStepExecutor:
             case InstallStep.START_STACK:
                 self._run(self._compose("up", "-d", "--wait"), lines)
             case InstallStep.RUN_MIGRATIONS:
+                # The apps depend_on the one-shot `migrations` with
+                # service_completed_successfully, so `up --wait` above already
+                # applied them; this explicit step is the AUDITABLE migration
+                # gate (matches the upgrade runbook) and is a safe idempotent
+                # no-op here (env.py takes a pg_advisory_xact_lock).
                 self._run(self._compose("run", "--rm", "migrations"), lines)
             case InstallStep.BOOTSTRAP_VAULT:
                 self._bootstrap_vault(lines)
@@ -161,6 +174,17 @@ class RealStepExecutor:
         # we run ONLY the orchestration (init → unseal → enable KV → policies).
 
     def _seed_tenant(self, lines: list[str]) -> None:
+        # 1. Platform tenant + the built-in catalog (agents, teams, tools, skills,
+        #    KBs, project templates, marketplace). Without this a clean install
+        #    boots an EMPTY system — no platform tenant, nothing to clone/use
+        #    (review finding). Idempotent (every builtin seed upserts).
+        self._run(
+            self._compose("run", "--rm", "api-server", "python", "-m", "api_server.seeds"),
+            lines,
+        )
+        lines.append("Catálogo built-in sembrado (platform tenant + agentes/equipos/tools)")
+
+        # 2. The operator's initial tenant + admin user + membership.
         # CSPRNG admin password; passed by env PASS-THROUGH (never argv) to the
         # init_tenant entrypoint inside the api-server container.
         password = _secrets.token_urlsafe(18)

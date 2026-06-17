@@ -119,19 +119,23 @@ class FakeCommandRunner:
     fail_on: tuple[str, ...] | None = None
     calls: list[tuple[str, ...]] = field(default_factory=list)
     cwds: list[str | None] = field(default_factory=list)
+    #: The ``env`` dict passed to each call (so a test can assert a secret is
+    #: handed over as an env var, NOT on the command line).
+    envs: list[dict[str, str] | None] = field(default_factory=list)
 
     def run(
         self,
         args: Sequence[str],
         *,
         cwd: str | None = None,
-        env: dict[str, str] | None = None,  # noqa: ARG002 - Protocol parity
+        env: dict[str, str] | None = None,
         timeout: int | None = None,  # noqa: ARG002 - Protocol parity
         on_line: Callable[[str], None] | None = None,
     ) -> CommandResult:
         argv = tuple(args)
         self.calls.append(argv)
         self.cwds.append(cwd)
+        self.envs.append(env)
 
         if self.fail_on is not None and argv[: len(self.fail_on)] == self.fail_on:
             result = CommandResult(

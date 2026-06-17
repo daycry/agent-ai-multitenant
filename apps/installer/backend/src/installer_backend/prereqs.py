@@ -46,8 +46,12 @@ BYTES_PER_GIB = 1024**3
 MIN_DOCKER_VERSION: tuple[int, int] = (24, 0)
 
 #: Minimum Docker Compose version. The stack uses Compose v2 syntax/CLI
-#: (``docker compose``, not the legacy ``docker-compose`` v1).
-MIN_COMPOSE_VERSION: tuple[int, int] = (2, 0)
+#: (``docker compose``). The floor is 2.21: the installer runs
+#: ``up -d --wait`` with the one-shot ``migrations`` service as a
+#: ``service_completed_successfully`` dependency, and reliable ``--wait``
+#: handling of completed (exit-0) one-shots stabilised in later 2.x
+#: (task_prod01_16 / 20) — an older Compose can hang/false-fail there.
+MIN_COMPOSE_VERSION: tuple[int, int] = (2, 21)
 
 #: Minimum total system RAM. The single-machine stack (PostgreSQL+pgvector,
 #: Redis, MinIO, Vault, API, workers) needs headroom; 8 GiB is the floor.
@@ -408,7 +412,13 @@ class SystemHostProbe:
         )
 
     def _ports_in_use(self) -> tuple[int, ...]:  # pragma: no cover - host-only
-        """Of REQUIRED_FREE_PORTS, the ones a bind() can't claim (already taken)."""
+        """Of REQUIRED_FREE_PORTS, the ones already bound (LISTENing).
+
+        Only ``EADDRINUSE`` counts as taken. Binding 80/443 needs privilege, so a
+        non-root probe gets ``EACCES`` — that is NOT occupancy (the real install
+        runs privileged), so we must not report a false positive on it.
+        """
+        import errno
         import socket
 
         busy: list[int] = []
@@ -417,8 +427,10 @@ class SystemHostProbe:
             try:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.bind(("0.0.0.0", port))
-            except OSError:
-                busy.append(port)
+            except OSError as exc:
+                if exc.errno == errno.EADDRINUSE:
+                    busy.append(port)
+                # EACCES (no privilege to bind <1024) ≠ occupied — ignore.
             finally:
                 sock.close()
         return tuple(busy)

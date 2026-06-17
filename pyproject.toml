@@ -385,6 +385,7 @@ markers = [
   "e2e: end-to-end tests (full stack)",
   "cross_tenant: multi-tenant isolation tests — assert cross-tenant denial (CI-gated, Plan 06.14)",
   "security: security-invariant tests — assert the hardening posture holds (Plan 15 internal pentest, task_15_14)",
+  "timeout: per-test wall-clock cap (pytest-timeout) — used by the heavy e2e install suite (prod-01 task_20)",
 ]
 
 # Coverage gate (Plan prod-02 task_06, findings tests-5 / quality-6). Coverage is
