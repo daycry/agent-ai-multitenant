@@ -235,7 +235,10 @@ jobs:
   test-integration:
     name: Integration tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45 (was 30): the full integration suite (~22 min) + agent-runtime build +
+    # cross-tenant gate push the whole job near 30; a slow runner tipped it over
+    # and cancelled mid-suite (Plan prod-01 CI). Revisit when the suite is split.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 

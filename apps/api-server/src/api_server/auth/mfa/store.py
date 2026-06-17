@@ -96,6 +96,8 @@ async def _mfa_diag_on_failure() -> None:
     so we can tell whether the table is globally invisible to that role
     (search_path/schema) or the failing pooled session was stale. Remove with
     the other diagnostics once the CI-only failure is fixed."""
+    import os
+
     import structlog
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -103,6 +105,17 @@ async def _mfa_diag_on_failure() -> None:
     from api_server.config import get_settings
 
     log = structlog.get_logger("mfa.forensics")
+
+    def _record(line: str) -> None:
+        # Write to a file too: pytest discards captured logs unless the run
+        # reaches its end-of-run failure report (a timeout-cancelled run loses
+        # them). The CI job cats MFA_FORENSICS_FILE in an always() step.
+        log.error("mfa.forensics", detail=line)
+        path = os.environ.get("MFA_FORENSICS_FILE")
+        if path:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+
     try:
         # FRESH engine/connection (not the pooled admin engine) as the same
         # migrations_user role, to compare its view against the failing session.
@@ -113,18 +126,19 @@ async def _mfa_diag_on_failure() -> None:
                 async def _one(sql: str) -> object:
                     return (await conn.execute(text(sql))).scalar()
 
-                log.error(
-                    "mfa.forensics.fresh_probe",
-                    current_user=await _one("SELECT current_user"),
-                    search_path=await _one("SHOW search_path"),
-                    user_mfa_totp=await _one("SELECT to_regclass('public.user_mfa_totp')::text"),
-                    users=await _one("SELECT to_regclass('public.users')::text"),
-                    alembic_version=await _one("SELECT version_num FROM alembic_version"),
+                cu = await _one("SELECT current_user")
+                sp = await _one("SHOW search_path")
+                mfa = await _one("SELECT to_regclass('public.user_mfa_totp')::text")
+                usr = await _one("SELECT to_regclass('public.users')::text")
+                ver = await _one("SELECT version_num FROM alembic_version")
+                _record(
+                    f"[MFA-PROBE] fresh migrations_user conn: current_user={cu!r} "
+                    f"search_path={sp!r} user_mfa_totp={mfa!r} users={usr!r} alembic={ver!r}"
                 )
         finally:
             await eng.dispose()
     except Exception as exc:  # pragma: no cover - diagnostic
-        log.error("mfa.forensics.probe_failed", error=repr(exc))
+        _record(f"[MFA-PROBE] probe_failed: {exc!r}")
 
 
 async def user_mfa_methods(user_id: UUID) -> list[str]:
