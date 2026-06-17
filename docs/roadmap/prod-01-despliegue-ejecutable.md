@@ -175,7 +175,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_08` — Retro-port de hardening al compose canónico
 
-- [ ] **Título**: `deploy.resources.limits` + `cap_drop: [ALL]` en `docker/docker-compose.yml`
+- [x] **Título**: `deploy.resources.limits` + `cap_drop: [ALL]` en `docker/docker-compose.yml`
 - **Descripción**: portar al compose canónico el mismo criterio que ya aplica `compose_generator._hardening` (`compose_generator.py:174-187`): límites cpus/memory y `cap_drop: [ALL]` por servicio, con la excepción `IPC_LOCK` de Vault. Un solo criterio de hardening entre fichero canónico y generado. Cierra deploy-12.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:

@@ -303,8 +303,9 @@ def _minio_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
 
 
 def _vault_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
-    # Vault needs IPC_LOCK to mlock its memory — it opts out of the blanket
-    # cap-drop (matches the canonical compose's `cap_add: [IPC_LOCK]`).
+    # Vault drops ALL caps like every other service but adds IPC_LOCK back to
+    # mlock its memory (matches the canonical compose's cap_drop:[ALL] +
+    # cap_add:[IPC_LOCK] — one hardening criterion, prod-01 task_08).
     svc: dict[str, Any] = {
         "image": IMAGE_VAULT,
         "cap_add": ["IPC_LOCK"],
@@ -331,8 +332,9 @@ def _vault_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # no
         },
         "networks": ["agentic-net"],
     }
-    # cap_drop_all=False: keep IPC_LOCK; no-new-privileges + limits still apply.
-    svc.update(_hardening(limits_cpus="1.0", limits_memory="512m", cap_drop_all=False))
+    # cap_drop:[ALL] + cap_add:[IPC_LOCK] (above) — drop everything, add back
+    # only the cap Vault needs to mlock memory. no-new-privileges + limits apply.
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
     return svc
 
 

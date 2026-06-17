@@ -67,6 +67,21 @@ x-seccomp: &default-seccomp
   security_opt:
     - no-new-privileges:true
     - apparmor=agentic-default
+  # cap_drop ALL is part of the hardening baseline (deploy-12 / prod-01 task_08):
+  # mirrors compose_generator._hardening so the canonical + generated stacks
+  # share ONE criterion. Vault adds IPC_LOCK back (cap_add, below) to mlock its
+  # memory; the one-shot ollama-bootstrap merges only logging+seccomp.
+  cap_drop: [ALL]
+
+# Default resource cap (deploy-12 / prod-01 task_08): a CPU/memory limit so a
+# runaway container cannot starve the single host. Services that legitimately
+# need more (ollama models, docling) override `deploy` inline.
+x-limits: &default-limits
+  deploy:
+    resources:
+      limits:
+        cpus: "2.0"
+        memory: "2g"
 
 services:
   # ---------------------------------------------------------------------------
@@ -97,7 +112,7 @@ services:
       retries: 5
       start_period: 30s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
   # ---------------------------------------------------------------------------
   # Redis 7 — sessions (server-side), Celery broker, rate-limit counters.
@@ -126,7 +141,7 @@ services:
       retries: 5
       start_period: 10s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
   # ---------------------------------------------------------------------------
   # MinIO — S3-compatible object storage. The web console runs on 9001.
@@ -150,7 +165,7 @@ services:
       retries: 5
       start_period: 30s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
   # ---------------------------------------------------------------------------
   # HashiCorp Vault in server mode with file backend.
@@ -186,7 +201,7 @@ services:
       retries: 10
       start_period: 30s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
   # ---------------------------------------------------------------------------
   # ClamAV — antivirus scanning for user-uploaded files (RAG ingestion,
@@ -206,7 +221,7 @@ services:
       retries: 5
       start_period: 120s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
   # ---------------------------------------------------------------------------
   # docling-serve — IBM's open-source document parser (Plan 04 task_04_10).
@@ -230,8 +245,15 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    # Override the default 2g cap: document parsing (PDF/Office/Whisper) is
+    # memory-hungry.
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "4g"
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
   # ---------------------------------------------------------------------------
   # docling-mcp — MCP-protocol surface of Docling (Plan 04 task_04_21).
@@ -283,7 +305,7 @@ services:
     networks:
       - agentic-net
       - agentic-agents
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
   # ---------------------------------------------------------------------------
   # Ollama — in-stack embeddings (and optionally local LLMs) for the platform
@@ -307,8 +329,14 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    # Override the default 2g cap: LLM/embedding models need more headroom.
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: "8g"
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
   # ---------------------------------------------------------------------------
   # ollama-bootstrap — one-shot that pulls the embedding model into the ollama
