@@ -155,3 +155,8 @@ el problema ya esté documentado.
 
 - [ci-github-actions-node-deprecation.md](./ci-github-actions-node-deprecation.md)
   — Node 20 deprecado; `actions/checkout@v4 → v5`, etc.
+- [test-fixture-admin-db-url-override.md](./test-fixture-admin-db-url-override.md)
+  — fixture que setea `API_SERVER_DATABASE_URL` pero NO
+  `API_SERVER_ADMIN_DATABASE_URL`: el admin engine cae al DSN por defecto;
+  verde en local (BD dev migrada) pero `relation X does not exist` solo-en-CI
+  (BD por defecto vacía).
