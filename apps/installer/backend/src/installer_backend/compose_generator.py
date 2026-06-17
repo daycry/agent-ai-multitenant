@@ -524,7 +524,11 @@ def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             "retries": 5,
             "start_period": "30s",
         },
-        "networks": ["agentic-net"],
+        # agentic-agents (internal) so the sandbox runtimes can reach the
+        # internal API directly, bypassing the egress-proxy (ADR 0060 B1,
+        # task_11). The PUBLIC surface stays on agentic-net / behind the TLS
+        # reverse proxy (Fase E).
+        "networks": ["agentic-net", "agentic-agents"],
     }
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
     return svc

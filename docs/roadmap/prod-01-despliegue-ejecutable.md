@@ -215,7 +215,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_11` — API interna del agente alcanzable desde el sandbox
 
-- [ ] **Título**: `internal_api` sin proxy + ruta de red al api-server + fallo ruidoso
+- [x] **Título**: `internal_api` sin proxy + ruta de red al api-server + fallo ruidoso
 - **Descripción**: (a) en `docker/agent-runtimes/agent-runtime/agent_runtime/internal_api.py:73`, crear el `httpx.Client` con `trust_env=False` (o `NO_PROXY` para el host interno) para que las llamadas a `/internal/agent/*` no salgan por el egress-proxy deny-by-default (`docker/egress-proxy/filter.txt` no incluye `api-server`); (b) dar ruta de red: unir api-server a `agentic-agents` (solo listener interno) o publicar un alias dedicado — decidir en el ADR de la decisión 1; (c) sustituir la degradación silenciosa por un check de arranque que falle ruidosamente si la API interna no responde con agente asignado; (d) **rebuild y republish de la imagen agent-runtime** (depende del pipeline de Fase A para el versionado). Cierra sandbox-4.
 - **Depende de**: task_prod01_09
 - **Tiempo**: 1 día · **Complejidad**: m

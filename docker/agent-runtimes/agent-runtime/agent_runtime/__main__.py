@@ -84,9 +84,16 @@ def _build_internal_api() -> Any | None:
     from agent_runtime.internal_api import InternalAgentAPI, InternalAPIConfigError
 
     try:
-        return InternalAgentAPI.from_env()
+        api = InternalAgentAPI.from_env()
     except InternalAPIConfigError:
+        # No token → a bare run / a deployment that wired no internal token.
+        # Skip the families honestly (the old, intentional behaviour).
         return None
+    # A token WAS injected → a production run with an assigned agent. The
+    # internal API MUST be reachable; fail loudly rather than silently degrade
+    # (Plan prod-01 task_11 / sandbox-4). InternalAPIUnreachable propagates.
+    api.ensure_reachable()
+    return api
 
 
 def _wire_assigned_tools(
