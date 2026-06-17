@@ -94,6 +94,18 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
   es la pieza JWT/sesiones; coordinar para no duplicar el validador.
 - CI de vitest/Playwright (frontend-7) → **prod-02**. Los tests nuevos de este
   plan deben quedar listados para que prod-02 los incorpore a los gates.
+- **DEUDA HEREDADA (diferida aquí desde prod-01, 2026-06-17):** el subset mockeado
+  de Playwright en CI está **rojo por deuda pre-existente** (reproducible en local,
+  no CI-only). Dos modos: (1) **colisión de glob** — `page.route("**/X")` en
+  Playwright 1.60 intercepta también la navegación `page.goto(".../X")`, ~15 specs
+  con globs de recurso desnudos (projects/agents/${id}/teams/${id}/human-agents/
+  memories/plans/${id}); fix = predicado por `pathname` exacto (ver gotcha
+  `docs/03-guides/gotchas/playwright-route-glob-intercepts-navigation.md`); (2)
+  **otros modos** (p. ej. `sidebar-complete`, `sso-oidc-config`) sin enumerar del
+  todo. Como este plan ya reescribe los specs e2e (task_prod09_08, fin de
+  localStorage), **arreglar la colisión de glob aquí de paso** para dejar el job
+  Playwright verde. El job tiene `timeout-minutes: 60` y hoy llega al timeout;
+  valorar bajarlo o marcarlo no-bloqueante hasta arreglarlo.
 - Rate limiting del endpoint LLM `/assistant/chat` (api-4) → **prod-07**.
 - TLS/reverse proxy de producción → **prod-01** (las cabeceras HSTS de aquí
   asumen que prod-01 provee TLS; coordinar el orden de despliegue).
