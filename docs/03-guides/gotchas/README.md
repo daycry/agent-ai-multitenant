@@ -160,3 +160,7 @@ el problema ya esté documentado.
   `API_SERVER_ADMIN_DATABASE_URL`: el admin engine cae al DSN por defecto;
   verde en local (BD dev migrada) pero `relation X does not exist` solo-en-CI
   (BD por defecto vacía).
+- [playwright-route-glob-intercepts-navigation.md](./playwright-route-glob-intercepts-navigation.md)
+  — `page.route("**/X")` en Playwright 1.60 intercepta también la navegación
+  `page.goto(".../X")` (misma cola de path) → la página recibe el JSON del mock
+  como documento. Usar predicado por `pathname` exacto, no glob desnudo.
