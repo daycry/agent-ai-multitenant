@@ -33,6 +33,7 @@ from installer_backend.prereqs import (
     HostReadings,
     PrereqThresholds,
     RealPrereqChecker,
+    check_apparmor,
     check_disk,
     check_docker,
     check_gpu,
@@ -82,7 +83,7 @@ def test_all_pass_allows_proceeding() -> None:
     results = checker.check_all()
 
     # one result per check, all required ones OK.
-    assert {r.key for r in results} == {"docker", "compose", "ram", "disk", "gpu"}
+    assert {r.key for r in results} == {"docker", "compose", "ram", "disk", "gpu", "apparmor"}
     assert all(r.status is PrereqStatus.OK for r in results if r.required)
     assert checker.can_proceed is True
     # No blocking result, and no remediation noise on the passing required ones.
@@ -173,6 +174,28 @@ def test_gpu_present_is_ok_with_name_detail() -> None:
 
 
 # ---------------------------------------------------------------------------
+# AppArmor absent -> WARN (degrade to seccomp-only), never blocks (task_10).
+# ---------------------------------------------------------------------------
+def test_apparmor_absent_is_warn_not_fail() -> None:
+    readings = _healthy_readings(apparmor_available=False)
+    result = check_apparmor(readings, PrereqThresholds())
+    assert result.status is PrereqStatus.WARN
+    assert result.required is False
+    assert result.blocking is False
+    assert result.ok is True  # a WARN does not close the gate
+    assert result.remediation  # tells the operator how to load the profiles
+
+    # AppArmor missing alone keeps the whole gate open.
+    checker = RealPrereqChecker(probe=FakeHostProbe(readings))
+    assert checker.can_proceed is True
+
+
+def test_apparmor_present_is_ok() -> None:
+    result = check_apparmor(_healthy_readings(apparmor_available=True), PrereqThresholds())
+    assert result.status is PrereqStatus.OK
+
+
+# ---------------------------------------------------------------------------
 # Thresholds are configurable.
 # ---------------------------------------------------------------------------
 def test_thresholds_are_configurable_ram() -> None:
@@ -245,6 +268,7 @@ def test_route_reports_can_proceed_when_all_pass() -> None:
         "ram": "ok",
         "disk": "ok",
         "gpu": "ok",
+        "apparmor": "ok",
     }
 
 

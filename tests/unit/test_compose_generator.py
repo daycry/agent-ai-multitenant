@@ -595,6 +595,23 @@ def test_socket_proxy_lives_on_a_dedicated_internal_network_only() -> None:
 
 
 @pytest.mark.parametrize("service_name", ["workers", "workers-privileged"])
+def test_workers_pin_seccomp_and_apparmor_profiles(service_name: str) -> None:
+    """task_prod01_10 / sandbox-2: the workers must pin the STRICT runtime
+    profiles onto the sandboxes they launch (today the WORKERS_ defaults are ""
+    → the runtimes fall back to Docker's default profiles)."""
+    svc = generate_compose(_config())["services"][service_name]
+    env = svc["environment"]
+    assert env.get("WORKERS_SECCOMP_PROFILE_PATH", "").endswith(
+        "agent-runtime.json"
+    ), f"{service_name} must pin the seccomp profile path"
+    assert (
+        env.get("WORKERS_APPARMOR_PROFILE") == "agent-runtime"
+    ), f"{service_name} must pin the apparmor profile name"
+    # The seccomp profile path must actually be mounted (task_06 bind).
+    assert "seccomp" in " ".join(svc.get("volumes", [])), f"{service_name} seccomp not mounted"
+
+
+@pytest.mark.parametrize("service_name", ["workers", "workers-privileged"])
 def test_workers_reach_docker_via_proxy_and_join_agents_network(service_name: str) -> None:
     svc = generate_compose(_config())["services"][service_name]
     env = svc["environment"]

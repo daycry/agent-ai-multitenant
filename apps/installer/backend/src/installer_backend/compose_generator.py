@@ -583,6 +583,14 @@ def _workers_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             # Launched runtimes reach LLM providers only through the egress
             # allowlist proxy (field egress_proxy_url).
             "WORKERS_EGRESS_PROXY_URL": "http://egress-proxy:8888",
+            # STRICT profiles the worker pins onto the UNTRUSTED runtimes it
+            # launches (task_10 / sandbox-2). Without these the defaults are ""
+            # and the sandboxes run with Docker's default profiles. The seccomp
+            # JSON is bind-mounted by _workers_volumes; the AppArmor profile is
+            # referenced by the NAME loaded on the host (runbook + installer
+            # prereq load docker/apparmor/agent-runtime.profile).
+            "WORKERS_SECCOMP_PROFILE_PATH": "/etc/agentic/seccomp/agent-runtime.json",
+            "WORKERS_APPARMOR_PROFILE": "agent-runtime",
             # Backup wiring (workers-6 / prod-04). The NAMES are pinned here so
             # the .env contract holds; the correct VALUES (a dedicated pg_dump
             # DSN, the bind-mount capture path) are prod-04's job — TODO(prod-04).

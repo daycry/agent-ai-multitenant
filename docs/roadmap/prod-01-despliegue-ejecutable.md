@@ -202,7 +202,7 @@ Este plan convierte el simulacro en un despliegue real:
 
 #### `task_prod01_10` — Perfiles seccomp/AppArmor pinneados en producción
 
-- [ ] **Título**: `WORKERS_SECCOMP_PROFILE` + `WORKERS_APPARMOR_PROFILE` fijados por el instalador
+- [x] **Título**: `WORKERS_SECCOMP_PROFILE` + `WORKERS_APPARMOR_PROFILE` fijados por el instalador
 - **Descripción**: el compose generado monta `docker/seccomp/agent-runtime.json` en el servicio workers e inyecta `WORKERS_SECCOMP_PROFILE` (ruta in-container) y `WORKERS_APPARMOR_PROFILE=agent-runtime` (hoy defaults `""` en `workers/config.py:111,120` → los sandboxes corren con perfiles Docker por defecto). El instalador añade un paso/prereq que carga el perfil AppArmor en el host (o avisa y degrada documentadamente a solo-seccomp si el host no tiene AppArmor). Actualizar el runbook de instalación. Cierra sandbox-2.
 - **Depende de**: task_prod01_09
 - **Tiempo**: 0,5 días · **Complejidad**: s

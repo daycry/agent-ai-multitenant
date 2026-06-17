@@ -96,6 +96,9 @@ class HostReadings:
     free_disk_bytes: int
     gpu_present: bool
     gpu_name: str | None = None
+    # AppArmor LSM available on the host kernel. Optional: without it the
+    # agent/test sandboxes degrade to seccomp-only (task_prod01_10 / sandbox-2).
+    apparmor_available: bool = True
 
 
 @runtime_checkable
@@ -265,8 +268,45 @@ def check_gpu(readings: HostReadings, thresholds: PrereqThresholds) -> PrereqRes
     )
 
 
+def check_apparmor(
+    readings: HostReadings,
+    thresholds: PrereqThresholds,  # noqa: ARG001 — uniform check signature
+) -> PrereqResult:
+    """AppArmor LSM on the host (OPTIONAL — absence is a WARN, never a FAIL).
+
+    The worker pins ``apparmor=agent-runtime`` onto the UNTRUSTED sandboxes it
+    launches (task_prod01_10, ``WORKERS_APPARMOR_PROFILE``). Without AppArmor the
+    stack still runs but those sandboxes lose that MAC layer and degrade to
+    seccomp-only — less defense-in-depth, so we warn rather than block.
+    """
+
+    key, label = "apparmor", "AppArmor (opcional)"
+    if readings.apparmor_available:
+        return PrereqResult(
+            key=key,
+            label=label,
+            status=PrereqStatus.OK,
+            detail="AppArmor disponible en el kernel.",
+            required=False,
+        )
+    return PrereqResult(
+        key=key,
+        label=label,
+        status=PrereqStatus.WARN,
+        detail="AppArmor no detectado en el host.",
+        remediation=(
+            "AppArmor es opcional pero recomendado: el worker pina "
+            "apparmor=agent-runtime sobre los sandboxes. Sin AppArmor degradan a "
+            "solo-seccomp (menos defensa en profundidad). En hosts con AppArmor, "
+            "carga los perfiles con `apparmor_parser -r -W docker/apparmor/"
+            "agent-runtime.profile` (ver docs/06-runbooks/apparmor-profiles.md)."
+        ),
+        required=False,
+    )
+
+
 #: The ordered checks the wizard runs. Required checks first, optional last.
-PREREQ_CHECKS = (check_docker, check_compose, check_ram, check_disk, check_gpu)
+PREREQ_CHECKS = (check_docker, check_compose, check_ram, check_disk, check_gpu, check_apparmor)
 
 
 @dataclass
@@ -312,7 +352,21 @@ class SystemHostProbe:
             free_disk_bytes=self._free_disk_bytes(),
             gpu_present=self._gpu_name() is not None,
             gpu_name=self._gpu_name(),
+            apparmor_available=self._apparmor_available(),
         )
+
+    def _apparmor_available(self) -> bool:  # pragma: no cover - host-only
+        """True iff the AppArmor LSM is enabled on this kernel. Best-effort: the
+        sysfs flag is the canonical signal; absence/error means 'no AppArmor'."""
+        from pathlib import Path
+
+        try:
+            flag = Path("/sys/module/apparmor/parameters/enabled")
+            if flag.exists():
+                return flag.read_text().strip().upper().startswith("Y")
+            return Path("/sys/kernel/security/apparmor").exists()
+        except OSError:
+            return False
 
     # -- individual real probes (host-only) ---------------------------------
     def _run(self, *args: str) -> str | None:  # pragma: no cover - host-only
