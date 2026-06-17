@@ -75,6 +75,7 @@ from installer_backend.install import (
     InstallOrchestrator,
     StepExecutor,
 )
+from installer_backend.real_step_executor import RealStepExecutor
 from installer_backend.reinstall import (
     ReinstallAbortedError,
     Reinstaller,
@@ -183,6 +184,39 @@ class StubCredentialBuilder:
             admin_password=self.admin_password,
             vault_root_token=self.vault_root_token,
             vault_unseal_keys=self.vault_unseal_keys,
+        )
+
+
+@dataclass
+class RealCredentialBuilder:
+    """Real :class:`CredentialBuilder` — reads what a :class:`RealStepExecutor`
+    captured during the install (Plan prod-01 task_17 / secrets-1).
+
+    No credential is minted here: the Vault root token + unseal keys come from the
+    BOOTSTRAP_VAULT init, and the admin password from the SEED_TENANT step. They
+    live ONLY in memory (redacted ``repr``s) for the one-time finalize reveal —
+    never persisted in the repo tree (the sole secret-bearing write is the ``.env``
+    at 0600 under the compose dir). A re-bootstrap (Vault already initialised →
+    ``init is None``) or an un-run seed fails loud rather than revealing nothing.
+    """
+
+    executor: RealStepExecutor
+
+    def build(self, config: InstallerConfig) -> InstallCredentials:
+        result = self.executor.vault_bootstrap_result
+        password = self.executor.seeded_admin_password
+        init = result.init if result is not None else None
+        if init is None or not password:
+            raise CliError(
+                "No hay credenciales reales que revelar: el bootstrap de Vault y/o "
+                "la siembra del tenant no se completaron en esta ejecución.",
+                ExitCode.PROVISION,
+            )
+        return InstallCredentials(
+            admin_username=str(config.tenant.admin_email),
+            admin_password=password,
+            vault_root_token=init.root_token,
+            vault_unseal_keys=init.unseal_keys,
         )
 
 

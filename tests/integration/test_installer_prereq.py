@@ -83,7 +83,15 @@ def test_all_pass_allows_proceeding() -> None:
     results = checker.check_all()
 
     # one result per check, all required ones OK.
-    assert {r.key for r in results} == {"docker", "compose", "ram", "disk", "gpu", "apparmor"}
+    assert {r.key for r in results} == {
+        "docker",
+        "compose",
+        "ram",
+        "disk",
+        "ports",
+        "gpu",
+        "apparmor",
+    }
     assert all(r.status is PrereqStatus.OK for r in results if r.required)
     assert checker.can_proceed is True
     # No blocking result, and no remediation noise on the passing required ones.
@@ -267,6 +275,7 @@ def test_route_reports_can_proceed_when_all_pass() -> None:
         "compose": "ok",
         "ram": "ok",
         "disk": "ok",
+        "ports": "ok",
         "gpu": "ok",
         "apparmor": "ok",
     }

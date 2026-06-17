@@ -56,6 +56,11 @@ DEFAULT_MIN_RAM_GIB: int = 8
 #: Minimum free disk on the data volume. Images + pgdata + object storage.
 DEFAULT_MIN_DISK_GIB: int = 50
 
+#: Host ports the published surface (the Caddy reverse proxy) must bind — the
+#: ONLY ports the generated stack exposes to the host (ADR 0061). They must be
+#: free for the install to succeed (task_prod01_17).
+REQUIRED_FREE_PORTS: tuple[int, ...] = (80, 443)
+
 
 @dataclass(frozen=True)
 class PrereqThresholds:
@@ -99,6 +104,10 @@ class HostReadings:
     # AppArmor LSM available on the host kernel. Optional: without it the
     # agent/test sandboxes degrade to seccomp-only (task_prod01_10 / sandbox-2).
     apparmor_available: bool = True
+    # Host ports (from REQUIRED_FREE_PORTS) found already in use. The reverse
+    # proxy is the only published surface (ADR 0061), so 80/443 must be free
+    # (task_prod01_17). Empty == all free.
+    ports_in_use: tuple[int, ...] = ()
 
 
 @runtime_checkable
@@ -305,8 +314,50 @@ def check_apparmor(
     )
 
 
+def check_ports(
+    readings: HostReadings,
+    thresholds: PrereqThresholds,  # noqa: ARG001 — uniform check signature
+) -> PrereqResult:
+    """The published surface ports (80/443) must be free (REQUIRED).
+
+    After ADR 0061 the Caddy reverse proxy is the ONLY service that binds host
+    ports (80/443). If something else already holds them the stack can't come
+    up, so this is a hard FAIL with remediation.
+    """
+
+    key, label = "ports", "Puertos publicados libres (80/443)"
+    busy = [p for p in REQUIRED_FREE_PORTS if p in readings.ports_in_use]
+    if not busy:
+        return PrereqResult(
+            key=key,
+            label=label,
+            status=PrereqStatus.OK,
+            detail="Los puertos 80 y 443 están libres.",
+        )
+    busy_str = ", ".join(str(p) for p in busy)
+    return PrereqResult(
+        key=key,
+        label=label,
+        status=PrereqStatus.FAIL,
+        detail=f"Puertos ya en uso: {busy_str}.",
+        remediation=(
+            f"El reverse proxy (Caddy) necesita publicar 80/443 (ADR 0061); "
+            f"libera el/los puerto(s) {busy_str} (otro servicio web los está "
+            "usando) o detén el proceso que los ocupa antes de instalar."
+        ),
+    )
+
+
 #: The ordered checks the wizard runs. Required checks first, optional last.
-PREREQ_CHECKS = (check_docker, check_compose, check_ram, check_disk, check_gpu, check_apparmor)
+PREREQ_CHECKS = (
+    check_docker,
+    check_compose,
+    check_ram,
+    check_disk,
+    check_ports,
+    check_gpu,
+    check_apparmor,
+)
 
 
 @dataclass
@@ -353,7 +404,24 @@ class SystemHostProbe:
             gpu_present=self._gpu_name() is not None,
             gpu_name=self._gpu_name(),
             apparmor_available=self._apparmor_available(),
+            ports_in_use=self._ports_in_use(),
         )
+
+    def _ports_in_use(self) -> tuple[int, ...]:  # pragma: no cover - host-only
+        """Of REQUIRED_FREE_PORTS, the ones a bind() can't claim (already taken)."""
+        import socket
+
+        busy: list[int] = []
+        for port in REQUIRED_FREE_PORTS:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(("0.0.0.0", port))
+            except OSError:
+                busy.append(port)
+            finally:
+                sock.close()
+        return tuple(busy)
 
     def _apparmor_available(self) -> bool:  # pragma: no cover - host-only
         """True iff the AppArmor LSM is enabled on this kernel. Best-effort: the
