@@ -355,19 +355,37 @@ class Uninstaller:
         return result
 
 
-def build_default_uninstaller(out: TextIO, confirmer: Confirmer) -> Uninstaller:
-    """Build an :class:`Uninstaller` wired to the in-memory stub seams.
+def build_default_uninstaller(
+    out: TextIO,
+    confirmer: Confirmer,
+    *,
+    dry_run: bool = False,
+    compose_dir: str = "/data/agent-platform",
+) -> Uninstaller:
+    """Build an :class:`Uninstaller` with the REAL host bindings by default.
 
-    The host-touching seams default to the recording stubs (import-safe, no
-    Docker / no disk writes); the caller supplies the :class:`Confirmer` (the
-    CLI passes a flag-derived one, tests pass a scripted one). The real install
-    replaces the stub seams with the host bindings (``docker compose down`` +
-    ``shutil.rmtree``), exercised only by the plan's Tests Humanos.
+    ``dry_run=True`` wires the in-memory stub seams (import-safe, no Docker / no
+    disk writes) for an explicitly-marked simulation. Otherwise it wires the real
+    bindings: :class:`RealStackTeardown` (``docker compose down`` under
+    *compose_dir*) + :class:`RealDataPurger` (``rmtree`` of the data tree). The
+    caller supplies the :class:`Confirmer`; the double confirmation gates the
+    real destruction. The real seams only touch the host when :meth:`Uninstaller.run`
+    executes.
     """
 
+    if dry_run:
+        return Uninstaller(
+            teardown=StubStackTeardown(),
+            purger=StubDataPurger(),
+            confirmer=confirmer,
+            out=out,
+        )
+    from installer_backend.command_runner import SubprocessRunner
+    from installer_backend.real_teardown import RealDataPurger, RealStackTeardown
+
     return Uninstaller(
-        teardown=StubStackTeardown(),
-        purger=StubDataPurger(),
+        teardown=RealStackTeardown(compose_dir, SubprocessRunner()),
+        purger=RealDataPurger(),
         confirmer=confirmer,
         out=out,
     )

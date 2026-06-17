@@ -110,6 +110,27 @@ un `install.yaml`, sin navegador
 # equivale a: python -m installer_backend.cli install --config install.yaml
 ```
 
+> **Real vs simulación (`--dry-run`).** Sin `--dry-run`, el CLI aprovisiona
+> **de verdad**: escribe el `docker-compose.yml` + `.env` + `caddy/Caddyfile`
+> bajo el `data_root`, hace `docker compose pull` / `up -d --wait`, aplica las
+> migraciones (servicio one-shot `migrations`), bootstrapea Vault y siembra el
+> tenant inicial. Requiere Docker + Compose v2 en el host (el `PrereqChecker`
+> lo verifica, incluido que los puertos **80/443** estén libres — la única
+> superficie publicada es el proxy Caddy, ADR 0061).
+>
+> `python -m installer_backend.cli install --config install.yaml --dry-run`
+> ejecuta una **SIMULACIÓN** explícita (banner visible): NO toca el host y las
+> credenciales mostradas son **FALSAS**. Úsalo solo para validar el `install.yaml`
+> y el flujo, **nunca** como instalación real. Un instalador con seams de
+> simulación cableados **sin** `--dry-run` **aborta** con código de salida
+> `PROVISION` (4) y un mensaje inequívoco — no existe una instalación falsa
+> silenciosa (deploy-1).
+>
+> El **wizard HTTP** (`/api/install/stream`) sigue usando el ejecutor de
+> simulación; el camino REAL de instalación es este CLI (`scripts/install.sh`).
+> Cablear el wizard al ejecutor real es un follow-up de la UI del instalador
+> (prod-09).
+
 ### Perfiles
 
 En `scripts/install-profiles/` hay tres `install.yaml` completos de

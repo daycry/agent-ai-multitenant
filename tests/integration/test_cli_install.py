@@ -303,8 +303,9 @@ def test_headless_executor_order_equals_wizard_stream_order() -> None:
 # ---------------------------------------------------------------------------
 def test_default_installer_runs_with_stub_seams() -> None:
     out = io.StringIO()
-    inst = build_default_installer(out)
-    inst.run(load_install_config(_valid_yaml()))
+    config = load_install_config(_valid_yaml())
+    inst = build_default_installer(out, config, dry_run=True)
+    inst.run(config)
     # All provisioning steps + the full phase list ran through the stubs.
     assert inst.phases == list(headless_pipeline())
 
@@ -331,9 +332,12 @@ def test_install_emits_no_secret_to_python_logs(tmp_path, caplog: pytest.LogCapt
 def test_main_install_success(tmp_path, capsys) -> None:
     cfg = tmp_path / "install.yaml"
     cfg.write_text(_valid_yaml(), encoding="utf-8")
-    code = main(["install", "--config", str(cfg)])
+    # --dry-run: the default install now wires the REAL host bindings (which would
+    # need Docker); the dry run exercises the CLI orchestration + reveal headlessly.
+    code = main(["install", "--config", str(cfg), "--dry-run"])
     assert code == int(ExitCode.OK)
     out = capsys.readouterr().out
+    assert "SIMULACIÓN" in out  # the dry-run banner is explicit
     # The one-time reveal printed the admin username derived from the config.
     assert "admin@acme.com" in out
 

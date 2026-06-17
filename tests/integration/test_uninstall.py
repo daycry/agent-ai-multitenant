@@ -204,6 +204,7 @@ def test_run_uninstall_without_yes_aborts() -> None:
             yes=False,
             uninstaller=inst,
             out=out,
+            dry_run=True,  # injected stub seams: an explicit simulation
         )
     assert getattr(exc.value, "code", None) == ExitCode.ABORTED
     assert teardown.torn_down is False
@@ -218,8 +219,10 @@ def test_main_uninstall_without_confirmation_is_aborted_exit() -> None:
 
 def test_main_uninstall_with_both_confirmations_succeeds() -> None:
     out = io.StringIO()
+    # --dry-run: the default uninstall now wires the REAL teardown (docker compose
+    # down); the dry run exercises the CLI gating + exit codes with stub seams.
     code = main(
-        ["uninstall", "--confirm-name", _DEPLOYMENT, "--yes"],
+        ["uninstall", "--confirm-name", _DEPLOYMENT, "--yes", "--dry-run"],
         out=out,
     )
     assert code == int(ExitCode.OK)
@@ -242,8 +245,9 @@ def test_main_uninstall_purge_data_with_yes_wipes() -> None:
     # confirm (the FlagConfirmer answers yes to every yes/no gate); --purge-data
     # is the explicit opt-in that lets the data gate run at all.
     out = io.StringIO()
+    # --dry-run so the purge runs against the stub seam, not a real rmtree.
     code = main(
-        ["uninstall", "--confirm-name", _DEPLOYMENT, "--yes", "--purge-data"],
+        ["uninstall", "--confirm-name", _DEPLOYMENT, "--yes", "--purge-data", "--dry-run"],
         out=out,
     )
     assert code == int(ExitCode.OK)
