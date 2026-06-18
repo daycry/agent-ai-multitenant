@@ -254,7 +254,9 @@ export function renderHtml(
     .shot-bar { height: 22px; background: linear-gradient(180deg,#f1f5f9,#e7ecf3); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 6px; padding: 0 11px; }
     .shot-bar span { width: 8px; height: 8px; border-radius: 50%; background: #cbd5e1; }
     .shot-bar span:nth-child(1){ background:#f87171; } .shot-bar span:nth-child(2){ background:#fbbf24; } .shot-bar span:nth-child(3){ background:#34d399; }
-    .shot img { display: block; width: 100%; }
+    /* La imagen escala para CABER en una página A4 manteniendo proporción:
+       las capturas largas (fullPage) se reducen en vez de desbordar/partirse. */
+    .shot img { display: block; max-width: 100%; max-height: 200mm; width: auto; height: auto; margin: 0 auto; }
     .shot figcaption { font-size: 9.8px; color: var(--muted); padding: 7px 12px; background: var(--wash); border-top: 1px solid var(--line); }
   </style></head><body>
   <div class="cover">

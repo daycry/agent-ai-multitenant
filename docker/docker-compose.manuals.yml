@@ -100,3 +100,118 @@ services:
       start_period: 10s
     networks: [agentic-net]
     restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # docker-socket-proxy — pasarela de API Docker de mínimo privilegio (ADR 0060).
+  # Los workers lanzan los runtimes efímeros a través de ESTO (DOCKER_HOST=
+  # tcp://docker-socket-proxy:2375), nunca con el socket crudo. Red dedicada
+  # agentic-docker (solo workers ↔ proxy).
+  # ---------------------------------------------------------------------------
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    environment:
+      CONTAINERS: "1"
+      IMAGES: "1"
+      NETWORKS: "1"
+      POST: "1"
+      EXEC: "0"
+      VOLUMES: "0"
+      SWARM: "0"
+      SECRETS: "0"
+      CONFIGS: "0"
+      NODES: "0"
+      SERVICES: "0"
+      TASKS: "0"
+      SYSTEM: "0"
+      INFO: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [agentic-docker]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # orchestrator — asigna tareas listas a los workers (Celery). HTTP /healthz :8002.
+  # ---------------------------------------------------------------------------
+  orchestrator:
+    image: agentic-platform/orchestrator:manuals
+    environment:
+      ORCHESTRATOR_ENVIRONMENT: dev
+      ORCHESTRATOR_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      ORCHESTRATOR_REDIS_URL: redis://redis:6379/0
+      ORCHESTRATOR_BROKER_URL: redis://redis:6379/1
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8002/healthz',timeout=5).status==200 else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [agentic-net]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # workers — pool Celery que ejecuta tareas lanzando agent-runtime efímeros.
+  # DOCKER_HOST → docker-socket-proxy; agent-runtime:v1 (default); JWT igual que
+  # el api-server (token interno del agente). Tres redes (agentic-net + -agents
+  # + -docker).
+  # ---------------------------------------------------------------------------
+  workers:
+    image: agentic-platform/workers:ci
+    command:
+      [
+        "celery",
+        "-A",
+        "workers.celery_app",
+        "worker",
+        "--queues=default,heavy,gpu,ingestion,test,review",
+        "--concurrency=2",
+        "--loglevel=info",
+      ]
+    environment:
+      WORKERS_ENVIRONMENT: dev
+      WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      WORKERS_BROKER_URL: redis://redis:6379/1
+      WORKERS_RESULT_BACKEND: redis://redis:6379/2
+      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/3
+      WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
+      WORKERS_AGENT_INTERNAL_API_URL: http://api-server:8000
+      WORKERS_AGENT_RUNTIME_IMAGE: agent-runtime:v1
+      WORKERS_DATA_ROOT: /data/agent-platform
+      WORKERS_EGRESS_PROXY_URL: http://egress-proxy:8888
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+    volumes:
+      - agentic_worktrees:/data/agent-platform
+      - ./seccomp:/etc/agentic/seccomp:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      docker-socket-proxy: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -t 5 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks: [agentic-net, agentic-agents, agentic-docker]
+    restart: unless-stopped
+
+volumes:
+  agentic_worktrees:
+    name: agentic_worktrees
+
+networks:
+  # Red interna dedicada SOLO al tráfico workers ↔ docker-socket-proxy (ADR 0060).
+  # En el compose generado de prod vive en docker-compose.yml; aquí (dev) la
+  # declara el overlay de manuales.
+  agentic-docker:
+    name: agentic-docker
+    driver: bridge
+    internal: true

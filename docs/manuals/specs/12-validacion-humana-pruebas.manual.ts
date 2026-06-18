@@ -18,6 +18,44 @@ const steps: Step[] =
   PID && PLAN
     ? [
         {
+          title: "Ver las tareas ejecutándose: el timeline del agente",
+          fullPage: true,
+          settleMs: 1800,
+          body: `<p>Antes de validar, conviene ver <b>cómo trabajaron los
+          agentes</b>. La plataforma registra el <b>timeline de ejecución</b> de
+          cada tarea paso a paso: <i>percibe</i> la tarea, <i>recuerda</i>
+          contexto, <i>llama al modelo</i> (LLM), <i>decide</i>, <i>finaliza</i>
+          y se <i>auto-revisa</i> — con el <b>estado</b>, las <b>iteraciones</b>,
+          los <b>tokens</b> consumidos y el <b>coste</b> de la ejecución.</p>
+          <p>Esta es la prueba de que la tarea se <b>ejecutó de verdad</b>: un
+          agente recibió la tarea, invocó al modelo del proveedor configurado y
+          produjo el resultado. Cada paso muestra su latencia y su veredicto
+          (<code>ok</code>), y la vista se actualiza en vivo mientras corre.</p>`,
+          // Localiza la ejecución más reciente del tenant (listado newest-first) y
+          // abre su timeline — la pantalla real de seguimiento de la ejecución.
+          action: async (page) => {
+            const token = await page.evaluate(() => localStorage.getItem("agentic.token"));
+            const res = await page.request.get(`/api/tenant-stats/runs?window_days=730`, {
+              headers: token ? { Authorization: `Bearer ${token}` } : {},
+            });
+            if (res.ok()) {
+              const rows = (await res.json()) as Array<{
+                execution_id?: string;
+                id?: string;
+                status?: string;
+              }>;
+              const pick = rows.find((r) => r.status === "done") ?? rows[0];
+              const id = pick?.execution_id ?? pick?.id;
+              if (id) {
+                await page
+                  .goto(`/admin/executions/${id}`, { waitUntil: "networkidle" })
+                  .catch(() => {});
+                await page.waitForTimeout(1500);
+              }
+            }
+          },
+        },
+        {
           title: "El plan en validación humana",
           goto: `/admin/projects/${PID}/plans/${PLAN}`,
           fullPage: true,
@@ -84,8 +122,16 @@ const steps: Step[] =
         {
           title: "Emitir el veredicto: aprobar o rechazar el plan",
           goto: `/admin/projects/${PID}/plans/${PLAN}`,
-          fullPage: true,
+          // Viewport (no fullPage) + scroll al panel: primer plano del veredicto,
+          // distinto del paso 1 (que muestra el plan completo).
+          fullPage: false,
           settleMs: 1500,
+          action: async (page) => {
+            await page
+              .getByTestId("plan-human-validation")
+              .scrollIntoViewIfNeeded()
+              .catch(() => {});
+          },
           body: `<p>Tras probar la app y revisar el checklist, emites el
           <b>veredicto</b> desde el panel de validación: <b>«Aprobar plan»</b>
           (el plan pasa a <code>completed</code> y se cierra el ciclo) o

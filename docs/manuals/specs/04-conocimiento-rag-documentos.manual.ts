@@ -3,6 +3,14 @@ import { login } from "../lib/auth";
 import { generateManual, ManualDef } from "../lib/manual";
 
 // GENERADO desde el workflow de redacción. Editable a mano; reejecutable.
+//
+// NOTA sobre las capturas: la mayoría de pasos navegan a la MISMA ruta
+// (`/admin/knowledge-bases`), que es una pantalla con listado + diálogos.
+// Para que cada paso capture una pantalla DISTINTA y útil, cada paso que
+// documenta un diálogo o un panel desplegable abre esa superficie con una
+// `action` (clic) ANTES del pantallazo. Todas las acciones son tolerantes
+// (`.catch(()=>{})`) para no romper la generación si un selector no existe
+// en el entorno donde se ejecuta (p. ej. tenant sin KBs todavía).
 const manual: ManualDef = {
   order: "04",
   slug: "04-conocimiento-rag-documentos",
@@ -21,31 +29,114 @@ const manual: ManualDef = {
     {
       title: "Crear una Knowledge Base",
       goto: "/admin/knowledge-bases",
+      // Abre el diálogo "Crear Knowledge Base" pulsando el botón "Crear KB".
+      action: async (page) => {
+        await page
+          .getByRole("button", { name: "Crear KB" })
+          .click()
+          .catch(async () => {
+            await page
+              .locator('[data-testid="kbs-create-button"]')
+              .click()
+              .catch(() => {});
+          });
+        await page.waitForTimeout(500);
+      },
       body: "<p>Pulse <b>Crear KB</b> (arriba a la derecha) para abrir el diálogo de creación. Una KB es un contenedor de documentos indexados; tras crearla se despliega en la lista para subir documentos y se le da acceso (grant) a los proyectos o agentes que la consumirán.</p><ul><li><b>Nombre</b> (obligatorio, máximo 120 caracteres): identifica la KB en el listado.</li><li><b>Categoría</b> (opcional): un selector con las categorías built-in y las del tenant; sirve para organizar el listado. El botón <b>+</b> contiguo abre un mini-diálogo para crear una categoría nueva sin salir del flujo (pidiendo slug, nombre y color).</li><li><b>Descripción</b> (opcional): admite formato Markdown.</li></ul><p>El <b>modelo de embedding</b> se asigna automáticamente al valor por defecto de la plataforma y no se puede cambiar después. Pulse <b>Crear KB</b> para guardar; si hay error se mostrará un mensaje en el propio diálogo.</p>",
       fullPage: true,
     },
     {
-      title: "Editar, conceder acceso (Grant) y borrar una KB",
+      title: "Conceder acceso (Grant) de una KB a un proyecto",
       goto: "/admin/knowledge-bases",
-      body: "<p>Desde cada tarjeta del listado (con rol tenant_admin) dispone de varias acciones:</p><ul><li><b>Grant</b>: abre el diálogo <i>Dar acceso a un proyecto</i>. Seleccione el proyecto destino con el buscador; tras conceder el acceso, ese proyecto verá la KB en su sub-sección Knowledge Bases y podrá subir documentos. Puede repetir el grant para varios proyectos.</li><li><b>Editar</b> (icono lápiz, solo en KBs no built-in): permite cambiar nombre, categoría y descripción. El modelo de embedding se muestra pero es de solo lectura: para usar otro modelo hay que crear una KB nueva y reindexar.</li><li><b>Borrar</b> (icono papelera, solo en KBs no built-in): acción <b>irreversible</b>. Borra la KB, todos sus documentos indexados y los grants a proyectos (los archivos en el almacenamiento de objetos no se tocan). Para confirmar debe teclear exactamente el nombre de la KB.</li></ul><p>Las KBs built-in no muestran los botones de editar ni borrar, ya que el backend las protege como de solo lectura para el tenant.</p>",
+      // Abre el diálogo "Dar acceso a un proyecto" pulsando el botón "Grant"
+      // de la primera KB del listado.
+      action: async (page) => {
+        await page
+          .getByRole("button", { name: "Grant" })
+          .first()
+          .click()
+          .catch(async () => {
+            await page
+              .locator('[data-testid^="kb-grant-"]')
+              .first()
+              .click()
+              .catch(() => {});
+          });
+        await page.waitForTimeout(500);
+      },
+      body: "<p>Desde cada tarjeta del listado (con rol tenant_admin) el botón <b>Grant</b> abre el diálogo <i>Dar acceso a un proyecto</i>. Seleccione el proyecto destino con el buscador; tras conceder el acceso, ese proyecto verá la KB en su sub-sección Knowledge Bases y podrá subir documentos. Puede repetir el grant para varios proyectos sin cerrar el diálogo.</p><p>Junto a Grant, cada tarjeta dispone (solo en KBs no built-in) de:</p><ul><li><b>Editar</b> (icono lápiz): permite cambiar nombre, categoría y descripción. El modelo de embedding se muestra pero es de solo lectura: para usar otro modelo hay que crear una KB nueva y reindexar.</li><li><b>Borrar</b> (icono papelera): acción <b>irreversible</b>. Borra la KB, todos sus documentos indexados y los grants a proyectos (los archivos en el almacenamiento de objetos no se tocan). Para confirmar debe teclear exactamente el nombre de la KB.</li></ul><p>Las KBs built-in no muestran los botones de editar ni borrar, ya que el backend las protege como de solo lectura para el tenant.</p>",
       fullPage: true,
     },
     {
       title: "Ver asignaciones (proyectos y agentes con acceso)",
       goto: "/admin/knowledge-bases",
+      // Abre el diálogo "Asignaciones" de la primera KB del listado.
+      action: async (page) => {
+        await page
+          .getByRole("button", { name: "Asignaciones" })
+          .first()
+          .click()
+          .catch(async () => {
+            await page
+              .locator('[data-testid^="kb-assignments-"]')
+              .first()
+              .click()
+              .catch(() => {});
+          });
+        await page.waitForTimeout(500);
+      },
       body: "<p>El botón <b>Asignaciones</b> de cada KB abre un diálogo que muestra a quién se ha concedido acceso, en dos secciones:</p><ul><li><b>Proyectos</b>: lista de proyectos con grant. Cada fila tiene un botón de papelera para <b>revocar</b> el acceso de ese proyecto.</li><li><b>Agentes</b>: lista de agentes con grant, mostrando su rol y su ámbito (scope) mediante etiquetas. Cada fila permite revocar el acceso del agente.</li></ul><p>Si la KB no está concedida a nadie, el diálogo lo indica y recuerda cómo conceder acceso: a un proyecto con el botón <b>Grant</b> de la lista, y a un agente desde su detalle (pestaña Knowledge Bases → Grant KB). Estas asignaciones son las que determinan qué agentes pueden recuperar el conocimiento de la KB durante el RAG.</p>",
       fullPage: true,
     },
     {
       title: "Subir documentos a una KB e indexarlos",
       goto: "/admin/knowledge-bases",
-      body: "<p>Para gestionar documentos, despliegue una KB en el listado (pulsando su fila) para abrir su <b>panel de documentos</b>. El panel muestra el número de documentos y un botón <b>Subir documento</b> (rol tenant_admin).</p><ul><li>El diálogo de subida acepta un <b>Archivo</b> (formatos admitidos: .pdf, .docx, .md, .txt, .html, .wav, .mp3) y un <b>Título</b> opcional (por defecto se usa el nombre del archivo).</li><li>Al subir, el documento entra en la cola de <b>ingestión</b> y se procesa para extraer su texto y generar los fragmentos (chunks) e índices que usará el RAG.</li></ul><p>Cada documento muestra un <b>estado</b> mediante una etiqueta de color: <b>Pendiente</b>, <b>Procesando</b>, <b>Indexado</b> (verde, listo para RAG), <b>Indexado vacío</b> (aviso: se procesó pero con 0 fragmentos, por lo que el agente no podrá recuperar nada; conviene subir un original con texto seleccionable o reindexar) y <b>Fallido</b> (con su mensaje de error). También se ven el tipo MIME, el tamaño y el número de páginas.</p>",
+      // Despliega la primera KB (panel de documentos) y abre el diálogo de
+      // subida pulsando "Subir documento".
+      action: async (page) => {
+        await page
+          .locator('[data-testid^="kb-toggle-docs-"]')
+          .first()
+          .click()
+          .catch(async () => {
+            await page
+              .getByRole("button", { name: /knowledge base|kb|library/i })
+              .first()
+              .click()
+              .catch(() => {});
+          });
+        await page.waitForTimeout(600);
+        await page
+          .getByRole("button", { name: "Subir documento" })
+          .first()
+          .click()
+          .catch(async () => {
+            await page
+              .locator('[data-testid^="kb-docs-upload-open-"]')
+              .first()
+              .click()
+              .catch(() => {});
+          });
+        await page.waitForTimeout(500);
+      },
+      body: "<p>Para gestionar documentos, despliegue una KB en el listado (pulsando su fila) para abrir su <b>panel de documentos</b>. El panel muestra el número de documentos y un botón <b>Subir documento</b> (rol tenant_admin) que abre el diálogo de subida.</p><ul><li>El diálogo de subida acepta un <b>Archivo</b> (formatos admitidos: .pdf, .docx, .md, .txt, .html, .wav, .mp3) y un <b>Título</b> opcional (por defecto se usa el nombre del archivo).</li><li>Al subir, el documento entra en la cola de <b>ingestión</b> y se procesa para extraer su texto y generar los fragmentos (chunks) e índices que usará el RAG.</li></ul><p>Cada documento muestra un <b>estado</b> mediante una etiqueta de color: <b>Pendiente</b>, <b>Procesando</b>, <b>Indexado</b> (verde, listo para RAG), <b>Indexado vacío</b> (aviso: se procesó pero con 0 fragmentos, por lo que el agente no podrá recuperar nada; conviene subir un original con texto seleccionable o reindexar) y <b>Fallido</b> (con su mensaje de error). También se ven el tipo MIME, el tamaño y el número de páginas.</p>",
       fullPage: true,
     },
     {
       title: "Reindexar, ver progreso y borrar documentos",
       goto: "/admin/knowledge-bases",
-      body: "<p>En el panel de documentos de cada KB, dentro de la fila de cada documento, dispone de acciones según su estado:</p><ul><li><b>Progreso</b>: enlace que abre la página de detalle de ingestión del documento, donde puede seguir el avance del procesamiento.</li><li><b>Reindexar</b> (icono de recarga, rol tenant_admin): vuelve a procesar el documento. Está disponible cuando el documento ya terminó (estados Indexado, Indexado vacío o Fallido); útil para reintentar un fallo o reprocesar tras corregir el original. Se oculta mientras el documento está Pendiente o Procesando.</li><li><b>Eliminar</b> (icono papelera, rol tenant_admin): borra el documento de la KB.</li></ul><p>Cuando un documento queda <b>Indexado vacío</b> se muestra un aviso explicando que no tiene fragmentos recuperables. El estado se refresca al consultar la lista, por lo que conviene volver a desplegar la KB para ver la progresión de Procesando a Indexado.</p>",
+      // Despliega la primera KB para mostrar el panel de documentos con sus
+      // filas y acciones (sin abrir ningún diálogo, a diferencia del paso
+      // anterior que captura el formulario de subida).
+      action: async (page) => {
+        await page
+          .locator('[data-testid^="kb-toggle-docs-"]')
+          .first()
+          .click()
+          .catch(() => {});
+        await page.waitForTimeout(800);
+      },
+      body: "<p>En el panel de documentos de cada KB (que se abre al desplegar la fila), dentro de la fila de cada documento, dispone de acciones según su estado:</p><ul><li><b>Progreso</b>: enlace que abre la página de detalle de ingestión del documento, donde puede seguir el avance del procesamiento.</li><li><b>Reindexar</b> (icono de recarga, rol tenant_admin): vuelve a procesar el documento. Está disponible cuando el documento ya terminó (estados Indexado, Indexado vacío o Fallido); útil para reintentar un fallo o reprocesar tras corregir el original. Se oculta mientras el documento está Pendiente o Procesando.</li><li><b>Eliminar</b> (icono papelera, rol tenant_admin): borra el documento de la KB.</li></ul><p>Cuando un documento queda <b>Indexado vacío</b> se muestra un aviso explicando que no tiene fragmentos recuperables. El estado se refresca al consultar la lista, por lo que conviene volver a desplegar la KB para ver la progresión de Procesando a Indexado.</p>",
       fullPage: true,
     },
     {
@@ -57,6 +148,19 @@ const manual: ManualDef = {
     {
       title: "Crear, editar y borrar categorías",
       goto: "/admin/knowledge-bases/categories",
+      // Abre el diálogo "Nueva categoría" pulsando el botón homónimo.
+      action: async (page) => {
+        await page
+          .getByRole("button", { name: "Nueva categoría" })
+          .click()
+          .catch(async () => {
+            await page
+              .locator('[data-testid="kb-cat-create-button"]')
+              .click()
+              .catch(() => {});
+          });
+        await page.waitForTimeout(500);
+      },
       body: "<p>Pulse <b>Nueva categoría</b> para abrir el diálogo de creación. Debe indicar:</p><ul><li><b>Slug</b>: identificador estable usado en filtros y URLs; solo admite minúsculas, números, guion y guion bajo (p. ej. <code>compliance-pci</code>).</li><li><b>Nombre</b>: el texto que se muestra en la interfaz (p. ej. <i>Compliance PCI-DSS</i>).</li><li><b>Color</b>: selector de color (o código hexadecimal) que identifica visualmente la categoría en el listado de KBs.</li></ul><p>Al <b>editar</b> una categoría propia puede cambiar el nombre y el color, pero <b>no el slug</b> (es fijo porque puede estar referenciado en filtros e integraciones). Al <b>borrar</b> una categoría, las KBs que pertenecían a ella no se eliminan: simplemente pasan a quedar <b>Sin categoría</b>. Las categorías built-in no se pueden editar ni borrar.</p>",
       fullPage: true,
     },

@@ -3,6 +3,14 @@ import { login } from "../lib/auth";
 import { generateManual, ManualDef } from "../lib/manual";
 
 // GENERADO desde el workflow de redacción. Editable a mano; reejecutable.
+//
+// NOTA sobre capturas: la pantalla del Marketplace (/admin/marketplace) usa
+// PESTAÑAS (Catálogo / Instaladas / Compartir) renderizadas como un mismo
+// `goto`. Si un paso no CLICA su pestaña, captura la pestaña por defecto
+// (Catálogo) y dos pasos salen idénticos. Por eso los pasos 2 y 3 traen una
+// `action` que pulsa su pestaña ANTES del pantallazo. Todas las acciones son
+// tolerantes (.catch(()=>{})) para no romper la generación si un selector no
+// existe en este entorno.
 const manual: ManualDef = {
   order: "06",
   slug: "06-marketplace-guardrails-calidad",
@@ -14,25 +22,96 @@ const manual: ManualDef = {
     {
       title: "Marketplace: pestaña Catálogo",
       goto: "/admin/marketplace",
+      // El Marketplace abre en la pestaña Catálogo por defecto. La pulsamos de
+      // forma explícita por si un paso anterior dejó otra activa.
+      action: async (page) => {
+        await page
+          .getByRole("tab", { name: "Catálogo" })
+          .click()
+          .catch(async () => {
+            await page
+              .getByRole("button", { name: "Catálogo" })
+              .click()
+              .catch(async () => {
+                await page
+                  .getByText("Catálogo", { exact: true })
+                  .first()
+                  .click()
+                  .catch(() => {});
+              });
+          });
+        await page.waitForTimeout(500);
+      },
       body: "<p>El Marketplace es el área donde un Tenant Admin gestiona el catálogo de extensiones de su organización. La cabecera muestra el título <b>Marketplace</b> con dos botones de acción: <b>Privadas</b> (lleva al marketplace privado) y <b>Publicar</b> (atajo para publicar un listing, visible solo para tenant_admin).</p><p>Bajo la cabecera hay tres pestañas: <b>Catálogo</b>, <b>Instaladas</b> y <b>Compartir</b>. La pestaña <b>Catálogo</b> está activa por defecto y muestra todos los listings disponibles: los del catálogo global (etiqueta <code>global</code>) y los listings privados propios del tenant (etiqueta <code>privado</code>).</p><p>Cada listing aparece como una tarjeta con su nombre, su tipo (<code>skill</code>, <code>tool</code> o <code>mcp_server</code>), su versión y su nivel de confianza (<code>verified</code>, <code>community</code> o <code>experimental</code>). Si eres tenant_admin verás arriba un aviso destacado que invita a publicar tus propias skills o tools internas, con un botón <b>Publicar en el marketplace</b>.</p><p>El listing especial de Playwright muestra además un botón <b>Configurar</b> para abrir su configuración guiada. Si el catálogo está vacío, se muestra un mensaje invitando a publicar la primera skill o tool interna.</p>",
       fullPage: true,
     },
     {
       title: "Marketplace: pestaña Instaladas",
       goto: "/admin/marketplace",
+      // Clic en la pestaña "Instaladas" para capturar ese panel y no el de
+      // Catálogo (que es el activo por defecto).
+      action: async (page) => {
+        await page
+          .getByRole("tab", { name: "Instaladas" })
+          .click()
+          .catch(async () => {
+            await page
+              .getByRole("button", { name: "Instaladas" })
+              .click()
+              .catch(async () => {
+                await page
+                  .getByText("Instaladas", { exact: true })
+                  .first()
+                  .click()
+                  .catch(() => {});
+              });
+          });
+        await page.waitForTimeout(500);
+      },
       body: "<p>La pestaña <b>Instaladas</b> lista todo lo que el tenant tiene instalado. Cada instalación se muestra como una tarjeta con el identificador del listing, su versión y una etiqueta de estado: <b>Habilitada</b>, <b>Deshabilitada</b> o <b>Revocada</b>.</p><p>Para cada instalación dispones del botón <b>Permisos</b>, que abre la pantalla de consentimiento granular donde se revisan los permisos concedidos y denegados de esa instalación.</p><p>Si eres tenant_admin verás además dos acciones: <b>Revocar</b> (retira la instalación dejándola en estado revocado; se deshabilita si ya está revocada) y <b>Desinstalar</b> (elimina la instalación por completo). Ambas operaciones se confirman en el servidor y la lista se refresca automáticamente. Si el tenant no tiene nada instalado, se muestra el mensaje correspondiente.</p>",
       fullPage: true,
     },
     {
       title: "Marketplace: pestaña Compartir (cross-tenant)",
       goto: "/admin/marketplace",
+      // Clic en la pestaña "Compartir" para capturar el formulario de grants
+      // cross-tenant en lugar del Catálogo.
+      action: async (page) => {
+        await page
+          .getByRole("tab", { name: "Compartir" })
+          .click()
+          .catch(async () => {
+            await page
+              .getByRole("button", { name: "Compartir" })
+              .click()
+              .catch(async () => {
+                await page
+                  .getByText("Compartir", { exact: true })
+                  .first()
+                  .click()
+                  .catch(() => {});
+              });
+          });
+        await page.waitForTimeout(500);
+      },
       body: "<p>La pestaña <b>Compartir</b> gestiona los grants cross-tenant: permite que tu tenant comparta uno de sus listings privados con otro tenant. Compartir es siempre <b>opt-in y explícito</b>: el tenant destino solo ve e instala el listing mediante el grant, y cada acción queda auditada por el System Admin. Revocar retira la visibilidad de inmediato.</p><p>Si eres tenant_admin, en la tarjeta superior puedes crear un grant: selecciona un <b>Listing privado</b> del desplegable (solo aparecen tus listings privados, ya que los globales son visibles para todos), introduce el <b>UUID del tenant destino</b> y pulsa <b>Compartir</b>. Si no tienes listings privados, un aviso te enlaza al Marketplace privado para publicar uno.</p><p>Debajo, la sección <b>Grants activos creados por tu tenant</b> lista los shares que has otorgado, indicando el listing y el tenant destino. Cada grant tiene un botón <b>Revocar</b> para retirarlo. Por defecto no se comparte nada.</p>",
       fullPage: true,
     },
     {
-      title: "Marketplace privado del tenant",
+      title: "Marketplace privado: publicar un listing",
       goto: "/admin/marketplace/private",
-      body: "<p>Esta pantalla permite publicar las skills y tools internas del tenant como <b>listings privados</b>: solo tu tenant los ve, aislados por RLS. La cabecera incluye un botón <b>Volver al catálogo</b>.</p><p>Si eres tenant_admin verás el formulario <b>Publicar listing privado</b>. Primero eliges el <b>Tipo</b>: <code>skill</code> (SKILL.md), <code>tool</code> (manifest YAML) o <code>mcp_server</code> (manifest YAML). Según el tipo, un bloque de ayuda inline muestra el resumen del formato y los campos obligatorios y opcionales esperados.</p><p>A continuación rellenas el <b>Autor</b> (opcional) y pegas el <b>Manifest</b> en el área de texto. El botón <b>Usar ejemplo</b> inserta un manifest válido de ese tipo para que partas de una base que funciona. El nombre y la versión se leen del propio manifest; una versión duplicada se rechaza.</p><p>Al pulsar <b>Publicar</b>, el backend valida el manifest: si falla, se muestra un recuadro de error con el mensaje exacto del validador y no se crea ningún listing; si tiene éxito, aparece un mensaje de confirmación. Más abajo, la sección <b>Catálogo privado del tenant</b> lista tus listings publicados, cada uno con su tipo, versión, etiqueta <code>privado</code> y un botón <b>Despublicar</b> (solo tenant_admin).</p>",
+      // El formulario de publicación arranca con el manifest vacío. Pulsamos
+      // "Usar ejemplo" para que la captura muestre un manifest válido relleno
+      // (skill por defecto), que es la pantalla útil que documenta el paso.
+      action: async (page) => {
+        await page
+          .getByRole("button", { name: "Usar ejemplo" })
+          .first()
+          .click()
+          .catch(() => {});
+        await page.waitForTimeout(500);
+      },
+      body: "<p>Esta pantalla permite publicar las skills y tools internas del tenant como <b>listings privados</b>: solo tu tenant los ve, aislados por RLS. La cabecera incluye un botón <b>Volver al catálogo</b>.</p><p>Si eres tenant_admin verás el formulario <b>Publicar listing privado</b>. Primero eliges el <b>Tipo</b>: <code>skill</code> (SKILL.md), <code>tool</code> (manifest YAML) o <code>mcp_server</code> (manifest YAML). Según el tipo, un bloque de ayuda inline muestra el resumen del formato y los campos obligatorios y opcionales esperados.</p><p>A continuación rellenas el <b>Autor</b> (opcional) y pegas el <b>Manifest</b> en el área de texto. El botón <b>Usar ejemplo</b> inserta un manifest válido de ese tipo para que partas de una base que funciona (es lo que muestra la captura). El nombre y la versión se leen del propio manifest; una versión duplicada se rechaza.</p><p>Al pulsar <b>Publicar</b>, el backend valida el manifest: si falla, se muestra un recuadro de error con el mensaje exacto del validador y no se crea ningún listing; si tiene éxito, aparece un mensaje de confirmación. Más abajo, la sección <b>Catálogo privado del tenant</b> lista tus listings publicados, cada uno con su tipo, versión, etiqueta <code>privado</code> y un botón <b>Despublicar</b> (solo tenant_admin).</p>",
       fullPage: true,
     },
     {

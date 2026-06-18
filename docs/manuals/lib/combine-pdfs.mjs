@@ -160,6 +160,36 @@ async function main() {
     console.log("  + añadido", f, `(${src.getPageCount()} págs.)`);
   }
 
+  // --- Paginación CONTINUA del documento combinado -------------------------
+  // Las páginas vienen de los PDFs individuales con su pie "pág X/Y" POR MANUAL
+  // horneado por Chromium. Lo tapamos con una franja blanca (cae dentro del
+  // margen inferior de 17 mm, sin contenido) y reescribimos un pie CONTINUO
+  // "página N / TOTAL" sobre todo el documento. La portada (índice 0) se
+  // respeta (tiene su propio diseño).
+  const allPages = out.getPages();
+  const contentTotal = allPages.length - 1; // excluye la portada
+  for (let i = 1; i < allPages.length; i++) {
+    const p = allPages[i];
+    const pw = p.getSize().width;
+    p.drawRectangle({ x: 0, y: 0, width: pw, height: 46, color: rgb(1, 1, 1) });
+    p.drawLine({
+      start: { x: 42, y: 31 },
+      end: { x: pw - 42, y: 31 },
+      thickness: 0.5,
+      color: line,
+    });
+    p.drawText("Plataforma Agéntica Multi-Tenant · Manual de usuario completo", {
+      x: 42,
+      y: 18,
+      size: 7.5,
+      font: fontReg,
+      color: muted,
+    });
+    const label = `página ${i} / ${contentTotal}`;
+    const lw = fontReg.widthOfTextAtSize(label, 7.5);
+    p.drawText(label, { x: pw - 42 - lw, y: 18, size: 7.5, font: fontReg, color: muted });
+  }
+
   const bytes = await out.save();
   fs.writeFileSync(OUT, bytes);
   console.log(`\nManual completo: ${OUT} (${out.getPageCount()} págs., ${files.length} manuales)`);

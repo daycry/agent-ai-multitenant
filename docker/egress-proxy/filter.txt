@@ -23,6 +23,10 @@
 # alcanzarlo basta con que el contenedor del modelo esté en el
 # network `agentic-agents`.
 ^ollama\.com$
+# Ollama IN-STACK (dev/manuales): el agent-runtime enruta las llamadas LLM por
+# este proxy (HTTP_PROXY), así que el host interno `ollama` debe permitirse para
+# usar el modelo local (p.ej. llama3.2:1b) sin credenciales externas.
+^ollama(:[0-9]+)?$
 
 # --- Plantilla para per-proyecto -------------------------------------
 # El tool `http_request` (Fase D) sigue aplicando su propia allowlist

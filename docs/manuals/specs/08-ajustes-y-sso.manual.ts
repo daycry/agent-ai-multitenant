@@ -26,6 +26,19 @@ const manual: ManualDef = {
     {
       title: "Configurar o editar OIDC (diálogo)",
       goto: "/admin/settings/sso",
+      // Abre el diálogo de configuración OIDC (botón "Configurar OIDC").
+      action: async (page) => {
+        await page
+          .getByTestId("sso-create-button")
+          .click()
+          .catch(async () => {
+            await page
+              .getByRole("button", { name: "Configurar OIDC" })
+              .click()
+              .catch(() => {});
+          });
+        await page.waitForTimeout(600);
+      },
       body: "<p>Al pulsar <b>Configurar OIDC</b> (o el lápiz para editar) se abre un diálogo con el formulario. En la parte superior puedes elegir una <b>Plantilla de proveedor</b> (Azure AD/Entra, Google, Okta, Auth0, GitHub, GitLab, Apple, Facebook); al seleccionarla se pre-rellenan automáticamente el issuer, los scopes y el mapeo de claims con valores verificados, que luego puedes ajustar a mano.</p><ul><li>Si la plantilla lo requiere, aparecen <b>parámetros específicos</b> (por ejemplo el <code>tenant</code> de Azure o el <code>domain</code> de Okta) que completan el issuer.</li><li><b>Nombre visible</b> (opcional), <b>Issuer</b> (sobre el que se consulta <code>/.well-known/openid-configuration</code>), <b>Client ID</b> y <b>Client secret</b>. El secreto se cifra en reposo y nunca se devuelve en claro; al editar, deja el campo vacío para conservar el actual.</li><li><b>Scopes</b> separados por espacios (por defecto <code>openid email profile</code>) y una casilla para <b>activar</b> el proveedor en el login.</li></ul><p>Al crear, el secreto es obligatorio; al editar es opcional. Pulsa <b>Crear</b> o <b>Guardar cambios</b> para confirmar, o <b>Cancelar</b> para descartar. Los errores devueltos por el backend se muestran dentro del diálogo.</p>",
       fullPage: true,
     },
@@ -38,6 +51,19 @@ const manual: ManualDef = {
     {
       title: "Configurar o editar SAML (diálogo)",
       goto: "/admin/settings/sso/saml",
+      // Abre el diálogo de configuración SAML (botón "Configurar SAML").
+      action: async (page) => {
+        await page
+          .getByTestId("saml-create-button")
+          .click()
+          .catch(async () => {
+            await page
+              .getByRole("button", { name: "Configurar SAML" })
+              .click()
+              .catch(() => {});
+          });
+        await page.waitForTimeout(600);
+      },
       body: "<p>El diálogo de SAML empieza por el bloque <b>Metadatos del IdP (XML)</b>: puedes pegar el <code>EntityDescriptor</code> del proveedor o pulsar <b>Subir XML</b> para cargar el archivo, y luego <b>Extraer datos</b> para que el sistema rellene automáticamente el Entity ID, la URL de SSO, el certificado y el formato de NameID.</p><ul><li>Campos editables: <b>Nombre visible</b> (opcional), <b>IdP Entity ID</b>, <b>URL de SSO del IdP</b> y <b>Certificado de firma del IdP (X.509)</b>, con el que se verifican las aserciones.</li><li><b>Formato de NameID</b> mediante un selector (emailAddress recomendado, persistent, transient o unspecified) y mapeo de atributos opcionales de <b>email</b> y <b>nombre</b>.</li><li>Bloque del <b>SP</b>: certificado público y clave privada en PEM (solo necesarios si firmas el AuthnRequest o cifras aserciones); la clave se cifra en reposo y nunca se devuelve. Al editar, déjala vacía para conservar la actual.</li><li>Casillas de seguridad: firmar el AuthnRequest saliente, exigir aserciones firmadas (recomendado), exigir aserciones cifradas y exigir NameID cifrado, más la casilla para <b>activar</b> el proveedor.</li></ul><p>Pulsa <b>Crear</b> o <b>Guardar cambios</b> para confirmar (Entity ID, URL de SSO y certificado del IdP son obligatorios) o <b>Cancelar</b> para salir.</p>",
       fullPage: true,
     },

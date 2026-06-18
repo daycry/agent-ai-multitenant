@@ -76,6 +76,16 @@ const manual: ManualDef = {
       title: "Tu organización (tenant) activa",
       goto: "/admin/dashboard",
       settleMs: 1200,
+      // Abre el selector de tenant del top bar para mostrar el cambio de
+      // organización (vista distinta del dashboard del paso anterior).
+      action: async (page) => {
+        await page
+          .getByRole("button", { name: /Demo Manuales/ })
+          .first()
+          .click()
+          .catch(() => {});
+        await page.waitForTimeout(500);
+      },
       body: `<p>Todo lo que ves pertenece a tu <b>tenant</b> activo. La plataforma
         es <b>multi-tenant</b>: cada organización tiene sus propios proyectos,
         agentes y datos, completamente aislados (a nivel de base de datos con
