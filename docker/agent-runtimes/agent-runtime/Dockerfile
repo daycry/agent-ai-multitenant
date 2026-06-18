@@ -34,8 +34,19 @@ ENV PATH="/opt/venv/bin:$PATH"
 # shared-llm is a path dependency of agent-runtime (ADR 0021); install
 # it first so the next `pip install .` resolves the `shared-llm` name
 # from the already-installed local wheel instead of asking PyPI.
+#
+# WITH_CLAUDE (ADR 0064): Claude Agent SDK is an OPTIONAL extra so non-Claude
+# deployments stay lean (no Node CLI). Build with `--build-arg WITH_CLAUDE=1`
+# to install `shared-llm[claude]` (the Python SDK) — the matching Claude Code
+# CLI (Node) is added to the runtime stage below. Both are needed to run a
+# `claude_sdk` agent; the platform credential-wiring (ADR 0064) is independent.
+ARG WITH_CLAUDE=0
 COPY packages/shared-llm/ /src/shared-llm/
-RUN pip install --no-cache-dir /src/shared-llm
+RUN if [ "$WITH_CLAUDE" = "1" ]; then \
+        pip install --no-cache-dir "/src/shared-llm[claude]"; \
+    else \
+        pip install --no-cache-dir /src/shared-llm; \
+    fi
 
 # shared-mcp is a path dependency of agent-runtime since Plan 05
 # task_05_03 (MCP tools adapter). Same trick as shared-llm: install
@@ -80,6 +91,18 @@ RUN groupadd --gid 1000 agent \
 
 # The venv already holds the installed agent_runtime package + its deps.
 COPY --from=builder /opt/venv /opt/venv
+
+# WITH_CLAUDE (ADR 0064): the Claude Agent SDK (installed in the builder via the
+# `[claude]` extra) spawns the Claude Code CLI (`claude`, a Node binary) at
+# query time. Install Node + the CLI ONLY when Claude is enabled, so the
+# default image stays lean (no Node). Done as root before dropping to uid 1000.
+ARG WITH_CLAUDE=0
+RUN if [ "$WITH_CLAUDE" = "1" ]; then \
+        apt-get update \
+     && apt-get install -y --no-install-recommends nodejs npm \
+     && npm install -g @anthropic-ai/claude-code \
+     && rm -rf /var/lib/apt/lists/* /root/.npm; \
+    fi
 
 WORKDIR /workspace
 USER 1000:1000

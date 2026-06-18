@@ -89,3 +89,25 @@ allowlisted, ADR 0019).
 - **Device-flow interactivo para Claude** (como Copilot): el SDK de suscripción
   usa un token de `claude setup-token` que el operador pega; un device-flow
   propio es alcance futuro si Anthropic lo ofrece.
+
+## Puesta en marcha (operador)
+
+El **cableado de la plataforma está completo y testeado** (CSDK-1..4): la
+credencial viaja Vault → spec → sandbox → SDK. Para EJECUTAR un agente Claude
+faltan dos pasos de entorno (independientes del código):
+
+1. **Imagen agent-runtime Claude-capable.** El SDK Python + el CLI `claude`
+   (Node) son OPCIONALES por diseño (imágenes lean). Construir con el build-arg:
+   `docker build -t agent-runtime:v1 --build-arg WITH_CLAUDE=1 \
+-f docker/agent-runtimes/agent-runtime/Dockerfile .`
+   Verificado: la imagen resultante trae `claude_agent_sdk` + `claude` en PATH.
+2. **Credencial en Vault + provider activo.** Requiere `API_SERVER_VAULT_TOKEN`
+   válido y el mount KV `platform` (el instalador de prod lo provisiona; en dev
+   el token de `vault-init-output/root-token.txt` debe ser el vigente). Con eso,
+   crear el provider `claude_sdk` desde la UI (modo API key o suscripción) y
+   activarlo; asignar a un agente `model_config.provider=claude_sdk`.
+
+Comprobación de fail-loud verificada en vivo: con el agente apuntando a
+`claude_sdk` y SIN provider activo, la ejecución falla con
+`no active llm_providers row of kind 'claude_sdk'` (nunca cae a scripted
+silencioso, ADR 0057). El egress ya permite `api.anthropic.com`.
