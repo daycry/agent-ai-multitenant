@@ -263,7 +263,7 @@ def _parse_selection(provider_id: str | None, model_id: str | None) -> Assistant
         parsed = UUID(str(provider_id))
     except (ValueError, TypeError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="provider_id must be a valid UUID",
         ) from exc
     return AssistantModelSelection(provider_id=parsed, model_id=str(model_id))
@@ -276,7 +276,7 @@ async def _validate_selection_or_422(
     model (price catalogue plus the provider's synced models)."""
     if not await is_valid_selection(admin_session, selection):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "invalid selection: provider_id must be an active provider and "
                 "model_id must be one it offers (catalogue or synced — sync the "

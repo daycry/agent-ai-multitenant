@@ -970,7 +970,7 @@ def _apply_secret(
         row.client_secret_encrypted = None
     elif is_create:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "a client secret is required: send client_secret (plaintext) "
                 "or client_secret_ref (a Vault pointer)"
@@ -1056,7 +1056,7 @@ async def put_public_base_url(
         stored = await set_app_public_base_url(session, payload.base_url, actor=actor)
     except InvalidPublicBaseUrlError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
     env_default = get_settings().sso_redirect_base_url.rstrip("/")
     return PublicBaseUrlResponse(base_url=stored, is_override=True, env_default=env_default)
@@ -1297,7 +1297,7 @@ def _validate_saml_crypto_invariant(row: SSOConfiguration) -> None:
     has_key = bool(row.sp_private_key_ref or row.sp_private_key_encrypted)
     if not row.sp_x509_cert or not has_key:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "AuthnRequest signing and assertion/NameID encryption require "
                 "both an SP certificate and an SP private key"
@@ -1335,7 +1335,7 @@ async def parse_saml_idp_metadata(
         parsed = parse_idp_metadata(payload.metadata_xml)
     except IdPMetadataError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
     return IdPMetadataParseResponse(

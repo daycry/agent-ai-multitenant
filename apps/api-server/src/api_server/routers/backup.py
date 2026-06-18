@@ -109,7 +109,7 @@ async def update_backup_schedule(
         )
     except InvalidBackupScheduleError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 
@@ -174,7 +174,7 @@ async def update_backup_destinations(
         normalised = await set_backup_destinations(session, items, actor=actor)
     except InvalidBackupDestinationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 
@@ -448,7 +448,7 @@ async def trigger_restore(
         expected = _full_confirm_token(payload.backup_id)
     if payload.confirm != expected:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "restore confirmation token does not match the expected value; "
                 "refusing to enqueue a destructive restore"

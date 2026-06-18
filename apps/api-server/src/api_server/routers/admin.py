@@ -419,7 +419,7 @@ async def update_user_membership(
     resolver only counts ``is_active`` rows)."""
     if payload.role is None and payload.is_active is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="nothing to update (provide role and/or is_active)",
         )
     membership, org = await _get_membership_or_404(session, user_id, membership_id)

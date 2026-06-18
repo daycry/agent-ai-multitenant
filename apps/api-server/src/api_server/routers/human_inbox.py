@@ -440,7 +440,7 @@ async def reject_assignment(
     justification = (payload.justification or "").strip()
     if not justification:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="a justification is required to reject an assignment",
         )
     assignment, task = await _load_my_assignment_or_404(
@@ -852,7 +852,7 @@ async def reject_review(
     feedback = (payload.feedback_text or "").strip()
     if not feedback:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="feedback_text is required to reject a review",
         )
     assignment, task = await _load_my_review_or_404(session, assignment_id, principal, tenant_id)

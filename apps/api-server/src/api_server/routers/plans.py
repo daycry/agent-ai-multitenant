@@ -138,7 +138,7 @@ async def create_plan(
             validate_dag(spec_dict["tasks"])
         except DAGCycleError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={"error": "dag_cycle", "cycle": exc.cycle},
             ) from exc
 
@@ -279,7 +279,7 @@ async def update_plan(
             validate_dag(spec_dict["tasks"])
         except DAGCycleError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={"error": "dag_cycle", "cycle": exc.cycle},
             ) from exc
 
@@ -343,7 +343,7 @@ async def post_plan_comment(
             idx = int(payload.target_ref or "")
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="phase target_ref must be the phase index as a string",
             ) from exc
         if idx < 0 or idx >= len(phases):
@@ -625,7 +625,7 @@ async def sync_plan_kanban(
         )
     except SyncScopeError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"error": "invalid_sync_scope", "message": str(exc)},
         ) from exc
 

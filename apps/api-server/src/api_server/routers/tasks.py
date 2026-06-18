@@ -262,7 +262,7 @@ async def update_task(
             await assert_dependencies_done(session, task.id, payload.status.value)
         except DependenciesNotDoneError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={
                     "error": "dependencies_not_done",
                     "target_status": payload.status.value,

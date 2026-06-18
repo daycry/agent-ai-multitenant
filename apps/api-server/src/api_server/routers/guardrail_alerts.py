@@ -173,7 +173,7 @@ async def update_alert_rule(
     provided = payload.model_dump(include=payload.model_fields_set)
     if not provided:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="no fields to update",
         )
     rule = await _load_rule(session, tenant_id=tenant_id, rule_id=rule_id)

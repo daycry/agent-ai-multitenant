@@ -326,7 +326,7 @@ async def replay_incoming_webhook_delivery(
         outcome = await replay_delivery(session, config=config, source_event=source_event)
     except WebhookReplayError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
     return IncomingWebhookReplayResponse(
         replay_event_id=outcome.replay_event_id,

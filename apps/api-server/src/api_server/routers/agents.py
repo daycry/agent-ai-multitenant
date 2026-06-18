@@ -927,7 +927,7 @@ async def set_agent_tools(
     missing = [tool_id for tool_id in requested if tool_id not in tools_by_id]
     if missing:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "unknown or non-assignable tool_id(s): "
                 + ", ".join(str(tool_id) for tool_id in missing)
@@ -947,7 +947,7 @@ async def set_agent_tools(
     ]
     if not_wired:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "tool(s) not executable in the agent-runtime (no wired executor): "
                 + ", ".join(sorted(tool.name for tool in not_wired))
@@ -966,7 +966,7 @@ async def set_agent_tools(
             server = _mcp_server_name(tool.implementation_ref)
             if server is None or server not in project_server_names:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=(
                         f"MCP tool {tool.name!r} requires MCP server {server!r} "
                         "on the agent's project; not declared"
@@ -1139,7 +1139,7 @@ async def set_agent_skills(
     missing = [skill_id for skill_id in requested if skill_id not in skills_by_id]
     if missing:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "unknown or non-assignable skill_id(s): "
                 + ", ".join(str(skill_id) for skill_id in missing)
@@ -1268,7 +1268,7 @@ async def get_agent_effective_tools(
             # Built-in lookup miss (custom modes are resolved elsewhere with a
             # tenant registry). Treat an unknown built-in name as a bad request.
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"unknown chat mode: {mode!r}",
             ) from None
         mode_allowed_tools = mode_config.allowed_tools

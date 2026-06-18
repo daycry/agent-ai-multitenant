@@ -472,7 +472,7 @@ async def merge_memory_into(
 
     if source_id == payload.target_id:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="cannot merge a memory into itself",
         )
 
@@ -492,7 +492,7 @@ async def merge_memory_into(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
     if src.scope != tgt.scope:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"cannot merge across scopes ({src.scope!r} -> {tgt.scope!r})",
         )
     # Same scope is necessary but not sufficient: within a scope the
@@ -505,7 +505,7 @@ async def merge_memory_into(
     owner_attr = _SCOPE_OWNER_ATTR.get(src.scope)
     if owner_attr is not None and getattr(src, owner_attr) != getattr(tgt, owner_attr):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"cannot merge across {owner_attr} within scope {src.scope!r}"
                 f" ({getattr(src, owner_attr)!r} -> {getattr(tgt, owner_attr)!r})"

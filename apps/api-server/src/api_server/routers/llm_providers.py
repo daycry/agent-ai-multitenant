@@ -255,7 +255,7 @@ async def update_provider(
     """
     if not payload.has_changes():
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="no fields to update",
         )
     provider = await _load_provider(session, provider_id)

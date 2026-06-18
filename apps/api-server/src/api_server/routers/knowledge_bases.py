@@ -578,7 +578,9 @@ async def upload_document(
     # Read the upload up-front so we can size-check before we touch MinIO.
     payload = await file.read()
     if not payload:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="empty upload")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="empty upload"
+        )
     if len(payload) > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,

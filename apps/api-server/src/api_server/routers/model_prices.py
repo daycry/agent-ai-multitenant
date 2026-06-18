@@ -128,7 +128,7 @@ async def _assert_provider_exists(session: AsyncSession, provider_id: UUID) -> N
     """
     if await get_llm_provider(session, provider_id) is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="provider_id does not reference an existing llm_providers row",
         )
 
@@ -314,7 +314,7 @@ async def update_price(
     """
     if not payload.has_changes():
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="no fields to update",
         )
     price = await _load_price(session, price_id)
