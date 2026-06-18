@@ -183,6 +183,14 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
     tags: Mapped[list[Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
+    # Normalised entities (people, projects, components, technologies…) the
+    # distilation extracts (ADR 0059 Opción A — la idea nativa de mem0). Used
+    # as a THIRD recall signal (entity-match) fused with BM25 + vector via RRF.
+    # JSONB array of lowercased strings; GIN-indexed (migración 0084) for the
+    # `?|` overlap lookup. Empty `[]` when nothing was extracted.
+    entities: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     # Anything else the Memorizer wants to stash (model id used to
     # distil, token cost, source step ids, etc.).
     metadata_: Mapped[dict[str, Any]] = mapped_column(

@@ -30,6 +30,8 @@ import structlog
 from shared_llm.base import LLMProvider
 from shared_llm.types import Message
 
+from api_server.memorizer.recall import query_entity_terms
+
 logger = structlog.get_logger(__name__)
 
 
@@ -56,18 +58,25 @@ class MemoryCandidate:
     content: str
     type: str  # 'episodic' or 'semantic'
     tags: tuple[str, ...] = field(default_factory=tuple)
+    # Normalised entities (ADR 0059 Opción A — idea nativa de mem0): the third
+    # recall signal. Lowercased significant tokens (same tokenizer the recall
+    # query uses, so write + read align). Empty when the LLM returns none.
+    entities: tuple[str, ...] = field(default_factory=tuple)
 
 
 _SYSTEM_PROMPT = (
     "You are the Memorizer of an agentic platform. After every "
     "execution you extract a SHORT list of useful memories to store for "
     "future agent runs. Always answer with a JSON array (no prose, no "
-    "markdown fences). Each item is an object with exactly three keys:\n"
-    '  "content" — a single-paragraph fact (max 2000 chars).\n'
-    '  "type"    — "episodic" (a concrete event) or "semantic" '
+    "markdown fences). Each item is an object with exactly four keys:\n"
+    '  "content"  — a single-paragraph fact (max 2000 chars).\n'
+    '  "type"     — "episodic" (a concrete event) or "semantic" '
     "(a generalised rule extracted from one or more events).\n"
-    '  "tags"    — array of short string tags for filtering, e.g. '
+    '  "tags"     — array of short string tags for filtering, e.g. '
     '["sqlalchemy", "asyncpg"].\n'
+    '  "entities" — array of the key NAMED ENTITIES the memory is about '
+    "(people, projects, components, technologies, files), e.g. "
+    '["PostgreSQL", "RLS", "agent-runtime"]. Used to find this memory later.\n'
     "Return between 0 and 5 items. Return an empty array if the "
     "execution produced nothing worth remembering."
 )
@@ -159,13 +168,16 @@ _HUMAN_SYSTEM_PROMPT = (
     "made them in, and the outcome. Phrase semantic facts as reusable "
     'knowledge (e.g. "<name> decided to <decision> in <context>, which led to '
     '<outcome>"). Always answer with a JSON array (no prose, no markdown '
-    "fences). Each item is an object with exactly three keys:\n"
-    '  "content" — a single-paragraph fact (max 2000 chars). When a human name '
+    "fences). Each item is an object with exactly four keys:\n"
+    '  "content"  — a single-paragraph fact (max 2000 chars). When a human name '
     "is known, cite WHO made the decision.\n"
-    '  "type"    — "episodic" (a concrete event of this session) or "semantic" '
+    '  "type"     — "episodic" (a concrete event of this session) or "semantic" '
     "(a generalised rule / decision rationale worth reusing).\n"
-    '  "tags"    — array of short string tags for filtering, e.g. '
+    '  "tags"     — array of short string tags for filtering, e.g. '
     '["legal-review", "brand"].\n'
+    '  "entities" — array of the key NAMED ENTITIES the memory is about '
+    "(people, projects, brands, documents), e.g. "
+    '["Ana", "campaña-verano", "contrato-marco"]. Used to find this memory later.\n'
     "Return between 0 and 5 items. Return an empty array if the work session "
     "produced nothing worth remembering."
 )
@@ -292,11 +304,20 @@ def _parse_response(text: str) -> list[MemoryCandidate]:
         if not isinstance(tags, list):
             tags = []
         clean_tags = tuple(t.strip() for t in tags if isinstance(t, str) and t.strip())
+        entities_raw = raw.get("entities") or []
+        if not isinstance(entities_raw, list):
+            entities_raw = []
+        # Normalise with the SAME tokenizer the recall query uses, so the stored
+        # entities and the query terms match on shared tokens (ADR 0059).
+        clean_entities = tuple(
+            query_entity_terms(" ".join(e for e in entities_raw if isinstance(e, str)))
+        )
         out.append(
             MemoryCandidate(
                 content=content.strip()[:MAX_CONTENT_CHARS],
                 type=kind,
                 tags=clean_tags,
+                entities=clean_entities,
             )
         )
     return out

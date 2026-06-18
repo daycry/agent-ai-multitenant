@@ -12,7 +12,18 @@ docs_language: es
 
 # ADR 0059 — Entity linking en el recall de memoria
 
-> **Estado: `accepted`** (2026-06-17, por delegación del operador). Decisión:
+> **ACTUALIZACIÓN 2026-06-18 — Opción A IMPLEMENTADA** (activada por el operador:
+> "implementar las mejoras que tenía mem0, sin la librería, solo las ideas"). Se
+> añadió la columna `memory_entries.entities` (JSONB + GIN, migración 0084), la
+> distilación extrae entidades normalizadas, y el recall fusiona una TERCERA
+> señal de entity-match en el RRF (BM25 + vector + entidades). Sin dependencias
+> externas ni segundo almacén; Postgres sigue siendo la única fuente de verdad y
+> se respeta RLS + ADR 0021. El tokenizador de la query (hot path, sin LLM) y la
+> normalización de entidades en la distilación comparten función para alinear
+> write/read. Lo de abajo era la decisión original (diferir), conservada como
+> contexto.
+
+> **Estado original: `accepted`** (2026-06-17, por delegación del operador). Decisión:
 > **Opción C — NO implementar ahora** (el default documentado). El recall actual
 > (BM25 + pgvector fusionados con RRF) es sólido y aceptable para producción; el
 > entity-linking es una mejora **especulativa** sin métricas que la respalden, y

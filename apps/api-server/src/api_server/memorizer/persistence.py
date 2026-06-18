@@ -164,6 +164,7 @@ async def persist_memory_candidates(
             source_execution_id=source_execution_id,
             source_human_work_session_id=source_human_work_session_id,
             tags=list(cand.tags),
+            entities=list(cand.entities),
             metadata_={**metadata_base, "tags": list(cand.tags)},
             **owner,
         )
