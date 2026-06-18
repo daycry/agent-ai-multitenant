@@ -325,6 +325,36 @@ async def test_create_claude_requires_oauth_token(configured_app, migrations_pg_
 
 
 @pytest.mark.asyncio
+async def test_create_claude_accepts_an_api_key(configured_app, migrations_pg_dsn: str) -> None:
+    """claude_sdk accepts an Anthropic API key as an ALTERNATIVE to the
+    subscription oauth_token — both auth modes ride the same kind (ADR 0063).
+    The api_key is written to Vault, never to a DB column."""
+    seeded = await _seed(migrations_pg_dsn)
+    headers = await _sysadmin_headers(seeded)
+    api_key = "sk-ant-apikey-DO-NOT-LEAK"
+    async with _client(configured_app) as client:
+        resp = await client.post(
+            "/admin/llm-providers",
+            json={
+                "kind": "claude_sdk",
+                "slug": "claude-apikey",
+                "display_name": "Claude API key",
+                "api_key": api_key,
+            },
+            headers=headers,
+        )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["has_credential"] is True
+    provider_id = UUID(resp.json()["id"])
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        row = await conn.fetchrow("SELECT * FROM llm_providers WHERE id = $1", provider_id)
+    finally:
+        await conn.close()
+    assert api_key not in " ".join(str(v) for v in dict(row).values())
+
+
+@pytest.mark.asyncio
 async def test_create_azure_requires_base_url_and_key(
     configured_app, migrations_pg_dsn: str
 ) -> None:

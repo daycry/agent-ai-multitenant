@@ -531,6 +531,11 @@ function ProviderFormDialog({ mode, provider, onClose, onSaved }: ProviderFormDi
   const [oauthToken, setOauthToken] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [bearerToken, setBearerToken] = useState("");
+  // claude_sdk has TWO auth modes on the same kind (ADR 0063): an Anthropic
+  // API key (→ ANTHROPIC_API_KEY) or a Pro/Max subscription token from
+  // `claude setup-token` (→ CLAUDE_CODE_OAUTH_TOKEN). The single credential
+  // input is routed to the right field by this mode.
+  const [claudeAuthMode, setClaudeAuthMode] = useState<"api_key" | "subscription">("api_key");
 
   const needsBaseUrl = kind === "azure_foundry" || kind === "ollama";
 
@@ -567,7 +572,15 @@ function ProviderFormDialog({ mode, provider, onClose, onSaved }: ProviderFormDi
 
   // Append the meaningful credential field for the kind, ONLY when filled.
   function addCredential(body: Record<string, unknown>): void {
-    if (kind === "claude_sdk" || kind === "copilot") {
+    if (kind === "claude_sdk") {
+      // Route the single credential input to the field the backend maps to the
+      // right env var (ADR 0063): API key → api_key (ANTHROPIC_API_KEY),
+      // subscription → oauth_token (CLAUDE_CODE_OAUTH_TOKEN).
+      if (oauthToken.trim() !== "") {
+        if (claudeAuthMode === "api_key") body.api_key = oauthToken;
+        else body.oauth_token = oauthToken;
+      }
+    } else if (kind === "copilot") {
       if (oauthToken.trim() !== "") body.oauth_token = oauthToken;
     } else if (kind === "azure_foundry") {
       if (apiKey.trim() !== "") body.api_key = apiKey;
@@ -675,11 +688,43 @@ function ProviderFormDialog({ mode, provider, onClose, onSaved }: ProviderFormDi
 
           {/* Credential fields switch by kind (write-only). */}
           <div className="space-y-1" data-testid="form-credential-section">
-            {kind === "claude_sdk" || kind === "copilot" ? (
+            {kind === "claude_sdk" ? (
+              <>
+                <Label htmlFor="form-claude-auth-mode">Modo de autenticación</Label>
+                <select
+                  id="form-claude-auth-mode"
+                  data-testid="form-claude-auth-mode"
+                  value={claudeAuthMode}
+                  onChange={(e) =>
+                    setClaudeAuthMode(
+                      e.target.value === "subscription" ? "subscription" : "api_key",
+                    )
+                  }
+                  className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+                >
+                  <option value="api_key">API key (Anthropic)</option>
+                  <option value="subscription">Suscripción Pro/Max (claude setup-token)</option>
+                </select>
+                <Label htmlFor="form-oauth-token">
+                  {claudeAuthMode === "api_key"
+                    ? "API key (sk-ant-…)"
+                    : "Token de suscripción (de «claude setup-token»)"}
+                  {isEdit ? "" : " *"}
+                </Label>
+                <Input
+                  id="form-oauth-token"
+                  type="password"
+                  autoComplete="off"
+                  value={oauthToken}
+                  onChange={(e) => setOauthToken(e.target.value)}
+                  placeholder={isEdit && provider?.has_credential ? "•••••••• (configurado)" : ""}
+                  data-testid="form-oauth-token"
+                />
+              </>
+            ) : kind === "copilot" ? (
               <>
                 <Label htmlFor="form-oauth-token">
-                  Token OAuth
-                  {kind === "copilot" ? " (o usa el Device Flow desde la lista)" : ""}
+                  Token OAuth (o usa el Device Flow desde la lista)
                 </Label>
                 <Input
                   id="form-oauth-token"

@@ -328,6 +328,8 @@ class ClaudeSDKModelClient:
         self,
         *,
         model: str,
+        api_key: str | None = None,
+        oauth_token: str | None = None,
         query_fn: SdkQuery | None = None,
         tools: list[dict[str, Any]] | None = None,
         max_turns: int = 1,
@@ -335,7 +337,11 @@ class ClaudeSDKModelClient:
         self.model = model
         self._tools = tools
         self._max_turns = max_turns
+        # Feed the resolved credential to the SDK: api_key → ANTHROPIC_API_KEY,
+        # oauth_token → CLAUDE_CODE_OAUTH_TOKEN (subscription Pro/Max, ADR 0063).
         self.provider = ClaudeAgentProvider(
+            api_key=api_key,
+            oauth_token=oauth_token,
             default_model=model,
             query_fn=query_fn,
         )
@@ -422,11 +428,16 @@ def _overlay_resolved(
         if secret.get("oauth_token"):
             merged["github_token"] = secret["oauth_token"]
     elif kind in ("claude_sdk", "claude"):
-        # Claude SDK uses ambient subscription auth — the row carries no
-        # spec-level override beyond the (rare) base_url; the OAuth token in
-        # Vault is consumed out-of-band by the SDK environment. Nothing to
-        # overlay onto the spec here.
-        pass
+        # Two auth modes on the same kind (ADR 0063): API key
+        # (secret['api_key'] → ANTHROPIC_API_KEY) and Pro/Max subscription
+        # (secret['oauth_token'] from `claude setup-token` →
+        # CLAUDE_CODE_OAUTH_TOKEN). Carry whichever Vault field is present onto
+        # the spec; `build_provider_client` feeds it to the SDK env. Mirror of
+        # the worker's `model_resolver._overlay_provider_fields`.
+        if secret.get("api_key"):
+            merged["api_key"] = secret["api_key"]
+        if secret.get("oauth_token"):
+            merged["oauth_token"] = secret["oauth_token"]
     elif kind == "ollama":
         if base_url:
             merged["base_url"] = base_url
@@ -493,6 +504,8 @@ def build_provider_client(
     if kind in ("claude_sdk", "claude"):
         return ClaudeSDKModelClient(
             model=model,
+            api_key=spec.get("api_key"),
+            oauth_token=spec.get("oauth_token"),
             tools=tools,
             max_turns=int(spec.get("max_turns", 1)),
         )

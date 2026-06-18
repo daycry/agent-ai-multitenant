@@ -8,6 +8,7 @@ exercised without importing the real package.
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -59,6 +60,24 @@ def _make_query(*messages: Any):  # type: ignore[no-untyped-def]
             yield m
 
     return _q
+
+
+def test_api_key_is_exported_to_anthropic_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """API-key mode: the key lands in ANTHROPIC_API_KEY so the SDK authenticates."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    ClaudeAgentProvider(api_key="sk-ant-test-DO-NOT-LEAK", query_fn=_make_query())
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-test-DO-NOT-LEAK"
+
+
+def test_subscription_token_is_exported_to_claude_code_oauth_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Subscription Pro/Max mode (ADR 0063): a `claude setup-token` OAuth token
+    lands in CLAUDE_CODE_OAUTH_TOKEN — the env var the Claude Agent SDK reads to
+    authenticate against a subscription WITHOUT an API key."""
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    ClaudeAgentProvider(oauth_token="sk-ant-oat-test-DO-NOT-LEAK", query_fn=_make_query())
+    assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat-test-DO-NOT-LEAK"
 
 
 @pytest.mark.asyncio

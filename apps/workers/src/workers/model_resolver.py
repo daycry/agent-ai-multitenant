@@ -64,8 +64,17 @@ def _overlay_provider_fields(
         if secret.get("oauth_token"):
             merged["github_token"] = secret["oauth_token"]
     elif kind in ("claude_sdk", "claude"):
-        # Claude SDK usa auth ambiental de suscripción — nada que inyectar.
-        pass
+        # El Claude Agent SDK admite DOS modos de auth, ambos sobre el mismo
+        # kind (ADR 0021/0063): API key (`secret['api_key']` → ANTHROPIC_API_KEY)
+        # y suscripción Pro/Max (`secret['oauth_token']`, de `claude
+        # setup-token` → CLAUDE_CODE_OAUTH_TOKEN). El runtime mapea la clave del
+        # spec al env var correcto dentro del contenedor; aquí solo trasladamos
+        # la credencial de Vault al spec (antes se descartaba → el agente nunca
+        # se autenticaba en el sandbox).
+        if secret.get("api_key"):
+            merged["api_key"] = secret["api_key"]
+        if secret.get("oauth_token"):
+            merged["oauth_token"] = secret["oauth_token"]
     elif kind == "ollama":
         if base_url:
             merged["base_url"] = base_url
@@ -130,7 +139,10 @@ def safe_spec_summary(spec: dict[str, Any]) -> dict[str, Any]:
         "model": spec.get("model"),
         "base_url": spec.get("base_url") or spec.get("apim_base_url"),
         "has_credential": bool(
-            spec.get("api_key") or spec.get("subscription_key") or spec.get("github_token")
+            spec.get("api_key")
+            or spec.get("subscription_key")
+            or spec.get("github_token")
+            or spec.get("oauth_token")
         ),
     }
 

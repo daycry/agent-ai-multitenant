@@ -39,6 +39,11 @@ class ClaudeAgentProvider:
         self,
         *,
         api_key: str | None = None,
+        # Pro/Max subscription token from `claude setup-token` (ADR 0063). The
+        # Claude Agent SDK reads CLAUDE_CODE_OAUTH_TOKEN to authenticate against
+        # a subscription WITHOUT an API key — the alternative auth mode for the
+        # same `claude_sdk` provider kind.
+        oauth_token: str | None = None,
         default_model: str = "claude-sonnet-4-5",
         # The completion-shaped path keeps tools off by default — the
         # `run_agent()` path is where tools belong.
@@ -50,10 +55,16 @@ class ClaudeAgentProvider:
     ) -> None:
         if api_key:
             os.environ["ANTHROPIC_API_KEY"] = api_key
-        elif not os.environ.get("ANTHROPIC_API_KEY") and query_fn is None:
-            # Pro/Max subscription users do NOT set ANTHROPIC_API_KEY;
-            # the SDK picks the subscription up itself. We only fail
-            # here when there's no key AND no injected query.
+        if oauth_token:
+            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+        if (
+            not (api_key or oauth_token)
+            and not os.environ.get("ANTHROPIC_API_KEY")
+            and query_fn is None
+        ):
+            # Pro/Max subscription users may rely on ambient auth (a token
+            # already in the environment / the SDK's own credentials). We do
+            # NOT fail here — the SDK surfaces an auth error at call time.
             pass
         self._default_model = default_model
         self._default_allowed_tools = default_allowed_tools or []

@@ -264,9 +264,19 @@ def _validate_kind_fields(
     False on update (a credential may be rotated, but omitting it keeps the
     existing one).
     """
-    if kind in (LLMProviderKind.CLAUDE_SDK, LLMProviderKind.COPILOT):
+    if kind == LLMProviderKind.CLAUDE_SDK:
+        # Two auth modes on the same kind (ADR 0063): an Anthropic `api_key`
+        # (→ ANTHROPIC_API_KEY) or a Pro/Max subscription `oauth_token` from
+        # `claude setup-token` (→ CLAUDE_CODE_OAUTH_TOKEN). Either satisfies the
+        # credential requirement; the resolver routes each to the right env var.
+        if require_credential and oauth_token is None and api_key is None:
+            raise ValueError(
+                "claude_sdk requires a credential: an api_key (Anthropic) or an "
+                "oauth_token (Pro/Max subscription, from `claude setup-token`)"
+            )
+    elif kind == LLMProviderKind.COPILOT:
         if require_credential and oauth_token is None:
-            raise ValueError(f"{kind.value} requires an oauth_token")
+            raise ValueError("copilot requires an oauth_token")
     elif kind == LLMProviderKind.AZURE_FOUNDRY:
         if not base_url:
             raise ValueError("azure_foundry requires base_url (the APIM gateway endpoint)")
