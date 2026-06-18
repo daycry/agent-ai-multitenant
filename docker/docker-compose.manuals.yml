@@ -1,0 +1,102 @@
+# =============================================================================
+# Dev-only overlay: MANUALS containerized stack.
+#
+# Containerizes the APP tier (api-server + admin-panel + Caddy reverse proxy,
+# plus orchestrator + workers for real task execution) ON TOP of the running dev
+# infra (docker/docker-compose.yml + .dev.yml), so the user manuals can capture
+# the REAL production-like stack reached through Caddy on a single origin
+# (http://localhost:8080). This is NOT the production path — prod uses the
+# installer-generated compose (apps/installer). It reuses the dev infra service
+# names + dev-only credentials.
+#
+# Usage (same project name → joins the running networks):
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
+#                  -f docker/docker-compose.manuals.yml up -d \
+#                  api-server admin-panel caddy
+# =============================================================================
+services:
+  # ---------------------------------------------------------------------------
+  # api-server — reached internally as api-server:8000 (Caddy publishes it under
+  # /api). Minimal env: the same DB/Redis/JWT wiring the proven dev runner uses
+  # (scripts/dev/generate-manuals.ps1); the rest of the settings keep their
+  # dev-friendly defaults.
+  # ---------------------------------------------------------------------------
+  api-server:
+    image: agentic-platform/api-server:manuals
+    environment:
+      API_SERVER_DATABASE_URL: postgresql+asyncpg://app_user:changeme-app-dev-only@postgres:5432/agentic_platform
+      API_SERVER_ADMIN_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      API_SERVER_REDIS_URL: redis://redis:6379/0
+      API_SERVER_BROKER_URL: redis://redis:6379/1
+      API_SERVER_RESULT_BACKEND: redis://redis:6379/2
+      API_SERVER_JWT_SECRET: dev-only-jwt-secret-change-me
+      # High limit so the Playwright manual capture is never rate-limited.
+      API_SERVER_LOGIN_RATE_LIMIT_COUNT: "1000"
+      API_SERVER_LOGIN_RATE_LIMIT_WINDOW_SECONDS: "60"
+      API_SERVER_MINIO_URL: http://minio:9000
+      API_SERVER_MINIO_ACCESS_KEY: minioadmin
+      API_SERVER_MINIO_SECRET_KEY: changeme-dev-only
+      # In-network URLs so the dashboard "Salud de servicios" probes all reach
+      # the running infra by service name (otherwise they default to localhost
+      # and report down inside the container).
+      API_SERVER_VAULT_URL: http://vault:8200
+      API_SERVER_DOCLING_SERVE_URL: http://docling-serve:5001
+      API_SERVER_OLLAMA_URL: http://ollama:11434
+      API_SERVER_CLAMAV_HOST: clamav
+      API_SERVER_CLAMAV_PORT: "3310"
+      API_SERVER_EGRESS_PROXY_HOST: egress-proxy
+      API_SERVER_EGRESS_PROXY_PORT: "8888"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    # The python:3.12-slim runtime has NO wget/curl, so the api-server healthcheck
+    # must use python (the generated compose's wget-based check is broken the same
+    # way — a prod-01 fix tracked in compose_generator).
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz',timeout=5).status==200 else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [agentic-net, agentic-agents]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # admin-panel — Next.js SPA built with NEXT_PUBLIC_API_URL=/api (single-origin
+  # behind Caddy). Image must be built with that build-arg (see manuals runner).
+  # ---------------------------------------------------------------------------
+  admin-panel:
+    image: agentic-platform/admin-panel:manuals
+    environment:
+      NODE_ENV: production
+      PLATFORM_DOMAIN: localhost
+    depends_on:
+      api-server: { condition: service_healthy }
+    networks: [agentic-net]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # caddy — single-origin reverse proxy. The ONLY published port (8080).
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2.8-alpine
+    ports: ["8080:8080"]
+    volumes:
+      - ./caddy-manuals/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      api-server: { condition: service_healthy }
+      admin-panel: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [agentic-net]
+    restart: unless-stopped

@@ -23,6 +23,10 @@ repos:
       - id: check-toml
       - id: check-added-large-files
         args: [--maxkb=1024]
+        # Los manuales de usuario en PDF (docs/manuals/pdf/) son ENTREGABLES
+        # versionados a propósito y pueden superar 1 MB (llevan pantallazos
+        # embebidos). El runner los regenera; se excluyen de este límite.
+        exclude: ^docs/manuals/pdf/.*\.pdf$
       - id: check-merge-conflict
       - id: detect-private-key
       - id: mixed-line-ending

@@ -1,0 +1,9 @@
+# Dependencias y artefactos regenerables del generador de manuales.
+# Los PDFs (pdf/) SÍ se versionan: son el entregable.
+node_modules/
+# Pantallazos intermedios + snapshots (los regenera el runner: assets/*.png,
+# assets/dockers.json, assets/seed.json).
+assets/
+test-results/
+playwright-report/
+.last-run.json

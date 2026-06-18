@@ -1,0 +1,18 @@
+{
+  "name": "agentic-platform-manuals",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Generador reutilizable de manuales de usuario en PDF (Playwright + screenshots). Reejecutable cuando la UI cambia.",
+  "scripts": {
+    "manuals": "playwright test",
+    "manuals:headed": "playwright test --headed",
+    "combine": "node lib/combine-pdfs.mjs",
+    "install:browser": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1"
+  }
+}
