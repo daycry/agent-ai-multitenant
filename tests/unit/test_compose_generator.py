@@ -669,6 +669,31 @@ def test_workers_lanes_bind_data_root_and_seccomp_profiles() -> None:
         ), f"{name} does not bind the seccomp profiles (for launched runtimes)"
 
 
+def test_worker_lanes_bind_data_root_same_path_not_named_volume() -> None:
+    """DooD invariant (ADR 0063 / sesión 2026-06-18): the worker launches the
+    agent-runtime / review-runtime through the docker-socket-proxy, so the
+    daemon resolves the bind ``source`` against ITS OWN filesystem. The
+    worktree path the worker passes only resolves if ``data_root`` is bound
+    with the SAME path inside and out. A NAMED volume mounted at ``data_root``
+    would make the daemon bind a nonexistent host path → the launched runtime
+    sees an EMPTY ``/workspace`` and serves nothing. Lock the same-path bind."""
+    import re
+
+    data_root = "/data/agent-platform"
+    services = generate_compose(_config(data_root=data_root))["services"]
+    for name in ("workers", "workers-privileged"):
+        vols = services[name].get("volumes", [])
+        assert f"{data_root}:{data_root}" in vols, (
+            f"{name} must bind data_root SAME-PATH ({data_root}:{data_root}) for DooD "
+            f"worktree resolution; got {vols}"
+        )
+        named = [v for v in vols if re.match(rf"^[A-Za-z0-9_]+:{re.escape(data_root)}(:|$)", v)]
+        assert not named, (
+            f"{name} mounts data_root via a NAMED volume {named} — the daemon would bind "
+            "an empty host dir and the launched runtime would see an EMPTY /workspace"
+        )
+
+
 @pytest.mark.parametrize(
     "service_name",
     ["orchestrator", "workers", "workers-privileged", "notification-dispatcher"],
