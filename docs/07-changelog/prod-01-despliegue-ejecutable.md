@@ -77,3 +77,41 @@ verdad detrás de TLS.
 - `human_prod01_03` — upgrade y desinstalación reales.
 - `auto_prod01_20_a` (e2e) sólo acredita deploy-1/2/3 tras una ejecución verde
   con `E2E_INSTALL=1` en un runner Linux con Docker (nightly, coordinación prod-02).
+
+## Correcciones durante validación en vivo (2026-06-18)
+
+Al levantar el stack contenerizado **de verdad** (para generar los manuales de
+usuario, ver `docs/manuals/`) emergieron bugs reales en los entregables de
+prod-01 que el `.venv` de desarrollo enmascaraba. Todos corregidos con su test
+de regresión y su gotcha en `docs/03-guides/gotchas/`:
+
+- **`cap_drop: [ALL]` rompía las imágenes oficiales** (postgres/redis/vault/
+  clamav/egress-proxy entraban en crash-loop al recrearse: su entrypoint hace
+  `chown`/`chmod` y baja de privilegios). Fix: anchor `x-infra-caps` /
+  `_INFRA_CAPS` que devuelve solo las caps de auto-init (CHOWN, DAC_OVERRIDE,
+  FOWNER, SETGID, SETUID; vault +SETFCAP) en el compose canónico **y** en
+  `compose_generator.py`. Tests `test_official_infra_images_keep_self_init_caps`
+  (×2). Gotcha `docker-cap-drop-all-breaks-official-images.md`.
+- **La imagen del api-server no arrancaba** (faltaban `celery` y el paquete
+  `workers`, que el código importa). Declarados/instalados en el Dockerfile.
+  Gotcha `app-image-missing-runtime-deps.md`.
+- **Healthchecks rotos** dejaban contenedores `unhealthy` para siempre →
+  `depends_on: service_healthy` nunca se cumplía. `python:3.12-slim` no tiene
+  wget/curl (api-server/orchestrator → healthcheck con `python` stdlib) y
+  docling rechaza el HEAD de `--spider` (→ GET). Fix en ambos composes + test
+  `test_python_app_healthchecks_do_not_rely_on_wget`. Gotcha
+  `compose-healthcheck-tooling-missing.md`.
+
+Con estos fixes el stack contenerizado **funciona end-to-end** (single-origin
+por Caddy, 16 contenedores sanos, login + dashboard + 8 servicios «ok»),
+materializando deploy-1/2/3 de forma observable a la espera de los tests humanos
+en VM Linux.
+
+## prod-09 (frontend same-origin) — inicio
+
+Adelantado el primer arreglo de prod-09 necesario para servir la UI tras Caddy:
+`apps/admin-panel/lib/ws.ts` resolvía mal el WebSocket con base relativa
+(`NEXT_PUBLIC_API_URL=/api`). Nueva `resolveWsBase()` deriva el origen
+`ws(s)://` absoluto de `window.location` (test `lib/ws.test.ts`). La imagen
+`admin-panel` construida con `NEXT_PUBLIC_API_URL=/api` sirve la SPA y la API en
+el mismo origen a través de Caddy.

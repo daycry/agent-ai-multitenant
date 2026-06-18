@@ -155,6 +155,17 @@ def _logging_block() -> dict[str, Any]:
     }
 
 
+# Capabilities the official infra images need back on top of cap_drop:[ALL] to
+# self-initialise: chown/chmod their data dir as root and drop to their service
+# user via gosu/su-exec. Without them postgres/redis/clamav/egress-proxy
+# crash-loop on start ("chmod/chown: Operation not permitted", "Permission
+# denied", "Unable to change to group"). prod-01: the cap_drop baseline
+# (task_08) was too broad for stateful official images — these add back ONLY the
+# self-init caps, never the dangerous ones (NET_ADMIN, SYS_ADMIN, …). Mirrors the
+# canonical compose's x-infra-caps anchor.
+_INFRA_CAPS = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"]
+
+
 def _hardening(
     *,
     limits_cpus: str,
@@ -209,6 +220,31 @@ def _healthcheck(test: str, *, start_period: str = "30s", timeout: str = "10s") 
     }
 
 
+def _http_healthcheck(url: str, *, start_period: str = "30s") -> dict[str, Any]:
+    """HTTP liveness probe using python's stdlib (no shell, no external tool).
+
+    The first-party app images are ``python:3.12-slim``, which ships NEITHER
+    wget NOR curl. A wget-based healthcheck therefore marks api-server /
+    orchestrator permanently unhealthy, so ``depends_on: service_healthy`` is
+    never satisfied and the whole stack fails to come up (prod-01: verified live
+    — the api-server only went healthy once the probe used python). Celery lanes
+    use ``celery inspect ping`` (binary present in their image), so they keep the
+    CMD-SHELL ``_healthcheck`` helper.
+    """
+
+    code = (
+        "import urllib.request,sys;"
+        f"sys.exit(0 if urllib.request.urlopen('{url}',timeout=5).status==200 else 1)"
+    )
+    return {
+        "test": ["CMD", "python", "-c", code],
+        "interval": "30s",
+        "timeout": "5s",
+        "retries": 5,
+        "start_period": start_period,
+    }
+
+
 def _env_ref(var: str, dev_default: str | None, *, prod: bool) -> str:
     """A ``${VAR}`` reference, keeping a dev fallback only outside prod.
 
@@ -255,6 +291,7 @@ def _postgres_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
         "networks": ["agentic-net"],
     }
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    svc["cap_add"] = list(_INFRA_CAPS)  # postgres self-inits PGDATA as root
     return svc
 
 
@@ -285,6 +322,7 @@ def _redis_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # no
         "networks": ["agentic-net"],
     }
     svc.update(_hardening(limits_cpus="1.0", limits_memory="1g"))
+    svc["cap_add"] = list(_INFRA_CAPS)  # redis chowns /data + drops to redis user
     return svc
 
 
@@ -316,7 +354,9 @@ def _vault_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # no
     # cap_add:[IPC_LOCK] — one hardening criterion, prod-01 task_08).
     svc: dict[str, Any] = {
         "image": IMAGE_VAULT,
-        "cap_add": ["IPC_LOCK"],
+        # IPC_LOCK to mlock memory; SETFCAP because the entrypoint setcaps its
+        # own binary; plus the self-init/user-drop caps (_INFRA_CAPS).
+        "cap_add": ["IPC_LOCK", "SETFCAP", *_INFRA_CAPS],
         "environment": {
             "VAULT_ADDR": "http://0.0.0.0:8200",
             "VAULT_API_ADDR": "http://0.0.0.0:8200",
@@ -361,6 +401,7 @@ def _clamav_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # n
         "networks": ["agentic-net"],
     }
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    svc["cap_add"] = list(_INFRA_CAPS)  # clamav chowns /var/lib/clamav + drops user
     return svc
 
 
@@ -369,7 +410,9 @@ def _docling_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # 
         "image": IMAGE_DOCLING,
         "environment": {"DOCLING_SERVE_ENABLE_UI": "false"},
         "healthcheck": {
-            "test": ["CMD-SHELL", "wget -q --spider http://localhost:5001/health || exit 1"],
+            # GET, not --spider (HEAD): docling's /health rejects HEAD, so a
+            # spider check wrongly marks it unhealthy though it serves 200 on GET.
+            "test": ["CMD-SHELL", "wget -q -O /dev/null http://localhost:5001/health || exit 1"],
             "interval": "30s",
             "timeout": "5s",
             "retries": 5,
@@ -399,6 +442,7 @@ def _egress_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
         "networks": ["agentic-net", "agentic-agents"],
     }
     svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
+    svc["cap_add"] = list(_INFRA_CAPS)  # tinyproxy setgid/setuid drop on start
     return svc
 
 
@@ -548,13 +592,7 @@ def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             "redis": {"condition": "service_healthy"},
             "vault": {"condition": "service_healthy"},
         },
-        "healthcheck": {
-            "test": ["CMD-SHELL", "wget -q --spider http://localhost:8000/healthz || exit 1"],
-            "interval": "30s",
-            "timeout": "5s",
-            "retries": 5,
-            "start_period": "30s",
-        },
+        "healthcheck": _http_healthcheck("http://localhost:8000/healthz"),
         # agentic-agents (internal) so the sandbox runtimes can reach the
         # internal API directly, bypassing the egress-proxy (ADR 0060 B1,
         # task_11). The PUBLIC surface stays on agentic-net / behind the TLS
@@ -576,7 +614,7 @@ def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/orchestrator:{APP_IMAGE_TAG}",
         "environment": env,
-        "healthcheck": _healthcheck("wget -q --spider http://localhost:8002/healthz || exit 1"),
+        "healthcheck": _http_healthcheck("http://localhost:8002/healthz"),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},

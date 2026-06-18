@@ -48,6 +48,16 @@ COPY packages/shared-test-runtimes/ /src/shared-test-runtimes/
 RUN pip install /src/shared-test-runtimes
 COPY packages/shared-guardrails/ /src/shared-guardrails/
 RUN pip install /src/shared-guardrails
+# The api-server imports a handful of helpers from the `workers` package
+# (review_runtime.verify_review_url is a TOP-LEVEL import in routers/review.py;
+# backup/restore/git_repos/kb_sync import lazily). The dev .venv had `workers`
+# installed editable, which hid this — the image MUST ship it or the api-server
+# crash-loops on boot with "ModuleNotFoundError: No module named 'workers'"
+# (prod-01: app-image packaging gap; a cleaner split into a shared package is
+# tracked for prod-03). Its deps (celery, docker SDK) overlap what we already
+# install, so the footprint cost is small.
+COPY apps/workers/ /src/workers/
+RUN pip install /src/workers
 
 # pyproject.toml is the single source of truth for the dependency set.
 WORKDIR /build

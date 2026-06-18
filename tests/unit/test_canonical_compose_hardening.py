@@ -53,3 +53,22 @@ def test_services_drop_all_caps_with_vault_keeping_ipc_lock() -> None:
             assert "IPC_LOCK" in (svc.get("cap_add") or []), "vault must keep IPC_LOCK"
         else:
             assert svc.get("cap_drop") == ["ALL"], f"{name} must cap_drop: [ALL]"
+
+
+def test_official_infra_images_keep_self_init_caps() -> None:
+    """Parity with ``compose_generator._INFRA_CAPS``: official images that
+    self-init as root (postgres/redis/clamav/egress-proxy chown their data dir +
+    drop to a service user via gosu/su-exec) add the self-init caps back on top
+    of ``cap_drop:[ALL]``; Vault also keeps SETFCAP (it setcaps its binary).
+    Without these the recreated containers crash-loop ("chmod/chown: Operation
+    not permitted", "Unable to change to group") — the prod-01 hardening
+    regression this guards against. Verified live: the dev stack containers are
+    healthy with exactly these caps."""
+    infra_caps = {"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}
+    services = _services()
+    for name in ("postgres", "redis", "clamav"):
+        assert set(services[name].get("cap_add") or []) >= infra_caps, name
+    if "egress-proxy" in services:  # tinyproxy setgid/setuid on start
+        assert set(services["egress-proxy"].get("cap_add") or []) >= infra_caps
+    vault_caps = set(services["vault"].get("cap_add") or [])
+    assert vault_caps >= infra_caps | {"IPC_LOCK", "SETFCAP"}

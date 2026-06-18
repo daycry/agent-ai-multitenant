@@ -414,11 +414,51 @@ def test_hardening_defaults_on_every_service() -> None:
             continue
         # AppArmor MAC confinement is pinned on every other generated service.
         assert "apparmor=agentic-default" in opts, name
-        # Vault keeps IPC_LOCK; everything else drops ALL caps.
+        # Every non-privileged service drops ALL caps. Official infra images that
+        # self-init as root (chown their data dir + drop to a service user via
+        # gosu/su-exec) add the self-init caps back on top of the blanket drop;
+        # Vault additionally needs IPC_LOCK (mlock) + SETFCAP (setcaps its binary).
+        assert svc["cap_drop"] == ["ALL"], name
+        infra_caps = {"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}
         if name == "vault":
-            assert svc["cap_add"] == ["IPC_LOCK"]
-        else:
-            assert svc["cap_drop"] == ["ALL"], name
+            assert set(svc["cap_add"]) >= infra_caps | {"IPC_LOCK", "SETFCAP"}, name
+        elif name in {"postgres", "redis", "clamav", "egress-proxy"}:
+            assert set(svc["cap_add"]) >= infra_caps, name
+
+
+def test_official_infra_images_keep_self_init_caps() -> None:
+    """postgres/redis/clamav/egress-proxy run official images that self-init as
+    root (chown their data dir + drop to a service user via gosu/su-exec). Under
+    cap_drop:[ALL] they crash-loop ("chmod/chown: Operation not permitted",
+    "Unable to change to group") unless the self-init caps are added back. This
+    guards the prod-01 hardening regression where the blanket cap-drop was too
+    broad for stateful official images."""
+    compose = generate_compose(_config(), monitoring=False)
+    infra_caps = {"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}
+    for name in ("postgres", "redis", "clamav"):
+        svc = compose["services"][name]
+        assert svc["cap_drop"] == ["ALL"], name
+        assert set(svc["cap_add"]) >= infra_caps, name
+    if "egress-proxy" in compose["services"]:  # tinyproxy setgid/setuid on start
+        assert set(compose["services"]["egress-proxy"]["cap_add"]) >= infra_caps
+    # Vault: self-init caps + IPC_LOCK (mlock) + SETFCAP (setcaps its own binary).
+    vault = compose["services"]["vault"]
+    assert set(vault["cap_add"]) >= infra_caps | {"IPC_LOCK", "SETFCAP"}
+
+
+def test_python_app_healthchecks_do_not_rely_on_wget() -> None:
+    """api-server + orchestrator run on python:3.12-slim, which ships NO
+    wget/curl. Their HTTP healthcheck must use python's stdlib — a wget-based
+    check marks them permanently unhealthy, so depends_on:service_healthy is
+    never satisfied and the WHOLE stack fails to come up (prod-01: verified live
+    — the containers only became healthy once the check used python). The Celery
+    lanes (workers, notification-dispatcher) use `celery inspect ping`, which IS
+    in their image, so they are unaffected."""
+    compose = generate_compose(_config(), monitoring=False)
+    for name in ("api-server", "orchestrator"):
+        flat = " ".join(compose["services"][name]["healthcheck"]["test"])
+        assert "wget" not in flat and "curl" not in flat, f"{name} healthcheck uses a missing tool"
+        assert "python" in flat, f"{name} healthcheck must use python (no wget in the image)"
 
 
 def test_generated_services_rely_on_docker_default_seccomp() -> None:
