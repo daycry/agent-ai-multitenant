@@ -625,6 +625,38 @@ def test_workers_lanes_cover_every_queue_with_no_orphan() -> None:
     )
 
 
+def _celery_app_target(service: dict, *, from_healthcheck: bool = False) -> str | None:
+    """Extract the ``-A <target>`` of a service's celery command (or its
+    healthcheck's ``celery inspect`` probe). Accepts string or argv list."""
+    import re
+
+    if from_healthcheck:
+        raw = service.get("healthcheck", {}).get("test")
+        text = raw if isinstance(raw, str) else " ".join(raw or [])
+    else:
+        cmd = service.get("command")
+        text = cmd if isinstance(cmd, str) else " ".join(cmd or [])
+    m = re.search(r"-A\s+([A-Za-z0-9_.]+)", text)
+    return m.group(1) if m else None
+
+
+def test_workers_celery_app_target_is_the_importable_module() -> None:
+    """task_prod01: ``celery -A workers`` does NOT resolve — there is no
+    ``workers/celery.py`` nor a top-level app attribute, so Celery exits with a
+    usage error and the worker (and its ``inspect ping`` healthcheck) never
+    starts. The app lives in ``workers.celery_app``; the command AND the
+    healthcheck must target that module, in BOTH lanes."""
+    services = generate_compose(_config())["services"]
+    for name in ("workers", "workers-privileged"):
+        assert _celery_app_target(services[name]) == "workers.celery_app", (
+            f"{name} command must target -A workers.celery_app (bare 'workers' "
+            "does not resolve and the worker never boots)"
+        )
+        assert (
+            _celery_app_target(services[name], from_healthcheck=True) == "workers.celery_app"
+        ), f"{name} healthcheck 'celery inspect ping' must target -A workers.celery_app"
+
+
 def test_workers_lanes_bind_data_root_and_seccomp_profiles() -> None:
     services = generate_compose(_config(data_root="/data/agent-platform"))["services"]
     for name in ("workers", "workers-privileged"):

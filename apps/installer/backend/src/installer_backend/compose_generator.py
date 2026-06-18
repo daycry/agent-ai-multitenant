@@ -695,11 +695,11 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     mem = f"{cfg.resources.worker_memory_gib}g"
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
-        "command": f"celery -A workers worker --queues={_WORKER_GENERIC_QUEUES}",
+        "command": f"celery -A workers.celery_app worker --queues={_WORKER_GENERIC_QUEUES}",
         "environment": _workers_env(cfg, prod=prod),
         "volumes": _workers_volumes(cfg),
         "healthcheck": _healthcheck(
-            "celery -A workers inspect ping -t 5 || exit 1", start_period="40s"
+            "celery -A workers.celery_app inspect ping -t 5 || exit 1", start_period="40s"
         ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
@@ -720,11 +720,14 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
     Same image + WORKERS_* env as the generic pool; different queue + scale."""
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
-        "command": f"celery -A workers worker --queues={_WORKER_PRIVILEGED_QUEUE} --concurrency=1",
+        "command": (
+            f"celery -A workers.celery_app worker "
+            f"--queues={_WORKER_PRIVILEGED_QUEUE} --concurrency=1"
+        ),
         "environment": _workers_env(cfg, prod=prod),
         "volumes": _workers_volumes(cfg),
         "healthcheck": _healthcheck(
-            "celery -A workers inspect ping -t 5 || exit 1", start_period="40s"
+            "celery -A workers.celery_app inspect ping -t 5 || exit 1", start_period="40s"
         ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
