@@ -115,3 +115,28 @@ Adelantado el primer arreglo de prod-09 necesario para servir la UI tras Caddy:
 `ws(s)://` absoluto de `window.location` (test `lib/ws.test.ts`). La imagen
 `admin-panel` construida con `NEXT_PUBLIC_API_URL=/api` sirve la SPA y la API en
 el mismo origen a través de Caddy.
+
+## Validación humana end-to-end — acceso a la app levantada (ADR 0062)
+
+Completado el cableado del **review-runtime** (Plan 06 Fase G), que estaba
+diseñado pero **0% conectado**: ahora un humano puede **abrir y probar la app
+construida** desde un link clicable del panel antes de aprobar el plan.
+
+- **Ingress de preview sin romper zero-trust**: el **api-server reverse-proxy**
+  el contenedor de review por su nombre interno (`agentic-review-{id}` en
+  `agentic-agents`); ruta `GET|POST /review/{id}/app/{path}` firmada por HMAC (la
+  misma `?exp=&sig=`). No se publica ningún puerto (ADR 0062).
+- **URL expuesta a la UI**: `GET /plans/{id}/review-session` (JWT+RBAC) devuelve
+  la sesión + URLs firmadas (`app_url`, `review_url`, `verdict_url`). El panel del
+  plan muestra el botón **«Abrir app para probar»** + **Aprobar/Rechazar**
+  (`apps/admin-panel/.../plans/[planId]`).
+- **Veredicto**: `POST /review/{id}/verdict` marca la sesión terminal y
+  transiciona el plan (`approved`→`completed`, `rejected`→`rejected`).
+- **Worker**: `compose_review_runtime` nombra el contenedor de forma determinista
+  - lo une a `agentic-agents` + registra `spec.main_host` para el proxy.
+- **Demo + manual reutilizables**: `scripts/dev/seed-review-demo.ps1` levanta la
+  app _Hello World PHP_ + la review-session; el **manual 12** la documenta con
+  pantallazos REALES (plan con el link → app abierta vía proxy → consola de
+  revisión → veredicto). Verificado en vivo: `verdict approved → plan completed`.
+- Tests: `tests/integration/test_review_preview.py`. Cierra los GAP 1/3/5 de la
+  investigación 2026-06-18 (URL no expuesta, sin veredicto, sin acceso desde UI).

@@ -42,7 +42,9 @@ export default defineConfig({
   // reintenta una vez. Los pasos que no encuentran su pantalla se registran como
   // "no disponible" en el PDF en vez de abortar (ver lib/manual.ts).
   retries: 1,
-  timeout: 180_000,
+  // Tope amplio: algunos manuales capturan 25+ pantallazos (navegación + render
+  // del PDF con todas las imágenes embebidas). Los specs pueden subirlo más.
+  timeout: 420_000,
   reporter: [["list"]],
   use: {
     baseURL: process.env.MANUALS_BASE_URL ?? "http://localhost:3000",

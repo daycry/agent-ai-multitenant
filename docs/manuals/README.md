@@ -44,7 +44,9 @@ El runner (`scripts/dev/generate-manuals.ps1`):
    y `api-server:manuals`.
 2. Levanta el overlay [`docker/docker-compose.manuals.yml`](../../docker/docker-compose.manuals.yml)
    (api-server + admin-panel + Caddy) sobre la infra dev.
-3. Siembra datos demo reales (proyecto **Hello World PHP** + plan + tareas) — idempotente.
+3. Siembra datos demo reales (proyecto **Hello World PHP** + plan + tareas) — idempotente —
+   y la **demo de validación humana** (`seed-review-demo.ps1`: review-session + app levantada
+   para el manual 12 · ADR 0062).
 4. Captura `docker compose ps` en `assets/dockers.json` (lo usa el manual 11).
 5. Ejecuta cada `*.manual.ts` por **Caddy** (`MANUALS_BASE_URL=http://localhost:8080`,
    `MANUALS_NO_WEBSERVER=1`) y combina todo en `manual-completo.pdf`.

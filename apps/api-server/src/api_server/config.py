@@ -57,6 +57,16 @@ class Settings(BaseSettings):
         default=SecretStr("dev-only-review-url-secret-change-me"),
         description="HMAC secret for signing reviewer URLs.",
     )
+    # Public base URL where the signed review URLs are reachable. Carries the
+    # reverse-proxy's /api prefix (ADR 0061/0062): Caddy routes /api/* to the
+    # api-server (stripping /api), so `/api/review/{id}` lands on the review
+    # router. The reviewer's browser reaches the preview app through
+    # `{review_public_base_url}/review/{id}/app/...`. Dev default points at the
+    # containerized manuals stack (Caddy on :8080).
+    review_public_base_url: str = Field(
+        default="http://localhost:8080/api",
+        description="Public base URL (incl. /api prefix) for signed review URLs.",
+    )
 
     # ----- SSO / OIDC (Plan 08 task_08_01) -----
     # Fernet-derived key used to encrypt OIDC client secrets at rest when

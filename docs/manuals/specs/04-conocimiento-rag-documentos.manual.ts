@@ -70,7 +70,9 @@ const manual: ManualDef = {
 };
 
 test(`manual ${manual.order} — ${manual.title}`, async ({ page }) => {
-  test.setTimeout(300_000);
+  // Manual extenso (muchos pasos): captura + render de >25 pantallazos. Holgura
+  // amplia para que no agote el presupuesto del test bajo carga.
+  test.setTimeout(900_000);
   await login(page);
   await generateManual(page, manual);
 });

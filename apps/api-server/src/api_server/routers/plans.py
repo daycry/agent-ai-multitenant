@@ -47,6 +47,7 @@ from api_server.db.domain import Plan, PlanStatus, Project, Task
 from api_server.db.models import Organization
 from api_server.db.plan_comment import PlanComment
 from api_server.db.platform_settings import get_double_signature_threshold
+from api_server.db.review_session_repo import list_review_sessions_for_plan
 from api_server.routers._helpers import (
     get_writable_or_404,
     require_tenant_id,
@@ -57,6 +58,7 @@ from api_server.routers._pagination import (
     limit_query,
     offset_query,
 )
+from api_server.routers.review import build_review_urls
 from api_server.schemas.plans import (
     AICostBreakdownResponse,
     CostBreakdownResponse,
@@ -208,6 +210,41 @@ async def get_plan(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanResponse:
     return to_plan_response(await _load_plan(session, plan_id))
+
+
+@plans_router.get("/{plan_id}/review-session")
+async def get_plan_review_session(
+    plan_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, object]:
+    """Latest review session of a plan + freshly-signed reviewer URLs (ADR 0062).
+
+    When a plan is in ``pending_human_validation`` the orchestrator spawns a
+    review-runtime that serves the built app. This endpoint hands the operator a
+    CLICKABLE link to open + test that app (``app_url``) and the reviewer SPA
+    (``review_url``); both are HMAC-signed. 404 if the plan has no review
+    session yet.
+    """
+    await _load_plan(session, plan_id)  # 404 + RLS visibility check
+    sessions = await list_review_sessions_for_plan(session, plan_id)
+    if not sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="no review session for this plan yet",
+        )
+    # Prefer a live (running/suspended) session; otherwise the newest.
+    row = next((s for s in sessions if s.status in {"running", "suspended"}), sessions[0])
+    urls = build_review_urls(row.id, row.expires_at.timestamp())
+    return {
+        "session_id": str(row.id),
+        "status": row.status,
+        "verdict": row.verdict,
+        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+        "review_url": urls["review_url"],
+        "app_url": urls["app_url"],
+        "verdict_url": urls["verdict_url"],
+    }
 
 
 @plans_router.put("/{plan_id}", response_model=PlanResponse)

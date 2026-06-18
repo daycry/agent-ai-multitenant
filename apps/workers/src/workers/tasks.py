@@ -379,6 +379,12 @@ async def _compose_review_runtime(request: dict[str, Any], settings: Settings) -
                 expires_at=expires_at,
             )
             session_id = row.id
+            # Record where the api-server will reverse-proxy the app (ADR 0062):
+            # the container's deterministic name on agentic-agents. The proxy
+            # reads `spec.main_host`; default falls back to the same name.
+            spec_with_host = {**spec_payload, "main_host": f"agentic-review-{session_id}"}
+            row.spec = spec_with_host
+            await session.flush()
 
         # 2. Try the real spawn.
         container_ids = _spawn_review_runtime(request, str(session_id), settings)
@@ -445,6 +451,11 @@ def _spawn_review_runtime(
 
     kwargs = build_hardened_run_kwargs(settings, workspace_host_path=worktree_host_path)
     kwargs["detach"] = True
+    # Deterministic name + shared internal network so the api-server can reverse
+    # -proxy the running app by name (ADR 0062). agentic-agents is internal (no
+    # host egress); the app is reachable ONLY via the api-server's signed proxy.
+    kwargs["name"] = f"agentic-review-{session_id}"
+    kwargs["network"] = "agentic-agents"
     kwargs["labels"] = {
         "com.agentic-platform.component": "review-runtime",
         "com.agentic-platform.managed": "true",

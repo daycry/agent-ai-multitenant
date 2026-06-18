@@ -110,7 +110,22 @@ export async function generateManual(page: Page, def: ManualDef): Promise<void> 
   fs.mkdirSync(OUT_PDF, { recursive: true });
   const html = renderHtml(def, captured);
   const pdfPage = await page.context().newPage();
-  await pdfPage.setContent(html, { waitUntil: "load" });
+  // domcontentloaded (NOT "load"): los pantallazos van embebidos como data-URI
+  // base64; el evento "load" sobre 20+ imágenes grandes puede no dispararse
+  // dentro del presupuesto del test (el manual 04, con 28, lo agotaba). En su
+  // lugar montamos el DOM y esperamos el decode de las imágenes de forma
+  // ACOTADA, así el PDF no se rasteriza antes de pintarlas.
+  await pdfPage.setContent(html, { waitUntil: "domcontentloaded" });
+  await Promise.race([
+    pdfPage.evaluate(() =>
+      Promise.all(
+        Array.from(document.images).map((img) =>
+          (img as HTMLImageElement).decode().catch(() => undefined),
+        ),
+      ),
+    ),
+    pdfPage.waitForTimeout(30_000),
+  ]);
   await pdfPage.emulateMedia({ media: "print" });
   await pdfPage.pdf({
     path: path.join(OUT_PDF, `${def.slug}.pdf`),

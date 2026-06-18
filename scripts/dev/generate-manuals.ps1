@@ -81,6 +81,10 @@ try {
     if (-not $SkipSeed) {
       Write-Host "==> Sembrando datos demo (idempotente)" -ForegroundColor Cyan
       node lib/seed-demo-data.mjs
+      # Demo de validación humana: app levantada + review-session (ADR 0062) para
+      # el manual 12. Best-effort (no aborta la generación si falla).
+      Write-Host "==> Sembrando demo de review-runtime (app levantada)" -ForegroundColor Cyan
+      try { & (Join-Path $RepoRoot "scripts\dev\seed-review-demo.ps1") } catch { Write-Warning "seed-review-demo: $_" }
     }
 
     Write-Host "==> Capturando docker compose ps -> assets/dockers.json" -ForegroundColor Cyan
