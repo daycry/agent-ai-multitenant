@@ -281,6 +281,8 @@ export interface AssistantModel {
   provider_kind: string | null;
   provider_display_name: string | null;
   has_tenant_override: boolean;
+  /** ADR 0070: esfuerzo de razonamiento efectivo (null = sin razonar). */
+  reasoning_effort: string | null;
 }
 
 /** One active provider + the model ids selectable on it (dropdown source). */
@@ -296,6 +298,8 @@ export interface AssistantModelOption {
 /** GET /assistant/model/options (tenant) and /assistant/default-model/options. */
 export interface AssistantModelOptions {
   providers: AssistantModelOption[];
+  /** ADR 0070: opciones de razonamiento por kind de proveedor (off + niveles). */
+  reasoning_by_kind?: Record<string, string[]>;
 }
 
 /** GET/PUT /assistant/default-model — the platform default (System Admin). */
@@ -305,6 +309,8 @@ export interface AssistantDefaultModel {
   /** False when a stored default no longer resolves (stale provider/model). */
   is_valid: boolean;
   provider_display_name: string | null;
+  /** ADR 0070: esfuerzo de razonamiento del default de plataforma. */
+  reasoning_effort: string | null;
 }
 
 /** The effective model for the tenant's assistant (resolved with inheritance). */
@@ -318,10 +324,14 @@ export function getAssistantModelOptions(): Promise<AssistantModelOptions> {
 }
 
 /** Set the tenant model override (validated server-side; 422 if invalid). */
-export function setAssistantModel(providerId: string, modelId: string): Promise<AssistantModel> {
+export function setAssistantModel(
+  providerId: string,
+  modelId: string,
+  reasoningEffort = "off",
+): Promise<AssistantModel> {
   return apiFetch<AssistantModel>("/assistant/model", {
     method: "PUT",
-    body: { provider_id: providerId, model_id: modelId },
+    body: { provider_id: providerId, model_id: modelId, reasoning_effort: reasoningEffort },
   });
 }
 
@@ -347,10 +357,11 @@ export function getAssistantDefaultModelOptions(): Promise<AssistantModelOptions
 export function setAssistantDefaultModel(
   providerId: string,
   modelId: string,
+  reasoningEffort = "off",
 ): Promise<AssistantDefaultModel> {
   return apiFetch<AssistantDefaultModel>("/assistant/default-model", {
     method: "PUT",
-    body: { provider_id: providerId, model_id: modelId },
+    body: { provider_id: providerId, model_id: modelId, reasoning_effort: reasoningEffort },
   });
 }
 

@@ -79,10 +79,17 @@ modelo) queda para una v2 si hace falta.
 - **Spec/worker** (`model_resolver`): la clave viaja en `model_config` → spec; se
   añade a `safe_spec_summary` (observabilidad, sin secretos).
 - **agent-runtime** (`build_provider_client`): lee `spec["reasoning_effort"]` y lo
-  pasa al adaptador, que lo traduce al parámetro nativo del proveedor.
-- **UI**: `GET /agents/model-options` gana `reasoning_by_kind`; `PersonaModelFields`
-  añade un selector "Razonamiento" poblado por proveedor (oculto si vacío; reset al
-  cambiar de proveedor; `off` por defecto).
+  pasa al adaptador, que lo traduce al parámetro nativo vía la fuente única
+  `shared_llm.reasoning.reasoning_call_kwargs(kind, effort)`.
+- **Asistente personal** (`routers/assistant.py`): la selección del asistente
+  (`{provider_id, model_id, reasoning_effort?}`, override de tenant + default de
+  plataforma) valida el reasoning por kind y lo threadea a `LLMAssistantModel`
+  con el MISMO `reasoning_call_kwargs`; `/assistant/model/options` gana
+  `reasoning_by_kind`.
+- **UI**: `GET /agents/model-options` y `/assistant/model/options` ganan
+  `reasoning_by_kind`; `PersonaModelFields` y las tarjetas de modelo del asistente
+  añaden un selector "Razonamiento" poblado por proveedor (oculto si vacío; reset
+  al cambiar de proveedor; `off` por defecto).
 
 ## Alternativas
 

@@ -52,24 +52,41 @@ function errorText(error: unknown): string {
 /** Shared provider + model selects. ``providerId === ""`` means "none picked".
  * The model list comes from the provider's catalogue + synced models; a System
  * Admin populates it from "Proveedores LLM" → "Sincronizar modelos". */
+function reasoningLabel(opt: string): string {
+  return opt === "off" ? "Desactivado" : opt; // low / medium / high / xhigh / max
+}
+
 function ProviderModelSelects({
   idPrefix,
   providers,
   providerId,
   modelId,
+  reasoningByKind,
+  reasoningEffort,
   onProviderChange,
   onModelChange,
+  onReasoningChange,
   disabled,
 }: {
   idPrefix: string;
   providers: AssistantModelOption[];
   providerId: string;
   modelId: string;
+  reasoningByKind: Record<string, string[]>;
+  reasoningEffort: string;
   onProviderChange: (next: string) => void;
   onModelChange: (next: string) => void;
+  onReasoningChange: (next: string) => void;
   disabled: boolean;
 }) {
   const models = providerId ? modelsFor(providers, providerId) : [];
+  // Opciones de razonamiento del kind del proveedor elegido (ADR 0070).
+  const kind = providers.find((p) => p.provider_id === providerId)?.kind;
+  const reasoningOptions = kind ? (reasoningByKind[kind] ?? []) : [];
+  const reasoningSelectable =
+    reasoningEffort && reasoningEffort !== "off" && !reasoningOptions.includes(reasoningEffort)
+      ? [reasoningEffort, ...reasoningOptions]
+      : reasoningOptions;
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       <div className="space-y-1.5">
@@ -112,6 +129,24 @@ function ProviderModelSelects({
           ))}
         </Select>
       </div>
+      {reasoningOptions.length > 0 ? (
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-reasoning`}>Razonamiento</Label>
+          <Select
+            id={`${idPrefix}-reasoning`}
+            data-testid={`${idPrefix}-reasoning`}
+            value={reasoningEffort}
+            disabled={disabled || !providerId}
+            onChange={(e) => onReasoningChange(e.target.value)}
+          >
+            {reasoningSelectable.map((o) => (
+              <option key={o} value={o}>
+                {reasoningLabel(o)}
+              </option>
+            ))}
+          </Select>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -123,6 +158,7 @@ export function AssistantModelCard({ enabled }: { enabled: boolean }) {
   const queryClient = useQueryClient();
   const [providerId, setProviderId] = useState("");
   const [modelId, setModelId] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState("off");
   const [seeded, setSeeded] = useState(false);
 
   const optionsQuery = useQuery<AssistantModelOptions, ApiError>({
@@ -147,14 +183,16 @@ export function AssistantModelCard({ enabled }: { enabled: boolean }) {
     if (currentQuery.data.has_tenant_override && currentQuery.data.provider_id) {
       setProviderId(currentQuery.data.provider_id);
       setModelId(currentQuery.data.model_id ?? "");
+      setReasoningEffort(currentQuery.data.reasoning_effort ?? "off");
     }
     setSeeded(true);
   }, [seeded, currentQuery.data]);
 
   const providers = optionsQuery.data?.providers ?? [];
+  const reasoningByKind = optionsQuery.data?.reasoning_by_kind ?? {};
 
   const saveMutation = useMutation<AssistantModel, ApiError>({
-    mutationFn: () => setAssistantModel(providerId, modelId),
+    mutationFn: () => setAssistantModel(providerId, modelId, reasoningEffort),
     onSuccess: (data) => {
       queryClient.setQueryData(["assistant-model"], data);
     },
@@ -165,6 +203,7 @@ export function AssistantModelCard({ enabled }: { enabled: boolean }) {
       queryClient.setQueryData(["assistant-model"], data);
       setProviderId("");
       setModelId("");
+      setReasoningEffort("off");
       saveMutation.reset();
     },
   });
@@ -223,13 +262,20 @@ export function AssistantModelCard({ enabled }: { enabled: boolean }) {
                   providers={providers}
                   providerId={providerId}
                   modelId={modelId}
+                  reasoningByKind={reasoningByKind}
+                  reasoningEffort={reasoningEffort}
                   onProviderChange={(next) => {
                     setProviderId(next);
                     setModelId("");
+                    setReasoningEffort("off");
                     saveMutation.reset();
                   }}
                   onModelChange={(next) => {
                     setModelId(next);
+                    saveMutation.reset();
+                  }}
+                  onReasoningChange={(next) => {
+                    setReasoningEffort(next);
                     saveMutation.reset();
                   }}
                   disabled={busy}
@@ -282,6 +328,7 @@ export function PlatformDefaultModelCard() {
   const queryClient = useQueryClient();
   const [providerId, setProviderId] = useState("");
   const [modelId, setModelId] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState("off");
   const [seeded, setSeeded] = useState(false);
 
   const optionsQuery = useQuery<AssistantModelOptions, ApiError>({
@@ -302,14 +349,16 @@ export function PlatformDefaultModelCard() {
     if (currentQuery.data.provider_id) {
       setProviderId(currentQuery.data.provider_id);
       setModelId(currentQuery.data.model_id ?? "");
+      setReasoningEffort(currentQuery.data.reasoning_effort ?? "off");
     }
     setSeeded(true);
   }, [seeded, currentQuery.data]);
 
   const providers = optionsQuery.data?.providers ?? [];
+  const reasoningByKind = optionsQuery.data?.reasoning_by_kind ?? {};
 
   const saveMutation = useMutation<AssistantDefaultModel, ApiError>({
-    mutationFn: () => setAssistantDefaultModel(providerId, modelId),
+    mutationFn: () => setAssistantDefaultModel(providerId, modelId, reasoningEffort),
     onSuccess: (data) => queryClient.setQueryData(["assistant-default-model"], data),
   });
   const clearMutation = useMutation<AssistantDefaultModel, ApiError>({
@@ -318,6 +367,7 @@ export function PlatformDefaultModelCard() {
       queryClient.setQueryData(["assistant-default-model"], data);
       setProviderId("");
       setModelId("");
+      setReasoningEffort("off");
       saveMutation.reset();
     },
   });
@@ -379,13 +429,20 @@ export function PlatformDefaultModelCard() {
                   providers={providers}
                   providerId={providerId}
                   modelId={modelId}
+                  reasoningByKind={reasoningByKind}
+                  reasoningEffort={reasoningEffort}
                   onProviderChange={(next) => {
                     setProviderId(next);
                     setModelId("");
+                    setReasoningEffort("off");
                     saveMutation.reset();
                   }}
                   onModelChange={(next) => {
                     setModelId(next);
+                    saveMutation.reset();
+                  }}
+                  onReasoningChange={(next) => {
+                    setReasoningEffort(next);
                     saveMutation.reset();
                   }}
                   disabled={busy}

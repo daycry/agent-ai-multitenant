@@ -30,6 +30,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from shared_llm.exceptions import AuthError, LLMError, RateLimitError
+from shared_llm.reasoning import reasoning_call_kwargs
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,7 +60,11 @@ from api_server.auth.deps import (
     require_system_admin,
     require_tenant_admin,
 )
-from api_server.db.llm_providers import get_llm_provider, list_llm_providers
+from api_server.db.llm_providers import (
+    REASONING_OPTIONS_BY_KIND,
+    get_llm_provider,
+    list_llm_providers,
+)
 from api_server.db.models import Organization, User
 from api_server.db.session import get_admin_sessionmaker
 from api_server.llm_providers.factory import build_llm_provider
@@ -158,7 +163,9 @@ async def get_assistant_model(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="the configured LLM provider is unavailable",
         )
-    return LLMAssistantModel(provider=provider, model=api_model)
+    # ADR 0070: traduce el reasoning_effort resuelto al kwarg nativo del proveedor.
+    extra = reasoning_call_kwargs(resolved.provider_kind, resolved.reasoning_effort)
+    return LLMAssistantModel(provider=provider, model=api_model, extra_call_kwargs=extra)
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +262,9 @@ async def put_identity(
 # ===========================================================================
 # Model selection (ADR 0053)
 # ===========================================================================
-def _parse_selection(provider_id: str | None, model_id: str | None) -> AssistantModelSelection:
+def _parse_selection(
+    provider_id: str | None, model_id: str | None, reasoning_effort: str | None = None
+) -> AssistantModelSelection:
     """Coerce a request's provider_id/model_id into a selection (422 on a
     malformed UUID). Callers pass non-None values (the schema enforces
     both-or-neither and the clear path is handled before this)."""
@@ -266,14 +275,20 @@ def _parse_selection(provider_id: str | None, model_id: str | None) -> Assistant
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="provider_id must be a valid UUID",
         ) from exc
-    return AssistantModelSelection(provider_id=parsed, model_id=str(model_id))
+    # "off"/vacío no se persiste (= sin razonamiento).
+    reasoning = reasoning_effort if reasoning_effort and reasoning_effort != "off" else None
+    return AssistantModelSelection(
+        provider_id=parsed, model_id=str(model_id), reasoning_effort=reasoning
+    )
 
 
 async def _validate_selection_or_422(
     admin_session: AsyncSession, selection: AssistantModelSelection
 ) -> None:
     """422 unless the selection names an ACTIVE provider and a SELECTABLE
-    model (price catalogue plus the provider's synced models)."""
+    model (price catalogue plus the provider's synced models), y el
+    ``reasoning_effort`` (si lo hay) es válido para el kind del proveedor
+    (ADR 0070)."""
     if not await is_valid_selection(admin_session, selection):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -283,6 +298,17 @@ async def _validate_selection_or_422(
                 "provider's models first)"
             ),
         )
+    if selection.reasoning_effort:
+        provider = await get_llm_provider(admin_session, selection.provider_id)
+        allowed = REASONING_OPTIONS_BY_KIND.get(provider.kind, ()) if provider else ()
+        if selection.reasoning_effort not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"reasoning_effort {selection.reasoning_effort!r} is not valid for "
+                    f"this provider (ADR 0070); allowed: {list(allowed)}"
+                ),
+            )
 
 
 def _model_response(
@@ -297,6 +323,7 @@ def _model_response(
         provider_kind=resolved.provider_kind,
         provider_display_name=resolved.provider_display_name,
         has_tenant_override=has_tenant_override,
+        reasoning_effort=resolved.reasoning_effort,
     )
 
 
@@ -335,7 +362,9 @@ async def put_model(
         if payload.is_clear:
             await clear_tenant_model_override(admin_session, tenant_id)
         else:
-            selection = _parse_selection(payload.provider_id, payload.model_id)
+            selection = _parse_selection(
+                payload.provider_id, payload.model_id, payload.reasoning_effort
+            )
             await _validate_selection_or_422(admin_session, selection)
             await set_tenant_model_override(
                 admin_session, tenant_id, selection, updated_by_user_id=principal.user_id
@@ -361,7 +390,14 @@ async def _build_model_options(admin_session: AsyncSession) -> AssistantModelOpt
         )
         for provider in providers
     ]
-    return AssistantModelOptionsResponse(providers=options)
+    # ADR 0070: opciones de razonamiento por kind, solo para los kinds activos.
+    active_kinds = {p.kind for p in providers}
+    reasoning_by_kind = {
+        kind: list(REASONING_OPTIONS_BY_KIND[kind])
+        for kind in active_kinds
+        if kind in REASONING_OPTIONS_BY_KIND
+    }
+    return AssistantModelOptionsResponse(providers=options, reasoning_by_kind=reasoning_by_kind)
 
 
 @router.get(
@@ -406,6 +442,7 @@ async def get_default_model(
         model_id=default.model_id,
         is_valid=await is_valid_selection(admin_session, default),
         provider_display_name=(provider.display_name if provider else None),
+        reasoning_effort=default.reasoning_effort,
     )
 
 
@@ -422,7 +459,7 @@ async def put_default_model(
     if payload.is_clear:
         await clear_platform_default_model(admin_session, actor=actor)
         return AssistantDefaultModelResponse()
-    selection = _parse_selection(payload.provider_id, payload.model_id)
+    selection = _parse_selection(payload.provider_id, payload.model_id, payload.reasoning_effort)
     await _validate_selection_or_422(admin_session, selection)
     await set_platform_default_model(admin_session, selection, actor=actor)
     provider = await get_llm_provider(admin_session, selection.provider_id)
@@ -431,6 +468,7 @@ async def put_default_model(
         model_id=selection.model_id,
         is_valid=True,
         provider_display_name=(provider.display_name if provider else None),
+        reasoning_effort=selection.reasoning_effort,
     )
 
 

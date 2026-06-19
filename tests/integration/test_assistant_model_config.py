@@ -155,6 +155,7 @@ async def test_model_unset_then_set_override_then_clear(
             "provider_kind": None,
             "provider_display_name": None,
             "has_tenant_override": False,
+            "reasoning_effort": None,
         }
 
         # Set a valid override.
@@ -377,6 +378,59 @@ async def test_agents_model_options_includes_reasoning_by_kind(
     assert body["reasoning_by_kind"]["ollama"] == ["off", "low", "medium", "high"]
     # reasoning_by_kind solo para proveedores activos (mismas keys que by_kind).
     assert set(body["reasoning_by_kind"]) == set(body["by_kind"])
+
+
+@pytest.mark.asyncio
+async def test_assistant_model_override_with_reasoning_effort(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """PUT /assistant/model con reasoning_effort lo persiste, GET lo devuelve y
+    /model/options expone reasoning_by_kind (ADR 0070). Provider sembrado: ollama."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint(seeded["admin_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with _client(configured_app) as client:
+        put = await client.put(
+            "/assistant/model",
+            json={
+                "provider_id": str(seeded["provider_id"]),
+                "model_id": "llama3.1",
+                "reasoning_effort": "high",
+            },
+            headers=headers,
+        )
+        assert put.status_code == 200, put.text
+        assert put.json()["reasoning_effort"] == "high"
+
+        got = await client.get("/assistant/model", headers=headers)
+        assert got.json()["reasoning_effort"] == "high"
+
+        opts = await client.get("/assistant/model/options", headers=headers)
+        assert opts.json()["reasoning_by_kind"]["ollama"] == ["off", "low", "medium", "high"]
+
+
+@pytest.mark.asyncio
+async def test_assistant_model_rejects_invalid_reasoning(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """reasoning_effort fuera de las opciones del proveedor → 422 (ADR 0070).
+    'xhigh' es de claude_sdk, no de ollama."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint(seeded["admin_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with _client(configured_app) as client:
+        put = await client.put(
+            "/assistant/model",
+            json={
+                "provider_id": str(seeded["provider_id"]),
+                "model_id": "llama3.1",
+                "reasoning_effort": "xhigh",
+            },
+            headers=headers,
+        )
+        assert put.status_code == 422, put.text
 
 
 @pytest.mark.asyncio

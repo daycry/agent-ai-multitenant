@@ -58,13 +58,18 @@ ModelSource = Literal["tenant_override", "platform_default"]
 
 @dataclass(frozen=True)
 class AssistantModelSelection:
-    """A stored ``(provider_id, model_id)`` choice."""
+    """A stored ``(provider_id, model_id)`` choice (+ opcional reasoning_effort)."""
 
     provider_id: UUID
     model_id: str
+    # ADR 0070: esfuerzo de razonamiento elegido (None/"off" = sin razonar).
+    reasoning_effort: str | None = None
 
     def to_value(self) -> dict[str, str]:
-        return {"provider_id": str(self.provider_id), "model_id": self.model_id}
+        value = {"provider_id": str(self.provider_id), "model_id": self.model_id}
+        if self.reasoning_effort:
+            value["reasoning_effort"] = self.reasoning_effort
+        return value
 
 
 @dataclass(frozen=True)
@@ -76,10 +81,12 @@ class ResolvedAssistantModel:
     source: ModelSource
     provider_kind: str
     provider_display_name: str
+    reasoning_effort: str | None = None
 
 
 def _selection_from_value(raw: Any) -> AssistantModelSelection | None:
-    """Parse a stored ``{"provider_id", "model_id"}`` blob, or ``None``.
+    """Parse a stored ``{"provider_id", "model_id", reasoning_effort?}`` blob, or
+    ``None``.
 
     Tolerant of a missing/garbled value (returns ``None``) so a hand-edited
     or legacy row can never raise on the hot path.
@@ -94,7 +101,11 @@ def _selection_from_value(raw: Any) -> AssistantModelSelection | None:
         provider_id = UUID(str(provider_raw))
     except (ValueError, TypeError):
         return None
-    return AssistantModelSelection(provider_id=provider_id, model_id=model_id)
+    reasoning_raw = raw.get("reasoning_effort")
+    reasoning = reasoning_raw if isinstance(reasoning_raw, str) and reasoning_raw.strip() else None
+    return AssistantModelSelection(
+        provider_id=provider_id, model_id=model_id, reasoning_effort=reasoning
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +311,7 @@ async def resolve_assistant_model(
             source=source,  # type: ignore[arg-type]
             provider_kind=provider.kind,
             provider_display_name=provider.display_name,
+            reasoning_effort=selection.reasoning_effort,
         )
     return None
 

@@ -44,6 +44,7 @@ from shared_llm import (
     Message,
     OllamaProvider,
 )
+from shared_llm.reasoning import reasoning_call_kwargs
 
 from agent_runtime.model import (
     DecisionKind,
@@ -237,24 +238,8 @@ class _ProviderModelClient:
         return _review_from(resp, model=self.model)
 
 
-def _openai_reasoning_kwargs(reasoning_effort: str | None) -> dict[str, Any]:
-    """OpenAI-compat (azure/copilot): traduce el nivel a `reasoning_effort` en el
-    body (ADR 0070). `off`/vacío → nada (no-op; el modelo lo ignora si no razona)."""
-    if reasoning_effort and reasoning_effort != "off":
-        return {"reasoning_effort": reasoning_effort}
-    return {}
-
-
-def _ollama_reasoning_kwargs(reasoning_effort: str | None) -> dict[str, Any]:
-    """Ollama /v1/chat/completions honra `reasoning_effort` (low/medium/high;
-    "none"=off), NO el `think` nativo de /api/chat (ollama#14820). `off` se manda
-    explícito como "none" porque OMITIRLO deja el thinking auto-ON en los modelos
-    que razonan; vacío → nada."""
-    if not reasoning_effort:
-        return {}
-    if reasoning_effort == "off":
-        return {"reasoning_effort": "none"}
-    return {"reasoning_effort": reasoning_effort}
+# La traducción reasoning_effort → kwarg nativo vive en `shared_llm.reasoning`
+# (fuente única, compartida con el asistente personal — ADR 0070).
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +272,7 @@ class AzureFoundryModelClient(_ProviderModelClient):
             ),
             model=model,
             tools=tools,
-            extra_call_kwargs=_openai_reasoning_kwargs(reasoning_effort),
+            extra_call_kwargs=reasoning_call_kwargs("azure_foundry", reasoning_effort),
         )
 
 
@@ -308,7 +293,7 @@ class CopilotModelClient(_ProviderModelClient):
             provider=CopilotProvider(github_token=github_token, http_client=http_client),
             model=model,
             tools=tools,
-            extra_call_kwargs=_openai_reasoning_kwargs(reasoning_effort),
+            extra_call_kwargs=reasoning_call_kwargs("copilot", reasoning_effort),
         )
 
 
@@ -334,7 +319,7 @@ class OllamaModelClient(_ProviderModelClient):
             ),
             model=model,
             tools=tools,
-            extra_call_kwargs=_ollama_reasoning_kwargs(reasoning_effort),
+            extra_call_kwargs=reasoning_call_kwargs("ollama", reasoning_effort),
         )
 
 
@@ -372,7 +357,7 @@ class ClaudeSDKModelClient:
         self._max_turns = max_turns
         # ADR 0070: el SDK de Claude usa `effort` (low/medium/high/xhigh/max).
         # `off`/vacío → None (sin extended thinking forzado).
-        self._effort = reasoning_effort if reasoning_effort and reasoning_effort != "off" else None
+        self._effort = reasoning_call_kwargs("claude_sdk", reasoning_effort).get("effort")
         # Feed the resolved credential to the SDK: api_key → ANTHROPIC_API_KEY,
         # oauth_token → CLAUDE_CODE_OAUTH_TOKEN (subscription Pro/Max, ADR 0063).
         self.provider = ClaudeAgentProvider(
