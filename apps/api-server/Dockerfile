@@ -40,8 +40,18 @@ ENV PATH="/opt/venv/bin:$PATH"
 # being looked up on PyPI (where they do not exist).
 COPY packages/shared-domain/ /src/shared-domain/
 RUN pip install /src/shared-domain
+# WITH_CLAUDE (ADR 0064): el ASISTENTE corre en el api-server y, si usa
+# claude_sdk, necesita el Claude Agent SDK (Python) + el CLI `claude` (Node).
+# Opcional para no engordar deployments sin Claude. Build con
+# `--build-arg WITH_CLAUDE=1` para instalar `shared-llm[claude]` aquí + el CLI
+# Node en el stage runtime.
+ARG WITH_CLAUDE=0
 COPY packages/shared-llm/ /src/shared-llm/
-RUN pip install /src/shared-llm
+RUN if [ "$WITH_CLAUDE" = "1" ]; then \
+        pip install "/src/shared-llm[claude]"; \
+    else \
+        pip install /src/shared-llm; \
+    fi
 COPY packages/shared-mcp/ /src/shared-mcp/
 RUN pip install /src/shared-mcp
 COPY packages/shared-test-runtimes/ /src/shared-test-runtimes/
@@ -82,6 +92,17 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libxml2 libxmlsec1 libxmlsec1-openssl \
  && rm -rf /var/lib/apt/lists/*
+
+# WITH_CLAUDE (ADR 0064): el Claude Agent SDK lanza el CLI `claude` (Node) al
+# correr el asistente con claude_sdk. Instala Node + el CLI SOLO cuando se
+# habilita Claude, para mantener lean el deployment por defecto.
+ARG WITH_CLAUDE=0
+RUN if [ "$WITH_CLAUDE" = "1" ]; then \
+        apt-get update \
+     && apt-get install -y --no-install-recommends nodejs npm \
+     && npm install -g @anthropic-ai/claude-code \
+     && rm -rf /var/lib/apt/lists/* /root/.npm; \
+    fi
 
 # Non-root user (uid/gid 1000), matching the agent-runtime convention and the
 # hardened compose (--user 1000:1000).

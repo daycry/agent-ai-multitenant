@@ -96,16 +96,22 @@ El **cableado de la plataforma está completo y testeado** (CSDK-1..4): la
 credencial viaja Vault → spec → sandbox → SDK. Para EJECUTAR un agente Claude
 faltan dos pasos de entorno (independientes del código):
 
-1. **Imagen agent-runtime Claude-capable.** El SDK Python + el CLI `claude`
-   (Node) son OPCIONALES por diseño (imágenes lean). Construir con el build-arg:
-   `docker build -t agent-runtime:v1 --build-arg WITH_CLAUDE=1 \
--f docker/agent-runtimes/agent-runtime/Dockerfile .`
-   Verificado: la imagen resultante trae `claude_agent_sdk` + `claude` en PATH.
+1. **Imágenes Claude-capable.** El SDK Python + el CLI `claude` (Node) son
+   OPCIONALES por diseño (imágenes lean). El build-arg `WITH_CLAUDE=1` instala
+   ambos. Hace falta en **DOS** imágenes según dónde corra Claude:
+   - **agent-runtime** (para los AGENTES en el sandbox):
+     `docker build -t agent-runtime:v1 --build-arg WITH_CLAUDE=1 -f docker/agent-runtimes/agent-runtime/Dockerfile .`
+   - **api-server** (para el ASISTENTE, que corre dentro del api-server):
+     `docker build -t agentic-platform/api-server:manuals --build-arg WITH_CLAUDE=1 -f apps/api-server/Dockerfile .`
+     Verificado: ambas traen `claude_agent_sdk` + `claude` en PATH. Sin el extra,
+     el asistente con claude_sdk falla con `ImportError: claude-agent-sdk is not
+installed` (→ 500).
 2. **Credencial en Vault + provider activo.** Requiere `API_SERVER_VAULT_TOKEN`
-   válido y el mount KV `platform` (el instalador de prod lo provisiona; en dev
-   el token de `vault-init-output/root-token.txt` debe ser el vigente). Con eso,
-   crear el provider `claude_sdk` desde la UI (modo API key o suscripción) y
-   activarlo; asignar a un agente `model_config.provider=claude_sdk`.
+   VÁLIDO para el Vault en marcha (en dev `-dev` es `dev-root-token`; OJO: el de
+   `vault-init-output/` es de otra instancia y da 502) + el mount KV `secret`
+   (`PLATFORM_KV_MOUNT="secret"`). Con eso, crear el provider `claude_sdk` desde
+   la UI (modo API key o suscripción) y activarlo; asignar a un agente
+   `model_config.provider=claude_sdk`.
 
 Comprobación de fail-loud verificada en vivo: con el agente apuntando a
 `claude_sdk` y SIN provider activo, la ejecución falla con
