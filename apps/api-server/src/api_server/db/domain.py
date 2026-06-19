@@ -643,6 +643,7 @@ class Team(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
             "is_builtin",
             postgresql_where=text("is_builtin = true"),
         ),
+        Index("ix_teams_forked_from", "forked_from_team_id"),
     )
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -665,6 +666,15 @@ class Team(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     model_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+    # Adopción de equipos built-in (Ola C / ADR 0066): espejo de los campos
+    # forked_from de Agent. Un equipo adoptado enlaza al built-in origen para
+    # diff/re-sync; NULL en equipos creados desde cero o built-in de plataforma.
+    forked_from_team_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("teams.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    forked_from_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 # =============================================================================

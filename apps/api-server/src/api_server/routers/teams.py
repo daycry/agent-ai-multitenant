@@ -46,14 +46,16 @@ from api_server.capabilities import (
     memory_counts,
     merge_kbs,
 )
-from api_server.db.domain import Agent, Team, TeamMember
+from api_server.db.domain import Agent, AgentScope, Project, Team, TeamMember
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers.agents import _clone_agent_capabilities
 from api_server.schemas.teams import (
+    TeamAdoptRequest,
     TeamCreateRequest,
     TeamMemberAddRequest,
     TeamMemberUpdateRequest,
@@ -167,6 +169,138 @@ async def create_team(
     await session.flush()
     await session.refresh(team)
     return to_team_response(team, [])
+
+
+# ---------------------------------------------------------------------------
+# Ola C / ADR 0066: POST /teams/{source_id}/adopt
+# ---------------------------------------------------------------------------
+# Adopta un equipo built-in (o de otro origen visible) como COPIA editable del
+# tenant. Crea un Team `is_builtin=false` enlazado al origen (`forked_from_*`),
+# forkea cada miembro (persona + tools + skills, reusando el helper de fork por
+# agente) al scope destino (project_local | global_tenant_template) y recrea los
+# TeamMember. El built-in original queda intacto (read-only, global). La
+# re-adopción está permitida (cada llamada crea copias nuevas).
+@router.post("/{source_id}/adopt", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
+async def adopt_team(
+    source_id: UUID,
+    payload: TeamAdoptRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> TeamResponse:
+    tenant_id = require_tenant_id(principal)
+
+    # El origen puede ser un built-in global (visible vía RLS de SELECT) o un
+    # equipo del propio tenant.
+    src = (
+        await session.execute(select(Team).where(Team.id == source_id, Team.deleted_at.is_(None)))
+    ).scalar_one_or_none()
+    if src is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source team not found")
+
+    # Resuelve scope destino + (opcional) proyecto del tenant.
+    if payload.target == "project":
+        project = (
+            await session.execute(
+                select(Project).where(
+                    Project.id == payload.project_id,
+                    Project.tenant_id == tenant_id,
+                    Project.deleted_at.is_(None),
+                    Project.is_template.is_(False),
+                )
+            )
+        ).scalar_one_or_none()
+        if project is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
+        scope = AgentScope.PROJECT_LOCAL.value
+        fork_project_id: UUID | None = payload.project_id
+    else:
+        scope = AgentScope.GLOBAL_TENANT_TEMPLATE.value
+        fork_project_id = None
+
+    team_version = src.updated_at.isoformat() if src.updated_at is not None else None
+    new_team = Team(
+        tenant_id=tenant_id,
+        name=payload.name or src.name,
+        description=src.description,
+        default_workflow_template_id=src.default_workflow_template_id,
+        is_builtin=False,
+        forked_from_team_id=src.id,
+        forked_from_version=team_version,
+        model_config=dict(payload.llm_config or {}),
+    )
+    session.add(new_team)
+    await session.flush()
+
+    # Miembros del origen (team_members no tiene RLS; los agentes built-in son
+    # visibles vía la policy de SELECT). Orden estable para reproducibilidad.
+    src_members = (
+        (
+            await session.execute(
+                select(TeamMember)
+                .where(TeamMember.team_id == src.id)
+                .order_by(TeamMember.assignment_priority, TeamMember.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    for member in src_members:
+        src_agent = (
+            await session.execute(
+                select(Agent).where(Agent.id == member.agent_id, Agent.deleted_at.is_(None))
+            )
+        ).scalar_one_or_none()
+        if src_agent is None:
+            # Miembro no visible/borrado → se omite (no rompe la adopción).
+            continue
+
+        agent_version = (
+            src_agent.updated_at.isoformat() if src_agent.updated_at is not None else None
+        )
+        fork = Agent(
+            tenant_id=tenant_id,
+            name=src_agent.name,
+            description=src_agent.description,
+            avatar_url=src_agent.avatar_url,
+            agent_type=src_agent.agent_type,
+            role=src_agent.role,
+            system_prompt=src_agent.system_prompt,
+            model_config=dict(src_agent.model_config or {}),
+            memory_scope=src_agent.memory_scope,
+            review_capability=src_agent.review_capability,
+            max_concurrent_tasks=src_agent.max_concurrent_tasks,
+            is_template=False,
+            scope=scope,
+            project_id=fork_project_id,
+            forked_from_agent_id=src_agent.id,
+            forked_from_version=agent_version,
+            anchored_version=None,
+        )
+        session.add(fork)
+        await session.flush()
+        # Clona SABER/HACER/SER (KBs/tools/skills) del agente origen al fork.
+        await _clone_agent_capabilities(
+            session,
+            source_id=src_agent.id,
+            fork_id=fork.id,
+            tenant_id=tenant_id,
+            granted_by=principal.user_id,
+        )
+        session.add(
+            TeamMember(
+                team_id=new_team.id,
+                agent_id=fork.id,
+                role_in_team=member.role_in_team,
+                is_team_leader=member.is_team_leader,
+                assignment_priority=member.assignment_priority,
+            )
+        )
+
+    await session.flush()
+    await session.refresh(new_team)
+    members = await _load_members(session, new_team.id)
+    return to_team_response(new_team, members)
 
 
 @router.put("/{team_id}", response_model=TeamResponse)
