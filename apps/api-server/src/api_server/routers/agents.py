@@ -83,6 +83,7 @@ from api_server.schemas.agents import (
     AgentFieldDiff,
     AgentForkRequest,
     AgentMergeRequest,
+    AgentModelOptionsResponse,
     AgentResponse,
     AgentSkillResponse,
     AgentToolResponse,
@@ -153,6 +154,39 @@ async def list_agents(
     stmt = apply_pagination(stmt, limit=limit, offset=offset)
     result = await session.execute(stmt)
     return [to_agent_response(a) for a in result.scalars().all()]
+
+
+# ---------------------------------------------------------------------------
+# GET /agents/model-options — modelos por kind para los selectores de modelo
+# ---------------------------------------------------------------------------
+# DEBE declararse ANTES de `GET /{agent_id}`, o "model-options" se intentaría
+# parsear como un UUID de agente. Tenant-accesible (require_tenant_member): los
+# proveedores LLM son platform-global (sin secretos), leídos en la sesión admin
+# como hace `/assistant/model/options`. Por kind se exponen SOLO los modelos del
+# proveedor que el dispatch resolverá (el más nuevo activo), igual que el
+# endpoint System-Admin de platform-settings.
+@router.get("/model-options", response_model=AgentModelOptionsResponse)
+async def get_agent_model_options(
+    _: AuthPrincipal = Depends(require_tenant_member),
+) -> AgentModelOptionsResponse:
+    from api_server.assistant.model_config import list_available_models_for_provider
+    from api_server.db.llm_providers import (
+        LLM_PROVIDER_KINDS,
+        list_active_llm_providers_by_kind,
+    )
+    from api_server.db.session import get_admin_sessionmaker
+
+    by_kind: dict[str, list[str]] = {}
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        for kind in LLM_PROVIDER_KINDS:
+            rows = await list_active_llm_providers_by_kind(session, kind)
+            if not rows:
+                continue
+            models = await list_available_models_for_provider(session, rows[0])
+            if models:
+                by_kind[kind] = sorted(set(models))
+    return AgentModelOptionsResponse(by_kind=by_kind)
 
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,17 @@ from api_server.db.domain import (
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
 
+class AgentModelOptionsResponse(BaseModel):
+    """Modelos seleccionables por kind de proveedor del catálogo cerrado, para
+    poblar el dropdown de modelo en las pantallas de agente/equipo/proyecto.
+    ``by_kind`` mapea cada kind ACTIVO (claude_sdk/copilot/azure_foundry/ollama)
+    a sus modelos; un kind sin proveedor activo se omite. Sin secretos."""
+
+    model_config = _BASE_CONFIG
+
+    by_kind: dict[str, list[str]] = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------------

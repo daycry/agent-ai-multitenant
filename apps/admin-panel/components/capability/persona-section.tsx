@@ -271,6 +271,20 @@ export function PersonaModelFields({
   const errorFor = (field: "provider" | "model" | "temperature") =>
     errors.find((e) => e.field === field)?.message ?? null;
 
+  // Modelos seleccionables por proveedor (catálogo cerrado, GET /agents/model-options).
+  // Si el proveedor elegido tiene modelos activos → dropdown; si no (proveedor sin
+  // backend activo o aún cargando) → input de texto, para no bloquear la edición.
+  const optionsQuery = useQuery({
+    queryKey: ["agent-model-options"],
+    queryFn: () => apiFetch<{ by_kind: Record<string, string[]> }>("/agents/model-options"),
+    refetchOnWindowFocus: false,
+    staleTime: 5 * 60_000,
+  });
+  const kindModels = optionsQuery.data?.by_kind?.[draft.provider] ?? [];
+  // Si el modelo actual no está en la lista (legacy/custom), lo anteponemos para no perderlo.
+  const modelOptions =
+    draft.model && !kindModels.includes(draft.model) ? [draft.model, ...kindModels] : kindModels;
+
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid={`${idPrefix}-model-fields`}>
       <div className="flex flex-col gap-1.5">
@@ -279,7 +293,13 @@ export function PersonaModelFields({
           id={`${idPrefix}-provider`}
           value={draft.provider}
           onChange={(e) =>
-            onChange({ ...draft, provider: e.target.value as ModelConfigDraft["provider"] })
+            // Al cambiar de proveedor, reseteamos el modelo: el dropdown se
+            // repuebla con los del nuevo proveedor (el usuario elige uno válido).
+            onChange({
+              ...draft,
+              provider: e.target.value as ModelConfigDraft["provider"],
+              model: "",
+            })
           }
           data-testid={`${idPrefix}-provider`}
         >
@@ -301,13 +321,30 @@ export function PersonaModelFields({
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={`${idPrefix}-model`}>{lang === "es" ? "Modelo" : "Model"}</Label>
-        <Input
-          id={`${idPrefix}-model`}
-          value={draft.model}
-          onChange={(e) => onChange({ ...draft, model: e.target.value })}
-          placeholder="claude-sonnet-4"
-          data-testid={`${idPrefix}-model`}
-        />
+        {modelOptions.length > 0 ? (
+          <Select
+            id={`${idPrefix}-model`}
+            value={draft.model}
+            onChange={(e) => onChange({ ...draft, model: e.target.value })}
+            data-testid={`${idPrefix}-model`}
+          >
+            <option value="">{lang === "es" ? "— Selecciona —" : "— Select —"}</option>
+            {modelOptions.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </Select>
+        ) : (
+          // Fallback: proveedor sin modelos activos (o aún cargando) → texto libre.
+          <Input
+            id={`${idPrefix}-model`}
+            value={draft.model}
+            onChange={(e) => onChange({ ...draft, model: e.target.value })}
+            placeholder="claude-sonnet-4"
+            data-testid={`${idPrefix}-model`}
+          />
+        )}
         {errorFor("model") && (
           <p
             className="text-danger-soft-foreground text-xs"
