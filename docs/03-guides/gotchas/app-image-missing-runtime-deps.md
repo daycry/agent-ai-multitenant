@@ -54,7 +54,12 @@ de **producción** tendría exactamente el mismo fallo.
 ## Cómo verificar el fix
 
 ```powershell
-docker build -t agentic-platform/api-server:manuals -f apps/api-server/Dockerfile .
+# WITH_CLAUDE=1: el asistente corre en el api-server y necesita el Claude Agent
+# SDK si usa claude_sdk (ADR 0064). Sin él, /assistant/chat con Claude da 500
+# (ImportError en claude_agent.py:_build_options).
+docker build -t agentic-platform/api-server:manuals --build-arg WITH_CLAUDE=1 -f apps/api-server/Dockerfile .
 docker run --rm agentic-platform/api-server:manuals python -c "import api_server.main; print('import OK')"
 # Debe imprimir "import OK" sin ModuleNotFoundError.
+docker run --rm --entrypoint python agentic-platform/api-server:manuals -c "import claude_agent_sdk; print('claude SDK OK')"
+# Debe imprimir "claude SDK OK" (build WITH_CLAUDE=1).
 ```

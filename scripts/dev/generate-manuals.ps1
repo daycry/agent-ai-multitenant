@@ -47,9 +47,11 @@ $Compose = @(
 Push-Location $RepoRoot
 try {
   if (-not $SkipBuild) {
-    Write-Host "==> Construyendo imágenes de app (admin-panel:/api + api-server)" -ForegroundColor Cyan
+    Write-Host "==> Construyendo imágenes de app (admin-panel:/api + api-server WITH_CLAUDE)" -ForegroundColor Cyan
     docker build -t agentic-platform/admin-panel:manuals --build-arg NEXT_PUBLIC_API_URL=/api -f apps/admin-panel/Dockerfile apps/admin-panel | Out-Null
-    docker build -t agentic-platform/api-server:manuals -f apps/api-server/Dockerfile . | Out-Null
+    # WITH_CLAUDE=1: el ASISTENTE corre en el api-server y necesita el Claude Agent
+    # SDK si usa claude_sdk (ADR 0064); sin él, /assistant/chat con Claude da 500.
+    docker build -t agentic-platform/api-server:manuals --build-arg WITH_CLAUDE=1 -f apps/api-server/Dockerfile . | Out-Null
   }
 
   Write-Host "==> Levantando overlay contenerizado (api-server + admin-panel + caddy)" -ForegroundColor Cyan

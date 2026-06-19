@@ -118,6 +118,15 @@ async def require_assistant_access(
     return principal
 
 
+def _claude_sdk_available() -> bool:
+    """True si el Claude Agent SDK está instalado (build WITH_CLAUDE, ADR 0064).
+    El asistente corre EN el api-server; sin el SDK, un modelo claude_sdk daría un
+    500 (ImportError) — lo convertimos en 503 limpio aguas arriba."""
+    import importlib.util
+
+    return importlib.util.find_spec("claude_agent_sdk") is not None
+
+
 # ---------------------------------------------------------------------------
 # Model injection seam (overridden in tests with a ScriptedAssistantModel)
 # ---------------------------------------------------------------------------
@@ -148,6 +157,20 @@ async def get_assistant_model(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="no LLM model configured for the personal assistant",
+            )
+        # El asistente corre EN el api-server: si usa claude_sdk pero la imagen no
+        # trae el Claude Agent SDK (build sin WITH_CLAUDE, ADR 0064), fallamos
+        # limpio con 503 en vez de un 500 (ImportError en `_build_options`). Los
+        # agentes de equipo NO se ven afectados: corren en agent-runtime (WITH_CLAUDE).
+        if resolved.provider_kind == "claude_sdk" and not _claude_sdk_available():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "el modelo del asistente usa Claude (claude_sdk) pero este "
+                    "api-server no incluye el Claude Agent SDK (build con "
+                    "WITH_CLAUDE=1). Elige otro proveedor para el asistente o "
+                    "redespliega el api-server con el SDK."
+                ),
             )
         # The catalog id can be LiteLLM-keyed (e.g. ``ollama/llama3.1``); the
         # provider API wants the bare model name.
