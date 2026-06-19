@@ -83,6 +83,52 @@ provider+modelo+temperatura y el validador (`validate_model_config`) existentes.
 de abajo; `system_prompts` se conserva); integración de dispatch resolviendo por
 equipo y por proyecto.
 
+## Parte B0 — Enriquecimiento del catálogo (skills + tools + prompts)
+
+Precede a B (un catálogo más rico = mejores asignaciones por rol). Respeta las
+**taxonomías cerradas**: skills ∈ {backend, frontend, devops, qa, research, docs}
+(ADR 0050); tools ∈ {file, runtime, network, knowledge, notification, command}
+(ADR 0049). Sin categorías nuevas → sin migración de taxonomía.
+
+**B0.1 — Skills nuevas (baratas: fila de catálogo + `prompt_fragment`).** Llenan
+huecos reales, el mayor: **hay equipo CI4 (PHP) y CERO skills PHP**. Propuestas:
+
+- backend: `php-phpunit`, `codeigniter4-hmvc`, `doctrine-orm`,
+  `secure-coding-owasp`, `sql-optimization`, `rag-pgvector`
+- frontend: `twig-templating`, `state-management`, `web-performance`
+- devops: `dependency-audit-sca`, `backup-recovery`
+- qa: `contract-testing`, `load-testing`
+- research: `prompt-engineering`, `eval-design`, `web-research`
+- docs: `changelog-authoring`, `openapi-authoring`
+  Seed + test "todo slug del mapa de roles existe en el catálogo".
+
+**B0.2 — Tools nuevas (FEATURE: el runtime las ejecuta; las de red exigen
+proveedor + egress allowlist + guardrails — acción sensible).** ADR propio.
+
+- network: `web-search` (búsqueda en internet vía proveedor + egress),
+  `fetch-url` (navegar/leer página → markdown, con allowlist + límites).
+- runtime: `run-tests` genérico por runtime-template (complementa `run-pytest`
+  para PHP/Node) + `format-code`.
+
+> **Git NO se añade como tool del agente** (decisión, corrección del operador):
+> la plataforma **ya gestiona git** (Principios 4 y 5 de CLAUDE.md) — worktrees
+> por tarea, commit con trailers `Plan-Id`/`Task-Id`/`Execution-Id` y PR por plan,
+> en el worker (`plan_git.py`/`git_repos.py`). El agente solo edita ficheros
+> (`write-file`/`apply-patch`); dar git-\* directo al agente le dejaría commitear
+> fuera del flujo gestionado (rama/trailers incorrectos). Descartado.
+
+**B0.3 — Revisión de prompts (donde aporte; proponer, no reescribir a ciegas).**
+
+- Los `prompt_fragment` de las skills nuevas se escriben con criterio (parte de
+  B0.1).
+- Revisar los `system_prompt_es/en` de los agentes built-in (CI4 +
+  `builtin_agents`) para **alinearlos con sus skills/tools** y ganar
+  claridad/concisión; cada cambio se propone por agente (diff visible) y se
+  mantiene la paridad es/en. Sin tocar lo que ya funciona bien.
+
+**Tests B0:** unit de catálogo (slugs/categorías válidas, bilingüe es/en
+presente); las tools de red/git con su suite propia en su ADR.
+
 ## Parte B — Built-ins completos (tools + skills por rol)
 
 **Sin cambio de datos** (junctions `agent_tools`/`agent_skills` ya existen; el
@@ -170,14 +216,21 @@ de equipos filtra `is_builtin=false`; el resto es visual.
 
 ## Olas de implementación (un PR/plan por ola)
 
-1. **Ola B** — mapa por rol + skills en equipos built-in + test "no vacío".
-   (Independiente, ganancia inmediata.)
-2. **Ola A** — migración (`teams.model_config`, `projects.model_config`) +
+1. **Ola B0.1** — skills nuevas en el catálogo (PHP/CI4 + security + data + LLM)
+   - sus `prompt_fragment`. Barato (seed + test de catálogo). Ganancia inmediata.
+2. **Ola B0.2** — tools de red (`web-search`/`fetch-url`) + `run-tests`/
+   `format-code`. **FEATURE con ADR propio** (proveedor de búsqueda + egress
+   allowlist + guardrails). (Git NO — lo gestiona el sistema.)
+3. **Ola B0.3** — revisión de `system_prompt` de agentes built-in (alinear con
+   skills/tools; proponer por agente). Puede solaparse con B0.1/B.
+4. **Ola B** — mapa por rol + skills en equipos built-in + test "no vacío"
+   (usa el catálogo enriquecido de B0.1).
+5. **Ola A** — migración (`teams.model_config`, `projects.model_config`) +
    resolución de la cadena + UI de defaults por equipo/proyecto.
-3. **Ola C** — migración (`teams.forked_from_*`) + endpoint `/teams/{id}/adopt`
+6. **Ola C** — migración (`teams.forked_from_*`) + endpoint `/teams/{id}/adopt`
    - extensión del fork por-scope + UI "Adoptar/Personalizar equipo".
-4. **Ola D** — copy del aviso + banner read-only + modelo efectivo/origen en la
-   UI.
+7. **Ola D** — copy del aviso + banner read-only + modelo efectivo/origen en la
+   UI + listas "solo del tenant" + adoptar desde catálogo.
 
 Cada ola: TDD, migraciones reversibles, ADR donde proceda (la cadena de modelo y
 la adopción de equipo justifican un ADR cada una, extendiendo 0055/0057).
