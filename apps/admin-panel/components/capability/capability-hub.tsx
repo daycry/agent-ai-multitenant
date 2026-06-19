@@ -297,9 +297,27 @@ function SerBody({ caps, lang }: { caps: CapabilitiesResponse; lang: "es" | "en"
           <dd className="font-medium tabular-nums">{ser.temperature}</dd>
         </div>
       )}
+      {ser.model_origin && (
+        <div className="flex items-center justify-between gap-2">
+          <dt className="text-muted-foreground text-xs">
+            {lang === "es" ? "Origen del modelo" : "Model origin"}
+          </dt>
+          <dd className="font-medium">
+            {MODEL_ORIGIN_LABEL[ser.model_origin]?.[lang] ?? ser.model_origin}
+          </dd>
+        </div>
+      )}
     </dl>
   );
 }
+
+/** Etiqueta bilingüe del nivel que fija el modelo efectivo (Ola D / ADR 0065). */
+const MODEL_ORIGIN_LABEL: Record<string, { es: string; en: string }> = {
+  agent: { es: "Agente (propio)", en: "Agent (own)" },
+  team: { es: "Equipo", en: "Team" },
+  project: { es: "Proyecto", en: "Project" },
+  platform: { es: "Plataforma (default)", en: "Platform (default)" },
+};
 
 /**
  * HACER incrusta el set efectivo de 06.18: la lista `effective` que el contrato

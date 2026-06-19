@@ -128,6 +128,10 @@ class CapabilitySer(BaseModel):
     model: str | None = None
     temperature: float | None = None
     system_prompt_present: bool = False
+    #: Nivel que fija el modelo EFECTIVO en la cadena de herencia (Ola D / ADR
+    #: 0065): ``"agent" | "team" | "project" | "platform"``. ``None`` si no se
+    #: resolvió (p. ej. el agente sí pinea su modelo). Solo informativo.
+    model_origin: str | None = None
 
 
 class CapabilityHacer(BaseModel):

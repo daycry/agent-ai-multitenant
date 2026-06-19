@@ -467,6 +467,28 @@ def resolve_model_config_chain(
     return {**dict(platform_default or {}), **agent}
 
 
+def resolve_model_config_origin(
+    agent_cfg: dict[str, Any] | None,
+    team_cfg: dict[str, Any] | None,
+    project_cfg: dict[str, Any] | None,
+) -> str:
+    """Nivel de la cadena que PINEA el modelo efectivo (Ola D / ADR 0065).
+
+    Devuelve ``"agent" | "team" | "project" | "platform"`` — el más específico que
+    fije ``provider``+``model`` (misma precedencia que ``resolve_model_config_chain``;
+    ``"platform"`` si ninguno de los niveles superiores pinea, por eso no necesita
+    el default de plataforma). Sirve para mostrar el ORIGEN del modelo efectivo en
+    el Hub de Capacidad, no para resolverlo.
+    """
+    if not config_needs_default_model(dict(agent_cfg or {})):
+        return "agent"
+    if team_cfg and not config_needs_default_model(dict(team_cfg)):
+        return "team"
+    if project_cfg and not config_needs_default_model(dict(project_cfg)):
+        return "project"
+    return "platform"
+
+
 async def get_default_model_config(session: AsyncSession) -> dict[str, Any]:
     """El ``model_config`` por defecto seguro para un agente sin spec explícito.
 

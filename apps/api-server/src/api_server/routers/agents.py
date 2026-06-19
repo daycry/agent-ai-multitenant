@@ -22,6 +22,7 @@ constraints don't currently exist on agents.
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -59,6 +60,7 @@ from api_server.db.domain import (
     AgentTool,
     Project,
     Skill,
+    Team,
     Tool,
     ToolImplementationType,
 )
@@ -1352,6 +1354,29 @@ async def get_agent_effective_tools(
 # DELEGA/COMPONE con la pieza pura `compute_effective_tools` de 06.18 — NO
 # recalcula la intersección (frontera con 06.18). Read-only, tenant-scoped: RLS
 # oculta agentes cross-tenant, así que un agente oculto/inexistente → 404.
+async def _resolve_model_origin(session: AsyncSession, agent: Agent) -> str:
+    """Nivel que fija el modelo EFECTIVO del agente en la cadena de herencia
+    (Ola D / ADR 0065): carga el proyecto del agente y su equipo para resolver
+    ``agent → team → project → platform``."""
+    from api_server.db.platform_settings import resolve_model_config_origin
+
+    project_cfg: dict[str, Any] = {}
+    team_cfg: dict[str, Any] = {}
+    if agent.project_id is not None:
+        project = (
+            await session.execute(select(Project).where(Project.id == agent.project_id))
+        ).scalar_one_or_none()
+        if project is not None:
+            project_cfg = dict(project.model_config or {})
+            if project.team_id is not None:
+                team = (
+                    await session.execute(select(Team).where(Team.id == project.team_id))
+                ).scalar_one_or_none()
+                if team is not None:
+                    team_cfg = dict(team.model_config or {})
+    return resolve_model_config_origin(dict(agent.model_config or {}), team_cfg, project_cfg)
+
+
 @router.get("/{agent_id}/capabilities", response_model=CapabilitiesResponse)
 async def get_agent_capabilities(
     agent_id: UUID,
@@ -1395,6 +1420,8 @@ async def get_agent_capabilities(
     # SER: persona/modelo (ADR 0055).
     ser, ser_warnings = build_ser(agent)
     warnings += ser_warnings
+    # Ola D / ADR 0065: nivel que fija el modelo EFECTIVO en la cadena de herencia.
+    ser.model_origin = await _resolve_model_origin(session, agent)
 
     # HACER: delega en compute_effective_tools (06.18).
     hacer, hacer_warnings = await hacer_for_agent(session, agent=agent)
