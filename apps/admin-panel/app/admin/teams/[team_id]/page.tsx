@@ -21,11 +21,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { CapabilityHub } from "@/components/capability/capability-hub";
 import { DefaultModelSection } from "@/components/capability/default-model-section";
 import { AdoptTeamDialog } from "@/components/teams/adopt-team-dialog";
 import { ApiError, apiFetch } from "@/lib/api";
+import { MEMORY_SCOPE_OPTIONS } from "@/lib/memory/constants";
 import { type ModelConfig } from "@/lib/persona/persona";
 
 interface TeamMember {
@@ -45,6 +47,8 @@ interface Team {
   forked_from_team_id: string | null;
   // Ola A: modelo por defecto del equipo (alias JSON `model_config`). {} = hereda.
   model_config: ModelConfig;
+  // ADR 0071: política de memoria del equipo (null = sin política / heredar).
+  memory_scope: string | null;
   members: TeamMember[];
 }
 
@@ -151,6 +155,20 @@ export default function TeamDetailPage() {
       apiFetch<Team>(`/teams/${teamId}`, {
         method: "PUT",
         body: { model_config: modelConfig },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["teams", teamId] });
+      void queryClient.invalidateQueries({ queryKey: ["teams", "list"] });
+    },
+  });
+
+  // ADR 0071: fija/quita la política de memoria del equipo (PUT /teams/{id}).
+  // `null` = sin política (los miembros caen al scope del agente / plataforma).
+  const saveMemoryScope = useMutation<Team, ApiError, string | null>({
+    mutationFn: (scope) =>
+      apiFetch<Team>(`/teams/${teamId}`, {
+        method: "PUT",
+        body: { memory_scope: scope },
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["teams", teamId] });
@@ -276,6 +294,34 @@ export default function TeamDetailPage() {
               scopeLabel={{ es: "del equipo", en: "(team)" }}
               onSave={(modelConfig) => saveModel.mutate(modelConfig)}
             />
+          </div>
+          {/* ADR 0071: política de memoria del equipo. Gobierna a sus miembros. */}
+          <div className="mb-6">
+            <Card className="p-4">
+              <Label htmlFor="team-memory-scope" className="text-sm font-medium">
+                Política de memoria del equipo
+              </Label>
+              <p className="text-muted-foreground mt-1 text-xs">
+                Gobierna la memoria de los agentes del equipo. &quot;Sin política&quot; = cada
+                agente usa su propio scope. Las lecciones (semantic) viajan a este nivel; lo puntual
+                de cada proyecto (episodic) se queda en su proyecto.
+              </p>
+              <Select
+                id="team-memory-scope"
+                data-testid="team-memory-scope"
+                className="mt-2 max-w-xs"
+                value={team.memory_scope ?? ""}
+                disabled={isReadOnly || saveMemoryScope.isPending}
+                onChange={(e) => saveMemoryScope.mutate(e.target.value || null)}
+              >
+                <option value="">Sin política (heredar)</option>
+                {MEMORY_SCOPE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </Select>
+            </Card>
           </div>
         </>
       )}

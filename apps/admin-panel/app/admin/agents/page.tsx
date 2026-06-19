@@ -50,6 +50,8 @@ interface Agent {
   project_id: string | null;
   forked_from_agent_id: string | null;
   is_template: boolean;
+  // ADR 0071: equipos a los que pertenece el agente (badge + filtros).
+  teams: { id: string; name: string }[];
   // Bilingual: the seed stores prompts under model_config.system_prompts.{es,en}.
   // The API exposes it as `model_config` (Pydantic alias of `llm_config`).
   model_config?: {
@@ -135,6 +137,21 @@ function AgentList({
                 {agent.forked_from_agent_id && (
                   <p className="text-muted-foreground text-xs italic">Forked from another agent</p>
                 )}
+                {/* ADR 0071: equipos del agente (su memoria la gobierna el equipo). */}
+                <div
+                  className="flex flex-wrap items-center gap-1"
+                  data-testid={`teams-${agent.id}`}
+                >
+                  {agent.teams.length > 0 ? (
+                    agent.teams.map((t) => (
+                      <Badge key={t.id} variant="muted" className="text-[10px]">
+                        {t.name}
+                      </Badge>
+                    ))
+                  ) : (
+                    <span className="text-muted-foreground text-[10px] italic">Sin equipo</span>
+                  )}
+                </div>
               </CardContent>
             </Card>
           </Link>
@@ -155,9 +172,24 @@ export default function AgentsCatalogPage() {
     refetchOnWindowFocus: false,
   });
 
-  const builtins = (data ?? []).filter((a) => a.scope === "global_builtin");
-  const tenantTemplates = (data ?? []).filter((a) => a.scope === "global_tenant_template");
-  const projectLocal = (data ?? []).filter((a) => a.scope === "project_local");
+  // ADR 0071: filtros por pertenencia a equipo + por equipo concreto del tenant.
+  const teamsQuery = useQuery({
+    queryKey: ["teams", "list"],
+    queryFn: () => apiFetch<{ id: string; name: string }[]>("/teams"),
+    refetchOnWindowFocus: false,
+  });
+  const [membership, setMembership] = useState<"all" | "in_team" | "no_team">("all");
+  const [teamFilter, setTeamFilter] = useState<string>("");
+
+  const filtered = (data ?? []).filter((a) => {
+    if (membership === "in_team" && a.teams.length === 0) return false;
+    if (membership === "no_team" && a.teams.length > 0) return false;
+    if (teamFilter && !a.teams.some((t) => t.id === teamFilter)) return false;
+    return true;
+  });
+  const builtins = filtered.filter((a) => a.scope === "global_builtin");
+  const tenantTemplates = filtered.filter((a) => a.scope === "global_tenant_template");
+  const projectLocal = filtered.filter((a) => a.scope === "project_local");
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -198,6 +230,45 @@ export default function AgentsCatalogPage() {
         errorTitle="Could not load agents"
         errorTestId="agents-error"
       >
+        {data && (
+          <div className="mb-4 flex flex-wrap items-center gap-4" data-testid="agents-filters">
+            <div className="flex items-center gap-2">
+              <Label htmlFor="agents-membership" className="text-xs">
+                Pertenencia
+              </Label>
+              <Select
+                id="agents-membership"
+                className="h-8 w-auto"
+                value={membership}
+                onChange={(e) => setMembership(e.target.value as "all" | "in_team" | "no_team")}
+                data-testid="agents-membership-filter"
+              >
+                <option value="all">Todos</option>
+                <option value="in_team">En equipo</option>
+                <option value="no_team">Sin equipo</option>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="agents-team" className="text-xs">
+                Equipo
+              </Label>
+              <Select
+                id="agents-team"
+                className="h-8 w-auto"
+                value={teamFilter}
+                onChange={(e) => setTeamFilter(e.target.value)}
+                data-testid="agents-team-filter"
+              >
+                <option value="">Todos los equipos</option>
+                {(teamsQuery.data ?? []).map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </div>
+        )}
         {data && (
           <Tabs defaultValue="builtin" data-testid="agents-tabs">
             <TabsList>
