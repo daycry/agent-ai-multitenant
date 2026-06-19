@@ -211,6 +211,34 @@ async def create_project(
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
 
+    # Ola C / ADR 0068: fork opt-in del equipo. Si el wizard pide personalizar el
+    # equipo para este proyecto, forkeamos el equipo referenciado (built-in de la
+    # plantilla, normalmente) a una copia editable del tenant con agentes
+    # `project_local`, y repuntamos `project.team_id` al fork. El equipo original
+    # queda intacto. `fork_team=False` (default) referencia el equipo tal cual.
+    if payload.fork_team and project.team_id is not None:
+        from api_server.db.domain import AgentScope
+        from api_server.routers.teams import fork_team_into
+
+        source_team = (
+            await session.execute(
+                select(Team).where(Team.id == project.team_id, Team.deleted_at.is_(None))
+            )
+        ).scalar_one_or_none()
+        if source_team is not None:
+            forked = await fork_team_into(
+                session,
+                source_team,
+                tenant_id=tenant_id,
+                scope=AgentScope.PROJECT_LOCAL.value,
+                project_id=project.id,
+                name=f"{project.name} — equipo",
+                llm_config=None,
+                granted_by=principal.user_id,
+            )
+            project.team_id = forked.id
+            await session.flush()
+
     # Plan 06.13 task_06_13_03: adopt the template's KB grants. Runs after
     # the project is flushed (so the FK target exists) and is idempotent —
     # the helper resolves `default_kb_grants` slugs to built-in KB ids and

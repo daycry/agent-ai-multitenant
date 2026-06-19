@@ -147,6 +147,12 @@ class ProjectCreateRequest(BaseModel):
     # `template_id` is absent ("proyecto en blanco" grants nothing anyway).
     apply_template_kb_grants: bool = True
 
+    # Ola C / ADR 0068: si `True` Y hay `team_id`, al crear el proyecto se FORKEA
+    # ese equipo (copia editable del tenant, agentes `project_local`) y el
+    # proyecto apunta al fork en vez de al equipo (built-in) original. `False`
+    # (default, retro-compatible) = referencia el equipo tal cual (linked).
+    fork_team: bool = False
+
     mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
     rag_knowledge_bases: list[dict[str, Any]] = Field(default_factory=list)
     worker_config: dict[str, Any] = Field(default_factory=dict)

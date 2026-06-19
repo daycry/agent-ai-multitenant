@@ -19,6 +19,7 @@ tenant-scoped via its parent Team.
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -217,16 +218,47 @@ async def adopt_team(
         scope = AgentScope.GLOBAL_TENANT_TEMPLATE.value
         fork_project_id = None
 
+    new_team = await fork_team_into(
+        session,
+        src,
+        tenant_id=tenant_id,
+        scope=scope,
+        project_id=fork_project_id,
+        name=payload.name,
+        llm_config=payload.llm_config,
+        granted_by=principal.user_id,
+    )
+    await session.refresh(new_team)
+    members = await _load_members(session, new_team.id)
+    return to_team_response(new_team, members)
+
+
+async def fork_team_into(
+    session: AsyncSession,
+    src: Team,
+    *,
+    tenant_id: UUID,
+    scope: str,
+    project_id: UUID | None,
+    name: str | None,
+    llm_config: dict[str, Any] | None,
+    granted_by: UUID | None,
+) -> Team:
+    """Copia profunda de un equipo `src` a uno editable del tenant (Ola C / ADR
+    0066): crea un Team enlazado por ``forked_from``, forkea cada miembro al
+    ``scope`` dado (clonando KBs/tools/skills) y recrea los ``TeamMember``.
+    Reutilizable por ``POST /teams/{id}/adopt`` y por la creación de proyecto con
+    fork de equipo (ADR 0068). Devuelve el Team nuevo (flush hecho, sin refresh)."""
     team_version = src.updated_at.isoformat() if src.updated_at is not None else None
     new_team = Team(
         tenant_id=tenant_id,
-        name=payload.name or src.name,
+        name=name or src.name,
         description=src.description,
         default_workflow_template_id=src.default_workflow_template_id,
         is_builtin=False,
         forked_from_team_id=src.id,
         forked_from_version=team_version,
-        model_config=dict(payload.llm_config or {}),
+        model_config=dict(llm_config or {}),
     )
     session.add(new_team)
     await session.flush()
@@ -252,7 +284,7 @@ async def adopt_team(
             )
         ).scalar_one_or_none()
         if src_agent is None:
-            # Miembro no visible/borrado → se omite (no rompe la adopción).
+            # Miembro no visible/borrado → se omite (no rompe el fork).
             continue
 
         agent_version = (
@@ -272,7 +304,7 @@ async def adopt_team(
             max_concurrent_tasks=src_agent.max_concurrent_tasks,
             is_template=False,
             scope=scope,
-            project_id=fork_project_id,
+            project_id=project_id,
             forked_from_agent_id=src_agent.id,
             forked_from_version=agent_version,
             anchored_version=None,
@@ -285,7 +317,7 @@ async def adopt_team(
             source_id=src_agent.id,
             fork_id=fork.id,
             tenant_id=tenant_id,
-            granted_by=principal.user_id,
+            granted_by=granted_by,
         )
         session.add(
             TeamMember(
@@ -298,9 +330,7 @@ async def adopt_team(
         )
 
     await session.flush()
-    await session.refresh(new_team)
-    members = await _load_members(session, new_team.id)
-    return to_team_response(new_team, members)
+    return new_team
 
 
 @router.put("/{team_id}", response_model=TeamResponse)

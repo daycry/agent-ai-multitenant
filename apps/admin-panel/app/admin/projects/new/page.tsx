@@ -62,6 +62,9 @@ export default function NewProjectWizardPage() {
   // whether its default_kb_grants are actually applied. Default true (the
   // template's KBs are the point of picking it); a blank project ignores it.
   const [applyKbGrants, setApplyKbGrants] = useState(true);
+  // Ola C / ADR 0068: forkear el equipo de la plantilla a una copia editable del
+  // proyecto (default off = referenciar el equipo tal cual).
+  const [forkTeam, setForkTeam] = useState(false);
   // The stack's default runtime template (06.18 GET /runtime-templates). "" =
   // no default (the run_* tools fall back to per-tool defaults).
   const [runtime, setRuntime] = useState("");
@@ -119,6 +122,7 @@ export default function NewProjectWizardPage() {
         body.template_id = selected.id;
         body.apply_template_kb_grants = applyKbGrants;
         body.team_id = selected.team_id;
+        if (selected.team_id) body.fork_team = forkTeam;
         body.worker_config = selected.worker_config;
         body.repository_config = selected.repository_config;
         body.human_approval_policy = selected.human_approval_policy;
@@ -363,6 +367,22 @@ export default function NewProjectWizardPage() {
                   <span className="text-muted-foreground text-xs uppercase">Equipo</span>
                   <p>{teamsById.get(selected.team_id)?.name ?? selected.team_id}</p>
                 </div>
+              )}
+              {selected?.team_id && (
+                <label className="flex items-start gap-2" data-testid="wizard-fork-team">
+                  <Checkbox
+                    checked={forkTeam}
+                    onChange={(e) => setForkTeam(e.target.checked)}
+                    data-testid="wizard-fork-team-checkbox"
+                  />
+                  <span>
+                    Personalizar el equipo para este proyecto
+                    <span className="text-muted-foreground block text-xs">
+                      Crea una copia editable del equipo (agentes propios del proyecto). Si no, se
+                      referencia el equipo de la plantilla (compartido; no editable si es built-in).
+                    </span>
+                  </span>
+                </label>
               )}
               {selected?.human_approval_policy?.preset != null && (
                 <div>
