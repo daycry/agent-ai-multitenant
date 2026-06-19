@@ -177,9 +177,50 @@ def should_memorize_human_session(
     return MemorizeDecision(memorise=True, reason="ok")
 
 
+# ---------------------------------------------------------------------------
+# ADR 0071 — gobernanza de scope por equipo + enrutado por tipo
+# ---------------------------------------------------------------------------
+
+# Orden de amplitud de los scopes (de más estrecho a más amplio). Acota el
+# episodic a project_shared sin pasarse del scope efectivo.
+_SCOPE_RANK: dict[str, int] = {
+    MemoryScope.PRIVATE.value: 0,
+    MemoryScope.PROJECT_SHARED.value: 1,
+    MemoryScope.TEAM_SHARED.value: 2,
+    MemoryScope.GLOBAL.value: 3,
+}
+
+
+def resolve_effective_memory_scope(
+    team_memory_scope: str | None,
+    agent_memory_scope: str | None,
+    platform_default_scope: str,
+) -> str:
+    """Scope efectivo de una ejecución (ADR 0071): manda el **equipo** del
+    contexto (``project.team_id``); si el equipo no fija política, el del
+    **agente**; si tampoco, el **default de plataforma**. El primero no vacío
+    gana."""
+    return team_memory_scope or agent_memory_scope or platform_default_scope
+
+
+def route_scope_for_type(effective_scope: str, mem_type: str | None) -> str:
+    """Enruta una memoria según su tipo (ADR 0071): ``semantic`` (lección/regla)
+    viaja al ``effective_scope``; ``episodic`` — y cualquier tipo desconocido,
+    por prudencia — se acota a ``project_shared`` (nunca más amplio que el
+    efectivo). Así la pericia se comparte y lo puntual queda en su proyecto."""
+    if mem_type == "semantic":
+        return effective_scope
+    project_shared = MemoryScope.PROJECT_SHARED.value
+    if _SCOPE_RANK.get(effective_scope, 0) > _SCOPE_RANK[project_shared]:
+        return project_shared
+    return effective_scope
+
+
 __all__ = [
     "MemorizeDecision",
     "MemorizeSkipReason",
+    "resolve_effective_memory_scope",
+    "route_scope_for_type",
     "should_memorize",
     "should_memorize_human_session",
 ]

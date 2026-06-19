@@ -666,6 +666,11 @@ class Team(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     model_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+    # Política de memoria del EQUIPO (ADR 0071). NULLABLE: NULL = el equipo no fija
+    # política y sus miembros caen al memory_scope del agente / default plataforma.
+    # Cuando se fija, gobierna la memoria de las ejecuciones de los proyectos de
+    # este equipo (resuelto por project.team_id). Mismo enum que Agent.memory_scope.
+    memory_scope: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # Adopción de equipos built-in (Ola C / ADR 0066): espejo de los campos
     # forked_from de Agent. Un equipo adoptado enlaza al built-in origen para
     # diff/re-sync; NULL en equipos creados desde cero o built-in de plataforma.

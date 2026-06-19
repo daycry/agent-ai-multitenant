@@ -351,8 +351,9 @@ async def test_human_team_shared_scope_uses_team_id(
     await _grant_app_user_existing_tables()
     seeded = await _seed(migrations_pg_dsn, memory_scope="team_shared")
 
+    # ADR 0071: una memoria SEMANTIC (lección) sí viaja al scope del equipo.
     fake = _FakeLLM(
-        content='[{"content": "El equipo legal aprobo.", "type": "episodic", "tags": []}]'
+        content='[{"content": "El equipo legal aprobo.", "type": "semantic", "tags": []}]'
     )
     from workers.memorizer import _memorize_human_work_session_async
 
@@ -373,6 +374,41 @@ async def test_human_team_shared_scope_uses_team_id(
     assert rows[0]["team_id"] == seeded["team_a"]
     assert rows[0]["project_id"] is None
     assert rows[0]["user_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_human_team_shared_episodic_goes_to_project(
+    schema_at_head, migrations_pg_dsn: str, workers_settings
+) -> None:
+    """ADR 0071: con scope efectivo team_shared, una memoria EPISODIC (evento
+    concreto) se acota a project_shared — el hecho puntual se queda en su
+    proyecto, no contamina el pool del equipo."""
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seeded = await _seed(migrations_pg_dsn, memory_scope="team_shared")
+
+    fake = _FakeLLM(
+        content='[{"content": "El 2026-06-19 fallo el deploy X.", "type": "episodic", "tags": []}]'
+    )
+    from workers.memorizer import _memorize_human_work_session_async
+
+    result = await _memorize_human_work_session_async(
+        seeded["work_session"],
+        settings=workers_settings,
+        llm_factory=lambda _settings: fake,
+    )
+
+    assert result["persisted"] == 1, result
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        rows = await conn.fetch("SELECT scope, team_id, project_id, user_id FROM memory_entries")
+    finally:
+        await conn.close()
+    assert len(rows) == 1
+    assert rows[0]["scope"] == "project_shared"
+    assert rows[0]["project_id"] == seeded["project_a"]
+    assert rows[0]["team_id"] is None
 
 
 # ---------------------------------------------------------------------------
