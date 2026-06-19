@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Users } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowRight, Plus, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { StateBlock } from "@/components/shared/state-block";
+import { AdoptTeamDialog } from "@/components/teams/adopt-team-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,6 +31,10 @@ interface Team {
 }
 
 export default function TeamsListPage() {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const [adopting, setAdopting] = useState<Team | null>(null);
+
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["teams", "list"],
     queryFn: () => apiFetch<Team[]>("/teams"),
@@ -83,16 +90,40 @@ export default function TeamsListPage() {
                   {team.members.length} miembro
                   {team.members.length === 1 ? "" : "s"}
                 </p>
-                <Button variant="outline" size="sm" asChild>
-                  <Link href={`/admin/teams/${team.id}`}>
-                    Ver detalle <ArrowRight className="ml-1 h-3.5 w-3.5" />
-                  </Link>
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href={`/admin/teams/${team.id}`}>
+                      Ver detalle <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                    </Link>
+                  </Button>
+                  {team.is_builtin && (
+                    <Button
+                      size="sm"
+                      onClick={() => setAdopting(team)}
+                      data-testid={`team-adopt-${team.id}`}
+                    >
+                      <Plus className="mr-1 h-3.5 w-3.5" /> Adoptar
+                    </Button>
+                  )}
+                </div>
               </CardContent>
             </Card>
           ))}
         </div>
       </StateBlock>
+
+      {adopting && (
+        <AdoptTeamDialog
+          team={{ id: adopting.id, name: adopting.name }}
+          open={adopting !== null}
+          onOpenChange={(v) => !v && setAdopting(null)}
+          onAdopted={(newId) => {
+            setAdopting(null);
+            void queryClient.invalidateQueries({ queryKey: ["teams", "list"] });
+            router.push(`/admin/teams/${newId}`);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -54,7 +54,9 @@ import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { Select } from "@/components/ui/select";
 import { StateBlock } from "@/components/shared/state-block";
 import { CapabilityHub } from "@/components/capability/capability-hub";
+import { DefaultModelSection } from "@/components/capability/default-model-section";
 import { ApiError, apiFetch } from "@/lib/api";
+import { type ModelConfig } from "@/lib/persona/persona";
 
 type ProjectStatus = "active" | "paused" | "archived";
 
@@ -65,6 +67,8 @@ interface Project {
   status: string;
   team_id: string | null;
   is_template: boolean;
+  // Ola A: modelo por defecto del proyecto (alias JSON `model_config`). {} = hereda.
+  model_config: ModelConfig;
 }
 
 interface ProjectUpdate {
@@ -72,6 +76,7 @@ interface ProjectUpdate {
   description?: string | null;
   status?: ProjectStatus;
   team_id?: string | null;
+  model_config?: ModelConfig;
 }
 
 const STATUS_VARIANT: Record<string, BadgeVariant> = {
@@ -174,6 +179,19 @@ export default function ProjectHubPage() {
     refetchOnWindowFocus: false,
   });
 
+  // Ola A-UI: fija el modelo por defecto del proyecto (PUT /projects/{id}).
+  const saveModel = useMutation<Project, ApiError, ModelConfig>({
+    mutationFn: (modelConfig) =>
+      apiFetch<Project>(`/projects/${projectId}`, {
+        method: "PUT",
+        body: { model_config: modelConfig },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      void queryClient.invalidateQueries({ queryKey: ["projects", "tenant"] });
+    },
+  });
+
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8" data-testid="project-hub">
       <PageHeader
@@ -244,6 +262,17 @@ export default function ProjectHubPage() {
               RECORDAR; SER no aplica y HACER no restringe a nivel de proyecto). */}
           <div className="mb-6">
             <CapabilityHub entityType="project" entityId={projectId} />
+          </div>
+
+          {/* Ola A-UI: modelo por defecto del proyecto (cadena de herencia, ADR 0065). */}
+          <div className="mb-6">
+            <DefaultModelSection
+              value={project.model_config}
+              pending={saveModel.isPending}
+              idPrefix="project"
+              scopeLabel={{ es: "del proyecto", en: "(project)" }}
+              onSave={(modelConfig) => saveModel.mutate(modelConfig)}
+            />
           </div>
 
           {/* Sub-sections grid */}

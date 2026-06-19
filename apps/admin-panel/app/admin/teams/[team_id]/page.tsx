@@ -23,7 +23,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { CapabilityHub } from "@/components/capability/capability-hub";
+import { DefaultModelSection } from "@/components/capability/default-model-section";
+import { AdoptTeamDialog } from "@/components/teams/adopt-team-dialog";
 import { ApiError, apiFetch } from "@/lib/api";
+import { type ModelConfig } from "@/lib/persona/persona";
 
 interface TeamMember {
   agent_id: string;
@@ -38,6 +41,10 @@ interface Team {
   name: string;
   description: string | null;
   is_builtin: boolean;
+  // Ola C: enlace al built-in origen si el equipo fue adoptado (badge/origen).
+  forked_from_team_id: string | null;
+  // Ola A: modelo por defecto del equipo (alias JSON `model_config`). {} = hereda.
+  model_config: ModelConfig;
   members: TeamMember[];
 }
 
@@ -93,6 +100,8 @@ export default function TeamDetailPage() {
   // Plan 06.6: edit + delete dialogs.
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // Ola C-UI: diálogo de adopción de un equipo built-in.
+  const [adoptOpen, setAdoptOpen] = useState(false);
   // Plan 06.17 task_06_17_15: edición de metadata de miembro (líder/prioridad/rol).
   const [memberEditing, setMemberEditing] = useState<TeamMember | null>(null);
   const router = useRouter();
@@ -133,6 +142,19 @@ export default function TeamDetailPage() {
     },
     onError: (err: unknown) => {
       setSubmitError(err instanceof ApiError ? err.body : String(err));
+    },
+  });
+
+  // Ola A-UI: fija el modelo por defecto del equipo (PUT /teams/{id}).
+  const saveModel = useMutation<Team, ApiError, ModelConfig>({
+    mutationFn: (modelConfig) =>
+      apiFetch<Team>(`/teams/${teamId}`, {
+        method: "PUT",
+        body: { model_config: modelConfig },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["teams", teamId] });
+      void queryClient.invalidateQueries({ queryKey: ["teams", "list"] });
     },
   });
 
@@ -178,6 +200,12 @@ export default function TeamDetailPage() {
                 </Button>
               </>
             )}
+            {team && isReadOnly && (
+              <Button size="sm" onClick={() => setAdoptOpen(true)} data-testid="team-adopt-button">
+                <Plus className="mr-1 h-4 w-4" />
+                Adoptar / Personalizar
+              </Button>
+            )}
           </div>
         }
       />
@@ -204,6 +232,18 @@ export default function TeamDetailPage() {
           />
         </>
       )}
+      {team && isReadOnly && (
+        <AdoptTeamDialog
+          team={{ id: team.id, name: team.name }}
+          open={adoptOpen}
+          onOpenChange={setAdoptOpen}
+          onAdopted={(newId) => {
+            setAdoptOpen(false);
+            void queryClient.invalidateQueries({ queryKey: ["teams", "list"] });
+            router.push(`/admin/teams/${newId}`);
+          }}
+        />
+      )}
 
       {teamQuery.isLoading && <p className="text-muted-foreground text-sm">Cargando equipo…</p>}
 
@@ -224,6 +264,18 @@ export default function TeamDetailPage() {
               GET /teams/{id}/capabilities. */}
           <div className="mb-6">
             <CapabilityHub entityType="team" entityId={teamId} />
+          </div>
+          {/* Ola A-UI: modelo por defecto del equipo (cadena de herencia, ADR 0065).
+              Read-only en built-in (se personaliza adoptando). */}
+          <div className="mb-6">
+            <DefaultModelSection
+              value={team.model_config}
+              isReadOnly={isReadOnly}
+              pending={saveModel.isPending}
+              idPrefix="team"
+              scopeLabel={{ es: "del equipo", en: "(team)" }}
+              onSave={(modelConfig) => saveModel.mutate(modelConfig)}
+            />
           </div>
         </>
       )}
