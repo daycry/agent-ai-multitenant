@@ -276,7 +276,11 @@ export function PersonaModelFields({
   // backend activo o aún cargando) → input de texto, para no bloquear la edición.
   const optionsQuery = useQuery({
     queryKey: ["agent-model-options"],
-    queryFn: () => apiFetch<{ by_kind: Record<string, string[]> }>("/agents/model-options"),
+    queryFn: () =>
+      apiFetch<{
+        by_kind: Record<string, string[]>;
+        reasoning_by_kind?: Record<string, string[]>;
+      }>("/agents/model-options"),
     refetchOnWindowFocus: false,
     staleTime: 5 * 60_000,
   });
@@ -284,6 +288,14 @@ export function PersonaModelFields({
   // Si el modelo actual no está en la lista (legacy/custom), lo anteponemos para no perderlo.
   const modelOptions =
     draft.model && !kindModels.includes(draft.model) ? [draft.model, ...kindModels] : kindModels;
+  // Opciones de razonamiento por proveedor (ADR 0070). Vacío → ocultar el selector
+  // (proveedor sin backend activo o aún cargando).
+  const reasoningOptions = optionsQuery.data?.reasoning_by_kind?.[draft.provider] ?? [];
+  const reasoningLabel = (opt: string): string => {
+    if (opt === "off") return lang === "es" ? "Desactivado" : "Off";
+    if (opt === "think") return lang === "es" ? "Activado" : "On";
+    return opt; // low / medium / high / xhigh / max
+  };
 
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid={`${idPrefix}-model-fields`}>
@@ -293,12 +305,13 @@ export function PersonaModelFields({
           id={`${idPrefix}-provider`}
           value={draft.provider}
           onChange={(e) =>
-            // Al cambiar de proveedor, reseteamos el modelo: el dropdown se
-            // repuebla con los del nuevo proveedor (el usuario elige uno válido).
+            // Al cambiar de proveedor, reseteamos modelo y razonamiento: cada
+            // proveedor tiene sus opciones (ADR 0070); el usuario elige válidas.
             onChange({
               ...draft,
               provider: e.target.value as ModelConfigDraft["provider"],
               model: "",
+              reasoning_effort: "off",
             })
           }
           data-testid={`${idPrefix}-provider`}
@@ -378,6 +391,26 @@ export function PersonaModelFields({
           </p>
         )}
       </div>
+
+      {reasoningOptions.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`${idPrefix}-reasoning`}>
+            {lang === "es" ? "Razonamiento" : "Reasoning"}
+          </Label>
+          <Select
+            id={`${idPrefix}-reasoning`}
+            value={draft.reasoning_effort}
+            onChange={(e) => onChange({ ...draft, reasoning_effort: e.target.value })}
+            data-testid={`${idPrefix}-reasoning`}
+          >
+            {reasoningOptions.map((opt) => (
+              <option key={opt} value={opt}>
+                {reasoningLabel(opt)}
+              </option>
+            ))}
+          </Select>
+        </div>
+      )}
     </div>
   );
 }
