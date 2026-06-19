@@ -236,36 +236,40 @@ export default function AgentsCatalogPage() {
               <Label htmlFor="agents-membership" className="text-xs">
                 Pertenencia
               </Label>
-              <Select
-                id="agents-membership"
-                className="h-8 w-auto"
-                value={membership}
-                onChange={(e) => setMembership(e.target.value as "all" | "in_team" | "no_team")}
-                data-testid="agents-membership-filter"
-              >
-                <option value="all">Todos</option>
-                <option value="in_team">En equipo</option>
-                <option value="no_team">Sin equipo</option>
-              </Select>
+              {/* Ancho fijo en el contenedor: el wrapper del Select es w-full, así
+                  que el <select> no se queda estrecho y no recorta el valor. */}
+              <div className="w-44">
+                <Select
+                  id="agents-membership"
+                  value={membership}
+                  onChange={(e) => setMembership(e.target.value as "all" | "in_team" | "no_team")}
+                  data-testid="agents-membership-filter"
+                >
+                  <option value="all">Todos</option>
+                  <option value="in_team">En equipo</option>
+                  <option value="no_team">Sin equipo</option>
+                </Select>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <Label htmlFor="agents-team" className="text-xs">
                 Equipo
               </Label>
-              <Select
-                id="agents-team"
-                className="h-8 w-auto"
-                value={teamFilter}
-                onChange={(e) => setTeamFilter(e.target.value)}
-                data-testid="agents-team-filter"
-              >
-                <option value="">Todos los equipos</option>
-                {(teamsQuery.data ?? []).map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </Select>
+              <div className="w-56">
+                <Select
+                  id="agents-team"
+                  value={teamFilter}
+                  onChange={(e) => setTeamFilter(e.target.value)}
+                  data-testid="agents-team-filter"
+                >
+                  <option value="">Todos los equipos</option>
+                  {(teamsQuery.data ?? []).map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
             </div>
           </div>
         )}
