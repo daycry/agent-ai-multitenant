@@ -52,12 +52,14 @@ def _as_async_dsn(dsn: str) -> str:
 def test_seed_creates_builtin_skills_in_expected_range(
     alembic_config, migrations_pg_dsn: str
 ) -> None:
-    """30-40 skills per spec (we ship 33)."""
+    """45-70 skills per spec (we ship 51 tras la Ola B0.1: PHP/CI4 + security +
+    data + LLM + web-research). El rango deja margen para crecer sin tocar el
+    test en cada skill nueva, pero acota que el catálogo no se vacíe ni explote."""
     command.upgrade(alembic_config, "head")
     asyncio.run(_truncate(migrations_pg_dsn))
 
     n = asyncio.run(_run_seed(_as_async_dsn(migrations_pg_dsn)))
-    assert 30 <= n <= 40, f"expected 30-40 skills, got {n}"
+    assert 45 <= n <= 70, f"expected 45-70 skills, got {n}"
 
 
 def test_seed_covers_all_six_categories(alembic_config, migrations_pg_dsn: str) -> None:
@@ -167,4 +169,4 @@ def test_seeded_skills_visible_to_tenant_sessions(alembic_config, migrations_pg_
             await conn.close()
 
     visible = asyncio.run(_seed_tenant_and_count())
-    assert 30 <= visible <= 40
+    assert 45 <= visible <= 70
