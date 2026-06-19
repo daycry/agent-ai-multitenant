@@ -21,7 +21,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
-from api_server.db.domain import Agent, ExecutionStatus, Project, Task
+from api_server.db.domain import Agent, ExecutionStatus, Project, Task, Team
 from api_server.db.execution_repo import list_executions_for_task
 from api_server.db.models import Organization
 from orchestrator.config import Settings as OrchestratorSettings
@@ -238,6 +238,71 @@ async def test_dispatch_fills_default_model_for_inherit_only_agent(
         assert model["provider"] == "ollama"
         assert model["model"] == "qwen3-coder:480b"
         # ...and the agent's personality preserved.
+        assert model["system_prompts"] == prompts["system_prompts"]
+    finally:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as s, s.begin():
+            await s.execute(
+                text("DELETE FROM platform_settings WHERE key = 'model.default_config'")
+            )
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_inherits_team_model_config_over_platform_default(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """Ola A / ADR 0055: un agente que solo hereda toma el modelo del EQUIPO de
+    su proyecto por encima del default de plataforma. El equipo pinea
+    claude_sdk/sonnet; la plataforma tiene ollama; gana el equipo (más
+    específico) y los system_prompts del agente se preservan."""
+    engine = create_async_engine(admin_database_url)
+    redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
+    team_id = uuid4()
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm)
+        await redis.delete("default")
+        prompts = {"system_prompts": {"en": "You are CI4.", "es": "Eres CI4."}}
+        platform = {"provider": "ollama", "model": "qwen3-coder:480b", "temperature": 0.2}
+        team_cfg = {"provider": "claude_sdk", "model": "claude-sonnet-4-5"}
+        async with sm() as s, s.begin():
+            await s.execute(
+                update(Agent).where(Agent.id == ids["agent"]).values(model_config=prompts)
+            )
+            s.add(
+                Team(
+                    id=team_id,
+                    tenant_id=ids["tenant"],
+                    name="Equipo con modelo",
+                    model_config=team_cfg,
+                )
+            )
+            await s.flush()
+            await s.execute(
+                update(Project).where(Project.id == ids["project"]).values(team_id=team_id)
+            )
+            await s.execute(
+                text(
+                    "INSERT INTO platform_settings (key, value) VALUES"
+                    " ('model.default_config', CAST(:v AS jsonb))"
+                    " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+                ),
+                {"v": json.dumps(platform)},
+            )
+
+        await _dispatcher(sm).handle(_ready_event(ids))
+
+        messages = await _drain_queue(redis, "default")
+        assert len(messages) == 1
+        body = json.loads(base64.b64decode(messages[0]["body"]))
+        _args, kwargs, _embed = body
+        model = kwargs["request"]["model"]
+        # El equipo gana sobre el default de plataforma...
+        assert model["provider"] == "claude_sdk"
+        assert model["model"] == "claude-sonnet-4-5"
+        # ...y la personalidad del agente se preserva.
         assert model["system_prompts"] == prompts["system_prompts"]
     finally:
         async with async_sessionmaker(engine, expire_on_commit=False)() as s, s.begin():

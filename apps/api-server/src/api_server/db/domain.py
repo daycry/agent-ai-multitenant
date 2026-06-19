@@ -658,6 +658,13 @@ class Team(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     # migración 0082 dropea la columna (reversible).
     # Catalog marker -- same pattern as Skill/Tool.is_builtin.
     is_builtin: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+    # Default de modelo del EQUIPO (Ola A / ADR 0055): un nivel de la cadena de
+    # herencia plataforma → proyecto → equipo → agente. JSONB ``{}`` = no fija
+    # modelo (los agentes del equipo heredan del proyecto/plataforma). Cuando
+    # pinea provider+model, sus agentes sin modelo propio lo usan.
+    model_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
 
 
 # =============================================================================
@@ -744,6 +751,12 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
         ARRAY(String), nullable=False, server_default=text("'{}'::text[]")
     )
     worker_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # Default de modelo del PROYECTO (Ola A / ADR 0055): nivel de la cadena de
+    # herencia plataforma → proyecto → equipo → agente. JSONB ``{}`` = no fija
+    # modelo. Distinto de ``worker_config`` (assignment_policy, etc.).
+    model_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     repository_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

@@ -440,6 +440,33 @@ def config_needs_default_model(cfg: dict[str, Any] | None) -> bool:
     return not (cfg.get("provider") and cfg.get("model"))
 
 
+def resolve_model_config_chain(
+    agent_cfg: dict[str, Any] | None,
+    team_cfg: dict[str, Any] | None,
+    project_cfg: dict[str, Any] | None,
+    platform_default: dict[str, Any],
+) -> dict[str, Any]:
+    """Resuelve el ``model_config`` por la cadena de herencia (Ola A / ADR 0055):
+    **plataforma → proyecto → equipo → agente**, gana el más específico que
+    PINEE ``provider``+``model``.
+
+    Si el agente pinea, se devuelve verbatim. Si no, se baja a equipo, luego a
+    proyecto, luego a plataforma, tomando el PRIMER nivel que pinee; ese nivel
+    rellena ``provider``/``model``/``temperature`` y las claves no-modelo del
+    agente (p.ej. ``system_prompts``) se preservan (mismo merge ``{**nivel,
+    **agente}`` que usaba el dispatch con el default de plataforma). Un nivel que
+    solo pinea parcialmente (provider sin model) NO cuenta — se ignora y se baja.
+    """
+    agent = dict(agent_cfg or {})
+    if not config_needs_default_model(agent):
+        return agent
+    for level in (team_cfg, project_cfg, platform_default):
+        level_d = dict(level or {})
+        if not config_needs_default_model(level_d):
+            return {**level_d, **agent}
+    return {**dict(platform_default or {}), **agent}
+
+
 async def get_default_model_config(session: AsyncSession) -> dict[str, Any]:
     """El ``model_config`` por defecto seguro para un agente sin spec explícito.
 

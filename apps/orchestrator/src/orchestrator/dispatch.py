@@ -41,10 +41,12 @@ from api_server.db.domain import (
     Project,
     Task,
     TaskStatus,
+    Team,
 )
 from api_server.db.platform_settings import (
     config_needs_default_model,
     get_default_model_config,
+    resolve_model_config_chain,
 )
 from api_server.plan_progress import TaskSnapshot, transition_to_pending_human_validation
 from api_server.task_state_machine import transition_task_status
@@ -478,11 +480,17 @@ class TaskDispatcher:
         model_spec = dict(agent.model_config or {})
         if config_needs_default_model(model_spec):
             # No model pinned (``{}`` legacy, or a SEEDED agent that carries only
-            # ``system_prompts`` and inherits — the CI4 built-in team). Fill the
-            # default's provider/model/temperature while preserving any other keys
-            # (system_prompts). A ``kind`` scripted spec is left untouched.
-            default = await get_default_model_config(session)
-            model_spec = {**default, **model_spec}
+            # ``system_prompts`` and inherits — the CI4 built-in team). Resolve via
+            # la cadena de herencia plataforma → proyecto → equipo → agente (Ola A /
+            # ADR 0055): el nivel MÁS específico que pinee provider+model rellena el
+            # spec, preservando las claves no-modelo del agente (system_prompts). Un
+            # spec ``kind`` scripted no entra aquí (config_needs_default_model=False).
+            platform_default = await get_default_model_config(session)
+            team_cfg = await self._team_model_config(session, project)
+            project_cfg = dict(getattr(project, "model_config", None) or {}) if project else {}
+            model_spec = resolve_model_config_chain(
+                model_spec, team_cfg, project_cfg, platform_default
+            )
 
         request: dict[str, Any] = {
             "tenant_id": str(task.tenant_id),
@@ -548,6 +556,28 @@ class TaskDispatcher:
         if project_mcp_servers:
             request["mcp_servers"] = [dict(server) for server in project_mcp_servers]
         return _AiDispatch(request=request)
+
+    async def _team_model_config(
+        self, session: AsyncSession, project: Project | None
+    ) -> dict[str, Any]:
+        """``model_config`` del equipo del proyecto para la cadena de herencia
+        (Ola A). Vacío si el proyecto no tiene equipo o no se encuentra. El
+        orchestrator corre con BYPASSRLS; aun así filtramos por tenant del
+        proyecto como defensa en profundidad."""
+        if project is None:
+            return {}
+        team_id = getattr(project, "team_id", None)
+        if team_id is None:
+            return {}
+        team = (
+            await session.execute(
+                select(Team).where(
+                    Team.id == team_id,
+                    Team.tenant_id == project.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        return dict(team.model_config or {}) if team is not None else {}
 
     async def _route_human(
         self, session: AsyncSession, task: Task, human_agent: Agent
