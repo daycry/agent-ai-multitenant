@@ -99,6 +99,9 @@ class CI4Agent:
     system_prompt_en: str
     # Slugs de tools built-in asignadas a este agente (junction agent_tools).
     tool_slugs: tuple[str, ...] = field(default_factory=tuple)
+    # Slugs de skills built-in (junction agent_skills). Si vacío, se derivan del
+    # rol (default_skill_slugs) + extras de stack del equipo CI4 — Ola B.
+    skill_slugs: tuple[str, ...] = field(default_factory=tuple)
     max_concurrent_tasks: int = 2
 
     @property
@@ -117,6 +120,28 @@ class CI4Agent:
                 "en": self.system_prompt_en,
             }
         }
+
+    def resolved_skill_slugs(self) -> tuple[str, ...]:
+        """Skills del agente: explícitas si las hay; si no, las del rol (mapa
+        DRY) + los extras de stack del equipo CI4 (PHP), de-duplicadas."""
+        from api_server.seeds.builtin_role_capabilities import default_skill_slugs
+
+        if self.skill_slugs:
+            return self.skill_slugs
+        seen: set[str] = set()
+        out: list[str] = []
+        for slug in (*default_skill_slugs(self.role), *_CI4_EXTRA_SKILLS.get(self.role, ())):
+            if slug not in seen:
+                seen.add(slug)
+                out.append(slug)
+        return tuple(out)
+
+
+# Extras de stack del equipo CI4 (PHP) sobre el default por rol (Ola B).
+_CI4_EXTRA_SKILLS: dict[str, tuple[str, ...]] = {
+    "backend_dev": ("php-phpunit", "codeigniter4-hmvc", "doctrine-orm"),
+    "frontend_dev": ("twig-templating",),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -646,6 +671,46 @@ _DELETE_STALE_AGENT_TOOLS_SQL = text(
        AND tool_id <> ALL(:keep_ids)
     """
 )
+
+
+_UPSERT_AGENT_SKILL_SQL = text(
+    """
+    INSERT INTO agent_skills (agent_id, skill_id)
+    VALUES (:agent_id, :skill_id)
+    ON CONFLICT (agent_id, skill_id) DO UPDATE SET updated_at = now()
+    """
+)
+_DELETE_STALE_AGENT_SKILLS_SQL = text(
+    """
+    DELETE FROM agent_skills
+     WHERE agent_id = :agent_id
+       AND skill_id <> ALL(:keep_ids)
+    """
+)
+
+
+async def seed_ci4_agent_skills(session: AsyncSession) -> int:
+    """Cablea las skills de cada agente CI4 vía ``agent_skills`` (por rol +
+    extras PHP; ver ``CI4Agent.resolved_skill_slugs``). Idempotente: upsert +
+    poda de links fuera del spec. DEBE correr DESPUÉS de seed_ci4_agents y
+    seed_builtin_skills (FKs de agent_skills). Devuelve nº de (agent, skill)
+    tocados."""
+    from api_server.seeds.builtin_skills import _skill_id
+
+    links = 0
+    for agent in CI4_AGENTS:
+        keep_ids = [str(_skill_id(slug)) for slug in agent.resolved_skill_slugs()]
+        for skill_id in keep_ids:
+            await session.execute(
+                _UPSERT_AGENT_SKILL_SQL,
+                {"agent_id": str(agent.id), "skill_id": skill_id},
+            )
+            links += 1
+        await session.execute(
+            _DELETE_STALE_AGENT_SKILLS_SQL,
+            {"agent_id": str(agent.id), "keep_ids": keep_ids},
+        )
+    return links
 
 
 async def seed_ci4_agent_tools(session: AsyncSession) -> int:

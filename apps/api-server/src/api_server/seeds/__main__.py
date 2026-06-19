@@ -19,7 +19,11 @@ from api_server.db import models as _models  # noqa: F401
 from api_server.db.session import get_admin_sessionmaker
 from api_server.logging import configure_logging
 from api_server.marketplace.seed import seed_marketplace_listings
-from api_server.seeds.builtin_agents import seed_builtin_agent_skills, seed_builtin_agents
+from api_server.seeds.builtin_agents import (
+    seed_builtin_agent_skills,
+    seed_builtin_agent_tools,
+    seed_builtin_agents,
+)
 from api_server.seeds.builtin_approval_policies import seed_builtin_approval_policies
 from api_server.seeds.builtin_kb_categories import seed_builtin_kb_categories
 from api_server.seeds.builtin_kbs import seed_builtin_kbs
@@ -29,6 +33,7 @@ from api_server.seeds.builtin_teams import seed_builtin_teams
 from api_server.seeds.builtin_tools import seed_builtin_tools
 from api_server.seeds.catalog_ingestion import seed_catalog_ingestion
 from api_server.seeds.ci4_team import (
+    seed_ci4_agent_skills,
     seed_ci4_agent_tools,
     seed_ci4_agents,
     seed_ci4_project_template,
@@ -69,12 +74,21 @@ async def main() -> None:
         # (FKs on agent_skills). Wire them once both seeds have run.
         n_agent_skills = await seed_builtin_agent_skills(session)
         n_tools = await seed_builtin_tools(session)
+        # Ola B: wire each standalone built-in agent to its tools (por rol). MUST
+        # run after seed_builtin_agents (FK agent_tools.agent_id) AND
+        # seed_builtin_tools (FK agent_tools.tool_id). Antes los built-in sueltos
+        # tenían skills pero NO tools → equipos built-in "a medias".
+        n_agent_tools = await seed_builtin_agent_tools(session)
         # Plan codeigniter-4-builtin-team: wire each ci4-* agent to its
         # built-in tools via the agent_tools junction (the table does NOT
         # restrict scope, so global_builtin agents can carry tools). MUST run
         # after seed_builtin_tools (FK agent_tools.tool_id) AND after
         # seed_ci4_agents (FK agent_tools.agent_id).
         n_ci4_agent_tools = await seed_ci4_agent_tools(session)
+        # Ola B: wire each ci4-* agent to its skills (por rol + extras PHP) via
+        # the agent_skills junction. MUST run after seed_ci4_agents (FK
+        # agent_skills.agent_id) AND seed_builtin_skills (FK agent_skills.skill_id).
+        n_ci4_agent_skills = await seed_ci4_agent_skills(session)
         # Teams depend on agents being present (FK on team_members.agent_id).
         n_teams = await seed_builtin_teams(session)
         # Plan codeigniter-4-builtin-team: the CodeIgniter 4 built-in team
@@ -118,11 +132,13 @@ async def main() -> None:
         human_agent_templates=n_human_templates,
         ci4_agents=n_ci4_agents,
         ci4_agent_tools=n_ci4_agent_tools,
+        ci4_agent_skills=n_ci4_agent_skills,
         ci4_team=n_ci4_team,
         ci4_project_template=n_ci4_template,
         skills=n_skills,
         agent_skills=n_agent_skills,
         tools=n_tools,
+        agent_tools=n_agent_tools,
         teams=n_teams,
         kb_categories=n_kb_categories,
         knowledge_bases=n_kbs,

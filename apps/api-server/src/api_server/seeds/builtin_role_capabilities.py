@@ -43,6 +43,43 @@ ROLE_DEFAULT_SKILLS: dict[str, tuple[str, ...]] = {
         "observability-otel",
         "backup-recovery",
     ),
+    "researcher": (
+        "technical-comparison",
+        "literature-review",
+        "evidence-collection",
+        "web-research",
+    ),
+    "technical_writer": (
+        "structured-writing",
+        "mermaid-diagrams",
+        "api-documentation",
+        "changelog-authoring",
+    ),
+}
+
+
+# rol -> slugs de tool del catálogo `builtin_tools.py`. Todo rol lee (read/list/
+# search + semantic-search); los que producen código además escriben/ejecutan.
+_READ = ("read-file", "list-files", "search-code", "semantic-search")
+ROLE_DEFAULT_TOOLS: dict[str, tuple[str, ...]] = {
+    "project_manager": (*_READ, "summarize-text"),
+    "architect": (*_READ, "write-file", "apply-patch", "summarize-text"),
+    "backend_dev": (
+        *_READ,
+        "write-file",
+        "apply-patch",
+        "run-pytest",
+        "run-lint",
+        "run-typecheck",
+    ),
+    "frontend_dev": (*_READ, "write-file", "apply-patch", "run-lint", "run-build"),
+    "qa": (*_READ, "write-file", "apply-patch", "run-pytest", "run-lint"),
+    "reviewer": (*_READ, "run-lint", "run-typecheck"),
+    "devops": (*_READ, "write-file", "apply-patch", "run-build", "shell-exec"),
+    "security": (*_READ, "run-lint"),
+    "specialist": (*_READ, "write-file", "apply-patch", "http-get", "summarize-text"),
+    "researcher": (*_READ, "http-get", "summarize-text"),
+    "technical_writer": (*_READ, "write-file", "apply-patch", "summarize-text"),
 }
 
 
@@ -51,4 +88,14 @@ def default_skill_slugs(role: str) -> tuple[str, ...]:
     return ROLE_DEFAULT_SKILLS.get(role, ())
 
 
-__all__ = ["ROLE_DEFAULT_SKILLS", "default_skill_slugs"]
+def default_tool_slugs(role: str) -> tuple[str, ...]:
+    """Tools por defecto de un rol (vacío si el rol no está mapeado)."""
+    return ROLE_DEFAULT_TOOLS.get(role, ())
+
+
+__all__ = [
+    "ROLE_DEFAULT_SKILLS",
+    "ROLE_DEFAULT_TOOLS",
+    "default_skill_slugs",
+    "default_tool_slugs",
+]
