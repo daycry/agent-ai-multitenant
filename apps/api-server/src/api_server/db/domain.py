@@ -775,6 +775,10 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     repository_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Config git tipada del proyecto (ADR 0072): {provider, remote_url,
+    # default_branch, auth_mode}. NULL = sin remoto (solo bare local). El SECRETO
+    # (PAT/clave SSH) NO va aquí — vive en Vault (projects/{id}/git).
+    git_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     human_approval_policy: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     # Plan 06.16 task_06_16_01: polyglot tool catalog. `allowed_commands`

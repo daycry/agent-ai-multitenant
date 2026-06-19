@@ -30,14 +30,20 @@ from api_server.capabilities import (
     kbs_for_project,
     memory_counts,
 )
+from api_server.celery_client import enqueue_clone_project_repo
 from api_server.db.domain import Project, ProjectStatus, Team
+from api_server.git_integration import project_git_secret_path
+from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers.llm_providers import get_provider_vault_store
 from api_server.schemas.projects import (
+    GitConfigResponse,
+    GitConfigUpdateRequest,
     ProjectCreateRequest,
     ProjectResponse,
     ProjectUpdateRequest,
@@ -291,6 +297,68 @@ async def update_project(
     await session.flush()
     await session.refresh(project)
     return to_project_response(project)
+
+
+# ---------------------------------------------------------------------------
+# PUT /projects/{id}/git — config git + credencial (ADR 0072)
+# ---------------------------------------------------------------------------
+@router.put("/{project_id}/git", response_model=GitConfigResponse)
+async def set_project_git(
+    project_id: UUID,
+    payload: GitConfigUpdateRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+    vault: LLMProviderVaultStore | None = Depends(get_provider_vault_store),
+) -> GitConfigResponse:
+    """Fija el remoto + credencial (PAT/SSH) del proyecto y encola el clone.
+
+    La config no-secreta va a ``projects.git_config``; el secreto (token/ssh_key)
+    va a Vault (`projects/{id}/git`) y NUNCA se devuelve. Un update que solo
+    cambia metadatos puede omitir la credencial si ya hay una guardada.
+    """
+    require_tenant_id(principal)
+    project = await get_writable_or_404(
+        session, Project, project_id, principal, not_found_detail="project not found"
+    )
+
+    path = project_git_secret_path(project_id)
+    existing = vault.read_secret(path) if vault is not None else {}
+
+    new_secret: dict[str, str] | None = None
+    if payload.auth_mode == "pat" and payload.token:
+        new_secret = {"username": payload.username or "", "token": payload.token}
+    elif payload.auth_mode == "ssh" and payload.ssh_key:
+        new_secret = {"ssh_key": payload.ssh_key}
+
+    has_credential = bool(new_secret) or bool(existing)
+    if payload.auth_mode in ("pat", "ssh") and not has_credential:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"auth_mode={payload.auth_mode!r} requiere credencial (token o ssh_key)",
+        )
+
+    project.git_config = payload.config_dict()
+
+    if new_secret is not None:
+        if vault is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Vault no disponible para guardar la credencial git",
+            )
+        vault.write_secret(path, new_secret)
+    elif payload.auth_mode == "none" and existing and vault is not None:
+        vault.delete_secret(path)  # sin auth → no dejes la credencial colgada
+        has_credential = False
+
+    await session.flush()
+    await enqueue_clone_project_repo(project_id)
+    return GitConfigResponse(
+        provider=payload.provider,
+        remote_url=payload.remote_url,
+        default_branch=payload.default_branch,
+        auth_mode=payload.auth_mode,
+        has_credential=has_credential,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -193,6 +193,10 @@ services:
       WORKERS_AGENT_RUNTIME_IMAGE: agent-runtime:v1
       WORKERS_DATA_ROOT: /data/agent-platform
       WORKERS_EGRESS_PROXY_URL: http://egress-proxy:8888
+      # ADR 0072: el worker resuelve la credencial git del proyecto desde Vault
+      # (mismo Vault dev que el api-server) al clonar/fetch repos privados.
+      WORKERS_VAULT_URL: http://vault:8200
+      WORKERS_VAULT_TOKEN: ${API_SERVER_VAULT_TOKEN:-dev-root-token}
       DOCKER_HOST: tcp://docker-socket-proxy:2375
     volumes:
       - agentic_worktrees:/data/agent-platform

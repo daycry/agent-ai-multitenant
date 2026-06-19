@@ -107,6 +107,25 @@ async def enqueue_ingestion(document_id: UUID) -> bool:
     return True
 
 
+async def enqueue_clone_project_repo(project_id: UUID) -> bool:
+    """Encola el clone/fetch autenticado del repo de un proyecto (ADR 0072).
+
+    Best-effort: un fallo del broker se loguea y se traga — la config git ya está
+    persistida y el clone se puede re-disparar (acción "Sincronizar"). Corre el
+    ``send_task`` (I/O bloqueante) fuera del event loop."""
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            "workers.clone_project_repo",
+            args=[str(project_id)],
+            queue="default",
+        )
+    except Exception as exc:
+        _log.warning("clone_repo.enqueue_failed", project_id=str(project_id), error=str(exc))
+        return False
+    return True
+
+
 async def enqueue_notification_send(
     send_request: dict[str, Any],
     *,

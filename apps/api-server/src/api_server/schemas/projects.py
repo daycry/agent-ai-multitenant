@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -329,6 +329,9 @@ class ProjectResponse(BaseModel):
     # Modelo por defecto del proyecto (Ola A / ADR 0065). Alias JSON `model_config`.
     llm_config: dict[str, Any] = Field(alias="model_config")
     repository_config: dict[str, Any] | None
+    # Config git del proyecto (ADR 0072): {provider, remote_url, default_branch,
+    # auth_mode}. Sin secreto (vive en Vault). NULL = sin remoto.
+    git_config: dict[str, Any] | None
     human_approval_policy: dict[str, Any] | None
     secrets_vault_id: UUID | None
 
@@ -368,6 +371,7 @@ def to_project_response(p: Project) -> ProjectResponse:
         "worker_config": p.worker_config,
         "model_config": dict(p.model_config or {}),
         "repository_config": p.repository_config,
+        "git_config": p.git_config,
         "human_approval_policy": p.human_approval_policy,
         "secrets_vault_id": p.secrets_vault_id,
         "allowed_commands": p.allowed_commands,
@@ -385,3 +389,47 @@ def to_project_response(p: Project) -> ProjectResponse:
         "deleted_at": p.deleted_at,
     }
     return ProjectResponse.model_validate(payload)
+
+
+# ---------------------------------------------------------------------------
+# Git config (ADR 0072) — PUT /projects/{id}/git
+# ---------------------------------------------------------------------------
+GitProvider = Literal["github", "gitlab", "azure_devops", "generic"]
+GitAuthMode = Literal["none", "pat", "ssh"]
+
+
+class GitConfigUpdateRequest(BaseModel):
+    """Fija el remoto + credencial del proyecto. El secreto (token/ssh_key) es de
+    SOLO ESCRITURA: se guarda en Vault y NUNCA se devuelve."""
+
+    model_config = _BASE_CONFIG
+
+    provider: GitProvider = "generic"
+    remote_url: str = Field(min_length=1, max_length=2048)
+    default_branch: str = Field(default="main", min_length=1, max_length=255)
+    auth_mode: GitAuthMode = "none"
+    # Credencial (write-only). PAT: username opcional + token. SSH: ssh_key.
+    username: str | None = Field(default=None, max_length=255)
+    token: str | None = Field(default=None, max_length=8192)
+    ssh_key: str | None = Field(default=None, max_length=16384)
+
+    def config_dict(self) -> dict[str, str]:
+        """Solo los campos NO secretos que se persisten en projects.git_config."""
+        return {
+            "provider": self.provider,
+            "remote_url": self.remote_url,
+            "default_branch": self.default_branch,
+            "auth_mode": self.auth_mode,
+        }
+
+
+class GitConfigResponse(BaseModel):
+    """Config git efectiva (sin secreto) + si hay credencial guardada en Vault."""
+
+    model_config = _BASE_CONFIG
+
+    provider: str
+    remote_url: str
+    default_branch: str
+    auth_mode: str
+    has_credential: bool

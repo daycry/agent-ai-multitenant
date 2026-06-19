@@ -193,6 +193,18 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ----- ADR 0072: Vault para resolver la credencial git del proyecto -----
+    # El worker lee el secreto git (PAT/SSH) de Vault al clonar/fetch. Sin estos
+    # (None) la task de clone no puede autenticar repos privados (sí públicos).
+    vault_url: str | None = Field(
+        default=None,
+        description="URL de Vault para resolver la credencial git del proyecto (ADR 0072).",
+    )
+    vault_token: str | None = Field(
+        default=None,
+        description="Token de Vault (dev/install). Secreto — no loguear.",
+    )
+
     # ----- Scheduled price-catalog sync (Plan 11 task_11_18) -----
     # The price-sync beat job runs the LiteLLM-feed sync (ADR 0021: data feed
     # only, NOT a provider runtime) on a CONFIGURABLE cadence. The cron string
