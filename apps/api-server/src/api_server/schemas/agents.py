@@ -36,6 +36,9 @@ class AgentModelOptionsResponse(BaseModel):
     model_config = _BASE_CONFIG
 
     by_kind: dict[str, list[str]] = Field(default_factory=dict)
+    # ADR 0070: opciones de razonamiento por proveedor (off + niveles del provider).
+    # Solo para los proveedores activos (mismas keys que `by_kind`).
+    reasoning_by_kind: dict[str, list[str]] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

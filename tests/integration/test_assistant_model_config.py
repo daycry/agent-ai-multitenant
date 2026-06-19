@@ -360,6 +360,26 @@ async def test_platform_default_set_and_inherited_by_tenant(
 
 
 @pytest.mark.asyncio
+async def test_agents_model_options_includes_reasoning_by_kind(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """GET /agents/model-options expone reasoning_by_kind por proveedor activo
+    (ADR 0070). El proveedor sembrado es ollama → razonamiento solo off/think."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint(seeded["admin_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with _client(configured_app) as client:
+        resp = await client.get("/agents/model-options", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "ollama" in body["by_kind"]
+    assert body["reasoning_by_kind"]["ollama"] == ["off", "think"]
+    # reasoning_by_kind solo para proveedores activos (mismas keys que by_kind).
+    assert set(body["reasoning_by_kind"]) == set(body["by_kind"])
+
+
+@pytest.mark.asyncio
 async def test_default_model_options_for_system_admin(
     configured_app, migrations_pg_dsn: str
 ) -> None:

@@ -137,6 +137,7 @@ def safe_spec_summary(spec: dict[str, Any]) -> dict[str, Any]:
         "kind": spec.get("kind"),
         "provider": spec.get("provider"),
         "model": spec.get("model"),
+        "reasoning_effort": spec.get("reasoning_effort"),  # ADR 0070 (no sensible)
         "base_url": spec.get("base_url") or spec.get("apim_base_url"),
         "has_credential": bool(
             spec.get("api_key")

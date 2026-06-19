@@ -78,6 +78,19 @@ class LLMProviderKind(enum.StrEnum):
 # The CHECK / membership source of truth — the four valid ``kind`` values.
 LLM_PROVIDER_KINDS: tuple[str, ...] = tuple(k.value for k in LLMProviderKind)
 
+# Reasoning/thinking effort options per provider kind (ADR 0070) — fuente única.
+# ``off`` = sin razonamiento. Cada adaptador del agent-runtime las traduce a su
+# parámetro nativo (claude_sdk→ClaudeAgentOptions.effort; azure/copilot→OpenAI
+# ``reasoning_effort``; ollama→``think`` booleano). Es por proveedor (v1) y
+# dependiente del modelo: un modelo sin razonamiento ignora el valor (no-op).
+REASONING_EFFORT_OFF = "off"
+REASONING_OPTIONS_BY_KIND: dict[str, tuple[str, ...]] = {
+    "claude_sdk": ("off", "low", "medium", "high", "xhigh", "max"),
+    "azure_foundry": ("off", "low", "medium", "high"),
+    "copilot": ("off", "low", "medium", "high"),
+    "ollama": ("off", "think"),
+}
+
 # Key under the non-secret ``config`` JSONB holding the model ids discovered by
 # an on-demand sync (POST /admin/llm-providers/{id}/sync-models). Read by the
 # assistant model selector WITHOUT any network call (ADR 0053 — sync, don't

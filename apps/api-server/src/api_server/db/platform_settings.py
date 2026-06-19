@@ -471,6 +471,18 @@ def validate_model_config(cfg: dict[str, Any]) -> dict[str, Any]:
                 f"temperature {temp} must be between "
                 f"{MODEL_TEMPERATURE_MIN} and {MODEL_TEMPERATURE_MAX}"
             )
+    # reasoning_effort (ADR 0070): opcional; si está, debe ser una opción válida
+    # del proveedor (incluye "off"). Cada proveedor tiene su set; no hay uno común.
+    reasoning = cfg.get("reasoning_effort")
+    if isinstance(reasoning, str) and reasoning.strip():
+        from api_server.db.llm_providers import REASONING_OPTIONS_BY_KIND
+
+        allowed = REASONING_OPTIONS_BY_KIND.get(provider, ())
+        if reasoning not in allowed:
+            raise InvalidModelConfigError(
+                f"reasoning_effort {reasoning!r} is not valid for provider "
+                f"{provider!r} (ADR 0070); allowed: {allowed}"
+            )
     return cfg
 
 

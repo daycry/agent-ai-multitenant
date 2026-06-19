@@ -96,6 +96,7 @@ class ClaudeAgentProvider:
         system: str | None,
         allowed_tools: list[str] | None,
         max_turns: int,
+        effort: str | None = None,
     ) -> Any:
         if self._query_fn is not None:
             return None  # the injected fake accepts whatever we pass
@@ -105,6 +106,12 @@ class ClaudeAgentProvider:
             raise ImportError(
                 "claude-agent-sdk is not installed. " "Run `pip install 'shared-llm[claude]'`."
             ) from exc
+        # ADR 0070: extended-thinking effort (EffortLevel: low/medium/high/xhigh/max).
+        # Solo se pasa cuando hay valor — así seguimos compatibles con SDKs sin el
+        # campo `effort`; `None` (off) reproduce el comportamiento previo.
+        extra: dict[str, Any] = {}
+        if effort:
+            extra["effort"] = effort
         return ClaudeAgentOptions(
             model=model or self._default_model,
             system_prompt=system if system is not None else self._default_system_prompt,
@@ -112,6 +119,7 @@ class ClaudeAgentProvider:
                 allowed_tools if allowed_tools is not None else self._default_allowed_tools
             ),
             max_turns=max_turns,
+            **extra,
         )
 
     @staticmethod
@@ -171,6 +179,7 @@ class ClaudeAgentProvider:
             system=system,
             allowed_tools=kwargs.pop("allowed_tools", None),
             max_turns=1,
+            effort=kwargs.pop("effort", None),
         )
         query_fn = self._query()
         collected: list[Any] = []
@@ -205,6 +214,7 @@ class ClaudeAgentProvider:
             system=system,
             allowed_tools=kwargs.pop("allowed_tools", None),
             max_turns=1,
+            effort=kwargs.pop("effort", None),
         )
         query_fn = self._query()
         last_usage: Usage | None = None

@@ -206,10 +206,14 @@ class _ProviderModelClient:
         provider: LLMProvider,
         model: str,
         tools: list[dict[str, Any]] | None = None,
+        extra_call_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
         self._tools = tools
+        # ADR 0070: extra params del proveedor (p.ej. reasoning_effort/think) que
+        # se vuelcan al body de /chat/completions vía el **kwargs del provider.
+        self._extra_call_kwargs = extra_call_kwargs or {}
 
     def decide(self, state: dict[str, Any]) -> ModelResponse:
         resp = _run(
@@ -217,6 +221,7 @@ class _ProviderModelClient:
                 _decide_messages(state),
                 model=self.model,
                 tools=self._tools,
+                **self._extra_call_kwargs,
             )
         )
         return _decision_from(resp, model=self.model)
@@ -226,9 +231,18 @@ class _ProviderModelClient:
             self.provider.complete(
                 _review_messages(state),
                 model=self.model,
+                **self._extra_call_kwargs,
             )
         )
         return _review_from(resp, model=self.model)
+
+
+def _openai_reasoning_kwargs(reasoning_effort: str | None) -> dict[str, Any]:
+    """OpenAI-compat (azure/copilot): traduce el nivel a `reasoning_effort` en el
+    body (ADR 0070). `off`/vacío → nada (no-op; el modelo lo ignora si no razona)."""
+    if reasoning_effort and reasoning_effort != "off":
+        return {"reasoning_effort": reasoning_effort}
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +262,7 @@ class AzureFoundryModelClient(_ProviderModelClient):
         api_version: str = "2024-10-21",
         tools: list[dict[str, Any]] | None = None,
         http_client: httpx.AsyncClient | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         super().__init__(
             provider=AzureFoundryAPIMProvider(
@@ -260,6 +275,7 @@ class AzureFoundryModelClient(_ProviderModelClient):
             ),
             model=model,
             tools=tools,
+            extra_call_kwargs=_openai_reasoning_kwargs(reasoning_effort),
         )
 
 
@@ -274,11 +290,13 @@ class CopilotModelClient(_ProviderModelClient):
         github_token: str,
         tools: list[dict[str, Any]] | None = None,
         http_client: httpx.AsyncClient | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         super().__init__(
             provider=CopilotProvider(github_token=github_token, http_client=http_client),
             model=model,
             tools=tools,
+            extra_call_kwargs=_openai_reasoning_kwargs(reasoning_effort),
         )
 
 
@@ -293,7 +311,10 @@ class OllamaModelClient(_ProviderModelClient):
         api_key: str | None = None,
         tools: list[dict[str, Any]] | None = None,
         http_client: httpx.AsyncClient | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
+        # Ollama usa `think` (booleano), no niveles (ADR 0070): "think" → think=true.
+        think_kwargs = {"think": True} if reasoning_effort == "think" else {}
         super().__init__(
             provider=OllamaProvider(
                 base_url=base_url,
@@ -303,6 +324,7 @@ class OllamaModelClient(_ProviderModelClient):
             ),
             model=model,
             tools=tools,
+            extra_call_kwargs=think_kwargs,
         )
 
 
@@ -333,10 +355,14 @@ class ClaudeSDKModelClient:
         query_fn: SdkQuery | None = None,
         tools: list[dict[str, Any]] | None = None,
         max_turns: int = 1,
+        reasoning_effort: str | None = None,
     ) -> None:
         self.model = model
         self._tools = tools
         self._max_turns = max_turns
+        # ADR 0070: el SDK de Claude usa `effort` (low/medium/high/xhigh/max).
+        # `off`/vacío → None (sin extended thinking forzado).
+        self._effort = reasoning_effort if reasoning_effort and reasoning_effort != "off" else None
         # Feed the resolved credential to the SDK: api_key → ANTHROPIC_API_KEY,
         # oauth_token → CLAUDE_CODE_OAUTH_TOKEN (subscription Pro/Max, ADR 0063).
         self.provider = ClaudeAgentProvider(
@@ -347,7 +373,9 @@ class ClaudeSDKModelClient:
         )
 
     def decide(self, state: dict[str, Any]) -> ModelResponse:
-        resp = _run(self.provider.complete(_decide_messages(state), model=self.model))
+        resp = _run(
+            self.provider.complete(_decide_messages(state), model=self.model, effort=self._effort)
+        )
         # SDK never emits OpenAI-style tool_calls through complete();
         # this is always a FINISH (the SDK's text output).
         decision = ModelDecision(kind=DecisionKind.FINISH, output=resp.content)
@@ -360,7 +388,9 @@ class ClaudeSDKModelClient:
         )
 
     def review(self, state: dict[str, Any]) -> ReviewResponse:
-        resp = _run(self.provider.complete(_review_messages(state), model=self.model))
+        resp = _run(
+            self.provider.complete(_review_messages(state), model=self.model, effort=self._effort)
+        )
         return _review_from(resp, model=self.model)
 
 
@@ -485,6 +515,9 @@ def build_provider_client(
             spec = _overlay_resolved(spec, kind, resolved)
     model = spec.get("model", "")
     tools = spec.get("tools")
+    # ADR 0070: esfuerzo de razonamiento por proveedor (clave de model_config que
+    # viaja en el spec). Cada adaptador lo traduce a su parámetro nativo.
+    reasoning = spec.get("reasoning_effort")
     if kind == "azure_foundry":
         return AzureFoundryModelClient(
             model=model,
@@ -494,12 +527,14 @@ def build_provider_client(
             bearer_token=spec.get("bearer_token"),
             api_version=spec.get("api_version", "2024-10-21"),
             tools=tools,
+            reasoning_effort=reasoning,
         )
     if kind == "copilot":
         return CopilotModelClient(
             model=model,
             github_token=spec["github_token"],
             tools=tools,
+            reasoning_effort=reasoning,
         )
     if kind in ("claude_sdk", "claude"):
         return ClaudeSDKModelClient(
@@ -508,6 +543,7 @@ def build_provider_client(
             oauth_token=spec.get("oauth_token"),
             tools=tools,
             max_turns=int(spec.get("max_turns", 1)),
+            reasoning_effort=reasoning,
         )
     if kind == "ollama":
         return OllamaModelClient(
@@ -515,6 +551,7 @@ def build_provider_client(
             base_url=spec.get("base_url", "http://localhost:11434/v1"),
             api_key=spec.get("api_key"),
             tools=tools,
+            reasoning_effort=reasoning,
         )
     if kind == "litellm":
         raise ValueError(

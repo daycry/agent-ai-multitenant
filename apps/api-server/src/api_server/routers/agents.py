@@ -172,6 +172,7 @@ async def get_agent_model_options(
     from api_server.assistant.model_config import list_available_models_for_provider
     from api_server.db.llm_providers import (
         LLM_PROVIDER_KINDS,
+        REASONING_OPTIONS_BY_KIND,
         list_active_llm_providers_by_kind,
     )
     from api_server.db.session import get_admin_sessionmaker
@@ -186,7 +187,13 @@ async def get_agent_model_options(
             models = await list_available_models_for_provider(session, rows[0])
             if models:
                 by_kind[kind] = sorted(set(models))
-    return AgentModelOptionsResponse(by_kind=by_kind)
+    # ADR 0070: opciones de razonamiento por proveedor, solo para los activos.
+    reasoning_by_kind = {
+        kind: list(REASONING_OPTIONS_BY_KIND[kind])
+        for kind in by_kind
+        if kind in REASONING_OPTIONS_BY_KIND
+    }
+    return AgentModelOptionsResponse(by_kind=by_kind, reasoning_by_kind=reasoning_by_kind)
 
 
 # ---------------------------------------------------------------------------
