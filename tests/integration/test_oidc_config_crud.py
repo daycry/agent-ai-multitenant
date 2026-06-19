@@ -569,6 +569,48 @@ async def test_public_base_url_defaults_to_env_then_override_wins(
 
 
 @pytest.mark.asyncio
+async def test_api_path_prefix_inserts_between_origin_and_sso_paths(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """ADR 0069 (opción C): el prefijo de API se inserta entre el origen y los
+    paths SSO. Default "" = sin prefijo (callback actual); tras fijar `/api`,
+    callback y SP metadata lo llevan → funciona bajo el reverse proxy single-origin."""
+    await _truncate_all(migrations_pg_dsn)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    token = await _mint_token(admin, is_system_admin=True)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://testserver"
+    ) as client:
+        # Default: sin prefijo (retro-compatible).
+        got = await client.get("/auth/sso/api-path-prefix", headers=_auth(token))
+        assert got.status_code == 200, got.text
+        assert got.json()["prefix"] == "" and got.json()["is_override"] is False
+        cb0 = await client.get("/auth/sso/oidc/callback-url", headers=_auth(token))
+        assert cb0.json()["callback_url"] == "http://testserver/auth/sso/oidc/callback"
+
+        # Fijar /api (un trailing slash se normaliza).
+        put = await client.put(
+            "/auth/sso/api-path-prefix", json={"prefix": "/api/"}, headers=_auth(token)
+        )
+        assert put.status_code == 200, put.text
+        assert put.json()["prefix"] == "/api" and put.json()["is_override"] is True
+
+        # El callback OIDC y el SP metadata SAML ahora llevan el prefijo.
+        cb = await client.get("/auth/sso/oidc/callback-url", headers=_auth(token))
+        assert cb.json()["callback_url"] == "http://testserver/api/auth/sso/oidc/callback"
+        meta = await client.get("/auth/sso/saml/sp-metadata", headers=_auth(token))
+        assert meta.json()["sp_entity_id"] == "http://testserver/api/auth/sso/saml/metadata"
+        assert meta.json()["acs_url"] == "http://testserver/api/auth/sso/saml/acs"
+
+        # Un prefijo inválido (sin barra inicial) es 422.
+        bad = await client.put(
+            "/auth/sso/api-path-prefix", json={"prefix": "api"}, headers=_auth(token)
+        )
+        assert bad.status_code == 422, bad.text
+
+
+@pytest.mark.asyncio
 async def test_public_base_url_rejects_invalid(configured_app, migrations_pg_dsn: str) -> None:
     """A non-bare URL (carries a path) is a 422 and is never persisted."""
     await _truncate_all(migrations_pg_dsn)

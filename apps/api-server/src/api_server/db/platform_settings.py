@@ -131,6 +131,73 @@ async def set_app_public_base_url(session: AsyncSession, value: str, *, actor: U
     return normalised
 
 
+# ---------------------------------------------------------------------------
+# API path prefix (ADR 0069). The PATH segment under which the api-server is
+# published behind a single-origin reverse proxy (Caddy/nginx): it sits BETWEEN
+# the public origin (`app.public_base_url`) and the SSO/SCIM paths the routers
+# append. Option C keeps the origin and the prefix as SEPARATE settings so the
+# same origin serves the SPA at `/` and the API under e.g. `/api`. Empty = no
+# prefix (api-server at the origin root — the dev/default, backward-compatible).
+# ---------------------------------------------------------------------------
+APP_API_PATH_PREFIX_KEY = "app.api_path_prefix"
+
+
+class InvalidApiPathPrefixError(ValueError):
+    """Raised when a proposed API path prefix is not a bare path beginning with
+    ``/`` (carries a host/scheme/query/fragment, or omits the leading slash)."""
+
+
+def validate_api_path_prefix(value: str) -> str:
+    """Validate + normalise the API path prefix.
+
+    Empty / whitespace / a bare ``/`` normalise to ``""`` (no prefix). A
+    non-empty value must be a bare absolute path (leading ``/``, no
+    scheme/host/query/fragment); it is returned with a leading slash and NO
+    trailing slash (``/api``, ``/api/v1``). Raises
+    :class:`InvalidApiPathPrefixError` otherwise.
+    """
+    from urllib.parse import urlparse
+
+    candidate = (value or "").strip()
+    if not candidate or candidate == "/":
+        return ""
+    if "://" in candidate or candidate.startswith("//"):
+        raise InvalidApiPathPrefixError("the API path prefix must be a path, not a URL with host")
+    if not candidate.startswith("/"):
+        raise InvalidApiPathPrefixError("the API path prefix must start with '/'")
+    parsed = urlparse(candidate)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        raise InvalidApiPathPrefixError(
+            "the API path prefix must be a bare path (no host, query or fragment)"
+        )
+    inner = parsed.path.strip("/")
+    return f"/{inner}" if inner else ""
+
+
+async def get_api_path_prefix_override(session: AsyncSession) -> str | None:
+    """The System-Admin API-path-prefix override, or ``None`` when unset/invalid.
+
+    When ``None`` the router falls back to the env bootstrap
+    (``settings.api_path_prefix``). A stored value that fails validation is
+    treated as unset (never crashes the URL builders)."""
+    value = await get_platform_setting(session, APP_API_PATH_PREFIX_KEY, default=None)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return validate_api_path_prefix(value)
+    except InvalidApiPathPrefixError:
+        return None
+
+
+async def set_api_path_prefix(session: AsyncSession, value: str, *, actor: User) -> str:
+    """Persist the API path prefix override (System Admin only). Validates first
+    (raising :class:`InvalidApiPathPrefixError`); returns the normalised prefix
+    stored (may be ``""``)."""
+    normalised = validate_api_path_prefix(value)
+    await set_platform_setting(session, APP_API_PATH_PREFIX_KEY, normalised, actor=actor)
+    return normalised
+
+
 async def get_max_review_retries(session: AsyncSession) -> int:
     """The effective max_review_retries — the platform override, or the
     default. This is what an execution's review-retry budget is built from."""

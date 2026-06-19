@@ -97,9 +97,13 @@ from api_server.db.models import (
     User,
 )
 from api_server.db.platform_settings import (
+    InvalidApiPathPrefixError,
     InvalidPublicBaseUrlError,
+    get_api_path_prefix_override,
     get_app_public_base_url_override,
+    set_api_path_prefix,
     set_app_public_base_url,
+    validate_api_path_prefix,
 )
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 from api_server.routers.mcp import get_vault_resolver
@@ -107,6 +111,8 @@ from api_server.schemas.auth import LoginResponse
 from api_server.schemas.sso import (
     LOGIN_METHOD_PASSWORD,
     LOGIN_METHOD_SSO,
+    ApiPathPrefixResponse,
+    ApiPathPrefixUpdate,
     CallbackUrlResponse,
     IdPMetadataParseRequest,
     IdPMetadataParseResponse,
@@ -196,20 +202,27 @@ def get_saml_relay_state_store(
 
 
 async def _effective_redirect_base() -> str:
-    """The effective public base URL for IdP redirects (ADR 0047).
+    """The effective public base URL for IdP redirects (ADR 0047 / 0069).
 
-    The System-Admin override from ``platform_settings`` if set, else the env
-    bootstrap default (``settings.sso_redirect_base_url``). Read on the
-    BYPASSRLS admin engine (it is a platform setting, no tenant). Trailing
-    slash stripped. Resolved once per request at each async entry point and
-    handed to the sync URL builders below — so the OIDC/SAML resolution logic
-    stays synchronous.
+    Origin + API path prefix, both System-Admin-overridable (``platform_settings``)
+    with env bootstrap fallbacks (``settings.sso_redirect_base_url`` /
+    ``settings.api_path_prefix``). Read on the BYPASSRLS admin engine. Returns the
+    full ``{origin}{prefix}`` (e.g. ``https://host/api``) with no trailing slash;
+    the sync URL builders below append the well-known SSO paths to it, so under a
+    single-origin reverse proxy (ADR 0061) the callback/ACS/EntityID carry the
+    ``/api`` prefix. Empty prefix (default) reproduces the previous behaviour.
     """
     sessionmaker = get_admin_sessionmaker()
     async with sessionmaker() as session:
         override = await get_app_public_base_url_override(session)
-    base = override or get_settings().sso_redirect_base_url
-    return base.rstrip("/")
+        prefix_override = await get_api_path_prefix_override(session)
+    base = (override or get_settings().sso_redirect_base_url).rstrip("/")
+    raw_prefix = prefix_override if prefix_override is not None else get_settings().api_path_prefix
+    try:
+        prefix = validate_api_path_prefix(raw_prefix)
+    except InvalidApiPathPrefixError:
+        prefix = ""
+    return f"{base}{prefix}"
 
 
 def _callback_redirect_uri(base: str) -> str:
@@ -1060,6 +1073,50 @@ async def put_public_base_url(
         ) from exc
     env_default = get_settings().sso_redirect_base_url.rstrip("/")
     return PublicBaseUrlResponse(base_url=stored, is_override=True, env_default=env_default)
+
+
+@router.get("/api-path-prefix", response_model=ApiPathPrefixResponse)
+async def get_api_path_prefix_endpoint(
+    _principal: AuthPrincipal = Depends(require_system_admin),
+) -> ApiPathPrefixResponse:
+    """The effective API path prefix + how it is sourced (ADR 0069).
+
+    The PATH segment under which the API is published behind a single-origin
+    reverse proxy (e.g. ``/api``), inserted between the public origin and the
+    SSO/SCIM paths. ``""`` = no prefix (api-server at the origin root)."""
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        override = await get_api_path_prefix_override(session)
+    env_default = validate_api_path_prefix(get_settings().api_path_prefix)
+    return ApiPathPrefixResponse(
+        prefix=override if override is not None else env_default,
+        is_override=override is not None,
+        env_default=env_default,
+    )
+
+
+@router.put("/api-path-prefix", response_model=ApiPathPrefixResponse)
+async def put_api_path_prefix(
+    payload: ApiPathPrefixUpdate,
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> ApiPathPrefixResponse:
+    """Set the API path prefix override (System Admin only). Validated +
+    normalised (``""`` or a bare absolute path); a bad value is a 422. Stored in
+    ``platform_settings`` so it takes effect live for the next SSO redirect."""
+    actor = await session.get(User, principal.user_id)
+    if actor is None:  # pragma: no cover - token validated upstream
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="user no longer exists"
+        )
+    try:
+        stored = await set_api_path_prefix(session, payload.prefix, actor=actor)
+    except InvalidApiPathPrefixError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+    env_default = validate_api_path_prefix(get_settings().api_path_prefix)
+    return ApiPathPrefixResponse(prefix=stored, is_override=True, env_default=env_default)
 
 
 @router.get("/config", response_model=list[SSOConfigResponse])

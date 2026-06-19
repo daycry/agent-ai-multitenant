@@ -103,6 +103,15 @@ class Settings(BaseSettings):
         default="http://localhost:8001",
         description="Bootstrap public app base URL (System-Admin-overridable).",
     )
+    # Path prefix under which the API is published behind a reverse proxy
+    # (single-origin, ADR 0061/0069). Inserted BETWEEN the public origin and the
+    # SSO/SCIM paths: e.g. prefix `/api` → callback `https://host/api/auth/sso/...`.
+    # Default "" = no prefix (api-server reachable at the origin root, dev). A
+    # System Admin overrides it live (platform setting `app.api_path_prefix`).
+    api_path_prefix: str = Field(
+        default="",
+        description="Bootstrap API path prefix for single-origin proxies (e.g. /api).",
+    )
     # TTL of the short-lived state/nonce record stored in Redis between
     # the /login redirect and the /callback. Bounds how long a login can
     # legitimately take before the anti-CSRF state expires.
