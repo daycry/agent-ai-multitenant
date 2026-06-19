@@ -58,7 +58,8 @@ export function isProviderKind(value: string): value is ProviderKind {
 export const DEFAULT_MODEL_CONFIG: ModelConfigDraft = {
   provider: "claude_sdk",
   model: "claude-sonnet-4",
-  temperature: 0.2,
+  // 0.1 alinea con el default del plugin de GitHub Copilot en VS Code.
+  temperature: 0.1,
   reasoning_effort: "off",
 };
 

@@ -291,9 +291,18 @@ export function PersonaModelFields({
   // Opciones de razonamiento por proveedor (ADR 0070). Vacío → ocultar el selector
   // (proveedor sin backend activo o aún cargando).
   const reasoningOptions = optionsQuery.data?.reasoning_by_kind?.[draft.provider] ?? [];
+  // Si el valor guardado no está entre las opciones del proveedor (legacy/cruzado),
+  // lo anteponemos para que el select lo MUESTRE en vez de divergir en silencio.
+  const reasoningSelectable =
+    draft.reasoning_effort &&
+    draft.reasoning_effort !== "off" &&
+    !reasoningOptions.includes(draft.reasoning_effort)
+      ? [draft.reasoning_effort, ...reasoningOptions]
+      : reasoningOptions;
+  // claude_sdk no expone `temperature` (el SDK la ignora); el resto sí la envían.
+  const temperatureApplies = draft.provider !== "claude_sdk";
   const reasoningLabel = (opt: string): string => {
     if (opt === "off") return lang === "es" ? "Desactivado" : "Off";
-    if (opt === "think") return lang === "es" ? "Activado" : "On";
     return opt; // low / medium / high / xhigh / max
   };
 
@@ -380,9 +389,17 @@ export function PersonaModelFields({
           step={0.1}
           value={draft.temperature}
           onChange={(e) => onChange({ ...draft, temperature: Number(e.target.value) })}
+          disabled={!temperatureApplies}
           data-testid={`${idPrefix}-temperature`}
         />
-        {errorFor("temperature") && (
+        {!temperatureApplies && (
+          <p className="text-muted-foreground text-xs" data-testid={`${idPrefix}-temperature-na`}>
+            {lang === "es"
+              ? "No aplica a Claude (el SDK no la expone)"
+              : "Not applicable to Claude (the SDK does not expose it)"}
+          </p>
+        )}
+        {temperatureApplies && errorFor("temperature") && (
           <p
             className="text-danger-soft-foreground text-xs"
             data-testid={`${idPrefix}-temperature-error`}
@@ -403,7 +420,7 @@ export function PersonaModelFields({
             onChange={(e) => onChange({ ...draft, reasoning_effort: e.target.value })}
             data-testid={`${idPrefix}-reasoning`}
           >
-            {reasoningOptions.map((opt) => (
+            {reasoningSelectable.map((opt) => (
               <option key={opt} value={opt}>
                 {reasoningLabel(opt)}
               </option>

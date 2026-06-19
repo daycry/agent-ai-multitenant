@@ -80,15 +80,17 @@ LLM_PROVIDER_KINDS: tuple[str, ...] = tuple(k.value for k in LLMProviderKind)
 
 # Reasoning/thinking effort options per provider kind (ADR 0070) — fuente única.
 # ``off`` = sin razonamiento. Cada adaptador del agent-runtime las traduce a su
-# parámetro nativo (claude_sdk→ClaudeAgentOptions.effort; azure/copilot→OpenAI
-# ``reasoning_effort``; ollama→``think`` booleano). Es por proveedor (v1) y
-# dependiente del modelo: un modelo sin razonamiento ignora el valor (no-op).
+# parámetro nativo (claude_sdk→ClaudeAgentOptions.effort; azure/copilot/ollama→
+# OpenAI ``reasoning_effort``). El endpoint OpenAI-compat de Ollama honra
+# ``reasoning_effort`` (low/medium/high; "none"=off), NO el ``think`` nativo de
+# /api/chat (ollama#14820). Es por proveedor (v1) y dependiente del modelo: un
+# modelo sin razonamiento ignora el valor (no-op).
 REASONING_EFFORT_OFF = "off"
 REASONING_OPTIONS_BY_KIND: dict[str, tuple[str, ...]] = {
     "claude_sdk": ("off", "low", "medium", "high", "xhigh", "max"),
     "azure_foundry": ("off", "low", "medium", "high"),
     "copilot": ("off", "low", "medium", "high"),
-    "ollama": ("off", "think"),
+    "ollama": ("off", "low", "medium", "high"),
 }
 
 # Key under the non-secret ``config`` JSONB holding the model ids discovered by

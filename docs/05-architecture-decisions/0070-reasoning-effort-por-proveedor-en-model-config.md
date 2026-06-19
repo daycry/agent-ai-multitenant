@@ -26,7 +26,7 @@ de API):
 | **claude_sdk**    | `ClaudeAgentOptions.effort` (`EffortLevel`) | `low` · `medium` · `high` · `xhigh` · `max` (+ `thinking`/`max_thinking_tokens` para control fino) |
 | **azure_foundry** | `reasoning_effort` (OpenAI o-series)        | `low` · `medium` · `high`                                                                          |
 | **copilot**       | `reasoning_effort` (OpenAI-compat)          | `low` · `medium` · `high`                                                                          |
-| **ollama**        | `think` (booleano)                          | on/off                                                                                             |
+| **ollama**        | `reasoning_effort` (OpenAI-compat /v1)      | `low` · `medium` · `high` (`none`=off) — NO el `think` de /api/chat (ollama#14820)                 |
 
 Además es **dependiente del modelo** (un modelo sin razonamiento ignora el
 parámetro). No existe un set común → las opciones deben ser las reales de cada
@@ -36,8 +36,11 @@ proveedor.
 
 Una clave nueva **opcional** `model_config.reasoning_effort: str` con **valores
 específicos por proveedor**. `""`/ausente = sin razonamiento. Viaja por la cadena
-de herencia (ADR 0065) junto al `provider` con el que se fija (quedan
-consistentes por construcción; nunca un valor de un proveedor colgado en otro).
+de herencia (ADR 0065) junto al `provider` con el que se fija. La validación de
+escritura ya garantiza que cualquier config con `reasoning_effort` pinea
+`provider`+`model` (caso verbatim de la herencia); además la herencia fija el
+`reasoning_effort` al nivel que aporta el provider (ver `_merge_inherited_model`)
+para no dejar nunca un valor de un proveedor colgado en otro ante datos legacy.
 
 **Catálogo de opciones por kind** (fuente única en el backend,
 `REASONING_OPTIONS_BY_KIND` junto a `LLM_PROVIDER_KINDS`):
@@ -47,15 +50,17 @@ consistentes por construcción; nunca un valor de un proveedor colgado en otro).
 | `claude_sdk`    | `off` · `low` · `medium` · `high` · `xhigh` · `max` |
 | `azure_foundry` | `off` · `low` · `medium` · `high`                   |
 | `copilot`       | `off` · `low` · `medium` · `high`                   |
-| `ollama`        | `off` · `think`                                     |
+| `ollama`        | `off` · `low` · `medium` · `high`                   |
 
 **Traducción al parámetro nativo** (cada adaptador del agent-runtime interpreta su
 valor; `off`/ausente = no enviar nada):
 
 - `claude_sdk` → `ClaudeAgentOptions(effort=<valor>)`.
 - `azure_foundry` / `copilot` → kwarg `reasoning_effort=<valor>` (→ body
-  `/chat/completions`; los providers ya hacen `{..., **kwargs}`).
-- `ollama` → kwarg `think=true` (si valor ≠ `off`).
+  `/chat/completions`; los providers ya hacen `{..., **kwargs}`); `off` → no enviar.
+- `ollama` → kwarg `reasoning_effort=<valor>` en el endpoint OpenAI-compat `/v1`
+  (NO el `think` de `/api/chat`, que `/v1` ignora — ollama#14820); `off` → `none`
+  explícito (omitirlo dejaría el thinking auto-ON en modelos que razonan).
 
 **Granularidad v1: por proveedor.** El selector ofrece el superset del proveedor;
 si el modelo concreto no razona, el adaptador es **no-op** (el parámetro se ignora;
@@ -67,8 +72,10 @@ modelo) queda para una v2 si hace falta.
 - **Validación** (`validate_model_config`, ADR 0055): si hay `reasoning_effort`
   no vacío, debe estar en `REASONING_OPTIONS_BY_KIND[provider]` (requiere
   `provider`); `off` siempre válido.
-- **Herencia** (`resolve_model_config_chain`): **sin cambios** — la clave es parte
-  del bloque de modelo y se hereda con él.
+- **Herencia** (`resolve_model_config_chain`): la clave se hereda con el bloque de
+  modelo; cuando el agente NO pinea y hereda el provider de un nivel superior,
+  `_merge_inherited_model` fija el `reasoning_effort` a ESE nivel (o lo descarta),
+  para no arrastrar el del agente a un provider incompatible.
 - **Spec/worker** (`model_resolver`): la clave viaja en `model_config` → spec; se
   añade a `safe_spec_summary` (observabilidad, sin secretos).
 - **agent-runtime** (`build_provider_client`): lee `spec["reasoning_effort"]` y lo
@@ -80,8 +87,10 @@ modelo) queda para una v2 si hace falta.
 ## Alternativas
 
 - **Abstracción universal** (off/low/.../max común mapeado por proveedor):
-  rechazada — Ollama no tiene niveles (solo on/off) y los rangos no coinciden;
-  exponer opciones irreales confunde. Por-proveedor es honesto.
+  rechazada — los rangos no coinciden (claude llega a `xhigh`/`max`; azure/
+  copilot/ollama solo `low`/`medium`/`high`) y los mecanismos difieren
+  (`effort` del SDK vs `reasoning_effort` OpenAI); exponer opciones irreales
+  confunde. Por-proveedor es honesto.
 - **Por proveedor + modelo en v1**: más preciso pero exige un mapa de capacidades
   por modelo a mantener; se difiere.
 
@@ -102,6 +111,7 @@ modelo) queda para una v2 si hace falta.
 ## Tests
 
 `validate_model_config` (unit: acepta valores válidos por proveedor, rechaza
-cruzados/desconocidos, `off` siempre); `GET /agents/model-options` expone
+cruzados/desconocidos, `off` siempre); herencia (`resolve_model_config_chain`)
+no cruza reasoning_effort entre proveedores; `GET /agents/model-options` expone
 `reasoning_by_kind`; el adaptador del agent-runtime traduce por proveedor
-(claude→effort, openai-compat→reasoning_effort, ollama→think).
+(claude→effort; azure/copilot/ollama→`reasoning_effort`, ollama con `off`→`none`).

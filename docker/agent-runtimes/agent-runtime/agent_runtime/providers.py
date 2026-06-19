@@ -245,6 +245,18 @@ def _openai_reasoning_kwargs(reasoning_effort: str | None) -> dict[str, Any]:
     return {}
 
 
+def _ollama_reasoning_kwargs(reasoning_effort: str | None) -> dict[str, Any]:
+    """Ollama /v1/chat/completions honra `reasoning_effort` (low/medium/high;
+    "none"=off), NO el `think` nativo de /api/chat (ollama#14820). `off` se manda
+    explícito como "none" porque OMITIRLO deja el thinking auto-ON en los modelos
+    que razonan; vacío → nada."""
+    if not reasoning_effort:
+        return {}
+    if reasoning_effort == "off":
+        return {"reasoning_effort": "none"}
+    return {"reasoning_effort": reasoning_effort}
+
+
 # ---------------------------------------------------------------------------
 # Per-provider adapters — thin constructors that build the right provider
 # ---------------------------------------------------------------------------
@@ -313,8 +325,6 @@ class OllamaModelClient(_ProviderModelClient):
         http_client: httpx.AsyncClient | None = None,
         reasoning_effort: str | None = None,
     ) -> None:
-        # Ollama usa `think` (booleano), no niveles (ADR 0070): "think" → think=true.
-        think_kwargs = {"think": True} if reasoning_effort == "think" else {}
         super().__init__(
             provider=OllamaProvider(
                 base_url=base_url,
@@ -324,7 +334,7 @@ class OllamaModelClient(_ProviderModelClient):
             ),
             model=model,
             tools=tools,
-            extra_call_kwargs=think_kwargs,
+            extra_call_kwargs=_ollama_reasoning_kwargs(reasoning_effort),
         )
 
 

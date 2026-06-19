@@ -416,11 +416,12 @@ MODEL_DEFAULT_CONFIG_KEY = "model.default_config"
 
 # Fallback de código anclado al catálogo cerrado del ADR 0021. Claude SDK es el
 # camino primario de la plataforma (suscripción Pro/Max). ``temperature`` baja
-# por defecto (salida más determinista para tareas de agente).
+# por defecto (salida más determinista para tareas de agente); 0.1 alinea con el
+# valor que envía por defecto el plugin de GitHub Copilot en VS Code.
 DEFAULT_MODEL_CONFIG: dict[str, Any] = {
     "provider": "claude_sdk",
     "model": "claude-sonnet-4",
-    "temperature": 0.2,
+    "temperature": 0.1,
 }
 
 # Rango válido de temperatura (mismo rango que valida el schema de agente).
@@ -542,8 +543,25 @@ def resolve_model_config_chain(
     for level in (team_cfg, project_cfg, platform_default):
         level_d = dict(level or {})
         if not config_needs_default_model(level_d):
-            return {**level_d, **agent}
-    return {**dict(platform_default or {}), **agent}
+            return _merge_inherited_model(level_d, agent)
+    return _merge_inherited_model(dict(platform_default or {}), agent)
+
+
+def _merge_inherited_model(level_d: dict[str, Any], agent: dict[str, Any]) -> dict[str, Any]:
+    """Merge de herencia cuando el agente NO pinea: el nivel aporta
+    ``provider``/``model``/``temperature`` y el agente preserva sus claves
+    no-modelo (p.ej. ``system_prompts``). ``reasoning_effort`` es
+    provider-específico (ADR 0070): como el provider efectivo lo aporta el NIVEL,
+    el reasoning del agente (que sería de OTRO provider) NO aplica — manda el del
+    nivel o, si el nivel no fija ninguno, se descarta para no dejar un valor
+    cruzado/inválido colgado en un provider incompatible."""
+    merged = {**level_d, **agent}
+    level_reasoning = level_d.get("reasoning_effort")
+    if level_reasoning:
+        merged["reasoning_effort"] = level_reasoning
+    else:
+        merged.pop("reasoning_effort", None)
+    return merged
 
 
 def resolve_model_config_origin(

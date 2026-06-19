@@ -2,7 +2,7 @@
 de la llamada del proveedor traducido a su parámetro nativo (ADR 0070).
 
   * azure_foundry / copilot → `reasoning_effort` en el JSON de /chat/completions
-  * ollama                  → `think: true`
+  * ollama                  → `reasoning_effort` en /v1 (off→"none"); NO `think`
   * claude_sdk              → `effort` hacia el SDK (vía complete())
 
 `off`/ausente = no enviar nada (no-op; modelos sin razonamiento lo ignoran).
@@ -82,28 +82,28 @@ def test_azure_off_omits_reasoning_effort() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Ollama: think (booleano)
+# Ollama: reasoning_effort en /v1 (niveles), NO `think` (nativo de /api/chat).
 # ---------------------------------------------------------------------------
-def test_ollama_think_in_body() -> None:
+def test_ollama_sends_reasoning_effort_in_body() -> None:
     seen, http = _capture_body()
-    OllamaModelClient(model="qwen3", http_client=http, reasoning_effort="think").decide(_STATE)
-    assert seen["body"]["think"] is True
+    OllamaModelClient(model="qwen3", http_client=http, reasoning_effort="high").decide(_STATE)
+    assert seen["body"]["reasoning_effort"] == "high"
+    assert "think" not in seen["body"]  # `think` no se usa en el endpoint /v1
 
 
-def test_ollama_off_omits_think() -> None:
+def test_ollama_off_sends_none() -> None:
+    # "off" se manda explícito como "none": omitirlo dejaría el thinking auto-ON.
     seen, http = _capture_body()
     OllamaModelClient(model="llama3.2", http_client=http, reasoning_effort="off").decide(_STATE)
-    assert "think" not in seen["body"]
+    assert seen["body"]["reasoning_effort"] == "none"
 
 
 # ---------------------------------------------------------------------------
 # build_provider_client: thread spec["reasoning_effort"] a cada adaptador
 # ---------------------------------------------------------------------------
 def test_factory_threads_reasoning_to_ollama() -> None:
-    client = build_provider_client(
-        {"kind": "ollama", "model": "qwen3", "reasoning_effort": "think"}
-    )
-    assert client._extra_call_kwargs == {"think": True}  # type: ignore[attr-defined]
+    client = build_provider_client({"kind": "ollama", "model": "qwen3", "reasoning_effort": "high"})
+    assert client._extra_call_kwargs == {"reasoning_effort": "high"}  # type: ignore[attr-defined]
 
 
 def test_factory_threads_reasoning_to_azure() -> None:
