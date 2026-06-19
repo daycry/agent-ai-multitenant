@@ -245,6 +245,72 @@ async def test_team_model_config_roundtrip(configured_app, migrations_pg_dsn: st
 
 
 @pytest.mark.asyncio
+async def test_team_memory_scope_roundtrip(configured_app, migrations_pg_dsn: str) -> None:
+    """ADR 0071: PUT /teams/{id} fija/quita la política de memoria del equipo y
+    GET la devuelve. `null` explícito la quita (heredar); omitir no la toca."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        team_id = (
+            await client.post("/teams", json={"name": "Con memoria"}, headers=headers)
+        ).json()["id"]
+        # Recién creado: sin política (hereda).
+        assert (await client.get(f"/teams/{team_id}", headers=headers)).json()[
+            "memory_scope"
+        ] is None
+
+        # Fijar la política.
+        upd = await client.put(
+            f"/teams/{team_id}", json={"memory_scope": "team_shared"}, headers=headers
+        )
+        assert upd.status_code == 200, upd.text
+        assert upd.json()["memory_scope"] == "team_shared"
+
+        # Omitir memory_scope (tocar solo el nombre) NO la cambia.
+        await client.put(f"/teams/{team_id}", json={"name": "Renombrado"}, headers=headers)
+        assert (await client.get(f"/teams/{team_id}", headers=headers)).json()[
+            "memory_scope"
+        ] == "team_shared"
+
+        # `null` explícito la quita (heredar).
+        cleared = await client.put(
+            f"/teams/{team_id}", json={"memory_scope": None}, headers=headers
+        )
+        assert cleared.json()["memory_scope"] is None
+
+
+@pytest.mark.asyncio
+async def test_agent_response_includes_teams(configured_app, migrations_pg_dsn: str) -> None:
+    """ADR 0071: GET /agents/{id} devuelve los equipos del agente (badge/filtros/
+    disable del memory_scope); un agente sin equipo trae lista vacía."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        team_id = (
+            await client.post("/teams", json={"name": "Plataforma X"}, headers=headers)
+        ).json()["id"]
+        await client.post(
+            f"/teams/{team_id}/members",
+            json={"agent_id": str(seeded["agent_a1"])},
+            headers=headers,
+        )
+        detail = await client.get(f"/agents/{seeded['agent_a1']}", headers=headers)
+        assert detail.status_code == 200, detail.text
+        assert "Plataforma X" in {t["name"] for t in detail.json()["teams"]}
+
+        other = await client.get(f"/agents/{seeded['agent_a2']}", headers=headers)
+        assert other.json()["teams"] == []
+
+
+@pytest.mark.asyncio
 async def test_members_lifecycle(configured_app, migrations_pg_dsn: str) -> None:
     seeded = await _seed(migrations_pg_dsn)
     token = await _mint_token(seeded["user_a"], seeded["tenant_a"])

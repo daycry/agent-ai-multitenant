@@ -165,6 +165,7 @@ async def create_team(
         name=payload.name,
         description=payload.description,
         default_workflow_template_id=payload.default_workflow_template_id,
+        memory_scope=payload.memory_scope.value if payload.memory_scope else None,
     )
     session.add(team)
     await session.flush()
@@ -259,6 +260,7 @@ async def fork_team_into(
         forked_from_team_id=src.id,
         forked_from_version=team_version,
         model_config=dict(llm_config or {}),
+        memory_scope=src.memory_scope,  # ADR 0071: hereda la política del origen
     )
     session.add(new_team)
     await session.flush()
@@ -346,7 +348,13 @@ async def update_team(
     )
 
     # `llm_config` (JSON `model_config`) → columna `model_config` (Ola A).
-    apply_partial_update(team, payload, rename={"llm_config": "model_config"})
+    # `memory_scope` (ADR 0071): enum → string; `null` explícito quita la política.
+    apply_partial_update(
+        team,
+        payload,
+        rename={"llm_config": "model_config"},
+        enum_fields=("memory_scope",),
+    )
 
     await session.flush()
     await session.refresh(team)

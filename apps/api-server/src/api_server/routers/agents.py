@@ -61,6 +61,7 @@ from api_server.db.domain import (
     Project,
     Skill,
     Team,
+    TeamMember,
     Tool,
     ToolImplementationType,
 )
@@ -153,7 +154,28 @@ async def list_agents(
     stmt = stmt.order_by(Agent.created_at, Agent.id)
     stmt = apply_pagination(stmt, limit=limit, offset=offset)
     result = await session.execute(stmt)
-    return [to_agent_response(a) for a in result.scalars().all()]
+    agents = list(result.scalars().all())
+    teams_by_agent = await _teams_by_agent(session, [a.id for a in agents])
+    return [to_agent_response(a, teams_by_agent.get(a.id, [])) for a in agents]
+
+
+async def _teams_by_agent(
+    session: AsyncSession, agent_ids: list[UUID]
+) -> dict[UUID, list[tuple[UUID, str]]]:
+    """Pertenencias (team_id, nombre) por agente, en UNA query (ADR 0071). Team es
+    tenant-scoped (RLS), así que el join filtra al tenant del request."""
+    if not agent_ids:
+        return {}
+    rows = await session.execute(
+        select(TeamMember.agent_id, Team.id, Team.name)
+        .join(Team, Team.id == TeamMember.team_id)
+        .where(TeamMember.agent_id.in_(agent_ids), Team.deleted_at.is_(None))
+        .order_by(Team.name)
+    )
+    out: dict[UUID, list[tuple[UUID, str]]] = {}
+    for agent_id, team_id, team_name in rows.all():
+        out.setdefault(agent_id, []).append((team_id, team_name))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +233,8 @@ async def get_agent(
     agent = result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent not found")
-    return to_agent_response(agent)
+    teams_by_agent = await _teams_by_agent(session, [agent.id])
+    return to_agent_response(agent, teams_by_agent.get(agent.id, []))
 
 
 # ---------------------------------------------------------------------------

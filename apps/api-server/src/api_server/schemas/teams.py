@@ -17,7 +17,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from api_server.db.domain import Team, TeamMember
+from api_server.db.domain import MemoryScope, Team, TeamMember
 
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
@@ -73,6 +73,9 @@ class TeamCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str | None = None
     default_workflow_template_id: UUID | None = None
+    # Política de memoria del equipo (ADR 0071). None = sin política (los miembros
+    # caen al memory_scope del agente / default de plataforma).
+    memory_scope: MemoryScope | None = None
 
 
 class TeamUpdateRequest(BaseModel):
@@ -84,6 +87,9 @@ class TeamUpdateRequest(BaseModel):
     # Modelo por defecto del equipo (Ola A / ADR 0065). Alias JSON `model_config`
     # (igual que en Agent). `{}` = no fija modelo (hereda). `None` = no tocar.
     llm_config: dict[str, Any] | None = Field(default=None, alias="model_config")
+    # Política de memoria del equipo (ADR 0071). `null` explícito = quitar política
+    # (heredar); omitir = no tocar; un scope = fijarla (gobierna a los miembros).
+    memory_scope: MemoryScope | None = None
 
     @model_validator(mode="after")
     def _validate_model(self) -> TeamUpdateRequest:
@@ -146,6 +152,8 @@ class TeamResponse(BaseModel):
     is_builtin: bool
     forked_from_team_id: UUID | None
     llm_config: dict[str, Any] = Field(default_factory=dict, alias="model_config")
+    # ADR 0071: política de memoria del equipo (None = sin política / heredar).
+    memory_scope: str | None = None
     members: list[TeamMemberResponse]
     created_at: datetime
     updated_at: datetime
@@ -165,6 +173,7 @@ def to_team_response(t: Team, members: list[TeamMember]) -> TeamResponse:
         "is_builtin": t.is_builtin,
         "forked_from_team_id": t.forked_from_team_id,
         "model_config": dict(t.model_config or {}),
+        "memory_scope": t.memory_scope,
         "members": [to_member_response(m) for m in members],
         "created_at": t.created_at,
         "updated_at": t.updated_at,
