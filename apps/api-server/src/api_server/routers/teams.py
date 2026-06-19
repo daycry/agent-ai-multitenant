@@ -315,7 +315,8 @@ async def update_team(
         session, Team, team_id, principal, not_found_detail="team not found"
     )
 
-    apply_partial_update(team, payload)
+    # `llm_config` (JSON `model_config`) → columna `model_config` (Ola A).
+    apply_partial_update(team, payload, rename={"llm_config": "model_config"})
 
     await session.flush()
     await session.refresh(team)

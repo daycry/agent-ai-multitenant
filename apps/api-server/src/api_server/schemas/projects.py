@@ -235,6 +235,24 @@ class ProjectUpdateRequest(BaseModel):
     budget_period_start_day: int | None = Field(default=None, ge=1, le=31)
     budget_period_length_days: int | None = Field(default=None, ge=1, le=366)
 
+    # Modelo por defecto del proyecto (Ola A / ADR 0065). Alias JSON `model_config`
+    # (igual que en Agent/Team). `{}` = no fija modelo (hereda). `None` = no tocar.
+    llm_config: dict[str, Any] | None = Field(default=None, alias="model_config")
+
+    @model_validator(mode="after")
+    def _validate_model(self) -> ProjectUpdateRequest:
+        if self.llm_config:
+            from api_server.db.platform_settings import (
+                InvalidModelConfigError,
+                validate_model_config,
+            )
+
+            try:
+                validate_model_config(self.llm_config)
+            except InvalidModelConfigError as exc:
+                raise ValueError(str(exc)) from exc
+        return self
+
     @field_validator("mcp_servers", mode="after")
     @classmethod
     def _validate_mcp_servers(
@@ -302,6 +320,8 @@ class ProjectResponse(BaseModel):
     mcp_servers: list[dict[str, Any]]
     rag_knowledge_bases: list[dict[str, Any]]
     worker_config: dict[str, Any]
+    # Modelo por defecto del proyecto (Ola A / ADR 0065). Alias JSON `model_config`.
+    llm_config: dict[str, Any] = Field(alias="model_config")
     repository_config: dict[str, Any] | None
     human_approval_policy: dict[str, Any] | None
     secrets_vault_id: UUID | None
@@ -327,30 +347,35 @@ class ProjectResponse(BaseModel):
 
 
 def to_project_response(p: Project) -> ProjectResponse:
-    return ProjectResponse(
-        id=p.id,
-        tenant_id=p.tenant_id,
-        name=p.name,
-        description=p.description,
-        status=p.status,
-        team_id=p.team_id,
-        mcp_servers=p.mcp_servers,
-        rag_knowledge_bases=p.rag_knowledge_bases,
-        worker_config=p.worker_config,
-        repository_config=p.repository_config,
-        human_approval_policy=p.human_approval_policy,
-        secrets_vault_id=p.secrets_vault_id,
-        allowed_commands=p.allowed_commands,
-        default_runtime_template=p.default_runtime_template,
-        human_task_review_mode=p.human_task_review_mode,
-        budget_amount=p.budget_amount,
-        budget_currency=p.budget_currency,
-        budget_period=p.budget_period,
-        budget_period_start_day=p.budget_period_start_day,
-        budget_period_length_days=p.budget_period_length_days,
-        paused_by_budget=p.paused_by_budget,
-        is_template=p.is_template,
-        created_at=p.created_at,
-        updated_at=p.updated_at,
-        deleted_at=p.deleted_at,
-    )
+    # Vía `model_validate` con la clave ALIAS `model_config`: el plugin mypy de
+    # Pydantic no expone el kwarg field-name (`llm_config`) cuando hay alias
+    # (mismo patrón que to_agent_response / to_team_response).
+    payload: dict[str, Any] = {
+        "id": p.id,
+        "tenant_id": p.tenant_id,
+        "name": p.name,
+        "description": p.description,
+        "status": p.status,
+        "team_id": p.team_id,
+        "mcp_servers": p.mcp_servers,
+        "rag_knowledge_bases": p.rag_knowledge_bases,
+        "worker_config": p.worker_config,
+        "model_config": dict(p.model_config or {}),
+        "repository_config": p.repository_config,
+        "human_approval_policy": p.human_approval_policy,
+        "secrets_vault_id": p.secrets_vault_id,
+        "allowed_commands": p.allowed_commands,
+        "default_runtime_template": p.default_runtime_template,
+        "human_task_review_mode": p.human_task_review_mode,
+        "budget_amount": p.budget_amount,
+        "budget_currency": p.budget_currency,
+        "budget_period": p.budget_period,
+        "budget_period_start_day": p.budget_period_start_day,
+        "budget_period_length_days": p.budget_period_length_days,
+        "paused_by_budget": p.paused_by_budget,
+        "is_template": p.is_template,
+        "created_at": p.created_at,
+        "updated_at": p.updated_at,
+        "deleted_at": p.deleted_at,
+    }
+    return ProjectResponse.model_validate(payload)

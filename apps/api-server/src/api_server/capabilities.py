@@ -393,13 +393,19 @@ def agent_global_warning(agent: Agent) -> list[CapabilityWarning]:
             CapabilityWarning(
                 code=WARN_GLOBAL_AGENT,
                 es=(
-                    "agente global: no ve conocimiento ni memoria de proyecto en "
-                    "esta vista (en una tarea de proyecto usará el contexto de la "
-                    "tarea según ADR 0054)"
+                    "Agente global: es una plantilla read-only sin contexto de "
+                    "proyecto propio, por eso esta vista no muestra conocimiento ni "
+                    "memoria de proyecto. En una tarea de proyecto sí usará el "
+                    "contexto de la tarea (ADR 0054). Para personalizarlo "
+                    "(conocimiento, tools, skills o modelo), fórkalo a tu proyecto "
+                    "desde la pantalla de Agentes, o adopta su equipo desde Equipos."
                 ),
                 en=(
-                    "global agent: does not see project knowledge or memory in this "
-                    "view (in a project task it uses the task context per ADR 0054)"
+                    "Global agent: a read-only template with no project context of "
+                    "its own, so this view shows no project knowledge or memory. In "
+                    "a project task it will use the task context (ADR 0054). To "
+                    "customize it (knowledge, tools, skills or model), fork it into "
+                    "your project from the Agents screen, or adopt its team from Teams."
                 ),
             )
         ]

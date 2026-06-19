@@ -219,6 +219,32 @@ async def test_team_crud_roundtrip(configured_app, migrations_pg_dsn: str) -> No
 
 
 @pytest.mark.asyncio
+async def test_team_model_config_roundtrip(configured_app, migrations_pg_dsn: str) -> None:
+    """Ola A-UI: PUT /teams/{id} fija el modelo por defecto del equipo y GET lo
+    devuelve (clave JSON `model_config`, alias del `llm_config` Python)."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    cfg = {"provider": "claude_sdk", "model": "claude-sonnet-4-5", "temperature": 0.2}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        team_id = (
+            await client.post("/teams", json={"name": "Con modelo"}, headers=headers)
+        ).json()["id"]
+        # Recién creado: sin modelo (hereda).
+        assert (await client.get(f"/teams/{team_id}", headers=headers)).json()["model_config"] == {}
+
+        upd = await client.put(f"/teams/{team_id}", json={"model_config": cfg}, headers=headers)
+        assert upd.status_code == 200, upd.text
+        assert upd.json()["model_config"] == cfg
+
+        got = await client.get(f"/teams/{team_id}", headers=headers)
+        assert got.json()["model_config"]["provider"] == "claude_sdk"
+
+
+@pytest.mark.asyncio
 async def test_members_lifecycle(configured_app, migrations_pg_dsn: str) -> None:
     seeded = await _seed(migrations_pg_dsn)
     token = await _mint_token(seeded["user_a"], seeded["tenant_a"])

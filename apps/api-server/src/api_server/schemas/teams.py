@@ -81,6 +81,23 @@ class TeamUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = None
     default_workflow_template_id: UUID | None = None
+    # Modelo por defecto del equipo (Ola A / ADR 0065). Alias JSON `model_config`
+    # (igual que en Agent). `{}` = no fija modelo (hereda). `None` = no tocar.
+    llm_config: dict[str, Any] | None = Field(default=None, alias="model_config")
+
+    @model_validator(mode="after")
+    def _validate_model(self) -> TeamUpdateRequest:
+        if self.llm_config:
+            from api_server.db.platform_settings import (
+                InvalidModelConfigError,
+                validate_model_config,
+            )
+
+            try:
+                validate_model_config(self.llm_config)
+            except InvalidModelConfigError as exc:
+                raise ValueError(str(exc)) from exc
+        return self
 
 
 class TeamAdoptRequest(BaseModel):

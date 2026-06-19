@@ -218,6 +218,38 @@ async def test_project_crud_roundtrip(configured_app, migrations_pg_dsn: str) ->
 
 
 @pytest.mark.asyncio
+async def test_project_model_config_roundtrip(configured_app, migrations_pg_dsn: str) -> None:
+    """Ola A-UI: PUT /projects/{id} fija el modelo por defecto del proyecto y GET
+    lo devuelve (clave JSON `model_config`, alias del `llm_config` Python)."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    cfg = {"provider": "ollama", "model": "qwen3-coder:480b", "temperature": 0.2}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        project_id = (
+            await client.post(
+                "/projects", json=_minimal_payload(team_id=str(seeded["team_a"])), headers=headers
+            )
+        ).json()["id"]
+        # Recién creado: sin modelo (hereda del default de plataforma).
+        assert (await client.get(f"/projects/{project_id}", headers=headers)).json()[
+            "model_config"
+        ] == {}
+
+        upd = await client.put(
+            f"/projects/{project_id}", json={"model_config": cfg}, headers=headers
+        )
+        assert upd.status_code == 200, upd.text
+        assert upd.json()["model_config"] == cfg
+
+        got = await client.get(f"/projects/{project_id}", headers=headers)
+        assert got.json()["model_config"]["model"] == "qwen3-coder:480b"
+
+
+@pytest.mark.asyncio
 async def test_project_cannot_reference_other_tenants_team(
     configured_app, migrations_pg_dsn: str
 ) -> None:
