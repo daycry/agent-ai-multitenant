@@ -356,6 +356,15 @@ function ProjectEditDialog({
   const [status, setStatus] = useState<ProjectStatus>(
     (project.status as ProjectStatus) ?? "active",
   );
+  // Equipo del proyecto: "" = sin equipo. Permite asignar/cambiar el equipo de
+  // CUALQUIER proyecto (incluido uno en blanco) — el backend ya lo soporta.
+  const [teamId, setTeamId] = useState(project.team_id ?? "");
+  const teamsQuery = useQuery({
+    queryKey: ["teams", "list"],
+    queryFn: () => apiFetch<{ id: string; name: string }[]>("/teams"),
+    refetchOnWindowFocus: false,
+    enabled: open,
+  });
 
   // Reset form when the dialog reopens with a (possibly stale)
   // project — otherwise an edit, save, reopen still shows the old
@@ -365,8 +374,9 @@ function ProjectEditDialog({
       setName(project.name);
       setDescription(project.description ?? "");
       setStatus((project.status as ProjectStatus) ?? "active");
+      setTeamId(project.team_id ?? "");
     }
-  }, [open, project.name, project.description, project.status]);
+  }, [open, project.name, project.description, project.status, project.team_id]);
 
   const mutation = useMutation<Project, ApiError, ProjectUpdate>({
     mutationFn: (payload) =>
@@ -422,6 +432,26 @@ function ProjectEditDialog({
               ))}
             </Select>
           </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="edit-team">Equipo</Label>
+            <Select
+              id="edit-team"
+              value={teamId}
+              onChange={(e) => setTeamId(e.target.value)}
+              data-testid="edit-project-team"
+            >
+              <option value="">Sin equipo</option>
+              {(teamsQuery.data ?? []).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </Select>
+            <p className="text-muted-foreground text-xs">
+              El equipo del proyecto gobierna qué agentes ejecutan sus tareas y la política de
+              memoria (ADR 0071).
+            </p>
+          </div>
           {mutation.isError && (
             <p
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
@@ -442,6 +472,7 @@ function ProjectEditDialog({
                 name: name.trim(),
                 description: description.trim() || null,
                 status,
+                team_id: teamId || null,
               })
             }
             data-testid="edit-project-save"
