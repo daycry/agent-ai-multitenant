@@ -24,6 +24,7 @@ Orientados a quien mantiene el sistema corriendo en una sola máquina
 | [04-disaster-recovery.md](./04-disaster-recovery.md)                 | DR: punto de entrada canónico para restore completo o selectivo por tenant           |
 | [05-key-rotation.md](./05-key-rotation.md)                           | Rotar unseal keys + credenciales (estáticas/dinámicas) y revocación de emergencia    |
 | [06-capacity-management.md](./06-capacity-management.md)             | Escalar workers/colas, concurrencia + límites de tiempo, sizing y capacity de GPU    |
+| [07-custom-domain.md](./07-custom-domain.md)                         | Publicar bajo un dominio propio (DNS + TLS + origen/prefijo) y su efecto en el SSO   |
 | [health-check.md](./health-check.md)                                 | Verificar que todos los servicios del stack están sanos                              |
 | [backups.md](./backups.md)                                           | Copia/restauración manual a nivel de volumen (procedimiento básico)                  |
 | [restart-services.md](./restart-services.md)                         | Reiniciar el stack o un servicio concreto sin perder datos                           |
