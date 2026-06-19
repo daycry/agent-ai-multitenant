@@ -65,6 +65,9 @@ export default function NewProjectWizardPage() {
   // Ola C / ADR 0068: forkear el equipo de la plantilla a una copia editable del
   // proyecto (default off = referenciar el equipo tal cual).
   const [forkTeam, setForkTeam] = useState(false);
+  // Equipo para un proyecto EN BLANCO (sin plantilla): "" = sin equipo. En los
+  // basados en plantilla el equipo lo aporta la plantilla (selected.team_id).
+  const [teamId, setTeamId] = useState("");
   // The stack's default runtime template (06.18 GET /runtime-templates). "" =
   // no default (the run_* tools fall back to per-tool defaults).
   const [runtime, setRuntime] = useState("");
@@ -126,6 +129,9 @@ export default function NewProjectWizardPage() {
         body.worker_config = selected.worker_config;
         body.repository_config = selected.repository_config;
         body.human_approval_policy = selected.human_approval_policy;
+      } else {
+        // Proyecto en blanco: el equipo lo elige el operador (o ninguno).
+        body.team_id = teamId || null;
       }
       return apiFetch<Project>("/projects", { method: "POST", body });
     },
@@ -304,6 +310,31 @@ export default function NewProjectWizardPage() {
                   </p>
                 )}
               </div>
+
+              {/* Proyecto EN BLANCO: elegir equipo (en los de plantilla lo aporta
+                  la plantilla — se muestra abajo). ADR 0071. */}
+              {!selected && (
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="wizard-team">Equipo</Label>
+                  <Select
+                    id="wizard-team"
+                    value={teamId}
+                    onChange={(e) => setTeamId(e.target.value)}
+                    data-testid="wizard-team-select"
+                  >
+                    <option value="">Sin equipo</option>
+                    {(teamsQuery.data ?? []).map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </Select>
+                  <p className="text-muted-foreground text-xs">
+                    El equipo gobierna qué agentes ejecutan las tareas y la política de memoria.
+                    También puedes asignarlo/cambiarlo luego desde la ficha del proyecto.
+                  </p>
+                </div>
+              )}
 
               {/* KB grants de la plantilla — solo si hay plantilla elegida. */}
               {selected && (
