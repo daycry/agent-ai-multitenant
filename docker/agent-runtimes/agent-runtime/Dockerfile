@@ -89,6 +89,12 @@ RUN groupadd --gid 1000 agent \
  && mkdir -p /workspace \
  && chown -R 1000:1000 /workspace
 
+# git + openssh-client (ADR 0072): los agentes commitean en los worktrees y las
+# operaciones git contra remotos pueden requerir ssh. La base no los trae.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git openssh-client \
+ && rm -rf /var/lib/apt/lists/*
+
 # The venv already holds the installed agent_runtime package + its deps.
 COPY --from=builder /opt/venv /opt/venv
 

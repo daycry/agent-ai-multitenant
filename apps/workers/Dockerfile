@@ -22,6 +22,12 @@ LABEL org.opencontainers.image.title="workers" \
 # Install the workers package into the shared venv (root owns it). Any workers
 # dep already present in the base is seen as satisfied; only the delta installs.
 USER root
+# git + openssh-client (ADR 0072): el worker ejecuta operaciones git (git_repos:
+# bare repos + worktrees + fetch/push autenticado a remotos GitHub/GitLab/DevOps).
+# La base python-slim no los trae.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git openssh-client \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY apps/workers/pyproject.toml ./
 COPY apps/workers/src/ ./src/
