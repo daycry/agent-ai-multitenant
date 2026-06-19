@@ -285,11 +285,20 @@ interface PublicBaseUrl {
   env_default: string;
 }
 
+interface ApiPathPrefix {
+  prefix: string;
+  is_override: boolean;
+  env_default: string;
+}
+
 function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolean }) {
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // ADR 0069: el prefijo de API (p.ej. /api) bajo un reverse proxy single-origin.
+  const [prefixDraft, setPrefixDraft] = useState<string | null>(null);
+  const [prefixSaveError, setPrefixSaveError] = useState<string | null>(null);
 
   // Authoritative source: the effective public base URL + whether it is the
   // operator override or still the env bootstrap default (ADR 0047).
@@ -315,11 +324,37 @@ function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolea
     onError: (err) => setSaveError(err instanceof ApiError ? err.body : String(err)),
   });
 
+  // ADR 0069: prefijo de API (origen + prefijo + path SSO), editable por separado.
+  const prefixQuery = useQuery({
+    queryKey: ["sso-api-path-prefix"],
+    queryFn: () => apiFetch<ApiPathPrefix>("/auth/sso/api-path-prefix"),
+    refetchOnWindowFocus: false,
+  });
+  const prefixSaveMutation = useMutation({
+    mutationFn: (prefix: string) =>
+      apiFetch<ApiPathPrefix>("/auth/sso/api-path-prefix", {
+        method: "PUT",
+        body: { prefix },
+      }),
+    onSuccess: () => {
+      setPrefixSaveError(null);
+      setPrefixDraft(null);
+      void queryClient.invalidateQueries({ queryKey: ["sso-api-path-prefix"] });
+      void queryClient.invalidateQueries({ queryKey: ["sso-callback-url"] });
+    },
+    onError: (err) => setPrefixSaveError(err instanceof ApiError ? err.body : String(err)),
+  });
+
   const baseData = baseQuery.data;
   const fieldValue = draft ?? baseData?.base_url ?? "";
   const dirty =
     draft !== null && draft.trim() !== "" && draft.trim() !== (baseData?.base_url ?? "");
   const stillDefault = baseData ? !baseData.is_override : false;
+
+  const prefixData = prefixQuery.data;
+  // El prefijo "" es válido (sin prefijo), así que el dirty compara contra el valor actual.
+  const prefixValue = prefixDraft ?? prefixData?.prefix ?? "";
+  const prefixDirty = prefixDraft !== null && prefixDraft.trim() !== (prefixData?.prefix ?? "");
 
   async function copy() {
     if (url === null) return;
@@ -384,6 +419,44 @@ function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolea
                 data-testid="sso-public-base-url-error"
               >
                 {saveError}
+              </p>
+            )}
+          </div>
+
+          {/* ADR 0069: prefijo de API bajo el reverse proxy single-origin. */}
+          <div className="space-y-1.5">
+            <Label htmlFor="api-path-prefix">Prefijo de API (reverse proxy)</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="api-path-prefix"
+                value={prefixValue}
+                onChange={(e) => setPrefixDraft(e.target.value)}
+                placeholder="/api  (vacío si el API cuelga de la raíz)"
+                data-testid="sso-api-path-prefix-input"
+                disabled={prefixQuery.isLoading || prefixSaveMutation.isPending}
+              />
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => prefixSaveMutation.mutate(prefixValue.trim())}
+                disabled={!prefixDirty || prefixSaveMutation.isPending}
+                data-testid="sso-api-path-prefix-save"
+              >
+                {prefixSaveMutation.isPending ? "Guardando…" : "Guardar"}
+              </Button>
+            </div>
+            <p className="text-muted-foreground text-xs">
+              Si publicas single-origin (SPA en <span className="font-mono">/</span> y API bajo{" "}
+              <span className="font-mono">/api</span> tras Caddy/nginx), pon{" "}
+              <span className="font-mono">/api</span>. Vacío si el api-server cuelga de la raíz del
+              dominio. Se inserta entre el origen y la ruta del callback.
+            </p>
+            {prefixSaveError && (
+              <p
+                className="text-danger-soft-foreground text-xs"
+                data-testid="sso-api-path-prefix-error"
+              >
+                {prefixSaveError}
               </p>
             )}
           </div>
