@@ -40,11 +40,13 @@ services:
       # the running infra by service name (otherwise they default to localhost
       # and report down inside the container).
       API_SERVER_VAULT_URL: http://vault:8200
-      # Dev-only: el token de Vault se pasa por el entorno del host al hacer
-      # `up` (NUNCA se commitea). Permite que el stack de manuales gestione
-      # proveedores LLM (escribe el secreto en Vault). Vacío → la gestión de
-      # proveedores responde 503 "Vault not configured" (degradación limpia).
-      API_SERVER_VAULT_TOKEN: ${API_SERVER_VAULT_TOKEN:-}
+      # Dev-only: token del Vault en modo -dev (docker-compose.dev.yml lo arranca
+      # con `-dev-root-token-id=dev-root-token`). NO es un secreto real (ya está
+      # en el overlay dev). Permite que el stack de manuales gestione proveedores
+      # LLM (escribe el secreto en el mount KV `secret`). Se puede sobrescribir
+      # con el env del host. OJO: NO usar el token de `vault-init-output/` — es
+      # de una instancia de Vault distinta (prod) y el Vault dev lo rechaza (502).
+      API_SERVER_VAULT_TOKEN: ${API_SERVER_VAULT_TOKEN:-dev-root-token}
       API_SERVER_DOCLING_SERVE_URL: http://docling-serve:5001
       API_SERVER_OLLAMA_URL: http://ollama:11434
       API_SERVER_CLAMAV_HOST: clamav
