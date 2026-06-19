@@ -18,6 +18,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+
+import { wsUrl } from "@/lib/ws";
 import { useParams } from "next/navigation";
 
 interface ChecklistItem {
@@ -60,7 +62,9 @@ export default function ReviewPage() {
   // Logs WebSocket.
   useEffect(() => {
     if (!sessionId) return;
-    const ws = new WebSocket(`ws://localhost:8001/ws/review/${sessionId}/logs`);
+    // Same-origin a través de Caddy (/api). `wsUrl` deriva ws(s)://host/api… de
+    // la base relativa y adjunta el token (antes hardcodeaba ws://localhost:8001).
+    const ws = new WebSocket(wsUrl(`/ws/review/${sessionId}/logs`));
     ws.onmessage = (ev: MessageEvent) => {
       setLogs((prev) => [...prev, String(ev.data)]);
     };
