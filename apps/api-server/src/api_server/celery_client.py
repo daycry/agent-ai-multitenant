@@ -126,6 +126,24 @@ async def enqueue_clone_project_repo(project_id: UUID) -> bool:
     return True
 
 
+async def enqueue_open_plan_pr(
+    project_id: UUID, plan_branch: str, *, title: str, body: str
+) -> bool:
+    """Encola el auto-PR de un plan (ADR 0072 fase 2): push autenticado de la rama
+    + apertura del PR/MR por proveedor. Best-effort."""
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            "workers.open_plan_pr",
+            args=[str(project_id), plan_branch, title, body],
+            queue="default",
+        )
+    except Exception as exc:
+        _log.warning("plan_pr.enqueue_failed", project_id=str(project_id), error=str(exc))
+        return False
+    return True
+
+
 async def enqueue_notification_send(
     send_request: dict[str, Any],
     *,

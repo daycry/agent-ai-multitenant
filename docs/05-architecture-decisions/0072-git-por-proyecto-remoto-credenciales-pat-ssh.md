@@ -11,9 +11,11 @@ extends: ["0028"]
 
 # ADR 0072 — Git por proyecto: remoto + credenciales (PAT/SSH) + clone autenticado
 
-> **Estado: `accepted`** (delegación autónoma del operador, 2026-06-19). v1 cubre
-> **configurar el remoto + credenciales (PAT/SSH) y clonar/push autenticado**;
-> el auto-PR por proveedor queda como **fase 2** (sección al final).
+> **Estado: `accepted`** (delegación autónoma del operador, 2026-06-19). v1:
+> **configurar el remoto + credenciales (PAT/SSH) y clonar/push autenticado**.
+> **Fase 2 (auto-PR por proveedor) implementada** (opener GitHub/GitLab/Azure +
+> push autenticado + task `open_plan_pr`); solo falta su disparo automático al
+> cerrar plan, que depende del pipeline de ejecución-git (sección al final).
 
 ## Contexto (estado actual — analizado)
 
@@ -119,9 +121,24 @@ cleanup borra temporales); validación de `GitConfig`; `PUT /projects/{id}/git`
 (config + secreto a Vault, nunca devuelve el secreto); la task `clone_project_repo`
 resuelve cred + llama ensure/fetch (con fakes).
 
-## Fase 2 (diferida) — Auto-PR por proveedor
+## Fase 2 — Auto-PR por proveedor (IMPLEMENTADO)
 
-`pr_opener` despachado por `provider` (GitHub REST `/pulls`, GitLab
-`/merge_requests`, Azure DevOps `/pullrequests`) cableado en el orchestrator al
-cerrar el plan (hoy `open_plan_pr` tiene el seam pero NO está inyectado). Usa la
-misma credencial de Vault. Requiere su propio slice + tests.
+- **`workers/pr_openers.py`**: `open_pull_request(provider, remote_url, token,
+head, base, title, body)` despachado por proveedor — GitHub REST `/pulls`
+  (Bearer; api.github.com o `/api/v3` en GHE), GitLab `/merge_requests`
+  (PRIVATE-TOKEN; path URL-encoded), Azure DevOps `/pullrequests` (Basic). Parseo
+  de owner/repo/host desde URL https o ssh. Tests con transporte mockeado.
+- **Push autenticado**: `PlanGitWorkflow` acepta `auth_env` y lo aplica en
+  `push_branch_to_remote` (la rama del plan sube al remoto con PAT/SSH).
+- **Task `workers.open_plan_pr(project_id, plan_branch, title, body)`**: resuelve
+  `git_config` + el PAT de Vault, construye el opener + el `auth_env`, fuerza el
+  push y abre el PR/MR vía `PlanGitWorkflow.open_plan_pr`. Best-effort.
+  `enqueue_open_plan_pr` en el api-server. El PR/MR requiere PAT (la API REST no
+  va por SSH); con SSH se hace el push pero no la apertura del PR.
+
+**Pendiente (no de git-config)**: el DISPARO automático al cerrar un plan
+(encolar `open_plan_pr`) y, antes, conectar la ejecución real (agent-runtime/
+LangGraph) al pipeline bare→worktree→commit→push — hoy ese pipeline es andamiaje
+(solo lo ejercita el driver de demo `plan_runner`, no la ejecución productiva).
+Esa integración es un plan de roadmap propio; cuando exista, solo tiene que
+llamar a `enqueue_open_plan_pr` al cierre del plan.
