@@ -123,6 +123,10 @@ el problema ya esté documentado.
 - [powershell-ps1-vs-python-py.md](./powershell-ps1-vs-python-py.md)
   — `.ps1` se invoca directo, `.py` con `.venv\Scripts\python.exe`;
   mezclarlos da `SyntaxError` o pantalla en blanco.
+- [docker-msys-build-arg-leading-slash-windows.md](./docker-msys-build-arg-leading-slash-windows.md)
+  — `docker build --build-arg X=/api` desde Git Bash mangla `/api` a
+  `C:/Program Files/Git/api` (MSYS); hornea una URL rota en el admin-panel.
+  Construir desde PowerShell o con `MSYS_NO_PATHCONV=1`. Linux/prod no afectados.
 
 ### admin-panel / next.js
 
