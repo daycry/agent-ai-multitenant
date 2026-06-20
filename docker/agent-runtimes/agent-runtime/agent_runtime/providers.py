@@ -332,13 +332,13 @@ SdkQuery = Callable[..., AsyncIterator[Any]]
 class ClaudeSDKModelClient:
     """The Claude Agent SDK as a single-decision `ModelClient`.
 
-    Wraps `shared_llm.providers.ClaudeAgentProvider`. The SDK does not
-    expose `/chat/completions`-style tool_calls in this path — when the
-    loop needs tool use it should run inside the SDK's own agent loop
-    via `provider.run_agent()`, which is a different code path.
-
-    For the per-decision adapter, every turn is FINISH (text). The
-    LangGraph loop drives multi-turn behaviour itself (ADR 0018).
+    Wraps `shared_llm.providers.ClaudeAgentProvider`. That provider's
+    `complete()` now HONOURS `tools` and surfaces the model's requests as
+    `CompletionResponse.tool_calls` (host-executed tool-calling: it advertises
+    the schemas as an in-process MCP server and captures the call via
+    `can_use_tool`). So claude_sdk reaches ACT exactly like the
+    OpenAI-compatible providers — provider-agnostic parity — and the LangGraph
+    loop drives the multi-turn tool use (ADR 0018).
     """
 
     def __init__(
@@ -369,18 +369,16 @@ class ClaudeSDKModelClient:
 
     def decide(self, state: dict[str, Any]) -> ModelResponse:
         resp = _run(
-            self.provider.complete(_decide_messages(state), model=self.model, effort=self._effort)
+            self.provider.complete(
+                _decide_messages(state),
+                model=self.model,
+                tools=self._tools,
+                effort=self._effort,
+            )
         )
-        # SDK never emits OpenAI-style tool_calls through complete();
-        # this is always a FINISH (the SDK's text output).
-        decision = ModelDecision(kind=DecisionKind.FINISH, output=resp.content)
-        return ModelResponse(
-            decision=decision,
-            model=resp.model or self.model,
-            tokens_in=resp.usage.input_tokens,
-            tokens_out=resp.usage.output_tokens,
-            cost_usd=resp.usage.cost_usd,
-        )
+        # complete() now emits tool_calls when the model asks for a tool, so this
+        # ramifies to ACT/FINISH like every other provider (no hardcoded FINISH).
+        return _decision_from(resp, model=self.model)
 
     def review(self, state: dict[str, Any]) -> ReviewResponse:
         resp = _run(
