@@ -266,6 +266,60 @@ async def test_chat_converges_on_repeated_tool_calls(
     assert count == 1
 
 
+@pytest.mark.asyncio
+async def test_chat_caps_repeated_tool_with_different_args(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """An over-eager model re-calling the SAME tool with DIFFERENT args every
+    round (e.g. inventing several phrasings of one fact) must NOT run away: the
+    per-tool cap (MAX_CALLS_PER_TOOL) bounds how many times it runs in a turn."""
+    seeded = await _seed(migrations_pg_dsn)
+    from api_server.assistant.graph import (
+        MAX_CALLS_PER_TOOL,
+        ModelTurn,
+        ScriptedAssistantModel,
+        ToolInvocation,
+    )
+    from api_server.routers.assistant import get_assistant_model
+
+    # Distinct phrasings of the same fact → distinct signatures (NOT deduped),
+    # more of them than the cap allows.
+    turns = [
+        ModelTurn(
+            tool_calls=(
+                ToolInvocation(
+                    name="remember_about_me", arguments={"content": f"Se llama Jose ({i})"}
+                ),
+            )
+        )
+        for i in range(MAX_CALLS_PER_TOOL + 2)
+    ]
+    turns.append(ModelTurn(content="Listo."))
+    scripted = ScriptedAssistantModel(turns=turns)
+    configured_app.dependency_overrides[get_assistant_model] = lambda: scripted
+    token = await _mint(seeded["admin_a"], seeded["tenant"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with _client(configured_app) as client:
+        resp = await client.post(
+            "/assistant/chat", json={"message": "me llamo Jose"}, headers=headers
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # The write tool ran at most the cap, not once per invented phrasing.
+    assert body["tools_called"].count("remember_about_me") == MAX_CALLS_PER_TOOL
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        count = await conn.fetchval(
+            "SELECT count(*) FROM memory_entries WHERE user_id = $1 AND deleted_at IS NULL",
+            seeded["admin_a"],
+        )
+    finally:
+        await conn.close()
+    assert count == MAX_CALLS_PER_TOOL
+
+
 # ===========================================================================
 # Chat flow — stored facts are injected into the system prompt
 # ===========================================================================

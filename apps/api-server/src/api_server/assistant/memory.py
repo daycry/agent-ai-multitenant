@@ -142,10 +142,18 @@ def augment_system_prompt(
         )
     if remember_enabled:
         sections.append(
-            "Si el usuario comparte un dato personal duradero (su nombre, una "
-            "preferencia, un gusto o su estilo), usa la herramienta "
-            "remember_about_me para recordarlo en futuras conversaciones. No "
-            "guardes información efímera ni la repitas si ya la sabes."
+            "Memoria sobre el usuario: usa la herramienta remember_about_me SOLO "
+            "cuando el usuario comparta EXPLÍCITAMENTE, en su último mensaje, un "
+            "dato personal NUEVO y duradero sobre sí mismo (su nombre, una "
+            "preferencia, un gusto o su estilo de trabajo). Reglas estrictas:\n"
+            "- NO inventes ni deduzcas datos; guarda solo lo que el usuario afirme "
+            "de sí mismo, con sus palabras.\n"
+            "- NO guardes saludos, preguntas, datos efímeros, ni nada que ya "
+            "figure en «Lo que sé de ti».\n"
+            "- Guarda como mucho UN hecho por cada dato nuevo; no trocees un mismo "
+            "dato en varias llamadas ni invoques la herramienta repetidamente.\n"
+            "- Si el usuario NO ha compartido un dato personal nuevo, NO llames a "
+            "remember_about_me: responde con normalidad."
         )
     return "\n\n".join(sections)
 

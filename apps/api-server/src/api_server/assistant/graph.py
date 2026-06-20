@@ -32,6 +32,12 @@ AssistantNode = Callable[["AssistantState"], Awaitable["AssistantState"]]
 
 # Hard ceiling on tool rounds so a misbehaving model can't loop forever.
 MAX_TOOL_ROUNDS = 6
+# Backstop on how many times ONE tool may run in a single turn. The signature
+# dedup below stops a model re-calling a tool with IDENTICAL args, but an
+# over-eager model can re-call the SAME tool with slightly DIFFERENT args (e.g.
+# inventing several "facts" to remember). This caps that runaway per tool name —
+# defence in depth on top of the prompt guidance.
+MAX_CALLS_PER_TOOL = 3
 
 
 # ---------------------------------------------------------------------------
@@ -150,15 +156,19 @@ def _node_decide(model: AssistantModelClient) -> AssistantNode:
         turn = await model.decide(state)
         if turn.content:
             state.last_content = turn.content
-        # Keep only tool calls that are (a) enabled for the tenant and (b) not
-        # already executed this turn — an over-eager model re-emitting the same
-        # call (e.g. remembering the same fact every round) is dropped, which
-        # lets the loop converge.
+        # Keep only tool calls that are (a) enabled for the tenant, (b) not
+        # already executed this turn (same name+args), and (c) under the
+        # per-tool call cap. (b) drops a model re-emitting the SAME call; (c)
+        # drops an over-eager model re-calling the same tool with DIFFERENT args
+        # every round (e.g. inventing several facts to remember) so the loop
+        # converges instead of running to the round ceiling.
         allowed = set(state.enabled_tools)
         kept = tuple(
             tc
             for tc in turn.tool_calls
-            if tc.name in allowed and _signature(tc) not in state.executed_signatures
+            if tc.name in allowed
+            and _signature(tc) not in state.executed_signatures
+            and state.tools_called.count(tc.name) < MAX_CALLS_PER_TOOL
         )
         state.pending = ModelTurn(content=turn.content, tool_calls=kept)
         if not kept:

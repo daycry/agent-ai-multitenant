@@ -119,6 +119,74 @@ async def test_stream_yields_text_deltas_and_a_final_done_chunk() -> None:
 
 
 @pytest.mark.asyncio
+async def test_complete_emits_tool_calls_when_model_requests_a_tool() -> None:
+    """Protocol contract (ADR 0021): complete() debe HONRAR `tools` y exponer las
+    peticiones de tool del modelo como CompletionResponse.tool_calls — misma forma
+    que los providers OpenAI-compatibles — para que el host (grafo del asistente /
+    loop del agente) las ejecute. El SDK nombra las tools MCP in-process como
+    ``mcp__<server>__<tool>``; lo recortamos al nombre base que registró el host."""
+    fake_query = _make_query(
+        _AssistantMessage(
+            content=[
+                _ToolUseBlock(
+                    name="mcp__host_tools__remember_about_me",
+                    input={"content": "Mi nombre es Dani"},
+                    id="tu_42",
+                )
+            ]
+        ),
+    )
+    p = ClaudeAgentProvider(query_fn=fake_query, default_model="claude-sonnet-4-5")
+    resp = await p.complete(
+        [Message(role="user", content="me llamo Dani")],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "remember_about_me",
+                    "description": "Guarda un dato del usuario",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"content": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+    )
+    assert resp.tool_calls is not None
+    assert len(resp.tool_calls) == 1
+    assert resp.tool_calls[0].name == "remember_about_me"
+    assert resp.tool_calls[0].arguments == {"content": "Mi nombre es Dani"}
+    assert resp.tool_calls[0].id == "tu_42"
+
+
+@pytest.mark.asyncio
+async def test_complete_with_tools_returns_text_when_model_does_not_call_a_tool() -> None:
+    """Si se ofrecen tools pero el modelo solo responde texto, complete() devuelve
+    el texto y tool_calls=None (paridad con los providers OpenAI-compatibles)."""
+    fake_query = _make_query(
+        _AssistantMessage(content=[_TextBlock(text="Encantado.")]),
+        _ResultMessage(total_cost_usd=0.001, usage=_UsageBlock(input_tokens=5, output_tokens=3)),
+    )
+    p = ClaudeAgentProvider(query_fn=fake_query, default_model="claude-sonnet-4-5")
+    resp = await p.complete(
+        [Message(role="user", content="hola")],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "remember_about_me",
+                    "description": "x",
+                    "parameters": {},
+                },
+            }
+        ],
+    )
+    assert resp.tool_calls is None
+    assert resp.content == "Encantado."
+
+
+@pytest.mark.asyncio
 async def test_run_agent_yields_typed_agent_run_events() -> None:
     fake_query = _make_query(
         _AssistantMessage(content=[_ToolUseBlock(name="Read", input={"path": "file.txt"})]),

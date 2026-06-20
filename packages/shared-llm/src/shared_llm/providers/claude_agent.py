@@ -28,8 +28,13 @@ from shared_llm.types import (
     CompletionResponse,
     Message,
     StreamChunk,
+    ToolCall,
     Usage,
 )
+
+# In-process MCP server name used to advertise host tool schemas to the SDK.
+# The SDK namespaces these tools as ``mcp__{_HOST_TOOLS_SERVER}__{tool}``.
+_HOST_TOOLS_SERVER = "host_tools"
 
 
 class ClaudeAgentProvider:
@@ -170,19 +175,39 @@ class ClaudeAgentProvider:
         model: str | None = None,
         max_tokens: int = 1024,  # noqa: ARG002 — SDK does not expose this
         temperature: float = 0.7,  # noqa: ARG002 — same
-        tools: list[dict[str, Any]] | None = None,  # noqa: ARG002
+        tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> CompletionResponse:
         system, prompt = self._flatten(messages)
+        max_turns = int(kwargs.pop("max_turns", 8))
+        effort = kwargs.pop("effort", None)
+        allowed_tools = kwargs.pop("allowed_tools", None)
+        # ADR 0021 / Protocol (base.py): complete() DEBE honrar `tools` cuando el
+        # backend soporta tool-calling. El SDK de Claude no es chat-completions:
+        # advertimos las tools como un MCP server in-process (el modelo ve sus
+        # esquemas) y CAPTURAMOS la tool-call vía `can_use_tool` (deny+interrupt)
+        # en vez de que la ejecute el SDK, devolviéndola en `tool_calls` para que
+        # la ejecute el HOST — idéntico contrato a los providers OpenAI-compatibles.
+        # Así el grafo del asistente (y un provider futuro, p.ej. OpenAI) se
+        # comportan igual sea cual sea el backend LLM.
+        if tools:
+            return await self._complete_with_tools(
+                prompt=prompt,
+                system=system,
+                model=model,
+                tools=tools,
+                max_turns=max_turns,
+                effort=effort,
+            )
         options = self._build_options(
             model=model,
             system=system,
-            allowed_tools=kwargs.pop("allowed_tools", None),
+            allowed_tools=allowed_tools,
             # `max_turns=1` agota el loop interno del Claude Code CLI (incluso una
             # respuesta simple cuenta como >1 turno) → "Reached maximum number of
             # turns (1)". 8 deja responder + algún paso interno; overridable.
-            max_turns=int(kwargs.pop("max_turns", 8)),
-            effort=kwargs.pop("effort", None),
+            max_turns=max_turns,
+            effort=effort,
         )
         query_fn = self._query()
         collected: list[Any] = []
@@ -197,8 +222,132 @@ class ClaudeAgentProvider:
             model=model or self._default_model,
             provider=self.name,
             usage=usage,
-            tool_calls=None,  # complete() runs SDK with no tools
+            tool_calls=None,  # no tools requested
             raw=collected,
+        )
+
+    async def _complete_with_tools(
+        self,
+        *,
+        prompt: str,
+        system: str | None,
+        model: str | None,
+        tools: list[dict[str, Any]],
+        max_turns: int,
+        effort: str | None,
+    ) -> CompletionResponse:
+        """Honor `tools` with the Claude Agent SDK (host-executed tool-calling).
+
+        The SDK drives its own tool loop, so we expose the host tools as an
+        in-process MCP server and intercept each call with a ``can_use_tool``
+        callback that DENIES execution and interrupts — the host then runs the
+        tool, exactly like the OpenAI-compatible providers. The model's
+        ``tool_use`` blocks are harvested into ``CompletionResponse.tool_calls``.
+        """
+        query_fn = self._query()
+        specs = _unwrap_tool_schemas(tools)
+        if self._query_fn is not None:
+            # Test mode: the injected fake takes whatever we pass; no SDK import.
+            prompt_arg: Any = prompt
+            options: Any = None
+        else:
+            options = self._build_tool_options(
+                system=system, model=model, specs=specs, max_turns=max_turns, effort=effort
+            )
+            prompt_arg = _single_user_prompt_stream(prompt)
+        collected: list[Any] = []
+        try:
+            async for msg in query_fn(prompt=prompt_arg, options=options):
+                collected.append(msg)
+        except Exception as exc:
+            # `can_use_tool(interrupt=True)` puede cerrar el stream con una señal;
+            # si ya cosechamos la tool-call, ESO es el resultado. Si no, es error.
+            tool_calls = _harvest_tool_calls(collected)
+            if not tool_calls:
+                raise ProviderError(str(exc)) from exc
+            text_parts, usage = self._harvest(collected)
+            return CompletionResponse(
+                content="".join(text_parts),
+                model=model or self._default_model,
+                provider=self.name,
+                usage=usage,
+                tool_calls=tool_calls,
+                raw=collected,
+            )
+        text_parts, usage = self._harvest(collected)
+        tool_calls = _harvest_tool_calls(collected)
+        return CompletionResponse(
+            content="".join(text_parts),
+            model=model or self._default_model,
+            provider=self.name,
+            usage=usage,
+            tool_calls=tool_calls or None,
+            raw=collected,
+        )
+
+    def _build_tool_options(
+        self,
+        *,
+        system: str | None,
+        model: str | None,
+        specs: list[dict[str, Any]],
+        max_turns: int,
+        effort: str | None,
+    ) -> Any:
+        """Build ``ClaudeAgentOptions`` advertising `specs` as an in-process MCP
+        server, with a ``can_use_tool`` that denies+interrupts so the HOST runs
+        the tool (the SDK only surfaces the call). Production path only — in tests
+        the injected ``query_fn`` short-circuits this (no SDK import)."""
+        try:
+            from claude_agent_sdk import (  # lazy — optional extra
+                ClaudeAgentOptions,
+                PermissionResultDeny,
+                create_sdk_mcp_server,
+                tool,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "claude-agent-sdk is not installed. Run `pip install 'shared-llm[claude]'`."
+            ) from exc
+
+        async def _stub(args: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001 — SDK tool sig
+            # Never executed: can_use_tool denies before the SDK would run it.
+            return {"content": [{"type": "text", "text": ""}]}
+
+        sdk_tools = [
+            tool(
+                spec["name"],
+                spec.get("description") or spec["name"],
+                _json_schema_to_tool_schema(spec.get("parameters")),
+            )(_stub)
+            for spec in specs
+        ]
+        server = create_sdk_mcp_server(name=_HOST_TOOLS_SERVER, version="1.0.0", tools=sdk_tools)
+
+        async def _capture_and_deny(
+            tool_name: str,  # noqa: ARG001 — SDK can_use_tool sig
+            tool_input: dict[str, Any],  # noqa: ARG001 — SDK can_use_tool sig
+            context: Any,  # noqa: ARG001 — SDK can_use_tool sig
+        ) -> Any:
+            # The call is harvested from the message stream; deny+interrupt keeps
+            # the SDK from executing it or looping — the host runs it instead.
+            return PermissionResultDeny(
+                message="Tool ejecutada por el host (host-executed tool-calling).",
+                interrupt=True,
+            )
+
+        extra: dict[str, Any] = {}
+        if effort:
+            extra["effort"] = effort
+        # NB: las tools NO van en `allowed_tools` a propósito → el SDK evalúa el
+        # permiso a "ask" → dispara `can_use_tool` → interceptamos.
+        return ClaudeAgentOptions(
+            model=model or self._default_model,
+            system_prompt=system if system is not None else self._default_system_prompt,
+            mcp_servers={_HOST_TOOLS_SERVER: server},
+            can_use_tool=_capture_and_deny,
+            max_turns=max_turns,
+            **extra,
         )
 
     async def stream(
@@ -324,6 +473,94 @@ def _to_agent_event(msg: Any) -> AgentRunEvent:
                 return AgentRunEvent(kind="text", text=text, raw=msg)
 
     return AgentRunEvent(kind="other", raw=msg)
+
+
+# ----------------------------------------------------------------------
+# Host-executed tool-calling helpers (ADR 0021 — Protocol `tools` contract)
+# ----------------------------------------------------------------------
+def _unwrap_tool_schemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalise OpenAI-style tool defs to flat ``{name, description, parameters}``.
+
+    Accepts both the wrapped ``{"type":"function","function":{...}}`` envelope and
+    a bare ``{"name","description","parameters"}`` dict; skips entries with no name.
+    """
+    specs: list[dict[str, Any]] = []
+    for t in tools or []:
+        fn = t.get("function") if isinstance(t, dict) and "function" in t else t
+        if not isinstance(fn, dict):
+            continue
+        name = fn.get("name")
+        if not name:
+            continue
+        specs.append(
+            {
+                "name": str(name),
+                "description": fn.get("description") or "",
+                "parameters": fn.get("parameters") or fn.get("input_schema") or {},
+            }
+        )
+    return specs
+
+
+def _json_schema_to_tool_schema(parameters: dict[str, Any] | None) -> dict[str, Any]:
+    """Map a JSON-Schema ``parameters`` object to the ``@tool`` decorator's simple
+    ``{field: python_type}`` form. The stub tool is never executed (the host runs
+    the real one), so this only needs to advertise field names/types to the model.
+    """
+    props = (parameters or {}).get("properties") or {}
+    typemap: dict[str, type] = {
+        "string": str,
+        "integer": int,
+        "number": float,
+        "boolean": bool,
+        "array": list,
+        "object": dict,
+    }
+    schema = {
+        name: typemap.get(str((spec or {}).get("type")), str)
+        for name, spec in props.items()
+        if isinstance(name, str)
+    }
+    return schema or {"input": str}
+
+
+def _strip_mcp_prefix(name: str) -> str:
+    """``mcp__host_tools__remember_about_me`` → ``remember_about_me`` (the bare
+    name the host registered). Non-MCP names pass through unchanged."""
+    if name.startswith("mcp__"):
+        parts = name.split("__")
+        if len(parts) >= 3:
+            return "__".join(parts[2:])
+    return name
+
+
+def _harvest_tool_calls(messages: list[Any]) -> list[ToolCall]:
+    """Collect the model's tool requests from SDK assistant messages.
+
+    A ``tool_use`` block is duck-typed exactly like ``_to_agent_event`` detects it
+    (has ``.name`` and ``.input``). The SDK's MCP namespacing is stripped back to
+    the bare tool name the host expects."""
+    calls: list[ToolCall] = []
+    for msg in messages:
+        content = getattr(msg, "content", None)
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if hasattr(block, "name") and hasattr(block, "input"):
+                calls.append(
+                    ToolCall(
+                        id=str(getattr(block, "id", "") or ""),
+                        name=_strip_mcp_prefix(str(getattr(block, "name", ""))),
+                        arguments=dict(getattr(block, "input", {}) or {}),
+                    )
+                )
+    return calls
+
+
+async def _single_user_prompt_stream(prompt: str) -> AsyncIterator[dict[str, Any]]:
+    """Streaming-mode input: ``can_use_tool`` requires an AsyncIterable prompt, not
+    a string. Yield the single user turn in the SDK's streaming message shape."""
+    yield {"type": "user", "message": {"role": "user", "content": prompt}}
 
 
 __all__ = ["AgentRunEvent", "ClaudeAgentProvider"]
