@@ -13,9 +13,12 @@ extends: ["0028"]
 
 > **Estado: `accepted`** (delegación autónoma del operador, 2026-06-19). v1:
 > **configurar el remoto + credenciales (PAT/SSH) y clonar/push autenticado**.
-> **Fase 2 (auto-PR por proveedor) implementada** (opener GitHub/GitLab/Azure +
-> push autenticado + task `open_plan_pr`); solo falta su disparo automático al
-> cerrar plan, que depende del pipeline de ejecución-git (sección al final).
+> **Fase 2 (auto-PR por proveedor) implementada y DISPARADA**: opener
+> GitHub/GitLab/Azure + push autenticado + task `open_plan_pr`, encolada
+> automáticamente al **validar** el plan (→ `completed`), respetando el gate de
+> validación humana. Las **políticas del flujo git** son configurables por
+> proyecto. Único pendiente: el pipeline de ejecución-git (agentes que commitean
+> de verdad en los worktrees), que es un plan de roadmap propio (sección final).
 
 ## Contexto (estado actual — analizado)
 
@@ -136,9 +139,46 @@ head, base, title, body)` despachado por proveedor — GitHub REST `/pulls`
   `enqueue_open_plan_pr` en el api-server. El PR/MR requiere PAT (la API REST no
   va por SSH); con SSH se hace el push pero no la apertura del PR.
 
-**Pendiente (no de git-config)**: el DISPARO automático al cerrar un plan
-(encolar `open_plan_pr`) y, antes, conectar la ejecución real (agent-runtime/
-LangGraph) al pipeline bare→worktree→commit→push — hoy ese pipeline es andamiaje
-(solo lo ejercita el driver de demo `plan_runner`, no la ejecución productiva).
-Esa integración es un plan de roadmap propio; cuando exista, solo tiene que
-llamar a `enqueue_open_plan_pr` al cierre del plan.
+## Fase 2 — Políticas del flujo git del plan (IMPLEMENTADO)
+
+El flujo git del plan es configurable por proyecto en
+**`projects.worker_config.git_policies`** (`PlanGitPolicies`, frozen). Tres ejes,
+con defaults que reproducen la regla operativa "los agentes pushean su rama y, al
+cerrar, NO se hace PR directo si hay validación humana pendiente":
+
+| Política               | Valores                                                               | Default                   |
+| ---------------------- | --------------------------------------------------------------------- | ------------------------- |
+| `branch_push_mode`     | `incremental` (push por tarea) · `final_only` (al cerrar)             | `incremental`             |
+| `plan_validation_mode` | `human_required` · `auto_approve`                                     | `human_required`          |
+| `push_policy`          | `forbidden` · `branch_only_pr_required` · `direct_to_default_allowed` | `branch_only_pr_required` |
+
+Se fijan/leen en `PUT /projects/{id}/git` (campos opcionales; se persisten en
+`worker_config.git_policies` preservando el resto del blob) y se exponen en la UI
+("Flujo git del plan", 3 selects en `GitConfigSection`). La task `open_plan_pr`
+las carga con `_policies_from_worker_config` y `PlanGitWorkflow` decide según
+`push_policy` (no-op si `forbidden`, PR si `branch_only_pr_required`, merge si
+`direct_to_default_allowed`).
+
+## Fase 2 — Disparo automático del auto-PR (IMPLEMENTADO)
+
+El auto-PR se **encola al VALIDAR el plan**, no al terminar las tareas. En
+`POST .../review/.../verdict` (`submit_verdict`): cuando el plan está en
+`pending_human_validation` y el veredicto es `approved`, pasa a `completed` y
+**solo entonces** se llama `enqueue_open_plan_pr(project_id, plan_id, …)`. El gate
+humano queda respetado **por construcción**: con `human_required` el plan nunca
+salta a `completed` sin un veredicto humano, así que el PR jamás se abre con
+validación pendiente. La rama del plan se deriva en el worker de `plan_id` +
+`title` (`make_plan_branch_name`), consistente con el push de las tareas.
+
+## Pendiente — Pipeline de ejecución-git (plan de roadmap propio)
+
+Lo único que falta para el ciclo completo es conectar la **ejecución real**
+(agent-runtime / LangGraph) al pipeline `bare → worktree → commit → push`: hoy
+`conduct_execution` corre el agente en un `/workspace` efímero (tmpfs) y los
+cambios de ficheros **se pierden**. Para que los agentes commiteen de verdad hay
+que **montar el worktree por tarea dentro del contenedor sandbox** (sensible a
+seguridad, principio 2), resolver `repo_name` por tarea (hoy no hay FK Task→repo)
+y añadir columnas `slug` a Plan/Project. Es un plan de roadmap con su propio
+ADR/diseño (ver `docs/roadmap/`), no un cableado rápido. Cuando exista, **no toca
+nada de lo anterior**: el disparo del auto-PR ya está puesto y se ejecutará solo
+en cuanto las ramas lleven commits reales.
