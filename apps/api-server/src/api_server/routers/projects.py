@@ -338,6 +338,11 @@ async def set_project_git(
         )
 
     project.git_config = payload.config_dict()
+    # Políticas del flujo git del plan → worker_config.git_policies (preserva el resto).
+    project.worker_config = {
+        **(project.worker_config or {}),
+        "git_policies": payload.git_policies(),
+    }
 
     if new_secret is not None:
         if vault is None:
@@ -358,6 +363,9 @@ async def set_project_git(
         default_branch=payload.default_branch,
         auth_mode=payload.auth_mode,
         has_credential=has_credential,
+        branch_push_mode=payload.branch_push_mode,
+        plan_validation_mode=payload.plan_validation_mode,
+        push_policy=payload.push_policy,
     )
 
 

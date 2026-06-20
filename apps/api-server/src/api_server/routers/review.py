@@ -43,6 +43,7 @@ from sqlalchemy import select
 from workers.review_runtime import sign_review_url, verify_review_url
 
 from api_server.auth.deps import get_redis
+from api_server.celery_client import enqueue_open_plan_pr
 from api_server.config import get_settings
 from api_server.db.domain import Plan
 from api_server.db.models import ReviewSession as ReviewSessionRow
@@ -462,11 +463,30 @@ async def submit_verdict(
             raise HTTPException(status_code=404, detail="review session not found")
         plan = await db.get(Plan, row.plan_id)
         plan_status: str | None = None
+        # ADR 0072 fase 2: contexto para el auto-PR si el plan pasa a completed.
+        pr_ctx: tuple[UUID, UUID, str] | None = None
         if plan is not None:
             if plan.status == "pending_human_validation":
                 plan.status = "completed" if body.verdict == "approved" else "rejected"
+                if plan.status == "completed" and plan.project_id is not None:
+                    pr_ctx = (plan.project_id, plan.id, plan.title or "")
             plan_status = plan.status
         await db.flush()
+    # ADR 0072 fase 2: al VALIDAR el plan (→ completed) se encola el auto-PR. El
+    # gate humano queda respetado por construcción (solo en completed tras
+    # 'approved', NUNCA en pending_human_validation). La task hace el push
+    # autenticado + abre el PR/MR según push_policy (no-op si no hay remoto/PAT).
+    if pr_ctx is not None:
+        project_id, plan_id, plan_title = pr_ctx
+        await enqueue_open_plan_pr(
+            project_id,
+            plan_id,
+            title=f"Plan: {plan_title}" if plan_title else f"Plan {str(plan_id)[:8]}",
+            body=(
+                "PR automático tras la validación humana del plan.\n\n"
+                f"Plan: {plan_title}\nID: {plan_id}"
+            ),
+        )
     return {
         "session_id": str(session_id),
         "verdict": body.verdict,

@@ -25,13 +25,22 @@ export interface GitConfig {
   auth_mode: string;
 }
 
+/** Políticas del flujo git del plan (worker_config.git_policies, ADR 0072 fase 2). */
+export interface GitPolicies {
+  branch_push_mode: string;
+  plan_validation_mode: string;
+  push_policy: string;
+}
+
 export function GitConfigSection({
   projectId,
   value,
+  policies,
   isReadOnly = false,
 }: {
   projectId: string;
   value: GitConfig | null;
+  policies?: GitPolicies | null;
   isReadOnly?: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -42,6 +51,12 @@ export function GitConfigSection({
   const [username, setUsername] = useState("");
   const [token, setToken] = useState("");
   const [sshKey, setSshKey] = useState("");
+  // Políticas del flujo del plan (defaults razonables si el proyecto no las fijó).
+  const [branchPushMode, setBranchPushMode] = useState(policies?.branch_push_mode ?? "incremental");
+  const [planValidationMode, setPlanValidationMode] = useState(
+    policies?.plan_validation_mode ?? "human_required",
+  );
+  const [pushPolicy, setPushPolicy] = useState(policies?.push_policy ?? "branch_only_pr_required");
 
   useEffect(() => {
     setProvider(value?.provider ?? "generic");
@@ -49,6 +64,12 @@ export function GitConfigSection({
     setBranch(value?.default_branch ?? "main");
     setAuthMode(value?.auth_mode ?? "none");
   }, [value?.provider, value?.remote_url, value?.default_branch, value?.auth_mode]);
+
+  useEffect(() => {
+    setBranchPushMode(policies?.branch_push_mode ?? "incremental");
+    setPlanValidationMode(policies?.plan_validation_mode ?? "human_required");
+    setPushPolicy(policies?.push_policy ?? "branch_only_pr_required");
+  }, [policies?.branch_push_mode, policies?.plan_validation_mode, policies?.push_policy]);
 
   const save = useMutation<unknown, ApiError>({
     mutationFn: () =>
@@ -59,6 +80,9 @@ export function GitConfigSection({
           remote_url: remoteUrl.trim(),
           default_branch: branch.trim() || "main",
           auth_mode: authMode,
+          branch_push_mode: branchPushMode,
+          plan_validation_mode: planValidationMode,
+          push_policy: pushPolicy,
           ...(authMode === "pat" && token ? { username: username || null, token } : {}),
           ...(authMode === "ssh" && sshKey ? { ssh_key: sshKey } : {}),
         },
@@ -181,6 +205,57 @@ export function GitConfigSection({
           />
         </div>
       )}
+
+      <div className="border-t pt-3">
+        <h4 className="text-sm font-medium">Flujo git del plan</h4>
+        <p className="text-muted-foreground mt-1 text-xs">
+          Cómo se publican las ramas y qué pasa al cerrar el plan. Por defecto: los agentes empujan
+          la rama del plan tarea a tarea, el humano valida al cerrar y se abre un PR (sin merge
+          directo).
+        </p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="git-branch-push-mode">Push de la rama</Label>
+            <Select
+              id="git-branch-push-mode"
+              value={branchPushMode}
+              disabled={isReadOnly}
+              onChange={(e) => setBranchPushMode(e.target.value)}
+              data-testid="git-branch-push-mode"
+            >
+              <option value="incremental">Incremental (cada tarea)</option>
+              <option value="final_only">Solo al cerrar el plan</option>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="git-plan-validation-mode">Validación del plan</Label>
+            <Select
+              id="git-plan-validation-mode"
+              value={planValidationMode}
+              disabled={isReadOnly}
+              onChange={(e) => setPlanValidationMode(e.target.value)}
+              data-testid="git-plan-validation-mode"
+            >
+              <option value="human_required">Validación humana</option>
+              <option value="auto_approve">Auto-aprobar</option>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="git-push-policy">Al cerrar el plan</Label>
+            <Select
+              id="git-push-policy"
+              value={pushPolicy}
+              disabled={isReadOnly}
+              onChange={(e) => setPushPolicy(e.target.value)}
+              data-testid="git-push-policy"
+            >
+              <option value="forbidden">No hacer nada</option>
+              <option value="branch_only_pr_required">Abrir PR (revisión humana)</option>
+              <option value="direct_to_default_allowed">Merge directo a la rama base</option>
+            </Select>
+          </div>
+        </div>
+      </div>
 
       {save.isError && (
         <p className="text-destructive text-sm" data-testid="git-error">

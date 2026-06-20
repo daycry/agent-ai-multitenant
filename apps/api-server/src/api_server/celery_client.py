@@ -126,16 +126,15 @@ async def enqueue_clone_project_repo(project_id: UUID) -> bool:
     return True
 
 
-async def enqueue_open_plan_pr(
-    project_id: UUID, plan_branch: str, *, title: str, body: str
-) -> bool:
+async def enqueue_open_plan_pr(project_id: UUID, plan_id: UUID, *, title: str, body: str) -> bool:
     """Encola el auto-PR de un plan (ADR 0072 fase 2): push autenticado de la rama
-    + apertura del PR/MR por proveedor. Best-effort."""
+    + apertura del PR/MR por proveedor. La rama se deriva en el worker de
+    ``plan_id`` + ``title``. Best-effort."""
     try:
         await asyncio.to_thread(
             get_celery_client().send_task,
             "workers.open_plan_pr",
-            args=[str(project_id), plan_branch, title, body],
+            args=[str(project_id), str(plan_id), title, body],
             queue="default",
         )
     except Exception as exc:
@@ -341,10 +340,12 @@ def _read_restore_status(job_id: str) -> dict[str, Any]:
 
 
 __all__ = [
+    "enqueue_clone_project_repo",
     "enqueue_event_dispatch",
     "enqueue_ingestion",
     "enqueue_memorize_human_work_session",
     "enqueue_notification_send",
+    "enqueue_open_plan_pr",
     "enqueue_restore",
     "get_celery_client",
     "get_restore_job_status",

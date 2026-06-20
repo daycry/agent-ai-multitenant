@@ -55,7 +55,11 @@ import { Select } from "@/components/ui/select";
 import { StateBlock } from "@/components/shared/state-block";
 import { CapabilityHub } from "@/components/capability/capability-hub";
 import { DefaultModelSection } from "@/components/capability/default-model-section";
-import { GitConfigSection, type GitConfig } from "@/components/projects/git-config-section";
+import {
+  GitConfigSection,
+  type GitConfig,
+  type GitPolicies,
+} from "@/components/projects/git-config-section";
 import { ApiError, apiFetch } from "@/lib/api";
 import { type ModelConfig } from "@/lib/persona/persona";
 
@@ -72,6 +76,8 @@ interface Project {
   model_config: ModelConfig;
   // ADR 0072: config git del proyecto (sin secreto). null = sin remoto.
   git_config: GitConfig | null;
+  // worker_config.git_policies guarda las políticas del flujo git del plan (ADR 0072).
+  worker_config?: Record<string, unknown> | null;
 }
 
 interface ProjectUpdate {
@@ -280,7 +286,13 @@ export default function ProjectHubPage() {
 
           {/* ADR 0072: configuración del repositorio Git (remoto + PAT/SSH). */}
           <div className="mb-6">
-            <GitConfigSection projectId={projectId} value={project.git_config} />
+            <GitConfigSection
+              projectId={projectId}
+              value={project.git_config}
+              policies={
+                (project.worker_config?.["git_policies"] as GitPolicies | undefined) ?? null
+              }
+            />
           </div>
 
           {/* Sub-sections grid */}

@@ -396,6 +396,10 @@ def to_project_response(p: Project) -> ProjectResponse:
 # ---------------------------------------------------------------------------
 GitProvider = Literal["github", "gitlab", "azure_devops", "generic"]
 GitAuthMode = Literal["none", "pat", "ssh"]
+# Políticas del flujo git del plan (ADR 0072 fase 2).
+GitBranchPushMode = Literal["incremental", "final_only"]
+GitPlanValidationMode = Literal["human_required", "auto_approve"]
+GitPushPolicy = Literal["forbidden", "branch_only_pr_required", "direct_to_default_allowed"]
 
 
 class GitConfigUpdateRequest(BaseModel):
@@ -412,6 +416,11 @@ class GitConfigUpdateRequest(BaseModel):
     username: str | None = Field(default=None, max_length=255)
     token: str | None = Field(default=None, max_length=8192)
     ssh_key: str | None = Field(default=None, max_length=16384)
+    # Políticas del flujo git del plan (ADR 0072). Defaults razonables: la rama se
+    # ve desde la 1ª tarea, el humano valida al cerrar, y se abre PR (no merge).
+    branch_push_mode: GitBranchPushMode = "incremental"
+    plan_validation_mode: GitPlanValidationMode = "human_required"
+    push_policy: GitPushPolicy = "branch_only_pr_required"
 
     def config_dict(self) -> dict[str, str]:
         """Solo los campos NO secretos que se persisten en projects.git_config."""
@@ -420,6 +429,14 @@ class GitConfigUpdateRequest(BaseModel):
             "remote_url": self.remote_url,
             "default_branch": self.default_branch,
             "auth_mode": self.auth_mode,
+        }
+
+    def git_policies(self) -> dict[str, str]:
+        """Políticas que se persisten en projects.worker_config.git_policies."""
+        return {
+            "branch_push_mode": self.branch_push_mode,
+            "plan_validation_mode": self.plan_validation_mode,
+            "push_policy": self.push_policy,
         }
 
 
@@ -433,3 +450,7 @@ class GitConfigResponse(BaseModel):
     default_branch: str
     auth_mode: str
     has_credential: bool
+    # Políticas del flujo git del plan (defaults si el proyecto no las fijó).
+    branch_push_mode: str = "incremental"
+    plan_validation_mode: str = "human_required"
+    push_policy: str = "branch_only_pr_required"

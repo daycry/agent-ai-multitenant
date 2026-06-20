@@ -21,15 +21,27 @@ from workers.celery_app import app
 from workers.config import Settings, get_settings
 from workers.git_auth import build_git_auth_env
 from workers.git_repos import BareRepoLayout
-from workers.plan_git import PlanGitPolicies, PlanGitWorkflow
+from workers.plan_git import PlanGitPolicies, PlanGitWorkflow, make_plan_branch_name
 from workers.pr_openers import build_pr_opener
 from workers.repo_clone import _repo_name_from_url, _slugify, _vault_store
 
 _log = structlog.get_logger("workers.plan_pr")
 
 
+def _policies_from_worker_config(worker_config: dict[str, Any] | None) -> PlanGitPolicies:
+    """Lee las políticas git del proyecto (projects.worker_config.git_policies);
+    defaults razonables (ADR 0072): incremental + human_required + pr_required."""
+    gp = (worker_config or {}).get("git_policies")
+    gp = gp if isinstance(gp, dict) else {}
+    return PlanGitPolicies(
+        branch_push_mode=gp.get("branch_push_mode", "incremental"),
+        plan_validation_mode=gp.get("plan_validation_mode", "human_required"),
+        push_policy=gp.get("push_policy", "branch_only_pr_required"),
+    )
+
+
 async def _open_plan_pr_async(
-    project_id: UUID, plan_branch: str, *, title: str, body: str, settings: Settings
+    project_id: UUID, plan_id: str, *, title: str, body: str, settings: Settings
 ) -> dict[str, Any]:
     from api_server.db.domain import Project
     from api_server.db.models import Organization
@@ -47,7 +59,10 @@ async def _open_plan_pr_async(
             cfg = dict(project.git_config)
             tenant_slug = (org.slug if org is not None else None) or str(project.tenant_id)
             project_slug = _slugify(project.name)
+            policies = _policies_from_worker_config(project.worker_config)
 
+        # Misma convención que el worker que pushea la rama (consistente).
+        plan_branch = make_plan_branch_name(plan_id, _slugify(title))
         remote_url = cfg.get("remote_url")
         provider = cfg.get("provider", "generic")
         base = cfg.get("default_branch", "main")
@@ -85,7 +100,7 @@ async def _open_plan_pr_async(
             wf = PlanGitWorkflow(
                 bare_repo_path=bare_path,
                 plan_branch=plan_branch,
-                policies=PlanGitPolicies(),
+                policies=policies,
                 pr_opener=pr_opener,
                 auth_env=auth.env or None,
             )
@@ -110,15 +125,16 @@ async def _open_plan_pr_async(
 
 
 @app.task(name="workers.open_plan_pr")  # type: ignore[misc]
-def open_plan_pr(project_id: str, plan_branch: str, title: str, body: str) -> dict[str, Any]:
-    """Entry point Celery. Best-effort: nunca propaga."""
+def open_plan_pr(project_id: str, plan_id: str, title: str, body: str) -> dict[str, Any]:
+    """Entry point Celery. Best-effort: nunca propaga. La rama del plan se deriva
+    de ``plan_id`` + ``title`` (make_plan_branch_name), consistente con el push."""
     settings = get_settings()
     try:
         return asyncio.run(
             _open_plan_pr_async(
-                UUID(project_id), plan_branch, title=title, body=body, settings=settings
+                UUID(project_id), plan_id, title=title, body=body, settings=settings
             )
         )
     except Exception as exc:
-        _log.exception("plan_pr.failed", project_id=project_id, branch=plan_branch, error=str(exc))
-        return {"project_id": project_id, "branch": plan_branch, "status": f"error:{exc}"}
+        _log.exception("plan_pr.failed", project_id=project_id, plan_id=plan_id, error=str(exc))
+        return {"project_id": project_id, "plan_id": plan_id, "status": f"error:{exc}"}
