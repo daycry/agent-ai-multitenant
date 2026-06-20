@@ -178,7 +178,10 @@ class ClaudeAgentProvider:
             model=model,
             system=system,
             allowed_tools=kwargs.pop("allowed_tools", None),
-            max_turns=1,
+            # `max_turns=1` agota el loop interno del Claude Code CLI (incluso una
+            # respuesta simple cuenta como >1 turno) → "Reached maximum number of
+            # turns (1)". 8 deja responder + algún paso interno; overridable.
+            max_turns=int(kwargs.pop("max_turns", 8)),
             effort=kwargs.pop("effort", None),
         )
         query_fn = self._query()
@@ -213,7 +216,10 @@ class ClaudeAgentProvider:
             model=model,
             system=system,
             allowed_tools=kwargs.pop("allowed_tools", None),
-            max_turns=1,
+            # `max_turns=1` agota el loop interno del Claude Code CLI (incluso una
+            # respuesta simple cuenta como >1 turno) → "Reached maximum number of
+            # turns (1)". 8 deja responder + algún paso interno; overridable.
+            max_turns=int(kwargs.pop("max_turns", 8)),
             effort=kwargs.pop("effort", None),
         )
         query_fn = self._query()
