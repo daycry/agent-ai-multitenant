@@ -137,8 +137,11 @@ def augment_system_prompt(
     if known_facts:
         facts = "\n".join(f"- {fact}" for fact in known_facts)
         sections.append(
-            "Lo que sé de ti (son datos CIERTOS sobre el usuario con el que hablas; "
-            "tenlos en cuenta al responder y NUNCA digas que no los sabes):\n" + facts
+            "Lo que sé de ti (el usuario con el que hablas): son datos CIERTOS "
+            "SOBRE TI (no sobre el asistente). Al responder, refiérete a ellos en "
+            "SEGUNDA persona («te llamas…», «prefieres…»), NUNCA en primera "
+            "persona («me llamo…») —tú eres el asistente, no el usuario—, y NUNCA "
+            "digas que no los sabes:\n" + facts
         )
     if remember_enabled:
         sections.append(

@@ -265,9 +265,12 @@ class ClaudeAgentProvider:
             tool_calls = _harvest_tool_calls(collected)
             if not tool_calls:
                 raise ProviderError(str(exc)) from exc
-            text_parts, usage = self._harvest(collected)
+            _, usage = self._harvest(collected)
+            # Tool-call turn → DROP any partial text: the SDK's interrupt notice
+            # / the model's preamble is NOT the user-facing answer (the host runs
+            # the tool and the answer comes on a later, clean turn).
             return CompletionResponse(
-                content="".join(text_parts),
+                content="",
                 model=model or self._default_model,
                 provider=self.name,
                 usage=usage,
@@ -276,8 +279,11 @@ class ClaudeAgentProvider:
             )
         text_parts, usage = self._harvest(collected)
         tool_calls = _harvest_tool_calls(collected)
+        # Same rule on the clean path: when the model asked for tools, the partial
+        # text from this turn is not the answer; only return text when it DIDN'T.
+        content = "" if tool_calls else "".join(text_parts)
         return CompletionResponse(
-            content="".join(text_parts),
+            content=content,
             model=model or self._default_model,
             provider=self.name,
             usage=usage,
