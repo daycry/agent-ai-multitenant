@@ -692,15 +692,29 @@ def trigger_memorize_human_work_session(work_session_id: UUID, task_status: str)
     return True
 
 
+# Terminal ExecutionStatus values (api_server.db.domain.ExecutionStatus). The
+# trigger hands ANY finished execution to the Memorizer; WHICH terminal statuses
+# are actually memorised is the operator-configurable gate in the task
+# (should_memorize + get_memorizable_statuses, default {"done"}). The old
+# hardcoded `status == "done"` here pre-filtered BEFORE that gate, so the operator
+# setting was unreachable for error statuses — agents could not learn from
+# aborted/failed runs (06.17 added the setting but the trigger shadowed it).
+# Gating on terminal-ness (not the policy) fixes that and keeps this
+# fire-and-forget path free of DB reads.
+_TERMINAL_STATUSES = frozenset({"done", "failed", "aborted", "cancelled"})
+
+
 def trigger_memorize(execution_id: UUID, status: str) -> bool:
-    """Enqueue the Memorizer for one Execution. Returns True if the
-    task was enqueued, False if the status didn't warrant it.
+    """Enqueue the Memorizer for one FINISHED Execution. Returns True if the task
+    was enqueued, False if the status is non-terminal (mid-execution). The task
+    applies the operator-configured ``memorizable_statuses`` gate, so an error
+    status is only actually memorised when the operator opted in.
 
     Imported by :mod:`workers.execution` right after `finalize_execution`.
     Failures (broker down, etc.) are swallowed and logged so a
     Memorizer-side problem can never bring down an agent run.
     """
-    if status != "done":
+    if status not in _TERMINAL_STATUSES:
         return False
     try:
         memorize_execution.apply_async(args=[str(execution_id)], queue="default")

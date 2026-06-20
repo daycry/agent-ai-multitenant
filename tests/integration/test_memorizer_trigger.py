@@ -340,8 +340,12 @@ async def test_memorize_handles_missing_execution(
 # ---------------------------------------------------------------------------
 # Trigger from conduct_execution
 # ---------------------------------------------------------------------------
-def test_trigger_memorize_fires_only_on_done(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`trigger_memorize` calls apply_async iff status == 'done'."""
+def test_trigger_memorize_enqueues_for_terminal_statuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`trigger_memorize` hands ANY finished (terminal) execution to the Memorizer;
+    WHICH terminal statuses actually memorise is the operator-config gate in the
+    task. Non-terminal (mid-execution) statuses are not enqueued. This unlocks
+    learn-from-errors: 'aborted'/'failed' reach the task, which the operator can
+    enable via `memorizable_statuses` (the old hardcoded '== done' shadowed it)."""
     from workers import memorizer as mod
 
     calls: list[tuple[str, ...]] = []
@@ -352,11 +356,15 @@ def test_trigger_memorize_fires_only_on_done(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(mod.memorize_execution, "apply_async", _fake_apply_async)
 
     execution_id = uuid4()
+    # Terminal → enqueued (the task then applies the operator-config gate).
     assert mod.trigger_memorize(execution_id, "done") is True
-    assert mod.trigger_memorize(execution_id, "aborted") is False
-    assert mod.trigger_memorize(execution_id, "failed") is False
+    assert mod.trigger_memorize(execution_id, "aborted") is True
+    assert mod.trigger_memorize(execution_id, "failed") is True
+    assert mod.trigger_memorize(execution_id, "cancelled") is True
+    # Non-terminal (mid-execution) → NOT enqueued.
     assert mod.trigger_memorize(execution_id, "awaiting_human_approval") is False
-    assert len(calls) == 1  # only the 'done' call
+    assert mod.trigger_memorize(execution_id, "running") is False
+    assert len(calls) == 4  # the four terminal statuses
 
 
 def test_trigger_memorize_swallows_broker_errors(monkeypatch: pytest.MonkeyPatch) -> None:
