@@ -35,9 +35,21 @@ MAX_TOOL_ROUNDS = 6
 # Backstop on how many times ONE tool may run in a single turn. The signature
 # dedup below stops a model re-calling a tool with IDENTICAL args, but an
 # over-eager model can re-call the SAME tool with slightly DIFFERENT args (e.g.
-# inventing several "facts" to remember). This caps that runaway per tool name —
-# defence in depth on top of the prompt guidance.
+# saving the same fact reworded several times). This caps that runaway per tool
+# name — defence in depth on top of the prompt guidance.
 MAX_CALLS_PER_TOOL = 3
+# Per-tool overrides of the cap. The memory WRITE tool is special: with the
+# claude_sdk provider each round is a stateless SDK query, so an over-eager model
+# re-decides to "remember" the user's fact every round (reworded, so the exact
+# signature dedup misses it). A single user message should yield AT MOST ONE
+# memory write — the model is told to fold several facts into one call — so we
+# hard-cap it to 1/turn. This is the deterministic guarantee on top of the prompt.
+_PER_TOOL_CALL_CAP: dict[str, int] = {"remember_about_me": 1}
+
+
+def _tool_call_cap(name: str) -> int:
+    """Max times tool ``name`` may run in one turn (write tool capped tighter)."""
+    return _PER_TOOL_CALL_CAP.get(name, MAX_CALLS_PER_TOOL)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +180,7 @@ def _node_decide(model: AssistantModelClient) -> AssistantNode:
             for tc in turn.tool_calls
             if tc.name in allowed
             and _signature(tc) not in state.executed_signatures
-            and state.tools_called.count(tc.name) < MAX_CALLS_PER_TOOL
+            and state.tools_called.count(tc.name) < _tool_call_cap(tc.name)
         )
         state.pending = ModelTurn(content=turn.content, tool_calls=kept)
         if not kept:

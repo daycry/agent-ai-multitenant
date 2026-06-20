@@ -267,20 +267,24 @@ async def test_chat_converges_on_repeated_tool_calls(
 
 
 @pytest.mark.asyncio
-async def test_chat_caps_repeated_tool_with_different_args(
+async def test_chat_caps_write_tool_to_once_per_turn(
     configured_app, migrations_pg_dsn: str
 ) -> None:
-    """An over-eager model re-calling the SAME tool with DIFFERENT args every
-    round (e.g. inventing several phrasings of one fact) must NOT run away: the
-    per-tool cap (MAX_CALLS_PER_TOOL) bounds how many times it runs in a turn."""
+    """An over-eager model re-calling the WRITE tool with DIFFERENT args every
+    round (e.g. saving the same fact reworded several times) must NOT run away:
+    remember_about_me is hard-capped to ONE call per turn (its per-tool cap),
+    so a single user message yields a single memory write."""
     seeded = await _seed(migrations_pg_dsn)
     from api_server.assistant.graph import (
-        MAX_CALLS_PER_TOOL,
         ModelTurn,
         ScriptedAssistantModel,
         ToolInvocation,
+        _tool_call_cap,
     )
     from api_server.routers.assistant import get_assistant_model
+
+    cap = _tool_call_cap("remember_about_me")
+    assert cap == 1  # the write tool is capped to a single call per turn
 
     # Distinct phrasings of the same fact → distinct signatures (NOT deduped),
     # more of them than the cap allows.
@@ -292,7 +296,7 @@ async def test_chat_caps_repeated_tool_with_different_args(
                 ),
             )
         )
-        for i in range(MAX_CALLS_PER_TOOL + 2)
+        for i in range(4)
     ]
     turns.append(ModelTurn(content="Listo."))
     scripted = ScriptedAssistantModel(turns=turns)
@@ -306,8 +310,8 @@ async def test_chat_caps_repeated_tool_with_different_args(
         )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    # The write tool ran at most the cap, not once per invented phrasing.
-    assert body["tools_called"].count("remember_about_me") == MAX_CALLS_PER_TOOL
+    # The write tool ran exactly once, not once per reworded phrasing.
+    assert body["tools_called"].count("remember_about_me") == cap
 
     conn = await asyncpg.connect(migrations_pg_dsn)
     try:
@@ -317,7 +321,7 @@ async def test_chat_caps_repeated_tool_with_different_args(
         )
     finally:
         await conn.close()
-    assert count == MAX_CALLS_PER_TOOL
+    assert count == cap
 
 
 # ===========================================================================

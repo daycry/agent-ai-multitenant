@@ -150,8 +150,9 @@ def augment_system_prompt(
             "de sí mismo, con sus palabras.\n"
             "- NO guardes saludos, preguntas, datos efímeros, ni nada que ya "
             "figure en «Lo que sé de ti».\n"
-            "- Guarda como mucho UN hecho por cada dato nuevo; no trocees un mismo "
-            "dato en varias llamadas ni invoques la herramienta repetidamente.\n"
+            "- Llama a remember_about_me UNA SOLA VEZ por turno: no la repitas ni "
+            "reescribas el mismo dato. Si el usuario comparte VARIOS datos a la "
+            "vez, guárdalos en esa única llamada (un solo texto que los reúna).\n"
             "- Si el usuario NO ha compartido un dato personal nuevo, NO llames a "
             "remember_about_me: responde con normalidad."
         )
