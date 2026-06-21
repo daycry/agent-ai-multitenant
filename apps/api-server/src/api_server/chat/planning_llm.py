@@ -37,6 +37,19 @@ from api_server.chat.planning_graph import (
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+# Modo PLANNING (decisión del operador): el chat de planificación SOLO planifica.
+# NUNCA implementa, NUNCA escribe código, NUNCA dice "voy a crearlo". Su salida es un
+# PLAN (fases/tareas con dependencias) que luego se inserta como tareas del proyecto y
+# que ejecutan los agentes. Se inyecta en cada prompt del sub-grafo de planning.
+_PLAN_ONLY_RULE = (
+    "REGLA CLAVE — MODO PLANIFICACIÓN: tu ÚNICO objetivo es PLANIFICAR, no ejecutar. "
+    "NUNCA implementes, NUNCA escribas código, NUNCA digas que «vas a crear/hacer» la "
+    "aplicación. Puedes razonar sobre el código y los archivos existentes, pero solo para "
+    "informar el plan. El resultado de esta sesión es un PLAN (fases/tareas con "
+    "dependencias y criterios de aceptación) que se insertará como tareas del proyecto; "
+    "serán los AGENTES quienes lo ejecuten después, no tú ahora."
+)
+
 
 def _extract_json(text: str) -> dict[str, Any]:
     """Best-effort: parse the first ``{...}`` object out of an LLM reply."""
@@ -109,15 +122,17 @@ class LLMPlanningModel:
         available = sorted(r.value for r in state.team_roles if r != PlanningRole.PROJECT_MANAGER)
         system = (
             "Eres el PROJECT MANAGER de un equipo de desarrollo en una sesión de "
-            "PLANIFICACIÓN. Decides cómo afrontar ESTE turno del chat. Responde "
-            "ÚNICAMENTE con un objeto JSON, sin texto alrededor:\n"
+            "PLANIFICACIÓN. " + _PLAN_ONLY_RULE + "\n\n"
+            "Decides cómo afrontar ESTE turno del chat. Responde ÚNICAMENTE con un objeto "
+            "JSON, sin texto alrededor:\n"
             '{"intent": "<speak_alone|invite_specialists|ask_user|finish_planning>", '
             '"rationale": "<breve motivo>", "specialists": ["<rol>", ...]}\n'
-            "- speak_alone: respondes tú directamente.\n"
+            "- speak_alone: respondes tú directamente (avanzas el plan).\n"
             "- invite_specialists: pides la opinión de especialistas (lista en "
             '"specialists", SOLO de los disponibles).\n'
-            "- ask_user: necesitas más información del usuario.\n"
-            "- finish_planning: el plan está listo para formalizarse.\n"
+            "- ask_user: necesitas más información del usuario para planificar.\n"
+            "- finish_planning: el plan ya está claro y listo para formalizarse e "
+            "insertarse como tareas del proyecto.\n"
             f"Especialistas disponibles: {available or '(ninguno)'}."
         )
         messages = [Message(role="system", content=system)]
@@ -146,8 +161,10 @@ class LLMPlanningModel:
     def specialist_speak(self, role: PlanningRole, state: PlanningState) -> SpecialistContribution:
         system = (
             f"Eres el especialista «{role.value}» del equipo, en una sesión de "
-            "planificación. Aporta tu punto de vista técnico de forma CONCISA y "
-            "accionable sobre lo que se está planificando. No te repitas ni saludes."
+            "PLANIFICACIÓN. " + _PLAN_ONLY_RULE + " Aporta tu análisis técnico para el PLAN "
+            "de forma CONCISA y accionable: qué tareas harían falta desde tu rol, en qué "
+            "orden, dependencias, riesgos y criterios de aceptación. NO escribas código ni "
+            "implementes. No te repitas ni saludes."
         )
         messages = [Message(role="system", content=system)]
         note = _context_note(state)
@@ -160,10 +177,13 @@ class LLMPlanningModel:
         self, state: PlanningState, contributions: Sequence[SpecialistContribution]
     ) -> str:
         system = (
-            "Eres el PROJECT MANAGER. Redacta UNA sola respuesta para el usuario que "
-            "sintetice la postura del equipo y haga avanzar la planificación. Habla "
-            "en primera persona del equipo, sé claro y estructurado (markdown). Si "
-            "falta información, termina con una pregunta concreta al usuario."
+            "Eres el PROJECT MANAGER. " + _PLAN_ONLY_RULE + "\n\n"
+            "Redacta UNA sola respuesta (markdown) que sintetice la postura del equipo y "
+            "haga avanzar el PLAN. Habla en primera persona del equipo. NUNCA digas que vas "
+            "a implementar/crear nada: presentas un PLAN. Estructura el avance en fases y "
+            "tareas accionables con sus dependencias y criterios de aceptación. Si falta "
+            "información, termina con una pregunta concreta al usuario. Cuando el plan esté "
+            "completo, deja claro que está listo para insertarse como tareas del proyecto."
         )
         messages = [Message(role="system", content=system)]
         note = _context_note(state)
