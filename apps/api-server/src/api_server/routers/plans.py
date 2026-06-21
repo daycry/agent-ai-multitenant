@@ -16,6 +16,7 @@ Creation paths:
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -42,7 +43,7 @@ from api_server.chat.plan_state_machine import (
     transition_plan_status,
 )
 from api_server.chat.sync_to_kanban import SyncScopeError, sync_plan_to_kanban
-from api_server.db.conversation import Conversation
+from api_server.db.conversation import Conversation, Message
 from api_server.db.domain import Plan, PlanStatus, Project, Task
 from api_server.db.models import Organization
 from api_server.db.plan_comment import PlanComment
@@ -113,6 +114,43 @@ async def _verify_conversation_in_project(
     return conv
 
 
+async def _draft_from_conversation(
+    session: AsyncSession, conversation_id: UUID
+) -> tuple[str | None, dict[str, Any]] | None:
+    """The plan draft the planning chat produced: the latest ``agent`` message's
+    ``{kind: planning_directive, intent: finish_planning}`` attachment, as
+    ``(title, specification)``. ``None`` when the chat never finalised a plan.
+
+    This is the chat→plan materialisation (task_03_14): the planning sub-graph
+    attaches a structured ``specification`` when the PM finishes; ``create_plan``
+    with only a ``conversation_id`` lifts it so the Plan is born with its tasks."""
+    rows = (
+        (
+            await session.execute(
+                select(Message)
+                .where(
+                    Message.conversation_id == conversation_id,
+                    Message.author_kind == "agent",
+                )
+                .order_by(Message.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for msg in rows:
+        for att in msg.attachments or []:
+            if (
+                isinstance(att, dict)
+                and att.get("kind") == "planning_directive"
+                and att.get("intent") == "finish_planning"
+                and isinstance(att.get("specification"), dict)
+            ):
+                title = att.get("title")
+                return (str(title) if title else None, dict(att["specification"]))
+    return None
+
+
 # ===========================================================================
 # Project-scoped endpoints
 # ===========================================================================
@@ -129,7 +167,17 @@ async def create_plan(
     if payload.conversation_id is not None:
         await _verify_conversation_in_project(session, payload.conversation_id, project_id)
 
-    spec_dict = payload.specification.model_dump() if payload.specification else {}
+    # Spec sources: inline body wins; else lift the planning chat's draft attachment
+    # (chat→plan materialisation, task_03_14); else an empty draft.
+    draft_title: str | None = None
+    if payload.specification is not None:
+        spec_dict = payload.specification.model_dump()
+    elif payload.conversation_id is not None:
+        drafted = await _draft_from_conversation(session, payload.conversation_id)
+        spec_dict = drafted[1] if drafted is not None else {}
+        draft_title = drafted[0] if drafted is not None else None
+    else:
+        spec_dict = {}
 
     # Cycle check (task_03_15). The Pydantic validator handles unknown
     # deps + duplicate ids; the cycle check needs the full graph.
@@ -145,7 +193,7 @@ async def create_plan(
     plan = Plan(
         tenant_id=tenant_id,
         project_id=project_id,
-        title=payload.title or "Borrador del plan",
+        title=payload.title or draft_title or "Borrador del plan",
         description=payload.description,
         status=payload.status.value,
         conversation_id=payload.conversation_id,

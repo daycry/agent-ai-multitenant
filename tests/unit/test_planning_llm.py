@@ -12,7 +12,7 @@ from api_server.chat.planning_graph import (
     PMIntent,
     SpecialistContribution,
 )
-from api_server.chat.planning_llm import LLMPlanningModel
+from api_server.chat.planning_llm import LLMPlanningModel, _normalise_plan_draft
 from shared_llm.types import CompletionResponse, Message, StreamChunk
 
 
@@ -104,3 +104,31 @@ def test_pm_synthesise_includes_contributions_and_returns_text() -> None:
     joined = " ".join(m.content for m in seen[-1])
     assert "capas limpias" in joined
     assert "tests e2e" in joined
+
+
+def test_normalise_plan_draft_fills_ids_and_drops_bad_deps() -> None:
+    out = _normalise_plan_draft(
+        {
+            "title": "Landing CI4",
+            "summary": "Sin BD",
+            "tasks": [
+                {"title": "Controlador Home", "depends_on": []},  # no id → t1
+                {"id": "t2", "title": "Vista Twig", "depends_on": ["t1", "ghost", "t2"]},
+                {"id": "t3", "name": "POST saludar", "description": "echo nombre"},  # name→title
+                {"id": "t4"},  # no title → dropped
+                "garbage",  # non-dict → dropped
+            ],
+        }
+    )
+    assert out["title"] == "Landing CI4"
+    ids = [t["id"] for t in out["tasks"]]
+    assert ids == ["t1", "t2", "t3"]  # t4 (no title) + garbage dropped
+    t2 = next(t for t in out["tasks"] if t["id"] == "t2")
+    assert t2["depends_on"] == ["t1"]  # ghost (unknown) + self ref dropped
+    assert out["tasks"][2]["title"] == "POST saludar"  # name → title
+
+
+def test_normalise_plan_draft_empty_when_no_tasks() -> None:
+    out = _normalise_plan_draft({"title": "x"})
+    assert out["tasks"] == []
+    assert out["title"] == "x"

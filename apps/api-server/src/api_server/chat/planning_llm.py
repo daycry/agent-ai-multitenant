@@ -197,5 +197,73 @@ class LLMPlanningModel:
             )
         return self._complete(messages)
 
+    def pm_plan_draft(
+        self, state: PlanningState, contributions: Sequence[SpecialistContribution]
+    ) -> dict[str, Any]:
+        """Structured plan ready to materialise as a Plan (fases/tareas DAG). Called
+        when the PM decides ``finish_planning``. Returns ``{title, summary, tasks}``
+        where each task is ``{id, title, description, role, depends_on:[ids]}`` —
+        the shape ``PlanSpecification`` / ``POST /projects/{id}/plans`` expects."""
+        roles = sorted(r.value for r in state.team_roles)
+        system = (
+            "Eres el PROJECT MANAGER cerrando la planificación. " + _PLAN_ONLY_RULE + "\n\n"
+            "Formaliza el PLAN acordado como un objeto JSON, SIN texto alrededor, con esta "
+            "forma EXACTA:\n"
+            '{"title": "<título corto>", "summary": "<resumen: alcance, decisiones, '
+            'riesgos>", "tasks": [{"id": "t1", "title": "<acción>", "description": '
+            '"<qué hacer y criterio de aceptación>", "role": "<rol>", "depends_on": []}]}\n'
+            "Reglas: ids únicos y cortos (t1, t2, …); `depends_on` referencia SOLO ids "
+            "declarados; NO ciclos; ordena las tareas por dependencias; tareas accionables "
+            "y atómicas. `role` ∈ los roles del equipo cuando aplique. NO implementes ni "
+            f"escribas código: solo el plan. Roles del equipo: {roles or '(genérico)'}."
+        )
+        messages = [Message(role="system", content=system)]
+        note = _context_note(state)
+        if note:
+            messages.append(note)
+        messages.extend(_history_messages(state))
+        if contributions:
+            joined = "\n".join(f"- [{c.role.value}] {c.content}" for c in contributions)
+            messages.append(
+                Message(role="system", content="Aportaciones de los especialistas:\n" + joined)
+            )
+        return _normalise_plan_draft(_extract_json(self._complete(messages)))
+
+
+def _normalise_plan_draft(obj: dict[str, Any]) -> dict[str, Any]:
+    """Coerce an LLM plan object into a valid draft: string task ids (auto-filled),
+    ``depends_on`` as a list of KNOWN ids (unknown/self refs dropped), no cycles
+    relied upon downstream (the create-plan endpoint re-validates the DAG). Returns
+    ``{title, summary, tasks}``; ``tasks=[]`` when nothing usable was produced."""
+    raw_tasks = obj.get("tasks")
+    raw_tasks = raw_tasks if isinstance(raw_tasks, list) else []
+    tasks: list[dict[str, Any]] = []
+    ids: list[str] = []
+    for i, t in enumerate(raw_tasks):
+        if not isinstance(t, dict):
+            continue
+        tid = str(t.get("id") or f"t{i + 1}").strip() or f"t{i + 1}"
+        title = str(t.get("title") or t.get("name") or "").strip()
+        if not title:
+            continue
+        ids.append(tid)
+        tasks.append(
+            {
+                "id": tid,
+                "title": title[:255],
+                "description": str(t.get("description") or "").strip(),
+                "role": str(t.get("role") or "").strip(),
+                "depends_on": [str(d) for d in (t.get("depends_on") or []) if isinstance(d, str)],
+            }
+        )
+    id_set = set(ids)
+    for t in tasks:  # drop unknown / self references so the spec validates
+        t["depends_on"] = [d for d in t["depends_on"] if d in id_set and d != t["id"]]
+    return {
+        "title": str(obj.get("title") or "Plan del proyecto").strip()[:255],
+        "summary": str(obj.get("summary") or "").strip(),
+        "tasks": tasks,
+    }
+
 
 __all__ = ["LLMPlanningModel"]

@@ -298,6 +298,7 @@ async def _persist_and_publish(
     author_kind: str,
     redis: Redis,
     author_agent_id: UUID | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> None:
     # messages CHECK ck_messages_author_kind_consistency: 'agent' REQUIRES
     # author_agent_id (and author_user_id NULL); 'system' requires both NULL.
@@ -310,6 +311,7 @@ async def _persist_and_publish(
             author_agent_id=author_agent_id if author_kind == "agent" else None,
             content=content,
             mode=mode,
+            attachments=attachments or [],
         )
         session.add(message)
         await session.flush()
@@ -390,7 +392,9 @@ async def _stream_planning(
     async def _step(fn: Callable[..., Any], *args: Any) -> Any:
         return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=_STEP_TIMEOUT_S)
 
-    async def _emit(content: str, agent_id: UUID) -> None:
+    async def _emit(
+        content: str, agent_id: UUID, attachments: list[dict[str, Any]] | None = None
+    ) -> None:
         await _persist_and_publish(
             tenant_id=tenant_id,
             conversation_id=conversation_id,
@@ -398,6 +402,7 @@ async def _stream_planning(
             mode=mode,
             author_kind="agent",
             author_agent_id=agent_id,
+            attachments=attachments,
             redis=redis,
         )
 
@@ -454,8 +459,36 @@ async def _stream_planning(
             error_type=exc.__class__.__name__,
         )
         return published  # partial (framing + specialists) is still useful
+
+    # When the PM closes the plan, formalise it as a structured draft and attach it so
+    # the UI can offer "Insertar como Plan" (creates the Plan + DAG tasks). Best-effort:
+    # a failed/empty draft just means no button — the prose synthesis still posts.
+    attachments: list[dict[str, Any]] | None = None
+    if directive.intent == PMIntent.FINISH_PLANNING:
+        try:
+            draft = await _step(model.pm_plan_draft, state, contributions)
+            if draft.get("tasks"):
+                # kind/intent match the UI's "Generar Plan" button contract
+                # (isFinishPlanningReady); the spec lets create_plan materialise tasks.
+                attachments = [
+                    {
+                        "kind": "planning_directive",
+                        "intent": "finish_planning",
+                        "title": draft.get("title") or "Plan del proyecto",
+                        "specification": {
+                            "summary": draft.get("summary") or "",
+                            "tasks": draft["tasks"],
+                        },
+                    }
+                ]
+        except Exception as exc:  # draft is best-effort; never sinks the synthesis
+            _log.warning(
+                "chat.planning_draft_failed",
+                conversation_id=str(conversation_id),
+                error_type=exc.__class__.__name__,
+            )
     if synthesis.strip():
-        await _emit(synthesis, default_agent_id)
+        await _emit(synthesis, default_agent_id, attachments)
         published = True
     return published
 
