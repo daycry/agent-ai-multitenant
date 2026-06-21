@@ -576,11 +576,15 @@ async def _stream_planning(
         )
         return published  # partial (framing + specialists) is still useful
 
-    # When the PM closes the plan, formalise it as a structured draft and attach it so
-    # the UI can offer "Insertar como Plan" (creates the Plan + DAG tasks). Best-effort:
-    # a failed/empty draft just means no button — the prose synthesis still posts.
+    # In plan-only planning mode the deliverable is ALWAYS an insertable plan, so formalise
+    # the synthesis as a structured draft and attach it whenever the PM PRESENTS a plan — not
+    # only on the rarely self-selected FINISH_PLANNING intent (a complete plan produced under
+    # SPEAK_ALONE / INVITE_SPECIALISTS must still offer "Generar Plan"). ASK_USER is the one
+    # exception: there the PM is asking the user a question, not presenting a plan. pm_plan_draft
+    # self-gates — it only yields tasks when a real plan exists, so a clarifying turn attaches
+    # nothing. Best-effort: a failed/empty draft just means no button — the prose synthesis posts.
     attachments: list[dict[str, Any]] | None = None
-    if directive.intent == PMIntent.FINISH_PLANNING:
+    if directive.intent != PMIntent.ASK_USER and synthesis.strip():
         try:
             draft = await _step(model.pm_plan_draft, state, contributions)
             if draft.get("tasks"):
