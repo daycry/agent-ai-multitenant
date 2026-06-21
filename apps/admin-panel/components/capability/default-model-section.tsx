@@ -33,6 +33,8 @@ export function DefaultModelSection({
   isReadOnly = false,
   idPrefix,
   scopeLabel,
+  title,
+  description,
 }: {
   /** model_config actual de la entidad (equipo/proyecto). `{}`/null = hereda. */
   value: ModelConfig | null | undefined;
@@ -44,6 +46,10 @@ export function DefaultModelSection({
   idPrefix: string;
   /** "del proyecto" | "del equipo" para el copy bilingüe. */
   scopeLabel: { es: string; en: string };
+  /** Título opcional (default: "Modelo por defecto {scopeLabel}"). */
+  title?: { es: string; en: string };
+  /** Descripción opcional (default: copy de herencia del modelo por defecto). */
+  description?: { es: string; en: string };
 }) {
   const { lang } = useLang();
   const t = (es: string, en: string) => (lang === "es" ? es : en);
@@ -61,17 +67,21 @@ export function DefaultModelSection({
     <Card data-testid={`${idPrefix}-default-model`}>
       <CardHeader>
         <CardTitle>
-          {t(`Modelo por defecto ${scopeLabel.es}`, `Default model ${scopeLabel.en}`)}
+          {title
+            ? t(title.es, title.en)
+            : t(`Modelo por defecto ${scopeLabel.es}`, `Default model ${scopeLabel.en}`)}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-muted-foreground text-sm">
-          {t(
-            "Lo heredan los agentes sin modelo propio. Vacío = heredar del nivel superior " +
-              "(equipo → proyecto → plataforma).",
-            "Inherited by agents without their own model. Empty = inherit from the level above " +
-              "(team → project → platform).",
-          )}
+          {description
+            ? t(description.es, description.en)
+            : t(
+                "Lo heredan los agentes sin modelo propio. Vacío = heredar del nivel superior " +
+                  "(equipo → proyecto → plataforma).",
+                "Inherited by agents without their own model. Empty = inherit from the level " +
+                  "above (team → project → platform).",
+              )}
         </p>
 
         {isReadOnly ? (

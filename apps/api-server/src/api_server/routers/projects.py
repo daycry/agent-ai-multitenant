@@ -290,8 +290,9 @@ async def update_project(
         project,
         payload,
         enum_fields=("status", "budget_period", "human_task_review_mode"),
-        # `llm_config` (JSON `model_config`) → columna `model_config` (Ola A).
-        rename={"llm_config": "model_config"},
+        # `llm_config` (JSON `model_config`) → columna `model_config` (Ola A);
+        # `chat_llm_config` (JSON `chat_model_config`) → columna `chat_model_config`.
+        rename={"llm_config": "model_config", "chat_llm_config": "chat_model_config"},
     )
 
     await session.flush()

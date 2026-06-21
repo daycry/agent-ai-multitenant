@@ -347,12 +347,13 @@ async def update_team(
         session, Team, team_id, principal, not_found_detail="team not found"
     )
 
-    # `llm_config` (JSON `model_config`) → columna `model_config` (Ola A).
+    # `llm_config` (JSON `model_config`) → columna `model_config` (Ola A);
+    # `chat_llm_config` (JSON `chat_model_config`) → columna `chat_model_config`.
     # `memory_scope` (ADR 0071): enum → string; `null` explícito quita la política.
     apply_partial_update(
         team,
         payload,
-        rename={"llm_config": "model_config"},
+        rename={"llm_config": "model_config", "chat_llm_config": "chat_model_config"},
         enum_fields=("memory_scope",),
     )
 

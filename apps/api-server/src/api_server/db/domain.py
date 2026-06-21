@@ -666,6 +666,13 @@ class Team(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     model_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+    # Modelo del CHAT del proyecto, separado del de ejecución (`model_config`). El
+    # chat de planificación es interactivo: puede convenir un modelo más rápido/ligero
+    # que el (potente pero lento) que los agentes usan para ejecutar tareas reales.
+    # JSONB ``{}`` = el chat hereda el `model_config` de ejecución (cadena ADR 0065).
+    chat_model_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     # Política de memoria del EQUIPO (ADR 0071). NULLABLE: NULL = el equipo no fija
     # política y sus miembros caen al memory_scope del agente / default plataforma.
     # Cuando se fija, gobierna la memoria de las ejecuciones de los proyectos de
@@ -772,6 +779,13 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     # herencia plataforma → proyecto → equipo → agente. JSONB ``{}`` = no fija
     # modelo. Distinto de ``worker_config`` (assignment_policy, etc.).
     model_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # Modelo del CHAT del proyecto, separado del de ejecución (`model_config`). El
+    # chat de planificación es interactivo: conviene un modelo más rápido/ligero que
+    # el que los agentes usan para ejecutar tareas. JSONB ``{}`` = el chat hereda el
+    # `model_config` de ejecución (cadena ADR 0065). Gana sobre el de equipo.
+    chat_model_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     repository_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

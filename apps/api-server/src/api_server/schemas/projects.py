@@ -244,19 +244,23 @@ class ProjectUpdateRequest(BaseModel):
     # Modelo por defecto del proyecto (Ola A / ADR 0065). Alias JSON `model_config`
     # (igual que en Agent/Team). `{}` = no fija modelo (hereda). `None` = no tocar.
     llm_config: dict[str, Any] | None = Field(default=None, alias="model_config")
+    # Modelo del CHAT del proyecto, separado del de ejecución. Alias JSON
+    # `chat_model_config`. `{}` = el chat hereda el modelo de ejecución. `None` = no tocar.
+    chat_llm_config: dict[str, Any] | None = Field(default=None, alias="chat_model_config")
 
     @model_validator(mode="after")
     def _validate_model(self) -> ProjectUpdateRequest:
-        if self.llm_config:
-            from api_server.db.platform_settings import (
-                InvalidModelConfigError,
-                validate_model_config,
-            )
+        from api_server.db.platform_settings import (
+            InvalidModelConfigError,
+            validate_model_config,
+        )
 
-            try:
-                validate_model_config(self.llm_config)
-            except InvalidModelConfigError as exc:
-                raise ValueError(str(exc)) from exc
+        for cfg in (self.llm_config, self.chat_llm_config):
+            if cfg:
+                try:
+                    validate_model_config(cfg)
+                except InvalidModelConfigError as exc:
+                    raise ValueError(str(exc)) from exc
         return self
 
     @field_validator("mcp_servers", mode="after")
@@ -328,6 +332,8 @@ class ProjectResponse(BaseModel):
     worker_config: dict[str, Any]
     # Modelo por defecto del proyecto (Ola A / ADR 0065). Alias JSON `model_config`.
     llm_config: dict[str, Any] = Field(alias="model_config")
+    # Modelo del CHAT del proyecto (separado del de ejecución). `{}` = hereda.
+    chat_llm_config: dict[str, Any] = Field(alias="chat_model_config")
     repository_config: dict[str, Any] | None
     # Config git del proyecto (ADR 0072): {provider, remote_url, default_branch,
     # auth_mode}. Sin secreto (vive en Vault). NULL = sin remoto.
@@ -370,6 +376,7 @@ def to_project_response(p: Project) -> ProjectResponse:
         "rag_knowledge_bases": p.rag_knowledge_bases,
         "worker_config": p.worker_config,
         "model_config": dict(p.model_config or {}),
+        "chat_model_config": dict(p.chat_model_config or {}),
         "repository_config": p.repository_config,
         "git_config": p.git_config,
         "human_approval_policy": p.human_approval_policy,

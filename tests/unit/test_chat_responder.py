@@ -4,8 +4,17 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
-from api_server.chat.planning_graph import PlanningRole
+import pytest
+from api_server.chat import responder
+from api_server.chat.planning_graph import (
+    PlanningRole,
+    PlanningState,
+    PMDirective,
+    PMIntent,
+    SpecialistContribution,
+)
 from api_server.chat.responder import history_from_messages, planning_roles_from_strings
 
 
@@ -46,3 +55,54 @@ def test_planning_roles_maps_known_drops_unknown_always_pm() -> None:
 
 def test_planning_roles_empty_team_is_pm_only() -> None:
     assert planning_roles_from_strings([]) == frozenset({PlanningRole.PROJECT_MANAGER})
+
+
+class _FakePlanningModel:
+    """Drives _stream_planning without an LLM: PM invites 2 specialists, each speaks,
+    PM synthesises."""
+
+    def pm_decide(self, state: object) -> PMDirective:
+        return PMDirective(
+            intent=PMIntent.INVITE_SPECIALISTS,
+            rationale="necesito backend y frontend",
+            specialists=(PlanningRole.BACKEND_DEV, PlanningRole.FRONTEND_DEV),
+        )
+
+    def specialist_speak(self, role: PlanningRole, state: object) -> SpecialistContribution:
+        return SpecialistContribution(role=role, content=f"opinión de {role.value}")
+
+    def pm_synthesise(self, state: object, contributions: object) -> str:
+        return "Síntesis final del PM"
+
+
+@pytest.mark.asyncio
+async def test_stream_planning_publishes_each_step_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[tuple[str, str]] = []
+
+    async def _fake_persist(**kwargs: object) -> None:
+        published.append((str(kwargs["author_kind"]), str(kwargs["content"])))
+
+    monkeypatch.setattr(responder, "_persist_and_publish", _fake_persist)
+
+    state = PlanningState(
+        team_roles=frozenset(
+            {PlanningRole.PROJECT_MANAGER, PlanningRole.BACKEND_DEV, PlanningRole.FRONTEND_DEV}
+        )
+    )
+    ok = await responder._stream_planning(
+        model=_FakePlanningModel(),  # type: ignore[arg-type]
+        state=state,
+        tenant_id=uuid4(),
+        conversation_id=uuid4(),
+        mode="planning",
+        redis=None,  # type: ignore[arg-type]
+    )
+    assert ok is True
+    # PM framing + backend + frontend + synthesis = 4 streamed agent messages, in order.
+    assert [kind for kind, _ in published] == ["agent", "agent", "agent", "agent"]
+    assert "Backend" in published[0][1] and "Frontend" in published[0][1]  # framing names both
+    assert "opinión de backend_dev" in published[1][1]
+    assert "opinión de frontend_dev" in published[2][1]
+    assert published[3][1] == "Síntesis final del PM"

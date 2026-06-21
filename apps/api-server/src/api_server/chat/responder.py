@@ -14,14 +14,17 @@ ADR 0028). This is deliberately NOT the personal-assistant model setting.
 
 Per chat mode:
 
-  * **planning**  — the multi-agent planning sub-graph (PM + the project team's real
-                    specialist roles → synthesis).
+  * **planning**  — the multi-agent planning sub-graph, STREAMED: the PM's framing, each
+                    specialist's contribution and the final synthesis are each published
+                    as their own ``agent`` message as soon as they are ready, so the user
+                    watches the team work turn-by-turn instead of staring at silence.
   * **discussion**— a single open "ideas & opinions" team reply.
   * **execution** — a single execution-focused team reply (status / next steps).
 
 Provider-agnostic (ADR 0021). Best-effort but never silent: a missing provider, a
 timeout, an empty reply or any failure surfaces as a ``system`` message so the user is
-never left staring at silence, and the POST is never broken.
+never left staring at silence, and the POST is never broken. Each streamed step has its
+own timeout + error handling, so one slow/failed specialist never sinks the whole turn.
 """
 
 from __future__ import annotations
@@ -41,7 +44,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.assistant.model_config import to_provider_model_name
-from api_server.chat.planning_graph import PlanningRole, run_planning_turn
+from api_server.chat.planning_graph import (
+    PlanningRole,
+    PlanningState,
+    PMDirective,
+    PMIntent,
+    SpecialistContribution,
+)
 from api_server.chat.planning_llm import LLMPlanningModel
 from api_server.db.conversation import Conversation, Message
 from api_server.db.domain import Agent, Project, Team, TeamMember
@@ -59,11 +68,25 @@ from api_server.llm_providers.vault import LLMProviderVaultStore
 
 _log = structlog.get_logger("api_server.chat.responder")
 
-# Wall-clock backstop for a single chat turn (planning may chain several LLM calls).
-# On timeout we surface a ``system`` notice; the orphaned worker thread is bounded by
-# the provider's own network timeout. Keeps a hung provider from leaking threads.
-_RESPONDER_TIMEOUT_S = 180.0
+# Per-step wall-clock backstop. Each streamed planning step (and the single
+# discussion/execution reply) is bounded independently so one slow/hung step never
+# sinks the whole turn; the orphaned worker thread is bounded by the provider's own
+# network timeout. A faster chat model (per-project chat model_config) keeps steps short.
+_STEP_TIMEOUT_S = 150.0
 _DEFAULT_TEMPERATURE = 0.7
+
+# Spokesperson labels shown as the message heading so the user sees WHO is speaking.
+_ROLE_LABELS: dict[PlanningRole, str] = {
+    PlanningRole.PROJECT_MANAGER: "🧭 Project Manager",
+    PlanningRole.ARCHITECT: "🏗️ Arquitecto",
+    PlanningRole.BACKEND_DEV: "⚙️ Backend",
+    PlanningRole.FRONTEND_DEV: "🎨 Frontend",
+    PlanningRole.QA: "🧪 QA",
+    PlanningRole.REVIEWER: "🔍 Reviewer",
+    PlanningRole.DEVOPS: "🚀 DevOps",
+    PlanningRole.SECURITY: "🔐 Seguridad",
+    PlanningRole.TECHNICAL_WRITER: "📝 Documentación",
+}
 
 _MODE_PROMPTS: dict[str, str] = {
     "discussion": (
@@ -82,6 +105,10 @@ _ROLE_MAP = {"user": "user", "agent": "assistant", "system": "system"}
 
 # Detached reply tasks — held so the event loop does not GC them mid-flight.
 _PENDING_REPLIES: set[asyncio.Task[None]] = set()
+
+
+def _role_label(role: PlanningRole) -> str:
+    return _ROLE_LABELS.get(role, role.value)
 
 
 def history_from_messages(messages: list[Message]) -> list[dict[str, Any]]:
@@ -122,25 +149,52 @@ async def _team_model_config(session: AsyncSession, project: Project | None) -> 
     return dict(team.model_config or {}) if team is not None else {}
 
 
+async def _team_chat_model_config(session: AsyncSession, project: Project | None) -> dict[str, Any]:
+    """The team's CHAT-specific model override (``Team.chat_model_config``), empty
+    when unset. Lets a project run a lighter/faster model in the interactive chat
+    than the (possibly opus+max) model its agents use for real task execution."""
+    if project is None or getattr(project, "team_id", None) is None:
+        return {}
+    team = (
+        await session.execute(
+            select(Team).where(Team.id == project.team_id, Team.tenant_id == project.tenant_id)
+        )
+    ).scalar_one_or_none()
+    return dict(getattr(team, "chat_model_config", None) or {}) if team is not None else {}
+
+
 async def resolve_chat_model_config(
     session: AsyncSession, project: Project | None
 ) -> dict[str, Any]:
-    """Resolve the project chat's effective ``model_config`` via the ADR 0065
-    inheritance chain **platform → project → team** (no per-agent level — the
-    chat speaks for the whole team). Never empty: falls back to the platform
-    default and then the code default, exactly like agent dispatch. A corrupt
-    stored config that fails catalogue validation also falls back (M2)."""
+    """Resolve the project chat's effective ``model_config``.
+
+    A CHAT-specific override (project then team ``chat_model_config``) wins when set,
+    so an interactive chat can use a lighter/faster model than the team's execution
+    model. Otherwise it falls back to the normal ADR 0065 inheritance chain
+    **platform → project → team** (no per-agent level — the chat speaks for the whole
+    team). Never empty: ultimately falls back to the platform default and the code
+    default. A corrupt stored config that fails catalogue validation also falls back."""
+    project_chat = dict(getattr(project, "chat_model_config", None) or {}) if project else {}
+    team_chat = await _team_chat_model_config(session, project)
     platform_default = await get_default_model_config(session)
     project_cfg = dict(getattr(project, "model_config", None) or {}) if project else {}
     team_cfg = await _team_model_config(session, project)
-    # agent_cfg=None → resolve at team/project/platform granularity.
-    effective = resolve_model_config_chain(None, team_cfg, project_cfg, platform_default)
+    # Chat override (project → team) is most specific; then the execution chain.
+    effective = resolve_model_config_chain(project_chat or None, team_chat or None, None, {})
+    if _model_pinned(effective):
+        chosen = effective
+    else:
+        chosen = resolve_model_config_chain(None, team_cfg, project_cfg, platform_default)
     try:
-        validate_model_config(effective)
+        validate_model_config(chosen)
     except InvalidModelConfigError:
         _log.warning("chat.invalid_model_config_fallback")
         return platform_default
-    return effective
+    return chosen
+
+
+def _model_pinned(cfg: dict[str, Any]) -> bool:
+    return bool(cfg.get("provider") and cfg.get("model"))
 
 
 async def team_planning_roles(
@@ -148,7 +202,7 @@ async def team_planning_roles(
 ) -> frozenset[PlanningRole]:
     """The planning spokesperson roles available for this project's team. Always
     includes the PM; specialists come from the team's member agents' roles.
-    Joins ``Team`` and filters by tenant as defence-in-depth (M4)."""
+    Joins ``Team`` and filters by tenant as defence-in-depth."""
     if project is None or getattr(project, "team_id", None) is None:
         return frozenset({PlanningRole.PROJECT_MANAGER})
     rows = (
@@ -246,7 +300,7 @@ async def _system_notice(
     *, tenant_id: UUID, conversation_id: UUID, mode: str, content: str, redis: Redis
 ) -> None:
     """Publish a ``system`` message, swallowing any persist/publish failure so an
-    error notice can never itself crash the responder (A3 / M-level)."""
+    error notice can never itself crash the responder."""
     try:
         await _persist_and_publish(
             tenant_id=tenant_id,
@@ -264,35 +318,102 @@ async def _system_notice(
         )
 
 
-async def _generate_reply(
+def _pm_framing(directive: PMDirective, specialists: tuple[PlanningRole, ...]) -> str | None:
+    """The PM's opening message when it convenes specialists, so the user sees the
+    plan of attack before the contributions arrive. ``None`` when there's nothing
+    worth showing (PM answers alone → the synthesis IS the answer)."""
+    if not specialists:
+        return None
+    who = ", ".join(_role_label(r) for r in specialists)
+    rationale = directive.rationale.strip()
+    head = f"**{_role_label(PlanningRole.PROJECT_MANAGER)}**\n\n"
+    body = f"{rationale}\n\n" if rationale else ""
+    return f"{head}{body}_Consulto con: {who}_"
+
+
+async def _stream_planning(
     *,
+    model: LLMPlanningModel,
+    state: PlanningState,
+    tenant_id: UUID,
+    conversation_id: UUID,
     mode: str,
-    provider: LLMProvider,
-    api_model: str,
-    history: list[dict[str, Any]],
-    temperature: float,
-    extra: dict[str, Any],
-    roles: frozenset[PlanningRole],
-    project_context: dict[str, Any],
-) -> str:
-    if mode == "planning":
-        model = LLMPlanningModel(
-            provider=provider,
-            model=api_model,
-            temperature=temperature,
-            extra_call_kwargs=extra,
+    redis: Redis,
+) -> bool:
+    """Run one planning turn STEP-BY-STEP, publishing each step as its own ``agent``
+    message in real time (PM framing → each specialist → synthesis). Mirrors the
+    planning graph's routing. Each step is independently timed + error-guarded.
+    Returns True if at least one substantive message was published."""
+
+    async def _step(fn: Callable[..., Any], *args: Any) -> Any:
+        return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=_STEP_TIMEOUT_S)
+
+    async def _emit(content: str) -> None:
+        await _persist_and_publish(
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            content=content,
+            mode=mode,
+            author_kind="agent",
+            redis=redis,
         )
-        # The planning graph is sync (asyncio.run per LLM call inside the adapter);
-        # run it in a worker thread so that nested loop is its own.
-        result = await asyncio.to_thread(
-            run_planning_turn,
-            model,
-            chat_history=history,
-            project_context=project_context,
-            team_roles=roles,
+
+    published = False
+
+    # 1. PM decides who, if anyone, to bring in.
+    try:
+        directive: PMDirective = await _step(model.pm_decide, state)
+        state.directive = directive
+    except Exception as exc:  # first step fatal for the turn (incl. timeout)
+        _log.warning(
+            "chat.planning_pm_decide_failed",
+            conversation_id=str(conversation_id),
+            error_type=exc.__class__.__name__,
         )
-        return result.content
-    return await _simple_reply(provider, api_model, mode, history, temperature, extra)
+        return False
+
+    specialists: tuple[PlanningRole, ...] = ()
+    if directive.intent == PMIntent.INVITE_SPECIALISTS:
+        specialists = tuple(s for s in directive.specialists if s in state.team_roles)
+
+    framing = _pm_framing(directive, specialists)
+    if framing:
+        await _emit(framing)
+        published = True
+
+    # 2. Specialists, streamed as each finishes.
+    contributions: list[SpecialistContribution] = []
+    for role in specialists:
+        try:
+            contrib: SpecialistContribution = await _step(model.specialist_speak, role, state)
+        except Exception as exc:  # skip this specialist only (incl. timeout)
+            _log.warning(
+                "chat.planning_specialist_failed",
+                role=role.value,
+                error_type=exc.__class__.__name__,
+            )
+            await _emit(f"**{_role_label(role)}**\n\n_(no pudo aportar en este turno)_")
+            continue
+        contributions.append(contrib)
+        state.contributions.append(contrib)
+        if contrib.content.strip():
+            await _emit(f"**{_role_label(role)}**\n\n{contrib.content}")
+            published = True
+
+    # 3. PM synthesises the turn into the message that moves planning forward.
+    try:
+        synthesis: str = await _step(model.pm_synthesise, state, contributions)
+    except Exception as exc:  # incl. timeout
+        _log.warning(
+            "chat.planning_synthesise_failed",
+            conversation_id=str(conversation_id),
+            error_type=exc.__class__.__name__,
+        )
+        return published  # partial (framing + specialists) is still useful
+    if synthesis.strip():
+        await _emit(synthesis)
+        published = True
+    return published
 
 
 async def respond_to_conversation(
@@ -314,8 +435,8 @@ async def respond_to_conversation(
             ).scalar_one_or_none()
             if conv is None:
                 return
-            # Defence-in-depth on a BYPASSRLS session (C2): never act on another
-            # tenant's conversation/project even if invoked with mismatched args.
+            # Defence-in-depth on a BYPASSRLS session: never act on another tenant's
+            # conversation/project even if invoked with mismatched args.
             if conv.tenant_id != tenant_id:
                 _log.warning("chat.responder_cross_tenant_conversation", id=str(conversation_id))
                 return
@@ -368,40 +489,60 @@ async def respond_to_conversation(
         history = history_from_messages(list(rows))
         extra = reasoning_call_kwargs(kind, effective.get("reasoning_effort"))
         try:
-            content = await asyncio.wait_for(
-                _generate_reply(
-                    mode=mode,
+            if mode == "planning":
+                model = LLMPlanningModel(
                     provider=provider,
-                    api_model=api_model,
-                    history=history,
+                    model=api_model,
                     temperature=temperature,
-                    extra=extra,
-                    roles=roles,
+                    extra_call_kwargs=extra,
+                )
+                state = PlanningState(
+                    chat_history=history,
                     project_context=project_context,
-                ),
-                timeout=_RESPONDER_TIMEOUT_S,
-            )
+                    team_roles=roles,
+                )
+                published = await _stream_planning(
+                    model=model,
+                    state=state,
+                    tenant_id=tenant_id,
+                    conversation_id=conversation_id,
+                    mode=mode,
+                    redis=redis,
+                )
+                if not published:
+                    await _system_notice(
+                        tenant_id=tenant_id,
+                        conversation_id=conversation_id,
+                        mode=mode,
+                        content="El equipo no pudo elaborar una respuesta. Inténtalo de nuevo.",
+                        redis=redis,
+                    )
+            else:
+                content = await asyncio.wait_for(
+                    _simple_reply(provider, api_model, mode, history, temperature, extra),
+                    timeout=_STEP_TIMEOUT_S,
+                )
+                if content.strip():
+                    await _persist_and_publish(
+                        tenant_id=tenant_id,
+                        conversation_id=conversation_id,
+                        content=content,
+                        mode=mode,
+                        author_kind="agent",
+                        redis=redis,
+                    )
+                else:
+                    await _system_notice(
+                        tenant_id=tenant_id,
+                        conversation_id=conversation_id,
+                        mode=mode,
+                        content="El equipo procesó tu mensaje pero no tuvo nada que añadir.",
+                        redis=redis,
+                    )
         finally:
-            # Closing must never mask the real error (M6).
+            # Closing must never mask the real error.
             with contextlib.suppress(Exception):
                 await provider.aclose()
-        if content.strip():
-            await _persist_and_publish(
-                tenant_id=tenant_id,
-                conversation_id=conversation_id,
-                content=content,
-                mode=mode,
-                author_kind="agent",
-                redis=redis,
-            )
-        else:
-            await _system_notice(
-                tenant_id=tenant_id,
-                conversation_id=conversation_id,
-                mode=mode,
-                content="El equipo procesó tu mensaje pero no tuvo nada que añadir.",
-                redis=redis,
-            )
     except TimeoutError:
         _log.warning("chat.responder_timeout", conversation_id=str(conversation_id), mode=mode)
         await _system_notice(
@@ -413,7 +554,7 @@ async def respond_to_conversation(
         )
     except Exception as exc:  # never let a chat reply crash the background task
         # Log the exception TYPE, not str(exc): provider errors can embed response
-        # bodies / credentials (M5).
+        # bodies / credentials.
         _log.warning(
             "chat.responder_failed",
             conversation_id=str(conversation_id),

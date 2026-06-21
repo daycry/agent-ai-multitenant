@@ -87,22 +87,26 @@ class TeamUpdateRequest(BaseModel):
     # Modelo por defecto del equipo (Ola A / ADR 0065). Alias JSON `model_config`
     # (igual que en Agent). `{}` = no fija modelo (hereda). `None` = no tocar.
     llm_config: dict[str, Any] | None = Field(default=None, alias="model_config")
+    # Modelo del CHAT del equipo, separado del de ejecución. Alias JSON
+    # `chat_model_config`. `{}` = el chat hereda el modelo de ejecución. `None` = no tocar.
+    chat_llm_config: dict[str, Any] | None = Field(default=None, alias="chat_model_config")
     # Política de memoria del equipo (ADR 0071). `null` explícito = quitar política
     # (heredar); omitir = no tocar; un scope = fijarla (gobierna a los miembros).
     memory_scope: MemoryScope | None = None
 
     @model_validator(mode="after")
     def _validate_model(self) -> TeamUpdateRequest:
-        if self.llm_config:
-            from api_server.db.platform_settings import (
-                InvalidModelConfigError,
-                validate_model_config,
-            )
+        from api_server.db.platform_settings import (
+            InvalidModelConfigError,
+            validate_model_config,
+        )
 
-            try:
-                validate_model_config(self.llm_config)
-            except InvalidModelConfigError as exc:
-                raise ValueError(str(exc)) from exc
+        for cfg in (self.llm_config, self.chat_llm_config):
+            if cfg:
+                try:
+                    validate_model_config(cfg)
+                except InvalidModelConfigError as exc:
+                    raise ValueError(str(exc)) from exc
         return self
 
 
@@ -152,6 +156,8 @@ class TeamResponse(BaseModel):
     is_builtin: bool
     forked_from_team_id: UUID | None
     llm_config: dict[str, Any] = Field(default_factory=dict, alias="model_config")
+    # Modelo del CHAT del equipo (separado del de ejecución). `{}` = hereda.
+    chat_llm_config: dict[str, Any] = Field(default_factory=dict, alias="chat_model_config")
     # ADR 0071: política de memoria del equipo (None = sin política / heredar).
     memory_scope: str | None = None
     members: list[TeamMemberResponse]
@@ -173,6 +179,7 @@ def to_team_response(t: Team, members: list[TeamMember]) -> TeamResponse:
         "is_builtin": t.is_builtin,
         "forked_from_team_id": t.forked_from_team_id,
         "model_config": dict(t.model_config or {}),
+        "chat_model_config": dict(t.chat_model_config or {}),
         "memory_scope": t.memory_scope,
         "members": [to_member_response(m) for m in members],
         "created_at": t.created_at,
