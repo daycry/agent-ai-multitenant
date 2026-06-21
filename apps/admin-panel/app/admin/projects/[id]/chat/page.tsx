@@ -241,6 +241,16 @@ export default function ProjectChatPage() {
     queryFn: () => apiFetch<Message[]>(`/conversations/${activeConversationId}/messages`),
     refetchOnWindowFocus: false,
     enabled: Boolean(activeConversationId),
+    // Safety net for live updates: while the last message is the user's, the team is still
+    // replying. The WebSocket below pushes each step in real time, but if it never connected
+    // or got dropped (proxy idle-timeout, laptop sleep/wake), poll every few seconds so the
+    // reply still lands without a manual reload. Stops the moment an agent/system reply
+    // arrives (last message is no longer the user's) → no idle polling.
+    refetchInterval: (query) => {
+      const data = query.state.data as Message[] | undefined;
+      const awaiting = !!data && data.length > 0 && data[data.length - 1].author_kind === "user";
+      return awaiting ? 3000 : false;
+    },
   });
 
   // POST a new user message. The composer below uses this; the
