@@ -539,6 +539,10 @@ interface ChatComposerProps {
 
 function ChatComposer({ disabled, onSubmit }: ChatComposerProps) {
   const [value, setValue] = useState("");
+  // Markdown preview toggle. The edit view keeps the raw <textarea> so @-mention
+  // tracking (cursor/onChange) stays intact; preview renders the same markdown
+  // renderer the chat messages use.
+  const [preview, setPreview] = useState(false);
   // The @-trigger is open when the cursor sits in the middle of a
   // partial mention token ("@" followed by 0+ word-chars, no space).
   const mention = parsePendingMention(value);
@@ -568,18 +572,61 @@ function ChatComposer({ disabled, onSubmit }: ChatComposerProps) {
 
   return (
     <form className="mt-4 relative" onSubmit={handleSubmit} data-testid="chat-composer">
-      <textarea
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="Escribe un mensaje. Usa @ para mencionar a un agente."
-        rows={3}
-        disabled={disabled}
-        data-testid="chat-input"
-        className={cn(
-          "w-full resize-none rounded border px-3 py-2 text-sm",
-          "bg-background focus:outline-none focus:ring-2 focus:ring-indigo-500/40",
-        )}
-      />
+      <div className="bg-muted mb-1.5 inline-flex w-fit rounded-md p-0.5" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={!preview}
+          onClick={() => setPreview(false)}
+          data-testid="chat-input-tab-edit"
+          className={cn(
+            "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
+            !preview ? "bg-background text-foreground shadow" : "text-muted-foreground",
+          )}
+        >
+          Editar
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={preview}
+          onClick={() => setPreview(true)}
+          data-testid="chat-input-tab-preview"
+          className={cn(
+            "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
+            preview ? "bg-background text-foreground shadow" : "text-muted-foreground",
+          )}
+        >
+          Vista previa
+        </button>
+      </div>
+      {preview ? (
+        <div
+          data-testid="chat-input-preview"
+          className="bg-muted/30 min-h-[5.5rem] w-full rounded border px-3 py-2 text-sm"
+        >
+          {value.trim().length === 0 ? (
+            <p className="text-muted-foreground/60 text-xs italic">
+              Sin contenido para previsualizar.
+            </p>
+          ) : (
+            renderPlanDraft(value)
+          )}
+        </div>
+      ) : (
+        <textarea
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="Escribe un mensaje. Usa @ para mencionar a un agente. Soporta markdown."
+          rows={3}
+          disabled={disabled}
+          data-testid="chat-input"
+          className={cn(
+            "w-full resize-none rounded border px-3 py-2 text-sm",
+            "bg-background focus:outline-none focus:ring-2 focus:ring-indigo-500/40",
+          )}
+        />
+      )}
       {suggestions.length > 0 ? (
         <ul
           data-testid="mention-suggestions"
