@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import {
   Dialog,
   DialogBody,
@@ -749,13 +750,11 @@ function TeamEditDialog({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="te-description">Descripción</Label>
-            <textarea
-              id="te-description"
+            <Label>Descripción</Label>
+            <MarkdownTextarea
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={setDescription}
               rows={3}
-              className="border-input bg-background rounded-md border px-3 py-2 text-sm"
               data-testid="edit-team-description"
             />
           </div>

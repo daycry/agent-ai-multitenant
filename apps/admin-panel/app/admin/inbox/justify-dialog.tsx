@@ -17,6 +17,7 @@ import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import {
   Dialog,
   DialogBody,
@@ -132,14 +133,12 @@ export function InboxJustifyDialog({
                 <span className="text-foreground font-medium">{request.item.task_title}</span>
               </p>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="inbox-action-text">{copy.label}</Label>
-                <textarea
-                  id="inbox-action-text"
+                <Label>{copy.label}</Label>
+                <MarkdownTextarea
                   value={text}
-                  onChange={(e) => setText(e.target.value)}
+                  onChange={setText}
                   rows={4}
                   placeholder={copy.placeholder}
-                  className="border-input bg-background min-h-[6rem] rounded-md border px-3 py-2 text-sm"
                   data-testid="inbox-action-text"
                 />
               </div>

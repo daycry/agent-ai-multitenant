@@ -23,6 +23,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Link2, Paperclip, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import {
   Dialog,
   DialogBody,
@@ -166,14 +167,12 @@ export function InboxSubmitDialog({
 
               {/* Output text */}
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="submit-output">Resultado / output</Label>
-                <textarea
-                  id="submit-output"
+                <Label>Resultado / output</Label>
+                <MarkdownTextarea
                   value={output}
-                  onChange={(e) => setOutput(e.target.value)}
+                  onChange={setOutput}
                   rows={5}
                   placeholder="Describe qué hiciste y el resultado…"
-                  className="border-input bg-background min-h-[7rem] rounded-md border px-3 py-2 text-sm"
                   data-testid="submit-output"
                 />
               </div>

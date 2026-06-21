@@ -60,7 +60,9 @@ test("edit dialog opens with current name + description", async ({ page }) => {
   await page.goto(`/admin/teams/${TEAM_ID}`, { waitUntil: "domcontentloaded" });
   await page.getByTestId("team-edit-button").click();
   await expect(page.getByTestId("edit-team-name")).toHaveValue(TEAM_NAME);
-  await expect(page.getByTestId("edit-team-description")).toHaveValue("Frontend team description");
+  await expect(page.getByTestId("edit-team-description-edit")).toHaveValue(
+    "Frontend team description",
+  );
 });
 
 test("save sends PUT with updated fields", async ({ page }) => {
@@ -70,7 +72,7 @@ test("save sends PUT with updated fields", async ({ page }) => {
 
   await page.getByTestId("team-edit-button").click();
   await page.getByTestId("edit-team-name").fill("Frontend Squad v2");
-  await page.getByTestId("edit-team-description").fill("new desc");
+  await page.getByTestId("edit-team-description-edit").fill("new desc");
   await page.getByTestId("edit-team-save").click();
 
   await page.waitForTimeout(200);

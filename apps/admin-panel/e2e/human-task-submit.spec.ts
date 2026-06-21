@@ -113,7 +113,7 @@ test("opening the delivery form: submit is disabled until there is a deliverable
   // Empty form -> nothing to deliver -> submit disabled.
   await expect(page.getByTestId("submit-confirm")).toBeDisabled();
   // Typing an output enables it.
-  await page.getByTestId("submit-output").fill("Revisión completada sin observaciones.");
+  await page.getByTestId("submit-output-edit").fill("Revisión completada sin observaciones.");
   await expect(page.getByTestId("submit-confirm")).toBeEnabled();
 });
 
@@ -123,7 +123,9 @@ test("submitting posts output + attachments + hours", async ({ page }) => {
   await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
 
   await page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`).click();
-  await page.getByTestId("submit-output").fill("Cláusulas 3 y 7 OK; anexo 2 con observaciones.");
+  await page
+    .getByTestId("submit-output-edit")
+    .fill("Cláusulas 3 y 7 OK; anexo 2 con observaciones.");
 
   // Add a URL attachment.
   await page.getByTestId("submit-add-url").click();
@@ -172,7 +174,7 @@ test("negative hours are rejected client-side", async ({ page }) => {
   await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
 
   await page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`).click();
-  await page.getByTestId("submit-output").fill("Trabajo hecho.");
+  await page.getByTestId("submit-output-edit").fill("Trabajo hecho.");
   await page.getByTestId("submit-hours").fill("-2");
 
   await expect(page.getByTestId("submit-hours-error")).toBeVisible();
