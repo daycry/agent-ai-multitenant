@@ -297,8 +297,12 @@ async def test_post_message_persists_with_active_mode(
         listed = await client.get(f"/conversations/{conv_id}/messages", headers=headers)
         assert listed.status_code == 200
         body = listed.json()
-        assert len(body) == 1
-        assert body[0]["content"] == "Hola equipo, ¿cómo arrancamos?"
+        # Posting a USER message now schedules a team reply (Plan 04 wiring); with no
+        # active provider in the test env the team posts a 'system' notice
+        # asynchronously, so assert on the USER message rather than the total count.
+        user_msgs = [m for m in body if m["author_kind"] == "user"]
+        assert len(user_msgs) == 1
+        assert user_msgs[0]["content"] == "Hola equipo, ¿cómo arrancamos?"
 
 
 @pytest.mark.asyncio

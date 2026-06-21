@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -34,9 +34,10 @@ from api_server.auth.deps import (
     get_redis,
     get_tenant_session,
     require_tenant_member,
+    schedule_after_commit,
 )
 from api_server.chat.modes import list_chat_modes
-from api_server.chat.responder import respond_to_conversation
+from api_server.chat.responder import schedule_reply
 from api_server.db.conversation import (
     ChatMode,
     Conversation,
@@ -274,7 +275,6 @@ async def delete_conversation(
 async def post_message(
     conversation_id: UUID,
     payload: MessageCreateRequest,
-    background_tasks: BackgroundTasks,
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
     redis: Redis = Depends(get_redis),
@@ -316,18 +316,25 @@ async def post_message(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
     await session.refresh(message)
     await _publish_message_event(redis, message)
-    # The team replies to a USER message in the background (Plan 04 wiring): planning
-    # → multi-agent planning sub-graph; discussion/execution → a single team reply.
-    # Provider-agnostic; best-effort (never blocks/breaks the post). Only USER
-    # messages trigger a reply, so the agent never answers itself.
+    # The team replies to a USER message (Plan 04 wiring): planning → multi-agent
+    # planning sub-graph; discussion/execution → a single team reply. Only USER
+    # messages trigger a reply, so the team never answers itself.
+    #
+    # Scheduled via ``schedule_after_commit`` (NOT BackgroundTasks): in FastAPI the
+    # yield-dependency commit runs AFTER background tasks, so a BackgroundTask would
+    # read the not-yet-committed message and respond to stale/empty history. The
+    # after-commit factory spawns a detached task, so the POST does not block on the
+    # LLM call. Capture plain values now — the ORM ``conv`` is expired post-commit.
     if payload.author_kind == MessageAuthorKind.USER:
-        background_tasks.add_task(
-            respond_to_conversation,
-            conversation_id=conv.id,
-            tenant_id=tenant_id,
-            mode=conv.current_mode,
-            vault=vault,
-            redis=redis,
+        schedule_after_commit(
+            session,
+            schedule_reply(
+                conversation_id=conv.id,
+                tenant_id=tenant_id,
+                mode=conv.current_mode,
+                vault=vault,
+                redis=redis,
+            ),
         )
     return to_message_response(message)
 
