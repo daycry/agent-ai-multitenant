@@ -225,6 +225,38 @@ async def team_planning_roles(
     return planning_roles_from_strings(rows)
 
 
+async def team_role_agents(
+    session: AsyncSession, project: Project | None
+) -> dict[PlanningRole, UUID]:
+    """Map each planning role → the team's first agent of that role. Needed for
+    author attribution: an ``agent`` message MUST carry ``author_agent_id`` (DB
+    CHECK ``ck_messages_author_kind_consistency``). Empty when the project has no
+    team."""
+    if project is None or getattr(project, "team_id", None) is None:
+        return {}
+    rows = (
+        await session.execute(
+            select(Agent.id, Agent.role)
+            .join(TeamMember, TeamMember.agent_id == Agent.id)
+            .join(Team, Team.id == TeamMember.team_id)
+            .where(
+                TeamMember.team_id == project.team_id,
+                Team.tenant_id == project.tenant_id,
+                Agent.tenant_id == project.tenant_id,
+                Agent.deleted_at.is_(None),
+            )
+        )
+    ).all()
+    out: dict[PlanningRole, UUID] = {}
+    for agent_id, role_str in rows:
+        try:
+            role = PlanningRole(str(role_str))
+        except ValueError:
+            continue
+        out.setdefault(role, agent_id)  # first agent of each role wins
+    return out
+
+
 async def build_chat_provider(
     session: AsyncSession, *, kind: str, model: str, vault: LLMProviderVaultStore | None
 ) -> LLMProvider | None:
@@ -265,13 +297,17 @@ async def _persist_and_publish(
     mode: str,
     author_kind: str,
     redis: Redis,
+    author_agent_id: UUID | None = None,
 ) -> None:
+    # messages CHECK ck_messages_author_kind_consistency: 'agent' REQUIRES
+    # author_agent_id (and author_user_id NULL); 'system' requires both NULL.
     sm = get_admin_sessionmaker()
     async with sm() as session, session.begin():
         message = Message(
             tenant_id=tenant_id,
             conversation_id=conversation_id,
             author_kind=author_kind,
+            author_agent_id=author_agent_id if author_kind == "agent" else None,
             content=content,
             mode=mode,
         )
@@ -287,7 +323,9 @@ async def _persist_and_publish(
             "message_id": str(published.id),
             "author_kind": published.author_kind,
             "author_user_id": None,
-            "author_agent_id": None,
+            "author_agent_id": (
+                str(published.author_agent_id) if published.author_agent_id else None
+            ),
             "content": published.content,
             "mode": published.mode,
             "attachments": published.attachments,
@@ -339,22 +377,27 @@ async def _stream_planning(
     conversation_id: UUID,
     mode: str,
     redis: Redis,
+    default_agent_id: UUID,
+    role_agents: dict[PlanningRole, UUID],
 ) -> bool:
     """Run one planning turn STEP-BY-STEP, publishing each step as its own ``agent``
     message in real time (PM framing → each specialist → synthesis). Mirrors the
     planning graph's routing. Each step is independently timed + error-guarded.
-    Returns True if at least one substantive message was published."""
+    Each message is attributed to the speaking role's agent (``default_agent_id`` =
+    the PM, used for the framing/synthesis and as fallback). Returns True if at
+    least one substantive message was published."""
 
     async def _step(fn: Callable[..., Any], *args: Any) -> Any:
         return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=_STEP_TIMEOUT_S)
 
-    async def _emit(content: str) -> None:
+    async def _emit(content: str, agent_id: UUID) -> None:
         await _persist_and_publish(
             tenant_id=tenant_id,
             conversation_id=conversation_id,
             content=content,
             mode=mode,
             author_kind="agent",
+            author_agent_id=agent_id,
             redis=redis,
         )
 
@@ -378,12 +421,13 @@ async def _stream_planning(
 
     framing = _pm_framing(directive, specialists)
     if framing:
-        await _emit(framing)
+        await _emit(framing, default_agent_id)
         published = True
 
-    # 2. Specialists, streamed as each finishes.
+    # 2. Specialists, streamed as each finishes (attributed to their own agent).
     contributions: list[SpecialistContribution] = []
     for role in specialists:
+        speaker = role_agents.get(role, default_agent_id)
         try:
             contrib: SpecialistContribution = await _step(model.specialist_speak, role, state)
         except Exception as exc:  # skip this specialist only (incl. timeout)
@@ -392,12 +436,12 @@ async def _stream_planning(
                 role=role.value,
                 error_type=exc.__class__.__name__,
             )
-            await _emit(f"**{_role_label(role)}**\n\n_(no pudo aportar en este turno)_")
+            await _emit(f"**{_role_label(role)}**\n\n_(no pudo aportar en este turno)_", speaker)
             continue
         contributions.append(contrib)
         state.contributions.append(contrib)
         if contrib.content.strip():
-            await _emit(f"**{_role_label(role)}**\n\n{contrib.content}")
+            await _emit(f"**{_role_label(role)}**\n\n{contrib.content}", speaker)
             published = True
 
     # 3. PM synthesises the turn into the message that moves planning forward.
@@ -411,9 +455,87 @@ async def _stream_planning(
         )
         return published  # partial (framing + specialists) is still useful
     if synthesis.strip():
-        await _emit(synthesis)
+        await _emit(synthesis, default_agent_id)
         published = True
     return published
+
+
+async def _produce_reply(
+    *,
+    mode: str,
+    provider: LLMProvider,
+    api_model: str,
+    temperature: float,
+    extra: dict[str, Any],
+    history: list[dict[str, Any]],
+    project_context: dict[str, Any],
+    roles: frozenset[PlanningRole],
+    role_agents: dict[PlanningRole, UUID],
+    default_agent_id: UUID,
+    tenant_id: UUID,
+    conversation_id: UUID,
+    redis: Redis,
+) -> None:
+    """Run the reply for the resolved provider and publish it. planning → streamed
+    sub-graph; discussion/execution → a single reply. Always closes the provider."""
+    try:
+        if mode == "planning":
+            model = LLMPlanningModel(
+                provider=provider,
+                model=api_model,
+                temperature=temperature,
+                extra_call_kwargs=extra,
+            )
+            state = PlanningState(
+                chat_history=history,
+                project_context=project_context,
+                team_roles=roles,
+            )
+            published = await _stream_planning(
+                model=model,
+                state=state,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                mode=mode,
+                redis=redis,
+                default_agent_id=default_agent_id,
+                role_agents=role_agents,
+            )
+            if not published:
+                await _system_notice(
+                    tenant_id=tenant_id,
+                    conversation_id=conversation_id,
+                    mode=mode,
+                    content="El equipo no pudo elaborar una respuesta. Inténtalo de nuevo.",
+                    redis=redis,
+                )
+        else:
+            content = await asyncio.wait_for(
+                _simple_reply(provider, api_model, mode, history, temperature, extra),
+                timeout=_STEP_TIMEOUT_S,
+            )
+            if content.strip():
+                await _persist_and_publish(
+                    tenant_id=tenant_id,
+                    conversation_id=conversation_id,
+                    content=content,
+                    mode=mode,
+                    author_kind="agent",
+                    author_agent_id=default_agent_id,
+                    redis=redis,
+                )
+            else:
+                await _system_notice(
+                    tenant_id=tenant_id,
+                    conversation_id=conversation_id,
+                    mode=mode,
+                    content="El equipo procesó tu mensaje pero no tuvo nada que añadir.",
+                    redis=redis,
+                )
+    finally:
+        # Closing must never mask the real error.
+        with contextlib.suppress(Exception):
+            await provider.aclose()
 
 
 async def respond_to_conversation(
@@ -466,6 +588,12 @@ async def respond_to_conversation(
                 )
                 return
             roles = await team_planning_roles(session, project)
+            role_agents = await team_role_agents(session, project)
+            # Author for the PM/framing/synthesis + fallback for any role without its
+            # own agent. 'agent' messages REQUIRE author_agent_id (DB CHECK).
+            default_agent_id = role_agents.get(PlanningRole.PROJECT_MANAGER) or next(
+                iter(role_agents.values()), None
+            )
             project_context = (
                 {"name": project.name, "description": project.description or ""}
                 if project is not None
@@ -486,63 +614,39 @@ async def respond_to_conversation(
                 .scalars()
                 .all()
             )
-        history = history_from_messages(list(rows))
-        extra = reasoning_call_kwargs(kind, effective.get("reasoning_effort"))
-        try:
-            if mode == "planning":
-                model = LLMPlanningModel(
-                    provider=provider,
-                    model=api_model,
-                    temperature=temperature,
-                    extra_call_kwargs=extra,
-                )
-                state = PlanningState(
-                    chat_history=history,
-                    project_context=project_context,
-                    team_roles=roles,
-                )
-                published = await _stream_planning(
-                    model=model,
-                    state=state,
-                    tenant_id=tenant_id,
-                    conversation_id=conversation_id,
-                    mode=mode,
-                    redis=redis,
-                )
-                if not published:
-                    await _system_notice(
-                        tenant_id=tenant_id,
-                        conversation_id=conversation_id,
-                        mode=mode,
-                        content="El equipo no pudo elaborar una respuesta. Inténtalo de nuevo.",
-                        redis=redis,
-                    )
-            else:
-                content = await asyncio.wait_for(
-                    _simple_reply(provider, api_model, mode, history, temperature, extra),
-                    timeout=_STEP_TIMEOUT_S,
-                )
-                if content.strip():
-                    await _persist_and_publish(
-                        tenant_id=tenant_id,
-                        conversation_id=conversation_id,
-                        content=content,
-                        mode=mode,
-                        author_kind="agent",
-                        redis=redis,
-                    )
-                else:
-                    await _system_notice(
-                        tenant_id=tenant_id,
-                        conversation_id=conversation_id,
-                        mode=mode,
-                        content="El equipo procesó tu mensaje pero no tuvo nada que añadir.",
-                        redis=redis,
-                    )
-        finally:
-            # Closing must never mask the real error.
+        # An 'agent' message needs an agent to attribute to. No team agents → the
+        # team can't speak; tell the user instead of failing on the DB CHECK.
+        if default_agent_id is None:
             with contextlib.suppress(Exception):
                 await provider.aclose()
+            await _system_notice(
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                mode=mode,
+                content=(
+                    "⚠️ El equipo del proyecto no tiene agentes configurados, así que no "
+                    "puede responder en el chat. Asigna un equipo con agentes al proyecto."
+                ),
+                redis=redis,
+            )
+            return
+        history = history_from_messages(list(rows))
+        extra = reasoning_call_kwargs(kind, effective.get("reasoning_effort"))
+        await _produce_reply(
+            mode=mode,
+            provider=provider,
+            api_model=api_model,
+            temperature=temperature,
+            extra=extra,
+            history=history,
+            project_context=project_context,
+            roles=roles,
+            role_agents=role_agents,
+            default_agent_id=default_agent_id,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            redis=redis,
+        )
     except TimeoutError:
         _log.warning("chat.responder_timeout", conversation_id=str(conversation_id), mode=mode)
         await _system_notice(

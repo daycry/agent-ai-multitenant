@@ -98,6 +98,8 @@ async def test_stream_planning_publishes_each_step_in_order(
         conversation_id=uuid4(),
         mode="planning",
         redis=None,  # type: ignore[arg-type]
+        default_agent_id=uuid4(),
+        role_agents={},
     )
     assert ok is True
     # PM framing + backend + frontend + synthesis = 4 streamed agent messages, in order.
