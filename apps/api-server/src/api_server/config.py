@@ -268,6 +268,21 @@ class Settings(BaseSettings):
         default="http://localhost:3000",
         description="docling-mcp HTTP base URL (Plan 04 Fase E).",
     )
+    # --- Voz del Asistente (ADR 0073, voz F1) ---------------------------------
+    # Servicios de medios (NO providers LLM, ADR 0021): STT + TTS HTTP
+    # OpenAI-compatibles. En el stack docker apuntan a stt:8000 / tts:8880.
+    assistant_stt_url: str = Field(
+        default="http://localhost:8000",
+        description="STT (faster-whisper) base URL — /v1/audio/transcriptions (ADR 0073).",
+    )
+    assistant_tts_url: str = Field(
+        default="http://localhost:8880",
+        description="TTS (Kokoro-FastAPI) base URL — /v1/audio/speech (ADR 0073).",
+    )
+    assistant_tts_default_voice: str = Field(
+        default="af_heart",
+        description="Voz TTS por defecto (Kokoro). La UI permite elegir M/F.",
+    )
     ollama_url: str = Field(
         default="http://localhost:11434",
         description=(

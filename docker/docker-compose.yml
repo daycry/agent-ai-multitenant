@@ -278,6 +278,58 @@ services:
     <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
   # ---------------------------------------------------------------------------
+  # stt — Speech-to-Text para el modo voz del Asistente (ADR 0073, voz F1).
+  # faster-whisper (CTranslate2) con API OpenAI-compatible
+  # (POST /v1/audio/transcriptions). El modelo Whisper se descarga al primer
+  # uso desde HuggingFace y se cachea en el volumen `whisper_models`. Servicio
+  # INTERNO: sin puertos al host; el api-server lo alcanza en `stt:8000`.
+  # NB: confirmar tag/envs contra la imagen upstream; usar el overlay GPU
+  # (docker-compose.gpu.yml) para modelos grandes / baja latencia tipo Meet.
+  # ---------------------------------------------------------------------------
+  stt:
+    image: fedirz/faster-whisper-server:0.1.0-cpu # pin; *-cuda en el overlay GPU
+    environment:
+      # Modelo CPU-friendly por defecto (ES+EN); `large-v3` vía GPU overlay.
+      WHISPER__MODEL: Systran/faster-whisper-small
+      WHISPER__INFERENCE_DEVICE: cpu
+    volumes:
+      - whisper_models:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s # 1er arranque descarga el modelo
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "4g"
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+
+  # ---------------------------------------------------------------------------
+  # tts — Text-to-Speech para el modo voz (ADR 0073, voz F1). Kokoro-82M
+  # (Apache-2.0) con API OpenAI-compatible (POST /v1/audio/speech); voces M/F
+  # ES+EN incluidas. INTERNO: el api-server lo alcanza en `tts:8880`.
+  # ---------------------------------------------------------------------------
+  tts:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2 # pin; -gpu en el overlay GPU
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8880/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2g"
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+
+  # ---------------------------------------------------------------------------
   # docling-mcp — MCP-protocol surface of Docling (Plan 04 task_04_21).
   #
   # NO se levanta en el dev compose: el proyecto upstream NO publica una
@@ -399,6 +451,7 @@ volumes:
   vault_logs:
   clamav_data:
   ollama_data:
+  whisper_models: # STT model cache (ADR 0073, voz F1)
 
 networks:
   agentic-net:
