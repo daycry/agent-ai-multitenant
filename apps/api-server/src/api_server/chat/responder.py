@@ -53,8 +53,9 @@ from api_server.chat.planning_graph import (
 )
 from api_server.chat.planning_llm import LLMPlanningModel
 from api_server.db.conversation import Conversation, Message
-from api_server.db.domain import Agent, Project, Team, TeamMember
+from api_server.db.domain import Agent, Plan, Project, Team, TeamMember
 from api_server.db.llm_providers import get_llm_provider
+from api_server.db.memory import MemoryEntry
 from api_server.db.platform_settings import (
     InvalidModelConfigError,
     get_default_model_config,
@@ -66,6 +67,7 @@ from api_server.events import EVENT_MESSAGE_CREATED, publish_conversation_event
 from api_server.llm_providers.factory import build_llm_provider, build_provider_from_kind
 from api_server.llm_providers.factory_resolver import resolve_provider_config
 from api_server.llm_providers.vault import LLMProviderVaultStore
+from api_server.rag.search import recall_chunks
 
 _log = structlog.get_logger("api_server.chat.responder")
 
@@ -262,6 +264,86 @@ async def team_role_agents(
             continue
         out.setdefault(role, agent_id)  # first agent of each role wins
     return out
+
+
+def _plan_summary(plan: Plan) -> str:
+    spec = plan.specification if isinstance(plan.specification, dict) else {}
+    summary = spec.get("summary")
+    if isinstance(summary, dict):
+        return str(summary.get("description") or summary.get("title") or "")[:300]
+    return str(summary or plan.description or "")[:300]
+
+
+async def build_project_context(
+    session: AsyncSession, project: Project | None, query_text: str
+) -> dict[str, Any]:
+    """Assemble what the team needs to know to plan well in an EXISTING project:
+    identity + prior plans + project-scoped memories + relevant docs/code (RAG).
+
+    This is the provider-agnostic answer to "a 2nd plan should know how the project
+    is built": instead of an agent browsing the repo (which would only work natively
+    for claude_sdk), the system RETRIEVES the context and injects it into the planning
+    prompt (``project_context`` already reaches every planning prompt). Identical for
+    ollama / claude_sdk / azure / copilot. Each source is best-effort: a failure is
+    omitted, never sinks the turn."""
+    if project is None:
+        return {}
+    ctx: dict[str, Any] = {"name": project.name, "description": project.description or ""}
+
+    # Prior plans — so a follow-up plan knows what was already planned/built.
+    with contextlib.suppress(Exception):
+        plans = (
+            (
+                await session.execute(
+                    select(Plan)
+                    .where(Plan.project_id == project.id, Plan.deleted_at.is_(None))
+                    .order_by(Plan.created_at.desc())
+                    .limit(5)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if plans:
+            ctx["prior_plans"] = [
+                {"title": p.title, "status": p.status, "summary": _plan_summary(p)} for p in plans
+            ]
+
+    # Project-shared memories — what the team learned about THIS project.
+    with contextlib.suppress(Exception):
+        mems = (
+            (
+                await session.execute(
+                    select(MemoryEntry.content)
+                    .where(
+                        MemoryEntry.tenant_id == project.tenant_id,
+                        MemoryEntry.scope == "project_shared",
+                        MemoryEntry.project_id == project.id,
+                    )
+                    .order_by(MemoryEntry.created_at.desc())
+                    .limit(10)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if mems:
+            ctx["memories"] = [str(m) for m in mems]
+
+    # Relevant docs/code from the project's KBs (RAG; BM25-only when no embedding,
+    # so no embedder dependency on the hot path).
+    if query_text.strip():
+        with contextlib.suppress(Exception):
+            hits = await recall_chunks(
+                session,
+                query=query_text,
+                tenant_id=project.tenant_id,
+                project_id=project.id,
+                limit=5,
+            )
+            if hits:
+                ctx["docs"] = [h.content[:500] for h in hits]
+    return ctx
 
 
 async def build_chat_provider(
@@ -659,11 +741,6 @@ async def respond_to_conversation(
             default_agent_id = role_agents.get(PlanningRole.PROJECT_MANAGER) or next(
                 iter(role_agents.values()), None
             )
-            project_context = (
-                {"name": project.name, "description": project.description or ""}
-                if project is not None
-                else {}
-            )
             rows = (
                 (
                     await session.execute(
@@ -679,6 +756,13 @@ async def respond_to_conversation(
                 .scalars()
                 .all()
             )
+            # Ground the planning in the project's existing state (prior plans,
+            # project memories, docs/code via RAG) — provider-agnostic context, not an
+            # agent browsing the repo. The latest USER message drives the doc retrieval.
+            latest_user_text = next(
+                (m.content for m in reversed(list(rows)) if m.author_kind == "user"), ""
+            )
+            project_context = await build_project_context(session, project, latest_user_text)
         # An 'agent' message needs an agent to attribute to. No team agents → the
         # team can't speak; tell the user instead of failing on the DB CHECK.
         if default_agent_id is None:

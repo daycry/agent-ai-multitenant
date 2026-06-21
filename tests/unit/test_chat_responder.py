@@ -108,3 +108,24 @@ async def test_stream_planning_publishes_each_step_in_order(
     assert "opinión de backend_dev" in published[1][1]
     assert "opinión de frontend_dev" in published[2][1]
     assert published[3][1] == "Síntesis final del PM"
+
+
+def test_plan_summary_handles_dict_str_and_none() -> None:
+    from api_server.chat.responder import _plan_summary
+
+    # dict summary → description (then title) preferred
+    assert (
+        _plan_summary(
+            SimpleNamespace(
+                specification={"summary": {"description": "desc", "title": "t"}}, description=None
+            )
+        )
+        == "desc"
+    )
+    # string summary → used verbatim
+    assert (
+        _plan_summary(SimpleNamespace(specification={"summary": "plano"}, description=None))
+        == "plano"
+    )
+    # no summary → falls back to the plan description
+    assert _plan_summary(SimpleNamespace(specification={}, description="fallback")) == "fallback"
