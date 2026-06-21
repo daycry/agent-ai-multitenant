@@ -38,6 +38,7 @@ from api_server.events import publish_execution_event, publish_task_status_chang
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from workers.agent_tool_schemas import build_model_tool_schemas
 from workers.config import Settings
 from workers.container import AgentContainerRunner, ContainerSpec
 from workers.memorizer import trigger_memorize
@@ -267,6 +268,15 @@ def _agent_spec(
     # the runtime reads as "keep the system prompt untouched" (backward-compat).
     if request.skill_prompt_fragments is not None:
         spec["skill_prompt_fragments"] = request.skill_prompt_fragments
+    # Agentes #2: advertise the agent's tools to the LLM so it can actually call
+    # them (memory_recall/rag_search/read_file/…). Without this the model never
+    # sees any tool → it can neither recall memory nor work through tools, for ANY
+    # provider. Schemas come from the canonical builtin catalog + custom tool_specs,
+    # filtered to the effective allowlist (`allowed_tools`). Set inside `model` so
+    # `build_provider_client` reads `spec["tools"]` and passes them to complete().
+    model_tools = build_model_tool_schemas(request.allowed_tools, request.tool_specs)
+    if model_tools:
+        spec["model"] = {**spec["model"], "tools": model_tools}
     return spec
 
 

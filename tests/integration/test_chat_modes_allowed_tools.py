@@ -159,6 +159,29 @@ def test_agent_spec_omits_allowlist_when_none() -> None:
     assert "allowed_tools" not in spec
 
 
+def test_agent_spec_injects_model_tool_schemas_for_allowlisted_tools() -> None:
+    # Agentes #2: the model spec must carry the OpenAI schemas of the agent's
+    # tools so the LLM can actually CALL them (memory_recall/read_file/…). Without
+    # this the model never sees any tool and can't recall memory or work.
+    spec = _agent_spec(_request(["memory_recall", "read_file"]), None)
+    tools = spec["model"].get("tools")
+    assert tools is not None
+    names = [t["function"]["name"] for t in tools]
+    assert names == ["memory_recall", "read_file"]
+    # The original model fields are preserved.
+    assert spec["model"]["kind"] == "scripted"
+
+
+def test_agent_spec_omits_model_tools_when_no_allowlist() -> None:
+    spec = _agent_spec(_request(None), None)
+    assert "tools" not in spec["model"]
+
+
+def test_agent_spec_omits_model_tools_when_no_known_schemas() -> None:
+    spec = _agent_spec(_request(["totally_unknown_tool"]), None)
+    assert "tools" not in spec["model"]
+
+
 def test_execution_request_round_trips_allowlist() -> None:
     req = _request(["file_read"])
     rebuilt = ExecutionRequest.from_dict(req.as_dict())
