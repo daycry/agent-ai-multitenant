@@ -30,6 +30,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { cn } from "@/lib/utils";
+import { useWebSocket, wsUrl } from "@/lib/ws";
 
 // --------------------------------------------------------------------------
 // Types
@@ -259,6 +260,38 @@ export default function ProjectChatPage() {
     },
   });
 
+  // Live updates: the team's reply streams in message-by-message over the
+  // per-conversation WebSocket (the responder publishes each step). Without this
+  // the feed only refreshed on reload — the chat looked "hung" while waiting.
+  useWebSocket(
+    activeConversationId ? wsUrl(`/ws/conversation/${activeConversationId}`) : null,
+    (data: unknown) => {
+      const frame = data as { type?: string; payload?: Record<string, unknown> | null };
+      if (frame?.type !== "message.created" || !frame.payload || !activeConversationId) return;
+      const p = frame.payload;
+      const id = String(p.message_id ?? "");
+      if (!id) return;
+      queryClient.setQueryData<Message[]>(["messages", activeConversationId], (prev) => {
+        if (prev?.some((m) => m.id === id)) return prev; // dedup optimistic / echo
+        const msg: Message = {
+          id,
+          tenant_id: "",
+          conversation_id: activeConversationId,
+          author_kind: (p.author_kind as Message["author_kind"]) ?? "agent",
+          author_user_id: (p.author_user_id as string | null) ?? null,
+          author_agent_id: (p.author_agent_id as string | null) ?? null,
+          content: String(p.content ?? ""),
+          mode: String(p.mode ?? ""),
+          attachments: (p.attachments as Array<Record<string, unknown>>) ?? [],
+          related_plan_id: null,
+          is_summary: Boolean(p.is_summary),
+          created_at: new Date().toISOString(),
+        };
+        return prev ? [...prev, msg] : [msg];
+      });
+    },
+  );
+
   // ----------------------------------------------------------------
   // Render
   // ----------------------------------------------------------------
@@ -346,6 +379,19 @@ export default function ProjectChatPage() {
         </CardHeader>
         <CardContent>
           <MessageFeed messages={messagesQuery.data ?? []} loading={messagesQuery.isLoading} />
+          {(() => {
+            const msgs = messagesQuery.data ?? [];
+            // El equipo aún no ha contestado al último mensaje del usuario → "pensando".
+            const awaitingReply = msgs.length > 0 && msgs[msgs.length - 1].author_kind === "user";
+            return awaitingReply ? (
+              <p
+                className="text-muted-foreground mt-3 animate-pulse text-sm"
+                data-testid="chat-team-thinking"
+              >
+                El equipo está pensando… <span className="opacity-60">(esto puede tardar)</span>
+              </p>
+            ) : null;
+          })()}
           {activeConversation ? (
             <GeneratePlanButton
               messages={messagesQuery.data ?? []}
