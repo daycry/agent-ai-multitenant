@@ -25,6 +25,7 @@ import { Breadcrumb } from "@/components/layout/breadcrumb";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import {
   Dialog,
   DialogBody,
@@ -492,13 +493,11 @@ function AgentEditDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ae-description">Descripción</Label>
-            <textarea
-              id="ae-description"
+            <Label>Descripción</Label>
+            <MarkdownTextarea
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={setDescription}
               rows={2}
-              className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2"
               data-testid="edit-agent-description"
             />
           </div>

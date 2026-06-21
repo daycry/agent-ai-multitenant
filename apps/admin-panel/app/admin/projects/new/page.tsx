@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -273,13 +274,11 @@ export default function NewProjectWizardPage() {
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="description">Descripción</Label>
-                <textarea
-                  id="description"
+                <Label>Descripción</Label>
+                <MarkdownTextarea
                   value={description}
-                  onChange={(e) => setDescription(e.target.value)}
+                  onChange={setDescription}
                   rows={4}
-                  className="border-input bg-background ring-offset-background focus-visible:ring-ring rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
                   data-testid="wizard-description"
                 />
               </div>
