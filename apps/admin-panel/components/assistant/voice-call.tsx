@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Mic, Phone, PhoneOff, Square } from "lucide-react";
 
+import { AvatarFace } from "@/components/assistant/avatar-face";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { wsUrl } from "@/lib/ws";
@@ -53,10 +54,14 @@ export function VoiceCall() {
   const [answer, setAnswer] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  const [mouthOpen, setMouthOpen] = useState(0);
+
   const wsRef = useRef<WebSocket | null>(null);
   const recRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const rafRef = useRef<number | null>(null);
 
   const stopStream = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -66,6 +71,13 @@ export function VoiceCall() {
   const hangup = () => {
     if (recRef.current?.state === "recording") recRef.current.stop();
     stopStream();
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    void audioCtxRef.current?.close().catch(() => undefined);
+    audioCtxRef.current = null;
+    setMouthOpen(0);
     wsRef.current?.close();
     wsRef.current = null;
     setStatus("idle");
@@ -105,15 +117,56 @@ export function VoiceCall() {
     }
   };
 
+  const stopLipSync = () => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    setMouthOpen(0);
+  };
+
+  // Drive the avatar's mouth from the TTS audio's loudness (real amplitude
+  // lip-sync, ADR 0073 MVP) via a Web Audio analyser. Best-effort: if Web Audio
+  // is unavailable the audio still plays, just without lip-sync.
+  const attachLipSync = (audio: HTMLAudioElement) => {
+    try {
+      audioCtxRef.current ??= new AudioContext();
+      const ctx = audioCtxRef.current;
+      void ctx.resume();
+      const source = ctx.createMediaElementSource(audio);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      analyser.connect(ctx.destination);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      const tick = () => {
+        analyser.getByteFrequencyData(data);
+        let sum = 0;
+        for (const v of data) sum += v;
+        const avg = sum / data.length / 255; // 0..1
+        setMouthOpen(Math.min(1, avg * 2.4));
+        rafRef.current = requestAnimationFrame(tick);
+      };
+      tick();
+    } catch {
+      // No Web Audio → play without lip-sync.
+    }
+  };
+
   const playAudio = (buf: ArrayBuffer) => {
     const url = URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" }));
     const audio = new Audio(url);
     setStatus("speaking");
+    attachLipSync(audio);
     audio.onended = () => {
       URL.revokeObjectURL(url);
+      stopLipSync();
       setStatus("ready");
     };
-    void audio.play().catch(() => setStatus("ready"));
+    void audio.play().catch(() => {
+      stopLipSync();
+      setStatus("ready");
+    });
   };
 
   const connect = () => {
@@ -216,6 +269,14 @@ export function VoiceCall() {
           ))}
         </Select>
       </div>
+
+      {connected ? (
+        <AvatarFace
+          speaking={status === "speaking"}
+          mouthOpen={mouthOpen}
+          label={VOICES.find((v) => v.id === voice)?.label.split(" · ")[0] ?? "Aria"}
+        />
+      ) : null}
 
       {connected ? (
         <Button
