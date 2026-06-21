@@ -632,6 +632,14 @@ async def respond_to_conversation(
             return
         history = history_from_messages(list(rows))
         extra = reasoning_call_kwargs(kind, effective.get("reasoning_effort"))
+        if kind == "claude_sdk" and extra.pop("effort", None) is not None:
+            # Claude Code (claude_sdk) is AGENTIC: extended thinking on the chat's
+            # structured planning calls makes it blow past its internal turn budget
+            # ("Reached maximum number of turns (8)"). The interactive chat therefore
+            # runs claude_sdk WITHOUT extended reasoning (measured: pm_decide ~8s vs
+            # failing). Non-agentic providers (ollama/azure/copilot) keep the configured
+            # reasoning. For deep reasoning in the chat, use a non-agentic provider.
+            _log.info("chat.claude_sdk_reasoning_dropped", conversation_id=str(conversation_id))
         await _produce_reply(
             mode=mode,
             provider=provider,
