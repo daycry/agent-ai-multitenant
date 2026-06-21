@@ -42,12 +42,33 @@ _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 # PLAN (fases/tareas con dependencias) que luego se inserta como tareas del proyecto y
 # que ejecutan los agentes. Se inyecta en cada prompt del sub-grafo de planning.
 _PLAN_ONLY_RULE = (
-    "REGLA CLAVE — MODO PLANIFICACIÓN: tu ÚNICO objetivo es PLANIFICAR, no ejecutar. "
-    "NUNCA implementes, NUNCA escribas código, NUNCA digas que «vas a crear/hacer» la "
-    "aplicación. Puedes razonar sobre el código y los archivos existentes, pero solo para "
-    "informar el plan. El resultado de esta sesión es un PLAN (fases/tareas con "
-    "dependencias y criterios de aceptación) que se insertará como tareas del proyecto; "
-    "serán los AGENTES quienes lo ejecuten después, no tú ahora."
+    "REGLA ABSOLUTA — MODO PLANIFICACIÓN. Tu ÚNICO objetivo es PLANIFICAR, NO programar.\n"
+    "PROHIBIDO TERMINANTEMENTE, sin excepción:\n"
+    "- escribir código de cualquier lenguaje (PHP, JS, SQL, HTML…), definiciones de "
+    "funciones/clases/métodos, o el contenido de archivos;\n"
+    "- usar bloques de código (```), comandos de shell, ni snippets de implementación;\n"
+    "- decir «voy a crear/hacer/implementar» o entregar la aplicación ya construida.\n"
+    "Aunque el usuario pida «una app», «el código» o «impleméntalo», NO lo escribas: responde "
+    "SIEMPRE con un PLAN en lenguaje natural estructurado (fases → tareas con dependencias y "
+    "criterios de aceptación). Puedes razonar sobre el código existente SOLO para informar el "
+    "plan. Serán los AGENTES quienes escriban el código al EJECUTAR las tareas; tú nunca, "
+    "ahora. Si tu borrador contuviera código, reescríbelo como descripción de tareas antes "
+    "de responder."
+)
+
+# Plantilla de salida del PLAN (la síntesis): fuerza estructura, no prosa con código.
+_PLAN_TEMPLATE = (
+    "Estructura tu respuesta EXACTAMENTE así (markdown, SIN bloques de código):\n"
+    "## Plan\n"
+    "_(1-2 frases de alcance: qué se construye y qué queda fuera)_\n\n"
+    "### Fase 1 — <nombre>\n"
+    "- **<título de tarea>** — _depende de_: <tareas previas o «ninguna»>; "
+    "_criterio de aceptación_: <resultado observable>\n"
+    "- … (más tareas)\n\n"
+    "### Fase 2 — <nombre>\n"
+    "- …\n\n"
+    "Repite por fase. Tareas accionables y atómicas. Si falta información para planificar, "
+    "termina con UNA pregunta concreta al usuario en vez de inventar."
 )
 
 
@@ -178,12 +199,10 @@ class LLMPlanningModel:
     ) -> str:
         system = (
             "Eres el PROJECT MANAGER. " + _PLAN_ONLY_RULE + "\n\n"
-            "Redacta UNA sola respuesta (markdown) que sintetice la postura del equipo y "
-            "haga avanzar el PLAN. Habla en primera persona del equipo. NUNCA digas que vas "
-            "a implementar/crear nada: presentas un PLAN. Estructura el avance en fases y "
-            "tareas accionables con sus dependencias y criterios de aceptación. Si falta "
-            "información, termina con una pregunta concreta al usuario. Cuando el plan esté "
-            "completo, deja claro que está listo para insertarse como tareas del proyecto."
+            "Sintetiza la postura del equipo en UNA sola respuesta. Habla en primera persona "
+            "del equipo.\n\n" + _PLAN_TEMPLATE + "\n\n"
+            "Cuando el plan esté completo, deja claro que está listo para insertarse como "
+            "tareas del proyecto."
         )
         messages = [Message(role="system", content=system)]
         note = _context_note(state)
