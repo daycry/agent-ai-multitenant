@@ -55,14 +55,12 @@ import { Select } from "@/components/ui/select";
 import { StateBlock } from "@/components/shared/state-block";
 import { CapabilityHub } from "@/components/capability/capability-hub";
 import { ChatModelSection, type ChatModelConfig } from "@/components/capability/chat-model-section";
-import { DefaultModelSection } from "@/components/capability/default-model-section";
 import {
   GitConfigSection,
   type GitConfig,
   type GitPolicies,
 } from "@/components/projects/git-config-section";
 import { ApiError, apiFetch } from "@/lib/api";
-import { type ModelConfig } from "@/lib/persona/persona";
 
 type ProjectStatus = "active" | "paused" | "archived";
 
@@ -74,7 +72,7 @@ interface Project {
   team_id: string | null;
   is_template: boolean;
   // Ola A: modelo por defecto del proyecto (alias JSON `model_config`). {} = hereda.
-  model_config: ModelConfig;
+  model_config: ChatModelConfig;
   // Modelo del CHAT del proyecto (Feature B): proveedor concreto + modelo. {} = hereda.
   chat_model_config: ChatModelConfig;
   // ADR 0072: config git del proyecto (sin secreto). null = sin remoto.
@@ -88,7 +86,7 @@ interface ProjectUpdate {
   description?: string | null;
   status?: ProjectStatus;
   team_id?: string | null;
-  model_config?: ModelConfig;
+  model_config?: ChatModelConfig;
   chat_model_config?: ChatModelConfig;
 }
 
@@ -193,7 +191,7 @@ export default function ProjectHubPage() {
   });
 
   // Ola A-UI: fija el modelo por defecto del proyecto (PUT /projects/{id}).
-  const saveModel = useMutation<Project, ApiError, ModelConfig>({
+  const saveModel = useMutation<Project, ApiError, ChatModelConfig>({
     mutationFn: (modelConfig) =>
       apiFetch<Project>(`/projects/${projectId}`, {
         method: "PUT",
@@ -289,14 +287,23 @@ export default function ProjectHubPage() {
             <CapabilityHub entityType="project" entityId={projectId} />
           </div>
 
-          {/* Ola A-UI: modelo por defecto del proyecto (cadena de herencia, ADR 0065). */}
+          {/* Modelo de EJECUCIÓN del proyecto (ADR 0065): proveedor concreto por nombre,
+              uniforme con el del chat y el asistente. Lo heredan los agentes sin modelo. */}
           <div className="mb-6">
-            <DefaultModelSection
+            <ChatModelSection
               value={project.model_config}
               pending={saveModel.isPending}
-              idPrefix="project"
-              scopeLabel={{ es: "del proyecto", en: "(project)" }}
-              onSave={(modelConfig) => saveModel.mutate(modelConfig)}
+              idPrefix="project-exec"
+              title={{ es: "Modelo del proyecto", en: "Project model" }}
+              description={{
+                es:
+                  "Proveedor + modelo por defecto del proyecto, que heredan los agentes sin " +
+                  "modelo propio. Vacío = heredar del nivel superior (equipo → plataforma).",
+                en:
+                  "The project's default provider + model, inherited by agents without their " +
+                  "own. Empty = inherit from the level above (team → platform).",
+              }}
+              onSave={(cfg) => saveModel.mutate(cfg)}
             />
           </div>
 

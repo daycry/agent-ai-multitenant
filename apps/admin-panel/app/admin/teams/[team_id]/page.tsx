@@ -26,11 +26,9 @@ import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { CapabilityHub } from "@/components/capability/capability-hub";
 import { ChatModelSection, type ChatModelConfig } from "@/components/capability/chat-model-section";
-import { DefaultModelSection } from "@/components/capability/default-model-section";
 import { AdoptTeamDialog } from "@/components/teams/adopt-team-dialog";
 import { ApiError, apiFetch } from "@/lib/api";
 import { MEMORY_SCOPE_OPTIONS } from "@/lib/memory/constants";
-import { type ModelConfig } from "@/lib/persona/persona";
 
 interface TeamMember {
   agent_id: string;
@@ -48,7 +46,7 @@ interface Team {
   // Ola C: enlace al built-in origen si el equipo fue adoptado (badge/origen).
   forked_from_team_id: string | null;
   // Ola A: modelo por defecto del equipo (alias JSON `model_config`). {} = hereda.
-  model_config: ModelConfig;
+  model_config: ChatModelConfig;
   // Modelo del CHAT del equipo (Feature B): proveedor concreto + modelo. {} = hereda.
   chat_model_config: ChatModelConfig;
   // ADR 0071: política de memoria del equipo (null = sin política / heredar).
@@ -154,7 +152,7 @@ export default function TeamDetailPage() {
   });
 
   // Ola A-UI: fija el modelo por defecto del equipo (PUT /teams/{id}).
-  const saveModel = useMutation<Team, ApiError, ModelConfig>({
+  const saveModel = useMutation<Team, ApiError, ChatModelConfig>({
     mutationFn: (modelConfig) =>
       apiFetch<Team>(`/teams/${teamId}`, {
         method: "PUT",
@@ -299,16 +297,24 @@ export default function TeamDetailPage() {
           <div className="mb-6">
             <CapabilityHub entityType="team" entityId={teamId} />
           </div>
-          {/* Ola A-UI: modelo por defecto del equipo (cadena de herencia, ADR 0065).
-              Read-only en built-in (se personaliza adoptando). */}
+          {/* Modelo de EJECUCIÓN del equipo (ADR 0065): proveedor concreto por nombre,
+              uniforme con chat y asistente. Read-only en built-in (se personaliza adoptando). */}
           <div className="mb-6">
-            <DefaultModelSection
+            <ChatModelSection
               value={team.model_config}
               isReadOnly={isReadOnly}
               pending={saveModel.isPending}
-              idPrefix="team"
-              scopeLabel={{ es: "del equipo", en: "(team)" }}
-              onSave={(modelConfig) => saveModel.mutate(modelConfig)}
+              idPrefix="team-exec"
+              title={{ es: "Modelo del equipo", en: "Team model" }}
+              description={{
+                es:
+                  "Proveedor + modelo por defecto del equipo, que heredan sus agentes sin " +
+                  "modelo propio. Vacío = heredar del nivel superior (proyecto → plataforma).",
+                en:
+                  "The team's default provider + model, inherited by its agents without their " +
+                  "own. Empty = inherit from the level above (project → platform).",
+              }}
+              onSave={(cfg) => saveModel.mutate(cfg)}
             />
           </div>
           {/* Modelo del CHAT del equipo (Feature B): proveedor concreto por nombre. */}

@@ -37,6 +37,9 @@ interface ProviderOptionsResponse {
 }
 
 export interface ChatModelConfig {
+  /** Kind (claude_sdk/ollama/…) of the chosen provider — kept for the inheritance
+   * chain + validation; the concrete row is pinned by provider_id. */
+  provider?: string;
   provider_id?: string;
   model?: string;
   temperature?: number;
@@ -49,6 +52,8 @@ export function ChatModelSection({
   pending = false,
   isReadOnly = false,
   idPrefix,
+  title,
+  description,
 }: {
   /** chat_model_config actual. `{}`/sin provider_id = hereda el modelo de ejecución. */
   value: ChatModelConfig | null | undefined;
@@ -56,6 +61,10 @@ export function ChatModelSection({
   pending?: boolean;
   isReadOnly?: boolean;
   idPrefix: string;
+  /** Título opcional (default: "Modelo del chat"). */
+  title?: { es: string; en: string };
+  /** Descripción opcional (default: copy del modelo del chat). */
+  description?: { es: string; en: string };
 }) {
   const { lang } = useLang();
   const t = (es: string, en: string) => (lang === "es" ? es : en);
@@ -85,7 +94,9 @@ export function ChatModelSection({
       onSave({});
       return;
     }
-    const cfg: ChatModelConfig = { provider_id: providerId, model };
+    // Store the kind too (selected.kind): the inheritance chain + validation key off
+    // `provider`, and provider_id pins the concrete row for resolution.
+    const cfg: ChatModelConfig = { provider: selected?.kind, provider_id: providerId, model };
     if (tempApplies) cfg.temperature = temperature;
     if (reasoning && reasoning !== "off") cfg.reasoning_effort = reasoning;
     onSave(cfg);
@@ -96,18 +107,20 @@ export function ChatModelSection({
   return (
     <Card data-testid={`${idPrefix}-chat-model`}>
       <CardHeader>
-        <CardTitle>{t("Modelo del chat", "Chat model")}</CardTitle>
+        <CardTitle>{title ? t(title.es, title.en) : t("Modelo del chat", "Chat model")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-muted-foreground text-sm">
-          {t(
-            "El proveedor y modelo con el que el equipo RESPONDE en el chat de " +
-              "planificación. Vacío = usa el modelo de ejecución. Un proveedor no-agéntico " +
-              "(Ollama/Azure) hace el chat más rápido que claude_sdk.",
-            "The provider + model the team REPLIES with in the planning chat. Empty = use " +
-              "the execution model. A non-agentic provider (Ollama/Azure) makes the chat " +
-              "faster than claude_sdk.",
-          )}
+          {description
+            ? t(description.es, description.en)
+            : t(
+                "El proveedor y modelo con el que el equipo RESPONDE en el chat de " +
+                  "planificación. Vacío = usa el modelo de ejecución. Un proveedor no-agéntico " +
+                  "(Ollama/Azure) hace el chat más rápido que claude_sdk.",
+                "The provider + model the team REPLIES with in the planning chat. Empty = use " +
+                  "the execution model. A non-agentic provider (Ollama/Azure) makes the chat " +
+                  "faster than claude_sdk.",
+              )}
         </p>
 
         {isReadOnly ? (
