@@ -14,6 +14,7 @@ The factory classmethods `.local()` and `.cloud()` cover both.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -44,12 +45,32 @@ class OllamaProvider:
         self.base_url = base_url.rstrip("/")
         self.default_model = default_model
         self._api_key = api_key
+        self._timeout = timeout
         if http_client is not None:
-            self._client = http_client
+            self._client: httpx.AsyncClient | None = http_client
             self._owns_client = False
         else:
-            self._client = httpx.AsyncClient(timeout=timeout)
+            # Owned client is created PER CALL (see `_acquire`), bound to the loop
+            # that runs the request. A single cached client bound to one loop breaks
+            # when the same provider is used across event loops — e.g. the planning
+            # bridge calls complete() via asyncio.run repeatedly (a fresh loop each
+            # step), which would raise "Event loop is closed" on the 2nd call.
+            self._client = None
             self._owns_client = True
+
+    @asynccontextmanager
+    async def _acquire(self) -> AsyncIterator[httpx.AsyncClient]:
+        """Yield an httpx client valid for THIS call. Owned → a fresh client bound to
+        the current loop (closed on exit); injected → the caller's client (untouched)."""
+        if self._owns_client:
+            client = httpx.AsyncClient(timeout=self._timeout)
+            try:
+                yield client
+            finally:
+                await client.aclose()
+        else:
+            assert self._client is not None
+            yield self._client
 
     def _headers(self) -> dict[str, str]:
         """Auth + content-type per request — works with both owned and
@@ -120,11 +141,12 @@ class OllamaProvider:
         }
         if tools:
             body["tools"] = tools
-        resp = await self._client.post(
-            f"{self.base_url}/chat/completions", json=body, headers=self._headers()
-        )
-        check_status(resp, provider=self.name)
-        return parse_chat_completion(resp.json(), provider=self.name, fallback_model=model_id)
+        async with self._acquire() as client:
+            resp = await client.post(
+                f"{self.base_url}/chat/completions", json=body, headers=self._headers()
+            )
+            check_status(resp, provider=self.name)
+            return parse_chat_completion(resp.json(), provider=self.name, fallback_model=model_id)
 
     async def stream(
         self,
@@ -147,12 +169,15 @@ class OllamaProvider:
         }
         if tools:
             body["tools"] = tools
-        async with self._client.stream(
-            "POST",
-            f"{self.base_url}/chat/completions",
-            json=body,
-            headers=self._headers(),
-        ) as resp:
+        async with (
+            self._acquire() as client,
+            client.stream(
+                "POST",
+                f"{self.base_url}/chat/completions",
+                json=body,
+                headers=self._headers(),
+            ) as resp,
+        ):
             check_status(resp, provider=self.name)
             # iter_sse_chunks wraps the body iteration so a mid-stream
             # network/transport error becomes a typed ProviderError.
@@ -160,16 +185,18 @@ class OllamaProvider:
                 yield chunk
 
     async def aclose(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        # Owned clients are per-call (closed in `_acquire`); injected clients are the
+        # caller's to close. Nothing persistent to release here.
+        return None
 
     # ------------------------------------------------------------------
     # Ollama-specific helper — handy for the admin-panel "pick a model"
     # ------------------------------------------------------------------
     async def list_models(self) -> list[str]:
-        resp = await self._client.get(f"{self.base_url}/models", headers=self._headers())
-        check_status(resp, provider=self.name)
-        return [m["id"] for m in resp.json().get("data", [])]
+        async with self._acquire() as client:
+            resp = await client.get(f"{self.base_url}/models", headers=self._headers())
+            check_status(resp, provider=self.name)
+            return [m["id"] for m in resp.json().get("data", [])]
 
 
 __all__ = ["OllamaProvider"]

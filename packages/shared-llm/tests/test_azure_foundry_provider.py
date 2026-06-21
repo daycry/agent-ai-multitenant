@@ -184,3 +184,21 @@ async def test_stream_401_is_auth_error_403_is_provider_error() -> None:
             pass
     assert not isinstance(info.value, AuthError)
     assert info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_owned_client_is_fresh_per_call() -> None:
+    """Regression: an OWNED client is created per call (bound to the current loop),
+    not cached — so the provider is safe when reused across event loops (planning
+    bridge calls complete() via asyncio.run per step)."""
+    p = AzureFoundryAPIMProvider(
+        apim_base_url="https://apim.example.com",
+        deployment="gpt-4o",
+        subscription_key="sub-key",
+    )  # owned (no injected http_client)
+    async with p._acquire() as c1:
+        first = c1
+    async with p._acquire() as c2:
+        second = c2
+    assert first is not second
+    assert first.is_closed and second.is_closed

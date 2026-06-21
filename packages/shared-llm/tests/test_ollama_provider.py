@@ -180,3 +180,17 @@ async def test_complete_passes_tools_when_provided() -> None:
     body = captured["body"]
     assert isinstance(body, dict)
     assert body["tools"] == tools
+
+
+@pytest.mark.asyncio
+async def test_owned_client_is_fresh_per_call() -> None:
+    """Regression: an OWNED client must be created per call (bound to the current
+    loop), not cached. A single cached client breaks when the provider is used across
+    event loops (planning bridge calls complete() via asyncio.run repeatedly)."""
+    p = OllamaProvider.cloud(api_key="sk-x")  # owned (no injected http_client)
+    async with p._acquire() as c1:
+        first = c1
+    async with p._acquire() as c2:
+        second = c2
+    assert first is not second  # distinct per call → safe across loops
+    assert first.is_closed and second.is_closed  # each closed on context exit
