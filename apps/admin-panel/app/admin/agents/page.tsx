@@ -463,13 +463,11 @@ function NewAgentDialog({
             </legend>
             <PersonaModelFields draft={draft} onChange={setDraft} idPrefix="new-agent" />
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="new-agent-prompt-en">System prompt (EN)</Label>
-              <textarea
-                id="new-agent-prompt-en"
+              <Label>System prompt (EN)</Label>
+              <MarkdownTextarea
                 value={promptEn}
-                onChange={(e) => setPromptEn(e.target.value)}
+                onChange={setPromptEn}
                 rows={4}
-                className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2"
                 data-testid="new-agent-prompt-en"
               />
             </div>

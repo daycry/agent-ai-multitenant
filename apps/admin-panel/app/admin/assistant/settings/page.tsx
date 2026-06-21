@@ -28,6 +28,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -307,18 +308,16 @@ export default function AssistantSettingsPage() {
 
               {/* System prompt override */}
               <div className="space-y-1.5">
-                <Label htmlFor="assistant-system-prompt">
-                  Instrucciones adicionales (opcional)
-                </Label>
-                <textarea
-                  id="assistant-system-prompt"
+                <Label>Instrucciones adicionales (opcional)</Label>
+                <MarkdownTextarea
                   data-testid="assistant-system-prompt"
                   value={values.systemPrompt}
-                  maxLength={ASSISTANT_LIMITS.systemPrompt.max}
-                  onChange={(e) => update("systemPrompt", e.target.value)}
+                  // MarkdownTextarea no soporta maxLength; aplicamos el tope en el handler.
+                  onChange={(v) =>
+                    update("systemPrompt", v.slice(0, ASSISTANT_LIMITS.systemPrompt.max))
+                  }
                   rows={5}
                   placeholder="Sustituye el cuerpo del prompt por defecto. La identidad (nombre, tono, idioma) se conserva."
-                  className="border-input bg-background placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background flex w-full resize-y rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
                 />
                 <p className="text-muted-foreground text-xs">
                   {values.systemPrompt.trim().length}/{ASSISTANT_LIMITS.systemPrompt.max}
