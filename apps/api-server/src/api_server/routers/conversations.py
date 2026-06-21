@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -36,6 +36,7 @@ from api_server.auth.deps import (
     require_tenant_member,
 )
 from api_server.chat.modes import list_chat_modes
+from api_server.chat.responder import respond_to_conversation
 from api_server.db.conversation import (
     ChatMode,
     Conversation,
@@ -48,12 +49,14 @@ from api_server.events import (
     EVENT_MESSAGE_CREATED,
     publish_conversation_event,
 )
+from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers.llm_providers import get_provider_vault_store
 from api_server.schemas.conversations import (
     ChatModeResponse,
     ConversationCreateRequest,
@@ -271,9 +274,11 @@ async def delete_conversation(
 async def post_message(
     conversation_id: UUID,
     payload: MessageCreateRequest,
+    background_tasks: BackgroundTasks,
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
     redis: Redis = Depends(get_redis),
+    vault: LLMProviderVaultStore | None = Depends(get_provider_vault_store),
 ) -> MessageResponse:
     tenant_id = require_tenant_id(principal)
     conv = await _load_conversation(session, conversation_id)
@@ -311,6 +316,19 @@ async def post_message(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
     await session.refresh(message)
     await _publish_message_event(redis, message)
+    # The team replies to a USER message in the background (Plan 04 wiring): planning
+    # → multi-agent planning sub-graph; discussion/execution → a single team reply.
+    # Provider-agnostic; best-effort (never blocks/breaks the post). Only USER
+    # messages trigger a reply, so the agent never answers itself.
+    if payload.author_kind == MessageAuthorKind.USER:
+        background_tasks.add_task(
+            respond_to_conversation,
+            conversation_id=conv.id,
+            tenant_id=tenant_id,
+            mode=conv.current_mode,
+            vault=vault,
+            redis=redis,
+        )
     return to_message_response(message)
 
 
