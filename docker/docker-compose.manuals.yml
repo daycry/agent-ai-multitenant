@@ -49,6 +49,10 @@ services:
       API_SERVER_VAULT_TOKEN: ${API_SERVER_VAULT_TOKEN:-dev-root-token}
       API_SERVER_DOCLING_SERVE_URL: http://docling-serve:5001
       API_SERVER_OLLAMA_URL: http://ollama:11434
+      # Modo voz (ADR 0073): STT/TTS internos. Sin depends_on duro — descargan el
+      # modelo al 1er arranque; el WS de voz es best-effort si aún no están listos.
+      API_SERVER_ASSISTANT_STT_URL: http://stt:8000
+      API_SERVER_ASSISTANT_TTS_URL: http://tts:8880
       API_SERVER_CLAMAV_HOST: clamav
       API_SERVER_CLAMAV_PORT: "3310"
       API_SERVER_EGRESS_PROXY_HOST: egress-proxy

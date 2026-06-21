@@ -22,9 +22,10 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Bot, Send, Settings } from "lucide-react";
+import { Bot, Phone, Send, Settings } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { VoiceCall } from "@/components/assistant/voice-call";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -56,6 +57,7 @@ export default function AssistantChatPage() {
   const [draft, setDraft] = useState("");
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [forbidden, setForbidden] = useState(false);
+  const [voiceMode, setVoiceMode] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Read the on/off toggle (tenant_admin-only, NOT toggle-gated) so a Tenant
@@ -137,15 +139,33 @@ export default function AssistantChatPage() {
         title="Asistente personal"
         description="Pregunta por el estado global de tu tenant: proyectos, planes, actividad, presupuesto y carga de agentes."
         actions={
-          <Button variant="outline" asChild>
-            <Link href="/admin/assistant/settings">
-              <Settings className="mr-2 h-4 w-4" />
-              Identidad
-            </Link>
-          </Button>
+          <>
+            <Button
+              variant={voiceMode ? "default" : "outline"}
+              onClick={() => setVoiceMode((v) => !v)}
+              data-testid="assistant-voice-toggle"
+            >
+              <Phone className="mr-2 h-4 w-4" />
+              {voiceMode ? "Cerrar voz" : "Modo voz"}
+            </Button>
+            <Button variant="outline" asChild>
+              <Link href="/admin/assistant/settings">
+                <Settings className="mr-2 h-4 w-4" />
+                Identidad
+              </Link>
+            </Button>
+          </>
         }
         data-testid="assistant-chat-header"
       />
+
+      {voiceMode ? (
+        <Card className="mt-6" data-testid="assistant-voice-card">
+          <CardContent className="pt-5">
+            <VoiceCall />
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card className="mt-6">
         <CardContent className="flex flex-col gap-4 pt-5">
