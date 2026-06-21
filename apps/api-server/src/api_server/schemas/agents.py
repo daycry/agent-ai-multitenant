@@ -41,6 +41,30 @@ class AgentModelOptionsResponse(BaseModel):
     reasoning_by_kind: dict[str, list[str]] = Field(default_factory=dict)
 
 
+class ProviderOption(BaseModel):
+    """Un proveedor LLM ACTIVO concreto (fila) seleccionable para el chat del
+    proyecto. Sin secretos (la credencial vive en Vault)."""
+
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    kind: str
+    display_name: str
+    slug: str | None = None
+    models: list[str] = Field(default_factory=list)
+    reasoning_options: list[str] = Field(default_factory=list)
+
+
+class AgentProviderOptionsResponse(BaseModel):
+    """Proveedores ACTIVOS concretos (por nombre) + sus modelos, para el selector
+    del «Modelo del chat» (Feature B): a diferencia de ``by_kind``, distingue filas
+    del mismo kind (p.ej. Ollama local vs Ollama cloud)."""
+
+    model_config = _BASE_CONFIG
+
+    providers: list[ProviderOption] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------------

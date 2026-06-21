@@ -487,6 +487,29 @@ def validate_model_config(cfg: dict[str, Any]) -> dict[str, Any]:
     return cfg
 
 
+def validate_chat_model_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Validate a CHAT model override (Feature B). Two accepted shapes:
+
+      * concrete provider pinned: ``{provider_id: <uuid>, model: <non-empty>}`` —
+        the provider's kind governs at build time, so the closed-catalogue kind
+        check does not apply here (only provider_id well-formed + model present);
+      * kind-based: same rules as :func:`validate_model_config` (ADR 0021).
+
+    Raises :class:`InvalidModelConfigError` (→ 422) on a bad value."""
+    if cfg.get("provider_id"):
+        from uuid import UUID
+
+        try:
+            UUID(str(cfg["provider_id"]))
+        except (ValueError, TypeError) as exc:
+            raise InvalidModelConfigError("provider_id must be a UUID") from exc
+        model = cfg.get("model")
+        if not isinstance(model, str) or not model.strip():
+            raise InvalidModelConfigError("model must be a non-empty string")
+        return cfg
+    return validate_model_config(cfg)
+
+
 def is_model_config_empty(cfg: dict[str, Any] | None) -> bool:
     """Si un ``model_config`` cuenta como "vacío" (legacy ``{}``).
 

@@ -54,6 +54,7 @@ import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { Select } from "@/components/ui/select";
 import { StateBlock } from "@/components/shared/state-block";
 import { CapabilityHub } from "@/components/capability/capability-hub";
+import { ChatModelSection, type ChatModelConfig } from "@/components/capability/chat-model-section";
 import { DefaultModelSection } from "@/components/capability/default-model-section";
 import {
   GitConfigSection,
@@ -74,8 +75,8 @@ interface Project {
   is_template: boolean;
   // Ola A: modelo por defecto del proyecto (alias JSON `model_config`). {} = hereda.
   model_config: ModelConfig;
-  // Modelo del CHAT del proyecto (separado del de ejecución). {} = hereda del de ejecución.
-  chat_model_config: ModelConfig;
+  // Modelo del CHAT del proyecto (Feature B): proveedor concreto + modelo. {} = hereda.
+  chat_model_config: ChatModelConfig;
   // ADR 0072: config git del proyecto (sin secreto). null = sin remoto.
   git_config: GitConfig | null;
   // worker_config.git_policies guarda las políticas del flujo git del plan (ADR 0072).
@@ -88,7 +89,7 @@ interface ProjectUpdate {
   status?: ProjectStatus;
   team_id?: string | null;
   model_config?: ModelConfig;
-  chat_model_config?: ModelConfig;
+  chat_model_config?: ChatModelConfig;
 }
 
 const STATUS_VARIANT: Record<string, BadgeVariant> = {
@@ -204,8 +205,8 @@ export default function ProjectHubPage() {
     },
   });
 
-  // Modelo del CHAT del proyecto (separado del de ejecución; PUT /projects/{id}).
-  const saveChatModel = useMutation<Project, ApiError, ModelConfig>({
+  // Modelo del CHAT del proyecto (proveedor concreto; PUT /projects/{id}).
+  const saveChatModel = useMutation<Project, ApiError, ChatModelConfig>({
     mutationFn: (chatModelConfig) =>
       apiFetch<Project>(`/projects/${projectId}`, {
         method: "PUT",
@@ -299,27 +300,13 @@ export default function ProjectHubPage() {
             />
           </div>
 
-          {/* Modelo del CHAT del proyecto (separado del de ejecución): el equipo
-              responde en el chat de planificación con este modelo. Conviene uno más
-              rápido/ligero que el de ejecución (claude_sdk+opus+max es lento en chat). */}
+          {/* Modelo del CHAT del proyecto (Feature B): proveedor concreto por nombre. */}
           <div className="mb-6">
-            <DefaultModelSection
+            <ChatModelSection
               value={project.chat_model_config}
               pending={saveChatModel.isPending}
-              idPrefix="project-chat-model"
-              scopeLabel={{ es: "del chat", en: "(chat)" }}
-              title={{ es: "Modelo del chat", en: "Chat model" }}
-              description={{
-                es:
-                  "El modelo con el que el equipo RESPONDE en el chat de planificación. " +
-                  "Vacío = usa el modelo de ejecución del proyecto/equipo. Conviene uno más " +
-                  "rápido (un modelo agéntico/pesado hace el chat lento).",
-                en:
-                  "The model the team REPLIES with in the planning chat. Empty = use the " +
-                  "project/team execution model. A faster model is recommended (a heavy/" +
-                  "agentic model makes the chat slow).",
-              }}
-              onSave={(modelConfig) => saveChatModel.mutate(modelConfig)}
+              idPrefix="project"
+              onSave={(cfg) => saveChatModel.mutate(cfg)}
             />
           </div>
 

@@ -252,15 +252,17 @@ class ProjectUpdateRequest(BaseModel):
     def _validate_model(self) -> ProjectUpdateRequest:
         from api_server.db.platform_settings import (
             InvalidModelConfigError,
+            validate_chat_model_config,
             validate_model_config,
         )
 
-        for cfg in (self.llm_config, self.chat_llm_config):
-            if cfg:
-                try:
-                    validate_model_config(cfg)
-                except InvalidModelConfigError as exc:
-                    raise ValueError(str(exc)) from exc
+        try:
+            if self.llm_config:
+                validate_model_config(self.llm_config)
+            if self.chat_llm_config:  # may pin a concrete provider_id (Feature B)
+                validate_chat_model_config(self.chat_llm_config)
+        except InvalidModelConfigError as exc:
+            raise ValueError(str(exc)) from exc
         return self
 
     @field_validator("mcp_servers", mode="after")

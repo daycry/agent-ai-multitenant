@@ -54,6 +54,7 @@ from api_server.chat.planning_graph import (
 from api_server.chat.planning_llm import LLMPlanningModel
 from api_server.db.conversation import Conversation, Message
 from api_server.db.domain import Agent, Project, Team, TeamMember
+from api_server.db.llm_providers import get_llm_provider
 from api_server.db.platform_settings import (
     InvalidModelConfigError,
     get_default_model_config,
@@ -62,7 +63,7 @@ from api_server.db.platform_settings import (
 )
 from api_server.db.session import get_admin_sessionmaker
 from api_server.events import EVENT_MESSAGE_CREATED, publish_conversation_event
-from api_server.llm_providers.factory import build_provider_from_kind
+from api_server.llm_providers.factory import build_llm_provider, build_provider_from_kind
 from api_server.llm_providers.factory_resolver import resolve_provider_config
 from api_server.llm_providers.vault import LLMProviderVaultStore
 
@@ -176,10 +177,16 @@ async def resolve_chat_model_config(
     default. A corrupt stored config that fails catalogue validation also falls back."""
     project_chat = dict(getattr(project, "chat_model_config", None) or {}) if project else {}
     team_chat = await _team_chat_model_config(session, project)
+    # Feature B: a chat override pinned to a CONCRETE provider (provider_id + model)
+    # wins as-is (project → team), bypassing the kind-based chain/validation — the
+    # provider row + its kind are resolved at build time.
+    for override in (project_chat, team_chat):
+        if override.get("provider_id") and override.get("model"):
+            return dict(override)
     platform_default = await get_default_model_config(session)
     project_cfg = dict(getattr(project, "model_config", None) or {}) if project else {}
     team_cfg = await _team_model_config(session, project)
-    # Chat override (project → team) is most specific; then the execution chain.
+    # Kind-based chat override (project → team) is most specific; then the exec chain.
     effective = resolve_model_config_chain(project_chat or None, team_chat or None, None, {})
     if _model_pinned(effective):
         chosen = effective
@@ -269,6 +276,33 @@ async def build_chat_provider(
     return build_provider_from_kind(
         kind, base_url=resolved.base_url, secret=resolved.secret, model=model
     )
+
+
+async def _resolve_chat_provider(
+    session: AsyncSession, effective: dict[str, Any], vault: LLMProviderVaultStore | None
+) -> tuple[LLMProvider | None, str, str]:
+    """Build the chat provider + resolve its kind and API model name. Two paths:
+    a CONCRETE provider pinned by ``provider_id`` (Feature B → built from THAT row),
+    or a kind (built from the newest active row of the kind, the dispatch path).
+    Returns ``(provider|None, kind, api_model)``."""
+    pid = effective.get("provider_id")
+    if pid:
+        try:
+            provider_uuid = UUID(str(pid))
+        except (ValueError, TypeError):
+            return None, "", ""
+        row = await get_llm_provider(session, provider_uuid)
+        if row is None or not row.is_active:
+            return None, "", ""
+        api_model = to_provider_model_name(row.kind, str(effective.get("model") or ""))
+        provider = await build_llm_provider(
+            session, provider_id=provider_uuid, model=api_model, vault=vault
+        )
+        return provider, row.kind, api_model
+    kind = str(effective.get("provider") or "")
+    api_model = to_provider_model_name(kind, str(effective.get("model") or ""))
+    provider = await build_chat_provider(session, kind=kind, model=api_model, vault=vault)
+    return provider, kind, api_model
 
 
 async def _simple_reply(
@@ -603,10 +637,8 @@ async def respond_to_conversation(
                 return
 
             effective = await resolve_chat_model_config(session, project)
-            kind = str(effective.get("provider") or "")
-            api_model = to_provider_model_name(kind, str(effective.get("model") or ""))
             temperature = float(effective.get("temperature", _DEFAULT_TEMPERATURE))
-            provider = await build_chat_provider(session, kind=kind, model=api_model, vault=vault)
+            provider, kind, api_model = await _resolve_chat_provider(session, effective, vault)
             if provider is None:
                 await _system_notice(
                     tenant_id=tenant_id,

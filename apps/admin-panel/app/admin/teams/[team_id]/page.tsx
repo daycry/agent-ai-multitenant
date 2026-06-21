@@ -25,6 +25,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { CapabilityHub } from "@/components/capability/capability-hub";
+import { ChatModelSection, type ChatModelConfig } from "@/components/capability/chat-model-section";
 import { DefaultModelSection } from "@/components/capability/default-model-section";
 import { AdoptTeamDialog } from "@/components/teams/adopt-team-dialog";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -48,8 +49,8 @@ interface Team {
   forked_from_team_id: string | null;
   // Ola A: modelo por defecto del equipo (alias JSON `model_config`). {} = hereda.
   model_config: ModelConfig;
-  // Modelo del CHAT del equipo (separado del de ejecución). {} = hereda del de ejecución.
-  chat_model_config: ModelConfig;
+  // Modelo del CHAT del equipo (Feature B): proveedor concreto + modelo. {} = hereda.
+  chat_model_config: ChatModelConfig;
   // ADR 0071: política de memoria del equipo (null = sin política / heredar).
   memory_scope: string | null;
   members: TeamMember[];
@@ -165,8 +166,8 @@ export default function TeamDetailPage() {
     },
   });
 
-  // Modelo del CHAT del equipo (separado del de ejecución; PUT /teams/{id}).
-  const saveChatModel = useMutation<Team, ApiError, ModelConfig>({
+  // Modelo del CHAT del equipo (proveedor concreto; PUT /teams/{id}).
+  const saveChatModel = useMutation<Team, ApiError, ChatModelConfig>({
     mutationFn: (chatModelConfig) =>
       apiFetch<Team>(`/teams/${teamId}`, {
         method: "PUT",
@@ -310,27 +311,14 @@ export default function TeamDetailPage() {
               onSave={(modelConfig) => saveModel.mutate(modelConfig)}
             />
           </div>
-          {/* Modelo del CHAT del equipo (separado del de ejecución): el equipo responde
-              en el chat de planificación con este modelo. Conviene uno más rápido/ligero. */}
+          {/* Modelo del CHAT del equipo (Feature B): proveedor concreto por nombre. */}
           <div className="mb-6">
-            <DefaultModelSection
+            <ChatModelSection
               value={team.chat_model_config}
               isReadOnly={isReadOnly}
               pending={saveChatModel.isPending}
-              idPrefix="team-chat-model"
-              scopeLabel={{ es: "del chat", en: "(chat)" }}
-              title={{ es: "Modelo del chat", en: "Chat model" }}
-              description={{
-                es:
-                  "El modelo con el que el equipo RESPONDE en el chat de planificación. " +
-                  "Vacío = usa el modelo de ejecución del equipo. Conviene uno más rápido " +
-                  "(un modelo agéntico/pesado hace el chat lento).",
-                en:
-                  "The model the team REPLIES with in the planning chat. Empty = use the " +
-                  "team execution model. A faster model is recommended (a heavy/agentic " +
-                  "model makes the chat slow).",
-              }}
-              onSave={(modelConfig) => saveChatModel.mutate(modelConfig)}
+              idPrefix="team"
+              onSave={(cfg) => saveChatModel.mutate(cfg)}
             />
           </div>
           {/* ADR 0071: política de memoria del equipo. Gobierna a sus miembros. */}

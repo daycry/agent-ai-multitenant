@@ -85,6 +85,7 @@ from api_server.schemas.agents import (
     AgentForkRequest,
     AgentMergeRequest,
     AgentModelOptionsResponse,
+    AgentProviderOptionsResponse,
     AgentResponse,
     AgentSkillResponse,
     AgentToolResponse,
@@ -216,6 +217,46 @@ async def get_agent_model_options(
         if kind in REASONING_OPTIONS_BY_KIND
     }
     return AgentModelOptionsResponse(by_kind=by_kind, reasoning_by_kind=reasoning_by_kind)
+
+
+# ---------------------------------------------------------------------------
+# GET /agents/provider-options — proveedores ACTIVOS concretos (por nombre) + modelos
+# ---------------------------------------------------------------------------
+# Para el selector del «Modelo del chat» (Feature B): a diferencia de model-options
+# (agrega por kind, el más nuevo activo), lista CADA fila activa para que el operador
+# distinga p.ej. Ollama local vs cloud y fije un provider_id concreto SOLO para el
+# chat. Tenant-accesible; sin secretos (la credencial vive en Vault). DEBE ir antes
+# de GET /{agent_id}.
+@router.get("/provider-options", response_model=AgentProviderOptionsResponse)
+async def get_agent_provider_options(
+    _: AuthPrincipal = Depends(require_tenant_member),
+) -> AgentProviderOptionsResponse:
+    from api_server.assistant.model_config import list_available_models_for_provider
+    from api_server.db.llm_providers import (
+        LLM_PROVIDER_KINDS,
+        REASONING_OPTIONS_BY_KIND,
+        list_active_llm_providers_by_kind,
+    )
+    from api_server.db.session import get_admin_sessionmaker
+    from api_server.schemas.agents import ProviderOption
+
+    providers: list[ProviderOption] = []
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        for kind in LLM_PROVIDER_KINDS:
+            for row in await list_active_llm_providers_by_kind(session, kind):
+                models = await list_available_models_for_provider(session, row)
+                providers.append(
+                    ProviderOption(
+                        id=row.id,
+                        kind=row.kind,
+                        display_name=row.display_name,
+                        slug=row.slug,
+                        models=sorted(set(models)),
+                        reasoning_options=list(REASONING_OPTIONS_BY_KIND.get(kind, ())),
+                    )
+                )
+    return AgentProviderOptionsResponse(providers=providers)
 
 
 # ---------------------------------------------------------------------------
