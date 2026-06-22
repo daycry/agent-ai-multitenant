@@ -76,9 +76,17 @@ def parse_chat_completion(
     the standard `usage` block; `cost` is read if the provider added
     it (some APIM policies do, OpenAI itself does not).
     """
-    choice = data["choices"][0]["message"]
-    content = choice.get("content") or ""
-    raw_tool_calls = choice.get("tool_calls") or []
+    # A 200 can still carry a malformed/empty body (a flaky gateway, an APIM policy
+    # returning an error-shape). Guard so a typed ProviderError surfaces instead of a raw
+    # KeyError/IndexError/TypeError escaping the LLM layer. The body goes in `raw`, not the
+    # message, to avoid leaking it into logs.
+    choices = data.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    message = choice.get("message") if isinstance(choice, dict) else None
+    if not isinstance(message, dict):
+        raise ProviderError(f"{provider}: respuesta sin 'choices[0].message'", raw=data)
+    content = message.get("content") or ""
+    raw_tool_calls = message.get("tool_calls") or []
     tool_calls: list[ToolCall] | None = None
     if raw_tool_calls:
         tool_calls = []

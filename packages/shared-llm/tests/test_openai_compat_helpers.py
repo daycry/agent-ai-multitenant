@@ -112,6 +112,26 @@ def test_parse_chat_completion_with_tool_calls() -> None:
     assert resp.usage.cost_usd == 0.001
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"choices": []},
+        {"choices": [{}]},
+        {"choices": [{"message": None}]},
+        {"choices": "nope"},
+    ],
+)
+def test_parse_chat_completion_raises_provider_error_on_malformed_body(
+    body: dict[str, object],
+) -> None:
+    """An HTTP 200 with a malformed/empty body (a flaky OpenAI-compat gateway, an APIM
+    policy returning an error-shape) must surface as a typed ProviderError, not a raw
+    KeyError/IndexError escaping the LLM layer."""
+    with pytest.raises(ProviderError):
+        parse_chat_completion(body, provider="x", fallback_model="default")
+
+
 def test_parse_sse_delta_recognises_content_and_done() -> None:
     text, done = parse_sse_delta('data: {"choices":[{"delta":{"content":"hi"}}]}')
     assert text == "hi"
