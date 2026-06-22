@@ -395,9 +395,17 @@ async def recall(
     top_ids = [mid for mid, _ in sorted(fused.items(), key=lambda kv: -kv[1][0])][:limit]
     if not top_ids:
         return []
+    # Defence-in-depth: filter tenant_id + deleted_at explicitly here too, consistent with
+    # the three candidate queries. `top_ids` already come from tenant-scoped candidates under
+    # RLS, but this final detail fetch must not rely on RLS alone — if a session ever lacked a
+    # correct app.tenant_id (worker BYPASSRLS reuse, middleware bug), an unfiltered id-only
+    # lookup would surface cross-tenant rows.
     detail_rows = await session.execute(
-        text("SELECT id, content, scope, type FROM memory_entries" " WHERE id = ANY(:ids)"),
-        {"ids": top_ids},
+        text(
+            "SELECT id, content, scope, type FROM memory_entries"
+            " WHERE id = ANY(:ids) AND tenant_id = :tenant_id AND deleted_at IS NULL"
+        ),
+        {"ids": top_ids, "tenant_id": tenant_id},
     )
     by_id: dict[UUID, dict[str, Any]] = {
         row[0]: {"content": row[1], "scope": row[2], "type": row[3]} for row in detail_rows.all()
