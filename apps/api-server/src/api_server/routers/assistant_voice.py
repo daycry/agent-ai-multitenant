@@ -56,6 +56,19 @@ _CLOSE_POLICY = 1008
 # (defence in depth; a normal turn is a few seconds of 16 kHz PCM16 ≈ <1 MB).
 _MAX_UTTERANCE_BYTES = 8 * 1024 * 1024
 
+# Kokoro voices offered by the UI (components/assistant/voice-call.tsx). The
+# client's `voice` is forwarded to the internal TTS, so it MUST be validated
+# server-side against this allowlist — a free-form value would reach Kokoro raw.
+_SUPPORTED_VOICES = frozenset(
+    {"af_heart", "am_michael", "bf_emma", "bm_george", "ef_dora", "em_alex"}
+)
+
+
+def _resolve_voice(requested: str, current: str) -> str:
+    """The voice to use: ``requested`` iff it is a supported Kokoro voice,
+    otherwise keep ``current`` (an unsupported/empty value never reaches TTS)."""
+    return requested if requested in _SUPPORTED_VOICES else current
+
 
 async def _reject(ws: WebSocket, reason: str) -> None:
     with contextlib.suppress(Exception):
@@ -169,9 +182,8 @@ async def _handle_frame(
         return True
     ctype = control.get("type")
     if ctype == "config":
-        chosen = str(control.get("voice") or "")
-        if chosen:
-            state.voice = chosen
+        # Validate against the supported-voice allowlist before it reaches TTS.
+        state.voice = _resolve_voice(str(control.get("voice") or ""), state.voice)
         await ws.send_json({"type": "ready", "voice": state.voice})
     elif ctype == "reset":
         state.buffer.clear()
