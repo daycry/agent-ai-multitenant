@@ -163,25 +163,40 @@ def _signature(call: ToolInvocation) -> str:
     return f"{call.name}|{json.dumps(call.arguments, sort_keys=True, default=str)}"
 
 
+def _admissible_tool_calls(
+    state: AssistantState, calls: tuple[ToolInvocation, ...]
+) -> tuple[ToolInvocation, ...]:
+    """Tool calls from one ``decide`` round the host will actually run: (a) enabled
+    for the tenant, (b) not already executed this turn (same name+args), and (c) under
+    the per-tool cap — counting BOTH prior rounds (``state.tools_called``) AND calls
+    already kept within THIS round. Counting the current round is what stops an
+    over-eager model from exceeding the cap in a single round (e.g. emitting several
+    ``remember_about_me`` with distinct args), which ``state.tools_called`` alone — only
+    updated AFTER the round in ``run_tools`` — would miss."""
+    allowed = set(state.enabled_tools)
+    kept: list[ToolInvocation] = []
+    round_counts: dict[str, int] = {}
+    for tc in calls:
+        if tc.name not in allowed:
+            continue
+        if _signature(tc) in state.executed_signatures:
+            continue
+        used = state.tools_called.count(tc.name) + round_counts.get(tc.name, 0)
+        if used >= _tool_call_cap(tc.name):
+            continue
+        kept.append(tc)
+        round_counts[tc.name] = round_counts.get(tc.name, 0) + 1
+    return tuple(kept)
+
+
 def _node_decide(model: AssistantModelClient) -> AssistantNode:
     async def _run(state: AssistantState) -> AssistantState:
         turn = await model.decide(state)
         if turn.content:
             state.last_content = turn.content
-        # Keep only tool calls that are (a) enabled for the tenant, (b) not
-        # already executed this turn (same name+args), and (c) under the
-        # per-tool call cap. (b) drops a model re-emitting the SAME call; (c)
-        # drops an over-eager model re-calling the same tool with DIFFERENT args
-        # every round (e.g. inventing several facts to remember) so the loop
-        # converges instead of running to the round ceiling.
-        allowed = set(state.enabled_tools)
-        kept = tuple(
-            tc
-            for tc in turn.tool_calls
-            if tc.name in allowed
-            and _signature(tc) not in state.executed_signatures
-            and state.tools_called.count(tc.name) < _tool_call_cap(tc.name)
-        )
+        # Filter to the calls the host will actually run (enabled, not already
+        # executed, under the per-tool cap incl. this round) — see _admissible_tool_calls.
+        kept = _admissible_tool_calls(state, turn.tool_calls)
         state.pending = ModelTurn(content=turn.content, tool_calls=kept)
         if not kept:
             # No new work to do → this is the answer (the model's content, or
