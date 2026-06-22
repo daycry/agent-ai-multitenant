@@ -143,6 +143,28 @@ async def enqueue_open_plan_pr(project_id: UUID, plan_id: UUID, *, title: str, b
     return True
 
 
+async def revoke_execution_job(job_id: str) -> bool:
+    """Revoke a running/queued execution Celery job (cooperative cancellation).
+
+    ``terminate=True`` kills the worker child if the job is already running (the
+    worker then sees the ``cancel_requested_at`` flag to finalise as ``cancelled``)
+    and drops it if still queued. Best-effort: the DB flag is the source of truth,
+    so a broker failure is logged and swallowed — the worker still honours the flag
+    cooperatively. ``control.revoke`` does blocking socket I/O, so it runs off the
+    event loop. Returns True iff the revoke was published.
+    """
+    try:
+        await asyncio.to_thread(
+            get_celery_client().control.revoke,
+            job_id,
+            terminate=True,
+        )
+    except Exception as exc:
+        _log.warning("execution.revoke_failed", job_id=job_id, error=str(exc))
+        return False
+    return True
+
+
 async def enqueue_notification_send(
     send_request: dict[str, Any],
     *,

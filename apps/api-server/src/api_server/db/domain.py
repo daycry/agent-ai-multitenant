@@ -332,6 +332,8 @@ class ExecutionStatus(enum.StrEnum):
     FAILED = "failed"
     # Paused mid-run waiting on a human_approval_policy decision (Fase F).
     AWAITING_HUMAN_APPROVAL = "awaiting_human_approval"
+    # Stopped by an explicit operator cancel request (POST /executions/{id}/cancel).
+    CANCELLED = "cancelled"
 
 
 class DocumentStatus(enum.StrEnum):
@@ -1117,6 +1119,17 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
 
     started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    # Cooperative cancellation (auditoría / task_prod06_cancel_01). The operator's
+    # POST /executions/{id}/cancel stamps `cancel_requested_at`; the worker polls it
+    # to kill the container and finalises the row as `cancelled`. `celery_task_id` is
+    # stamped by the worker when it picks the job up, so the cancel endpoint can
+    # `revoke(terminate=True)` the still-queued/running task. Both nullable: a run
+    # that was never cancelled (or predates this column) simply leaves them NULL.
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    celery_task_id: Mapped[str | None] = mapped_column(String(155), nullable=True)
 
     # --- per-call price snapshot (Plan 11 Fase C, task_11_13) --------------
     # The catalog price that was IN EFFECT when this run's model calls were
