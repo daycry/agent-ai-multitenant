@@ -27,6 +27,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ApiError, apiFetch } from "@/lib/api";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { cn } from "@/lib/utils";
@@ -161,6 +162,7 @@ export default function ProjectChatPage() {
   const projectId = params.id;
   const queryClient = useQueryClient();
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
 
   const conversationsQuery = useQuery({
     queryKey: ["conversations", projectId],
@@ -391,15 +393,7 @@ export default function ProjectChatPage() {
                 size="sm"
                 data-testid="chat-clear"
                 disabled={clearMessages.isPending}
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      "¿Vaciar el chat? Se borrarán todos los mensajes de esta conversación.",
-                    )
-                  ) {
-                    clearMessages.mutate(activeConversation.id);
-                  }
-                }}
+                onClick={() => setConfirmClearOpen(true)}
               >
                 Vaciar chat
               </Button>
@@ -451,6 +445,23 @@ export default function ProjectChatPage() {
           ) : null}
         </CardContent>
       </Card>
+
+      {activeConversation ? (
+        <ConfirmDialog
+          open={confirmClearOpen}
+          onOpenChange={setConfirmClearOpen}
+          title="Vaciar chat"
+          description="Se borrarán todos los mensajes de esta conversación. No se puede deshacer."
+          confirmLabel="Vaciar"
+          destructive
+          pending={clearMessages.isPending}
+          onConfirm={() =>
+            clearMessages.mutate(activeConversation.id, {
+              onSuccess: () => setConfirmClearOpen(false),
+            })
+          }
+        />
+      ) : null}
     </div>
   );
 }
