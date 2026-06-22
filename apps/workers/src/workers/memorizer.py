@@ -45,6 +45,7 @@ from api_server.db.execution_repo import get_execution
 from api_server.db.models import User
 from api_server.db.platform_settings import get_default_memory_scope, get_memorizable_statuses
 from api_server.memorizer import (
+    count_memories_for_source,
     distil_execution,
     distil_human_work_session,
     persist_memory_candidates,
@@ -120,7 +121,9 @@ def memorize_execution(execution_id: str) -> dict[str, Any]:
     )
 
 
-async def _memorize_execution_async(
+# justified: guard-clause style — each early return is a distinct, named
+# skip/idempotency reason (clearer than nesting them into one exit).
+async def _memorize_execution_async(  # noqa: PLR0911
     execution_id: UUID,
     *,
     settings: Settings,
@@ -136,6 +139,17 @@ async def _memorize_execution_async(
             ctx = await _load_context(session, execution_id)
         if ctx is None:
             return _result(execution_id, 0, "skipped:execution_not_found")
+
+        # Idempotency guard (auditoría memoria): task_acks_late is global, so a broker
+        # redelivery / worker crash re-runs this task. If memories already exist for this
+        # execution, skip — re-distilling would make a fresh (non-deterministic) LLM call
+        # and persist duplicate rows that content-dedup wouldn't catch. Mirrors the
+        # supersede guard run_execution uses for the same acks_late re-delivery problem.
+        async with sessionmaker() as guard_session:
+            if await count_memories_for_source(
+                guard_session, tenant_id=ctx["tenant_id"], source_execution_id=execution_id
+            ):
+                return _result(execution_id, 0, "ok:already_memorized")
 
         # Estados elegibles operator-configurable (Plan 06.17 task_06_17_04): el
         # gate ya no asume "solo done"; el operador puede añadir p.ej. 'aborted'.

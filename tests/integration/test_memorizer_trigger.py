@@ -60,6 +60,19 @@ class _FakeLLM:
         self.closed = True
 
 
+class _CountingLLM(_FakeLLM):
+    """Like _FakeLLM but counts distil (complete) calls — to prove a redelivery
+    does NOT trigger a second LLM call."""
+
+    def __init__(self, content: str) -> None:
+        super().__init__(content)
+        self.calls = 0
+
+    async def complete(self, messages: Sequence[Message], **kwargs: Any) -> CompletionResponse:
+        self.calls += 1
+        return await super().complete(messages, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Seed helpers
 # ---------------------------------------------------------------------------
@@ -218,6 +231,48 @@ async def test_memorize_done_team_shared_persists(
     assert r["user_id"] is None
     assert r["agent_id"] == seeded["agent_id"]
     assert r["source_execution_id"] == seeded["execution_id"]
+
+
+@pytest.mark.asyncio
+async def test_redelivery_does_not_re_memorize(
+    schema_at_head, migrations_pg_dsn: str, workers_settings
+) -> None:
+    """Idempotency guard (auditoría): with task_acks_late a redelivery re-runs the
+    task; the guard must skip — no second LLM call, no duplicate rows."""
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seeded = await _seed(migrations_pg_dsn, memory_scope="team_shared")
+
+    fake = _CountingLLM(
+        content='[{"content": "Asyncpg is the only driver.", "type": "semantic", "tags": []}]'
+    )
+    from workers.memorizer import _memorize_execution_async
+
+    first = await _memorize_execution_async(
+        seeded["execution_id"], settings=workers_settings, llm_factory=lambda _s: fake
+    )
+    assert first["persisted"] == 1, first
+    assert first["reason"] == "ok"
+    assert fake.calls == 1
+
+    # Redelivery of the SAME execution: guard short-circuits before the LLM.
+    second = await _memorize_execution_async(
+        seeded["execution_id"], settings=workers_settings, llm_factory=lambda _s: fake
+    )
+    assert second["persisted"] == 0, second
+    assert second["reason"] == "ok:already_memorized"
+    assert fake.calls == 1  # NOT re-distilled — no second LLM call
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        count = await conn.fetchval(
+            "SELECT count(*) FROM memory_entries WHERE source_execution_id = $1",
+            seeded["execution_id"],
+        )
+    finally:
+        await conn.close()
+    assert count == 1  # no duplicate rows from the redelivery
 
 
 @pytest.mark.asyncio
