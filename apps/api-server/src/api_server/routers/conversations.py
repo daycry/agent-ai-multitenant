@@ -281,6 +281,18 @@ async def post_message(
     vault: LLMProviderVaultStore | None = Depends(get_provider_vault_store),
 ) -> MessageResponse:
     tenant_id = require_tenant_id(principal)
+
+    # This REST surface is the HUMAN one (require_tenant_member). Agent/system messages
+    # are authored server-side by the responder (chat/responder.py → _persist_and_publish)
+    # and by the mode-change notice, never through here. A user posting author_kind!='user'
+    # is impersonating an agent — and could forge the finish_planning attachment that
+    # materialises an attacker-controlled plan (plans.py:_draft_from_conversation). Reject it.
+    if payload.author_kind != MessageAuthorKind.USER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="solo se pueden publicar mensajes con author_kind='user' por esta vía",
+        )
+
     conv = await _load_conversation(session, conversation_id)
 
     # Resolve author_user_id from the principal when the caller is a
