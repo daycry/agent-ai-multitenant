@@ -49,6 +49,13 @@ def _state(history: list[dict[str, Any]], roles: set[PlanningRole]) -> PlanningS
     return PlanningState(chat_history=history, team_roles=frozenset(roles))
 
 
+def test_default_output_budget_is_generous_enough_for_a_full_plan() -> None:
+    # Regression: max_tokens=1024 truncated a 6-phase plan mid-sentence. The
+    # synthesis (a full structured ## Plan) needs a much larger output budget.
+    model = LLMPlanningModel(provider=_FakeProvider("## Plan"))  # type: ignore[arg-type]
+    assert model.max_tokens >= 4096
+
+
 def test_pm_decide_parses_json_intent_and_specialists() -> None:
     provider = _FakeProvider(
         '{"intent": "invite_specialists", "rationale": "necesito arquitectura", '

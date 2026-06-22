@@ -123,7 +123,15 @@ class LLMPlanningModel:
 
     provider: LLMProvider
     model: str | None = None
-    max_tokens: int = 1024
+    # A full structured plan (## Plan + several ### Fases with acceptance criteria)
+    # easily exceeds 1024 tokens — that budget truncated multi-phase plans
+    # mid-sentence. 8192 gives generous headroom and is supported across the closed
+    # catalog (ADR 0021). pm_decide/specialist_speak use far less. NOTE: this is a
+    # fixed default for now; making it operator-configurable (chat_model_config.
+    # max_tokens) is the follow-up for projects that need an even larger preview.
+    # The authoritative, unbounded plan is the STRUCTURED task draft (create_plan),
+    # not this prose synthesis.
+    max_tokens: int = 8192
     temperature: float = 0.4
     extra_call_kwargs: dict[str, Any] = field(default_factory=dict)
 
