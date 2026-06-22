@@ -191,6 +191,7 @@ def _to_mcp_config(raw: dict[str, Any]) -> Any:
         headers=dict(raw.get("headers") or {}),
         auth_ref=raw.get("auth_ref"),
         timeout_s=float(raw.get("timeout_s", 30.0)),
+        max_output_bytes=int(raw.get("max_output_bytes", 65536)),
     )
 
 

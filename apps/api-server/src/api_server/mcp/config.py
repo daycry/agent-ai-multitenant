@@ -70,6 +70,11 @@ class MCPServerConfigModel(BaseModel):
 
     timeout_s: float = Field(default=30.0, gt=0, le=300)
 
+    # Per-server cap on tool output bytes (defence against chatty/malicious
+    # servers that would otherwise exhaust the model's context window). Matches
+    # the dataclass default; bounded to a sane range (1 KiB .. 1 MiB).
+    max_output_bytes: int = Field(default=65536, ge=1024, le=1_048_576)
+
     @field_validator("auth_ref")
     @classmethod
     def _auth_ref_must_be_vault(cls, value: str | None) -> str | None:

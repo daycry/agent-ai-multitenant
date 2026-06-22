@@ -421,6 +421,7 @@ def _to_runtime_config(payload: MCPServerConfigModel) -> MCPServerConfig:
         headers=dict(data.get("headers") or {}),
         auth_ref=data.get("auth_ref"),
         timeout_s=float(data.get("timeout_s", 30.0)),
+        max_output_bytes=int(data.get("max_output_bytes", 65536)),
     )
 
 
