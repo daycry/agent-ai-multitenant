@@ -31,6 +31,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
+import { renderPlanDraft } from "@/lib/plan-draft-md";
 import {
   ASSISTANT_LIMITS,
   assistantToolLabel,
@@ -239,7 +240,14 @@ function ChatBubble({ turn }: { turn: ChatTurn }) {
           isUser ? "bg-primary text-primary-foreground" : "bg-muted text-foreground border",
         )}
       >
-        <p className="whitespace-pre-wrap">{turn.content}</p>
+        {isUser ? (
+          // User text stays verbatim (never markdown-rendered).
+          <p className="whitespace-pre-wrap">{turn.content}</p>
+        ) : (
+          // Assistant answers (status/plan tables, lists) render as markdown via the
+          // shared XSS-safe renderer — consistent with the project chat + markdown-everywhere.
+          renderPlanDraft(turn.content)
+        )}
         {!isUser && turn.toolsCalled && turn.toolsCalled.length > 0 ? (
           <div className="mt-2 flex flex-wrap gap-1" data-testid="assistant-answer-tools">
             {turn.toolsCalled.map((tool) => (
