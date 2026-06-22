@@ -12,7 +12,11 @@ from api_server.chat.planning_graph import (
     PMIntent,
     SpecialistContribution,
 )
-from api_server.chat.planning_llm import LLMPlanningModel, _normalise_plan_draft
+from api_server.chat.planning_llm import (
+    LLMPlanningModel,
+    _normalise_plan_draft,
+    _suggest_specialists,
+)
 from shared_llm.types import CompletionResponse, Message, StreamChunk
 
 
@@ -47,6 +51,56 @@ class _FakeProvider:
 
 def _state(history: list[dict[str, Any]], roles: set[PlanningRole]) -> PlanningState:
     return PlanningState(chat_history=history, team_roles=frozenset(roles))
+
+
+def test_suggest_specialists_detects_disciplines_intersected_with_team() -> None:
+    available = frozenset({PlanningRole.BACKEND_DEV, PlanningRole.SECURITY, PlanningRole.QA})
+    got = set(_suggest_specialists("API con base de datos, auth con JWT y tests", available))
+    assert got == {PlanningRole.BACKEND_DEV, PlanningRole.SECURITY, PlanningRole.QA}
+    # A discipline the team doesn't have is NOT returned even if mentioned.
+    assert _suggest_specialists("arquitectura multi-tenant", available) == ()
+
+
+def test_pm_decide_nudges_invite_for_multidisciplinary_request() -> None:
+    # The model answers alone, but the request clearly spans several disciplines →
+    # the deterministic nudge convenes the matching specialists.
+    provider = _FakeProvider('{"intent": "speak_alone", "rationale": "lo hago yo"}')
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    state = _state(
+        [
+            {
+                "role": "user",
+                "content": (
+                    "API multi-tenant con base de datos Doctrine, auth/login con roles, "
+                    "panel frontend y tests"
+                ),
+            }
+        ],
+        {
+            PlanningRole.PROJECT_MANAGER,
+            PlanningRole.ARCHITECT,
+            PlanningRole.BACKEND_DEV,
+            PlanningRole.SECURITY,
+            PlanningRole.FRONTEND_DEV,
+            PlanningRole.QA,
+        },
+    )
+    directive = model.pm_decide(state)
+    assert directive.intent == PMIntent.INVITE_SPECIALISTS
+    assert PlanningRole.BACKEND_DEV in directive.specialists
+    assert PlanningRole.SECURITY in directive.specialists
+    assert PlanningRole.ARCHITECT in directive.specialists
+
+
+def test_pm_decide_keeps_speak_alone_for_trivial_request() -> None:
+    provider = _FakeProvider('{"intent": "speak_alone", "rationale": "ajuste menor"}')
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    state = _state(
+        [{"role": "user", "content": "cambia el texto del botón de enviar"}],
+        {PlanningRole.PROJECT_MANAGER, PlanningRole.FRONTEND_DEV},
+    )
+    directive = model.pm_decide(state)
+    assert directive.intent == PMIntent.SPEAK_ALONE
 
 
 def test_default_output_budget_is_generous_enough_for_a_full_plan() -> None:

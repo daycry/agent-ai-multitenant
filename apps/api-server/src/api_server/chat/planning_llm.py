@@ -117,6 +117,105 @@ def _context_note(state: PlanningState) -> Message | None:
     )
 
 
+# Deterministic discipline → planning-role hints (supervisor/router pattern): the
+# model's pm_decide tends to answer alone, so we DETECT the disciplines a request
+# touches from its text and nudge the PM to convene the matching specialists.
+# Substring match on the lowercased request (ES + EN).
+_DISCIPLINE_KEYWORDS: dict[PlanningRole, tuple[str, ...]] = {
+    PlanningRole.ARCHITECT: (
+        "arquitect",
+        "architect",
+        "multi-tenant",
+        "multitenant",
+        "multi tenant",
+        "escalab",
+        "microservic",
+        "patrón",
+        "pattern",
+    ),
+    PlanningRole.BACKEND_DEV: (
+        "base de datos",
+        "database",
+        " orm",
+        "doctrine",
+        "entidad",
+        "entit",
+        "migracion",
+        "migración",
+        "migration",
+        "modelo de datos",
+        "endpoint",
+        "api rest",
+        " sql",
+        "esquema",
+        "schema",
+        "repositor",
+    ),
+    PlanningRole.FRONTEND_DEV: (
+        "frontend",
+        "front-end",
+        "front end",
+        "panel de",
+        "panel admin",
+        " ui",
+        "interfaz",
+        "react",
+        "vue",
+        "pantalla",
+        "dashboard",
+    ),
+    PlanningRole.QA: ("test", "prueba", " qa", "cobertura", "coverage", "e2e", "calidad"),
+    PlanningRole.SECURITY: (
+        "auth",
+        "autentic",
+        "login",
+        "seguridad",
+        "security",
+        "jwt",
+        "oauth",
+        "permiso",
+        "permission",
+        "roles",
+        "daycry/auth",
+        "token",
+    ),
+    PlanningRole.DEVOPS: (
+        "ci/cd",
+        "ci cd",
+        "pipeline",
+        "despliegue",
+        "deploy",
+        "docker",
+        "kubernetes",
+        "release",
+    ),
+    PlanningRole.TECHNICAL_WRITER: (
+        "documentación",
+        "documentation",
+        "openapi",
+        "swagger",
+        "readme",
+    ),
+    PlanningRole.REVIEWER: ("revisión de código", "code review", "quality gate", "revisor"),
+}
+
+
+def _suggest_specialists(text: str, available: frozenset[PlanningRole]) -> tuple[PlanningRole, ...]:
+    """Disciplines a request touches → matching team specialist roles (deterministic).
+
+    Substring detection so specialist collaboration doesn't hinge on the model's
+    pm_decide judgment (which tends to answer alone). Returns the detected roles
+    INTERSECTED with the team's available roles (PM never matches — no keywords),
+    sorted for determinism."""
+    low = text.lower()
+    hits = {
+        role
+        for role, kws in _DISCIPLINE_KEYWORDS.items()
+        if role in available and any(kw in low for kw in kws)
+    }
+    return tuple(sorted(hits, key=lambda r: r.value))
+
+
 @dataclass
 class LLMPlanningModel:
     """Adapt an ``LLMProvider`` to the planning sub-graph's ``PlanningModelClient``."""
@@ -162,6 +261,13 @@ class LLMPlanningModel:
             "- ask_user: necesitas más información del usuario para planificar.\n"
             "- finish_planning: el plan ya está claro y listo para formalizarse e "
             "insertarse como tareas del proyecto.\n"
+            "REGLA DE COLABORACIÓN: trabajas en EQUIPO. Si el plan abarca varias "
+            "disciplinas (arquitectura, modelo de datos, seguridad/auth, frontend, "
+            "pruebas, despliegue/CI, documentación), USA invite_specialists y convoca a "
+            "TODOS los roles relevantes de los disponibles ANTES de sintetizar — no "
+            "planifiques en solitario algo que les compete. Reserva speak_alone para "
+            "aclaraciones triviales, ajustes menores, o cuando ya hubo una ronda de "
+            "especialistas y solo falta cerrar.\n"
             f"Especialistas disponibles: {available or '(ninguno)'}."
         )
         messages = [Message(role="system", content=system)]
@@ -181,6 +287,28 @@ class LLMPlanningModel:
                 except ValueError:
                     continue
             specialists = tuple(picked)
+
+        # Deterministic collaboration nudge (supervisor/router pattern): the model
+        # under-invites, so detect the disciplines THIS request touches and convene the
+        # matching specialists instead of letting the PM plan solo. Only on a fresh,
+        # multi-disciplinary turn (>=2 detected, no specialist has spoken yet); never
+        # overrides ask_user / finish_planning.
+        latest_user = next(
+            (
+                str(e.get("content", ""))
+                for e in reversed(state.chat_history)
+                if e.get("role") == "user"
+            ),
+            "",
+        )
+        suggested = _suggest_specialists(latest_user, state.team_roles)
+        if intent == PMIntent.SPEAK_ALONE and len(suggested) >= 2 and not state.contributions:
+            intent = PMIntent.INVITE_SPECIALISTS
+            specialists = suggested
+        elif intent == PMIntent.INVITE_SPECIALISTS and suggested:
+            # Union the model's picks with the detected roles (don't miss obvious ones).
+            specialists = tuple(sorted(set(specialists) | set(suggested), key=lambda r: r.value))
+
         return PMDirective(
             intent=intent,
             rationale=str(obj.get("rationale", "")),
