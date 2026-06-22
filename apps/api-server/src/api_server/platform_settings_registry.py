@@ -27,7 +27,7 @@ from api_server.db.llm_providers import LLM_PROVIDER_KINDS
 from api_server.db.platform_settings import (
     DEFAULT_MODEL_CONFIG,
     InvalidModelConfigError,
-    validate_model_config,
+    validate_chat_model_config,
 )
 
 # ``model_config`` is the structured agent-default spec (provider/model/temperature);
@@ -204,7 +204,10 @@ def validate_platform_setting_value(key: str, value: Any) -> Any:
         if not isinstance(value, dict):
             raise ValueError(f"{key}: expected a model config object")
         try:
-            return dict(validate_model_config(value))
+            # Accept a CONCRETE provider pinned by provider_id (UI picks providers
+            # by name, like the project/team/chat pickers) OR the legacy kind-based
+            # shape — validate_chat_model_config covers both (ADR 0021/0055).
+            return dict(validate_chat_model_config(value))
         except InvalidModelConfigError as exc:
             raise ValueError(str(exc)) from exc
     raise ValueError(f"unknown setting type {sdef.type!r}")  # pragma: no cover

@@ -56,9 +56,19 @@ interface SettingValue {
 }
 
 interface ModelConfig {
+  /** Kind (claude_sdk/ollama/…) of the chosen provider — kept for validation +
+   * the inheritance chain; the concrete row is pinned by provider_id. */
   provider?: string;
+  provider_id?: string;
   model?: string;
   temperature?: number;
+}
+
+interface ProviderOption {
+  id: string;
+  kind: string;
+  display_name: string;
+  models: string[];
 }
 
 function errorText(err: unknown): string {
@@ -190,7 +200,10 @@ function SettingControl({
               checked={Boolean(value)}
               onChange={(e) => setValue(e.target.checked)}
             />
-            {value ? "Activado" : "Desactivado"}
+            <span className="font-medium">{value ? "Activado" : "Desactivado"}</span>
+            <span className="text-muted-foreground text-xs">
+              {value ? "(desmarca para desactivar)" : "(marca para activar)"}
+            </span>
           </label>
           <SaveButton onClick={() => save.mutate(value)} pending={save.isPending} />
         </div>
@@ -219,7 +232,6 @@ function SettingControl({
       ) : def.type === "model_config" ? (
         <ModelConfigControl
           value={(value ?? {}) as ModelConfig}
-          providerKinds={def.provider_kinds ?? []}
           onChange={setValue}
           onSave={() => save.mutate(value)}
           pending={save.isPending}
@@ -233,45 +245,51 @@ function SettingControl({
 
 function ModelConfigControl({
   value,
-  providerKinds,
   onChange,
   onSave,
   pending,
 }: {
   value: ModelConfig;
-  providerKinds: string[];
   onChange: (v: ModelConfig) => void;
   onSave: () => void;
   pending: boolean;
 }) {
   const set = (patch: Partial<ModelConfig>) => onChange({ ...value, ...patch });
 
-  // Models available per provider kind (active providers' synced/catalogued
-  // list) — fills the model dropdown when a provider is chosen.
-  const optionsQuery = useQuery<{ by_kind: Record<string, string[]> }, ApiError>({
-    queryKey: ["platform-settings", "model-options"],
-    queryFn: () => apiFetch("/admin/platform-settings/model-options"),
+  // Concrete providers by NAME (same source as the project/team/chat pickers) —
+  // not provider kinds. The platform default pins a specific provider row by
+  // provider_id, consistent with the rest of the model dropdowns.
+  const providersQuery = useQuery<ProviderOption[], ApiError>({
+    queryKey: ["agent-provider-options"],
+    queryFn: async () =>
+      (await apiFetch<{ providers: ProviderOption[] }>("/agents/provider-options")).providers,
     refetchOnWindowFocus: false,
   });
-  const byKind = optionsQuery.data?.by_kind ?? {};
-  const kindModels = value.provider ? (byKind[value.provider] ?? []) : [];
+  const providers = providersQuery.data ?? [];
+  const selected = providers.find((p) => p.id === value.provider_id);
+  const providerModels = selected?.models ?? [];
   // Keep the saved model selectable even if it's not (or no longer) in the
   // synced list, so editing another field never silently drops it.
   const modelOptions =
-    value.model && !kindModels.includes(value.model) ? [value.model, ...kindModels] : kindModels;
+    value.model && !providerModels.includes(value.model)
+      ? [value.model, ...providerModels]
+      : providerModels;
 
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
       <div className="space-y-1">
-        <Label className="text-xs">Proveedor (kind)</Label>
+        <Label className="text-xs">Proveedor</Label>
         <Select
-          value={value.provider ?? ""}
-          onChange={(e) => set({ provider: e.target.value, model: "" })}
+          value={value.provider_id ?? ""}
+          onChange={(e) => {
+            const p = providers.find((x) => x.id === e.target.value);
+            set({ provider_id: e.target.value || undefined, provider: p?.kind, model: "" });
+          }}
         >
           <option value="">—</option>
-          {providerKinds.map((k) => (
-            <option key={k} value={k}>
-              {k}
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.display_name} ({p.kind})
             </option>
           ))}
         </Select>
@@ -295,7 +313,7 @@ function ModelConfigControl({
               placeholder="qwen3-coder:480b"
             />
             <p className="text-muted-foreground text-[11px]">
-              {value.provider
+              {value.provider_id
                 ? "Sin modelos sincronizados — sincroniza el proveedor o escribe el nombre."
                 : "Elige un proveedor para ver sus modelos."}
             </p>
