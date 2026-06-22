@@ -212,6 +212,26 @@ async def test_run_agent_yields_typed_agent_run_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_agent_propagates_effort_to_options() -> None:
+    # Regression (córtex F0 precondición): run_agent no propagaba `effort` a
+    # _build_options (a diferencia de complete/stream), así que el razonamiento
+    # extendido (ADR 0070) se ignoraba en silencio en el modo agéntico.
+    fake_query = _make_query(_AssistantMessage(content=[_TextBlock(text="ok")]))
+    p = ClaudeAgentProvider(query_fn=fake_query, default_model="claude-sonnet-4-5")
+    captured: dict[str, Any] = {}
+    original = p._build_options
+
+    def _spy(**kwargs: Any):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return original(**kwargs)
+
+    p._build_options = _spy  # type: ignore[method-assign]
+    async for _ in p.run_agent("hola", effort="high"):
+        pass
+    assert captured.get("effort") == "high"
+
+
+@pytest.mark.asyncio
 async def test_flatten_collapses_chat_into_human_assistant_transcript() -> None:
     """The SDK's `query()` takes a string prompt; we collapse the chat
     history into a `Human:`/`Assistant:` transcript with system prepended."""

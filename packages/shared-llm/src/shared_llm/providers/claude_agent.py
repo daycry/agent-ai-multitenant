@@ -415,18 +415,22 @@ class ClaudeAgentProvider:
         system_prompt: str | None = None,
         allowed_tools: list[str] | None = None,
         max_turns: int = 10,
+        effort: str | None = None,
     ) -> AsyncIterator[AgentRunEvent]:
         """Multi-turn SDK run; yields typed events.
 
         Use when you want the SDK's full capabilities (tool use, MCP,
         sub-agents) but don't want the rest of the codebase to import
-        `claude-agent-sdk` types.
+        `claude-agent-sdk` types. ``effort`` enables extended thinking
+        (ADR 0070) — like ``complete``/``stream``, it must reach
+        ``_build_options`` or it is silently ignored.
         """
         options = self._build_options(
             model=model,
             system=system_prompt,
             allowed_tools=allowed_tools,
             max_turns=max_turns,
+            effort=effort,
         )
         query_fn = self._query()
         async for msg in query_fn(prompt=prompt, options=options):
