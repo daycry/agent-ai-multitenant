@@ -56,19 +56,40 @@ _PLAN_ONLY_RULE = (
     "de responder."
 )
 
+# Convención ÚNICA de línea de tarea, compartida por las contribuciones de los
+# especialistas y por la síntesis, para que TODO el chat se vea igual (prioridad
+# de UX del operador). Una sola fuente de verdad evita formatos divergentes.
+_TASK_LINE = (
+    "- **<título de la tarea>** — _depende de_: <tareas previas o «ninguna»>; "
+    "_criterio de aceptación_: <resultado observable>"
+)
+
 # Plantilla de salida del PLAN (la síntesis): fuerza estructura, no prosa con código.
 _PLAN_TEMPLATE = (
-    "Estructura tu respuesta EXACTAMENTE así (markdown, SIN bloques de código):\n"
+    "FORMATO OBLIGATORIO (respétalo al pie de la letra; markdown, SIN bloques de código):\n"
     "## Plan\n"
     "_(1-2 frases de alcance: qué se construye y qué queda fuera)_\n\n"
     "### Fase 1 — <nombre>\n"
-    "- **<título de tarea>** — _depende de_: <tareas previas o «ninguna»>; "
-    "_criterio de aceptación_: <resultado observable>\n"
+    f"{_TASK_LINE}\n"
     "- … (más tareas)\n\n"
     "### Fase 2 — <nombre>\n"
     "- …\n\n"
     "Repite por fase. Tareas accionables y atómicas. Si falta información para planificar, "
     "termina con UNA pregunta concreta al usuario en vez de inventar."
+)
+
+# Plantilla de la CONTRIBUCIÓN de un especialista. El encabezado de rol (p.ej.
+# "**🏗️ Arquitecto**") lo antepone el responder, así que el cuerpo NO debe
+# repetirlo. Mismo esqueleto + misma convención de tarea para TODOS los
+# especialistas → salida uniforme y escaneable.
+_CONTRIBUTION_TEMPLATE = (
+    "FORMATO OBLIGATORIO (respétalo al pie de la letra; markdown, SIN bloques de código, "
+    "SIN saludos y SIN repetir tu nombre/rol —se añade automáticamente):\n"
+    "**Objetivo:** _(1 frase: tu foco desde este rol en este plan)_\n\n"
+    "**Tareas propuestas:**\n"
+    f"{_TASK_LINE}\n"
+    "- … (entre 2 y 5 tareas atómicas)\n\n"
+    "**Riesgos y dependencias:** _(1-3 viñetas; «ninguno» si no aplica)_"
 )
 
 
@@ -319,9 +340,8 @@ class LLMPlanningModel:
         system = (
             f"Eres el especialista «{role.value}» del equipo, en una sesión de "
             "PLANIFICACIÓN. " + _PLAN_ONLY_RULE + " Aporta tu análisis técnico para el PLAN "
-            "de forma CONCISA y accionable: qué tareas harían falta desde tu rol, en qué "
-            "orden, dependencias, riesgos y criterios de aceptación. NO escribas código ni "
-            "implementes. No te repitas ni saludes."
+            "de forma CONCISA y accionable desde tu rol. NO escribas código ni implementes. "
+            "No te repitas ni saludes.\n\n" + _CONTRIBUTION_TEMPLATE
         )
         messages = [Message(role="system", content=system)]
         note = _context_note(state)

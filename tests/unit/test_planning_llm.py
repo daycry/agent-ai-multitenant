@@ -167,6 +167,53 @@ def test_pm_synthesise_includes_contributions_and_returns_text() -> None:
     assert "tests e2e" in joined
 
 
+def test_specialist_speak_enforces_shared_friendly_template() -> None:
+    # Regression: specialists rendered in wildly different shapes (one "Objetivo:",
+    # another "PLAN DE IMPLEMENTACIÓN"). Every specialist must follow ONE skeleton.
+    seen: list[list[Message]] = []
+    provider = _FakeProvider("ok", seen=seen)
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    model.specialist_speak(
+        PlanningRole.BACKEND_DEV,
+        _state([{"role": "user", "content": "x"}], {PlanningRole.BACKEND_DEV}),
+    )
+    system = " ".join(m.content for m in seen[-1] if m.role == "system")
+    assert "FORMATO OBLIGATORIO" in system
+    assert "**Objetivo:**" in system
+    assert "**Tareas propuestas:**" in system
+    assert "criterio de aceptación" in system
+
+
+def test_synthesis_enforces_friendly_plan_template() -> None:
+    # The synthesis must visibly follow the friendly plan layout, not free prose.
+    seen: list[list[Message]] = []
+    provider = _FakeProvider("## Plan", seen=seen)
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    model.pm_synthesise(_state([{"role": "user", "content": "app"}], set()), [])
+    system = " ".join(m.content for m in seen[-1] if m.role == "system")
+    assert "FORMATO OBLIGATORIO" in system
+    assert "## Plan" in system
+    assert "### Fase" in system
+
+
+def test_specialist_and_synthesis_share_task_line_convention() -> None:
+    # The SAME task-line convention drives specialist contributions and the final
+    # plan, so the whole conversation renders with one consistent, scannable look.
+    seen_c: list[list[Message]] = []
+    seen_s: list[list[Message]] = []
+    LLMPlanningModel(provider=_FakeProvider("c", seen=seen_c)).specialist_speak(  # type: ignore[arg-type]
+        PlanningRole.QA, _state([{"role": "user", "content": "x"}], {PlanningRole.QA})
+    )
+    LLMPlanningModel(provider=_FakeProvider("s", seen=seen_s)).pm_synthesise(  # type: ignore[arg-type]
+        _state([{"role": "user", "content": "x"}], set()), []
+    )
+    contrib_sys = " ".join(m.content for m in seen_c[-1] if m.role == "system")
+    synth_sys = " ".join(m.content for m in seen_s[-1] if m.role == "system")
+    for marker in ("_depende de_", "_criterio de aceptación_"):
+        assert marker in contrib_sys
+        assert marker in synth_sys
+
+
 def test_normalise_plan_draft_fills_ids_and_drops_bad_deps() -> None:
     out = _normalise_plan_draft(
         {
