@@ -309,8 +309,14 @@ async def finalize_execution(
     execution.model_call_count = int(usage.get("model_calls", 0))
     # Only a terminal status completes the run — a run parked in
     # `awaiting_human_approval` has not finished (task_02_33). `cancelled` is
-    # terminal too (preserve_cancel keeps the row's existing cancelled status).
-    terminal = {ExecutionStatus.DONE, ExecutionStatus.ABORTED, ExecutionStatus.FAILED}
+    # terminal too, whether it arrives as the new result (cooperative cancel from
+    # the worker) or was already on the row (preserve_cancel, late finalisation).
+    terminal = {
+        ExecutionStatus.DONE,
+        ExecutionStatus.ABORTED,
+        ExecutionStatus.FAILED,
+        ExecutionStatus.CANCELLED,
+    }
     is_terminal = preserve_cancel or result.status in terminal
     execution.completed_at = datetime.now(UTC) if is_terminal else None
     await session.flush()

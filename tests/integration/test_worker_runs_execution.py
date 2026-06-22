@@ -12,6 +12,8 @@ PostgreSQL and the test Redis. They skip cleanly when Docker is absent.
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from uuid import UUID, uuid4
 
 import pytest
@@ -24,6 +26,7 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from workers.config import Settings
+from workers.container import ContainerResult
 from workers.execution import ExecutionRequest, conduct_execution
 
 import docker
@@ -31,6 +34,36 @@ import docker
 from ._docker_helpers import docker_client, requires_docker
 
 pytestmark = [pytest.mark.integration, requires_docker]
+
+
+class _BlockingRunner:
+    """Fake AgentContainerRunner whose run_streamed blocks (as if a container were
+    running) until kill_by_label is called — lets the cooperative-cancel poll be
+    tested without Docker."""
+
+    def __init__(self) -> None:
+        self._kill = threading.Event()
+        self.killed_ids: list[str] = []
+
+    def run_streamed(
+        self, spec: object, on_line: object, *, timeout: object = None
+    ) -> ContainerResult:
+        self._kill.wait(timeout=10)
+        return ContainerResult(
+            container_id="fake",
+            exit_code=137,
+            logs="",
+            timed_out=False,
+            host_config={},
+            config_env=(),
+            networks=(),
+        )
+
+    def kill_by_label(self, execution_id: str) -> int:
+        self.killed_ids.append(execution_id)
+        self._kill.set()
+        return 1
+
 
 _IMAGE = "agent-runtime:v1"
 
@@ -266,6 +299,61 @@ async def test_unresolvable_model_fails_fast_without_launching_a_container(
         # El stream recibió el error (lo que el WS de la UI tailea).
         entries = await redis.xrange(execution_stream_key(outcome.execution_id))
         assert any("execution.error" in str(entry) for entry in entries)
+    finally:
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_conduct_execution_cancelled_by_operator_flag(
+    _migrated: None, admin_database_url: str, test_redis_url: str
+) -> None:
+    """Cooperative cancellation (slice 2): while the container 'runs', an operator
+    sets cancel_requested_at; the poll kills the container by label and the run is
+    finalised as `cancelled` (terminal, completed_at set). No Docker — a fake runner
+    blocks until killed."""
+    engine = create_async_engine(admin_database_url)
+    redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed_task(sm)
+        fake = _BlockingRunner()
+
+        async def _cancel_once_running() -> None:
+            for _ in range(200):  # up to ~4s
+                await asyncio.sleep(0.02)
+                async with sm() as s:
+                    rows = await list_executions_for_task(s, ids["task"])
+                    if rows and rows[0].status == ExecutionStatus.RUNNING:
+                        await s.execute(
+                            text(
+                                "UPDATE executions SET cancel_requested_at = now()" " WHERE id = :i"
+                            ),
+                            {"i": rows[0].id},
+                        )
+                        await s.commit()
+                        return
+
+        canceller = asyncio.create_task(_cancel_once_running())
+        outcome = await conduct_execution(
+            _request(ids, model=_ACT_THEN_FINISH),
+            settings=Settings(),
+            sessionmaker=sm,
+            redis=redis,
+            runner=fake,
+            cancel_poll_interval_s=0.05,
+        )
+        await canceller
+
+        assert outcome.status == ExecutionStatus.CANCELLED
+        assert fake.killed_ids == [outcome.execution_id]  # the container was killed by label
+
+        async with sm() as s:
+            rows = await list_executions_for_task(s, ids["task"])
+        assert len(rows) == 1
+        assert rows[0].status == ExecutionStatus.CANCELLED
+        assert rows[0].abort_code == "cancelled"
+        assert rows[0].completed_at is not None  # cancelled is terminal
     finally:
         await redis.aclose()
         await engine.dispose()

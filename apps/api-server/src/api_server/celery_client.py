@@ -144,21 +144,18 @@ async def enqueue_open_plan_pr(project_id: UUID, plan_id: UUID, *, title: str, b
 
 
 async def revoke_execution_job(job_id: str) -> bool:
-    """Revoke a running/queued execution Celery job (cooperative cancellation).
+    """Revoke a *queued* execution Celery job (cooperative cancellation).
 
-    ``terminate=True`` kills the worker child if the job is already running (the
-    worker then sees the ``cancel_requested_at`` flag to finalise as ``cancelled``)
-    and drops it if still queued. Best-effort: the DB flag is the source of truth,
-    so a broker failure is logged and swallowed — the worker still honours the flag
-    cooperatively. ``control.revoke`` does blocking socket I/O, so it runs off the
-    event loop. Returns True iff the revoke was published.
+    Dropped before it starts if still queued. NO ``terminate``: hard-killing the
+    worker child of an already-running job would orphan its agent container (which
+    is what actually burns LLM budget). A running job is stopped by the worker's
+    cooperative poll of ``cancel_requested_at`` (it kills the container and
+    finalises as ``cancelled``). Best-effort: the DB flag is the source of truth,
+    so a broker failure is logged and swallowed. ``control.revoke`` does blocking
+    socket I/O, so it runs off the event loop. Returns True iff revoke was published.
     """
     try:
-        await asyncio.to_thread(
-            get_celery_client().control.revoke,
-            job_id,
-            terminate=True,
-        )
+        await asyncio.to_thread(get_celery_client().control.revoke, job_id)
     except Exception as exc:
         _log.warning("execution.revoke_failed", job_id=job_id, error=str(exc))
         return False

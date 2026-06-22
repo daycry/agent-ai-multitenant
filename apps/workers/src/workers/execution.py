@@ -19,6 +19,7 @@ tests can point them at the throwaway test stack; the Celery task
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -54,6 +55,10 @@ _log = structlog.get_logger("workers.execution")
 # mirrors agent_runtime.state.STATUS_AWAITING_APPROVAL and
 # ExecutionStatus.AWAITING_HUMAN_APPROVAL.
 _AWAITING_APPROVAL = "awaiting_human_approval"
+
+# How often the run polls `cancel_requested_at` while the container runs, to
+# kill it cooperatively on an operator cancel (POST /executions/{id}/cancel).
+_CANCEL_POLL_INTERVAL_S = 3.0
 
 # A zeroed usage roll-up — used when a run produces no result line
 # (the container crashed or timed out before `execution.finished`).
@@ -434,13 +439,15 @@ def _default_vault_store() -> Any:
     return get_provider_vault_store()
 
 
-async def conduct_execution(  # noqa: PLR0915 - tramos lineales (seed/run/finalize/publish)
+async def conduct_execution(  # noqa: PLR0915 - tramos lineales + poll de cancelación
     request: ExecutionRequest,
     *,
     settings: Settings,
     sessionmaker: async_sessionmaker[AsyncSession],
     redis: Redis,
     vault_store: Any | None = None,
+    runner: AgentContainerRunner | None = None,
+    cancel_poll_interval_s: float = _CANCEL_POLL_INTERVAL_S,
 ) -> ExecutionOutcome:
     """Run one task end to end: container → Redis stream → `executions` row."""
     task_id = UUID(request.task_id)
@@ -565,8 +572,32 @@ async def conduct_execution(  # noqa: PLR0915 - tramos lineales (seed/run/finali
             ),
             labels={"com.agentic-platform.execution-id": exec_id},
         )
-        runner = AgentContainerRunner(settings)
-        container_result = await asyncio.to_thread(runner.run_streamed, container_spec, on_line)
+        active_runner = runner or AgentContainerRunner(settings)
+        cancel_seen = False
+
+        async def _watch_for_cancel() -> None:
+            """Poll ``cancel_requested_at`` while the container runs; on an operator
+            cancel, kill the container (the LLM-cost source) so ``run_streamed`` exits
+            and the run finalises as ``cancelled``."""
+            nonlocal cancel_seen
+            while True:
+                await asyncio.sleep(cancel_poll_interval_s)
+                async with sessionmaker() as cancel_session:
+                    ex = await get_execution(cancel_session, execution_id)
+                if ex is not None and ex.cancel_requested_at is not None:
+                    cancel_seen = True
+                    await asyncio.to_thread(active_runner.kill_by_label, exec_id)
+                    return
+
+        watcher = asyncio.create_task(_watch_for_cancel())
+        try:
+            container_result = await asyncio.to_thread(
+                active_runner.run_streamed, container_spec, on_line
+            )
+        finally:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
         await queue.put(None)
         await drainer
 
@@ -577,6 +608,17 @@ async def conduct_execution(  # noqa: PLR0915 - tramos lineales (seed/run/finali
             exit_code=container_result.exit_code,
             runtime_error=runtime_error,
         )
+        if cancel_seen:
+            # Operator cancel: keep the partial steps/usage for the audit trail but
+            # mark the run cancelled (finalize_execution treats it as terminal).
+            result = _RuntimeResult(
+                status="cancelled",
+                abort_code="cancelled",
+                output="cancelled by operator",
+                iterations=result.iterations,
+                steps=result.steps,
+                usage=result.usage,
+            )
         approval = final_result.get("approval") if final_result else None
     task_event: tuple[Any, str, str] | None = None
     async with sessionmaker() as session, session.begin():
