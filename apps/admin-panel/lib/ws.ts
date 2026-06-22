@@ -47,6 +47,18 @@ export function wsUrl(path: string): string {
   return `${base}${path}${sep}token=${encodeURIComponent(token)}`;
 }
 
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 10_000;
+
+/**
+ * Capped exponential backoff (ms) for WebSocket reconnect attempts:
+ * 500 → 1000 → 2000 → … capped at 10s. A negative attempt counts as the first.
+ */
+export function reconnectDelayMs(attempt: number): number {
+  const exp = RECONNECT_BASE_MS * 2 ** Math.max(0, attempt);
+  return Math.min(exp, RECONNECT_MAX_MS);
+}
+
 /**
  * Subscribe to a WebSocket for the lifetime of the component.
  *
@@ -54,6 +66,11 @@ export function wsUrl(path: string): string {
  * callback is always used (kept in a ref) so the socket is not torn
  * down and rebuilt when the handler identity changes — only `url` does
  * that. A null `url` means "do not connect".
+ *
+ * Auto-reconnects with capped exponential backoff: a dropped socket (proxy
+ * idle-timeout, sleep/wake, transient network blip) recovers on its own,
+ * so a long-running turn (a planning round spans minutes) keeps streaming
+ * live instead of going silent until a manual reload.
  */
 export function useWebSocket(url: string | null, onMessage: (data: unknown) => void): void {
   const handlerRef = useRef(onMessage);
@@ -62,15 +79,35 @@ export function useWebSocket(url: string | null, onMessage: (data: unknown) => v
   useEffect(() => {
     if (!url || typeof window === "undefined") return;
 
-    const socket = new WebSocket(url);
-    socket.onmessage = (event) => {
-      try {
-        handlerRef.current(JSON.parse(event.data as string));
-      } catch {
-        // A non-JSON frame is not something the UI can use — drop it.
-      }
+    let socket: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+    let disposed = false; // set on cleanup so a pending reconnect never fires
+
+    const connect = () => {
+      socket = new WebSocket(url);
+      socket.onopen = () => {
+        attempt = 0; // a successful connection resets the backoff
+      };
+      socket.onmessage = (event) => {
+        try {
+          handlerRef.current(JSON.parse(event.data as string));
+        } catch {
+          // A non-JSON frame is not something the UI can use — drop it.
+        }
+      };
+      socket.onclose = () => {
+        if (disposed) return; // unmounted / url changed → don't resurrect
+        reconnectTimer = setTimeout(connect, reconnectDelayMs(attempt++));
+      };
     };
 
-    return () => socket.close();
+    connect();
+
+    return () => {
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      socket?.close();
+    };
   }, [url]);
 }

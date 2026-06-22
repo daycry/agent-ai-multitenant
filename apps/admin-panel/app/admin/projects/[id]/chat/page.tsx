@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ApiError, apiFetch } from "@/lib/api";
+import { chatRefetchInterval, isReplyInFlight } from "@/lib/chat-feed";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { cn } from "@/lib/utils";
 import { useWebSocket, wsUrl } from "@/lib/ws";
@@ -243,16 +244,14 @@ export default function ProjectChatPage() {
     queryFn: () => apiFetch<Message[]>(`/conversations/${activeConversationId}/messages`),
     refetchOnWindowFocus: false,
     enabled: Boolean(activeConversationId),
-    // Safety net for live updates: while the last message is the user's, the team is still
-    // replying. The WebSocket below pushes each step in real time, but if it never connected
-    // or got dropped (proxy idle-timeout, laptop sleep/wake), poll every few seconds so the
-    // reply still lands without a manual reload. Stops the moment an agent/system reply
-    // arrives (last message is no longer the user's) → no idle polling.
-    refetchInterval: (query) => {
-      const data = query.state.data as Message[] | undefined;
-      const awaiting = !!data && data.length > 0 && data[data.length - 1].author_kind === "user";
-      return awaiting ? 3000 : false;
-    },
+    // Safety net for live updates: the WebSocket below pushes each step in real time, but if
+    // it never connected or got dropped (proxy idle-timeout, laptop sleep/wake), poll while the
+    // turn is still in flight so the reply lands without a manual reload. A PLANNING turn emits
+    // many messages over minutes (PM → specialists → synthesis), so `isReplyInFlight` keeps
+    // polling for the whole turn — not just until the first agent message — then stops (no idle
+    // polling). See lib/chat-feed.
+    refetchInterval: (query) =>
+      chatRefetchInterval(query.state.data as Message[] | undefined, Date.now()),
   });
 
   // POST a new user message. The composer below uses this; the
@@ -413,9 +412,9 @@ export default function ProjectChatPage() {
         <CardContent>
           <MessageFeed messages={messagesQuery.data ?? []} loading={messagesQuery.isLoading} />
           {(() => {
-            const msgs = messagesQuery.data ?? [];
-            // El equipo aún no ha contestado al último mensaje del usuario → "pensando".
-            const awaitingReply = msgs.length > 0 && msgs[msgs.length - 1].author_kind === "user";
+            // "Pensando" mientras el turno sigue en vuelo: en planning abarca toda la ronda
+            // (PM → especialistas → síntesis), no solo hasta el primer mensaje del equipo.
+            const awaitingReply = isReplyInFlight(messagesQuery.data, Date.now());
             return awaitingReply ? (
               <p
                 className="text-muted-foreground mt-3 animate-pulse text-sm"

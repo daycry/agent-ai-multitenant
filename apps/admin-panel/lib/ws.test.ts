@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveWsBase } from "@/lib/ws";
+import { reconnectDelayMs, resolveWsBase } from "@/lib/ws";
 
 /**
  * prod-01 / prod-09 — single-origin behind the Caddy reverse proxy. The
@@ -33,5 +33,22 @@ describe("resolveWsBase", () => {
 
   it("normalises a relative base without a leading slash", () => {
     expect(resolveWsBase("api", { protocol: "http:", host: "h" })).toBe("ws://h/api");
+  });
+});
+
+describe("reconnectDelayMs", () => {
+  it("backs off exponentially from a small base", () => {
+    expect(reconnectDelayMs(0)).toBe(500);
+    expect(reconnectDelayMs(1)).toBe(1000);
+    expect(reconnectDelayMs(2)).toBe(2000);
+  });
+
+  it("caps the delay so reconnects never wait too long", () => {
+    expect(reconnectDelayMs(10)).toBe(10_000);
+    expect(reconnectDelayMs(100)).toBe(10_000);
+  });
+
+  it("treats negative attempts as the first attempt", () => {
+    expect(reconnectDelayMs(-5)).toBe(500);
   });
 });
