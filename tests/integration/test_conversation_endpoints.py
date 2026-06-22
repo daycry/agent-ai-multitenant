@@ -432,6 +432,110 @@ async def test_clear_messages_cross_tenant_is_404(configured_app, migrations_pg_
 
 
 @pytest.mark.asyncio
+async def test_clear_messages_also_deletes_redis_stream(
+    configured_app, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    """Vaciar el chat borra también su stream Redis (conv:{id}): sin datos
+    huérfanos que reaparezcan como mensajes fantasma al reconectar el WebSocket."""
+    from api_server.events import (
+        EVENT_MESSAGE_CREATED,
+        conversation_stream_key,
+        publish_conversation_event,
+    )
+    from redis.asyncio import Redis
+
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        conv = await client.post(
+            f"/projects/{seeded['project_a']}/conversations",
+            json={"title": "Chat"},
+            headers=headers,
+        )
+        conv_id = conv.json()["id"]
+
+        redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
+        try:
+            await publish_conversation_event(
+                redis,
+                conv_id,
+                event_type=EVENT_MESSAGE_CREATED,
+                payload={
+                    "message_id": str(uuid4()),
+                    "author_kind": "user",
+                    "content": "hola",
+                    "mode": "planning",
+                    "attachments": [],
+                    "is_summary": False,
+                },
+            )
+            assert await redis.xlen(conversation_stream_key(conv_id)) == 1
+
+            cleared = await client.delete(f"/conversations/{conv_id}/messages", headers=headers)
+            assert cleared.status_code == 204, cleared.text
+
+            # Stream gone → no orphan events linger in Redis.
+            assert await redis.exists(conversation_stream_key(conv_id)) == 0
+        finally:
+            await redis.aclose()
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_also_deletes_redis_stream(
+    configured_app, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    """Eliminar una conversación borra también su stream Redis (conv:{id})."""
+    from api_server.events import (
+        EVENT_MESSAGE_CREATED,
+        conversation_stream_key,
+        publish_conversation_event,
+    )
+    from redis.asyncio import Redis
+
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        conv = await client.post(
+            f"/projects/{seeded['project_a']}/conversations",
+            json={"title": "Chat"},
+            headers=headers,
+        )
+        conv_id = conv.json()["id"]
+
+        redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
+        try:
+            await publish_conversation_event(
+                redis,
+                conv_id,
+                event_type=EVENT_MESSAGE_CREATED,
+                payload={
+                    "message_id": str(uuid4()),
+                    "author_kind": "user",
+                    "content": "hola",
+                    "mode": "planning",
+                    "attachments": [],
+                    "is_summary": False,
+                },
+            )
+            assert await redis.xlen(conversation_stream_key(conv_id)) == 1
+
+            deleted = await client.delete(f"/conversations/{conv_id}", headers=headers)
+            assert deleted.status_code == 204, deleted.text
+
+            assert await redis.exists(conversation_stream_key(conv_id)) == 0
+        finally:
+            await redis.aclose()
+
+
+@pytest.mark.asyncio
 async def test_post_message_rejects_forged_agent_message(
     configured_app, migrations_pg_dsn: str
 ) -> None:

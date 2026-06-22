@@ -157,6 +157,16 @@ async def publish_conversation_event(
         _log.warning("api_server.conversation_event_publish_failed", error=str(exc))
 
 
+async def delete_conversation_stream(redis: Redis, conversation_id: str) -> None:
+    """Drop a conversation's live stream (best-effort) so clearing or deleting a
+    chat leaves NO orphan events in Redis — otherwise a later WebSocket connect
+    would replay messages that no longer exist as ghost entries."""
+    try:
+        await redis.delete(conversation_stream_key(conversation_id))
+    except Exception as exc:  # cleanup is best-effort, never fail the caller
+        _log.warning("api_server.conversation_stream_delete_failed", error=str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Per-document live stream (Plan 04 task_04_15) — KB ingestion progress.
 #

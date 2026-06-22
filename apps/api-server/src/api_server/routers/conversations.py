@@ -48,6 +48,7 @@ from api_server.db.domain import Project
 from api_server.events import (
     EVENT_CONVERSATION_MODE_CHANGED,
     EVENT_MESSAGE_CREATED,
+    delete_conversation_stream,
     publish_conversation_event,
 )
 from api_server.llm_providers.vault import LLMProviderVaultStore
@@ -252,6 +253,7 @@ async def delete_conversation(
     conversation_id: UUID,
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
+    redis: Redis = Depends(get_redis),
 ) -> None:
     require_tenant_id(principal)
     conv = await get_writable_or_404(
@@ -262,6 +264,8 @@ async def delete_conversation(
         not_found_detail="conversation not found",
     )
     await soft_delete(session, conv)
+    # Drop the live stream too — no orphan events left behind in Redis.
+    await delete_conversation_stream(redis, str(conv.id))
 
 
 @conversations_router.delete("/{conversation_id}/messages", status_code=status.HTTP_204_NO_CONTENT)
@@ -269,6 +273,7 @@ async def clear_messages(
     conversation_id: UUID,
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
+    redis: Redis = Depends(get_redis),
 ) -> None:
     """Clear ALL messages of a conversation, keeping the conversation itself.
 
@@ -287,6 +292,8 @@ async def clear_messages(
         not_found_detail="conversation not found",
     )
     await session.execute(delete(Message).where(Message.conversation_id == conv.id))
+    # Clear the live stream too so cleared messages can't reappear as Redis ghosts.
+    await delete_conversation_stream(redis, str(conv.id))
 
 
 # ===========================================================================
