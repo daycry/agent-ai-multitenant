@@ -14,10 +14,12 @@
  *   - paragraphs with inline `**bold**`
  *
  * Anything else falls through as a plain paragraph with newlines
- * preserved. The chat feed already trusts agent content (it goes
- * through the backend, never user-uploaded HTML), so we don't need
- * an HTML sanitiser here — but we still escape inline text via
- * React's default text rendering (we never use dangerouslySetInnerHTML).
+ * preserved. We never use dangerouslySetInnerHTML, so inline text is
+ * escaped by React's default text rendering. The ONE active sink is the
+ * `[text](url)` link: agent content is LLM output (influenceable via the
+ * composer / @-mentions), NOT trusted, so link hrefs are validated
+ * against a scheme allowlist (`isSafeHref`) — `javascript:`/`data:` links
+ * degrade to plain text instead of becoming a clickable XSS vector.
  */
 
 import React from "react";
@@ -27,13 +29,25 @@ interface RenderedBlock {
   node: React.ReactNode;
 }
 
-const TABLE_HEADER_RE = /^\|.*\|\s*$/;
-// `-` placed last in the character class so it's a literal hyphen
-// (writing `:-|` would have been parsed as the ASCII range `:`→`|`
-// which excludes the actual `-` character).
-const TABLE_DIVIDER_RE = /^\|[\s:|-]+\|\s*$/;
-const ORDERED_LIST_RE = /^\d+\.\s+/;
-const HEADING_RE = /^(#{2,4})\s+(.*)$/;
+/**
+ * True when `raw` is a link href safe to render as a clickable `<a>`.
+ *
+ * Allowlist: `http(s):`, `mailto:`, and scheme-less (relative) URLs.
+ * Everything with another scheme — `javascript:`, `data:`, `vbscript:`,
+ * `file:`, … — is rejected. Browsers ignore leading/embedded whitespace
+ * and control chars when resolving a scheme, so we drop those first
+ * (defeats `java\tscript:` / ` javascript:` / `JavaScript:`).
+ */
+export function isSafeHref(raw: string): boolean {
+  let stripped = "";
+  for (const ch of raw) {
+    const code = ch.charCodeAt(0);
+    if (code > 0x20 && code !== 0x7f) stripped += ch; // drop space + ASCII control chars
+  }
+  const scheme = /^([a-z][a-z0-9+.-]*):/.exec(stripped.toLowerCase());
+  if (!scheme) return true; // relative / anchor / scheme-less → safe
+  return scheme[1] === "http" || scheme[1] === "https" || scheme[1] === "mailto";
+}
 
 // Single regex that captures the five inline patterns in priority
 // order. The order matters: `**bold**` must beat the `*italic*` rule
@@ -41,6 +55,14 @@ const HEADING_RE = /^(#{2,4})\s+(.*)$/;
 // is matched first so its content escapes the other patterns.
 const INLINE_RE =
   /(`[^`\n]+`)|(\[[^\]\n]+\]\([^)\n]+\))|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*|_[^_\n]+_)|(~~[^~\n]+~~)/g;
+
+const TABLE_HEADER_RE = /^\|.*\|\s*$/;
+// `-` placed last in the character class so it's a literal hyphen
+// (writing `:-|` would have been parsed as the ASCII range `:`→`|`
+// which excludes the actual `-` character).
+const TABLE_DIVIDER_RE = /^\|[\s:|-]+\|\s*$/;
+const ORDERED_LIST_RE = /^\d+\.\s+/;
+const HEADING_RE = /^(#{2,4})\s+(.*)$/;
 
 function inline(text: string): React.ReactNode {
   const out: React.ReactNode[] = [];
@@ -65,16 +87,21 @@ function inline(text: string): React.ReactNode {
       const labelEnd = token.indexOf("](");
       const label = token.slice(1, labelEnd);
       const href = token.slice(labelEnd + 2, -1);
+      // Unsafe schemes (javascript:/data:/…) degrade to plain text — never a clickable link.
       out.push(
-        <a
-          key={key++}
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-primary underline-offset-2 hover:underline"
-        >
-          {label}
-        </a>,
+        isSafeHref(href) ? (
+          <a
+            key={key++}
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary underline-offset-2 hover:underline"
+          >
+            {label}
+          </a>
+        ) : (
+          <React.Fragment key={key++}>{label}</React.Fragment>
+        ),
       );
     } else if (match[3]) {
       // **bold**
