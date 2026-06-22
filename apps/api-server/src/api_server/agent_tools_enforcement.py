@@ -173,7 +173,17 @@ def _tool_to_spec(tool: Tool) -> dict[str, Any]:
     elif impl == "python_function":
         if tool.implementation_ref:
             config["code"] = tool.implementation_ref
-    return {"name": tool.name, "implementation_type": impl, "config": config}
+    # input_schema + description are REQUIRED for the LLM to be told the tool
+    # exists: the worker's build_model_tool_schemas skips any custom tool whose
+    # spec carries no input_schema, so omitting them left every custom tool
+    # invisible to the model (and thus uncallable).
+    return {
+        "name": tool.name,
+        "implementation_type": impl,
+        "config": config,
+        "input_schema": tool.input_schema,
+        "description": tool.description,
+    }
 
 
 def combine_tool_allowlists(
