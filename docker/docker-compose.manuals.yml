@@ -218,9 +218,55 @@ services:
     networks: [agentic-net, agentic-agents, agentic-docker]
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # vault — PERSISTENTE (Camino B): deshace el `-dev` de docker-compose.dev.yml
+  # y usa el backend de FICHERO del base (config.hcl sobre el volumen vault_data),
+  # así los secretos SOBREVIVEN a reinicios. El `vault-unsealer` de abajo lo
+  # inicializa/des-sella solo. (El env VAULT_DEV_* del overlay dev es inocuo en
+  # modo server; solo el `command` decide el modo.)
+  # ---------------------------------------------------------------------------
+  vault:
+    command: ["server"]
+    # No tocamos `volumes` (el merge con el `!reset` de dev.yml es problemático y
+    # tira el bind-mount). En su lugar inyectamos la config de servidor (backend de
+    # FICHERO sobre el volumen vault_data) por VAULT_LOCAL_CONFIG: el entrypoint del
+    # contenedor la escribe en /vault/config/ y `vault server` la carga. Equivale a
+    # docker/vault/config.hcl pero sin pelearse con el override de volúmenes.
+    environment:
+      VAULT_LOCAL_CONFIG: >-
+        {"storage":{"file":{"path":"/vault/file"}},
+        "listener":{"tcp":{"address":"0.0.0.0:8200","tls_disable":true}},
+        "api_addr":"http://0.0.0.0:8200","cluster_addr":"http://0.0.0.0:8201",
+        "ui":true,"disable_mlock":false}
+
+  # ---------------------------------------------------------------------------
+  # vault-unsealer — compañero que auto-inicializa + des-sella Vault en cada
+  # arranque (sobrevive reinicios sin pasos manuales) y crea un token FIJO con el
+  # id que las apps ya usan (dev-root-token), para no tocar su env. Usa solo el
+  # CLI de vault contra http://vault:8200 (no arranca servidor). Las unseal keys
+  # viven en el volumen vault_init (trade-off dev consciente — ver gotcha).
+  # ---------------------------------------------------------------------------
+  vault-unsealer:
+    image: hashicorp/vault:1.17
+    entrypoint: ["sh", "/vault/auto-unseal.sh"]
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_FIXED_TOKEN: ${API_SERVER_VAULT_TOKEN:-dev-root-token}
+    volumes:
+      - ./vault/auto-unseal.sh:/vault/auto-unseal.sh:ro
+      - vault_init:/vault/init
+    depends_on:
+      vault: { condition: service_started }
+    networks: [agentic-net]
+    restart: unless-stopped
+
 volumes:
   agentic_worktrees:
     name: agentic_worktrees
+  # Unseal keys + root token del Vault persistente (Camino B). Volumen docker,
+  # NO en el repo. Borrarlo obliga a re-inicializar Vault (perderías los secretos).
+  vault_init:
+    name: agentic_vault_init
 
 networks:
   # Red interna dedicada SOLO al tráfico workers ↔ docker-socket-proxy (ADR 0060).
