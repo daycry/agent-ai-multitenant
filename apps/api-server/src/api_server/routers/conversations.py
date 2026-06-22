@@ -25,7 +25,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -262,6 +262,31 @@ async def delete_conversation(
         not_found_detail="conversation not found",
     )
     await soft_delete(session, conv)
+
+
+@conversations_router.delete("/{conversation_id}/messages", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_messages(
+    conversation_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> None:
+    """Clear ALL messages of a conversation, keeping the conversation itself.
+
+    Lets the operator empty an accumulated chat so it doesn't pile up and the team
+    starts the next turn with FRESH context (the responder loads the conversation's
+    recent messages as history). Messages have no soft-delete, so this hard-deletes
+    them. RLS-scoped: ``get_writable_or_404`` rejects a conversation the caller can't
+    see (cross-tenant → 404), and the delete is bounded to that conversation.
+    """
+    require_tenant_id(principal)
+    conv = await get_writable_or_404(
+        session,
+        Conversation,
+        conversation_id,
+        principal,
+        not_found_detail="conversation not found",
+    )
+    await session.execute(delete(Message).where(Message.conversation_id == conv.id))
 
 
 # ===========================================================================

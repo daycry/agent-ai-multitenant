@@ -270,6 +270,16 @@ export default function ProjectChatPage() {
     },
   });
 
+  // Empty the chat: clears the conversation's messages (keeps the conversation) so
+  // history doesn't pile up and the next turn starts with fresh context.
+  const clearMessages = useMutation({
+    mutationFn: async (conversationId: string) =>
+      apiFetch<void>(`/conversations/${conversationId}/messages`, { method: "DELETE" }),
+    onSuccess: (_result, conversationId) => {
+      queryClient.setQueryData<Message[]>(["messages", conversationId], []);
+    },
+  });
+
   // Live updates: the team's reply streams in message-by-message over the
   // per-conversation WebSocket (the responder publishes each step). Without this
   // the feed only refreshed on reload — the chat looked "hung" while waiting.
@@ -365,16 +375,35 @@ export default function ProjectChatPage() {
         description={activeConversation?.title ?? "Conversación con el equipo del proyecto"}
         actions={
           activeConversation ? (
-            <ChatModeSelector
-              current={activeConversation.current_mode}
-              pending={updateMode.isPending}
-              onChange={(next) =>
-                updateMode.mutate({
-                  conversationId: activeConversation.id,
-                  mode: next,
-                })
-              }
-            />
+            <div className="flex items-center gap-2">
+              <ChatModeSelector
+                current={activeConversation.current_mode}
+                pending={updateMode.isPending}
+                onChange={(next) =>
+                  updateMode.mutate({
+                    conversationId: activeConversation.id,
+                    mode: next,
+                  })
+                }
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="chat-clear"
+                disabled={clearMessages.isPending}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "¿Vaciar el chat? Se borrarán todos los mensajes de esta conversación.",
+                    )
+                  ) {
+                    clearMessages.mutate(activeConversation.id);
+                  }
+                }}
+              >
+                Vaciar chat
+              </Button>
+            </div>
           ) : null
         }
         data-testid="chat-page-header"

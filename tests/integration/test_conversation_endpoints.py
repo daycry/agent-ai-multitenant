@@ -368,6 +368,70 @@ async def test_message_author_kind_invariant_returns_422(
 
 
 @pytest.mark.asyncio
+async def test_clear_messages_empties_conversation_but_keeps_it(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """DELETE /conversations/{id}/messages vacía el chat (mantiene la conversación)
+    para que no se acumulen mensajes y el equipo arranque con contexto fresco."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        conv = await client.post(
+            f"/projects/{seeded['project_a']}/conversations",
+            json={"title": "Chat"},
+            headers=headers,
+        )
+        conv_id = conv.json()["id"]
+
+        # Insert messages directly (skip the REST post → no async team reply races).
+        cn = await asyncpg.connect(migrations_pg_dsn)
+        try:
+            for txt in ("hola equipo", "otra cosa"):
+                await cn.execute(
+                    "INSERT INTO messages (id, tenant_id, conversation_id, author_kind,"
+                    " author_user_id, content, mode, attachments, is_summary)"
+                    " VALUES ($1,$2,$3,'user',$4,$5,'planning','[]',false)",
+                    uuid7(),
+                    seeded["tenant_a"],
+                    UUID(conv_id),
+                    seeded["user_a"],
+                    txt,
+                )
+        finally:
+            await cn.close()
+
+        before = await client.get(f"/conversations/{conv_id}/messages", headers=headers)
+        assert len(before.json()) == 2
+
+        cleared = await client.delete(f"/conversations/{conv_id}/messages", headers=headers)
+        assert cleared.status_code == 204, cleared.text
+
+        after = await client.get(f"/conversations/{conv_id}/messages", headers=headers)
+        assert after.json() == []  # emptied
+
+        # The conversation row survives — only its messages were cleared.
+        got = await client.get(f"/conversations/{conv_id}", headers=headers)
+        assert got.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_clear_messages_cross_tenant_is_404(configured_app, migrations_pg_dsn: str) -> None:
+    """A conversation id not visible to the caller can't be cleared (RLS → 404)."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.delete(f"/conversations/{uuid4()}/messages", headers=headers)
+        assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_post_message_rejects_forged_agent_message(
     configured_app, migrations_pg_dsn: str
 ) -> None:
