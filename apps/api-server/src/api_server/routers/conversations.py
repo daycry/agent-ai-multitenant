@@ -263,6 +263,11 @@ async def delete_conversation(
         principal,
         not_found_detail="conversation not found",
     )
+    # Hard-delete the messages so deleting a chat actually removes its data from
+    # the DB (not just hiding a soft-deleted conversation with its messages left
+    # behind as orphan rows). The conversation row itself stays soft-deleted as a
+    # lightweight audit marker (it drops out of every listing via deleted_at).
+    await session.execute(delete(Message).where(Message.conversation_id == conv.id))
     await soft_delete(session, conv)
     # Drop the live stream too — no orphan events left behind in Redis.
     await delete_conversation_stream(redis, str(conv.id))

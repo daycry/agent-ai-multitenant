@@ -205,3 +205,15 @@ async def publish_document_event(
         )
     except Exception as exc:
         _log.warning("api_server.document_event_publish_failed", error=str(exc))
+
+
+async def delete_document_stream(redis: Redis, document_id: str) -> None:
+    """Drop a document's ingestion stream (best-effort) so deleting a document
+    leaves NO orphan events in Redis — same cleanup contract as
+    :func:`delete_conversation_stream`. Without this a later WebSocket connect to
+    ``/ws/documents/{id}`` would replay ingestion progress for a document that no
+    longer exists."""
+    try:
+        await redis.delete(document_stream_key(document_id))
+    except Exception as exc:  # cleanup is best-effort, never fail the caller
+        _log.warning("api_server.document_stream_delete_failed", error=str(exc))

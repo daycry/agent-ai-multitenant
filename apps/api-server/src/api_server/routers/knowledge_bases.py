@@ -22,12 +22,14 @@ import contextlib
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from redis.asyncio import Redis
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import (
     AuthPrincipal,
+    get_redis,
     get_tenant_session,
     require_tenant_admin,
     require_tenant_member,
@@ -41,6 +43,7 @@ from api_server.db.knowledge import (
     KnowledgeBase,
     KnowledgeBaseProject,
 )
+from api_server.events import delete_document_stream
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.logging import get_logger
 from api_server.rag.search import search_kb_chunks
@@ -664,6 +667,7 @@ async def delete_document(
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
     storage: ObjectStorage = Depends(get_object_storage),
+    redis: Redis = Depends(get_redis),
 ) -> None:
     """Soft-delete the metadata row + drop the MinIO blob. We do the
     blob deletion best-effort — a 503 from the storage backend
@@ -677,6 +681,8 @@ async def delete_document(
     with contextlib.suppress(ObjectStorageError):
         await storage.delete_object(key=doc.source_storage_key)
     await soft_delete(session, doc)
+    # Drop the ingestion stream too so no orphan progress events linger in Redis.
+    await delete_document_stream(redis, str(doc.id))
 
 
 @router.post("/{kb_id}/documents/{document_id}/reindex", response_model=DocumentResponse)

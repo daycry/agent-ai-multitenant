@@ -536,6 +536,58 @@ async def test_delete_conversation_also_deletes_redis_stream(
 
 
 @pytest.mark.asyncio
+async def test_delete_conversation_hard_deletes_its_messages(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Borrar un chat debe quitar sus mensajes de la BASE DE DATOS, no solo
+    ocultar una conversación soft-deleted con los mensajes huérfanos detrás."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        conv = await client.post(
+            f"/projects/{seeded['project_a']}/conversations",
+            json={"title": "Chat"},
+            headers=headers,
+        )
+        conv_id = UUID(conv.json()["id"])
+
+    # Seed two user messages straight into the DB (avoids the responder).
+    pg = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        for _ in range(2):
+            await pg.execute(
+                "INSERT INTO messages (id, tenant_id, conversation_id, author_kind,"
+                " author_user_id, content, mode) VALUES ($1, $2, $3, 'user', $4, $5, 'planning')",
+                uuid7(),
+                seeded["tenant_a"],
+                conv_id,
+                seeded["user_a"],
+                "hola equipo",
+            )
+        before = await pg.fetchval(
+            "SELECT count(*) FROM messages WHERE conversation_id = $1", conv_id
+        )
+        assert before == 2
+
+        async with AsyncClient(
+            transport=ASGITransport(app=configured_app), base_url="http://test"
+        ) as client:
+            deleted = await client.delete(f"/conversations/{conv_id}", headers=headers)
+            assert deleted.status_code == 204, deleted.text
+
+        after = await pg.fetchval(
+            "SELECT count(*) FROM messages WHERE conversation_id = $1", conv_id
+        )
+        assert after == 0  # messages hard-deleted, not left as orphans
+    finally:
+        await pg.close()
+
+
+@pytest.mark.asyncio
 async def test_post_message_rejects_forged_agent_message(
     configured_app, migrations_pg_dsn: str
 ) -> None:
