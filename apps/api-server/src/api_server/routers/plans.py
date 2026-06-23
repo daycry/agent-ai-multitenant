@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_server.auth.deps import (
     AuthPrincipal,
     get_tenant_session,
+    require_can_approve_plan,
     require_tenant_admin,
     require_tenant_member,
 )
@@ -563,7 +564,7 @@ async def get_plan_cost_breakdown(
 @plans_router.post("/{plan_id}/approve", response_model=PlanResponse)
 async def approve_plan(
     plan_id: UUID,
-    principal: AuthPrincipal = Depends(require_tenant_admin),
+    principal: AuthPrincipal = Depends(require_can_approve_plan),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanResponse:
     """Cast an approval signature on a plan.

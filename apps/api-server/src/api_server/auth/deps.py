@@ -409,6 +409,34 @@ async def require_tenant_admin(
     return principal
 
 
+async def require_can_approve_plan(
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> AuthPrincipal:
+    """Gate to roles allowed to approve plans (ADR 0079, Opción A).
+
+    Accepts ``tenant_admin`` OR ``plan_approver`` (and system admins). Kept
+    SEPARATE from ``require_tenant_admin`` on purpose: approving a plan is a
+    delegable signature (segregation of duties), not full tenant administration,
+    so a ``plan_approver`` can sign without gaining admin over everything else.
+    """
+    if principal.is_system_admin:
+        return principal
+    if principal.tenant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="no active tenant context",
+        )
+    membership = await _load_active_membership(session, principal.user_id, principal.tenant_id)
+    allowed = {UserRole.TENANT_ADMIN.value, UserRole.PLAN_APPROVER.value}
+    if membership is None or membership.role not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="tenant_admin or plan_approver role required",
+        )
+    return principal
+
+
 def require_tenant_role(
     role: UserRole,
 ) -> Callable[[AuthPrincipal, AsyncSession], Awaitable[AuthPrincipal]]:

@@ -56,6 +56,10 @@ class UserRole(enum.StrEnum):
     TENANT_ADMIN = "tenant_admin"
     TENANT_USER = "tenant_user"
     SYSTEM_OPERATOR = "system_operator"
+    # Aprobador de planes (ADR 0079, Opción A): puede firmar/aprobar planes del
+    # tenant SIN ser tenant_admin (segregación de funciones). Permiso acotado a la
+    # aprobación de planes; no concede administración del tenant.
+    PLAN_APPROVER = "plan_approver"
 
 
 class AuditAction(enum.StrEnum):

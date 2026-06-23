@@ -100,19 +100,22 @@ interface Membership {
 
 // Per-membership roles, mirroring db.models.UserRole (system_admin is a
 // global flag on the user, never a membership role).
-type MembershipRole = "tenant_admin" | "tenant_user" | "system_operator";
+type MembershipRole = "tenant_admin" | "tenant_user" | "plan_approver" | "system_operator";
 
-const ROLES: MembershipRole[] = ["tenant_admin", "tenant_user", "system_operator"];
+const ROLES: MembershipRole[] = ["tenant_admin", "tenant_user", "plan_approver", "system_operator"];
 
 const ROLE_LABEL: Record<MembershipRole, string> = {
   tenant_admin: "Tenant Admin",
   tenant_user: "Tenant User",
+  // ADR 0079: aprueba planes del tenant sin ser admin (segregación de funciones).
+  plan_approver: "Aprobador de planes",
   system_operator: "System Operator",
 };
 
 const ROLE_BADGE: Record<string, BadgeVariant> = {
   tenant_admin: "primary",
   tenant_user: "info",
+  plan_approver: "success",
   system_operator: "warning",
 };
 

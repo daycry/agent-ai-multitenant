@@ -91,15 +91,17 @@ endpoint de sync.
 
 ---
 
-## Feature 6 — Rol `project_approval` + modelo de roles del tenant · 🔒 GATED (ADR)
+## Feature 6 — Rol `plan_approver` (project_approval) · M · ✅ HECHO (Opción A, ADR 0079 accepted)
 
-**Estado.** Análisis hecho (workflow). Los roles del tenant son un **enum** cerrado
-(`tenant_admin`/`tenant_user`/`system_operator`), **sin Casbin**; aprobar plan está
-cableado a `tenant_admin`. Añadir `project_approval` es viable pero tiene decisiones de
-diseño abiertas (granularidad, relación con la doble firma, enum vs Casbin, SSO).
+**Estado.** ADR 0079 `accepted` — el operador eligió la **Opción A** (rol `plan_approver`
+a nivel de tenant). Desacopla "aprobar planes" de "administrar el tenant".
 
-- [x] **ADR 0079** — documenta el modelo actual, 4 opciones (enum / booleano / tabla por-proyecto / Casbin), recomienda la **Opción A** (rol `plan_approver` tenant-wide + `require_can_approve_plan`) y lista las **preguntas abiertas para el operador**. `docs/05-architecture-decisions/0079-rol-aprobacion-de-planes-project-approval.md`
-- [ ] **Implementación** — PENDIENTE de que el operador responda las 6 preguntas abiertas del ADR. Como pediste, no se toca código de roles sin ese análisis cerrado.
+- [x] **ADR 0079** — análisis del modelo de roles + 4 opciones + recomendación + defaults MVP. `docs/05-architecture-decisions/0079-...md`
+- [x] **Enum** — `UserRole.PLAN_APPROVER = "plan_approver"` (no necesita migración: `role` es `String(32)` sin CHECK). `apps/api-server/src/api_server/db/models.py`
+- [x] **Dependencia** — `require_can_approve_plan` (acepta `tenant_admin` ∪ `plan_approver`; system_admin pasa), separada de `require_tenant_admin`. `apps/api-server/src/api_server/auth/deps.py`
+- [x] **Wire** — `POST /plans/{id}/approve` usa `require_can_approve_plan`. La doble firma admite firmantes mixtos. `apps/api-server/src/api_server/routers/plans.py`
+- [x] **UI** — `plan_approver` ("Aprobador de planes") en el selector de rol de membresías. `apps/admin-panel/app/admin/users/page.tsx`
+- [x] **Tests** — plan_approver aprueba (200), tenant_user no (403), firma única sigue OK.
 
 ---
 

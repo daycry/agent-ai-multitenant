@@ -1,7 +1,7 @@
 ---
 adr_id: "0079"
 title: "Rol de aprobación de planes (project_approval) y modelo de roles del tenant"
-status: proposed
+status: accepted
 date: 2026-06-23
 authors: [claude-opus, workflow-analisis-lifecycle-y-roles]
 plan_referenced: mejoras-2026-06-chat-coste-cortex
@@ -12,10 +12,13 @@ supersedes: []
 
 # ADR 0079 — Rol de aprobación de planes (`project_approval`) y modelo de roles del tenant
 
-> **Estado: `proposed`** — toca el modelo de roles/autorización del tenant. **Requiere
-> que el operador decida las preguntas abiertas antes de implementar.** Este ADR es el
-> "análisis intenso" pedido: documenta lo que hay, plantea opciones y recomienda; no se
-> escribe código hasta el visto bueno.
+> **Estado: `accepted` (2026-06-23)** — el operador eligió la **Opción A** (rol
+> `plan_approver` a nivel de tenant). MVP implementado con estos defaults para las
+> preguntas 2-6 (revisables): (2) firma única permitida igual que un admin; (3) firmantes
+> mixtos `{tenant_admin, plan_approver}` permitidos en la doble firma; (4) solo aprueba
+> (no concede lectura/escritura extra; sigue siendo miembro del tenant); (5) acotado a
+> planes (más acciones → ADR futuro / Casbin); (6) asignación desde el admin-panel (SSO
+> queda para más adelante).
 
 ## Contexto
 
