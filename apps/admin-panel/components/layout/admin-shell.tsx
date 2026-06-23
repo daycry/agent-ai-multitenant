@@ -230,9 +230,16 @@ export function AdminShell({ children }: { children: ReactNode }) {
       )}
 
       {/* ============================= Main column ============================= */}
-      <div className="flex flex-1 flex-col md:pl-64">
+      {/* `min-w-0`: un flex item arranca con `min-width:auto`, así que NO se encoge
+          por debajo del min-content de su contenido. Sin esto, en cuanto una página
+          tiene un descendiente ancho (una tabla, un grid…) la columna crece más que
+          el viewport y aparece scroll horizontal de PÁGINA. Con min-w-0 la columna
+          se ajusta al viewport y los contenedores overflow-x-auto de dentro hacen su
+          propio scroll. Va en el shell (denominador común) para que valga en TODAS
+          las páginas, no parcheando cada una. */}
+      <div className="flex min-w-0 flex-1 flex-col md:pl-64">
         <AdminHeader onOpenMobileNav={() => setMobileOpen(true)} />
-        <main className="animate-fade-in flex-1">{children}</main>
+        <main className="animate-fade-in min-w-0 flex-1">{children}</main>
       </div>
     </div>
   );

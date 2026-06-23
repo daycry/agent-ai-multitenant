@@ -1,0 +1,7 @@
+- Historial de conversaciones
++ Si se borra un chat que se borre de base de datos y/o redis donde está almacenado
+- El cálculo de los costes en el detalle del plan, deberían de calcularse según el modelo del agente que tenga asignado, ya sea por override o heredado, actualmente lo hace con gtp-4o
+- Sería interesante poder exportar el detalle de un proyecto a un pdf, markdown.
+- Un plan en modo borrador no debería poder sincronizar con kanban, además falta la gestión de los estados de un plan, hasta que llega a aprobado, una vez está en aprobado, en este punto ya debería de permitir sincronizar las tareas en el kanban y se podría marcar el plan como en curso, en este punto revisar si estan la tareas en kanban y sino que las cree para que se empezaran a implementar las tareas
+- Quizá sería interesante añadir un rol que sea project_approval, para que la persona que tenga ese rol, pueda aprobar los planes de los proyectos. ¿Que te parece? Pero antes de hacer esto habría que analizar que roles existen para trabajar dentro de un tenant
+
