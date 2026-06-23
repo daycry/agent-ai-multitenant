@@ -33,9 +33,11 @@ from api_server.auth.deps import (
 )
 from api_server.chat.cost import (
     DEFAULT_HOURLY_RATE_EUR,
+    AICostBreakdown,
     compute_ai_cost,
     compute_human_cost,
 )
+from api_server.chat.cost_resolution import load_price_catalog, resolve_plan_task_models
 from api_server.chat.dag import DAGCycleError, validate_dag
 from api_server.chat.plan_state_machine import (
     PlanTransitionError,
@@ -437,6 +439,35 @@ async def list_plan_comments(
 # ===========================================================================
 # Cost breakdown (task_03_24)
 # ===========================================================================
+async def _compute_plan_ai_cost(
+    session: AsyncSession,
+    plan: Plan,
+    *,
+    default_model_override: str | None = None,
+) -> AICostBreakdown:
+    """AI cost for a plan, pricing each task by its assigned agent's resolved
+    model (override or inherited — ADR 0065) instead of a blanket ``gpt-4o``.
+
+    Tasks whose ``role`` maps to a team agent are priced with that agent's
+    effective model; the rest fall back to the ``default_model_override`` (the
+    ``?model=`` query) → plan ``metadata.default_model_id`` → ``gpt-4o`` chain.
+    The price catalog comes from the ``model_prices`` table. Shared by the
+    cost-breakdown endpoint and the approval double-signature threshold so both
+    see the same numbers."""
+    spec = plan.specification or {}
+    default_model_id = (
+        default_model_override or (spec.get("metadata") or {}).get("default_model_id") or "gpt-4o"
+    )
+    task_models = await resolve_plan_task_models(session, plan)
+    catalog = await load_price_catalog(session)
+    return compute_ai_cost(
+        spec,
+        default_model_id=default_model_id,
+        catalog=catalog,
+        task_models=task_models,
+    )
+
+
 @plans_router.get(
     "/{plan_id}/cost-breakdown",
     response_model=CostBreakdownResponse,
@@ -483,8 +514,7 @@ async def get_plan_cost_breakdown(
 
     human = compute_human_cost(spec, hourly_rate=rate, currency=currency)
 
-    default_model_id = model or (spec.get("metadata") or {}).get("default_model_id") or "gpt-4o"
-    ai = compute_ai_cost(spec, default_model_id=default_model_id)
+    ai = await _compute_plan_ai_cost(session, plan, default_model_override=model)
 
     return CostBreakdownResponse(
         human=HumanCostBreakdownResponse(
@@ -627,9 +657,7 @@ async def _resolve_first_signature_target(session: AsyncSession, plan: Plan) -> 
     except (ArithmeticError, ValueError):
         threshold = Decimal("0")
 
-    spec = plan.specification or {}
-    default_model_id = (spec.get("metadata") or {}).get("default_model_id") or "gpt-4o"
-    ai = compute_ai_cost(spec, default_model_id=default_model_id)
+    ai = await _compute_plan_ai_cost(session, plan)
     # We compare against `cost_max` (worst case) so the four-eye review
     # only kicks in when the plan is *potentially* expensive.
     if threshold > 0 and ai.cost_max > threshold:

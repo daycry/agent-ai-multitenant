@@ -86,6 +86,40 @@ def test_task_level_model_override_takes_precedence() -> None:
     assert by_id["t1"].cost_min > by_id["t2"].cost_min
 
 
+def test_task_models_override_beats_task_model_and_default() -> None:
+    """A per-task resolved model (e.g. the model of the agent assigned to the
+    task, override or inherited — ADR 0065) takes top precedence: it beats both
+    the task's own ``model`` field and the plan ``default_model_id``. This is
+    how the cost-breakdown stops pricing everything as ``gpt-4o`` and instead
+    uses each task's real assigned model."""
+    spec = {
+        "tasks": [
+            {"id": "t1", "title": "Has own model", "complexity": "m", "model": "gpt-4o"},
+            {"id": "t2", "title": "No own model", "complexity": "m"},
+            {"id": "t3", "title": "Not in the map", "complexity": "m"},
+        ],
+    }
+    result = compute_ai_cost(
+        spec,
+        default_model_id="gpt-4o",
+        task_models={"t1": "claude-opus-4-7", "t2": "claude-opus-4-7"},
+    )
+    by_id = {t.task_id: t for t in result.tasks}
+    assert by_id["t1"].model_id == "claude-opus-4-7"  # beats the task's own "gpt-4o"
+    assert by_id["t2"].model_id == "claude-opus-4-7"  # beats the default
+    assert by_id["t3"].model_id == "gpt-4o"  # not in the map → falls back to default
+    # Opus is more expensive than gpt-4o, so the resolved tasks cost more.
+    assert by_id["t1"].cost_min > by_id["t3"].cost_min
+
+
+def test_task_models_empty_or_none_is_a_noop() -> None:
+    spec = {"tasks": [{"id": "t1", "title": "A", "complexity": "m"}]}
+    base = compute_ai_cost(spec, default_model_id="gpt-4o")
+    for tm in (None, {}, {"other": "claude-opus-4-7"}):
+        result = compute_ai_cost(spec, default_model_id="gpt-4o", task_models=tm)
+        assert result.tasks[0].model_id == base.tasks[0].model_id == "gpt-4o"
+
+
 def test_unknown_complexity_falls_back_to_default() -> None:
     spec = {"tasks": [{"id": "t1", "title": "Weird", "complexity": "huge"}]}
     result = compute_ai_cost(spec, default_model_id="gpt-4o", default_complexity="m")
