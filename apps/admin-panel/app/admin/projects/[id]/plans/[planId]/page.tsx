@@ -529,43 +529,48 @@ function CostBreakdownSection({ planId }: { planId: string }) {
               <p className="mb-1 text-xs font-semibold uppercase tracking-wide">
                 Coste humano · {human.currency} · {human.hourly_rate} {human.currency}/h
               </p>
-              <table className="w-full text-xs">
-                <thead className="text-left">
-                  <tr className="border-muted border-b">
-                    <th className="py-1 pr-2 font-semibold">ID</th>
-                    <th className="py-1 pr-2 font-semibold">Tarea</th>
-                    <th className="py-1 pr-2 font-semibold text-right">Horas</th>
-                    <th className="py-1 pr-2 font-semibold text-right">Coste</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {human.tasks.map((t) => (
-                    <tr
-                      key={t.task_id}
-                      data-testid={`plan-cost-human-row-${t.task_id}`}
-                      className="border-muted/40 border-b"
-                    >
-                      <td className="py-1 pr-2 font-mono">{t.task_id}</td>
-                      <td className="py-1 pr-2">{t.title}</td>
-                      <td className="py-1 pr-2 text-right">{t.hours}</td>
-                      <td className="py-1 pr-2 text-right">
-                        {t.cost} {human.currency}
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-left">
+                    <tr className="border-muted border-b">
+                      <th className="py-1 pr-2 font-semibold">ID</th>
+                      <th className="py-1 pr-2 font-semibold">Tarea</th>
+                      <th className="py-1 pr-2 font-semibold text-right">Horas</th>
+                      <th className="py-1 pr-2 font-semibold text-right">Coste</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {human.tasks.map((t) => (
+                      <tr
+                        key={t.task_id}
+                        data-testid={`plan-cost-human-row-${t.task_id}`}
+                        className="border-muted/40 border-b"
+                      >
+                        <td className="py-1 pr-2 font-mono">{t.task_id}</td>
+                        <td className="py-1 pr-2">{t.title}</td>
+                        <td className="py-1 pr-2 text-right">{t.hours}</td>
+                        <td className="py-1 pr-2 text-right">
+                          {t.cost} {human.currency}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="font-semibold">
+                      <td colSpan={2} className="py-1 pr-2 text-right">
+                        Total
+                      </td>
+                      <td
+                        className="py-1 pr-2 text-right"
+                        data-testid="plan-cost-human-total-hours"
+                      >
+                        {human.total_hours}
+                      </td>
+                      <td className="py-1 pr-2 text-right" data-testid="plan-cost-human-total">
+                        {human.total_cost} {human.currency}
                       </td>
                     </tr>
-                  ))}
-                  <tr className="font-semibold">
-                    <td colSpan={2} className="py-1 pr-2 text-right">
-                      Total
-                    </td>
-                    <td className="py-1 pr-2 text-right" data-testid="plan-cost-human-total-hours">
-                      {human.total_hours}
-                    </td>
-                    <td className="py-1 pr-2 text-right" data-testid="plan-cost-human-total">
-                      {human.total_cost} {human.currency}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             {/* AI cost table — range (min / max) */}
@@ -574,49 +579,51 @@ function CostBreakdownSection({ planId }: { planId: string }) {
                 Coste IA · {ai.currency} · modelo por defecto{" "}
                 <span className="font-mono">{ai.default_model_id}</span>
               </p>
-              <table className="w-full text-xs">
-                <thead className="text-left">
-                  <tr className="border-muted border-b">
-                    <th className="py-1 pr-2 font-semibold">ID</th>
-                    <th className="py-1 pr-2 font-semibold">Tarea</th>
-                    <th className="py-1 pr-2 font-semibold">Compl.</th>
-                    <th className="py-1 pr-2 font-semibold">Modelo</th>
-                    <th className="py-1 pr-2 font-semibold text-right">Coste mín</th>
-                    <th className="py-1 pr-2 font-semibold text-right">Coste máx</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ai.tasks.map((t) => (
-                    <tr
-                      key={t.task_id}
-                      data-testid={`plan-cost-ai-row-${t.task_id}`}
-                      className="border-muted/40 border-b"
-                    >
-                      <td className="py-1 pr-2 font-mono">{t.task_id}</td>
-                      <td className="py-1 pr-2">{t.title}</td>
-                      <td className="py-1 pr-2">{t.complexity}</td>
-                      <td className="py-1 pr-2 font-mono">{t.model_id}</td>
-                      <td className="py-1 pr-2 text-right">
-                        {t.cost_min} {ai.currency}
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-left">
+                    <tr className="border-muted border-b">
+                      <th className="py-1 pr-2 font-semibold">ID</th>
+                      <th className="py-1 pr-2 font-semibold">Tarea</th>
+                      <th className="py-1 pr-2 font-semibold">Compl.</th>
+                      <th className="py-1 pr-2 font-semibold">Modelo</th>
+                      <th className="py-1 pr-2 font-semibold text-right">Coste mín</th>
+                      <th className="py-1 pr-2 font-semibold text-right">Coste máx</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ai.tasks.map((t) => (
+                      <tr
+                        key={t.task_id}
+                        data-testid={`plan-cost-ai-row-${t.task_id}`}
+                        className="border-muted/40 border-b"
+                      >
+                        <td className="py-1 pr-2 font-mono">{t.task_id}</td>
+                        <td className="py-1 pr-2">{t.title}</td>
+                        <td className="py-1 pr-2">{t.complexity}</td>
+                        <td className="py-1 pr-2 font-mono">{t.model_id}</td>
+                        <td className="py-1 pr-2 text-right">
+                          {t.cost_min} {ai.currency}
+                        </td>
+                        <td className="py-1 pr-2 text-right">
+                          {t.cost_max} {ai.currency}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="font-semibold">
+                      <td colSpan={4} className="py-1 pr-2 text-right">
+                        Total (rango)
                       </td>
-                      <td className="py-1 pr-2 text-right">
-                        {t.cost_max} {ai.currency}
+                      <td className="py-1 pr-2 text-right" data-testid="plan-cost-ai-total-min">
+                        {ai.cost_min} {ai.currency}
+                      </td>
+                      <td className="py-1 pr-2 text-right" data-testid="plan-cost-ai-total-max">
+                        {ai.cost_max} {ai.currency}
                       </td>
                     </tr>
-                  ))}
-                  <tr className="font-semibold">
-                    <td colSpan={4} className="py-1 pr-2 text-right">
-                      Total (rango)
-                    </td>
-                    <td className="py-1 pr-2 text-right" data-testid="plan-cost-ai-total-min">
-                      {ai.cost_min} {ai.currency}
-                    </td>
-                    <td className="py-1 pr-2 text-right" data-testid="plan-cost-ai-total-max">
-                      {ai.cost_max} {ai.currency}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              </div>
               {ai.missing_models.length > 0 ? (
                 <p
                   className="text-destructive mt-2 text-xs"
@@ -988,34 +995,38 @@ function TasksSection({ tasks }: { tasks: PlanSpecification["tasks"] | undefined
         <CardTitle>Tareas ({tasks.length})</CardTitle>
       </CardHeader>
       <CardContent>
-        <table className="w-full text-xs">
-          <thead className="text-left">
-            <tr className="border-muted border-b">
-              <th className="py-1 pr-2 font-semibold">ID</th>
-              <th className="py-1 pr-2 font-semibold">Título</th>
-              <th className="py-1 pr-2 font-semibold">Rol</th>
-              <th className="py-1 pr-2 font-semibold">Compl.</th>
-              <th className="py-1 pr-2 font-semibold">Depende de</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tasks.map((task) => (
-              <tr
-                key={task.id}
-                className="border-muted/40 border-b align-top"
-                data-testid={`plan-task-${task.id}`}
-              >
-                <td className="py-1 pr-2 font-mono">{task.id}</td>
-                <td className="py-1 pr-2">{task.title}</td>
-                <td className="py-1 pr-2">{task.role ?? "—"}</td>
-                <td className="py-1 pr-2">{task.complexity ?? "—"}</td>
-                <td className="py-1 pr-2 font-mono">
-                  {task.depends_on && task.depends_on.length > 0 ? task.depends_on.join(", ") : "—"}
-                </td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-left">
+              <tr className="border-muted border-b">
+                <th className="py-1 pr-2 font-semibold">ID</th>
+                <th className="py-1 pr-2 font-semibold">Título</th>
+                <th className="py-1 pr-2 font-semibold">Rol</th>
+                <th className="py-1 pr-2 font-semibold">Compl.</th>
+                <th className="py-1 pr-2 font-semibold">Depende de</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {tasks.map((task) => (
+                <tr
+                  key={task.id}
+                  className="border-muted/40 border-b align-top"
+                  data-testid={`plan-task-${task.id}`}
+                >
+                  <td className="py-1 pr-2 font-mono">{task.id}</td>
+                  <td className="py-1 pr-2">{task.title}</td>
+                  <td className="py-1 pr-2">{task.role ?? "—"}</td>
+                  <td className="py-1 pr-2">{task.complexity ?? "—"}</td>
+                  <td className="py-1 pr-2 font-mono">
+                    {task.depends_on && task.depends_on.length > 0
+                      ? task.depends_on.join(", ")
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </CardContent>
     </Card>
   );

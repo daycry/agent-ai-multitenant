@@ -138,35 +138,40 @@ function renderTable(lines: string[], key: string): RenderedBlock | null {
 
   return {
     key,
+    // A wide table (many columns / long cells) must scroll WITHIN its own box
+    // instead of pushing the page width and creating a page-level horizontal
+    // scrollbar. Same pattern the plan-detail DAG/Gantt use.
     node: (
-      <table
-        className="border-muted my-2 w-full border-collapse text-xs"
-        data-testid="plan-draft-table"
-      >
-        <thead>
-          <tr>
-            {headers.map((h, i) => (
-              <th
-                key={i}
-                className="border-muted bg-muted/50 border px-2 py-1 text-left font-semibold"
-              >
-                {inline(h)}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, r) => (
-            <tr key={r}>
-              {row.map((cell, c) => (
-                <td key={c} className="border-muted border px-2 py-1 align-top">
-                  {inline(cell)}
-                </td>
+      <div className="overflow-x-auto">
+        <table
+          className="border-muted my-2 w-full border-collapse text-xs"
+          data-testid="plan-draft-table"
+        >
+          <thead>
+            <tr>
+              {headers.map((h, i) => (
+                <th
+                  key={i}
+                  className="border-muted bg-muted/50 border px-2 py-1 text-left font-semibold"
+                >
+                  {inline(h)}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((row, r) => (
+              <tr key={r}>
+                {row.map((cell, c) => (
+                  <td key={c} className="border-muted border px-2 py-1 align-top">
+                    {inline(cell)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     ),
   };
 }
