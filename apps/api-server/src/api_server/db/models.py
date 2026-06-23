@@ -45,6 +45,12 @@ from api_server.db.base import (
     UUIDPrimaryKeyMixin,
 )
 
+# Córtex F1 (ADR 0074): import the córtex models so they register on
+# ``Base.metadata``. The Alembic env imports this module, so this guarantees the
+# autogenerate metadata + the running app both see the tenant-less córtex tables
+# (re-exported in ``__all__``).
+from api_server.db.cortex import CortexConversation, CortexTurn
+
 
 class UserRole(enum.StrEnum):
     """Per-membership role inside an organization.
@@ -1108,6 +1114,8 @@ __all__ = [
     "ApiTokenScope",
     "AuditAction",
     "AuditLog",
+    "CortexConversation",
+    "CortexTurn",
     "IncomingWebhookConfig",
     "IncomingWebhookEvent",
     "Organization",
