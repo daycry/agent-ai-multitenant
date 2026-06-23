@@ -75,6 +75,22 @@ huérfanos en Redis.
 
 ---
 
+## Feature 5 — Ciclo de vida del plan + gating de sync-to-kanban · M · ✅ HECHO
+
+**Problema.** Un plan en **borrador** podía materializar tareas al Kanban
+(`sync_plan_kanban` no comprobaba el estado), y no había acción explícita para
+pasar de **aprobado** a **en curso**. La máquina de estados (`plan_state_machine.py`)
+ya existía (draft→pending_approval→approved→in_progress→…) pero no se cumplía en el
+endpoint de sync.
+
+- [x] **Guard en `sync-to-kanban`** — 409 `plan_not_approved` salvo que el estado sea `approved`/`in_progress`. Un borrador ya no puede materializar tareas. `apps/api-server/src/api_server/routers/plans.py`
+- [x] **Endpoint `POST /plans/{id}/start-execution`** — transición `approved → in_progress` (vía state machine; 409 si no está aprobado) + materializa las tareas que falten (idempotente). Cumple "revisar si están en Kanban y si no, crearlas". `plans.py`
+- [x] **UI: barra de ciclo de vida** — `PlanLifecycleSection`: "Enviar a aprobación" (draft), "Aprobar plan" (pending_approval), "Empezar ejecución" (approved). `apps/admin-panel/app/admin/projects/[id]/plans/[planId]/page.tsx`
+- [x] **UI: gating de sync** — el botón "Sincronizar al Kanban" se deshabilita y avisa salvo que el plan esté aprobado/en curso.
+- [x] **Tests** — 3 integración nuevas (draft no sincroniza → 409; aprobado sincroniza + start-execution crea tareas; start-execution en draft → 409) + se actualizaron los 3 tests de sync/dag existentes para aprobar antes de sincronizar. **19 en verde.**
+
+---
+
 ## Feature 1 — Córtex cerebral / memoria cognitiva · XL · 🔒 GATED (solo F0)
 
 **Estado.** Diseño completo (`docs/roadmap/cortex-system-owner.md`, ADRs

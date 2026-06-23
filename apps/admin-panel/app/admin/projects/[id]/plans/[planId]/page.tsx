@@ -202,6 +202,7 @@ export default function PlanDetailPage() {
         </Card>
       )}
 
+      <PlanLifecycleSection planId={plan.id} status={plan.status} />
       <HumanValidationSection planId={plan.id} status={plan.status} />
       <PlanDeepLinksSection planId={plan.id} status={plan.status} />
       <SummarySection summary={spec.summary} />
@@ -209,6 +210,7 @@ export default function PlanDetailPage() {
       <CostBreakdownSection planId={plan.id} />
       <SyncToKanbanSection
         planId={plan.id}
+        status={plan.status}
         phases={spec.phases ?? []}
         taskIds={(spec.tasks ?? []).map((t) => t.id)}
       />
@@ -218,6 +220,114 @@ export default function PlanDetailPage() {
       <TasksSection tasks={spec.tasks} />
       <CommentsSection planId={plan.id} taskIds={(spec.tasks ?? []).map((t) => t.id)} />
     </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Plan lifecycle — explicit state transitions (draft → approval → in_progress)
+//
+// The lifecycle was missing its operator-facing controls: a draft could already
+// sync to the Kanban (now blocked server-side) and there was no button to move a
+// plan through approval or to start its execution. This action bar surfaces only
+// the transition that's legal for the current status.
+// --------------------------------------------------------------------------
+function PlanLifecycleSection({ planId, status }: { planId: string; status: string }) {
+  const queryClient = useQueryClient();
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["plan", planId] });
+    queryClient.invalidateQueries({ queryKey: ["project-tasks"] });
+  };
+  const onErr = (e: unknown) => setErrorMsg(e instanceof ApiError ? e.body : String(e));
+
+  const sendToApproval = useMutation({
+    mutationFn: () =>
+      apiFetch<{ status: string }>(`/plans/${planId}`, {
+        method: "PUT",
+        body: { status: "pending_approval" },
+      }),
+    onSuccess: () => {
+      setErrorMsg(null);
+      invalidate();
+    },
+    onError: onErr,
+  });
+  const approve = useMutation({
+    mutationFn: () => apiFetch<{ status: string }>(`/plans/${planId}/approve`, { method: "POST" }),
+    onSuccess: () => {
+      setErrorMsg(null);
+      invalidate();
+    },
+    onError: onErr,
+  });
+  const startExecution = useMutation({
+    mutationFn: () =>
+      apiFetch<{ status: string }>(`/plans/${planId}/start-execution`, { method: "POST" }),
+    onSuccess: () => {
+      setErrorMsg(null);
+      invalidate();
+    },
+    onError: onErr,
+  });
+
+  const canSendToApproval = status === "draft";
+  const canApprove = status === "pending_approval" || status === "pending_second_approval";
+  const canStart = status === "approved";
+  // Action bar, not a status display: render nothing when no transition is offered.
+  if (!canSendToApproval && !canApprove && !canStart) return null;
+
+  const pending = sendToApproval.isPending || approve.isPending || startExecution.isPending;
+
+  return (
+    <Card className="mt-6" data-testid="plan-lifecycle">
+      <CardHeader className="flex flex-row items-center justify-between gap-2">
+        <CardTitle>Ciclo de vida del plan</CardTitle>
+        <div className="flex flex-wrap gap-2">
+          {canSendToApproval ? (
+            <Button
+              onClick={() => sendToApproval.mutate()}
+              disabled={pending}
+              data-testid="plan-send-to-approval"
+            >
+              Enviar a aprobación
+            </Button>
+          ) : null}
+          {canApprove ? (
+            <Button
+              onClick={() => approve.mutate()}
+              disabled={pending}
+              data-testid="plan-lifecycle-approve"
+            >
+              Aprobar plan
+            </Button>
+          ) : null}
+          {canStart ? (
+            <Button
+              onClick={() => startExecution.mutate()}
+              disabled={pending}
+              data-testid="plan-start-execution"
+            >
+              Empezar ejecución
+            </Button>
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent>
+        <p className="text-muted-foreground text-sm">
+          {canSendToApproval
+            ? "El plan está en borrador. Envíalo a aprobación para revisarlo y aprobarlo."
+            : canApprove
+              ? "El plan espera aprobación. Al aprobarlo podrás sincronizar sus tareas al Kanban."
+              : "El plan está aprobado. «Empezar ejecución» lo marca en curso y crea las tareas en el Kanban."}
+        </p>
+        {errorMsg ? (
+          <p className="text-destructive mt-2 text-xs" data-testid="plan-lifecycle-error">
+            {errorMsg}
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -234,9 +344,11 @@ interface SyncResponse {
 
 function SyncToKanbanSection({
   planId,
+  status,
   phases,
   taskIds,
 }: {
+  status: string;
   planId: string;
   phases: PlanPhaseSpec[];
   taskIds: string[];
@@ -248,6 +360,9 @@ function SyncToKanbanSection({
   const [lastResult, setLastResult] = useState<SyncResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  // Materialising tasks is only legal once the plan is signed off (mirrors the
+  // backend guard). A draft must not seed the Kanban.
+  const syncable = status === "approved" || status === "in_progress";
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -289,14 +404,19 @@ function SyncToKanbanSection({
             setErrorMsg(null);
             setOpen(true);
           }}
-          disabled={taskIds.length === 0}
+          disabled={taskIds.length === 0 || !syncable}
           data-testid="plan-sync-open"
         >
           Sincronizar al Kanban
         </Button>
       </CardHeader>
       <CardContent>
-        {taskIds.length === 0 ? (
+        {!syncable ? (
+          <p className="text-muted-foreground text-sm italic" data-testid="plan-sync-not-approved">
+            Solo se pueden materializar tareas de un plan <strong>aprobado</strong> o en curso.
+            Aprueba el plan primero.
+          </p>
+        ) : taskIds.length === 0 ? (
           <p className="text-muted-foreground text-sm italic" data-testid="plan-sync-empty">
             El plan aún no tiene tareas para materializar.
           </p>

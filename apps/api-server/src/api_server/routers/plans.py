@@ -668,6 +668,69 @@ async def _resolve_first_signature_target(session: AsyncSession, plan: Plan) -> 
 # ===========================================================================
 # Sync to Kanban (task_03_27, task_03_28, task_03_29)
 # ===========================================================================
+# Materialising a plan's tasks is only legal once the plan is signed off: an
+# unapproved draft must not seed the Kanban with work. `in_progress` is included
+# so start-execution (and re-syncs while running) keep working.
+_SYNCABLE_STATUSES = frozenset({PlanStatus.APPROVED.value, PlanStatus.IN_PROGRESS.value})
+
+
+def _require_syncable_status(plan: Plan) -> None:
+    """409 unless the plan is approved (or already in progress). Blocks
+    materialising tasks from a draft / pending-approval plan."""
+    if plan.status not in _SYNCABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "plan_not_approved",
+                "message": (
+                    "Solo un plan aprobado (o en curso) puede sincronizar tareas al Kanban; "
+                    f"este plan está en estado '{plan.status}'. Apruébalo primero."
+                ),
+                "status": plan.status,
+            },
+        )
+
+
+@plans_router.post("/{plan_id}/start-execution", response_model=PlanResponse)
+async def start_plan_execution(
+    plan_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> PlanResponse:
+    """Mark an APPROVED plan as ``in_progress`` and ensure its tasks exist in the
+    Kanban so the team can start implementing them.
+
+    This is the explicit, operator-driven hand-off the lifecycle was missing: the
+    plan stays APPROVED (signed off, not running) until someone starts it. The
+    transition ``approved -> in_progress`` goes through the state machine (a draft
+    or pending-approval plan yields 409); then we materialise every still-missing
+    spec task (idempotent — already-synced tasks are skipped). Calling it again on
+    an already-running plan is a no-op that just re-ensures the Kanban.
+    """
+    require_tenant_id(principal)
+    plan = await get_writable_or_404(
+        session, Plan, plan_id, principal, not_found_detail="plan not found"
+    )
+    try:
+        transition_plan_status(plan, PlanStatus.IN_PROGRESS.value, actor=principal.user_id)
+    except PlanTransitionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "invalid_plan_transition",
+                "from": exc.from_status,
+                "to": exc.to_status,
+                "message": "Solo un plan aprobado puede marcarse en curso.",
+            },
+        ) from exc
+
+    # Ensure the tasks are in the Kanban (creates any missing ones; idempotent).
+    await sync_plan_to_kanban(session, plan, scope="total")
+    await session.flush()
+    await session.refresh(plan)
+    return to_plan_response(plan)
+
+
 @plans_router.post("/{plan_id}/sync-to-kanban", response_model=PlanSyncResponse)
 async def sync_plan_kanban(
     plan_id: UUID,
@@ -675,7 +738,12 @@ async def sync_plan_kanban(
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanSyncResponse:
-    """Materialise the plan's tasks into the Kanban.
+    """Materialise the plan's APPROVED tasks into the Kanban.
+
+    Requires ``plan.status in (approved, in_progress)``: a draft (or a plan still
+    awaiting approval) must NOT materialise tasks — that would seed the Kanban with
+    work nobody signed off on. Tasks start in ``backlog``; the orchestrator promotes
+    dependency-free ones to ``ready``.
 
     The scope mirrors the UI dialog: ``total`` syncs every spec task,
     ``phase`` only those of one ``phases[i]``, ``selection`` only the
@@ -690,6 +758,7 @@ async def sync_plan_kanban(
     plan = await get_writable_or_404(
         session, Plan, plan_id, principal, not_found_detail="plan not found"
     )
+    _require_syncable_status(plan)
 
     try:
         result = await sync_plan_to_kanban(

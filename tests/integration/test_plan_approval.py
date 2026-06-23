@@ -235,6 +235,84 @@ async def _create_and_open(client: AsyncClient, seeded: dict, spec: dict, header
 
 
 @pytest.mark.asyncio
+async def test_draft_plan_cannot_sync_to_kanban(configured_app, migrations_pg_dsn: str) -> None:
+    """Un borrador NO debe materializar tareas: sync-to-kanban en draft -> 409."""
+    seeded = await _seed(migrations_pg_dsn, threshold="1000")
+    token = await _mint_token(seeded["alice_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        create = await client.post(
+            f"/projects/{seeded['project_id']}/plans",
+            json={"title": "Plan", "specification": _CHEAP_SPEC},
+            headers=headers,
+        )
+        plan_id = create.json()["id"]  # status defaults to draft
+
+        resp = await client.post(
+            f"/plans/{plan_id}/sync-to-kanban", json={"scope": "total"}, headers=headers
+        )
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["error"] == "plan_not_approved"
+
+
+@pytest.mark.asyncio
+async def test_approved_plan_can_sync_and_start_execution_creates_tasks(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Aprobado -> sync permitido; start-execution lo pone in_progress y crea las
+    tareas en el Kanban (revisa si están y si no las crea)."""
+    seeded = await _seed(migrations_pg_dsn, threshold="1000")
+    token = await _mint_token(seeded["alice_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        plan_id = await _create_and_open(client, seeded, _CHEAP_SPEC, headers)
+        approve = await client.post(f"/plans/{plan_id}/approve", headers=headers)
+        assert approve.json()["status"] == "approved"
+
+        # start-execution: approved -> in_progress AND materialises the tasks.
+        started = await client.post(f"/plans/{plan_id}/start-execution", headers=headers)
+        assert started.status_code == 200, started.text
+        assert started.json()["status"] == "in_progress"
+
+        # The single spec task is now in the Kanban (idempotent re-sync returns it as skipped).
+        resync = await client.post(
+            f"/plans/{plan_id}/sync-to-kanban", json={"scope": "total"}, headers=headers
+        )
+        assert resync.status_code == 200, resync.text
+        assert resync.json()["skipped_task_ids"]  # already materialised by start-execution
+
+
+@pytest.mark.asyncio
+async def test_start_execution_on_unapproved_plan_returns_409(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """start-execution solo es legal desde approved: en draft -> 409."""
+    seeded = await _seed(migrations_pg_dsn, threshold="1000")
+    token = await _mint_token(seeded["alice_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        create = await client.post(
+            f"/projects/{seeded['project_id']}/plans",
+            json={"title": "Plan", "specification": _CHEAP_SPEC},
+            headers=headers,
+        )
+        plan_id = create.json()["id"]  # draft
+
+        resp = await client.post(f"/plans/{plan_id}/start-execution", headers=headers)
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["error"] == "invalid_plan_transition"
+
+
+@pytest.mark.asyncio
 async def test_cheap_plan_below_threshold_takes_single_signature(
     configured_app, migrations_pg_dsn: str
 ) -> None:

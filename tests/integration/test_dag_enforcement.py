@@ -133,6 +133,13 @@ async def _bootstrap(client: AsyncClient, project_id: UUID, headers: dict) -> di
         headers=headers,
     )
     plan_id = plan.json()["id"]
+    # Lifecycle: only an APPROVED plan may sync to the Kanban; approve first.
+    moved = await client.put(
+        f"/plans/{plan_id}", json={"status": "pending_approval"}, headers=headers
+    )
+    assert moved.status_code == 200, moved.text
+    approved = await client.post(f"/plans/{plan_id}/approve", headers=headers)
+    assert approved.status_code == 200, approved.text
     sync = await client.post(
         f"/plans/{plan_id}/sync-to-kanban", json={"scope": "total"}, headers=headers
     )

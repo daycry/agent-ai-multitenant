@@ -147,7 +147,17 @@ async def _create_plan(client: AsyncClient, project_id: UUID, headers: dict) -> 
         headers=headers,
     )
     assert create.status_code == 201, create.text
-    return create.json()["id"]
+    plan_id = create.json()["id"]
+    # Lifecycle: tasks only materialise from an APPROVED plan, so take the plan
+    # through the approval flow before syncing (these tests exercise sync mechanics,
+    # which now require an approved plan).
+    moved = await client.put(
+        f"/plans/{plan_id}", json={"status": "pending_approval"}, headers=headers
+    )
+    assert moved.status_code == 200, moved.text
+    approved = await client.post(f"/plans/{plan_id}/approve", headers=headers)
+    assert approved.status_code == 200, approved.text
+    return plan_id
 
 
 @pytest.mark.asyncio
