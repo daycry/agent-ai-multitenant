@@ -13,12 +13,21 @@ supersedes: []
 # ADR 0079 — Rol de aprobación de planes (`project_approval`) y modelo de roles del tenant
 
 > **Estado: `accepted` (2026-06-23)** — el operador eligió la **Opción A** (rol
-> `plan_approver` a nivel de tenant). MVP implementado con estos defaults para las
-> preguntas 2-6 (revisables): (2) firma única permitida igual que un admin; (3) firmantes
-> mixtos `{tenant_admin, plan_approver}` permitidos en la doble firma; (4) solo aprueba
-> (no concede lectura/escritura extra; sigue siendo miembro del tenant); (5) acotado a
-> planes (más acciones → ADR futuro / Casbin); (6) asignación desde el admin-panel (SSO
-> queda para más adelante).
+> `plan_approver` a nivel de tenant) y CONFIRMÓ las preguntas abiertas (2026-06-23):
+>
+> - **(2) Firma única:** SÍ — un `plan_approver` aprueba en solitario igual que un
+>   `tenant_admin` (en planes por encima del umbral aplica la doble firma normal).
+> - **(3) Doble firma:** firmantes mixtos permitidos — dos firmantes DISTINTOS cualesquiera
+>   de `{tenant_admin, plan_approver}` cierran la doble firma.
+> - **(4) Alcance / multi-rol:** roles **exclusivos** por (usuario, tenant) — un usuario
+>   tiene UN rol por tenant (`UniqueConstraint(user_id, tenant_id)`), así que NO se es
+>   `plan_approver` y `tenant_admin` a la vez en el mismo tenant (ni hace falta: un
+>   `tenant_admin` ya aprueba). Un `plan_approver` tiene además acceso de **miembro normal**
+>   (lee/escribe recursos como un `tenant_user`) porque pasa `require_tenant_member`. Entre
+>   tenants distintos sí puede tener roles distintos. **No se adopta multi-rol N:M** (sería
+>   otro ADR si algún día hace falta).
+> - **(5) Alcance futuro:** acotado a planes; más acciones sensibles → ADR futuro / Casbin.
+> - **(6) SSO/SCIM:** NO por ahora — el rol se asigna solo desde el admin-panel.
 
 ## Contexto
 
