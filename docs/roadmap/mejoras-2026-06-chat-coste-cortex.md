@@ -91,6 +91,18 @@ endpoint de sync.
 
 ---
 
+## Feature 6 — Rol `project_approval` + modelo de roles del tenant · 🔒 GATED (ADR)
+
+**Estado.** Análisis hecho (workflow). Los roles del tenant son un **enum** cerrado
+(`tenant_admin`/`tenant_user`/`system_operator`), **sin Casbin**; aprobar plan está
+cableado a `tenant_admin`. Añadir `project_approval` es viable pero tiene decisiones de
+diseño abiertas (granularidad, relación con la doble firma, enum vs Casbin, SSO).
+
+- [x] **ADR 0079** — documenta el modelo actual, 4 opciones (enum / booleano / tabla por-proyecto / Casbin), recomienda la **Opción A** (rol `plan_approver` tenant-wide + `require_can_approve_plan`) y lista las **preguntas abiertas para el operador**. `docs/05-architecture-decisions/0079-rol-aprobacion-de-planes-project-approval.md`
+- [ ] **Implementación** — PENDIENTE de que el operador responda las 6 preguntas abiertas del ADR. Como pediste, no se toca código de roles sin ese análisis cerrado.
+
+---
+
 ## Feature 1 — Córtex cerebral / memoria cognitiva · XL · 🔒 GATED (solo F0)
 
 **Estado.** Diseño completo (`docs/roadmap/cortex-system-owner.md`, ADRs
