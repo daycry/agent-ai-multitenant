@@ -110,14 +110,16 @@ a nivel de tenant). Desacopla "aprobar planes" de "administrar el tenant".
 **Estado.** Diseño completo (`docs/roadmap/cortex-system-owner.md`, ADRs
 0074-0078 en `proposed`), **cero código**. Fases F0-F5.
 
-**Decisión.** Implementar **solo F0** (el cimiento de rol, SIN tablas BYPASSRLS):
+**Decisión.** F0 (cimiento de rol, SIN tablas BYPASSRLS) **APROBADO + HECHO** por el operador.
 
-- [ ] **ADR 0074 → `accepted`** acotado a F0 (rol `system_owner`).
-- [ ] **Migración** `users.is_system_owner` (Boolean NOT NULL default false, UNIQUE parcial = singleton).
-- [ ] **JWT** claim `own` (encode/decode) + `AuthPrincipal.is_system_owner` + `require_system_owner` + `require_admin_or_owner`.
-- [ ] **Bootstrap** del primer usuario como owner + `/me` expone `is_system_owner`.
-- [ ] **Guardrail SSO** — `is_system_owner` no concedible por grupo IdP.
-- [ ] **Tests** — `tests/integration/test_cortex_f0_ownership.py` (singleton, 403 cross-user, claim).
+- [x] **ADR 0074 → `accepted-f0`** (F0 aprobado; F1-F5 siguen `proposed`/gated).
+- [x] **Migración 0091** `users.is_system_owner` (Boolean NOT NULL default false, UNIQUE parcial = singleton). Reversible.
+- [x] **JWT** claim `own` (encode/decode) + `AuthPrincipal.is_system_owner` + `require_system_owner` + `require_admin_or_owner` (**DB-authoritative**, no solo el claim).
+- [x] **Bootstrap** del primer usuario como owner + `/me` (ambos: `/auth/me` y `/me` rico) expone `is_system_owner` + hook `use-current-user` (`isSystemOwner`).
+- [x] **Guardrail SSO** — estructural: las vías SSO/MFA de minteo no fijan `is_system_owner` (default false) y el gate consulta la BD; SSO nunca concede ownership.
+- [x] **Tests** — `tests/integration/test_cortex_f0_ownership.py` (bootstrap, singleton, gate DB-authoritative rechaza hint forjado, /me). 3 en verde.
+
+**F1-F5 (memoria cognitiva, afecto, identidad, autonomía, voz) NO implementadas — gated por fase.**
 
 **F1-F5 (memoria cognitiva asociativa, motor afectivo PAD, identidad, bucles de
 reflexión/curiosidad, voz/avatar) quedan PENDIENTES de luz verde**: introducen

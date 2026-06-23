@@ -1,7 +1,7 @@
 ---
 adr_id: "0074"
 title: "Rol system_owner y Córtex: identidad global singleton, tablas tenant-less sobre BYPASSRLS"
-status: proposed
+status: accepted-f0
 date: 2026-06-22
 authors: [claude-opus, workflow-diseno-cortex]
 plan_referenced: cortex-system-owner
@@ -12,7 +12,12 @@ supersedes: []
 
 # ADR 0074 — Rol `system_owner` y Córtex: identidad global singleton sobre BYPASSRLS
 
-> **Estado: `proposed`** — toca el modelo de roles/auth y crea una **excepción consciente al Principio 1 (RLS)**. **Requiere aprobación del operador antes de implementar.**
+> **Estado: F0 `accepted` + IMPLEMENTADO (2026-06-23); F1-F5 `proposed` (gated).** El operador
+> aprobó el **cimiento F0** (rol `system_owner`: `users.is_system_owner` singleton, claim JWT
+> `own`, `require_system_owner`/`require_admin_or_owner` DB-authoritative, bootstrap del primer
+> usuario, `/me`). F0 **NO** crea tablas BYPASSRLS ni bucles autónomos. **F1-F5** (memoria
+> cognitiva, afecto, identidad, autonomía, voz) — que sí introducen la excepción al Principio 1
+> y egress/coste autónomos — **siguen requiriendo aprobación por fase antes de implementar.**
 
 ## Contexto
 

@@ -32,6 +32,7 @@ def encode_jwt(
     session_id: UUID,
     tenant_id: UUID | None = None,
     is_system_admin: bool = False,
+    is_system_owner: bool = False,
     expires_in: timedelta | None = None,
     extra_claims: dict[str, Any] | None = None,
 ) -> str:
@@ -57,6 +58,10 @@ def encode_jwt(
         claims["tid"] = str(tenant_id)
     if is_system_admin:
         claims["sys"] = True
+    # `own` is a hint for cheap reads; `require_system_owner` re-checks the DB
+    # (ADR 0074) so a stale token can't grant ownership on its own.
+    if is_system_owner:
+        claims["own"] = True
     if extra_claims:
         claims.update(extra_claims)
     encoded: str = jwt.encode(

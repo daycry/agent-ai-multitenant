@@ -305,6 +305,7 @@ def create_app() -> FastAPI:
                     "email": None,
                     "full_name": None,
                     "is_system_admin": principal.is_system_admin,
+                    "is_system_owner": principal.is_system_owner,
                     "memberships": [],
                     "active_tenant_id": (
                         str(principal.tenant_id) if principal.tenant_id is not None else None
@@ -343,6 +344,8 @@ def create_app() -> FastAPI:
             "email": user.email,
             "full_name": user.full_name,
             "is_system_admin": bool(user.is_system_admin),
+            # Córtex F0 (ADR 0074): el frontend puede gatear la futura UI del córtex.
+            "is_system_owner": bool(user.is_system_owner),
             "memberships": memberships,
             "active_tenant_id": (
                 str(principal.tenant_id) if principal.tenant_id is not None else None

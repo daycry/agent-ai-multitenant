@@ -32,7 +32,7 @@ from api_server.auth.mfa.webauthn_challenge_store import WebauthnChallengeStore
 from api_server.auth.rate_limit import RateLimiter
 from api_server.auth.sessions import SessionStore
 from api_server.config import get_settings
-from api_server.db.models import UserOrganizationMembership, UserRole
+from api_server.db.models import User, UserOrganizationMembership, UserRole
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 
 
@@ -47,6 +47,9 @@ class AuthPrincipal:
     session_id: UUID
     tenant_id: UUID | None
     is_system_admin: bool = False
+    # Hint from the `own` JWT claim (ADR 0074). NOT authoritative on its own —
+    # `require_system_owner` re-verifies against the DB per request.
+    is_system_owner: bool = False
 
 
 def _parse_bearer(authorization: str | None) -> str:
@@ -169,6 +172,7 @@ async def get_principal(
         )
 
     is_system_admin = bool(claims.get("sys", False))
+    is_system_owner = bool(claims.get("own", False))
 
     # Superadmin tenant override via header. Non-admins can't use this
     # path — even if they send the header, we ignore it.
@@ -186,6 +190,7 @@ async def get_principal(
         session_id=session_id,
         tenant_id=tenant_id,
         is_system_admin=is_system_admin,
+        is_system_owner=is_system_owner,
     )
 
 
@@ -199,6 +204,49 @@ def require_system_admin(
             detail="system admin role required",
         )
     return principal
+
+
+async def _is_db_system_owner(user_id: UUID) -> bool:
+    """Authoritative System Owner check against the DB (ADR 0074): the ``own``
+    JWT claim is only a hint, so the córtex gate re-reads ``users.is_system_owner``
+    per request — revoking ownership then takes effect immediately. Uses the
+    BYPASSRLS admin engine because ``users`` is global (un-RLSed)."""
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(User.is_system_owner).where(User.id == user_id, User.deleted_at.is_(None))
+        )
+        return bool(result.scalar_one_or_none())
+
+
+async def require_system_owner(
+    principal: AuthPrincipal = Depends(get_principal),
+) -> AuthPrincipal:
+    """Gate an endpoint to the System Owner (córtex F0, ADR 0074). 403 otherwise.
+
+    Verified against the DB per request, NOT just the ``own`` claim."""
+    if not await _is_db_system_owner(principal.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="system owner role required",
+        )
+    return principal
+
+
+async def require_admin_or_owner(
+    principal: AuthPrincipal = Depends(get_principal),
+) -> AuthPrincipal:
+    """Gate to System Admin OR System Owner (ADR 0074). Composite so neither
+    primitive (``require_system_admin`` / ``require_system_owner``) is overloaded
+    in-place."""
+    if principal.is_system_admin:
+        return principal
+    if await _is_db_system_owner(principal.user_id):
+        return principal
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="system admin or system owner role required",
+    )
 
 
 # ---------------------------------------------------------------------------
