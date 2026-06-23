@@ -30,6 +30,12 @@ from api_server.assistant.tools import AssistantToolContext, run_assistant_tool
 # A node is async because the tool round awaits DB queries.
 AssistantNode = Callable[["AssistantState"], Awaitable["AssistantState"]]
 
+# How the graph executes ONE tool call: ``(name, tool_ctx, arguments) -> result``.
+# Defaults to the assistant's :func:`run_assistant_tool`; the córtex (Plan F1)
+# reuses this very graph with its own runner (``cortex.tools.run_cortex_tool``)
+# so the loop, caps and convergence logic are shared, not duplicated.
+ToolRunner = Callable[[str, Any, dict[str, Any]], Awaitable[dict[str, Any]]]
+
 # Hard ceiling on tool rounds so a misbehaving model can't loop forever.
 MAX_TOOL_ROUNDS = 6
 # Backstop on how many times ONE tool may run in a single turn. The signature
@@ -44,7 +50,9 @@ MAX_CALLS_PER_TOOL = 3
 # signature dedup misses it). A single user message should yield AT MOST ONE
 # memory write — the model is told to fold several facts into one call — so we
 # hard-cap it to 1/turn. This is the deterministic guarantee on top of the prompt.
-_PER_TOOL_CALL_CAP: dict[str, int] = {"remember_about_me": 1}
+# ``cortex_remember`` (Plan F1) is the córtex's memory WRITE tool and shares the
+# exact same 1/turn guarantee — it reuses this graph, so it reuses this cap.
+_PER_TOOL_CALL_CAP: dict[str, int] = {"remember_about_me": 1, "cortex_remember": 1}
 
 
 def _tool_call_cap(name: str) -> int:
@@ -207,14 +215,14 @@ def _node_decide(model: AssistantModelClient) -> AssistantNode:
     return _run
 
 
-def _node_run_tools() -> AssistantNode:
+def _node_run_tools(tool_runner: ToolRunner) -> AssistantNode:
     async def _run(state: AssistantState) -> AssistantState:
         assert state.pending is not None
         assert state.tool_ctx is not None
         state.rounds += 1
         for call in state.pending.tool_calls:
             state.executed_signatures.add(_signature(call))
-            result = await run_assistant_tool(call.name, state.tool_ctx, call.arguments)
+            result = await tool_runner(call.name, state.tool_ctx, call.arguments)
             state.tools_called.append(call.name)
             state.tool_results.append({"tool": call.name, "result": result})
         return state
@@ -252,10 +260,21 @@ def _node_finish(model: AssistantModelClient) -> AssistantNode:
 # ---------------------------------------------------------------------------
 # Build + run
 # ---------------------------------------------------------------------------
-def build_assistant_graph(model: AssistantModelClient) -> Any:
-    graph: StateGraph[AssistantState] = StateGraph(AssistantState)
+def build_assistant_graph(
+    model: AssistantModelClient,
+    *,
+    state_type: type = AssistantState,
+    tool_runner: ToolRunner = run_assistant_tool,
+) -> Any:
+    """Compile the one-turn tool-use loop.
+
+    ``state_type`` / ``tool_runner`` are the two seams the córtex (Plan F1) reuses
+    to drive the SAME loop with its own state subclass and tool runner — no fork
+    of the convergence/cap logic. The defaults keep the assistant behaviour
+    identical."""
+    graph: StateGraph[Any] = StateGraph(state_type)
     graph.add_node("decide", _node_decide(model))
-    graph.add_node("run_tools", _node_run_tools())
+    graph.add_node("run_tools", _node_run_tools(tool_runner))
     graph.add_node("finish", _node_finish(model))
 
     graph.add_edge(START, "decide")
