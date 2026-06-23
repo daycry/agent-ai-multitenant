@@ -48,3 +48,24 @@ describe("renderPlanDraft — las tablas anchas no desbordan la página", () => 
     expect(wrapperIdx).toBeLessThan(tableIdx);
   });
 });
+
+describe("renderPlanDraft — los tokens largos sin espacios no desbordan la página", () => {
+  it("aplica break-words al párrafo (una URL/identificador larguísimo se parte en vez de desbordar)", () => {
+    // El contenido de planning es salida de un LLM: puede traer una URL o un
+    // identificador larguísimo SIN espacios. Sin overflow-wrap, ese token
+    // empuja el ancho del Card (que no tiene scroll propio) y aparece scroll
+    // horizontal de PÁGINA. `break-words` lo parte en su caja.
+    const longToken = `https://example.com/${"segmento-larguisimo".repeat(20)}`;
+    const html = renderToStaticMarkup(renderPlanDraft(longToken));
+    expect(html).toContain("<p");
+    expect(html).toContain("break-words");
+  });
+
+  it("aplica break-words al `código en línea` (tokens monoespaciados largos también se parten)", () => {
+    const html = renderToStaticMarkup(renderPlanDraft("Ruta: `" + "a".repeat(200) + "`"));
+    const codeIdx = html.indexOf("<code");
+    expect(codeIdx).toBeGreaterThanOrEqual(0);
+    // La clase break-words debe estar en el propio <code>.
+    expect(html.slice(codeIdx, codeIdx + 200)).toContain("break-words");
+  });
+});

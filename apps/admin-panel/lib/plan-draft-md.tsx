@@ -78,7 +78,10 @@ function inline(text: string): React.ReactNode {
     if (match[1]) {
       // `inline code`
       out.push(
-        <code key={key++} className="bg-muted rounded px-1 py-0.5 font-mono text-[0.85em]">
+        <code
+          key={key++}
+          className="bg-muted rounded px-1 py-0.5 font-mono text-[0.85em] break-words"
+        >
           {token.slice(1, -1)}
         </code>,
       );
@@ -221,7 +224,7 @@ function renderParagraph(lines: string[], key: string): RenderedBlock {
   return {
     key,
     node: (
-      <p className="my-1 whitespace-pre-wrap">
+      <p className="my-1 whitespace-pre-wrap break-words">
         {lines.map((l, i) => (
           <React.Fragment key={i}>
             {i > 0 && <br />}
