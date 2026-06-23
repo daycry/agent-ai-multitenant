@@ -232,6 +232,53 @@ async def test_run_agent_propagates_effort_to_options() -> None:
 
 
 @pytest.mark.asyncio
+async def test_complete_routes_native_allowed_tools_into_tool_path() -> None:
+    """ADR 0076 (córtex F1): las web tools NATIVAS del SDK (WebSearch/WebFetch) van
+    como `allowed_tools` y deben seguir activas AUN cuando hay host tools (MCP) en
+    juego — el córtex usa ambas a la vez. Verificamos que complete() reenvía
+    `allowed_tools` al camino con tools host (`_complete_with_tools`)."""
+    fake_query = _make_query(_AssistantMessage(content=[_TextBlock(text="ok")]))
+    p = ClaudeAgentProvider(query_fn=fake_query, default_model="claude-sonnet-4-5")
+    captured: dict[str, Any] = {}
+
+    async def _spy(**kwargs: Any):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        from shared_llm.types import CompletionResponse
+
+        return CompletionResponse(content="", model="m", provider="claude_agent")
+
+    p._complete_with_tools = _spy  # type: ignore[method-assign]
+    await p.complete(
+        [Message(role="user", content="busca en la web")],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "cortex_remember", "description": "x", "parameters": {}},
+            }
+        ],
+        allowed_tools=["WebSearch", "WebFetch"],
+    )
+    assert captured.get("allowed_tools") == ["WebSearch", "WebFetch"]
+
+
+def test_build_tool_options_keeps_native_allowed_tools() -> None:
+    """`_build_tool_options` asigna las web tools nativas a `allowed_tools` del
+    `ClaudeAgentOptions` (auto-aprobadas), separadas de las host tools (MCP) que el
+    interceptor `can_use_tool` captura. Requiere el SDK real (opcional)."""
+    pytest.importorskip("claude_agent_sdk")
+    p = ClaudeAgentProvider(default_model="claude-sonnet-4-5")
+    options = p._build_tool_options(  # type: ignore[attr-defined]
+        system="s",
+        model="claude-sonnet-4-5",
+        specs=[{"name": "cortex_remember", "description": "x", "parameters": {}}],
+        max_turns=4,
+        effort="high",
+        allowed_tools=["WebSearch", "WebFetch"],
+    )
+    assert list(options.allowed_tools) == ["WebSearch", "WebFetch"]
+
+
+@pytest.mark.asyncio
 async def test_flatten_collapses_chat_into_human_assistant_transcript() -> None:
     """The SDK's `query()` takes a string prompt; we collapse the chat
     history into a `Human:`/`Assistant:` transcript with system prepended."""

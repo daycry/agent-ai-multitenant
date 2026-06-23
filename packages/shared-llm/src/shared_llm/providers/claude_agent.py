@@ -198,6 +198,11 @@ class ClaudeAgentProvider:
                 tools=tools,
                 max_turns=max_turns,
                 effort=effort,
+                # Las web tools NATIVAS del SDK (WebSearch/WebFetch, ADR 0076) viajan
+                # como `allowed_tools` y deben seguir activas AUN cuando hay host
+                # tools en juego — el córtex (F1) tiene ambas. Aditivo: el asistente
+                # no pasa `allowed_tools`, así que None mantiene el comportamiento.
+                allowed_tools=allowed_tools,
             )
         options = self._build_options(
             model=model,
@@ -235,6 +240,7 @@ class ClaudeAgentProvider:
         tools: list[dict[str, Any]],
         max_turns: int,
         effort: str | None,
+        allowed_tools: list[str] | None = None,
     ) -> CompletionResponse:
         """Honor `tools` with the Claude Agent SDK (host-executed tool-calling).
 
@@ -243,6 +249,11 @@ class ClaudeAgentProvider:
         callback that DENIES execution and interrupts — the host then runs the
         tool, exactly like the OpenAI-compatible providers. The model's
         ``tool_use`` blocks are harvested into ``CompletionResponse.tool_calls``.
+
+        ``allowed_tools`` carries the SDK's NATIVE tools (WebSearch/WebFetch, ADR
+        0076) that must stay enabled even when host tools are advertised — the
+        córtex (F1) uses both. They are auto-approved (in ``allowed_tools``) so the
+        ``can_use_tool`` interceptor only fires for the host (MCP) tools.
         """
         query_fn = self._query()
         specs = _unwrap_tool_schemas(tools)
@@ -252,7 +263,12 @@ class ClaudeAgentProvider:
             options: Any = None
         else:
             options = self._build_tool_options(
-                system=system, model=model, specs=specs, max_turns=max_turns, effort=effort
+                system=system,
+                model=model,
+                specs=specs,
+                max_turns=max_turns,
+                effort=effort,
+                allowed_tools=allowed_tools,
             )
             prompt_arg = _single_user_prompt_stream(prompt)
         collected: list[Any] = []
@@ -299,11 +315,15 @@ class ClaudeAgentProvider:
         specs: list[dict[str, Any]],
         max_turns: int,
         effort: str | None,
+        allowed_tools: list[str] | None = None,
     ) -> Any:
         """Build ``ClaudeAgentOptions`` advertising `specs` as an in-process MCP
         server, with a ``can_use_tool`` that denies+interrupts so the HOST runs
         the tool (the SDK only surfaces the call). Production path only — in tests
-        the injected ``query_fn`` short-circuits this (no SDK import)."""
+        the injected ``query_fn`` short-circuits this (no SDK import).
+
+        ``allowed_tools`` lists the SDK's NATIVE tools (WebSearch/WebFetch, ADR
+        0076) to keep auto-approved alongside the intercepted host tools."""
         try:
             from claude_agent_sdk import (  # lazy — optional extra
                 ClaudeAgentOptions,
@@ -345,8 +365,13 @@ class ClaudeAgentProvider:
         extra: dict[str, Any] = {}
         if effort:
             extra["effort"] = effort
-        # NB: las tools NO van en `allowed_tools` a propósito → el SDK evalúa el
-        # permiso a "ask" → dispara `can_use_tool` → interceptamos.
+        # NB: las tools HOST (MCP) NO van en `allowed_tools` a propósito → el SDK
+        # evalúa el permiso a "ask" → dispara `can_use_tool` → interceptamos. Las
+        # web tools NATIVAS del SDK (WebSearch/WebFetch, ADR 0076) SÍ van en
+        # `allowed_tools` para quedar auto-aprobadas (las gestiona Anthropic, no el
+        # host) — así coexisten con las host tools sin disparar el interceptor.
+        if allowed_tools:
+            extra["allowed_tools"] = list(allowed_tools)
         return ClaudeAgentOptions(
             model=model or self._default_model,
             system_prompt=system if system is not None else self._default_system_prompt,
