@@ -28,8 +28,10 @@ import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
 import { chatRefetchInterval, isReplyInFlight } from "@/lib/chat-feed";
+import { conversationLabel, nextActiveAfterDelete } from "@/lib/conversation-history";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { cn } from "@/lib/utils";
 import { useWebSocket, wsUrl } from "@/lib/ws";
@@ -45,6 +47,7 @@ interface Conversation {
   current_mode: string;
   custom_mode_name: string | null;
   related_plan_id: string | null;
+  created_at: string;
 }
 
 interface Message {
@@ -164,6 +167,7 @@ export default function ProjectChatPage() {
   const queryClient = useQueryClient();
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   const conversationsQuery = useQuery({
     queryKey: ["conversations", projectId],
@@ -278,6 +282,24 @@ export default function ProjectChatPage() {
       apiFetch<void>(`/conversations/${conversationId}/messages`, { method: "DELETE" }),
     onSuccess: (_result, conversationId) => {
       queryClient.setQueryData<Message[]>(["messages", conversationId], []);
+    },
+  });
+
+  // Delete a whole conversation from the history (hard-deletes its messages +
+  // Redis stream server-side). After deleting, jump to the most recent remaining
+  // conversation (or fall back to the empty state when none are left).
+  const deleteConversation = useMutation({
+    mutationFn: async (conversationId: string) =>
+      apiFetch<void>(`/conversations/${conversationId}`, { method: "DELETE" }),
+    onSuccess: (_result, conversationId) => {
+      const current = queryClient.getQueryData<Conversation[]>(["conversations", projectId]) ?? [];
+      const nextActive = nextActiveAfterDelete(current, conversationId);
+      queryClient.setQueryData<Conversation[]>(
+        ["conversations", projectId],
+        current.filter((c) => c.id !== conversationId),
+      );
+      queryClient.removeQueries({ queryKey: ["messages", conversationId] });
+      setActiveConversationId(nextActive);
     },
   });
 
@@ -402,6 +424,51 @@ export default function ProjectChatPage() {
         data-testid="chat-page-header"
       />
 
+      {/* Conversation history: switch between past conversations, start a new one
+          without deleting the others, or delete one from the history. */}
+      <div
+        className="mt-4 flex flex-wrap items-center gap-2"
+        data-testid="conversation-history-bar"
+      >
+        <label htmlFor="conversation-picker" className="text-muted-foreground text-sm">
+          Conversación:
+        </label>
+        <div className="w-full min-w-0 sm:w-72">
+          <Select
+            id="conversation-picker"
+            value={activeConversationId ?? ""}
+            onChange={(e) => setActiveConversationId(e.target.value)}
+            data-testid="conversation-picker"
+          >
+            {conversations.map((c) => (
+              <option key={c.id} value={c.id}>
+                {conversationLabel(c)} · {c.current_mode}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="conversation-new"
+          disabled={createConversation.isPending}
+          onClick={() => createConversation.mutate()}
+        >
+          Nueva conversación
+        </Button>
+        {activeConversation ? (
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="conversation-delete"
+            disabled={deleteConversation.isPending}
+            onClick={() => setConfirmDeleteOpen(true)}
+          >
+            Eliminar conversación
+          </Button>
+        ) : null}
+      </div>
+
       <Card className="mt-6">
         <CardHeader>
           <CardTitle>
@@ -457,6 +524,23 @@ export default function ProjectChatPage() {
           onConfirm={() =>
             clearMessages.mutate(activeConversation.id, {
               onSuccess: () => setConfirmClearOpen(false),
+            })
+          }
+        />
+      ) : null}
+
+      {activeConversation ? (
+        <ConfirmDialog
+          open={confirmDeleteOpen}
+          onOpenChange={setConfirmDeleteOpen}
+          title="Eliminar conversación"
+          description="Se eliminará esta conversación y todos sus mensajes. No se puede deshacer."
+          confirmLabel="Eliminar"
+          destructive
+          pending={deleteConversation.isPending}
+          onConfirm={() =>
+            deleteConversation.mutate(activeConversation.id, {
+              onSuccess: () => setConfirmDeleteOpen(false),
             })
           }
         />

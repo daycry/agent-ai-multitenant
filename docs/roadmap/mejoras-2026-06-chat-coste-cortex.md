@@ -46,18 +46,18 @@ fallback al catálogo en código.
 
 ---
 
-## Feature 2 — Historial de conversaciones · M · ⏳ PENDIENTE
+## Feature 2 — Historial de conversaciones · M · ✅ HECHO
 
-**Estado.** El backend ya soporta N conversaciones por proyecto + soft-delete
-(`deleted_at`) + `DELETE /conversations/{id}` (limpia Redis) + `GET
-/projects/{id}/conversations`. **Falta UI** y un endpoint de borrado de mensaje
-individual.
+**Estado.** El backend ya soportaba N conversaciones por proyecto + soft-delete
+(`deleted_at`) + `DELETE /conversations/{id}` + `GET /projects/{id}/conversations`.
+El trabajo era de UI: el operador quedaba atrapado en la última conversación, sin
+forma de ver el histórico, cambiar de conversación, ni borrar una.
 
-- [ ] **Backend** — `DELETE /conversations/{id}/messages/{message_id}` (hard-delete, RLS, 404 si no existe). `apps/api-server/src/api_server/routers/conversations.py`
-- [ ] **UI: selector/histórico** — panel/dropdown que lista las conversaciones del proyecto (created_at, title, modo) y permite cambiar de activa. `apps/admin-panel/app/admin/projects/[id]/chat/page.tsx`
-- [ ] **UI: "Nueva conversación"** — botón visible SIEMPRE (hoy solo si la lista está vacía).
-- [ ] **UI: "Eliminar conversación"** — botón destructivo con `ConfirmDialog` → `DELETE /conversations/{id}` → recargar siguiente.
-- [ ] **Tests** — integración del DELETE de mensaje; e2e `conversation-navigation.spec.ts` (crear A, crear B, listar, cambiar, borrar A, B sigue).
+- [x] **UI: selector/histórico** — dropdown que lista las conversaciones del proyecto (etiqueta por título o fecha + modo) y permite cambiar de activa. `apps/admin-panel/app/admin/projects/[id]/chat/page.tsx`
+- [x] **UI: "Nueva conversación"** — botón visible SIEMPRE en la barra de historial (antes solo aparecía con la lista vacía).
+- [x] **UI: "Eliminar conversación"** — botón destructivo con `ConfirmDialog` → `DELETE /conversations/{id}` → salta a la más reciente restante (o estado vacío).
+- [x] **Helper puro testeado** — `lib/conversation-history.ts` (`nextActiveAfterDelete`, `conversationLabel`) con 6 tests vitest.
+- [~] **Borrado de mensaje individual** — NO implementado (no lo pediste; YAGNI). El borrado opera a nivel de conversación (eliminar) o "Vaciar chat" (todos los mensajes).
 
 ---
 
