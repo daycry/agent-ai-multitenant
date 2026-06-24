@@ -121,6 +121,25 @@ async def get_cortex_model(
 
     Los tests sobreescriben esta dependencia con un ``ScriptedAssistantModel``.
     """
+    return await build_cortex_default_model(vault)
+
+
+async def build_cortex_default_model(
+    vault: LLMProviderVaultStore | None,
+) -> AssistantModelClient:
+    """Construye el modelo del córtex desde el platform-default (sin gate).
+
+    Núcleo de :func:`get_cortex_model` SIN la dependencia de gate
+    (``require_system_owner``): el córtex es un singleton del owner, así que su
+    modelo sale sólo de ``cortex.default_model`` y no depende del principal. Lo
+    reutiliza el WS de voz del córtex, que ya gatea por su cuenta
+    (``_is_db_system_owner`` DB-authoritative en el accept del socket), donde no
+    hay principal de cabecera para resolver ``require_system_owner``.
+
+    Degradación limpia (ADR 0074): un modelo ``claude_sdk`` sin el SDK en ESTE
+    proceso, o un provider no construible, levanta ``CortexModelUnavailableError``
+    traducida a un 503 honesto; sin nada configurado → 503 también.
+    """
     sessionmaker = get_admin_sessionmaker()
     async with sessionmaker() as admin_session:
         resolved = await resolve_cortex_model(admin_session)
@@ -487,4 +506,4 @@ def _preview(content: str) -> str:
     return text if len(text) <= _PREVIEW_LEN else text[: _PREVIEW_LEN - 1] + "…"
 
 
-__all__ = ["get_cortex_model", "router"]
+__all__ = ["build_cortex_default_model", "get_cortex_model", "router"]

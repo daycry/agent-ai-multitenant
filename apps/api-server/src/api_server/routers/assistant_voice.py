@@ -115,13 +115,16 @@ async def _run_turn(
     stt: HttpSpeechToText,
     tts: HttpTextToSpeech,
     voice: str,
+    audio_mime: str = "audio/wav",
 ) -> None:
     """Process one end-of-turn: STT → brain → TTS, sending the result frames.
 
     A media/provider failure surfaces as an ``error`` frame, never closing the
-    socket (the user can keep talking)."""
+    socket (the user can keep talking). ``audio_mime`` is the real content type
+    the browser announced (MediaRecorder emits webm/opus, not wav) — propagating
+    it (instead of hardcoding ``audio/wav``) is the shared STT robustness fix."""
     session = VoiceSession(
-        transcribe=lambda a: stt.transcribe(a, content_type="audio/wav"),
+        transcribe=lambda a: stt.transcribe(a, content_type=audio_mime),
         respond=lambda t: _respond(principal, model, t),
         synthesize=lambda t: tts.synthesize(t, voice=voice),
     )
@@ -143,9 +146,12 @@ async def _run_turn(
 
 @dataclass
 class _VoiceLoopState:
-    """Per-socket mutable state: the buffered utterance + the chosen voice."""
+    """Per-socket mutable state: utterance buffer + chosen voice + audio mime."""
 
     voice: str
+    # Real content type the client announced for its audio (config.audio_mime).
+    # Default wav for a bare PCM client; the browser overrides it with webm/opus.
+    audio_mime: str = "audio/wav"
     buffer: bytearray = field(default_factory=bytearray)
 
 
@@ -182,8 +188,12 @@ async def _handle_frame(
         return True
     ctype = control.get("type")
     if ctype == "config":
-        # Validate against the supported-voice allowlist before it reaches TTS.
+        # Validate against the supported-voice allowlist before it reaches TTS;
+        # propagate the real audio mime (webm/opus from MediaRecorder) to STT.
         state.voice = _resolve_voice(str(control.get("voice") or ""), state.voice)
+        mime = control.get("audio_mime")
+        if isinstance(mime, str) and mime.strip():
+            state.audio_mime = mime.strip()
         await ws.send_json({"type": "ready", "voice": state.voice})
     elif ctype == "reset":
         state.buffer.clear()
@@ -194,7 +204,14 @@ async def _handle_frame(
             await ws.send_json({"type": "turn_end", "empty": True})
         else:
             await _run_turn(
-                ws, audio, principal=principal, model=model, stt=stt, tts=tts, voice=state.voice
+                ws,
+                audio,
+                principal=principal,
+                model=model,
+                stt=stt,
+                tts=tts,
+                voice=state.voice,
+                audio_mime=state.audio_mime,
             )
     return True
 

@@ -204,6 +204,11 @@ export function VoiceCall() {
         const buf = await blob.arrayBuffer();
         const sock = wsRef.current;
         if (sock && sock.readyState === WebSocket.OPEN && buf.byteLength > 0) {
+          // Announce the REAL audio mime (MediaRecorder emits webm/opus, not wav)
+          // so the server forwards it to STT verbatim — the shared content_type
+          // fix; forcing wav server-side broke transcription (ADR 0073).
+          const mime = (blob.type || rec.mimeType || "audio/webm").split(";")[0];
+          sock.send(JSON.stringify({ type: "config", voice, audio_mime: mime }));
           sock.send(buf);
           sock.send(JSON.stringify({ type: "eot" }));
           setStatus("thinking");

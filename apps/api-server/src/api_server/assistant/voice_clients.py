@@ -28,7 +28,9 @@ class SpeechToText(Protocol):
 
 
 class TextToSpeech(Protocol):
-    async def synthesize(self, text: str, *, voice: str, response_format: str = "mp3") -> bytes: ...
+    async def synthesize(
+        self, text: str, *, voice: str, response_format: str = "mp3", speed: float = 1.0
+    ) -> bytes: ...
 
 
 class HttpSpeechToText:
@@ -81,13 +83,20 @@ class HttpTextToSpeech:
         self._client = client
         self._timeout = timeout
 
-    async def synthesize(self, text: str, *, voice: str, response_format: str = "mp3") -> bytes:
-        payload = {
+    async def synthesize(
+        self, text: str, *, voice: str, response_format: str = "mp3", speed: float = 1.0
+    ) -> bytes:
+        payload: dict[str, Any] = {
             "model": self._model,
             "input": text,
             "voice": voice,
             "response_format": response_format,
         }
+        # `speed` rides the payload ONLY when it differs from the default, so a
+        # plain (assistant) call sends the exact legacy body and Kokoro applies
+        # its own default. The córtex voice WS sets it from the affective arousal.
+        if speed != 1.0:
+            payload["speed"] = speed
         url = f"{self._base_url}/v1/audio/speech"
         if self._client is not None:
             resp = await self._client.post(url, json=payload, timeout=self._timeout)

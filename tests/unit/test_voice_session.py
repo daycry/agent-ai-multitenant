@@ -116,3 +116,67 @@ async def test_http_tts_posts_voice_and_returns_audio() -> None:
     assert seen["url"] == "http://tts:8880/v1/audio/speech"
     assert seen["body"]["voice"] == "am_michael"
     assert seen["body"]["input"] == "hola"
+    # Default speed (1.0) is NOT sent — payload stays identical to the legacy one.
+    assert "speed" not in seen["body"]
+
+
+@pytest.mark.asyncio
+async def test_http_tts_forwards_speed_param() -> None:
+    """Kokoro speed modulation (córtex F5): a non-default ``speed`` rides the
+    /v1/audio/speech payload so the answer's pace follows the affective arousal."""
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        seen["body"] = _json.loads(request.content)
+        return httpx.Response(200, content=b"AUDIO")
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        tts = HttpTextToSpeech("http://tts:8880", client=client)
+        audio = await tts.synthesize("hola", voice="ef_dora", speed=1.4)
+
+    assert audio == b"AUDIO"
+    assert seen["body"]["speed"] == 1.4
+
+
+@pytest.mark.asyncio
+async def test_http_stt_defaults_content_type_to_wav() -> None:
+    """Default content_type stays audio/wav — the legacy assistant behaviour."""
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = request.content
+        return httpx.Response(200, json={"text": "ok"})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        stt = HttpSpeechToText("http://stt:8000", client=client)
+        await stt.transcribe(b"audio-bytes")
+
+    body = seen["body"]
+    assert isinstance(body, bytes)
+    assert b"audio/wav" in body
+
+
+@pytest.mark.asyncio
+async def test_http_stt_propagates_custom_content_type() -> None:
+    """Shared robustness fix (córtex F5): the real audio mime (e.g. audio/webm
+    from MediaRecorder) is propagated to STT instead of being forced to wav —
+    forcing wav was the assistant voice bug (the browser sends webm/opus)."""
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = request.content
+        return httpx.Response(200, json={"text": "ok"})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        stt = HttpSpeechToText("http://stt:8000", client=client)
+        await stt.transcribe(b"webm-bytes", content_type="audio/webm")
+
+    body = seen["body"]
+    assert isinstance(body, bytes)
+    assert b"audio/webm" in body
+    assert b"audio/wav" not in body
