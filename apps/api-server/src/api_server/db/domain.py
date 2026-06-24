@@ -172,8 +172,10 @@ class ToolCategory(enum.StrEnum):
     """Closed *Función* facet of the tool taxonomy (ADR 0049).
 
     The seven function buckets are exactly the ``category`` values used by the
-    19 built-in seed rows (``api_server.seeds.builtin_tools``); a CI contract
-    test (task_06_18_14) asserts this enum stays a superset of the seed.
+    built-in seed rows (``api_server.seeds.builtin_tools`` — currently 15, the
+    git family was retired in task_06_18_06); a CI contract test (task_06_18_14)
+    asserts this enum stays a superset of the seed, so the exact count is not
+    hardcoded here to avoid drift.
 
     Three extra buckets carry tools that are *not* in the catalog seed:
 

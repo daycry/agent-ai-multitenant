@@ -21,7 +21,7 @@ from api_server.auth.deps import (
     require_tenant_admin,
     require_tenant_member,
 )
-from api_server.db.domain import Skill
+from api_server.db.domain import Skill, Tool
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -45,6 +45,34 @@ router = APIRouter(prefix="/skills", tags=["skills"])
 
 def _str_uuid_list(values: list[UUID]) -> list[str]:
     return [str(v) for v in values]
+
+
+async def _validate_required_tools(session: AsyncSession, tool_ids: list[UUID]) -> None:
+    """Reject ``required_tools`` that don't resolve to a LIVE tool visible to the
+    caller's tenant (built-in/global or own) — L1 of the 2026-06 audit.
+
+    Runs under the tenant RLS session, so the SELECT only returns tools the
+    tenant may see; an unknown / soft-deleted / cross-tenant UUID simply won't
+    come back and is reported as a 422 (rather than silently persisting a
+    dangling reference the Capability Hub would then mis-render).
+    """
+    if not tool_ids:
+        return
+    found = set(
+        (
+            await session.execute(
+                select(Tool.id).where(Tool.id.in_(tool_ids), Tool.deleted_at.is_(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    missing = [str(t) for t in tool_ids if t not in found]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"required_tools reference tools not visible to this tenant: {missing}",
+        )
 
 
 @router.get("", response_model=list[SkillResponse])
@@ -89,6 +117,7 @@ async def create_skill(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> SkillResponse:
     tenant_id = require_tenant_id(principal)
+    await _validate_required_tools(session, payload.required_tools)
     skill = Skill(
         tenant_id=tenant_id,
         name=payload.name,
@@ -115,6 +144,8 @@ async def update_skill(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> SkillResponse:
     require_tenant_id(principal)
+    if payload.required_tools is not None:
+        await _validate_required_tools(session, payload.required_tools)
     skill = await get_writable_or_404(
         session,
         Skill,
