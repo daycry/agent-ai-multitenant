@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   affectFrameToMind,
+  avatarStyleFromAffect,
   driveToPercent,
   PAD_RANGES,
   padToPercent,
+  parseVoiceAffectFrame,
   type PadDimension,
 } from "./cortex";
 
@@ -124,5 +126,90 @@ describe("affectFrameToMind", () => {
     expect(affectFrameToMind(null)).toBeNull();
     expect(affectFrameToMind("nope")).toBeNull();
     expect(affectFrameToMind(42)).toBeNull();
+  });
+});
+
+describe("parseVoiceAffectFrame", () => {
+  // El frame de VOZ es PLANO (campos en raíz), no anidado en `payload`.
+  const frame = {
+    type: "affect",
+    valence: 0.42,
+    arousal: 0.61,
+    dominance: -0.15,
+    intensity: 0.55,
+    mood_label: "concentrado",
+    drives: { curiosity: 0.82, bonding: 0.4, coherence: 0.66, competence: 0.55 },
+  };
+
+  it("parses a well-formed flat voice affect frame", () => {
+    const parsed = parseVoiceAffectFrame(frame);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.valence).toBe(0.42);
+    expect(parsed?.arousal).toBe(0.61);
+    expect(parsed?.dominance).toBe(-0.15);
+    expect(parsed?.intensity).toBe(0.55);
+    expect(parsed?.mood_label).toBe("concentrado");
+    expect(parsed?.drives).toEqual({
+      curiosity: 0.82,
+      bonding: 0.4,
+      coherence: 0.66,
+      competence: 0.55,
+    });
+  });
+
+  it("coerces stringified numbers", () => {
+    const parsed = parseVoiceAffectFrame({
+      type: "affect",
+      valence: "0.3",
+      arousal: "0.5",
+      dominance: "0",
+      mood_label: "calmo",
+      drives: { curiosity: "0.5", bonding: "0.5", coherence: "0.5", competence: "0.5" },
+    });
+    expect(parsed?.valence).toBe(0.3);
+    expect(parsed?.arousal).toBe(0.5);
+    expect(parsed?.drives.curiosity).toBe(0.5);
+  });
+
+  it("does NOT accept the nested telemetry frame (has a `payload`)", () => {
+    // El frame de telemetría de `/mind` anida en `payload`; este parser es del WS
+    // de voz (campos planos), así que debe rechazarlo y dejarlo para affectFrameToMind.
+    expect(parseVoiceAffectFrame({ type: "affect", payload: { valence: 0.4 } })).toBeNull();
+  });
+
+  it("rejects non-affect, null, and non-object frames", () => {
+    expect(parseVoiceAffectFrame({ type: "transcript", text: "hola" })).toBeNull();
+    expect(parseVoiceAffectFrame(null)).toBeNull();
+    expect(parseVoiceAffectFrame("nope")).toBeNull();
+    expect(parseVoiceAffectFrame(42)).toBeNull();
+  });
+});
+
+describe("avatarStyleFromAffect", () => {
+  it("maps negative valence to a red-ish hue and positive to green-ish", () => {
+    const sad = avatarStyleFromAffect({ valence: -1, arousal: 0.5 });
+    const happy = avatarStyleFromAffect({ valence: 1, arousal: 0.5 });
+    expect(sad.hue).toBe(0); // rojo
+    expect(happy.hue).toBe(130); // verde
+    // La neutra (0) cae en un ámbar intermedio.
+    expect(avatarStyleFromAffect({ valence: 0, arousal: 0.5 }).hue).toBe(65);
+  });
+
+  it("raises saturation and speeds up the sway with arousal", () => {
+    const calm = avatarStyleFromAffect({ valence: 0, arousal: 0 });
+    const excited = avatarStyleFromAffect({ valence: 0, arousal: 1 });
+    expect(excited.saturation).toBeGreaterThan(calm.saturation);
+    expect(excited.intensity).toBeGreaterThan(calm.intensity);
+    // Más activación → ciclo de sway más corto (más rápido).
+    expect(excited.swayDurationSec).toBeLessThan(calm.swayDurationSec);
+  });
+
+  it("clamps out-of-range valence and arousal", () => {
+    const over = avatarStyleFromAffect({ valence: 5, arousal: 9 });
+    const under = avatarStyleFromAffect({ valence: -5, arousal: -9 });
+    expect(over.hue).toBe(130);
+    expect(over.intensity).toBe(1);
+    expect(under.hue).toBe(0);
+    expect(under.intensity).toBe(0);
   });
 });

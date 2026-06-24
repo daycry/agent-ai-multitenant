@@ -27,9 +27,10 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Brain, Send } from "lucide-react";
+import { Brain, Phone, Send } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { CortexVoiceCall } from "@/components/cortex/cortex-voice-call";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -57,6 +58,7 @@ export default function CortexChatPage() {
   const [draft, setDraft] = useState("");
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
+  const [voiceMode, setVoiceMode] = useState(false);
   // El effort efectivo del último turno del córtex; alimenta el indicador de
   // "pensando a fondo" del siguiente turno.
   const [lastEffort, setLastEffort] = useState<string | null>(null);
@@ -150,8 +152,31 @@ export default function CortexChatPage() {
         icon={<Brain className="h-6 w-6 sm:h-7 sm:w-7" />}
         title="Córtex"
         description="Tu córtex con hilo persistente, recall asociativo sobre tu memoria privada y deliberación profunda. Es una mente simulada y útil — sin afecto ni consciencia."
+        actions={
+          <Button
+            variant={voiceMode ? "default" : "outline"}
+            onClick={() => setVoiceMode((v) => !v)}
+            data-testid="cortex-voice-toggle"
+          >
+            <Phone className="mr-2 h-4 w-4" />
+            {voiceMode ? "Cerrar voz" : "Modo voz"}
+          </Button>
+        }
         data-testid="cortex-chat-header"
       />
+
+      {voiceMode ? (
+        <Card className="mt-6" data-testid="cortex-voice-card">
+          <CardContent className="pt-5">
+            <p className="text-muted-foreground mb-3 text-xs">
+              Habla con tu córtex. El avatar refleja su afecto simulado (color y expresión según
+              valencia y activación) — es un modelo computacional determinista, no sentimientos
+              reales.
+            </p>
+            <CortexVoiceCall />
+          </CardContent>
+        </Card>
+      ) : null}
 
       {/* Historial de hilos: cambia entre conversaciones o empieza una nueva
           sin borrar las demás (patrón del chat de proyecto). */}

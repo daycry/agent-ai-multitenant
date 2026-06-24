@@ -377,3 +377,90 @@ export function cortexConversationLabel(c: CortexConversation): string {
     minute: "2-digit",
   })}`;
 }
+
+// ---------------------------------------------------------------------------
+// Voz del córtex (Córtex F5, ADR 0073 voz + 0075 afecto) — frame de afecto + mapeo
+// del avatar. El WS de voz (`/ws/owner/cortex/voice`) emite un frame `affect`
+// PLANO (NO anidado en `payload` como el de telemetría de `/mind`): los campos van
+// al nivel raíz — ver `cortex/voice_turn.py::affect_frame`. El avatar lo mapea a
+// color/expresión/sway, rotulando SIEMPRE que es una mente SIMULADA (ADR 0075 §6).
+// ---------------------------------------------------------------------------
+
+/**
+ * Frame `{type:'affect', valence, arousal, dominance, intensity, mood_label,
+ * drives}` del WS de VOZ del córtex (campos al nivel raíz, distinto del frame de
+ * telemetría que los anida en `payload`). Rangos PAD: valence/dominance ∈ [-1,1],
+ * arousal/intensity ∈ [0,1]; drives ∈ [0,1].
+ */
+export interface CortexVoiceAffectFrame {
+  type: "affect";
+  valence: number;
+  arousal: number;
+  dominance: number;
+  intensity?: number;
+  mood_label: string;
+  drives: CortexDrives;
+}
+
+/**
+ * Normaliza un frame WS crudo de VOZ (`unknown`) a un `CortexVoiceAffectFrame`, o
+ * `null` si no es un frame de afecto plano válido. Defensivo: un frame de otro
+ * tipo o malformado nunca debe romper el avatar (cae al estado neutro).
+ */
+export function parseVoiceAffectFrame(data: unknown): CortexVoiceAffectFrame | null {
+  if (!isRecord(data) || data.type !== "affect") return null;
+  // El frame de telemetría anida en `payload`; el de voz lleva los campos en raíz.
+  // Sólo aceptamos el plano de voz: si trae `payload`, no es nuestro frame.
+  if (isRecord(data.payload)) return null;
+  const drives = isRecord(data.drives) ? (data.drives as Record<string, unknown>) : {};
+  return {
+    type: "affect",
+    valence: asNumber(data.valence),
+    arousal: asNumber(data.arousal),
+    dominance: asNumber(data.dominance),
+    intensity: asNumber(data.intensity),
+    mood_label: typeof data.mood_label === "string" ? data.mood_label : "",
+    drives: {
+      curiosity: asNumber(drives.curiosity, 0.5),
+      bonding: asNumber(drives.bonding, 0.5),
+      coherence: asNumber(drives.coherence, 0.5),
+      competence: asNumber(drives.competence, 0.5),
+    },
+  };
+}
+
+/** Estilo visual del avatar derivado del afecto (puro → testeable sin render). */
+export interface CortexAvatarStyle {
+  /** Tono HSL del rostro: rojo frío (valence −1) → verde cálido (valence +1). */
+  hue: number;
+  /** Saturación [%] del rostro: sube con la activación (arousal). */
+  saturation: number;
+  /** Intensidad [0,1] del "sway"/energía de la expresión (arousal). */
+  intensity: number;
+  /** Duración del ciclo de sway en segundos (más activación → más rápido). */
+  swayDurationSec: number;
+}
+
+/**
+ * Mapea un frame de afecto al estilo del avatar (PURO, sin React ni red):
+ *
+ *   - **Color/tono** sigue la VALENCIA: valence −1 → rojo (hue 0), 0 → ámbar
+ *     (hue ~50), +1 → verde (hue ~130). Positivo = cálido/verde, negativo = rojo.
+ *   - **Saturación** y **energía/sway** siguen la ACTIVACIÓN (arousal ∈ [0,1]):
+ *     más activación → más saturado y un sway más amplio y rápido.
+ *
+ * Clampa fuera de rango (un valor sucio nunca produce un color/animación inválida).
+ */
+export function avatarStyleFromAffect(
+  affect: Pick<CortexVoiceAffectFrame, "valence" | "arousal">,
+): CortexAvatarStyle {
+  const valence = Math.min(1, Math.max(-1, affect.valence));
+  const arousal = Math.min(1, Math.max(0, affect.arousal));
+  // valence [-1,1] → [0,1] → hue [0 (rojo) .. 130 (verde)].
+  const hue = ((valence + 1) / 2) * 130;
+  // arousal 0 → 45% (apagado), 1 → 90% (vibrante).
+  const saturation = 45 + arousal * 45;
+  // Sway más rápido (3.4s → 1.8s) cuanto mayor la activación.
+  const swayDurationSec = 3.4 - arousal * 1.6;
+  return { hue, saturation, intensity: arousal, swayDurationSec };
+}
