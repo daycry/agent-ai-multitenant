@@ -340,14 +340,17 @@ class MarketplaceInstallation(
 
     __tablename__ = "marketplace_installations"
     __table_args__ = (
-        # A given listing is installed at most once per (tenant, project)
-        # while live; revoked rows are kept for audit and excluded via the
-        # partial unique index.
+        # A given listing is installed at most once per (tenant, project) while
+        # live; revoked rows are kept for audit and excluded via the partial
+        # WHERE. COALESCE(project_id, zero-uuid) so TENANT-WIDE installs
+        # (project_id NULL) dedupe too (L4, migration 0096): PostgreSQL treats
+        # NULLs as distinct, so a plain index over project_id would NOT prevent
+        # two concurrent tenant-wide installs of the same listing.
         Index(
             "uq_marketplace_installations_live",
             "tenant_id",
             "listing_id",
-            "project_id",
+            text("COALESCE(project_id, '00000000-0000-0000-0000-000000000000'::uuid)"),
             unique=True,
             postgresql_where=text("deleted_at IS NULL AND status != 'revoked'"),
         ),

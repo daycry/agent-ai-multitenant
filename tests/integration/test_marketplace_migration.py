@@ -241,6 +241,73 @@ async def test_listings_policies_exist(schema_at_head, migrations_pg_dsn: str) -
 
 
 # ===========================================================================
+# L4 — tenant-wide installs (project_id NULL) dedupe via COALESCE in the index.
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_tenant_wide_install_dedup_under_nulls(
+    schema_at_head, migrations_pg_dsn: str
+) -> None:
+    """Two LIVE tenant-wide installs (project_id NULL) of the SAME listing must
+    collide. PostgreSQL treats NULLs as distinct, so the plain index over
+    project_id let them slip past (the dedup depended only on the router's racy
+    SELECT-then-insert). The COALESCE(project_id, zero-uuid) index makes them
+    collide so the DB is the real barrier. A project-scoped install of the same
+    listing still does NOT collide (different COALESCE value)."""
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    tenant_a, _, _, source_id = await _seed_two_tenants(migrations_pg_dsn)
+    listing = uuid4()
+    project = uuid4()
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO marketplace_listings"
+            " (id, source_id, tenant_id, kind, name, version)"
+            " VALUES ($1, $2, $3, 'tool', 'tool-a', '1.0.0')",
+            listing,
+            source_id,
+            tenant_a,
+        )
+        await conn.execute(
+            "INSERT INTO projects (id, tenant_id, name) VALUES ($1, $2, 'P')",
+            project,
+            tenant_a,
+        )
+        # First tenant-wide install (project_id NULL) — OK.
+        await conn.execute(
+            "INSERT INTO marketplace_installations"
+            " (id, tenant_id, listing_id, version, status)"
+            " VALUES ($1, $2, $3, '1.0.0', 'enabled')",
+            uuid4(),
+            tenant_a,
+            listing,
+        )
+        # Second tenant-wide install of the SAME listing — must violate the index.
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await conn.execute(
+                "INSERT INTO marketplace_installations"
+                " (id, tenant_id, listing_id, version, status)"
+                " VALUES ($1, $2, $3, '1.0.0', 'enabled')",
+                uuid4(),
+                tenant_a,
+                listing,
+            )
+        # A project-scoped install of the same listing is allowed (distinct COALESCE).
+        await conn.execute(
+            "INSERT INTO marketplace_installations"
+            " (id, tenant_id, listing_id, project_id, version, status)"
+            " VALUES ($1, $2, $3, $4, '1.0.0', 'enabled')",
+            uuid4(),
+            tenant_a,
+            listing,
+            project,
+        )
+    finally:
+        await conn.close()
+
+
+# ===========================================================================
 # Cross-tenant isolation — the heart of the multi-tenancy guarantee.
 # ===========================================================================
 @pytest.mark.cross_tenant
