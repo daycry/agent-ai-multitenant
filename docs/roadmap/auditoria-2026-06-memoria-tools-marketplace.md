@@ -48,15 +48,16 @@ Los problemas reales se concentran en cuatro puntos:
 
 ## Estado de remediación (2026-06-24)
 
-| Hallazgo                                                | Estado                     | Dónde                                                                                                                     |
-| ------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| **H0** (tools de memoria/orquestación no llegan al LLM) | ✅ **arreglado**           | commit `3419b2b` — `build_model_tool_schemas(include_system_tools)` + `register_system_families` + `_effective_allowlist` |
-| **H3** (tools de orquestación silenciadas)              | ✅ **arreglado**           | mismo commit (`3419b2b`); mismo root cause unificado con H0                                                               |
-| **H1** (`GET /memories` sin owner-auth)                 | ✅ **arreglado**           | router `/memories`: filtro owner para `private`                                                                           |
-| **H2** (`DELETE /memories` sin owner-auth)              | ✅ **arreglado (private)** | `private` de otro usuario → 404; shared/global = modelo de operador existente                                             |
-| **M3** (`/similar` + `/merge-into` sin owner-auth)      | ✅ **arreglado (private)** | `private` de otro usuario → 404; shared sigue guardado por el owner-pointer match                                         |
-| **H4** (install marketplace sin gates)                  | ⏳ pendiente               | —                                                                                                                         |
-| **M1/M2/L1-L5**                                         | ⏳ pendiente / deuda       | ver abajo                                                                                                                 |
+| Hallazgo                                                | Estado                         | Dónde                                                                                                                     |
+| ------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| **H0** (tools de memoria/orquestación no llegan al LLM) | ✅ **arreglado**               | commit `3419b2b` — `build_model_tool_schemas(include_system_tools)` + `register_system_families` + `_effective_allowlist` |
+| **H3** (tools de orquestación silenciadas)              | ✅ **arreglado**               | mismo commit (`3419b2b`); mismo root cause unificado con H0                                                               |
+| **H1** (`GET /memories` sin owner-auth)                 | ✅ **arreglado**               | router `/memories`: filtro owner para `private`                                                                           |
+| **H2** (`DELETE /memories` sin owner-auth)              | ✅ **arreglado (private)**     | `private` de otro usuario → 404; shared/global = modelo de operador existente                                             |
+| **M3** (`/similar` + `/merge-into` sin owner-auth)      | ✅ **arreglado (private)**     | `private` de otro usuario → 404; shared sigue guardado por el owner-pointer match                                         |
+| **H4** (install marketplace sin gates)                  | 🟡 **diferido con honestidad** | ADR 0081 — cablear los gates regresaría el feature (sandbox sin Docker); copy corregido + plan Fase B/C documentado       |
+| **M2** (asimetría store/recall `project_shared`)        | ✅ **arreglado**               | commit `73e7add` — `memory-store` usa el proyecto efectivo (ADR 0054)                                                     |
+| **M1 / L1-L5**                                          | ⏳ pendiente / deuda           | M1 ligado a H4 (ADR 0081); resto = deuda menor, ver abajo                                                                 |
 
 > **Decisión de política `/memories`** (respetando agentes≠humanos): `memory_entries` es
 > una tabla compartida por **agentes** (team/project/global), **asistente** (`private`,

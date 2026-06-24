@@ -855,8 +855,16 @@ async def install_listing(
     returns the row. The duplicate-live-install guard (partial unique
     index ``uq_marketplace_installations_live``) surfaces as a 409.
 
-    The trust / static-analysis / sandbox / per-permission consent gates
-    are Phase B-C — see the TODO markers below.
+    DEFERRED (ADR 0081): this fresh-install path does NOT run the security
+    gates (signature / static-analysis / sandbox) — those exist in
+    :meth:`InstallOrchestrator.install` and are wired ONLY to the *update* path
+    today. Wiring them here is blocked on the registry runtime + an
+    out-of-process sandbox the api-server can invoke (it deliberately has no
+    Docker socket, Principle 2): doing it naïvely would fail every install
+    closed (community/experimental need the sandbox; verified needs a signing
+    key + on-disk artifact). The per-permission consent gate IS enforced below
+    (a non-verified listing lands ``DISABLED`` with no permissions). See
+    ADR 0081 for the full Phase B/C plan.
     """
     tenant_id = require_tenant_id(principal)
 
@@ -899,8 +907,11 @@ async def install_listing(
             detail="listing already installed for this tenant/project",
         )
 
-    # TODO(Plan 09 Fase B/C): run the pre-install static analysis
-    # (Bandit/semgrep) and the post-install sandbox probe before persisting.
+    # DEFERRED to Phase B/C (ADR 0081): run the pre-install gates
+    # (signature → static analysis → sandbox probe) before persisting, by
+    # routing through InstallOrchestrator.install() like perform_installation_update
+    # already does. Blocked on an out-of-process sandbox runner (the api-server has
+    # no Docker socket) + the artifact registry. The audit H4 documents the gap.
 
     # Trust-level consent gate (plan decisions (a)+(b), task_09_07).
     # community / experimental listings ALWAYS require explicit

@@ -130,9 +130,18 @@ class MarketplaceTrustLevel(enum.StrEnum):
 class InstallationStatus(enum.StrEnum):
     """Lifecycle of an installation.
 
-    - ``enabled``:   installed and usable by the tenant's agents.
+    - ``enabled``:   installed and ALLOWED to be used by the tenant's agents.
     - ``disabled``:  installed but temporarily turned off (reversible).
     - ``revoked``:   permanently uninstalled; the row is kept for audit.
+
+    NOTE (ADR 0081): an ``enabled`` installation records *intent + permission*,
+    NOT a live capability. The install pipeline does not yet **materialize** the
+    listing's skill/tool into the tenant's native catalog (``tools`` / ``skills``)
+    nor run the pre-install security gates (signature / static-analysis / sandbox)
+    on the fresh-install path — both are Phase B/C, deferred pending the registry
+    runtime + an out-of-process sandbox the api-server can invoke (it has no Docker
+    socket by design). Until then, ``enabled`` does not mean an agent can actually
+    invoke it. See ADR 0081 and ``marketplace/install.py``.
     """
 
     ENABLED = "enabled"
