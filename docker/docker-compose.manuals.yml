@@ -237,6 +237,24 @@ services:
       WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
     depends_on:
       redis: { condition: service_healthy }
+    # beat es un SCHEDULER sin endpoint HTTP: el healthcheck HTTP que la imagen
+    # workers:ci hereda del api-server (FROM api-server) NUNCA pasa para beat.
+    # `celery inspect ping` tampoco aplica (beat no es un worker que responda a
+    # inspect). Verificamos que el proceso beat es el PID 1 vivo del contenedor
+    # (si beat muere, PID 1 muere y el contenedor reinicia). Python puro, sin
+    # herramientas extra en la imagen slim.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys; sys.exit(0 if b'beat' in open('/proc/1/cmdline', 'rb').read() else 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     networks: [agentic-net]
     restart: unless-stopped
 
