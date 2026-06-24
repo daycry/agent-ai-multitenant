@@ -44,6 +44,7 @@ from api_server.routers.conversations import (
 from api_server.routers.copilot_device_flow import (
     admin_router as copilot_device_flow_admin_router,
 )
+from api_server.routers.cortex import router as cortex_router
 from api_server.routers.cross_tenant_stats import router as cross_tenant_stats_router
 from api_server.routers.dep_cache import router as dep_cache_router
 from api_server.routers.docs_viewer import router as docs_viewer_router
@@ -231,6 +232,7 @@ def _register_routers(app: FastAPI) -> None:
         incoming_webhook_configs_router,
         assistant_router,
         assistant_voice_router,
+        cortex_router,
         backup_router,
         budget_pause_router,
         ws_router,

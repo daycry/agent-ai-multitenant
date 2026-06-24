@@ -210,7 +210,13 @@ async def recent_history_for_prompt(
     )
     rows = list((await session.execute(stmt)).all())
     rows.reverse()
-    return [{"role": role, "content": content} for role, content in rows]
+    # Map the domain role 'cortex' → 'assistant' so the LLM adapter sees a
+    # standard chat role (it folds any unknown role into 'user', which would
+    # mislabel the córtex's own past answers as if the user had written them).
+    return [
+        {"role": "assistant" if role == "cortex" else "user", "content": content}
+        for role, content in rows
+    ]
 
 
 __all__ = [

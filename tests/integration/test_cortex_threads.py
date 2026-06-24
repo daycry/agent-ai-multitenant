@@ -153,9 +153,12 @@ async def test_append_and_list_turns_owner_scoped(
         history = await threads.recent_history_for_prompt(
             session, conversation_id=conv.id, owner_user_id=owner_id
         )
+        # The domain role 'cortex' is mapped to the standard chat role 'assistant'
+        # so the LLM adapter doesn't mislabel the córtex's own past answers as user
+        # messages (it folds unknown roles into 'user').
         assert history == [
             {"role": "user", "content": "hola córtex"},
-            {"role": "cortex", "content": "hola owner"},
+            {"role": "assistant", "content": "hola owner"},
         ]
 
         # --- cross-owner: un owner ajeno NO escribe ni lee el hilo ---
