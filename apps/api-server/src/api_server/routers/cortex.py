@@ -38,6 +38,7 @@ from shared_llm.exceptions import AuthError, LLMError, RateLimitError
 from api_server.assistant.graph import AssistantModelClient
 from api_server.assistant.model_config import to_provider_model_name
 from api_server.auth.deps import AuthPrincipal, require_system_owner
+from api_server.celery_client import enqueue_cortex_distill_affect
 from api_server.cortex.graph import run_cortex_turn
 from api_server.cortex.memory import CORTEX_RECALL_LIMIT, augment_cortex_prompt, cortex_recall
 from api_server.cortex.model_config import (
@@ -267,7 +268,7 @@ async def post_turn(
         reasoning_effort = getattr(model, "reasoning_effort", None)
         degraded = bool(getattr(model, "degraded", False))
 
-        await append_turn(
+        cortex_turn = await append_turn(
             session,
             conversation_id=conversation_id,
             owner_user_id=owner_id,
@@ -279,6 +280,13 @@ async def post_turn(
             reasoning_effort=reasoning_effort,
             metadata={"degraded": degraded, "recall_hits": len(known_facts)},
         )
+        cortex_turn_id = cortex_turn.id
+
+    # Córtex F2 (ADR 0075): tras COMMIT del turno, dispara el distilador afectivo
+    # fuera del hot-path (fire-and-forget). El appraisal es ASÍNCRONO: el dial PAD
+    # se actualiza ~1-2s después; NUNCA bloquea ni rompe la respuesta (un fallo del
+    # broker se traga dentro de enqueue_cortex_distill_affect).
+    await enqueue_cortex_distill_affect(cortex_turn_id)
 
     return CortexTurnResponse(
         conversation_id=conversation_id,

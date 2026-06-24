@@ -105,7 +105,7 @@ repos:
         #   apps/watchdog/...                    -> uses api_server.logging
         #   apps/orchestrator/.../__main__.py    -> uses api_server.logging
         #   apps/orchestrator/.../dispatch.py    -> uses api_server.db
-        #   apps/workers/.../{execution,tasks,memorizer,maintenance}.py -> use api_server.db + .memorizer + .ingestion
+        #   apps/workers/.../{execution,tasks,memorizer,maintenance,cortex_affect}.py -> use api_server.db + .memorizer + .ingestion + .cortex
         #   apps/notification-dispatcher/.../{tasks,event_mapping}.py -> use api_server.db.notification
         # Also skip tests under packages — the hook venv has no pytest
         # available and tests carry untyped decorators by design.
@@ -114,7 +114,7 @@ repos:
         # a thin hand-written client. Generated style is not the repo's; it's
         # verified by tests/integration/test_sdk_python.py instead (see
         # packages/sdk-python/README.md).
-        exclude: ^(apps/(([^/]+/migrations/.*)|watchdog/.*|orchestrator/src/orchestrator/(__main__|dispatch)\.py|workers/src/workers/(execution|tasks|memorizer|maintenance)\.py|notification-dispatcher/src/notification_dispatcher/(tasks|event_mapping)\.py)|packages/sdk-python/src/agentic_platform_sdk/.*|packages/[^/]+/tests/.*)$
+        exclude: ^(apps/(([^/]+/migrations/.*)|watchdog/.*|orchestrator/src/orchestrator/(__main__|dispatch)\.py|workers/src/workers/(execution|tasks|memorizer|maintenance|cortex_affect)\.py|notification-dispatcher/src/notification_dispatcher/(tasks|event_mapping)\.py)|packages/sdk-python/src/agentic_platform_sdk/.*|packages/[^/]+/tests/.*)$
 
   # -------------------- TypeScript / JavaScript --------------------
   - repo: https://github.com/pre-commit/mirrors-prettier

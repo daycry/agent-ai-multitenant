@@ -168,6 +168,27 @@ class Settings(BaseSettings):
         "a small local model is the right trade-off (no quota, no egress).",
     )
 
+    # ----- Córtex F2: distilador afectivo (ADR 0075) -----
+    # El distilador afectivo (``workers.cortex_distill_affect``) puntúa cada turno
+    # del córtex contra los drives/identidad y emite un ``delta PAD + razón`` que
+    # el motor determinista aplica. Corre POST-turno, FAIL-OPEN (Ollama caído ⇒
+    # delta=0) y SIN egress: usa Ollama LOCAL (ya en el catálogo cerrado, ADR
+    # 0021), un modelo pequeño y barato (el razonamiento profundo sigue saliendo
+    # de claude_sdk en F1). Estos envs son sólo el cableado del host hacia Ollama;
+    # default local sin egress.
+    cortex_affect_llm_base_url: str = Field(
+        default="http://localhost:11434/v1",
+        description="OpenAI-compatible base URL que el distilador afectivo del "
+        "córtex (ADR 0075) llama. Default Ollama LOCAL (`ollama serve`) — sin "
+        "egress. Apúntalo a un endpoint gestionado en entornos sin Ollama local.",
+    )
+    cortex_affect_llm_model: str = Field(
+        default="llama3.1",
+        description="Modelo que el distilador afectivo pide. El appraisal es "
+        "barato; un modelo local pequeño es la decisión correcta (sin cuota, sin "
+        "egress). El catálogo LLM cerrado (ADR 0021) queda intacto.",
+    )
+
     # ----- Back-fill de embeddings de memoria (Plan 06.17 task_06_17_03) -----
     # El worker dedicado ``workers.backfill_memory_embeddings`` rellena los
     # ``memory_entries.embedding`` NULL embebiendo el contenido con Ollama

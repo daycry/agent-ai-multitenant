@@ -65,6 +65,15 @@ _RESTORE_QUEUE = "privileged"
 _MEMORIZE_HUMAN_WS_TASK = "workers.memorize_human_work_session"
 _MEMORIZE_QUEUE = "default"
 
+# The córtex affective distiller (Córtex F2, ADR 0075). After a córtex turn is
+# persisted, POST /owner/cortex/turns enqueues this by name so the distiller
+# (Ollama-local, fail-open) scores the turn → delta PAD + razón off the hot-path
+# — the dial updates ~1-2s after the answer. The `workers.cortex_affect` module
+# owns the implementation; the api-server only PRODUCES it by name (clean app
+# boundary, same as the Memorizer trigger).
+_CORTEX_DISTILL_AFFECT_TASK = "workers.cortex_distill_affect"
+_CORTEX_AFFECT_QUEUE = "default"
+
 
 @lru_cache(maxsize=1)
 def get_celery_client() -> Celery:
@@ -262,6 +271,33 @@ async def enqueue_memorize_human_work_session(work_session_id: UUID) -> bool:
     return True
 
 
+async def enqueue_cortex_distill_affect(turn_id: UUID) -> bool:
+    """Hand a freshly-persisted córtex turn to the affective distiller (Córtex F2).
+
+    Called by ``POST /owner/cortex/turns`` right after the cortex turn row is
+    committed — fire-and-forget, off the hot-path. The distiller scores the turn
+    (Ollama-local, fail-open) and writes a ``cortex_affect_snapshots`` row + the
+    live Redis state + a telemetry frame; the appraisal NEVER blocks the answer.
+
+    Best-effort: a broker failure is logged and swallowed (returns False) so the
+    turn the owner already received is never rolled back on a distiller-side
+    outage (the affect dial is a nice-to-have, not part of the turn transaction).
+    ``send_task`` does blocking socket I/O, so we run it off the event loop (same
+    approach as :func:`enqueue_ingestion`).
+    """
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            _CORTEX_DISTILL_AFFECT_TASK,
+            args=[str(turn_id)],
+            queue=_CORTEX_AFFECT_QUEUE,
+        )
+    except Exception as exc:
+        _log.warning("cortex_affect.enqueue_failed", turn_id=str(turn_id), error=str(exc))
+        return False
+    return True
+
+
 async def enqueue_restore(
     backup_id: str,
     *,
@@ -360,6 +396,7 @@ def _read_restore_status(job_id: str) -> dict[str, Any]:
 
 __all__ = [
     "enqueue_clone_project_repo",
+    "enqueue_cortex_distill_affect",
     "enqueue_event_dispatch",
     "enqueue_ingestion",
     "enqueue_memorize_human_work_session",
