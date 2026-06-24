@@ -46,6 +46,31 @@ Los problemas reales se concentran en cuatro puntos:
 
 ---
 
+## Estado de remediación (2026-06-24)
+
+| Hallazgo                                                | Estado                     | Dónde                                                                                                                     |
+| ------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **H0** (tools de memoria/orquestación no llegan al LLM) | ✅ **arreglado**           | commit `3419b2b` — `build_model_tool_schemas(include_system_tools)` + `register_system_families` + `_effective_allowlist` |
+| **H3** (tools de orquestación silenciadas)              | ✅ **arreglado**           | mismo commit (`3419b2b`); mismo root cause unificado con H0                                                               |
+| **H1** (`GET /memories` sin owner-auth)                 | ✅ **arreglado**           | router `/memories`: filtro owner para `private`                                                                           |
+| **H2** (`DELETE /memories` sin owner-auth)              | ✅ **arreglado (private)** | `private` de otro usuario → 404; shared/global = modelo de operador existente                                             |
+| **M3** (`/similar` + `/merge-into` sin owner-auth)      | ✅ **arreglado (private)** | `private` de otro usuario → 404; shared sigue guardado por el owner-pointer match                                         |
+| **H4** (install marketplace sin gates)                  | ⏳ pendiente               | —                                                                                                                         |
+| **M1/M2/L1-L5**                                         | ⏳ pendiente / deuda       | ver abajo                                                                                                                 |
+
+> **Decisión de política `/memories`** (respetando agentes≠humanos): `memory_entries` es
+> una tabla compartida por **agentes** (team/project/global), **asistente** (`private`,
+> user_id=humano) y **córtex** (`private`, user_id=owner). Solo `private` es dato personal
+> sensible → se restringe **estrictamente al dueño** (read/delete/similar/merge); otro
+> usuario lo ve como 404. Los scopes **compartidos** (team/project/global) siguen siendo
+> gestionables por cualquier miembro del tenant (modelo de operador existente; el `merge`
+> ya está guardado contra fugas cross-owner por el match de owner-pointer). NO se inventó
+> pertenencia humana a equipos (los `team_members` son AGENTES). Córtex y asistente usan
+> su propia vía interna (`cortex/memory.py`, `assistant/memory.py`), no este router, así
+> que el fix los protege sin romperles nada.
+
+---
+
 ## Hallazgos por severidad
 
 ### 🔴 HIGH
@@ -72,9 +97,9 @@ Los problemas reales se concentran en cuatro puntos:
    **solo emite schema para nombres del allowlist** (`for name in tool_names`). El propio
    módulo prepara `_RUNTIME_ONLY_SCHEMAS` con memory_recall/memory_store pero **se filtran**
    porque sus nombres no están en el allowlist.
-4. Resultado: el LLM **nunca ve** memory_recall/memory_store. Y si el agente tiene ≥1 tool
+4. Resultado: el LLM **nunca ve** memory*recall/memory_store. Y si el agente tiene ≥1 tool
    asignada, `set_allowed_tools` además las **rechazaría** en call-time (mismo eje que H3).
-   Si el agente no tiene tools, la _memory family_ ni siquiera se registra (gate
+   Si el agente no tiene tools, la \_memory family* ni siquiera se registra (gate
    `if "tool_specs" in spec`, ver L5).
 
 **Impacto:** ningún agente puede usar memoria cognitiva mientras ejecuta una tarea, sea
