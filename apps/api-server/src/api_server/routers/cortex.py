@@ -43,7 +43,10 @@ from api_server.cortex.memory import CORTEX_RECALL_LIMIT, augment_cortex_prompt,
 from api_server.cortex.model_config import (
     CortexModelUnavailableError,
     build_cortex_model,
+    clear_cortex_default_model,
+    get_cortex_default_model,
     resolve_cortex_model,
+    set_cortex_default_model,
 )
 from api_server.cortex.threads import (
     CortexNoTenantError,
@@ -55,11 +58,24 @@ from api_server.cortex.threads import (
     resolve_cortex_tenant_id,
 )
 from api_server.cortex.tools import CORTEX_TOOLS, CortexToolContext
+from api_server.db.llm_providers import get_llm_provider
+from api_server.db.models import User
+from api_server.db.platform_settings import PlatformSettingForbiddenError
 from api_server.db.session import get_admin_sessionmaker
 from api_server.llm_providers.factory import build_llm_provider
 from api_server.llm_providers.vault import LLMProviderVaultStore
-from api_server.routers.assistant import _claude_sdk_available
+from api_server.routers.assistant import (
+    _build_model_options,
+    _claude_sdk_available,
+    _parse_selection,
+    _validate_selection_or_422,
+)
 from api_server.routers.llm_providers import get_provider_vault_store
+from api_server.schemas.assistant import (
+    AssistantDefaultModelResponse,
+    AssistantDefaultModelUpdateRequest,
+    AssistantModelOptionsResponse,
+)
 from api_server.schemas.cortex import (
     CortexConversationResponse,
     CortexTurnItem,
@@ -321,6 +337,98 @@ async def get_conversations(
                 )
             )
         return out
+
+
+# ---------------------------------------------------------------------------
+# Modelo del córtex (config del owner — sin SQL, espejo del default del asistente)
+# ---------------------------------------------------------------------------
+# El córtex es un singleton del owner: su modelo sale SOLO del platform-default
+# ``cortex.default_model`` (sin override por tenant). Estos endpoints dan al
+# System Owner un selector en el panel (igual que el modelo del asistente) en vez
+# de tener que tocar ``platform_settings`` a mano. Reutilizan el builder de
+# opciones y la validación del asistente (catálogo cerrado, ADR 0021) para NO
+# duplicar el catálogo. Todos van gated por ``require_system_owner`` (config del
+# owner, no del tenant) y abren la sesión BYPASSRLS manualmente porque
+# ``platform_settings``/``llm_providers`` son globales (sin RLS, ADR 0028) y la
+# dependencia ``get_admin_session`` exige System Admin (un eje distinto al owner).
+@router.get("/model-options", response_model=AssistantModelOptionsResponse)
+async def get_model_options(
+    _principal: AuthPrincipal = Depends(require_system_owner),
+) -> AssistantModelOptionsResponse:
+    """Proveedores activos + sus modelos elegibles — la MISMA fuente que usa el
+    asistente para sus desplegables (catálogo + modelos sincronizados, sin red ni
+    secretos). El selector del córtex la consume tal cual."""
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as admin_session:
+        return await _build_model_options(admin_session)
+
+
+@router.get("/model", response_model=AssistantDefaultModelResponse)
+async def get_model(
+    _principal: AuthPrincipal = Depends(require_system_owner),
+) -> AssistantDefaultModelResponse:
+    """La selección de modelo del córtex (o sin configurar). ``is_valid`` marca
+    una selección obsoleta (proveedor desactivado / modelo retirado) para que el
+    owner pueda corregirla — mismo contrato que el default del asistente."""
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as admin_session:
+        selection = await get_cortex_default_model(admin_session)
+        if selection is None:
+            return AssistantDefaultModelResponse()
+        provider = await get_llm_provider(admin_session, selection.provider_id)
+        resolved = await resolve_cortex_model(admin_session)
+        return AssistantDefaultModelResponse(
+            provider_id=str(selection.provider_id),
+            model_id=selection.model_id,
+            is_valid=resolved is not None,
+            provider_display_name=(provider.display_name if provider else None),
+            reasoning_effort=selection.reasoning_effort,
+        )
+
+
+@router.put("/model", response_model=AssistantDefaultModelResponse)
+async def put_model(
+    payload: AssistantDefaultModelUpdateRequest,
+    principal: AuthPrincipal = Depends(require_system_owner),
+) -> AssistantDefaultModelResponse:
+    """Fija o limpia el modelo del córtex (System Owner).
+
+    Cuerpo con ``provider_id``+``model_id`` (y opcional ``reasoning_effort``) para
+    fijar, o ambos ``None`` para limpiar. Valida la selección como el asistente
+    (proveedor activo + modelo elegible del catálogo cerrado ADR 0021, y un
+    ``reasoning_effort`` válido para el kind, ADR 0070); rechaza con 422 una
+    selección fuera de catálogo. Todo en UNA transacción BYPASSRLS.
+
+    ``set_cortex_default_model`` (→ ``set_platform_setting``) re-verifica que el
+    actor es System Admin: el owner del despliegue lo es (es el primer usuario,
+    ADR 0074); un owner que NO fuese admin recibiría un 403 honesto en vez de un
+    escritura silenciosa."""
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as admin_session, admin_session.begin():
+        actor = await admin_session.get(User, principal.user_id)
+        if actor is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="actor user not found"
+            )
+        try:
+            if payload.is_clear:
+                await clear_cortex_default_model(admin_session, actor=actor)
+                return AssistantDefaultModelResponse()
+            selection = _parse_selection(
+                payload.provider_id, payload.model_id, payload.reasoning_effort
+            )
+            await _validate_selection_or_422(admin_session, selection)
+            await set_cortex_default_model(admin_session, selection, actor=actor)
+        except PlatformSettingForbiddenError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        provider = await get_llm_provider(admin_session, selection.provider_id)
+        return AssistantDefaultModelResponse(
+            provider_id=str(selection.provider_id),
+            model_id=selection.model_id,
+            is_valid=True,
+            provider_display_name=(provider.display_name if provider else None),
+            reasoning_effort=selection.reasoning_effort,
+        )
 
 
 # ---------------------------------------------------------------------------

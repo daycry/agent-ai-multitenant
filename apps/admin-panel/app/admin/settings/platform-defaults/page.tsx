@@ -26,6 +26,9 @@ import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useCurrentUser } from "@/lib/use-current-user";
+
+import { CortexModelSection } from "./cortex-model-section";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.platform_settings_registry.platform_registry_to_dict.
@@ -122,6 +125,11 @@ function PlatformDefaultsContent() {
 
   const valueByKey = new Map((valuesQuery.data ?? []).map((v) => [v.key, v]));
 
+  // El modelo del córtex es config del System Owner (no del System Admin): el
+  // córtex es la mente del dueño del despliegue (ADR 0074), gated en el backend
+  // por `require_system_owner`. Solo el owner ve esta sección.
+  const { isSystemOwner } = useCurrentUser();
+
   return (
     <div className="mt-6">
       <StateBlock
@@ -153,6 +161,8 @@ function PlatformDefaultsContent() {
           ))}
         </div>
       </StateBlock>
+
+      {isSystemOwner ? <CortexModelSection /> : null}
     </div>
   );
 }

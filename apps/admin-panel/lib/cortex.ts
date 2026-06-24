@@ -93,6 +93,75 @@ export function postCortexTurn(body: CortexTurnRequest): Promise<CortexTurnRespo
 }
 
 // ---------------------------------------------------------------------------
+// Modelo del córtex (cortex.default_model) — config por UI del System Owner.
+//
+// El córtex es un singleton del owner: su modelo sale SOLO de un platform-default
+// propio (`cortex.default_model`), sin override por tenant. Estos endpoints le dan
+// al owner un selector en el panel (espejo del modelo por defecto del asistente)
+// en vez de tener que tocar `platform_settings` a mano. El BACKEND valida la
+// selección contra el catálogo cerrado (proveedor activo + modelo elegible,
+// ADR 0021) y hace el gating por `require_system_owner`; la UI solo lo refleja.
+// ---------------------------------------------------------------------------
+
+/** Un proveedor activo + los modelos elegibles en él (fuente del desplegable). */
+export interface CortexModelOption {
+  provider_id: string;
+  kind: string;
+  /** Handle kebab-case único — desambigua proveedores del mismo kind. */
+  slug: string;
+  display_name: string;
+  models: string[];
+}
+
+/** GET /owner/cortex/model-options — proveedores + razonamiento por kind. */
+export interface CortexModelOptions {
+  providers: CortexModelOption[];
+  /** ADR 0070: opciones de razonamiento por kind de proveedor (off + niveles). */
+  reasoning_by_kind?: Record<string, string[]>;
+}
+
+/** GET/PUT /owner/cortex/model — la selección del córtex (o sin configurar). */
+export interface CortexModel {
+  provider_id: string | null;
+  model_id: string | null;
+  /** False cuando la selección guardada ya no resuelve (proveedor/modelo obsoleto). */
+  is_valid: boolean;
+  provider_display_name: string | null;
+  /** ADR 0070: esfuerzo de razonamiento de la selección (null = sin razonar). */
+  reasoning_effort: string | null;
+}
+
+/** Proveedores activos + sus modelos — la fuente del selector del córtex. */
+export function getCortexModelOptions(): Promise<CortexModelOptions> {
+  return cortexFetch<CortexModelOptions>("/model-options");
+}
+
+/** La selección de modelo del córtex (System Owner). */
+export function getCortexModel(): Promise<CortexModel> {
+  return cortexFetch<CortexModel>("/model");
+}
+
+/** Fija el modelo del córtex (validado server-side; 422 si es inválido). */
+export function setCortexModel(
+  providerId: string,
+  modelId: string,
+  reasoningEffort = "off",
+): Promise<CortexModel> {
+  return cortexFetch<CortexModel>("/model", {
+    method: "PUT",
+    body: { provider_id: providerId, model_id: modelId, reasoning_effort: reasoningEffort },
+  });
+}
+
+/** Desconfigura el modelo del córtex (System Owner). */
+export function clearCortexModel(): Promise<CortexModel> {
+  return cortexFetch<CortexModel>("/model", {
+    method: "PUT",
+    body: { provider_id: null, model_id: null },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Helpers puros (etiquetado del hilo) — testeables sin React.
 // ---------------------------------------------------------------------------
 
