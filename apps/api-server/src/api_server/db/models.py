@@ -55,6 +55,10 @@ from api_server.db.cortex import CortexConversation, CortexTurn
 # ``Base.metadata`` (same reason as the F1 models above).
 from api_server.db.cortex_affect import CortexAffectSnapshot
 
+# Córtex F3 (ADR 0074/0077): import the identity models so they register on
+# ``Base.metadata`` (same reason as the F1/F2 models above).
+from api_server.db.cortex_identity import CortexIdentity, CortexIdentityHistory
+
 
 class UserRole(enum.StrEnum):
     """Per-membership role inside an organization.
@@ -1120,6 +1124,8 @@ __all__ = [
     "AuditLog",
     "CortexAffectSnapshot",
     "CortexConversation",
+    "CortexIdentity",
+    "CortexIdentityHistory",
     "CortexTurn",
     "IncomingWebhookConfig",
     "IncomingWebhookEvent",

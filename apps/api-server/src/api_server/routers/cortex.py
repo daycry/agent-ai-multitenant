@@ -40,6 +40,7 @@ from api_server.assistant.model_config import to_provider_model_name
 from api_server.auth.deps import AuthPrincipal, require_system_owner
 from api_server.celery_client import enqueue_cortex_distill_affect
 from api_server.cortex.graph import run_cortex_turn
+from api_server.cortex.identity import ensure_identity, identity_preamble
 from api_server.cortex.memory import CORTEX_RECALL_LIMIT, augment_cortex_prompt, cortex_recall
 from api_server.cortex.model_config import (
     CortexModelUnavailableError,
@@ -209,6 +210,15 @@ async def post_turn(
         web_enabled = await get_cortex_web_enabled(session)
         enabled_tools = cortex_enabled_tool_names(web_enabled=web_enabled)
 
+        # Identidad del córtex (F3): carga (o crea la default) y la inyecta AL INICIO
+        # del system prompt, con el MISMO blindaje anti-inyección de los marcadores de
+        # datos. La identidad NUNCA se borra (ADR 0077), solo se versiona.
+        identity = await ensure_identity(session, owner_id)
+        preamble = identity_preamble(identity.identity_state)
+        base_prompt = _cortex_base_prompt()
+        if preamble:
+            base_prompt = f"{preamble}\n\n{base_prompt}"
+
         # Recall híbrido del owner (Tarea 4) + augment del system prompt (Tarea 10).
         known_facts = await cortex_recall(
             session,
@@ -218,7 +228,7 @@ async def post_turn(
             limit=CORTEX_RECALL_LIMIT,
         )
         system_prompt = augment_cortex_prompt(
-            _cortex_base_prompt(),
+            base_prompt,
             known_facts=known_facts,
             remember_enabled="cortex_remember" in enabled_tools,
         )
