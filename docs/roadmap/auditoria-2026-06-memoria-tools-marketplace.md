@@ -48,18 +48,22 @@ Los problemas reales se concentran en cuatro puntos:
 
 ## Estado de remediación (2026-06-24)
 
-| Hallazgo                                                | Estado                         | Dónde                                                                                                                     |
-| ------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| **H0** (tools de memoria/orquestación no llegan al LLM) | ✅ **arreglado**               | commit `3419b2b` — `build_model_tool_schemas(include_system_tools)` + `register_system_families` + `_effective_allowlist` |
-| **H3** (tools de orquestación silenciadas)              | ✅ **arreglado**               | mismo commit (`3419b2b`); mismo root cause unificado con H0                                                               |
-| **H1** (`GET /memories` sin owner-auth)                 | ✅ **arreglado**               | router `/memories`: filtro owner para `private`                                                                           |
-| **H2** (`DELETE /memories` sin owner-auth)              | ✅ **arreglado (private)**     | `private` de otro usuario → 404; shared/global = modelo de operador existente                                             |
-| **M3** (`/similar` + `/merge-into` sin owner-auth)      | ✅ **arreglado (private)**     | `private` de otro usuario → 404; shared sigue guardado por el owner-pointer match                                         |
-| **H4** (install marketplace sin gates)                  | 🟡 **diferido con honestidad** | ADR 0081 — cablear los gates regresaría el feature (sandbox sin Docker); copy corregido + plan Fase B/C documentado       |
-| **M2** (asimetría store/recall `project_shared`)        | ✅ **arreglado**               | commit `73e7add` — `memory-store` usa el proyecto efectivo (ADR 0054)                                                     |
-| **H6** (rag-search rota — side-effect de mem0)          | ✅ **arreglado**               | commit `9571739` — ver "Hallazgo adicional" abajo                                                                         |
-| **infra** (cortex-beat figuraba unhealthy)              | ✅ **arreglado**               | commit `81e5b89` — healthcheck propio de beat (PID 1)                                                                     |
-| **M1 / L1-L5**                                          | ⏳ pendiente / deuda           | M1 ligado a H4 (ADR 0081); resto = deuda menor, ver abajo                                                                 |
+| Hallazgo                                                  | Estado                         | Dónde                                                                                                                     |
+| --------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| **H0** (tools de memoria/orquestación no llegan al LLM)   | ✅ **arreglado**               | commit `3419b2b` — `build_model_tool_schemas(include_system_tools)` + `register_system_families` + `_effective_allowlist` |
+| **H3** (tools de orquestación silenciadas)                | ✅ **arreglado**               | mismo commit (`3419b2b`); mismo root cause unificado con H0                                                               |
+| **H1** (`GET /memories` sin owner-auth)                   | ✅ **arreglado**               | router `/memories`: filtro owner para `private`                                                                           |
+| **H2** (`DELETE /memories` sin owner-auth)                | ✅ **arreglado (private)**     | `private` de otro usuario → 404; shared/global = modelo de operador existente                                             |
+| **M3** (`/similar` + `/merge-into` sin owner-auth)        | ✅ **arreglado (private)**     | `private` de otro usuario → 404; shared sigue guardado por el owner-pointer match                                         |
+| **H4** (install marketplace sin gates)                    | 🟡 **diferido con honestidad** | ADR 0081 — cablear los gates regresaría el feature (sandbox sin Docker); copy corregido + plan Fase B/C documentado       |
+| **M2** (asimetría store/recall `project_shared`)          | ✅ **arreglado**               | commit `73e7add` — `memory-store` usa el proyecto efectivo (ADR 0054)                                                     |
+| **H6** (rag-search rota — side-effect de mem0)            | ✅ **arreglado**               | commit `9571739` — ver "Hallazgo adicional" abajo                                                                         |
+| **infra** (cortex-beat figuraba unhealthy)                | ✅ **arreglado**               | commit `81e5b89` — healthcheck propio de beat (PID 1)                                                                     |
+| **L1** (`required_tools` de skill sin validar)            | ✅ **arreglado**               | commit `bd69c8e` — validación contra tools vivas del tenant (422)                                                         |
+| **L4** (race dedup install tenant-wide `project_id NULL`) | ✅ **arreglado**               | commit `3e60848` — migración 0096: índice `COALESCE(project_id, zero-uuid)` (reversible)                                  |
+| **doc** ("19 vs 15 tools")                                | ✅ **arreglado**               | commit `bd69c8e` — docstring de `ToolCategory` sin hardcodear el conteo                                                   |
+| **L5** (agente sin tools no recibía memoria)              | ✅ **cerrada por H0/H3**       | `register_system_families` cablea memoria aunque no haya `agent_tools`                                                    |
+| **M1 / L2 / L3** (materialización marketplace)            | ⏳ **deuda, ligada a H4**      | solo tiene sentido con la infra Fase B/C (ADR 0081); no son independientes                                                |
 
 ### Hallazgo adicional (durante la remediación) — H6: `rag-search` rota por el entity-match de mem0
 
