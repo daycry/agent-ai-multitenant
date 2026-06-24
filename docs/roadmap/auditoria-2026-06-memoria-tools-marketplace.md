@@ -57,7 +57,32 @@ Los problemas reales se concentran en cuatro puntos:
 | **M3** (`/similar` + `/merge-into` sin owner-auth)      | ✅ **arreglado (private)**     | `private` de otro usuario → 404; shared sigue guardado por el owner-pointer match                                         |
 | **H4** (install marketplace sin gates)                  | 🟡 **diferido con honestidad** | ADR 0081 — cablear los gates regresaría el feature (sandbox sin Docker); copy corregido + plan Fase B/C documentado       |
 | **M2** (asimetría store/recall `project_shared`)        | ✅ **arreglado**               | commit `73e7add` — `memory-store` usa el proyecto efectivo (ADR 0054)                                                     |
+| **H6** (rag-search rota — side-effect de mem0)          | ✅ **arreglado**               | commit `9571739` — ver "Hallazgo adicional" abajo                                                                         |
+| **infra** (cortex-beat figuraba unhealthy)              | ✅ **arreglado**               | commit `81e5b89` — healthcheck propio de beat (PID 1)                                                                     |
 | **M1 / L1-L5**                                          | ⏳ pendiente / deuda           | M1 ligado a H4 (ADR 0081); resto = deuda menor, ver abajo                                                                 |
+
+### Hallazgo adicional (durante la remediación) — H6: `rag-search` rota por el entity-match de mem0
+
+**Área:** RAG · **Severidad:** HIGH (endpoint roto) · **Veredicto:** `confirmed`
+**Ficheros:** [search.py:237](apps/api-server/src/api_server/rag/search.py#L237), [search.py:321](apps/api-server/src/api_server/rag/search.py#L321), [recall.py:84-119](apps/api-server/src/api_server/memorizer/recall.py#L84) (`fuse_rankings`)
+
+Al "resolver unos flakys" resultó que **no eran flakys**: `rag-search` / `semantic_search`
+daban **500 en cualquier búsqueda con resultados** (`ValueError: too many values to unpack`).
+
+**Causa raíz — trazada al añadido de mem0 (ADR 0059):** la idea "entity linking" de mem0
+_("implementar las mejoras de mem0 sin la librería, solo las ideas")_ añadió una **tercera
+señal** al RRF (migración **0084**, `memory_entries.entities`). `fuse_rankings` pasó de
+devolver una 3-tupla `(score, bm25, vector)` a una **4-tupla** `(score, bm25, vector, entity)`.
+El consumidor de **memoria** (`recall.py:389`, que pasa `entity_ids`) se actualizó; los **dos
+consumidores de `rag/search.py`** (que ni usan entidades — pasan 2 listas) se quedaron
+desempaquetando 3 → crash. Verificado que esos dos eran los **únicos** afectados.
+
+**Fix:** desempacar la 4-tupla en ambos sitios, descartando `entity_rank` (RAG no hace
+entity-match; `ChunkHit` no lo expone). La feature de entidades en el recall de memoria es
+correcta y testeada; el bug era solo que rag-search **comparte** `fuse_rankings`. Regresión
+cubierta por `test_global_agent_project_context.py`. **Observación de diseño:**
+`fuse_rankings` devuelve una tupla posicional cuya aridad cambió silenciosamente; una
+estructura nombrada evitaría que un futuro cambio rompa consumidores sin aviso (deuda menor).
 
 > **Decisión de política `/memories`** (respetando agentes≠humanos): `memory_entries` es
 > una tabla compartida por **agentes** (team/project/global), **asistente** (`private`,
