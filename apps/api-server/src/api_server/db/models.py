@@ -51,6 +51,10 @@ from api_server.db.base import (
 # (re-exported in ``__all__``).
 from api_server.db.cortex import CortexConversation, CortexTurn
 
+# Córtex F2 (ADR 0075): import the affect-snapshot model so it registers on
+# ``Base.metadata`` (same reason as the F1 models above).
+from api_server.db.cortex_affect import CortexAffectSnapshot
+
 
 class UserRole(enum.StrEnum):
     """Per-membership role inside an organization.
@@ -1114,6 +1118,7 @@ __all__ = [
     "ApiTokenScope",
     "AuditAction",
     "AuditLog",
+    "CortexAffectSnapshot",
     "CortexConversation",
     "CortexTurn",
     "IncomingWebhookConfig",
