@@ -309,6 +309,50 @@ class Settings(BaseSettings):
     egress_proxy_host: str = Field(default="localhost", description="egress-proxy TCP host.")
     egress_proxy_port: int = Field(default=8888, description="egress-proxy TCP port (tinyproxy).")
 
+    # ----- Web del córtex (ADR 0067 — web-search / web-fetch provider-agnósticas) -----
+    # TODA salida a Internet de las host tools del córtex (``web_search`` / ``web_fetch``)
+    # va por el egress-proxy (tinyproxy, allowlist en docker/egress-proxy/filter.txt).
+    # NUNCA se conecta directo desde el api-server. En prod la api-server vive en
+    # `agentic-net` y resuelve `agentic-egress-proxy:8888`; en dev (api-server fuera de
+    # docker) el override expone el puerto al host (docker-compose.dev.yml), de ahí que
+    # el default apunte a localhost. Si se deja vacío, las web tools fallan con un error
+    # claro (nunca salen sin proxy).
+    cortex_egress_proxy_url: str = Field(
+        default="http://localhost:8888",
+        description=(
+            "URL del egress-proxy (tinyproxy) por el que las host tools del córtex "
+            "salen a Internet. En el stack docker: http://agentic-egress-proxy:8888."
+        ),
+    )
+    # Proveedor de búsqueda por defecto del córtex (catálogo cerrado, ADR 0067):
+    # 'searxng' (self-host, sin key — el camino por defecto) o 'brave' (API key en
+    # Vault/env). Un System Admin puede sobreescribirlo en vivo con el platform
+    # setting `cortex.web_search_provider`.
+    cortex_web_search_provider: str = Field(
+        default="searxng",
+        description="Proveedor de búsqueda web del córtex por defecto: 'searxng' | 'brave'.",
+    )
+    # SearXNG self-host (sin API key). En el stack docker el servicio `searxng`
+    # escucha en searxng:8080; en dev se puede apuntar a una instancia local.
+    cortex_searxng_url: str = Field(
+        default="http://searxng:8080",
+        description="Base URL de la instancia SearXNG self-host (sin key) — /search?format=json.",
+    )
+    # API de Brave Search. La key vive idealmente en Vault; como camino testeable sin
+    # Vault, se lee también de este env (API_SERVER_BRAVE_SEARCH_API_KEY). Cuando está
+    # vacía y el proveedor activo es 'brave', web_search falla con un error claro.
+    cortex_brave_search_url: str = Field(
+        default="https://api.search.brave.com/res/v1/web/search",
+        description="Endpoint de la Brave Search API (web search).",
+    )
+    brave_search_api_key: SecretStr | None = Field(
+        default=None,
+        description=(
+            "API key de Brave Search. Idealmente en Vault; como fallback testeable se "
+            "lee de API_SERVER_BRAVE_SEARCH_API_KEY. Nunca se loguea ni se devuelve."
+        ),
+    )
+
     # ----- Rate limits -----
     login_rate_limit_count: int = Field(default=5, description="Max login attempts per window.")
     login_rate_limit_window_seconds: int = Field(

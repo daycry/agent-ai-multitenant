@@ -57,10 +57,13 @@ from api_server.cortex.threads import (
     recent_history_for_prompt,
     resolve_cortex_tenant_id,
 )
-from api_server.cortex.tools import CORTEX_TOOLS, CortexToolContext
+from api_server.cortex.tools import CortexToolContext, cortex_enabled_tool_names
 from api_server.db.llm_providers import get_llm_provider
 from api_server.db.models import User
-from api_server.db.platform_settings import PlatformSettingForbiddenError
+from api_server.db.platform_settings import (
+    PlatformSettingForbiddenError,
+    get_cortex_web_enabled,
+)
 from api_server.db.session import get_admin_sessionmaker
 from api_server.llm_providers.factory import build_llm_provider
 from api_server.llm_providers.vault import LLMProviderVaultStore
@@ -85,9 +88,10 @@ from api_server.schemas.cortex import (
 
 router = APIRouter(prefix="/owner/cortex", tags=["cortex"])
 
-# Todas las tools del córtex están habilitadas para el owner (no hay identity por
-# tenant que las recorte como en el asistente; el córtex es un singleton).
-_CORTEX_ENABLED_TOOLS: tuple[str, ...] = tuple(CORTEX_TOOLS.keys())
+# El catálogo del córtex está habilitado para el owner (no hay identity por tenant que
+# lo recorte como en el asistente; el córtex es un singleton). Las host tools web
+# (ADR 0067) son la ÚNICA excepción: están gated por el setting ``cortex.web_enabled``
+# (deny-by-default) y se resuelven por turno con ``cortex_enabled_tool_names``.
 
 # Longitud del recorte del último turno en el listado de hilos.
 _PREVIEW_LEN = 160
@@ -198,6 +202,12 @@ async def post_turn(
                 detail="conversation not found",
             ) from exc
 
+        # Web del córtex (ADR 0067): gate deny-by-default. Cuando el owner lo habilita
+        # desde el panel, las host tools web_search/web_fetch entran en el catálogo y el
+        # ctx las permite (salida SIEMPRE por el egress-proxy + anti-SSRF).
+        web_enabled = await get_cortex_web_enabled(session)
+        enabled_tools = cortex_enabled_tool_names(web_enabled=web_enabled)
+
         # Recall híbrido del owner (Tarea 4) + augment del system prompt (Tarea 10).
         known_facts = await cortex_recall(
             session,
@@ -209,7 +219,7 @@ async def post_turn(
         system_prompt = augment_cortex_prompt(
             _cortex_base_prompt(),
             known_facts=known_facts,
-            remember_enabled="cortex_remember" in _CORTEX_ENABLED_TOOLS,
+            remember_enabled="cortex_remember" in enabled_tools,
         )
 
         # The thread's recent history as chat context (excludes the just-written
@@ -217,13 +227,18 @@ async def post_turn(
         chat_history = await recent_history_for_prompt(
             session, conversation_id=conversation_id, owner_user_id=owner_id
         )
-        tool_ctx = CortexToolContext(session=session, owner_user_id=owner_id, tenant_id=tenant_id)
+        tool_ctx = CortexToolContext(
+            session=session,
+            owner_user_id=owner_id,
+            tenant_id=tenant_id,
+            web_enabled=web_enabled,
+        )
 
         try:
             result = await run_cortex_turn(
                 model,
                 system_prompt=system_prompt,
-                enabled_tools=_CORTEX_ENABLED_TOOLS,
+                enabled_tools=enabled_tools,
                 tool_ctx=tool_ctx,
                 chat_history=chat_history,
             )

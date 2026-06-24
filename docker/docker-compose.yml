@@ -388,6 +388,41 @@ services:
     cap_add: *infra-caps
 
   # ---------------------------------------------------------------------------
+  # searxng — meta-buscador self-host para la web del córtex (ADR 0067). El
+  # api-server lo alcanza en `searxng:8080` (API_SERVER_CORTEX_SEARXNG_URL) y le
+  # pide `/search?q=&format=json`. Es el proveedor de búsqueda POR DEFECTO
+  # (sin API key, coherente con el despliegue de una sola máquina); la
+  # alternativa Brave (key en Vault/env) sale por el egress-proxy.
+  #
+  # SearXNG sólo sirve JSON cuando `search.formats` incluye `json` en su
+  # settings.yml; el bind-mount monta esa config (docker/searxng/settings.yml).
+  # Vive en `agentic-net` para poder consultar a los motores de búsqueda
+  # upstream a través de su propia salida; NO escucha en el host (sin `ports`).
+  # ---------------------------------------------------------------------------
+  searxng:
+    image: ${IMAGE_SEARXNG:-searxng/searxng:latest}
+    environment:
+      # Base URL pública del propio SearXNG (sólo afecta a enlaces que genera).
+      SEARXNG_BASE_URL: http://searxng:8080/
+      # Clave para firmar las URLs de imagen/respuesta; en dev un default, en
+      # prod el instalador la inyecta desde Vault/env.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-changeme-searxng-dev-only}
+    volumes:
+      # Config con `search.formats: [html, json]` para que el córtex reciba JSON.
+      - ./searxng:/etc/searxng:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+    # SearXNG (uwsgi) drops privileges to its service user at start, so it needs
+    # the privilege-drop caps back on top of cap_drop:[ALL] (see x-infra-caps).
+    cap_add: *infra-caps
+
+  # ---------------------------------------------------------------------------
   # Ollama — in-stack embeddings (and optionally local LLMs) for the platform
   # (ADR 0056). CPU by default; for GPU (CUDA) acceleration overlay
   # docker/docker-compose.gpu.yml (the installer wires the same NVIDIA

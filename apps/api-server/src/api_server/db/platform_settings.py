@@ -198,6 +198,33 @@ async def set_api_path_prefix(session: AsyncSession, value: str, *, actor: User)
     return normalised
 
 
+# ---------------------------------------------------------------------------
+# Web del córtex (ADR 0067) — habilitar egress web para las host tools
+# ---------------------------------------------------------------------------
+# Gate ON/OFF de las host tools provider-agnósticas ``web_search`` / ``web_fetch``
+# del córtex. Default OFF (deny-by-default, Principio 2: abrir egress web es una
+# decisión de seguridad, no el estado por defecto). Cuando el owner lo enciende desde
+# el panel, el router del córtex pone ``CortexToolContext.web_enabled=True``, las web
+# tools aparecen en los schemas y el modelo puede invocarlas (siempre por el
+# egress-proxy + anti-SSRF). Sólo un System Admin lo escribe — el owner del despliegue
+# lo es (ADR 0074). El proveedor de búsqueda concreto (searxng/brave) es un setting
+# aparte (``cortex.web_search_provider``, leído por la tool desde Settings).
+CORTEX_WEB_ENABLED_KEY = "cortex.web_enabled"
+DEFAULT_CORTEX_WEB_ENABLED = False
+
+
+async def get_cortex_web_enabled(session: AsyncSession) -> bool:
+    """Si la web del córtex (host tools ``web_search`` / ``web_fetch``) está habilitada.
+
+    Lo lee el router del córtex en cada turno para decidir ``web_enabled``. Default OFF
+    (ADR 0067, deny-by-default): abrir egress web es una decisión explícita del owner.
+    Sólo un System Admin lo escribe (``set_platform_setting``)."""
+    value = await get_platform_setting(
+        session, CORTEX_WEB_ENABLED_KEY, default=DEFAULT_CORTEX_WEB_ENABLED
+    )
+    return bool(value)
+
+
 async def get_max_review_retries(session: AsyncSession) -> int:
     """The effective max_review_retries — the platform override, or the
     default. This is what an execution's review-retry budget is built from."""
