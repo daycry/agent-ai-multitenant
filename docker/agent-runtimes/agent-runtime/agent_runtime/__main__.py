@@ -16,6 +16,7 @@ import json
 import os
 import platform
 import sys
+from collections.abc import Iterable
 from importlib import metadata
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,24 @@ _TASK_SPEC_FILE = "/workspace/agent_task.json"
 # from "spec has `allowed_tools: []`" (block every tool). A plain falsy
 # default would conflate the two.
 _NO_ALLOWLIST = object()
+
+
+def _effective_allowlist(allowed_tools: Iterable[str]) -> frozenset[str]:
+    """The per-agent allowlist UNION the always-available SYSTEM family tools.
+
+    The runtime-only families (memory + orchestration) are capabilities, not
+    catalog assignments, so they could never be in ``agent_tools``; exempting
+    them here means assigning any tool never silences memory recall/store or the
+    Kanban tools (H0/H3). An EXPLICIT empty allowlist is the discussion mode's
+    "block every tool" and stays empty — system tools are not a back door around
+    block-all.
+    """
+    from agent_runtime.builtin_families import SYSTEM_FAMILY_TOOL_NAMES
+
+    base = frozenset(allowed_tools)
+    if not base:
+        return base
+    return base | SYSTEM_FAMILY_TOOL_NAMES
 
 
 def _dep_version(dist: str) -> str:
@@ -149,6 +168,23 @@ def _wire_assigned_tools(
     register_tool_specs(registry, specs, ctx=ctx)
 
 
+def _wire_system_families(registry: Any) -> None:
+    """Wire ONLY the runtime-only SYSTEM families (memory + orchestration) for an
+    agent with no ``tool_specs``.
+
+    These are capabilities, not catalog assignments, so they must be available
+    to every agent regardless of ``agent_tools`` (H0/H3 / L5). The catalog
+    families stay un-wired in this path (06.15 backward-compat). When the agent
+    HAS ``tool_specs``, :func:`_wire_assigned_tools` already wires the system
+    families as part of the full family registration, so this is the
+    no-assignment branch only.
+    """
+    from agent_runtime.builtin_families import register_system_families
+    from agent_runtime.orchestration_tools import OrchestrationSink
+
+    register_system_families(registry, api=_build_internal_api(), sink=OrchestrationSink())
+
+
 def _build_mcp_vault_resolver() -> Any | None:
     """Best-effort Vault resolver for MCP auth (task_06_18_12 / ADR 0052).
 
@@ -259,11 +295,19 @@ def run_task(spec: dict[str, Any]) -> int:
 
     # Wire the assigned tool families + serialized ToolSpec rows (task_06_18_05).
     # Gated on the presence of `tool_specs`: an agent WITH `agent_tools`
-    # assignments carries the serialized list and gets its real tools wired
+    # assignments carries the serialized list and gets its CATALOG tools wired
     # under canonical names; an agent without assignments carries no key and
-    # keeps the pre-06.18 echo/noop behaviour (06.15 backward-compat).
+    # keeps the pre-06.18 echo/noop behaviour for the catalog families (06.15
+    # backward-compat). The runtime-only SYSTEM families (memory + orchestration)
+    # are wired ALWAYS below — they are capabilities, not catalog assignments
+    # (H0/H3 / L5), so an agent recalls/stores memory and moves the Kanban even
+    # with no agent_tools. `_wire_assigned_tools` registers them too (via the full
+    # family wiring), so we only wire the system families standalone when there
+    # are no tool_specs, to avoid registering the catalog families.
     if "tool_specs" in spec:
         _wire_assigned_tools(registry, spec)
+    else:
+        _wire_system_families(registry)
 
     # Wire the project's MCP servers (task_06_18_12 / ADR 0052). Gated on a
     # non-empty `mcp_servers` list: each declared server's `<server>.<tool>`
@@ -304,7 +348,12 @@ def run_task(spec: dict[str, Any]) -> int:
         # falsy default.
         allowed_tools = spec.get("allowed_tools", _NO_ALLOWLIST)
         if allowed_tools is not _NO_ALLOWLIST:
-            registry.set_allowed_tools(allowed_tools)
+            # System family tools (memory + orchestration) are runtime
+            # capabilities, not catalog assignments — exempt them from the
+            # per-agent allowlist so assigning any tool never silences memory
+            # recall/store or the Kanban tools (H0/H3). An explicit empty
+            # allowlist (discussion mode) stays block-all. See _effective_allowlist.
+            registry.set_allowed_tools(_effective_allowlist(allowed_tools))
 
         deps = AgentDeps(
             model=model_from_spec(spec["model"]),

@@ -81,7 +81,81 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
             "additionalProperties": False,
         },
     },
+    # Orchestration family — also runtime-only (no catalog row; wired by
+    # builtin_families). Schemas mirror agent_runtime.orchestration_tools.
+    "kanban_update": {
+        "name": "kanban_update",
+        "description": (
+            "Mueve la tarea en el Kanban a un nuevo estado (backlog/ready/"
+            "in_progress/in_review/blocked/done/cancelled)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "ID de la tarea a mover."},
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "backlog",
+                        "ready",
+                        "in_progress",
+                        "in_review",
+                        "blocked",
+                        "done",
+                        "cancelled",
+                    ],
+                },
+            },
+            "required": ["task_id", "status"],
+            "additionalProperties": False,
+        },
+    },
+    "task_comment": {
+        "name": "task_comment",
+        "description": "Añade un comentario a una tarea (progreso, decisiones, bloqueos).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "body": {"type": "string", "description": "El texto del comentario."},
+            },
+            "required": ["task_id", "body"],
+            "additionalProperties": False,
+        },
+    },
+    "agent_invoke": {
+        "name": "agent_invoke",
+        "description": (
+            "Solicita la ejecución de otro agente con un prompt (subtarea). Registra "
+            "la intención; el worker la aplica con su propia autorización."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string"},
+                "prompt": {"type": "string"},
+            },
+            "required": ["agent_id", "prompt"],
+            "additionalProperties": False,
+        },
+    },
 }
+
+# Runtime-only family tools (memory + orchestration) that are NOT in the
+# assignable catalog and therefore can NEVER be in a per-agent allowlist. They
+# are system CAPABILITIES, advertised to the LLM independently of the allowlist
+# (``include_system_tools=True``) so every agent can recall/store memory and
+# participate in the Kanban. Memory first (the universal capability).
+# MUST stay in sync with agent_runtime.builtin_families.SYSTEM_FAMILY_TOOL_NAMES
+# (the two packages deliberately do not import one another — the runtime is
+# container-side). Order is the advertisement order.
+SYSTEM_TOOL_NAMES: tuple[str, ...] = (
+    "memory_recall",
+    "memory_store",
+    "kanban_update",
+    "task_comment",
+    "agent_invoke",
+)
 
 
 def _catalog_by_canonical() -> dict[str, dict[str, Any]]:
@@ -119,6 +193,8 @@ def _catalog_by_canonical() -> dict[str, dict[str, Any]]:
 def build_model_tool_schemas(
     tool_names: list[str] | None,
     tool_specs: list[dict[str, Any]] | None,
+    *,
+    include_system_tools: bool = False,
 ) -> list[dict[str, Any]]:
     """OpenAI ``function`` schemas for the tools the agent may call.
 
@@ -126,9 +202,31 @@ def build_model_tool_schemas(
     ``"memory_recall"``, ``"rag_search"``). Schema sources, in order: the runtime
     memory tools, the builtin catalog (indexed by canonical name), then custom
     ``tool_specs`` ``input_schema``. A tool whose schema is unknown is skipped (the
-    model just isn't offered it). Returns ``[]`` when there is nothing to advertise
-    — the caller then omits the ``tools`` key (no change for tool-less agents)."""
-    if not tool_names:
+    model just isn't offered it).
+
+    ``include_system_tools`` advertises the runtime-only **system family** tools
+    (memory + orchestration, see :data:`SYSTEM_TOOL_NAMES`) IN ADDITION to the
+    allowlist. They are not in the assignable catalog, so they could never appear
+    in ``tool_names`` — yet the agent needs them to recall/store memory and move
+    the Kanban (H0/H3). The task-execution path passes ``True``; chat / mode
+    callers keep the default ``False``. An EXPLICIT empty allowlist (``[]``) is the
+    discussion mode's "block every tool" and suppresses everything, system tools
+    included.
+
+    Returns ``[]`` when there is nothing to advertise — the caller then omits the
+    ``tools`` key (no change for tool-less agents that opt out of system tools)."""
+    # An explicit empty allowlist means "block every tool" (discussion mode):
+    # nothing is advertised, not even system tools. ``None`` means "no per-agent
+    # restriction" and still gets system tools when requested.
+    if tool_names is not None and len(tool_names) == 0:
+        return []
+
+    effective: list[str] = list(tool_names or [])
+    if include_system_tools:
+        for system_name in SYSTEM_TOOL_NAMES:
+            if system_name not in effective:
+                effective.append(system_name)
+    if not effective:
         return []
 
     by_name: dict[str, dict[str, Any]] = dict(_RUNTIME_ONLY_SCHEMAS)
@@ -150,7 +248,7 @@ def build_model_tool_schemas(
 
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for name in tool_names:
+    for name in effective:
         entry = by_name.get(name)
         if entry is not None and name not in seen:
             seen.add(name)

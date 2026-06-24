@@ -66,3 +66,61 @@ def test_unknown_tool_without_schema_is_skipped() -> None:
 def test_order_follows_allowlist_and_dedups() -> None:
     out = build_model_tool_schemas(["memory_recall", "memory_recall", "read_file"], None)
     assert _names(out) == ["memory_recall", "read_file"]
+
+
+# ---------------------------------------------------------------------------
+# System family tools (memory + orchestration) — runtime-only, NOT in the
+# assignable catalog, so they can never be in a per-agent allowlist. They must
+# be advertised to the LLM independently (include_system_tools=True), else no
+# agent can recall/store memory or move the kanban (H0/H3). Off by default so
+# the chat / mode-restricted callers stay unaffected.
+# ---------------------------------------------------------------------------
+def test_system_tools_off_by_default() -> None:
+    # Default: an assigned agent gets ONLY its catalog tool — no memory leaks in.
+    out = build_model_tool_schemas(["read_file"], None)
+    assert _names(out) == ["read_file"]
+    # And a tool-less agent still advertises nothing.
+    assert build_model_tool_schemas(None, None) == []
+
+
+def test_system_tools_advertised_for_unassigned_agent_when_requested() -> None:
+    # The H0 regression: a tool-less agent (allowlist None) must still see the
+    # memory + orchestration tools so it can recall/store and participate.
+    out = build_model_tool_schemas(None, None, include_system_tools=True)
+    assert set(_names(out)) == {
+        "memory_recall",
+        "memory_store",
+        "kanban_update",
+        "task_comment",
+        "agent_invoke",
+    }
+
+
+def test_system_tools_advertised_alongside_assigned_tools() -> None:
+    out = build_model_tool_schemas(["read_file"], None, include_system_tools=True)
+    names = _names(out)
+    # The assigned tool comes first; system tools follow, deduped.
+    assert names[0] == "read_file"
+    assert {"memory_recall", "memory_store", "kanban_update"} <= set(names)
+    assert names.count("read_file") == 1
+
+
+def test_block_all_allowlist_suppresses_even_system_tools() -> None:
+    # An explicit EMPTY allowlist is the discussion mode's "block every tool";
+    # system tools must NOT slip past it.
+    assert build_model_tool_schemas([], None, include_system_tools=True) == []
+
+
+def test_assigned_tool_already_a_system_tool_is_not_duplicated() -> None:
+    out = build_model_tool_schemas(["memory_recall"], None, include_system_tools=True)
+    assert _names(out).count("memory_recall") == 1
+
+
+def test_orchestration_tools_have_schemas_mirroring_executors() -> None:
+    out = build_model_tool_schemas(
+        ["kanban_update", "task_comment", "agent_invoke"], None, include_system_tools=True
+    )
+    by = {s["function"]["name"]: s["function"]["parameters"] for s in out}
+    assert by["kanban_update"]["required"] == ["task_id", "status"]
+    assert by["task_comment"]["required"] == ["task_id", "body"]
+    assert by["agent_invoke"]["required"] == ["agent_id", "prompt"]

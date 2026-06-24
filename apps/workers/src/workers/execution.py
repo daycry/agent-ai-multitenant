@@ -279,7 +279,14 @@ def _agent_spec(
     # provider. Schemas come from the canonical builtin catalog + custom tool_specs,
     # filtered to the effective allowlist (`allowed_tools`). Set inside `model` so
     # `build_provider_client` reads `spec["tools"]` and passes them to complete().
-    model_tools = build_model_tool_schemas(request.allowed_tools, request.tool_specs)
+    # `include_system_tools=True`: the memory + orchestration families are
+    # runtime CAPABILITIES (not catalog assignments), so they never reach the
+    # allowlist — we advertise them here so every agent can recall/store memory
+    # and move the Kanban (H0/H3). An explicit empty allowlist (discussion mode)
+    # still suppresses everything inside build_model_tool_schemas.
+    model_tools = build_model_tool_schemas(
+        request.allowed_tools, request.tool_specs, include_system_tools=True
+    )
     if model_tools:
         spec["model"] = {**spec["model"], "tools": model_tools}
     return spec

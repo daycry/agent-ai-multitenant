@@ -149,9 +149,11 @@ def test_no_tool_specs_keeps_legacy_echo_behaviour(
 def test_no_tool_specs_does_not_register_extra_families(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """With no tool_specs the boot must NOT wire the new families — an
-    agent calling read_file in the legacy (unrestricted) path still gets the
-    old 'unknown tool' (no behaviour change for pre-06.18 specs)."""
+    """With no tool_specs the boot must NOT wire the CATALOG families (file /
+    network / knowledge) — an agent calling read_file in the legacy
+    (unrestricted) path still gets the old 'unknown tool'. (The runtime-only
+    SYSTEM families — memory + orchestration — ARE wired always; see
+    test_system_family_*.)"""
     spec = {
         "task": {"id": "t-5", "title": "legacy", "description": ""},
         "model": _scripted("read_file", {"path": "x"}),
@@ -159,6 +161,61 @@ def test_no_tool_specs_does_not_register_extra_families(
     step = _act_step(_run(spec, capsys))
     assert step["result"]["ok"] is False
     assert "unknown tool" in (step["result"].get("error") or "")
+
+
+# ---------------------------------------------------------------------------
+# H0/H3: the runtime-only SYSTEM families (memory + orchestration) are wired
+# ALWAYS — even with no tool_specs — and exempt from the per-agent allowlist,
+# so every agent can recall/store memory and move the Kanban. Orchestration
+# tools need only the sink (no api), so they exercise the wiring end-to-end.
+# ---------------------------------------------------------------------------
+def test_orchestration_tool_runs_without_tool_specs(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A tool-less agent (no agent_tools) can still call kanban_update — the
+    orchestration family is wired regardless of tool_specs (H0/H3 / L5)."""
+    spec = {
+        "task": {"id": "t-8", "title": "move", "description": ""},
+        "model": _scripted("kanban_update", {"task_id": "t-8", "status": "in_progress"}),
+    }
+    step = _act_step(_run(spec, capsys))
+    assert step["result"]["ok"] is True
+    assert "unknown tool" not in (step["result"].get("error") or "")
+    assert step["result"]["output"]["effect"] == "kanban_update"
+
+
+def test_orchestration_tool_allowed_despite_restrictive_allowlist(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An agent restricted to read_file can STILL call kanban_update — system
+    family tools are exempt from the per-agent allowlist (H3): otherwise
+    assigning any tool silences the orchestrator's kanban/comment/invoke."""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
+    spec = {
+        "task": {"id": "t-9", "title": "move", "description": ""},
+        "model": _scripted("kanban_update", {"task_id": "t-9", "status": "done"}),
+        "allowed_tools": ["read_file"],
+        "tool_specs": [{"name": "read_file", "implementation_type": "builtin", "config": {}}],
+    }
+    step = _act_step(_run(spec, capsys))
+    assert step["result"]["ok"] is True
+    assert "not allowed" not in (step["result"].get("error") or "")
+    assert step["result"]["output"]["effect"] == "kanban_update"
+
+
+def test_block_all_allowlist_still_blocks_system_tools(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The discussion mode's explicit empty allowlist blocks EVERY tool,
+    system tools included — they are not a back door around block-all."""
+    spec = {
+        "task": {"id": "t-10", "title": "discuss", "description": ""},
+        "model": _scripted("kanban_update", {"task_id": "t-10", "status": "done"}),
+        "allowed_tools": [],
+    }
+    step = _act_step(_run(spec, capsys))
+    assert step["result"]["ok"] is False
+    assert "not allowed" in (step["result"].get("error") or "")
 
 
 # ---------------------------------------------------------------------------
