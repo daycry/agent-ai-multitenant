@@ -1,0 +1,111 @@
+/**
+ * Córtex F1 (Tarea 12) — tipos + helper de fetch del córtex del System Owner.
+ *
+ * El córtex es un singleton del dueño del despliegue (`system_owner`): todos
+ * los endpoints están gated por `require_system_owner` en el backend (403 si
+ * no eres owner — DB-authoritative, ADR 0074). Este módulo solo carga el
+ * contrato de los tres endpoints `/owner/cortex/*` (no se inventa ninguno) y
+ * un fino wrapper sobre `apiFetch`.
+ *
+ * Honestidad de producto (riesgo del plan F1): el córtex F1 es una mente
+ * SIMULADA con memoria persistente + deliberación; NO tiene afecto ni
+ * consciencia (eso llega en F2). El copy de la UI no debe insinuar emociones.
+ */
+
+import { apiFetch, type ApiFetchOptions } from "@/lib/api";
+
+// ---------------------------------------------------------------------------
+// Contrato de endpoints (routers/cortex.py)
+// ---------------------------------------------------------------------------
+
+/** POST /owner/cortex/turns request body. */
+export interface CortexTurnRequest {
+  message: string;
+  /** Si se omite, el backend crea un hilo nuevo y lo devuelve. */
+  conversation_id?: string;
+}
+
+/** POST /owner/cortex/turns response. */
+export interface CortexTurnResponse {
+  conversation_id: string;
+  answer: string;
+  tools_called: string[];
+  rounds: number;
+  /** Effort efectivo del turno (null/ausente = sin razonamiento profundo). */
+  reasoning_effort?: string | null;
+  /** True cuando el córtex degradó (sin Claude Agent SDK) a un camino clásico. */
+  degraded: boolean;
+}
+
+/** Un turno persistido del hilo (GET /owner/cortex/turns). */
+export interface CortexTurnItem {
+  id: string;
+  role: "user" | "cortex";
+  content: string;
+  created_at: string;
+  model_id?: string | null;
+}
+
+/** Un hilo del owner (GET /owner/cortex/conversations). */
+export interface CortexConversation {
+  id: string;
+  title?: string | null;
+  model_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  last_turn_preview?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Límites de campo — espejo del schema Pydantic (schemas/cortex.py).
+// ---------------------------------------------------------------------------
+export const CORTEX_LIMITS = {
+  message: { min: 1, max: 8000 },
+} as const;
+
+// ---------------------------------------------------------------------------
+// Fetch helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Thin wrapper sobre `apiFetch` que prefija el router `/owner/cortex`. Mantiene
+ * un solo sitio donde vive el prefijo del córtex (igual que los helpers del
+ * asistente fijan sus rutas). `path` se espera relativo al router (con `/`).
+ */
+export function cortexFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
+  return apiFetch<T>(`/owner/cortex${path}`, options);
+}
+
+/** Lista los hilos del owner (más recientes primero). */
+export function getCortexConversations(): Promise<CortexConversation[]> {
+  return cortexFetch<CortexConversation[]>("/conversations");
+}
+
+/** Carga los turnos de un hilo en orden cronológico. */
+export function getCortexTurns(conversationId: string, limit = 100): Promise<CortexTurnItem[]> {
+  const params = new URLSearchParams({ conversation_id: conversationId, limit: String(limit) });
+  return cortexFetch<CortexTurnItem[]>(`/turns?${params.toString()}`);
+}
+
+/** Envía un turno (crea hilo si no se pasa `conversation_id`). */
+export function postCortexTurn(body: CortexTurnRequest): Promise<CortexTurnResponse> {
+  return cortexFetch<CortexTurnResponse>("/turns", { method: "POST", body });
+}
+
+// ---------------------------------------------------------------------------
+// Helpers puros (etiquetado del hilo) — testeables sin React.
+// ---------------------------------------------------------------------------
+
+/**
+ * Etiqueta legible de un hilo en el selector. Prefiere el título; si no, cae a
+ * un sello con fecha para que los hilos sin título sigan distinguiéndose.
+ */
+export function cortexConversationLabel(c: CortexConversation): string {
+  if (c.title && c.title.trim()) return c.title.trim();
+  const d = new Date(c.created_at);
+  if (Number.isNaN(d.getTime())) return "Hilo sin título";
+  return `Hilo · ${d.toLocaleDateString()} ${d.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
+}
