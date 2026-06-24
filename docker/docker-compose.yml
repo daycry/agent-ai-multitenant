@@ -297,7 +297,14 @@ services:
     volumes:
       - whisper_models:/root/.cache/huggingface
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8000/health || exit 1"]
+      # La imagen NO trae wget; sí python3. urlopen lanza (exit!=0) si /health no responde.
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4)",
+        ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -318,7 +325,14 @@ services:
   tts:
     image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2 # pin; -gpu en el overlay GPU
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8880/health || exit 1"]
+      # La imagen NO trae wget; sí python (en /app/.venv). urlopen lanza si /health falla.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8880/health', timeout=4)",
+        ]
       interval: 30s
       timeout: 5s
       retries: 5
