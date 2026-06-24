@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 
 from api_server.auth.deps import AuthPrincipal, get_redis, require_system_owner
@@ -38,7 +38,14 @@ from api_server.cortex.identity import (
 )
 from api_server.db.cortex_affect import CortexAffectSnapshot
 from api_server.db.memory import MemoryEntry
+from api_server.db.models import User
+from api_server.db.platform_settings import PlatformSettingForbiddenError
 from api_server.db.session import get_admin_sessionmaker
+from api_server.schemas.cortex_autonomy import (
+    CortexAutonomyBudget,
+    CortexAutonomyResponse,
+    CortexAutonomyUpdateRequest,
+)
 from api_server.schemas.cortex_identity import (
     CortexBaseline,
     CortexIdentityResponse,
@@ -313,6 +320,99 @@ async def reflect_now_endpoint(
 
     enqueued = await enqueue_cortex_reflection(principal.user_id)
     return CortexReflectResponse(enqueued=enqueued)
+
+
+# ===========================================================================
+# Autonomía: kill-switch global de los bucles cognitivos de fondo (F4, ADR 0078)
+# ===========================================================================
+# El owner ve/activa el KILL-SWITCH global de la autonomía (curiosidad + reflexión
+# programada + mantenimiento) y consulta el budget de búsquedas consumido hoy vs el
+# cap. Default OFF: ningún bucle hace trabajo hasta que el owner lo enciende
+# explícitamente. Copy honesto: la curiosidad es un comportamiento PROGRAMADO con
+# límites de coste auditables, no curiosidad consciente.
+async def _autonomy_snapshot(owner_id: UUID) -> CortexAutonomyResponse:
+    """Estado vivo de la autonomía: settings (BD) + budget/breaker (Redis)."""
+    from api_server.cortex.autonomy import (
+        CURIOSITY_KIND,
+        circuit_key,
+        daily_budget_key,
+    )
+    from api_server.db.platform_settings import (
+        get_cortex_autonomy_enabled,
+        get_cortex_curiosity_daily_searches_cap,
+        get_cortex_curiosity_drive_threshold,
+        get_cortex_web_enabled,
+    )
+
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        autonomy = await get_cortex_autonomy_enabled(session)
+        web = await get_cortex_web_enabled(session)
+        cap = await get_cortex_curiosity_daily_searches_cap(session)
+        threshold = await get_cortex_curiosity_drive_threshold(session)
+
+    now = datetime.now(UTC)
+    redis = get_redis()
+    searches_today = 0
+    breaker_open = False
+    try:
+        raw = await redis.get(daily_budget_key(str(owner_id), CURIOSITY_KIND, now=now))
+        searches_today = int(raw) if raw is not None else 0
+        breaker_open = bool(await redis.exists(circuit_key(str(owner_id), CURIOSITY_KIND)))
+    except Exception:  # estado vivo best-effort; la BD es la fuente de verdad
+        searches_today = 0
+        breaker_open = False
+
+    return CortexAutonomyResponse(
+        autonomy_enabled=autonomy,
+        web_enabled=web,
+        curiosity_drive_threshold=threshold,
+        circuit_breaker_open=breaker_open,
+        budget=CortexAutonomyBudget(searches_today=searches_today, searches_cap=cap),
+    )
+
+
+@router.get("/autonomy", response_model=CortexAutonomyResponse)
+async def get_autonomy(
+    principal: AuthPrincipal = Depends(require_system_owner),
+) -> CortexAutonomyResponse:
+    """Estado de la autonomía del córtex: kill-switch + gates + budget consumido hoy.
+
+    Owner-scoped: el budget/breaker se leen por la clave-por-owner del principal."""
+    return await _autonomy_snapshot(principal.user_id)
+
+
+@router.put("/autonomy", response_model=CortexAutonomyResponse)
+async def put_autonomy(
+    payload: CortexAutonomyUpdateRequest,
+    principal: AuthPrincipal = Depends(require_system_owner),
+) -> CortexAutonomyResponse:
+    """Activa/desactiva el KILL-SWITCH global de los bucles autónomos (System Owner).
+
+    Escribe el platform setting ``cortex.autonomy_enabled`` con el owner como actor.
+    ``set_platform_setting`` re-verifica que el actor es System Admin (el owner del
+    despliegue lo es, ADR 0074); un owner que NO fuese admin recibiría un 403 honesto
+    en vez de una escritura silenciosa. Con OFF, la siguiente pasada de CADA bucle
+    sale no-op."""
+    from api_server.db.platform_settings import (
+        CORTEX_AUTONOMY_ENABLED_KEY,
+        set_platform_setting,
+    )
+
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        actor = await session.get(User, principal.user_id)
+        if actor is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="actor user not found"
+            )
+        try:
+            await set_platform_setting(
+                session, CORTEX_AUTONOMY_ENABLED_KEY, payload.autonomy_enabled, actor=actor
+            )
+        except PlatformSettingForbiddenError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return await _autonomy_snapshot(principal.user_id)
 
 
 __all__ = ["router"]

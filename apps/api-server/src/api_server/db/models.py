@@ -55,6 +55,10 @@ from api_server.db.cortex import CortexConversation, CortexTurn
 # ``Base.metadata`` (same reason as the F1 models above).
 from api_server.db.cortex_affect import CortexAffectSnapshot
 
+# Córtex F4 (ADR 0078): import the curiosity-pursuit model so it registers on
+# ``Base.metadata`` (same reason as the F1/F2/F3 models above).
+from api_server.db.cortex_curiosity import CortexCuriosityPursuit
+
 # Córtex F3 (ADR 0074/0077): import the identity models so they register on
 # ``Base.metadata`` (same reason as the F1/F2 models above).
 from api_server.db.cortex_identity import CortexIdentity, CortexIdentityHistory
@@ -1124,6 +1128,7 @@ __all__ = [
     "AuditLog",
     "CortexAffectSnapshot",
     "CortexConversation",
+    "CortexCuriosityPursuit",
     "CortexIdentity",
     "CortexIdentityHistory",
     "CortexTurn",

@@ -225,6 +225,101 @@ async def get_cortex_web_enabled(session: AsyncSession) -> bool:
     return bool(value)
 
 
+# ---------------------------------------------------------------------------
+# Autonomía del córtex (Córtex F4, ADR 0078) — bucles cognitivos de fondo
+# ---------------------------------------------------------------------------
+# KILL-SWITCH GLOBAL de los bucles autónomos del córtex (curiosidad + reflexión
+# programada + mantenimiento). Default OFF (deny-by-default, ADR 0078): el
+# comportamiento autónomo consume LLM/egress sin que nadie lo dispare, así que
+# arranca APAGADO; el owner lo enciende explícitamente desde el panel. Con OFF, el
+# beat puede tickear pero CADA tarea lee este flag al inicio de la pasada y sale
+# no-op (ni curiosidad ni reflexión programada ni mantenimiento tocan BD/red). Solo
+# un System Admin lo escribe — el owner del despliegue lo es (ADR 0074).
+CORTEX_AUTONOMY_ENABLED_KEY = "cortex.autonomy_enabled"
+DEFAULT_CORTEX_AUTONOMY_ENABLED = False
+
+# Budget caps de la curiosidad por ventana DIARIA (ADR 0078: caps + circuit-breaker
+# son parte del MVP del bucle, no un fast-follow). Se aplican en Redis
+# (``cortex:budget:{owner}:curiosity:{yyyymmdd}`` con INCR + cap). Cuando se superan
+# → la pasada de curiosidad es un no-op (no busca). Solo un System Admin los escribe.
+CORTEX_CURIOSITY_DAILY_SEARCHES_CAP_KEY = "cortex.curiosity_daily_searches_cap"
+DEFAULT_CORTEX_CURIOSITY_DAILY_SEARCHES_CAP = 5
+
+# Umbral del drive: la curiosidad SOLO se dispara si ``curiosity < threshold``
+# (hambre de aprender). Por encima del umbral, el drive está saciado → no-op.
+CORTEX_CURIOSITY_DRIVE_THRESHOLD_KEY = "cortex.curiosity_drive_threshold"
+DEFAULT_CORTEX_CURIOSITY_DRIVE_THRESHOLD = 0.35
+
+# Circuit-breaker: tras N fallos CONSECUTIVOS de una pasada de curiosidad, el
+# breaker se ABRE durante ``cb_cooldown_s`` (worker config) y el bucle deja de
+# intentar (protege coste/egress ante un fallo sistémico). Un éxito lo resetea.
+CORTEX_CURIOSITY_CB_FAILS_KEY = "cortex.curiosity_cb_fails"
+DEFAULT_CORTEX_CURIOSITY_CB_FAILS = 3
+
+
+async def get_cortex_autonomy_enabled(session: AsyncSession) -> bool:
+    """El KILL-SWITCH global de los bucles autónomos del córtex (ADR 0078).
+
+    Lo leen las tres tareas de fondo (curiosidad / reflexión programada /
+    mantenimiento) al inicio de CADA pasada; cuando es False la pasada es un no-op
+    total (no toca BD ni red ni LLM). Default OFF (deny-by-default): el
+    comportamiento autónomo consume coste/egress, así que arranca apagado y el owner
+    lo enciende explícitamente. Solo un System Admin lo escribe (``set_platform_setting``)."""
+    value = await get_platform_setting(
+        session, CORTEX_AUTONOMY_ENABLED_KEY, default=DEFAULT_CORTEX_AUTONOMY_ENABLED
+    )
+    return bool(value)
+
+
+async def get_cortex_curiosity_daily_searches_cap(session: AsyncSession) -> int:
+    """Tope de búsquedas web/día de la curiosidad (default 5).
+
+    Lo lee el budget gate en vivo; al alcanzarse, la siguiente pasada es un no-op
+    (no busca). Un valor < 0 se sanea a 0 (cap a 0 = curiosidad apagada de facto)."""
+    value = await get_platform_setting(
+        session,
+        CORTEX_CURIOSITY_DAILY_SEARCHES_CAP_KEY,
+        default=DEFAULT_CORTEX_CURIOSITY_DAILY_SEARCHES_CAP,
+    )
+    try:
+        cap = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_CORTEX_CURIOSITY_DAILY_SEARCHES_CAP
+    return max(0, cap)
+
+
+async def get_cortex_curiosity_drive_threshold(session: AsyncSession) -> float:
+    """Umbral del drive ``curiosity`` por debajo del cual se dispara la curiosidad.
+
+    Lo lee la tarea de curiosidad en vivo. Un valor fuera de ``[0,1]`` se recorta al
+    rango; un valor no numérico cae al default 0.35."""
+    value = await get_platform_setting(
+        session,
+        CORTEX_CURIOSITY_DRIVE_THRESHOLD_KEY,
+        default=DEFAULT_CORTEX_CURIOSITY_DRIVE_THRESHOLD,
+    )
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_CORTEX_CURIOSITY_DRIVE_THRESHOLD
+    return max(0.0, min(1.0, threshold))
+
+
+async def get_cortex_curiosity_cb_fails(session: AsyncSession) -> int:
+    """Nº de fallos consecutivos que ABRE el circuit-breaker de la curiosidad (default 3).
+
+    Lo lee la tarea de curiosidad en vivo. Un valor < 1 se sanea a 1 (al menos un
+    fallo abre el breaker); un valor no numérico cae al default 3."""
+    value = await get_platform_setting(
+        session, CORTEX_CURIOSITY_CB_FAILS_KEY, default=DEFAULT_CORTEX_CURIOSITY_CB_FAILS
+    )
+    try:
+        fails = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_CORTEX_CURIOSITY_CB_FAILS
+    return max(1, fails)
+
+
 async def get_max_review_retries(session: AsyncSession) -> int:
     """The effective max_review_retries — the platform override, or the
     default. This is what an execution's review-retry budget is built from."""

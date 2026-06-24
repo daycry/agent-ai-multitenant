@@ -189,6 +189,36 @@ class Settings(BaseSettings):
         "egress). El catálogo LLM cerrado (ADR 0021) queda intacto.",
     )
 
+    # ----- Córtex F4: bucles cognitivos de fondo (ADR 0078) -----
+    # Las tres tareas autónomas (curiosidad / reflexión programada / mantenimiento)
+    # corren por Celery beat a una cadencia operator-tunable; el ENABLE real es el
+    # kill-switch `cortex.autonomy_enabled` (platform setting, default OFF) leído EN
+    # VIVO dentro de cada tarea — la entrada del beat siempre existe (como price-sync),
+    # pero con el kill-switch OFF cada pasada sale no-op. Estos crons los lee el beat
+    # PROCESS al boot. La curiosidad consume coste/egress, así que su cadencia es
+    # conservadora por defecto.
+    cortex_curiosity_cron: str = Field(
+        default="*/30 * * * *",
+        description="Cron (minute hour day-of-month month day-of-week) del bucle de "
+        "curiosidad autónoma del córtex. Default cada 30 minutos. Operator-tunable; "
+        "el enable real es el kill-switch `cortex.autonomy_enabled` (platform setting).",
+    )
+    cortex_reflection_cron: str = Field(
+        default="17 */6 * * *",
+        description="Cron de la reflexión periódica de identidad del córtex. Default "
+        "cada 6 horas (minuto 17 para descolgarlo de otros jobs). Operator-tunable.",
+    )
+    cortex_maintenance_cron: str = Field(
+        default="42 4 * * *",
+        description="Cron del mantenimiento de fondo del córtex (decay snapshot, "
+        "olvido/consolidación, poda). Default diario 04:42 UTC. Operator-tunable.",
+    )
+    cortex_curiosity_cb_cooldown_s: int = Field(
+        default=3600,
+        description="Cooldown (segundos) que el circuit-breaker de la curiosidad "
+        "permanece ABIERTO tras N fallos consecutivos. Default 1h. Operator-tunable.",
+    )
+
     # ----- Back-fill de embeddings de memoria (Plan 06.17 task_06_17_03) -----
     # El worker dedicado ``workers.backfill_memory_embeddings`` rellena los
     # ``memory_entries.embedding`` NULL embebiendo el contenido con Ollama
