@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Activity,
   BarChart3,
   Bell,
   BellRing,
@@ -225,7 +226,16 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Córtex",
     Icon: Brain,
     systemOwnerOnly: true,
-    items: [{ href: "/admin/cortex", label: "Córtex", Icon: Brain, systemOwnerOnly: true }],
+    items: [
+      { href: "/admin/cortex", label: "Córtex", Icon: Brain, systemOwnerOnly: true },
+      // Panel de Mente (Córtex F2, ADR 0075): estado afectivo del córtex en vivo.
+      {
+        href: "/admin/cortex/mind",
+        label: "Panel de Mente",
+        Icon: Activity,
+        systemOwnerOnly: true,
+      },
+    ],
   },
   {
     id: "ayuda",

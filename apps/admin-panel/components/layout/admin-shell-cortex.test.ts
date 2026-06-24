@@ -30,18 +30,21 @@ const cortexGroup = () => {
 };
 
 describe("Córtex NAV group", () => {
-  it("is declared as systemOwnerOnly with the /admin/cortex item", () => {
+  it("is declared as systemOwnerOnly with the chat + Panel de Mente items", () => {
     const group = cortexGroup();
     expect(group.systemOwnerOnly).toBe(true);
-    expect(group.items).toHaveLength(1);
-    expect(group.items[0].href).toBe("/admin/cortex");
-    expect(group.items[0].systemOwnerOnly).toBe(true);
+    // Córtex F2 (ADR 0075) añade el "Panel de Mente" como vista hermana del chat.
+    const hrefs = group.items.map((i) => i.href);
+    expect(hrefs).toContain("/admin/cortex");
+    expect(hrefs).toContain("/admin/cortex/mind");
+    // Todos los ítems del grupo siguen siendo systemOwnerOnly.
+    expect(group.items.every((i) => i.systemOwnerOnly === true)).toBe(true);
   });
 
   it("is visible to the System Owner", () => {
     const group = cortexGroup();
     expect(navGroupVisible(group, OWNER)).toBe(true);
-    expect(navItemVisible(group.items[0], OWNER)).toBe(true);
+    expect(group.items.every((i) => navItemVisible(i, OWNER))).toBe(true);
 
     const visible = visibleNavGroups(NAV_GROUPS, OWNER);
     expect(visible.some((g) => g.id === "cortex")).toBe(true);
@@ -51,7 +54,7 @@ describe("Córtex NAV group", () => {
     const group = cortexGroup();
     for (const scope of [SYSTEM_ADMIN, TENANT_ADMIN, MEMBER]) {
       expect(navGroupVisible(group, scope)).toBe(false);
-      expect(navItemVisible(group.items[0], scope)).toBe(false);
+      expect(group.items.every((i) => navItemVisible(i, scope) === false)).toBe(true);
       expect(visibleNavGroups(NAV_GROUPS, scope).some((g) => g.id === "cortex")).toBe(false);
     }
   });
