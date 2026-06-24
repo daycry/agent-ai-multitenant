@@ -1,7 +1,7 @@
 ---
 adr_id: "0067"
 title: "Tools de búsqueda web + fetch con egress controlado y guardrails (web-search / web-fetch)"
-status: proposed
+status: accepted
 date: 2026-06-19
 authors: [system_architect]
 plan_referenced: personalizacion-equipos-built-in
@@ -12,11 +12,18 @@ supersedes: []
 
 # ADR 0067 — Tools de búsqueda web + fetch con egress controlado y guardrails
 
-> **Estado: `proposed`** (Ola B0.2 del diseño _personalización de equipos
-> built-in_). **Requiere aprobación del operador antes de implementar**: abre
-> **egress a Internet** desde los runtimes de agente, lo que toca de lleno el
-> **Principio 2** (aislamiento por contenedor, red restringida). No se
-> implementará hasta que este ADR pase a `accepted`.
+> **Estado: `accepted` (2026-06-24)** — el operador aprobó abrir egress web. Decisiones
+> confirmadas a las preguntas abiertas: (1) **sí** se abre egress web; (2) **ambos**
+> proveedores soportados y elegibles (SearXNG self-host por defecto + Brave API con key en
+> Vault), igual que el catálogo LLM; (3) **ambas** tools (`web-search` + `web-fetch`).
+>
+> **Primer destino de implementación: el CÓRTEX del system_owner** (host tools ejecutadas
+> en el api-server, a través del `egress-proxy` + anti-SSRF, provider-agnósticas: valen para
+> claude_sdk/copilot/azure/ollama). El bloque nativo de `claude_sdk` (WebSearch/WebFetch del
+> Agent SDK) queda como **fast-path** opcional. La variante de **runtime de agente**
+> (per-proyecto `web_egress_allowlist` + guardrails pre/post_tool) es la Ola B0.2 más amplia
+> y se implementa después con el mismo diseño. Sigue tocando el **Principio 2** (egress
+> controlado), de ahí el anti-SSRF + allowlist + saneo obligatorios.
 
 ## Contexto
 
@@ -127,8 +134,12 @@ credenciales LLM del ADR 0057).
   6. Tests: anti-SSRF (rechaza IP privada/metadata), allowlist (bloquea dominio no
      listado), saneo/truncado de contenido, key nunca en logs.
 
-## Pregunta abierta para el operador
+## Pregunta abierta para el operador → RESUELTAS (2026-06-24)
 
-1. ¿Se aprueba abrir egress web para agentes? (sí/no)
-2. Si sí: ¿proveedor — **Brave API**, **SearXNG self-host**, o ambos?
-3. ¿`web-fetch` además de `web-search`, o solo búsqueda de momento?
+1. ¿Se aprueba abrir egress web? → **Sí.**
+2. ¿Proveedor? → **Ambos, elegibles** (SearXNG self-host por defecto; Brave API con key en Vault).
+3. ¿`web-fetch` además de `web-search`? → **Sí, ambas.**
+
+> Capa de **navegador real (Playwright)** — interacción/automatización, no solo leer — se
+> trata APARTE en el **ADR 0080** (sandbox de navegador + egress), por su superficie de
+> seguridad mucho mayor.
