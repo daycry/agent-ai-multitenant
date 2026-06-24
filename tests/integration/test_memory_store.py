@@ -134,11 +134,23 @@ def configured_app(
     reset_redis_cache()
 
     from api_server.main import create_app
+    from api_server.routers.docs_viewer import get_query_embedder
 
     app = create_app()
+
+    # Determinism: pin the query embedder to "none" so creation NEVER embeds at
+    # store time regardless of whether Ollama happens to be reachable in this
+    # environment (it is in dev, absent in CI). This exercises the documented
+    # best-effort defer path (embedding stays NULL, the back-fill fills it
+    # later) so `has_embedding` is a stable False rather than env-coupled.
+    async def _no_embedder():
+        yield None
+
+    app.dependency_overrides[get_query_embedder] = _no_embedder
     try:
         yield app
     finally:
+        app.dependency_overrides.clear()
         reset_engine_cache()
         reset_redis_cache()
         get_settings.cache_clear()
