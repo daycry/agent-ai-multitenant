@@ -37,6 +37,9 @@ from installer_backend.compose_generator import (
     MONITORING_SERVICES,
     OLLAMA_BOOTSTRAP_SERVICE,
     OLLAMA_SERVICE,
+    STT_SERVICE,
+    TTS_SERVICE,
+    VOICE_SERVICES,
     assert_no_dev_secret_markers,
     enabled_providers,
     generate_compose,
@@ -71,6 +74,7 @@ def _config(
     environment: Environment = Environment.PRODUCTION,
     gpu_enabled: bool = False,
     ollama_mode: str | None = None,
+    voice_mode: str | None = None,
     embedding_model: str = "nomic-embed-text",
     providers: ProvidersConfig | None = None,
     data_root: str = "/data/agent-platform",
@@ -87,6 +91,7 @@ def _config(
             worker_memory_gib=4,
             gpu_enabled=gpu_enabled,
             ollama_mode=ollama_mode,
+            voice_mode=voice_mode,
             embedding_model=embedding_model,
         ),
         storage=StorageConfig(
@@ -216,6 +221,101 @@ def test_default_config_has_no_ollama() -> None:
     assert cfg.resources.ollama_mode == "none"
     assert OLLAMA_SERVICE not in generate_compose(cfg)["services"]
     assert GPU_SERVICE not in selected_services(cfg, monitoring=False)
+
+
+# ---------------------------------------------------------------------------
+# Voice mode (stt / tts) — modo voz del Asistente + córtex (ADR 0073).
+#
+# El instalador de producción NO generaba stt/tts, así que el modo voz no
+# arrancaba en instalaciones reales. La definición de referencia vive en
+# docker/docker-compose.yml; estas pruebas fijan que el compose generado los
+# incluye con su imagen + healthcheck en python (NO wget: esas imágenes no lo
+# traen) y que el api-server queda cableado a stt:8000 / tts:8880.
+# ---------------------------------------------------------------------------
+def test_voice_mode_cpu_adds_stt_and_tts_services() -> None:
+    compose = generate_compose(_config(voice_mode="cpu"))
+    services = compose["services"]
+    assert STT_SERVICE in services
+    assert TTS_SERVICE in services
+    # The reference (docker/docker-compose.yml) images.
+    assert services[STT_SERVICE]["image"].startswith("fedirz/faster-whisper-server:")
+    assert services[TTS_SERVICE]["image"].startswith("ghcr.io/remsky/kokoro-fastapi-cpu:")
+
+
+def test_voice_mode_none_omits_stt_and_tts() -> None:
+    compose = generate_compose(_config(voice_mode="none"))
+    services = compose["services"]
+    assert STT_SERVICE not in services
+    assert TTS_SERVICE not in services
+    names = selected_services(_config(voice_mode="none"), monitoring=False)
+    for name in VOICE_SERVICES:
+        assert name not in names
+    # No STT/TTS wiring injected into the api-server when voice is off.
+    api_env = services["api-server"]["environment"]
+    assert "API_SERVER_ASSISTANT_STT_URL" not in api_env
+    assert "API_SERVER_ASSISTANT_TTS_URL" not in api_env
+
+
+def test_voice_enabled_by_default() -> None:
+    # The default config (no voice_mode given) ships the voice stack so the
+    # Assistant/córtex voice mode works out of the box on a real install — the
+    # bug this fixes was that prod NEVER generated stt/tts.
+    cfg = _config()
+    assert cfg.resources.voice_mode == "cpu"
+    services = generate_compose(cfg)["services"]
+    assert STT_SERVICE in services
+    assert TTS_SERVICE in services
+
+
+def test_voice_wiring_points_api_server_at_stt_and_tts() -> None:
+    env = generate_compose(_config(voice_mode="cpu"))["services"]["api-server"]["environment"]
+    assert env["API_SERVER_ASSISTANT_STT_URL"] == "http://stt:8000"
+    assert env["API_SERVER_ASSISTANT_TTS_URL"] == "http://tts:8880"
+
+
+def test_stt_service_matches_reference_definition() -> None:
+    stt = generate_compose(_config(voice_mode="cpu"))["services"][STT_SERVICE]
+    env = stt["environment"]
+    # Whisper model env from docker/docker-compose.yml (ES+EN CPU-friendly).
+    assert env["WHISPER__MODEL"] == "Systran/faster-whisper-small"
+    assert env["WHISPER__INFERENCE_DEVICE"] == "cpu"
+    # Model cache volume under the configured data root.
+    assert any("/.cache/huggingface" in v for v in stt["volumes"])
+    # Internal-only: no host ports, on agentic-net.
+    assert "ports" not in stt
+    assert stt["networks"] == ["agentic-net"]
+
+
+def test_voice_healthchecks_use_python_not_wget() -> None:
+    # The stt/tts images ship NEITHER wget NOR curl — a wget-based probe would
+    # mark them permanently unhealthy. They must probe with python (urllib).
+    services = generate_compose(_config(voice_mode="cpu"))["services"]
+    for name, port in ((STT_SERVICE, 8000), (TTS_SERVICE, 8880)):
+        flat = " ".join(services[name]["healthcheck"]["test"])
+        assert "wget" not in flat and "curl" not in flat, f"{name} healthcheck uses a missing tool"
+        assert "python" in flat, f"{name} healthcheck must use python"
+        assert f":{port}/health" in flat, f"{name} healthcheck must hit :{port}/health"
+
+
+def test_stt_uses_named_model_cache_volume() -> None:
+    # The Whisper model (~hundreds of MB) must persist across restarts so it is
+    # not re-downloaded on every boot — mounted from a named volume declared at
+    # the compose top level.
+    compose = generate_compose(_config(voice_mode="cpu"))
+    stt = compose["services"][STT_SERVICE]
+    vol_name = stt["volumes"][0].split(":", 1)[0]
+    assert vol_name in compose["volumes"], "the whisper model cache volume must be declared"
+
+
+def test_voice_services_are_hardened_like_the_rest() -> None:
+    services = generate_compose(_config(voice_mode="cpu"))["services"]
+    for name in (STT_SERVICE, TTS_SERVICE):
+        svc = services[name]
+        assert svc["cap_drop"] == ["ALL"], name
+        assert "no-new-privileges:true" in svc["security_opt"], name
+        assert "apparmor=agentic-default" in svc["security_opt"], name
+        assert "limits" in svc["deploy"]["resources"], name
+        assert svc["restart"] == "unless-stopped", name
 
 
 # ---------------------------------------------------------------------------

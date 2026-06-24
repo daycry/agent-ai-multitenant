@@ -57,6 +57,17 @@ from pydantic import (
 #:   * ``gpu``  — adds the NVIDIA device reservation for accelerated local LLMs.
 OllamaMode = Literal["none", "cpu", "gpu"]
 
+#: Deployment mode for the in-stack voice services (stt/tts) that power the
+#: Assistant + córtex voice mode (ADR 0073):
+#:   * ``none`` — no stt/tts services; the voice mode is unavailable in the
+#:     deployment (the operator can still opt in later).
+#:   * ``cpu``  — faster-whisper + Kokoro on CPU (the reference images); enough
+#:     for the ES+EN small model. This is the default so voice works out of the
+#:     box on a real install.
+#:   * ``gpu``  — same services, reserved for a future CUDA overlay (the
+#:     reference compose pins CPU images today; GPU is the documented overlay).
+VoiceMode = Literal["none", "cpu", "gpu"]
+
 #: How the single reverse proxy terminates TLS (ADR 0061):
 #:   * ``internal`` — Caddy's local CA, self-signed (default; flagged pending).
 #:   * ``provided`` — operator-supplied corporate cert (cert+key bind-mounted).
@@ -201,16 +212,32 @@ class ResourceConfig(BaseModel):
     # Deprecated alias — see the model validator below + ollama_mode.
     gpu_enabled: bool = False
     ollama_mode: OllamaMode | None = None
+    # Voice mode (ADR 0073): stt (faster-whisper) + tts (Kokoro) for the
+    # Assistant + córtex voice mode. Defaults to ``cpu`` so a fresh install ships
+    # a working voice stack; set ``none`` to skip the models' download/footprint.
+    # When omitted on an OLDER saved config it is derived to ``cpu`` (back-compat
+    # bridge below), so the bugfix applies even to configs persisted before this
+    # field existed.
+    voice_mode: VoiceMode | None = None
     embedding_model: str = Field(default="nomic-embed-text", min_length=1, max_length=120)
 
     @model_validator(mode="after")
-    def _resolve_ollama_mode(self) -> ResourceConfig:
-        """Back-compat bridge: derive ``ollama_mode`` from the legacy
-        ``gpu_enabled`` when it was not given, then keep the boolean in lockstep
-        so any remaining ``gpu_enabled`` reader still sees the GPU truth."""
+    def _resolve_modes(self) -> ResourceConfig:
+        """Back-compat bridges.
+
+        Ollama: derive ``ollama_mode`` from the legacy ``gpu_enabled`` when it
+        was not given, then keep the boolean in lockstep so any remaining
+        ``gpu_enabled`` reader still sees the GPU truth.
+
+        Voice: default ``voice_mode`` to ``cpu`` when omitted so older saved
+        configs (and the wizard's defaults) produce a working voice stack —
+        fixing the bug where the production installer never generated stt/tts.
+        """
         if self.ollama_mode is None:
             self.ollama_mode = "gpu" if self.gpu_enabled else "none"
         self.gpu_enabled = self.ollama_mode == "gpu"
+        if self.voice_mode is None:
+            self.voice_mode = "cpu"
         return self
 
 
@@ -525,6 +552,7 @@ def normalized_summary(config: InstallerConfig) -> dict[str, object]:
             "worker_replicas": config.resources.worker_replicas,
             "worker_memory_gib": config.resources.worker_memory_gib,
             "ollama_mode": config.resources.ollama_mode,
+            "voice_mode": config.resources.voice_mode,
             "embedding_model": config.resources.embedding_model,
             # Deprecated mirror, kept for any consumer still reading it.
             "gpu_enabled": config.resources.gpu_enabled,

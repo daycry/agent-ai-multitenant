@@ -82,6 +82,13 @@ IMAGE_CADVISOR = "gcr.io/cadvisor/cadvisor:v0.49.1"
 # socket (Principio 2).
 IMAGE_DOCKER_SOCKET_PROXY = "tecnativa/docker-socket-proxy:0.3.0"
 IMAGE_CADDY = "caddy:2.8-alpine"
+# Voice mode (ADR 0073): STT (faster-whisper) + TTS (Kokoro), OpenAI-compatible
+# HTTP APIs, kept in lockstep with docker/docker-compose.yml. Both ship CPU
+# images here (the GPU variants are a documented overlay — the canonical compose
+# pins the same CPU tags); upstream uses rolling tags (no semver) so pin by
+# digest for a fully reproducible prod if needed.
+IMAGE_STT = "fedirz/faster-whisper-server:latest-cpu"
+IMAGE_TTS = "ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2"
 
 #: The application images the platform builds. The generator references them by
 #: tag (the installer pulls the released images); the build context lives in the
@@ -136,6 +143,19 @@ MONITORING_SERVICES: tuple[str, ...] = (
 OLLAMA_SERVICE = "ollama"
 OLLAMA_BOOTSTRAP_SERVICE = "ollama-bootstrap"
 GPU_SERVICE = OLLAMA_SERVICE
+
+#: The in-stack voice services, added when ``voice_mode != "none"`` (ADR 0073).
+#: ``stt`` = faster-whisper (POST /v1/audio/transcriptions), ``tts`` = Kokoro
+#: (POST /v1/audio/speech). Both are reached internally by the api-server (which
+#: also serves the córtex voice turn) at ``stt:8000`` / ``tts:8880``.
+STT_SERVICE = "stt"
+TTS_SERVICE = "tts"
+VOICE_SERVICES: tuple[str, ...] = (STT_SERVICE, TTS_SERVICE)
+
+#: Named volume that caches the Whisper model (downloaded on first use) so it
+#: survives restarts instead of being re-pulled every boot. Matches the
+#: canonical compose's ``whisper_models`` volume.
+WHISPER_MODELS_VOLUME = "whisper_models"
 
 #: Name of the AppArmor MAC profile every generated service pins via
 #: ``security_opt: apparmor=…`` (Plan 15 task_15_16). Unlike seccomp (a path),
@@ -895,6 +915,74 @@ def _ollama_bootstrap_service(
     return svc
 
 
+def _python_health(binary: str, url: str, *, start_period: str) -> dict[str, Any]:
+    """A python-stdlib HTTP liveness probe (urllib) for the voice images.
+
+    The stt/tts images ship NEITHER wget NOR curl (only a python interpreter),
+    so a wget-based check would mark them permanently unhealthy. ``binary`` is
+    ``python3`` for faster-whisper and ``python`` for Kokoro (its venv exposes
+    ``python``), mirroring docker/docker-compose.yml. ``urlopen`` raises (exit
+    != 0) when /health is not yet serving.
+    """
+
+    return {
+        "test": [
+            "CMD",
+            binary,
+            "-c",
+            f"import urllib.request; urllib.request.urlopen('{url}', timeout=4)",
+        ],
+        "interval": "30s",
+        "timeout": "5s",
+        "retries": 5,
+        "start_period": start_period,
+    }
+
+
+def _stt_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    """Speech-to-Text for the Assistant + córtex voice mode (ADR 0073).
+
+    faster-whisper (CTranslate2) with an OpenAI-compatible API. The Whisper
+    model is downloaded on first use and cached in the ``whisper_models`` named
+    volume (the long ``start_period`` covers that first download). Internal
+    service: no host ports — the api-server reaches it at ``stt:8000``. Mirrors
+    docker/docker-compose.yml; the healthcheck probes with python3 (no wget in
+    the image).
+    """
+
+    svc: dict[str, Any] = {
+        "image": IMAGE_STT,
+        "environment": {
+            # CPU-friendly ES+EN default; large-v3 lives behind the GPU overlay.
+            "WHISPER__MODEL": "Systran/faster-whisper-small",
+            "WHISPER__INFERENCE_DEVICE": "cpu",
+        },
+        "volumes": [f"{WHISPER_MODELS_VOLUME}:/root/.cache/huggingface"],
+        # 1st boot downloads the model → generous grace window.
+        "healthcheck": _python_health(
+            "python3", "http://localhost:8000/health", start_period="120s"
+        ),
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="2.0", limits_memory="4g"))
+    return svc
+
+
+def _tts_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    """Text-to-Speech for the voice mode (ADR 0073) — Kokoro-82M with an
+    OpenAI-compatible API (ES+EN voices). Internal: the api-server reaches it at
+    ``tts:8880``. Mirrors docker/docker-compose.yml; healthcheck probes with
+    python (the image exposes ``python`` in its venv, not wget)."""
+
+    svc: dict[str, Any] = {
+        "image": IMAGE_TTS,
+        "healthcheck": _python_health("python", "http://localhost:8880/health", start_period="60s"),
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    return svc
+
+
 def _prometheus_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
     svc: dict[str, Any] = {
         "image": IMAGE_PROMETHEUS,
@@ -1073,6 +1161,8 @@ _BUILDERS = {
     "caddy": _reverse_proxy_service,
     "ollama": _ollama_service,
     "ollama-bootstrap": _ollama_bootstrap_service,
+    "stt": _stt_service,
+    "tts": _tts_service,
     "prometheus": _prometheus_service,
     "node-exporter": _node_exporter_service,
     "alertmanager": _alertmanager_service,
@@ -1117,6 +1207,16 @@ def _provider_env_for(cfg: InstallerConfig) -> dict[str, str]:
         env["API_SERVER_OLLAMA_URL"] = "http://ollama:11434"
         env["API_SERVER_EMBEDDING_MODEL"] = cfg.resources.embedding_model
         env["WORKERS_MEMORY_EMBEDDER_BASE_URL"] = "http://ollama:11434"
+
+    # Voice wiring (ADR 0073): when the in-stack stt/tts are deployed, point the
+    # api-server (which serves BOTH the Assistant voice loop and the córtex voice
+    # turn — they read the same assistant_{stt,tts}_url settings) at them.
+    # Without these the runtime falls back to its localhost dev defaults and the
+    # voice mode silently fails in production (the bug this fixes). API_SERVER_*
+    # are read only by the api-server → harmless on the other app services.
+    if cfg.resources.voice_mode != "none":
+        env["API_SERVER_ASSISTANT_STT_URL"] = f"http://{STT_SERVICE}:8000"
+        env["API_SERVER_ASSISTANT_TTS_URL"] = f"http://{TTS_SERVICE}:8880"
     return env
 
 
@@ -1140,13 +1240,16 @@ def selected_services(cfg: InstallerConfig, *, monitoring: bool) -> list[str]:
 
     Core services are always present; the in-stack ``ollama`` service + its
     ``ollama-bootstrap`` one-shot are added when ``ollama_mode != "none"`` (ADR
-    0056); the monitoring overlay services only when requested.
+    0056); the voice ``stt``/``tts`` services when ``voice_mode != "none"`` (ADR
+    0073); the monitoring overlay services only when requested.
     """
 
     services = list(CORE_SERVICES)
     if cfg.resources.ollama_mode != "none":
         services.append(OLLAMA_SERVICE)
         services.append(OLLAMA_BOOTSTRAP_SERVICE)
+    if cfg.resources.voice_mode != "none":
+        services.extend(VOICE_SERVICES)
     if monitoring:
         services.extend(MONITORING_SERVICES)
     return services
@@ -1235,6 +1338,12 @@ def generate_compose(
         "services": services,
         "networks": _networks_block(),
     }
+    # Declare the named volume(s) any generated service references. The only one
+    # is the Whisper model cache for the voice stt service (every other stateful
+    # service uses a {data_root} bind mount). Declared only when voice is on so
+    # the compose carries no dangling volume otherwise.
+    if STT_SERVICE in services:
+        compose["volumes"] = {WHISPER_MODELS_VOLUME: None}
     return compose
 
 
