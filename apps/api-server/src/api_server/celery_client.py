@@ -74,6 +74,15 @@ _MEMORIZE_QUEUE = "default"
 _CORTEX_DISTILL_AFFECT_TASK = "workers.cortex_distill_affect"
 _CORTEX_AFFECT_QUEUE = "default"
 
+# The córtex identity reflection (Córtex F3, ADR 0074/0077). A background loop
+# (scheduled by F4's beat) that synthesises the owner's recent turns into a
+# rewritten narrative + a CLAMPED trait/baseline adjustment, versioned and never
+# auto-forgotten. The `POST /owner/cortex/reflect` endpoint also fires it by name
+# for a manual/test pass. Ollama-local, fail-open. The `workers.cortex_reflection`
+# module owns the implementation; the api-server only PRODUCES it by name.
+_CORTEX_REFLECT_TASK = "workers.cortex_reflect"
+_CORTEX_REFLECT_QUEUE = "default"
+
 
 @lru_cache(maxsize=1)
 def get_celery_client() -> Celery:
@@ -298,6 +307,35 @@ async def enqueue_cortex_distill_affect(turn_id: UUID) -> bool:
     return True
 
 
+async def enqueue_cortex_reflection(owner_user_id: UUID) -> bool:
+    """Trigger one córtex identity-reflection pass for an owner (Córtex F3).
+
+    Called by ``POST /owner/cortex/reflect`` for a manual/test pass (F4's beat
+    schedules the recurring cadence). The reflection synthesises recent turns into
+    a rewritten narrative + a clamped trait/baseline adjustment (Ollama-local,
+    fail-open), versioned in ``cortex_identity_history``.
+
+    Best-effort: a broker failure is logged and swallowed (returns False) so a
+    manual trigger that can't reach the broker degrades gracefully (the reflection
+    is a background nice-to-have, not a transaction). ``send_task`` does blocking
+    socket I/O, so we run it off the event loop (same approach as
+    :func:`enqueue_ingestion`).
+    """
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            _CORTEX_REFLECT_TASK,
+            args=[str(owner_user_id)],
+            queue=_CORTEX_REFLECT_QUEUE,
+        )
+    except Exception as exc:
+        _log.warning(
+            "cortex_reflection.enqueue_failed", owner_user_id=str(owner_user_id), error=str(exc)
+        )
+        return False
+    return True
+
+
 async def enqueue_restore(
     backup_id: str,
     *,
@@ -397,6 +435,7 @@ def _read_restore_status(job_id: str) -> dict[str, Any]:
 __all__ = [
     "enqueue_clone_project_repo",
     "enqueue_cortex_distill_affect",
+    "enqueue_cortex_reflection",
     "enqueue_event_dispatch",
     "enqueue_ingestion",
     "enqueue_memorize_human_work_session",

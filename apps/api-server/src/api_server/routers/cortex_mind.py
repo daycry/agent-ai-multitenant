@@ -19,6 +19,7 @@ profundidad y la prueba de mérito es el test cross-owner).
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -28,9 +29,23 @@ from api_server.auth.deps import AuthPrincipal, get_redis, require_system_owner
 from api_server.cortex.affect_cache import read_affect_state
 from api_server.cortex.affect_store import load_affect_state
 from api_server.cortex.affective import AffectState
+from api_server.cortex.identity import (
+    clamp_baseline,
+    clamp_traits,
+    editable_owner_state,
+    ensure_identity,
+    update_identity,
+)
 from api_server.db.cortex_affect import CortexAffectSnapshot
 from api_server.db.memory import MemoryEntry
 from api_server.db.session import get_admin_sessionmaker
+from api_server.schemas.cortex_identity import (
+    CortexBaseline,
+    CortexIdentityResponse,
+    CortexIdentityUpdateRequest,
+    CortexReflectResponse,
+    CortexTraits,
+)
 from api_server.schemas.cortex_mind import (
     CortexAffectPoint,
     CortexDrives,
@@ -182,6 +197,122 @@ async def get_episodes(
             )
         )
     return out
+
+
+# ===========================================================================
+# Identidad evolutiva del córtex (Córtex F3, ADR 0074/0077)
+# ===========================================================================
+# Onboarding co-diseñado + override del owner. La identidad es un SINGLETON por
+# owner sobre tablas tenant-less (BYPASSRLS): TODO acceso filtra ``owner_user_id``
+# explícito. El owner co-diseña name/core_values/narrative/language y fija
+# learning_goals; los rasgos Big-Five, el mood_baseline y el modelo del owner los
+# DERIVA la reflexión periódica (clampeada + versionada) — el owner NO los pisa a
+# mano (guardrail de auto-modificación, ADR 0074). La identidad NUNCA se borra
+# (ADR 0077): cada cambio se versiona en ``cortex_identity_history``.
+def _identity_response(
+    state: dict[str, Any], *, version: int, updated_by: str, onboarded_at: datetime | None
+) -> CortexIdentityResponse:
+    """Mapea un ``identity_state`` (+ metadatos) al schema de respuesta.
+
+    Los derivados (traits/mood_baseline) se devuelven CLAMPEADOS a su rango
+    canónico (defensa en profundidad: una fila vieja/sucia nunca desborda)."""
+    traits = clamp_traits(state.get("traits"))
+    baseline = clamp_baseline(state.get("mood_baseline"))
+    name = state.get("name")
+    return CortexIdentityResponse(
+        name=(name if isinstance(name, str) and name.strip() else None),
+        core_values=[str(v) for v in (state.get("core_values") or [])],
+        narrative=str(state.get("narrative") or ""),
+        language=str(state.get("language") or "es"),
+        learning_goals=[str(v) for v in (state.get("learning_goals") or [])],
+        traits=CortexTraits(**traits),
+        mood_baseline=CortexBaseline(**baseline),
+        version=version,
+        updated_by=updated_by,
+        onboarded_at=onboarded_at,
+    )
+
+
+@router.get("/identity", response_model=CortexIdentityResponse)
+async def get_identity_endpoint(
+    principal: AuthPrincipal = Depends(require_system_owner),
+) -> CortexIdentityResponse:
+    """La identidad actual del córtex del owner (crea la default si no existe).
+
+    ``onboarded_at=null`` ⇒ onboarding pendiente (la UI lo muestra de forma
+    prominente). Filtra ``owner_user_id`` explícito sobre la sesión BYPASSRLS."""
+    owner_id = principal.user_id
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        identity = await ensure_identity(session, owner_id)
+        return _identity_response(
+            dict(identity.identity_state or {}),
+            version=identity.version,
+            updated_by=identity.updated_by,
+            onboarded_at=identity.onboarded_at,
+        )
+
+
+@router.put("/identity", response_model=CortexIdentityResponse)
+async def put_identity_endpoint(
+    payload: CortexIdentityUpdateRequest,
+    principal: AuthPrincipal = Depends(require_system_owner),
+) -> CortexIdentityResponse:
+    """Onboarding co-diseñado / override del owner de la identidad del córtex.
+
+    El owner fija SOLO name/core_values/narrative/language/learning_goals (campos
+    co-diseñados); ``traits``/``mood_baseline`` se PRESERVAN (los deriva la
+    reflexión — el schema rechaza con 422 cualquier intento de tocarlos). Versiona
+    en ``cortex_identity_history`` (``updated_by='owner_override'``,
+    ``reason='owner_onboarding'``) y marca ``onboarded_at`` si era NULL (la primera
+    vez es el onboarding; luego es un override idempotente que no re-marca)."""
+    owner_id = principal.user_id
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        identity = await ensure_identity(session, owner_id)
+        new_state = editable_owner_state(
+            dict(identity.identity_state or {}),
+            name=payload.name,
+            core_values=payload.core_values,
+            narrative=payload.narrative,
+            language=payload.language,
+            learning_goals=payload.learning_goals,
+        )
+        updated = await update_identity(
+            session,
+            owner_id,
+            new_state=new_state,
+            reason="owner_onboarding",
+            updated_by="owner_override",
+        )
+        # Marca onboarded_at en el PRIMER override (era NULL = onboarding pendiente).
+        if updated.onboarded_at is None:
+            updated.onboarded_at = datetime.now(UTC)
+        await session.flush()
+        return _identity_response(
+            dict(updated.identity_state or {}),
+            version=updated.version,
+            updated_by=updated.updated_by,
+            onboarded_at=updated.onboarded_at,
+        )
+
+
+@router.post("/reflect", response_model=CortexReflectResponse)
+async def reflect_now_endpoint(
+    principal: AuthPrincipal = Depends(require_system_owner),
+) -> CortexReflectResponse:
+    """Dispara una pasada de reflexión de la identidad del córtex (manual/test).
+
+    Encola ``workers.cortex_reflect`` para el córtex del owner (fire-and-forget,
+    fuera del hot-path). La tarea sintetiza los turnos recientes en una narrativa
+    reescrita + un ajuste CLAMPEADO de traits/baseline (Ollama-local, fail-open),
+    versionado en ``cortex_identity_history``. La cadencia RECURRENTE la agenda el
+    beat de F4; este endpoint solo permite un disparo bajo demanda. Best-effort: un
+    fallo del broker devuelve ``enqueued=false`` sin romper."""
+    from api_server.celery_client import enqueue_cortex_reflection
+
+    enqueued = await enqueue_cortex_reflection(principal.user_id)
+    return CortexReflectResponse(enqueued=enqueued)
 
 
 __all__ = ["router"]

@@ -66,6 +66,7 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             "workers.tasks",
             "workers.memorizer",
             "workers.cortex_affect",
+            "workers.cortex_reflection",
             "workers.maintenance",
             "workers.ingestion",
             "workers.price_sync",

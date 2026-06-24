@@ -33,10 +33,12 @@ describe("Córtex NAV group", () => {
   it("is declared as systemOwnerOnly with the chat + Panel de Mente items", () => {
     const group = cortexGroup();
     expect(group.systemOwnerOnly).toBe(true);
-    // Córtex F2 (ADR 0075) añade el "Panel de Mente" como vista hermana del chat.
+    // Córtex F2 (ADR 0075) añade el "Panel de Mente" como vista hermana del chat;
+    // Córtex F3 (ADR 0074/0077) añade "Identidad" (onboarding co-diseñado).
     const hrefs = group.items.map((i) => i.href);
     expect(hrefs).toContain("/admin/cortex");
     expect(hrefs).toContain("/admin/cortex/mind");
+    expect(hrefs).toContain("/admin/cortex/identity");
     // Todos los ítems del grupo siguen siendo systemOwnerOnly.
     expect(group.items.every((i) => i.systemOwnerOnly === true)).toBe(true);
   });

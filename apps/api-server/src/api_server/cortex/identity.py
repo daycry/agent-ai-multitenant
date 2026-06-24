@@ -34,6 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.cortex.affective import BASELINE_MAX_DELTA_PER_REFLECTION
 from api_server.db.cortex_identity import CortexIdentity, CortexIdentityHistory
 
 # Nombre por defecto neutro y honesto — el córtex puede autonombrarse luego en el
@@ -49,6 +50,59 @@ _NEUTRAL_TRAITS: dict[str, float] = {
     "agreeableness": 0.5,
     "neuroticism": 0.5,
 }
+
+#: Las cinco dimensiones Big-Five (orden canónico). Cada una ∈ [0,1].
+_TRAIT_NAMES: tuple[str, ...] = (
+    "openness",
+    "conscientiousness",
+    "extraversion",
+    "agreeableness",
+    "neuroticism",
+)
+
+#: Rango canónico de cada eje del baseline PAD (set-point del mood, ADR 0075 §4).
+_BASELINE_RANGES: dict[str, tuple[float, float]] = {
+    "valence": (-1.0, 1.0),
+    "arousal": (0.0, 1.0),
+    "dominance": (-1.0, 1.0),
+}
+
+#: Campos del ``identity_state`` que el override del OWNER puede tocar (PATCH/PUT).
+#: ``traits``/``mood_baseline``/``relationship_model``/``affect_params`` quedan
+#: FUERA: los deriva la reflexión (guardrail de auto-modificación, ADR 0074).
+OWNER_EDITABLE_FIELDS: tuple[str, ...] = (
+    "name",
+    "core_values",
+    "narrative",
+    "language",
+    "learning_goals",
+)
+
+
+def _to_float(value: Any, fallback: float) -> float:
+    """``value`` como float, o ``fallback`` si no es convertible (nunca lanza)."""
+    if isinstance(value, bool):  # bool es int en Python — no lo aceptamos como número
+        return fallback
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _clamp(x: float, lo: float, hi: float) -> float:
+    """Recorta ``x`` a ``[lo, hi]`` (nunca lanza)."""
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+
+
+def _str_list(values: Any) -> list[str]:
+    """Normaliza una lista de strings: recorta espacios y descarta los vacíos."""
+    if not isinstance(values, list | tuple):
+        return []
+    return [s for s in (str(v).strip() for v in values) if s]
 
 
 def default_identity_state() -> dict[str, Any]:
@@ -170,6 +224,123 @@ def compute_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any
 
 
 # ---------------------------------------------------------------------------
+# Capa pura de mutación de identidad (determinista — sin LLM/red/DB)
+# ---------------------------------------------------------------------------
+def clamp_traits(traits: Any) -> dict[str, float]:
+    """Cada Big-Five recortado a ``[0,1]``; claves faltantes/sucias → neutro 0.5.
+
+    Determinista y tolerante: un valor no numérico cae al punto medio 0.5 (nunca
+    lanza). Devuelve SIEMPRE las cinco dimensiones canónicas."""
+    src = traits if isinstance(traits, dict) else {}
+    return {name: _clamp(_to_float(src.get(name), 0.5), 0.0, 1.0) for name in _TRAIT_NAMES}
+
+
+def clamp_baseline(pad: Any) -> dict[str, float]:
+    """Set-point PAD recortado a su rango (valence/dominance ∈ [-1,1], arousal ∈ [0,1]).
+
+    Piso/techo del mood (ADR 0075 §4): evita "depresión/manía" simuladas. Claves
+    faltantes/sucias → 0.0 (neutro). Devuelve siempre los tres ejes."""
+    src = pad if isinstance(pad, dict) else {}
+    return {
+        axis: _clamp(_to_float(src.get(axis), 0.0), lo, hi)
+        for axis, (lo, hi) in _BASELINE_RANGES.items()
+    }
+
+
+def bounded_update(
+    current: dict[str, Any],
+    proposed: dict[str, Any],
+    *,
+    max_delta_per_cycle: float = BASELINE_MAX_DELTA_PER_REFLECTION,
+) -> dict[str, float]:
+    """Limita el |Δ| de cada campo numérico a ``max_delta_per_cycle`` por ciclo.
+
+    Guardrail de auto-modificación (ADR 0074): un ciclo de reflexión NUNCA puede
+    mover un trait/baseline más de ``max_delta_per_cycle`` (deriva acotada, no
+    salvaje). Solo se mueven los campos PRESENTES en ``proposed``; los demás se
+    conservan. Determinista; los valores de ``current`` se toman como float."""
+    out: dict[str, float] = {k: _to_float(v, 0.0) for k, v in current.items()}
+    for key, raw in proposed.items():
+        base = out.get(key, 0.0)
+        target = _to_float(raw, base)
+        delta = _clamp(target - base, -max_delta_per_cycle, max_delta_per_cycle)
+        out[key] = base + delta
+    return out
+
+
+def editable_owner_state(
+    current: dict[str, Any],
+    *,
+    name: str | None = None,
+    core_values: list[str] | None = None,
+    narrative: str | None = None,
+    language: str | None = None,
+    learning_goals: list[str] | None = None,
+) -> dict[str, Any]:
+    """El nuevo ``identity_state`` tras un override del OWNER (puro, no muta el input).
+
+    SOLO toca los campos en :data:`OWNER_EDITABLE_FIELDS` (name/core_values/
+    narrative/language/learning_goals); ``traits``/``mood_baseline``/
+    ``relationship_model``/``affect_params`` se PRESERVAN del estado actual — los
+    deriva la reflexión, jamás el owner a mano (ADR 0074). Un argumento ``None`` no
+    pisa el valor actual (PUT parcial)."""
+    out = {
+        k: (dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v)
+        for k, v in current.items()
+    }
+    if name is not None:
+        out["name"] = name.strip()
+    if core_values is not None:
+        out["core_values"] = _str_list(core_values)
+    if narrative is not None:
+        out["narrative"] = narrative
+    if language is not None:
+        out["language"] = language
+    if learning_goals is not None:
+        out["learning_goals"] = _str_list(learning_goals)
+    return out
+
+
+def apply_reflection_delta(
+    current: dict[str, Any],
+    *,
+    narrative: str | None = None,
+    traits: dict[str, Any] | None = None,
+    mood_baseline: dict[str, Any] | None = None,
+    max_delta_per_cycle: float = BASELINE_MAX_DELTA_PER_REFLECTION,
+) -> dict[str, Any]:
+    """El nuevo ``identity_state`` tras una pasada de reflexión (puro, no muta el input).
+
+    Compone clamp + bounded sobre ``traits``/``mood_baseline`` (deriva ACOTADA, no
+    salvaje — ADR 0074) y reescribe ``narrative`` (la reflexión SÍ la gobierna).
+    Un argumento ``None`` deja ese campo intacto. La identidad nunca se borra
+    (ADR 0077): esto solo produce el siguiente estado a versionar."""
+    out = {
+        k: (dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v)
+        for k, v in current.items()
+    }
+    if narrative is not None:
+        out["narrative"] = narrative
+    if traits is not None:
+        # bounded sobre el trait actual, luego clamp duro al rango [0,1].
+        current_traits = clamp_traits(current.get("traits"))
+        bounded = bounded_update(
+            current_traits,
+            clamp_traits({**current_traits, **traits}),
+            max_delta_per_cycle=max_delta_per_cycle,
+        )
+        out["traits"] = clamp_traits(bounded)
+    if mood_baseline is not None:
+        current_baseline = clamp_baseline(current.get("mood_baseline"))
+        proposed = clamp_baseline({**current_baseline, **mood_baseline})
+        bounded_b = bounded_update(
+            current_baseline, proposed, max_delta_per_cycle=max_delta_per_cycle
+        )
+        out["mood_baseline"] = clamp_baseline(bounded_b)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Preámbulo de identidad en el system prompt (helper PURO, anti-inyección)
 # ---------------------------------------------------------------------------
 def identity_preamble(identity_state: dict[str, Any] | None) -> str:
@@ -215,8 +386,14 @@ def identity_preamble(identity_state: dict[str, Any] | None) -> str:
 
 __all__ = [
     "DEFAULT_CORTEX_NAME",
+    "OWNER_EDITABLE_FIELDS",
+    "apply_reflection_delta",
+    "bounded_update",
+    "clamp_baseline",
+    "clamp_traits",
     "compute_diff",
     "default_identity_state",
+    "editable_owner_state",
     "ensure_identity",
     "get_identity",
     "identity_preamble",

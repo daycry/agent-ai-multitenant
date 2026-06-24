@@ -235,6 +235,13 @@ export const NAV_GROUPS: NavGroup[] = [
         Icon: Activity,
         systemOwnerOnly: true,
       },
+      // Identidad evolutiva (Córtex F3, ADR 0074/0077): onboarding co-diseñado.
+      {
+        href: "/admin/cortex/identity",
+        label: "Identidad",
+        Icon: Sparkles,
+        systemOwnerOnly: true,
+      },
     ],
   },
   {
