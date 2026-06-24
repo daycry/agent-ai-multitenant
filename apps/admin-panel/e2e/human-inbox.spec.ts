@@ -172,7 +172,7 @@ test("reject requires a justification before confirming", async ({ page }) => {
   await page.getByTestId(`inbox-reject-${PENDING.assignment_id}`).click();
   // The confirm button is disabled until a justification is typed.
   await expect(page.getByTestId("inbox-action-confirm")).toBeDisabled();
-  await page.getByTestId("inbox-action-text").fill("Fuera de mi área de competencia");
+  await page.getByTestId("inbox-action-text-edit").fill("Fuera de mi área de competencia");
   await expect(page.getByTestId("inbox-action-confirm")).toBeEnabled();
 });
 
@@ -182,7 +182,7 @@ test("reject with a justification posts it and removes the row", async ({ page }
   await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
 
   await page.getByTestId(`inbox-reject-${PENDING.assignment_id}`).click();
-  await page.getByTestId("inbox-action-text").fill("Fuera de mi área de competencia");
+  await page.getByTestId("inbox-action-text-edit").fill("Fuera de mi área de competencia");
   await page.getByTestId("inbox-action-confirm").click();
 
   await expect.poll(() => calls.length).toBeGreaterThanOrEqual(1);
@@ -201,7 +201,7 @@ test("an accepted assignment can be marked complete", async ({ page }) => {
 
   await expect(page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`)).toBeVisible();
   await page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`).click();
-  await page.getByTestId("inbox-action-text").fill("Listo, sin observaciones");
+  await page.getByTestId("inbox-action-text-edit").fill("Listo, sin observaciones");
   await page.getByTestId("inbox-action-confirm").click();
 
   await expect.poll(() => calls.length).toBeGreaterThanOrEqual(1);

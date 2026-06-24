@@ -58,7 +58,9 @@ export function isProviderKind(value: string): value is ProviderKind {
 export const DEFAULT_MODEL_CONFIG: ModelConfigDraft = {
   provider: "claude_sdk",
   model: "claude-sonnet-4",
-  temperature: 0.2,
+  // 0.1 alinea con el default del plugin de GitHub Copilot en VS Code.
+  temperature: 0.1,
+  reasoning_effort: "off",
 };
 
 // Rango de temperatura (mismo que `MODEL_TEMPERATURE_MIN/MAX` del backend).
@@ -84,6 +86,8 @@ export interface ModelConfig {
   provider?: string;
   model?: string;
   temperature?: number;
+  /** Esfuerzo de razonamiento por proveedor (ADR 0070). "off"/ausente = sin razonar. */
+  reasoning_effort?: string;
   system_prompts?: SystemPrompts;
   [key: string]: unknown;
 }
@@ -93,6 +97,8 @@ export interface ModelConfigDraft {
   provider: ProviderKind;
   model: string;
   temperature: number;
+  /** Opción de razonamiento elegida; "off" = sin razonamiento (ADR 0070). */
+  reasoning_effort: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +157,10 @@ export function draftFromConfig(cfg: ModelConfig | null | undefined): ModelConfi
     provider: provider && isProviderKind(provider) ? provider : DEFAULT_MODEL_CONFIG.provider,
     model: typeof cfg?.model === "string" && cfg.model.trim() ? cfg.model : "",
     temperature: temperature ?? DEFAULT_MODEL_CONFIG.temperature,
+    reasoning_effort:
+      typeof cfg?.reasoning_effort === "string" && cfg.reasoning_effort.trim()
+        ? cfg.reasoning_effort
+        : "off",
   };
 }
 
@@ -291,6 +301,14 @@ export function buildModelConfig(input: BuildConfigInput): ModelConfig {
   next.provider = draft.provider;
   next.model = draft.model.trim();
   next.temperature = draft.temperature;
+
+  // ADR 0070: persistir reasoning_effort solo si está activo; "off"/vacío lo
+  // omite (y borra el heredado del `current` para no dejar un valor colgado).
+  if (draft.reasoning_effort && draft.reasoning_effort !== "off") {
+    next.reasoning_effort = draft.reasoning_effort;
+  } else {
+    delete next.reasoning_effort;
+  }
 
   const system_prompts: SystemPrompts = {};
   if (prompts.es && prompts.es.trim()) system_prompts.es = prompts.es;

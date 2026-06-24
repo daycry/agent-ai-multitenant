@@ -60,7 +60,7 @@ def test_fuse_two_disjoint_lists_returns_all_ids() -> None:
 def test_fuse_overlapping_id_gets_summed_score() -> None:
     """An id that ranks #1 in both lists must score 2 / (k+1)."""
     out = fuse_rankings([_uid(1)], [_uid(1)])
-    score, bm25_r, vec_r = out[_uid(1)]
+    score, bm25_r, vec_r, _ent_r = out[_uid(1)]
     assert score == pytest.approx(2.0 / (RRF_K_DEFAULT + 1), abs=1e-9)
     assert bm25_r == 1
     assert vec_r == 1
@@ -68,7 +68,7 @@ def test_fuse_overlapping_id_gets_summed_score() -> None:
 
 def test_fuse_only_in_one_list_carries_none_for_other_rank() -> None:
     out = fuse_rankings([_uid(1)], [])
-    score, bm25_r, vec_r = out[_uid(1)]
+    score, bm25_r, vec_r, _ent_r = out[_uid(1)]
     assert score == pytest.approx(1.0 / (RRF_K_DEFAULT + 1))
     assert bm25_r == 1
     assert vec_r is None
@@ -108,3 +108,37 @@ def test_fuse_with_custom_k() -> None:
     assert set(out60) == set(out5)
     # k=5 yields strictly higher scores for both.
     assert out5[_uid(1)][0] > out60[_uid(1)][0]
+
+
+# ---------------------------------------------------------------------------
+# Entity-match signal (ADR 0059 Opción A — third RRF list, mem0 idea nativa)
+# ---------------------------------------------------------------------------
+def test_fuse_entity_signal_contributes_to_score() -> None:
+    """An id ranked #1 in both bm25 AND the entity-match list scores 2/(k+1)."""
+    out = fuse_rankings([_uid(1)], [], [_uid(1)])
+    score, bm25_r, vec_r, ent_r = out[_uid(1)]
+    assert score == pytest.approx(2.0 / (RRF_K_DEFAULT + 1), abs=1e-9)
+    assert bm25_r == 1
+    assert vec_r is None
+    assert ent_r == 1
+
+
+def test_fuse_entity_only_id_surfaces() -> None:
+    """A memory found ONLY by entity match still surfaces with its own score."""
+    out = fuse_rankings([], [], [_uid(7)])
+    score, bm25_r, vec_r, ent_r = out[_uid(7)]
+    assert bm25_r is None and vec_r is None and ent_r == 1
+    assert score == pytest.approx(1.0 / (RRF_K_DEFAULT + 1))
+
+
+def test_fuse_id_in_all_three_lists_tops_ranking() -> None:
+    out = fuse_rankings([_uid(1), _uid(2)], [_uid(1), _uid(3)], [_uid(1), _uid(4)])
+    top = sorted(out.items(), key=lambda kv: -kv[1][0])[0][0]
+    assert top == _uid(1)
+
+
+def test_fuse_no_entities_is_backward_compatible_four_tuple() -> None:
+    """Omitting the entity list yields entity_rank=None (only the shape grows)."""
+    out = fuse_rankings([_uid(1)], [_uid(1)])
+    _score, _b, _v, ent_r = out[_uid(1)]
+    assert ent_r is None

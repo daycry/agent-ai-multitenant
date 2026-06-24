@@ -60,6 +60,19 @@ class _FakeLLM:
         self.closed = True
 
 
+class _CountingLLM(_FakeLLM):
+    """Like _FakeLLM but counts distil (complete) calls — to prove a redelivery
+    does NOT trigger a second LLM call."""
+
+    def __init__(self, content: str) -> None:
+        super().__init__(content)
+        self.calls = 0
+
+    async def complete(self, messages: Sequence[Message], **kwargs: Any) -> CompletionResponse:
+        self.calls += 1
+        return await super().complete(messages, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Seed helpers
 # ---------------------------------------------------------------------------
@@ -221,6 +234,48 @@ async def test_memorize_done_team_shared_persists(
 
 
 @pytest.mark.asyncio
+async def test_redelivery_does_not_re_memorize(
+    schema_at_head, migrations_pg_dsn: str, workers_settings
+) -> None:
+    """Idempotency guard (auditoría): with task_acks_late a redelivery re-runs the
+    task; the guard must skip — no second LLM call, no duplicate rows."""
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seeded = await _seed(migrations_pg_dsn, memory_scope="team_shared")
+
+    fake = _CountingLLM(
+        content='[{"content": "Asyncpg is the only driver.", "type": "semantic", "tags": []}]'
+    )
+    from workers.memorizer import _memorize_execution_async
+
+    first = await _memorize_execution_async(
+        seeded["execution_id"], settings=workers_settings, llm_factory=lambda _s: fake
+    )
+    assert first["persisted"] == 1, first
+    assert first["reason"] == "ok"
+    assert fake.calls == 1
+
+    # Redelivery of the SAME execution: guard short-circuits before the LLM.
+    second = await _memorize_execution_async(
+        seeded["execution_id"], settings=workers_settings, llm_factory=lambda _s: fake
+    )
+    assert second["persisted"] == 0, second
+    assert second["reason"] == "ok:already_memorized"
+    assert fake.calls == 1  # NOT re-distilled — no second LLM call
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        count = await conn.fetchval(
+            "SELECT count(*) FROM memory_entries WHERE source_execution_id = $1",
+            seeded["execution_id"],
+        )
+    finally:
+        await conn.close()
+    assert count == 1  # no duplicate rows from the redelivery
+
+
+@pytest.mark.asyncio
 async def test_memorize_aborted_does_not_persist(
     schema_at_head, migrations_pg_dsn: str, workers_settings
 ) -> None:
@@ -340,8 +395,12 @@ async def test_memorize_handles_missing_execution(
 # ---------------------------------------------------------------------------
 # Trigger from conduct_execution
 # ---------------------------------------------------------------------------
-def test_trigger_memorize_fires_only_on_done(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`trigger_memorize` calls apply_async iff status == 'done'."""
+def test_trigger_memorize_enqueues_for_terminal_statuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`trigger_memorize` hands ANY finished (terminal) execution to the Memorizer;
+    WHICH terminal statuses actually memorise is the operator-config gate in the
+    task. Non-terminal (mid-execution) statuses are not enqueued. This unlocks
+    learn-from-errors: 'aborted'/'failed' reach the task, which the operator can
+    enable via `memorizable_statuses` (the old hardcoded '== done' shadowed it)."""
     from workers import memorizer as mod
 
     calls: list[tuple[str, ...]] = []
@@ -352,11 +411,15 @@ def test_trigger_memorize_fires_only_on_done(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(mod.memorize_execution, "apply_async", _fake_apply_async)
 
     execution_id = uuid4()
+    # Terminal → enqueued (the task then applies the operator-config gate).
     assert mod.trigger_memorize(execution_id, "done") is True
-    assert mod.trigger_memorize(execution_id, "aborted") is False
-    assert mod.trigger_memorize(execution_id, "failed") is False
+    assert mod.trigger_memorize(execution_id, "aborted") is True
+    assert mod.trigger_memorize(execution_id, "failed") is True
+    assert mod.trigger_memorize(execution_id, "cancelled") is True
+    # Non-terminal (mid-execution) → NOT enqueued.
     assert mod.trigger_memorize(execution_id, "awaiting_human_approval") is False
-    assert len(calls) == 1  # only the 'done' call
+    assert mod.trigger_memorize(execution_id, "running") is False
+    assert len(calls) == 4  # the four terminal statuses
 
 
 def test_trigger_memorize_swallows_broker_errors(monkeypatch: pytest.MonkeyPatch) -> None:

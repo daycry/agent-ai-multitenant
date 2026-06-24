@@ -29,11 +29,13 @@ efímero; nunca debe loguearse (usar ``safe_spec_summary`` para logs).
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
+from uuid import UUID
 
 from api_server.assistant.model_config import to_provider_model_name
 from api_server.llm_providers.factory_resolver import resolve_provider_config
-from api_server.llm_providers.vault import LLMProviderVaultStore
+from api_server.llm_providers.vault import LLMProviderVaultError, LLMProviderVaultStore
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -64,8 +66,17 @@ def _overlay_provider_fields(
         if secret.get("oauth_token"):
             merged["github_token"] = secret["oauth_token"]
     elif kind in ("claude_sdk", "claude"):
-        # Claude SDK usa auth ambiental de suscripción — nada que inyectar.
-        pass
+        # El Claude Agent SDK admite DOS modos de auth, ambos sobre el mismo
+        # kind (ADR 0021/0063): API key (`secret['api_key']` → ANTHROPIC_API_KEY)
+        # y suscripción Pro/Max (`secret['oauth_token']`, de `claude
+        # setup-token` → CLAUDE_CODE_OAUTH_TOKEN). El runtime mapea la clave del
+        # spec al env var correcto dentro del contenedor; aquí solo trasladamos
+        # la credencial de Vault al spec (antes se descartaba → el agente nunca
+        # se autenticaba en el sandbox).
+        if secret.get("api_key"):
+            merged["api_key"] = secret["api_key"]
+        if secret.get("oauth_token"):
+            merged["oauth_token"] = secret["oauth_token"]
     elif kind == "ollama":
         if base_url:
             merged["base_url"] = base_url
@@ -94,8 +105,19 @@ async def resolve_model_spec(
     if model_spec.get("kind"):
         return dict(model_spec)
 
-    provider_kind = model_spec.get("provider")
+    # Concrete provider pinned by provider_id (Feature B / "todo a proveedores
+    # concretos"): resolve THAT exact row + its credential, instead of the newest
+    # active of the kind. provider (kind) rides along for traceability/fallback.
+    provider_id = model_spec.get("provider_id")
     model_id = model_spec.get("model")
+    if provider_id and model_id:
+        resolved_spec = await _resolve_by_provider_id(
+            session, model_spec, str(provider_id), str(model_id), vault
+        )
+        if resolved_spec is not None:
+            return resolved_spec
+
+    provider_kind = model_spec.get("provider")
     if not provider_kind or not model_id:
         raise ModelResolutionError(
             "model_config has neither a resolvable provider/model nor an explicit kind"
@@ -118,6 +140,39 @@ async def resolve_model_spec(
     )
 
 
+async def _resolve_by_provider_id(
+    session: AsyncSession,
+    model_spec: dict[str, Any],
+    provider_id: str,
+    model_id: str,
+    vault: LLMProviderVaultStore | None,
+) -> dict[str, Any] | None:
+    """Overlay endpoint + Vault credential from the EXACT ``llm_providers`` row
+    pinned by ``provider_id`` (not the newest-active-of-kind). Returns ``None`` when
+    the id is malformed / row missing / inactive, so the caller falls back to the
+    kind path (backward-compat)."""
+    try:
+        pid = UUID(provider_id)
+    except (ValueError, TypeError):
+        return None
+    # Lazy import: the worker's mypy context can't statically resolve this
+    # api_server submodule (same quirk handled elsewhere with import_module).
+    get_llm_provider = import_module("api_server.db.llm_providers").get_llm_provider
+    row = await get_llm_provider(session, pid)
+    if row is None or not row.is_active:
+        return None
+    secret: dict[str, str] = {}
+    if row.secret_vault_path and vault is not None:
+        try:
+            secret = vault.read_secret(row.secret_vault_path)
+        except LLMProviderVaultError:
+            secret = {}
+    spec = dict(model_spec)
+    spec["kind"] = row.kind
+    spec["model"] = to_provider_model_name(row.kind, model_id)
+    return _overlay_provider_fields(spec, row.kind, base_url=row.base_url, secret=secret)
+
+
 def safe_spec_summary(spec: dict[str, Any]) -> dict[str, Any]:
     """Resumen logueable del spec resuelto — SIN credenciales.
 
@@ -128,9 +183,13 @@ def safe_spec_summary(spec: dict[str, Any]) -> dict[str, Any]:
         "kind": spec.get("kind"),
         "provider": spec.get("provider"),
         "model": spec.get("model"),
+        "reasoning_effort": spec.get("reasoning_effort"),  # ADR 0070 (no sensible)
         "base_url": spec.get("base_url") or spec.get("apim_base_url"),
         "has_credential": bool(
-            spec.get("api_key") or spec.get("subscription_key") or spec.get("github_token")
+            spec.get("api_key")
+            or spec.get("subscription_key")
+            or spec.get("github_token")
+            or spec.get("oauth_token")
         ),
     }
 

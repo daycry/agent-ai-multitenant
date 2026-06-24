@@ -52,6 +52,9 @@ class UserResponse(BaseModel):
     email: EmailStr
     full_name: str | None
     is_system_admin: bool
+    # System Owner — dueño del despliegue (córtex F0, ADR 0074). Default por
+    # compat: los tokens/usuarios previos a F0 no lo traían.
+    is_system_owner: bool = False
     is_active: bool
 
 

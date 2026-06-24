@@ -447,7 +447,7 @@ async def publish_private_listing(
         parsed = parse_private_listing(kind=payload.kind, manifest_text=payload.manifest)
     except PrivateListingFormatError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 
@@ -537,7 +537,7 @@ async def update_private_listing(
         parsed = parse_private_listing(kind=existing_kind, manifest_text=payload.manifest)
     except PrivateListingFormatError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 
@@ -650,7 +650,7 @@ async def create_share(
 
     if payload.target_tenant_id == owner_tenant_id:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="cannot share a listing with your own tenant",
         )
 
@@ -1043,7 +1043,7 @@ async def decide_consent(
         )
     except ConsentError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 
@@ -1204,7 +1204,7 @@ async def perform_installation_update(
             newer = is_outdated(installation.version, target_version)
         except VersioningError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         if not newer:
             raise HTTPException(
@@ -1254,7 +1254,7 @@ async def perform_installation_update(
         # The orchestrator already committed the abort audit row; the install
         # stays on its old version. Surface a 422 with a sanitized message.
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"update blocked by install gate: {exc}",
         ) from exc
 

@@ -32,6 +32,7 @@ from api_server.routers.api_v1 import api_v1_docs_router, api_v1_router
 from api_server.routers.approval_policies import router as approval_policies_router
 from api_server.routers.approvals import router as approvals_router
 from api_server.routers.assistant import router as assistant_router
+from api_server.routers.assistant_voice import router as assistant_voice_router
 from api_server.routers.auth import router as auth_router
 from api_server.routers.backup import router as backup_router
 from api_server.routers.budget_pause import router as budget_pause_router
@@ -43,6 +44,10 @@ from api_server.routers.conversations import (
 from api_server.routers.copilot_device_flow import (
     admin_router as copilot_device_flow_admin_router,
 )
+from api_server.routers.cortex import router as cortex_router
+from api_server.routers.cortex_mind import router as cortex_mind_router
+from api_server.routers.cortex_voice import router as cortex_voice_router
+from api_server.routers.cortex_ws import router as cortex_ws_router
 from api_server.routers.cross_tenant_stats import router as cross_tenant_stats_router
 from api_server.routers.dep_cache import router as dep_cache_router
 from api_server.routers.docs_viewer import router as docs_viewer_router
@@ -229,6 +234,11 @@ def _register_routers(app: FastAPI) -> None:
         incoming_webhooks_router,
         incoming_webhook_configs_router,
         assistant_router,
+        assistant_voice_router,
+        cortex_router,
+        cortex_mind_router,
+        cortex_voice_router,
+        cortex_ws_router,
         backup_router,
         budget_pause_router,
         ws_router,
@@ -303,6 +313,7 @@ def create_app() -> FastAPI:
                     "email": None,
                     "full_name": None,
                     "is_system_admin": principal.is_system_admin,
+                    "is_system_owner": principal.is_system_owner,
                     "memberships": [],
                     "active_tenant_id": (
                         str(principal.tenant_id) if principal.tenant_id is not None else None
@@ -341,6 +352,8 @@ def create_app() -> FastAPI:
             "email": user.email,
             "full_name": user.full_name,
             "is_system_admin": bool(user.is_system_admin),
+            # Córtex F0 (ADR 0074): el frontend puede gatear la futura UI del córtex.
+            "is_system_owner": bool(user.is_system_owner),
             "memberships": memberships,
             "active_tenant_id": (
                 str(principal.tenant_id) if principal.tenant_id is not None else None

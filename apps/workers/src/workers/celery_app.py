@@ -65,6 +65,10 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
         imports=(
             "workers.tasks",
             "workers.memorizer",
+            "workers.cortex_affect",
+            "workers.cortex_reflection",
+            "workers.cortex_curiosity",
+            "workers.cortex_maintenance",
             "workers.maintenance",
             "workers.ingestion",
             "workers.price_sync",
@@ -73,6 +77,8 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             "workers.credential_rotation_task",
             "workers.fx_fetcher",
             "workers.human_escalation",
+            "workers.repo_clone",
+            "workers.plan_pr",
         ),
         # Agent runs are long; ack only after completion so a worker
         # crash re-queues the job instead of losing it.

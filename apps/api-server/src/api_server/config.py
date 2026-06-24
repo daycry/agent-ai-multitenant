@@ -57,6 +57,16 @@ class Settings(BaseSettings):
         default=SecretStr("dev-only-review-url-secret-change-me"),
         description="HMAC secret for signing reviewer URLs.",
     )
+    # Public base URL where the signed review URLs are reachable. Carries the
+    # reverse-proxy's /api prefix (ADR 0061/0062): Caddy routes /api/* to the
+    # api-server (stripping /api), so `/api/review/{id}` lands on the review
+    # router. The reviewer's browser reaches the preview app through
+    # `{review_public_base_url}/review/{id}/app/...`. Dev default points at the
+    # containerized manuals stack (Caddy on :8080).
+    review_public_base_url: str = Field(
+        default="http://localhost:8080/api",
+        description="Public base URL (incl. /api prefix) for signed review URLs.",
+    )
 
     # ----- SSO / OIDC (Plan 08 task_08_01) -----
     # Fernet-derived key used to encrypt OIDC client secrets at rest when
@@ -92,6 +102,15 @@ class Settings(BaseSettings):
     sso_redirect_base_url: str = Field(
         default="http://localhost:8001",
         description="Bootstrap public app base URL (System-Admin-overridable).",
+    )
+    # Path prefix under which the API is published behind a reverse proxy
+    # (single-origin, ADR 0061/0069). Inserted BETWEEN the public origin and the
+    # SSO/SCIM paths: e.g. prefix `/api` → callback `https://host/api/auth/sso/...`.
+    # Default "" = no prefix (api-server reachable at the origin root, dev). A
+    # System Admin overrides it live (platform setting `app.api_path_prefix`).
+    api_path_prefix: str = Field(
+        default="",
+        description="Bootstrap API path prefix for single-origin proxies (e.g. /api).",
     )
     # TTL of the short-lived state/nonce record stored in Redis between
     # the /login redirect and the /callback. Bounds how long a login can
@@ -249,6 +268,21 @@ class Settings(BaseSettings):
         default="http://localhost:3000",
         description="docling-mcp HTTP base URL (Plan 04 Fase E).",
     )
+    # --- Voz del Asistente (ADR 0073, voz F1) ---------------------------------
+    # Servicios de medios (NO providers LLM, ADR 0021): STT + TTS HTTP
+    # OpenAI-compatibles. En el stack docker apuntan a stt:8000 / tts:8880.
+    assistant_stt_url: str = Field(
+        default="http://localhost:8000",
+        description="STT (faster-whisper) base URL — /v1/audio/transcriptions (ADR 0073).",
+    )
+    assistant_tts_url: str = Field(
+        default="http://localhost:8880",
+        description="TTS (Kokoro-FastAPI) base URL — /v1/audio/speech (ADR 0073).",
+    )
+    assistant_tts_default_voice: str = Field(
+        default="af_heart",
+        description="Voz TTS por defecto (Kokoro). La UI permite elegir M/F.",
+    )
     ollama_url: str = Field(
         default="http://localhost:11434",
         description=(
@@ -274,6 +308,50 @@ class Settings(BaseSettings):
     # puerto al host (ver docker-compose.dev.yml).
     egress_proxy_host: str = Field(default="localhost", description="egress-proxy TCP host.")
     egress_proxy_port: int = Field(default=8888, description="egress-proxy TCP port (tinyproxy).")
+
+    # ----- Web del córtex (ADR 0067 — web-search / web-fetch provider-agnósticas) -----
+    # TODA salida a Internet de las host tools del córtex (``web_search`` / ``web_fetch``)
+    # va por el egress-proxy (tinyproxy, allowlist en docker/egress-proxy/filter.txt).
+    # NUNCA se conecta directo desde el api-server. En prod la api-server vive en
+    # `agentic-net` y resuelve `agentic-egress-proxy:8888`; en dev (api-server fuera de
+    # docker) el override expone el puerto al host (docker-compose.dev.yml), de ahí que
+    # el default apunte a localhost. Si se deja vacío, las web tools fallan con un error
+    # claro (nunca salen sin proxy).
+    cortex_egress_proxy_url: str = Field(
+        default="http://localhost:8888",
+        description=(
+            "URL del egress-proxy (tinyproxy) por el que las host tools del córtex "
+            "salen a Internet. En el stack docker: http://agentic-egress-proxy:8888."
+        ),
+    )
+    # Proveedor de búsqueda por defecto del córtex (catálogo cerrado, ADR 0067):
+    # 'searxng' (self-host, sin key — el camino por defecto) o 'brave' (API key en
+    # Vault/env). Un System Admin puede sobreescribirlo en vivo con el platform
+    # setting `cortex.web_search_provider`.
+    cortex_web_search_provider: str = Field(
+        default="searxng",
+        description="Proveedor de búsqueda web del córtex por defecto: 'searxng' | 'brave'.",
+    )
+    # SearXNG self-host (sin API key). En el stack docker el servicio `searxng`
+    # escucha en searxng:8080; en dev se puede apuntar a una instancia local.
+    cortex_searxng_url: str = Field(
+        default="http://searxng:8080",
+        description="Base URL de la instancia SearXNG self-host (sin key) — /search?format=json.",
+    )
+    # API de Brave Search. La key vive idealmente en Vault; como camino testeable sin
+    # Vault, se lee también de este env (API_SERVER_BRAVE_SEARCH_API_KEY). Cuando está
+    # vacía y el proveedor activo es 'brave', web_search falla con un error claro.
+    cortex_brave_search_url: str = Field(
+        default="https://api.search.brave.com/res/v1/web/search",
+        description="Endpoint de la Brave Search API (web search).",
+    )
+    brave_search_api_key: SecretStr | None = Field(
+        default=None,
+        description=(
+            "API key de Brave Search. Idealmente en Vault; como fallback testeable se "
+            "lee de API_SERVER_BRAVE_SEARCH_API_KEY. Nunca se loguea ni se devuelve."
+        ),
+    )
 
     # ----- Rate limits -----
     login_rate_limit_count: int = Field(default=5, description="Max login attempts per window.")

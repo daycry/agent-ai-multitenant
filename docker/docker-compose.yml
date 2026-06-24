@@ -7,7 +7,8 @@
 #
 # Named volumes are used so the stack is portable across Linux/Windows
 # hosts. For production hardening (bind-mount to /data/agent-platform,
-# TLS, secrets from Vault), see the installer rolled out in phase 15.
+# TLS termination via the Caddy reverse proxy, secrets from Vault), see the
+# installer-generated compose (apps/installer, ADR 0061).
 
 name: agentic-platform
 
@@ -36,7 +37,13 @@ x-logging: &default-logging
 #     broke postgres (signalfd/shmget) — net negative for trusted services.
 #   * apparmor=agentic-default — host MAC confinement (loaded via
 #     `apparmor_parser -r -W docker/apparmor/agentic-default.profile`; see
-#     docs/06-runbooks/apparmor-profiles.md; a no-op where AppArmor is absent).
+#     docs/06-runbooks/apparmor-profiles.md). On Linux hosts (incl. GitHub
+#     Ubuntu runners) the profile MUST be loaded before `up`, or Docker
+#     aborts with "AppArmor profile agentic-default not found"; it is only a
+#     no-op where AppArmor is genuinely absent (e.g. Docker Desktop on WSL2).
+#     CI loads it (ci.yml test-integration); docker-compose.ci.yml
+#     (apparmor=unconfined) is the documented fallback if a runner's parser
+#     rejects the profile.
 # The UNTRUSTED agent/test runtime sandbox DOES use the STRICT default-deny
 # docker/seccomp/agent-runtime.json + docker/apparmor/agent-runtime.profile,
 # applied by the worker at launch (workers.isolation), where it matters most.
@@ -61,6 +68,30 @@ x-seccomp: &default-seccomp
   security_opt:
     - no-new-privileges:true
     - apparmor=agentic-default
+  # cap_drop ALL is part of the hardening baseline (deploy-12 / prod-01 task_08):
+  # mirrors compose_generator._hardening so the canonical + generated stacks
+  # share ONE criterion. Vault adds IPC_LOCK back (cap_add, below) to mlock its
+  # memory; the one-shot ollama-bootstrap merges only logging+seccomp.
+  cap_drop: [ALL]
+
+# Capabilities the official infra images need back on top of cap_drop:[ALL] to
+# self-initialise: chown/chmod their data dir as root and drop to their service
+# user via gosu/su-exec. Without them postgres/redis/clamav crash-loop on
+# (re)start ("chmod/chown: Operation not permitted", "Permission denied").
+# prod-01: the cap_drop baseline (task_08) was too broad for stateful official
+# images — these add back ONLY the self-init caps, never the dangerous ones
+# (NET_ADMIN, SYS_ADMIN, …). Vault needs SETFCAP too (it setcaps its binary).
+x-infra-caps: &infra-caps [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+
+# Default resource cap (deploy-12 / prod-01 task_08): a CPU/memory limit so a
+# runaway container cannot starve the single host. Services that legitimately
+# need more (ollama models, docling) override `deploy` inline.
+x-limits: &default-limits
+  deploy:
+    resources:
+      limits:
+        cpus: "2.0"
+        memory: "2g"
 
 services:
   # ---------------------------------------------------------------------------
@@ -91,7 +122,10 @@ services:
       retries: 5
       start_period: 30s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+    # Official postgres entrypoint self-inits PGDATA as root + drops to the
+    # postgres user (see x-infra-caps).
+    cap_add: *infra-caps
 
   # ---------------------------------------------------------------------------
   # Redis 7 — sessions (server-side), Celery broker, rate-limit counters.
@@ -120,7 +154,9 @@ services:
       retries: 5
       start_period: 10s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+    # redis:7-alpine chowns /data + drops to the redis user (see x-infra-caps).
+    cap_add: *infra-caps
 
   # ---------------------------------------------------------------------------
   # MinIO — S3-compatible object storage. The web console runs on 9001.
@@ -144,7 +180,7 @@ services:
       retries: 5
       start_period: 30s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
   # ---------------------------------------------------------------------------
   # HashiCorp Vault in server mode with file backend.
@@ -153,7 +189,9 @@ services:
   # ---------------------------------------------------------------------------
   vault:
     image: hashicorp/vault:1.17
-    cap_add: [IPC_LOCK]
+    # IPC_LOCK to mlock its memory; SETFCAP because the entrypoint setcaps its
+    # own binary; plus the self-init/user-drop caps (see x-infra-caps).
+    cap_add: [IPC_LOCK, SETFCAP, CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
     environment:
       VAULT_ADDR: http://0.0.0.0:8200
       VAULT_API_ADDR: http://0.0.0.0:8200
@@ -180,7 +218,7 @@ services:
       retries: 10
       start_period: 30s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
   # ---------------------------------------------------------------------------
   # ClamAV — antivirus scanning for user-uploaded files (RAG ingestion,
@@ -200,7 +238,9 @@ services:
       retries: 5
       start_period: 120s
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+    # clamav chowns /var/lib/clamav + drops to the clamav user (see x-infra-caps).
+    cap_add: *infra-caps
 
   # ---------------------------------------------------------------------------
   # docling-serve — IBM's open-source document parser (Plan 04 task_04_10).
@@ -219,13 +259,91 @@ services:
       # (task_04_12).
       DOCLING_SERVE_ENABLE_UI: "false"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:5001/health || exit 1"]
+      # GET (-O /dev/null), NOT --spider: docling's /health rejects the HEAD
+      # request --spider sends, so the spider check fails and the container is
+      # wrongly marked unhealthy even though the endpoint serves 200 on GET.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:5001/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 60s
+    # Override the default 2g cap: document parsing (PDF/Office/Whisper) is
+    # memory-hungry.
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "4g"
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+
+  # ---------------------------------------------------------------------------
+  # stt — Speech-to-Text para el modo voz del Asistente (ADR 0073, voz F1).
+  # faster-whisper (CTranslate2) con API OpenAI-compatible
+  # (POST /v1/audio/transcriptions). El modelo Whisper se descarga al primer
+  # uso desde HuggingFace y se cachea en el volumen `whisper_models`. Servicio
+  # INTERNO: sin puertos al host; el api-server lo alcanza en `stt:8000`.
+  # NB: confirmar tag/envs contra la imagen upstream; usar el overlay GPU
+  # (docker-compose.gpu.yml) para modelos grandes / baja latencia tipo Meet.
+  # ---------------------------------------------------------------------------
+  stt:
+    # fedirz/faster-whisper-server usa tags rodantes latest-cpu / latest-cuda (no
+    # semver). Para pin reproducible en prod, fijar por digest (@sha256:…).
+    image: fedirz/faster-whisper-server:latest-cpu # latest-cuda en el overlay GPU
+    environment:
+      # Modelo CPU-friendly por defecto (ES+EN); `large-v3` vía GPU overlay.
+      WHISPER__MODEL: Systran/faster-whisper-small
+      WHISPER__INFERENCE_DEVICE: cpu
+    volumes:
+      - whisper_models:/root/.cache/huggingface
+    healthcheck:
+      # La imagen NO trae wget; sí python3. urlopen lanza (exit!=0) si /health no responde.
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s # 1er arranque descarga el modelo
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "4g"
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+
+  # ---------------------------------------------------------------------------
+  # tts — Text-to-Speech para el modo voz (ADR 0073, voz F1). Kokoro-82M
+  # (Apache-2.0) con API OpenAI-compatible (POST /v1/audio/speech); voces M/F
+  # ES+EN incluidas. INTERNO: el api-server lo alcanza en `tts:8880`.
+  # ---------------------------------------------------------------------------
+  tts:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2 # pin; -gpu en el overlay GPU
+    healthcheck:
+      # La imagen NO trae wget; sí python (en /app/.venv). urlopen lanza si /health falla.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8880/health', timeout=4)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2g"
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
   # ---------------------------------------------------------------------------
   # docling-mcp — MCP-protocol surface of Docling (Plan 04 task_04_21).
@@ -277,7 +395,46 @@ services:
     networks:
       - agentic-net
       - agentic-agents
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+    # tinyproxy drops to the tinyproxy user/group on start (setgid/setuid),
+    # so it needs the privilege-drop caps back (see x-infra-caps). Without them
+    # it dies with "Unable to change to group 'tinyproxy'".
+    cap_add: *infra-caps
+
+  # ---------------------------------------------------------------------------
+  # searxng — meta-buscador self-host para la web del córtex (ADR 0067). El
+  # api-server lo alcanza en `searxng:8080` (API_SERVER_CORTEX_SEARXNG_URL) y le
+  # pide `/search?q=&format=json`. Es el proveedor de búsqueda POR DEFECTO
+  # (sin API key, coherente con el despliegue de una sola máquina); la
+  # alternativa Brave (key en Vault/env) sale por el egress-proxy.
+  #
+  # SearXNG sólo sirve JSON cuando `search.formats` incluye `json` en su
+  # settings.yml; el bind-mount monta esa config (docker/searxng/settings.yml).
+  # Vive en `agentic-net` para poder consultar a los motores de búsqueda
+  # upstream a través de su propia salida; NO escucha en el host (sin `ports`).
+  # ---------------------------------------------------------------------------
+  searxng:
+    image: ${IMAGE_SEARXNG:-searxng/searxng:latest}
+    environment:
+      # Base URL pública del propio SearXNG (sólo afecta a enlaces que genera).
+      SEARXNG_BASE_URL: http://searxng:8080/
+      # Clave para firmar las URLs de imagen/respuesta; en dev un default, en
+      # prod el instalador la inyecta desde Vault/env.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-changeme-searxng-dev-only}
+    volumes:
+      # Config con `search.formats: [html, json]` para que el córtex reciba JSON.
+      - ./searxng:/etc/searxng:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+    # SearXNG (uwsgi) drops privileges to its service user at start, so it needs
+    # the privilege-drop caps back on top of cap_drop:[ALL] (see x-infra-caps).
+    cap_add: *infra-caps
 
   # ---------------------------------------------------------------------------
   # Ollama — in-stack embeddings (and optionally local LLMs) for the platform
@@ -301,8 +458,14 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    # Override the default 2g cap: LLM/embedding models need more headroom.
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: "8g"
     networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
   # ---------------------------------------------------------------------------
   # ollama-bootstrap — one-shot that pulls the embedding model into the ollama
@@ -324,7 +487,12 @@ services:
       - "ollama pull ${EMBEDDING_MODEL:-nomic-embed-text}"
     restart: "no"
     networks: [agentic-net]
-    <<: [*default-logging]
+    # One-shot bootstrap, but it still runs `ollama pull` over the network as a
+    # long-ish process: carry the same trusted hardening baseline as every
+    # other service (no-new-privileges + apparmor=agentic-default via the
+    # x-seccomp anchor). It was added without it in the Ollama feature (ADR
+    # 0056) — tests/security/test_{apparmor,seccomp_profiles}.py flag the gap.
+    <<: [*default-logging, *default-seccomp]
 
 volumes:
   postgres_data:
@@ -334,6 +502,7 @@ volumes:
   vault_logs:
   clamav_data:
   ollama_data:
+  whisper_models: # STT model cache (ADR 0073, voz F1)
 
 networks:
   agentic-net:

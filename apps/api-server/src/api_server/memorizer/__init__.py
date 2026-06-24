@@ -21,7 +21,10 @@ from api_server.memorizer.distillation import (
     distil_execution,
     distil_human_work_session,
 )
-from api_server.memorizer.persistence import persist_memory_candidates
+from api_server.memorizer.persistence import (
+    count_memories_for_source,
+    persist_memory_candidates,
+)
 from api_server.memorizer.policy import (
     MemorizeDecision,
     MemorizeSkipReason,
@@ -33,6 +36,7 @@ __all__ = [
     "MemorizeDecision",
     "MemorizeSkipReason",
     "MemoryCandidate",
+    "count_memories_for_source",
     "distil_execution",
     "distil_human_work_session",
     "persist_memory_candidates",

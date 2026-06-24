@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import {
   Dialog,
   DialogBody,
@@ -21,9 +22,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { CapabilityHub } from "@/components/capability/capability-hub";
+import { ChatModelSection, type ChatModelConfig } from "@/components/capability/chat-model-section";
+import { AdoptTeamDialog } from "@/components/teams/adopt-team-dialog";
 import { ApiError, apiFetch } from "@/lib/api";
+import { MEMORY_SCOPE_OPTIONS } from "@/lib/memory/constants";
 
 interface TeamMember {
   agent_id: string;
@@ -38,6 +43,14 @@ interface Team {
   name: string;
   description: string | null;
   is_builtin: boolean;
+  // Ola C: enlace al built-in origen si el equipo fue adoptado (badge/origen).
+  forked_from_team_id: string | null;
+  // Ola A: modelo por defecto del equipo (alias JSON `model_config`). {} = hereda.
+  model_config: ChatModelConfig;
+  // Modelo del CHAT del equipo (Feature B): proveedor concreto + modelo. {} = hereda.
+  chat_model_config: ChatModelConfig;
+  // ADR 0071: política de memoria del equipo (null = sin política / heredar).
+  memory_scope: string | null;
   members: TeamMember[];
 }
 
@@ -93,6 +106,8 @@ export default function TeamDetailPage() {
   // Plan 06.6: edit + delete dialogs.
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // Ola C-UI: diálogo de adopción de un equipo built-in.
+  const [adoptOpen, setAdoptOpen] = useState(false);
   // Plan 06.17 task_06_17_15: edición de metadata de miembro (líder/prioridad/rol).
   const [memberEditing, setMemberEditing] = useState<TeamMember | null>(null);
   const router = useRouter();
@@ -133,6 +148,45 @@ export default function TeamDetailPage() {
     },
     onError: (err: unknown) => {
       setSubmitError(err instanceof ApiError ? err.body : String(err));
+    },
+  });
+
+  // Ola A-UI: fija el modelo por defecto del equipo (PUT /teams/{id}).
+  const saveModel = useMutation<Team, ApiError, ChatModelConfig>({
+    mutationFn: (modelConfig) =>
+      apiFetch<Team>(`/teams/${teamId}`, {
+        method: "PUT",
+        body: { model_config: modelConfig },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["teams", teamId] });
+      void queryClient.invalidateQueries({ queryKey: ["teams", "list"] });
+    },
+  });
+
+  // Modelo del CHAT del equipo (proveedor concreto; PUT /teams/{id}).
+  const saveChatModel = useMutation<Team, ApiError, ChatModelConfig>({
+    mutationFn: (chatModelConfig) =>
+      apiFetch<Team>(`/teams/${teamId}`, {
+        method: "PUT",
+        body: { chat_model_config: chatModelConfig },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["teams", teamId] });
+    },
+  });
+
+  // ADR 0071: fija/quita la política de memoria del equipo (PUT /teams/{id}).
+  // `null` = sin política (los miembros caen al scope del agente / plataforma).
+  const saveMemoryScope = useMutation<Team, ApiError, string | null>({
+    mutationFn: (scope) =>
+      apiFetch<Team>(`/teams/${teamId}`, {
+        method: "PUT",
+        body: { memory_scope: scope },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["teams", teamId] });
+      void queryClient.invalidateQueries({ queryKey: ["teams", "list"] });
     },
   });
 
@@ -178,6 +232,12 @@ export default function TeamDetailPage() {
                 </Button>
               </>
             )}
+            {team && isReadOnly && (
+              <Button size="sm" onClick={() => setAdoptOpen(true)} data-testid="team-adopt-button">
+                <Plus className="mr-1 h-4 w-4" />
+                Adoptar / Personalizar
+              </Button>
+            )}
           </div>
         }
       />
@@ -204,6 +264,18 @@ export default function TeamDetailPage() {
           />
         </>
       )}
+      {team && isReadOnly && (
+        <AdoptTeamDialog
+          team={{ id: team.id, name: team.name }}
+          open={adoptOpen}
+          onOpenChange={setAdoptOpen}
+          onAdopted={(newId) => {
+            setAdoptOpen(false);
+            void queryClient.invalidateQueries({ queryKey: ["teams", "list"] });
+            router.push(`/admin/teams/${newId}`);
+          }}
+        />
+      )}
 
       {teamQuery.isLoading && <p className="text-muted-foreground text-sm">Cargando equipo…</p>}
 
@@ -224,6 +296,64 @@ export default function TeamDetailPage() {
               GET /teams/{id}/capabilities. */}
           <div className="mb-6">
             <CapabilityHub entityType="team" entityId={teamId} />
+          </div>
+          {/* Modelo de EJECUCIÓN del equipo (ADR 0065): proveedor concreto por nombre,
+              uniforme con chat y asistente. Read-only en built-in (se personaliza adoptando). */}
+          <div className="mb-6">
+            <ChatModelSection
+              value={team.model_config}
+              isReadOnly={isReadOnly}
+              pending={saveModel.isPending}
+              idPrefix="team-exec"
+              title={{ es: "Modelo del equipo", en: "Team model" }}
+              description={{
+                es:
+                  "Proveedor + modelo por defecto del equipo, que heredan sus agentes sin " +
+                  "modelo propio. Vacío = heredar del nivel superior (proyecto → plataforma).",
+                en:
+                  "The team's default provider + model, inherited by its agents without their " +
+                  "own. Empty = inherit from the level above (project → platform).",
+              }}
+              onSave={(cfg) => saveModel.mutate(cfg)}
+            />
+          </div>
+          {/* Modelo del CHAT del equipo (Feature B): proveedor concreto por nombre. */}
+          <div className="mb-6">
+            <ChatModelSection
+              value={team.chat_model_config}
+              isReadOnly={isReadOnly}
+              pending={saveChatModel.isPending}
+              idPrefix="team"
+              onSave={(cfg) => saveChatModel.mutate(cfg)}
+            />
+          </div>
+          {/* ADR 0071: política de memoria del equipo. Gobierna a sus miembros. */}
+          <div className="mb-6">
+            <Card className="p-4">
+              <Label htmlFor="team-memory-scope" className="text-sm font-medium">
+                Política de memoria del equipo
+              </Label>
+              <p className="text-muted-foreground mt-1 text-xs">
+                Gobierna la memoria de los agentes del equipo. &quot;Sin política&quot; = cada
+                agente usa su propio scope. Las lecciones (semantic) viajan a este nivel; lo puntual
+                de cada proyecto (episodic) se queda en su proyecto.
+              </p>
+              <Select
+                id="team-memory-scope"
+                data-testid="team-memory-scope"
+                className="mt-2 max-w-xs"
+                value={team.memory_scope ?? ""}
+                disabled={isReadOnly || saveMemoryScope.isPending}
+                onChange={(e) => saveMemoryScope.mutate(e.target.value || null)}
+              >
+                <option value="">Sin política (heredar)</option>
+                {MEMORY_SCOPE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </Select>
+            </Card>
           </div>
         </>
       )}
@@ -651,13 +781,11 @@ function TeamEditDialog({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="te-description">Descripción</Label>
-            <textarea
-              id="te-description"
+            <Label>Descripción</Label>
+            <MarkdownTextarea
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={setDescription}
               rows={3}
-              className="border-input bg-background rounded-md border px-3 py-2 text-sm"
               data-testid="edit-team-description"
             />
           </div>

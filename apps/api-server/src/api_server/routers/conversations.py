@@ -25,7 +25,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,8 +34,10 @@ from api_server.auth.deps import (
     get_redis,
     get_tenant_session,
     require_tenant_member,
+    schedule_after_commit,
 )
 from api_server.chat.modes import list_chat_modes
+from api_server.chat.responder import schedule_reply
 from api_server.db.conversation import (
     ChatMode,
     Conversation,
@@ -46,14 +48,17 @@ from api_server.db.domain import Project
 from api_server.events import (
     EVENT_CONVERSATION_MODE_CHANGED,
     EVENT_MESSAGE_CREATED,
+    delete_conversation_stream,
     publish_conversation_event,
 )
+from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers.llm_providers import get_provider_vault_store
 from api_server.schemas.conversations import (
     ChatModeResponse,
     ConversationCreateRequest,
@@ -248,6 +253,7 @@ async def delete_conversation(
     conversation_id: UUID,
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
+    redis: Redis = Depends(get_redis),
 ) -> None:
     require_tenant_id(principal)
     conv = await get_writable_or_404(
@@ -257,7 +263,42 @@ async def delete_conversation(
         principal,
         not_found_detail="conversation not found",
     )
+    # Hard-delete the messages so deleting a chat actually removes its data from
+    # the DB (not just hiding a soft-deleted conversation with its messages left
+    # behind as orphan rows). The conversation row itself stays soft-deleted as a
+    # lightweight audit marker (it drops out of every listing via deleted_at).
+    await session.execute(delete(Message).where(Message.conversation_id == conv.id))
     await soft_delete(session, conv)
+    # Drop the live stream too — no orphan events left behind in Redis.
+    await delete_conversation_stream(redis, str(conv.id))
+
+
+@conversations_router.delete("/{conversation_id}/messages", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_messages(
+    conversation_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+    redis: Redis = Depends(get_redis),
+) -> None:
+    """Clear ALL messages of a conversation, keeping the conversation itself.
+
+    Lets the operator empty an accumulated chat so it doesn't pile up and the team
+    starts the next turn with FRESH context (the responder loads the conversation's
+    recent messages as history). Messages have no soft-delete, so this hard-deletes
+    them. RLS-scoped: ``get_writable_or_404`` rejects a conversation the caller can't
+    see (cross-tenant → 404), and the delete is bounded to that conversation.
+    """
+    require_tenant_id(principal)
+    conv = await get_writable_or_404(
+        session,
+        Conversation,
+        conversation_id,
+        principal,
+        not_found_detail="conversation not found",
+    )
+    await session.execute(delete(Message).where(Message.conversation_id == conv.id))
+    # Clear the live stream too so cleared messages can't reappear as Redis ghosts.
+    await delete_conversation_stream(redis, str(conv.id))
 
 
 # ===========================================================================
@@ -274,8 +315,21 @@ async def post_message(
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
     redis: Redis = Depends(get_redis),
+    vault: LLMProviderVaultStore | None = Depends(get_provider_vault_store),
 ) -> MessageResponse:
     tenant_id = require_tenant_id(principal)
+
+    # This REST surface is the HUMAN one (require_tenant_member). Agent/system messages
+    # are authored server-side by the responder (chat/responder.py → _persist_and_publish)
+    # and by the mode-change notice, never through here. A user posting author_kind!='user'
+    # is impersonating an agent — and could forge the finish_planning attachment that
+    # materialises an attacker-controlled plan (plans.py:_draft_from_conversation). Reject it.
+    if payload.author_kind != MessageAuthorKind.USER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="solo se pueden publicar mensajes con author_kind='user' por esta vía",
+        )
+
     conv = await _load_conversation(session, conversation_id)
 
     # Resolve author_user_id from the principal when the caller is a
@@ -311,6 +365,26 @@ async def post_message(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
     await session.refresh(message)
     await _publish_message_event(redis, message)
+    # The team replies to a USER message (Plan 04 wiring): planning → multi-agent
+    # planning sub-graph; discussion/execution → a single team reply. Only USER
+    # messages trigger a reply, so the team never answers itself.
+    #
+    # Scheduled via ``schedule_after_commit`` (NOT BackgroundTasks): in FastAPI the
+    # yield-dependency commit runs AFTER background tasks, so a BackgroundTask would
+    # read the not-yet-committed message and respond to stale/empty history. The
+    # after-commit factory spawns a detached task, so the POST does not block on the
+    # LLM call. Capture plain values now — the ORM ``conv`` is expired post-commit.
+    if payload.author_kind == MessageAuthorKind.USER:
+        schedule_after_commit(
+            session,
+            schedule_reply(
+                conversation_id=conv.id,
+                tenant_id=tenant_id,
+                mode=conv.current_mode,
+                vault=vault,
+                redis=redis,
+            ),
+        )
     return to_message_response(message)
 
 

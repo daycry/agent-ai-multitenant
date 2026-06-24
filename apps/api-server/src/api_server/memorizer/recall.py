@@ -45,6 +45,8 @@ RRF_K_DEFAULT = 60
 # How many candidates each retrieval path returns before fusion.
 BM25_K_DEFAULT = 20
 VECTOR_K_DEFAULT = 20
+# Entity-match path (ADR 0059 Opción A — idea nativa de mem0).
+ENTITY_K_DEFAULT = 20
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ class MemoryRecallHit:
     bm25_rank: int | None  # 1-indexed; None if the BM25 path didn't return it
     vector_rank: int | None  # 1-indexed; None if the vector path didn't return it
     rrf_score: float
+    entity_rank: int | None = None  # 1-indexed; None if the entity path didn't return it
 
 
 def rrf_score(rank: int, k: int = RRF_K_DEFAULT) -> float:
@@ -81,20 +84,27 @@ def rrf_score(rank: int, k: int = RRF_K_DEFAULT) -> float:
 def fuse_rankings(
     bm25_ids: Sequence[UUID],
     vector_ids: Sequence[UUID],
+    entity_ids: Sequence[UUID] = (),
     *,
     k: int = RRF_K_DEFAULT,
-) -> dict[UUID, tuple[float, int | None, int | None]]:
-    """Merge two ranked id lists with RRF.
+) -> dict[UUID, tuple[float, int | None, int | None, int | None]]:
+    """Merge up to THREE ranked id lists with RRF.
 
-    Returns ``{memory_id: (rrf_score, bm25_rank, vector_rank)}`` for
-    every id that appeared in at least one list. ``bm25_rank`` and
-    ``vector_rank`` are 1-indexed and ``None`` when the id was absent
-    from that list.
+    Returns ``{memory_id: (rrf_score, bm25_rank, vector_rank, entity_rank)}``
+    for every id that appeared in at least one list. Each rank is 1-indexed and
+    ``None`` when the id was absent from that list.
+
+    The third list — **entity match** (ADR 0059 Opción A, la idea nativa de
+    mem0) — es opcional: omitirla deja ``entity_rank=None`` y el score idéntico
+    al de la fusión BM25+vector clásica. Una memoria que solo casa por entidad
+    aún emerge con su propia contribución; las que casan por varias señales se
+    potencian.
     """
-    out: dict[UUID, tuple[float, int | None, int | None]] = {}
+    out: dict[UUID, tuple[float, int | None, int | None, int | None]] = {}
     bm25_ranks: dict[UUID, int] = {mid: i + 1 for i, mid in enumerate(bm25_ids)}
     vector_ranks: dict[UUID, int] = {mid: i + 1 for i, mid in enumerate(vector_ids)}
-    for mid in set(bm25_ranks) | set(vector_ranks):
+    entity_ranks: dict[UUID, int] = {mid: i + 1 for i, mid in enumerate(entity_ids)}
+    for mid in set(bm25_ranks) | set(vector_ranks) | set(entity_ranks):
         s = 0.0
         bm25_r = bm25_ranks.get(mid)
         if bm25_r is not None:
@@ -102,7 +112,10 @@ def fuse_rankings(
         vec_r = vector_ranks.get(mid)
         if vec_r is not None:
             s += rrf_score(vec_r, k=k)
-        out[mid] = (s, bm25_r, vec_r)
+        ent_r = entity_ranks.get(mid)
+        if ent_r is not None:
+            s += rrf_score(ent_r, k=k)
+        out[mid] = (s, bm25_r, vec_r, ent_r)
     return out
 
 
@@ -217,6 +230,109 @@ async def _vector_candidates(
     return [row[0] for row in result.all()]
 
 
+_ENTITY_STOPWORDS = frozenset(
+    {
+        # ES + EN function words that are never useful as entity terms.
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "this",
+        "that",
+        "what",
+        "how",
+        "why",
+        "los",
+        "las",
+        "una",
+        "uno",
+        "del",
+        "con",
+        "para",
+        "por",
+        "que",
+        "como",
+        "cual",
+        "cuales",
+        "donde",
+        "cuando",
+        "sobre",
+        "entre",
+    }
+)
+
+
+def query_entity_terms(query: str) -> list[str]:
+    """Lightweight entity-term extraction from a recall query (ADR 0059).
+
+    The hot recall path must NOT pay an LLM call, so query "entities" are
+    approximated by normalised significant tokens: lowercased, split on
+    non-alphanumerics, ≥3 chars, stopwords dropped, de-duplicated (order kept).
+    They are matched against the stored ``entities`` (which the distilation
+    normalises the same way) via an array-overlap GIN lookup.
+    """
+    seen: set[str] = set()
+    terms: list[str] = []
+    token = ""
+    for ch in query.lower():
+        if ch.isalnum():
+            token += ch
+            continue
+        if token:
+            if len(token) >= 3 and token not in _ENTITY_STOPWORDS and token not in seen:
+                seen.add(token)
+                terms.append(token)
+            token = ""
+    if token and len(token) >= 3 and token not in _ENTITY_STOPWORDS and token not in seen:
+        terms.append(token)
+    return terms
+
+
+async def _entity_candidates(
+    session: AsyncSession,
+    *,
+    terms: Sequence[str],
+    tenant_id: UUID,
+    scopes: Sequence[str],
+    user_id: UUID | None,
+    team_id: UUID | None,
+    project_id: UUID | None,
+    limit: int,
+) -> list[UUID]:
+    """Top-`limit` ids whose ``entities`` JSONB array overlaps the query terms,
+    ranked by how many entities match (ADR 0059 Opción A). Empty if no terms.
+
+    Uses the JSONB ``?|`` overlap operator (GIN-indexed) for the filter and an
+    element-count subquery for the ranking — Postgres-only, no second store."""
+    if not terms:
+        return []
+    sql = (
+        "SELECT id"
+        " FROM memory_entries"
+        " WHERE tenant_id = :tenant_id"
+        "   AND deleted_at IS NULL"
+        "   AND entities ?| :terms" + _scope_filter_sql() + " ORDER BY ("
+        "     SELECT count(*) FROM jsonb_array_elements_text(entities) e"
+        "     WHERE e = ANY(:terms)"
+        "   ) DESC, created_at DESC"
+        " LIMIT :limit"
+    )
+    result = await session.execute(
+        text(sql),
+        {
+            "tenant_id": tenant_id,
+            "terms": list(terms),
+            "scopes": list(scopes),
+            "user_id": user_id,
+            "team_id": team_id,
+            "project_id": project_id,
+            "limit": limit,
+        },
+    )
+    return [row[0] for row in result.all()]
+
+
 async def recall(
     session: AsyncSession,
     *,
@@ -230,6 +346,7 @@ async def recall(
     limit: int = 5,
     bm25_k: int = BM25_K_DEFAULT,
     vector_k: int = VECTOR_K_DEFAULT,
+    entity_k: int = ENTITY_K_DEFAULT,
     rrf_k: int = RRF_K_DEFAULT,
 ) -> list[MemoryRecallHit]:
     """Hybrid recall — see module docstring.
@@ -259,7 +376,17 @@ async def recall(
         project_id=project_id,
         limit=vector_k,
     )
-    fused = fuse_rankings(bm25_ids, vector_ids, k=rrf_k)
+    entity_ids = await _entity_candidates(
+        session,
+        terms=query_entity_terms(query),
+        tenant_id=tenant_id,
+        scopes=scopes,
+        user_id=user_id,
+        team_id=team_id,
+        project_id=project_id,
+        limit=entity_k,
+    )
+    fused = fuse_rankings(bm25_ids, vector_ids, entity_ids, k=rrf_k)
     if not fused:
         return []
 
@@ -268,9 +395,17 @@ async def recall(
     top_ids = [mid for mid, _ in sorted(fused.items(), key=lambda kv: -kv[1][0])][:limit]
     if not top_ids:
         return []
+    # Defence-in-depth: filter tenant_id + deleted_at explicitly here too, consistent with
+    # the three candidate queries. `top_ids` already come from tenant-scoped candidates under
+    # RLS, but this final detail fetch must not rely on RLS alone — if a session ever lacked a
+    # correct app.tenant_id (worker BYPASSRLS reuse, middleware bug), an unfiltered id-only
+    # lookup would surface cross-tenant rows.
     detail_rows = await session.execute(
-        text("SELECT id, content, scope, type FROM memory_entries" " WHERE id = ANY(:ids)"),
-        {"ids": top_ids},
+        text(
+            "SELECT id, content, scope, type FROM memory_entries"
+            " WHERE id = ANY(:ids) AND tenant_id = :tenant_id AND deleted_at IS NULL"
+        ),
+        {"ids": top_ids, "tenant_id": tenant_id},
     )
     by_id: dict[UUID, dict[str, Any]] = {
         row[0]: {"content": row[1], "scope": row[2], "type": row[3]} for row in detail_rows.all()
@@ -279,7 +414,7 @@ async def recall(
     for mid in top_ids:
         if mid not in by_id:
             continue
-        s, bm25_r, vec_r = fused[mid]
+        s, bm25_r, vec_r, ent_r = fused[mid]
         hits.append(
             MemoryRecallHit(
                 memory_id=mid,
@@ -289,6 +424,7 @@ async def recall(
                 bm25_rank=bm25_r,
                 vector_rank=vec_r,
                 rrf_score=s,
+                entity_rank=ent_r,
             )
         )
     return hits
@@ -296,10 +432,12 @@ async def recall(
 
 __all__ = [
     "BM25_K_DEFAULT",
+    "ENTITY_K_DEFAULT",
     "RRF_K_DEFAULT",
     "VECTOR_K_DEFAULT",
     "MemoryRecallHit",
     "fuse_rankings",
+    "query_entity_terms",
     "recall",
     "rrf_score",
 ]

@@ -242,6 +242,7 @@ def build_env_vars(
         "WORKERS_BACKUP_ROOT": f"{cfg.storage.data_root}/backups",
         # --- orchestrator (ORCHESTRATOR_ prefixed) ---
         "ORCHESTRATOR_ENVIRONMENT": runtime_env,
+        "ORCHESTRATOR_DATABASE_URL": db_urls["DATABASE_URL"],
         # --- notification-dispatcher (NOTIFY_ prefixed) ---
         # MUST match API_SERVER_NOTIFICATION_ENCRYPTION_KEY (write/read pair).
         "NOTIFY_ENVIRONMENT": runtime_env,
@@ -431,6 +432,9 @@ _DATA_SUBDIRS: tuple[tuple[str, int, str], ...] = (
     ("vault/file", 0o700, "Vault file storage backend (secret material)."),
     ("vault/logs", 0o700, "Vault audit logs (sensitive)."),
     ("clamav", 0o750, "ClamAV virus signature database."),
+    ("caddy/data", 0o700, "Caddy data dir: internal CA + ACME certs (sensitive)."),
+    ("caddy/config", 0o750, "Caddy autosave config."),
+    ("caddy/tls", 0o700, "Operator-supplied corporate cert+key (tls_mode=provided)."),
     ("projects", 0o750, "Per-tenant/project bare repos (repos/*.git)."),
     ("worktrees", 0o750, "Per-task git worktrees (transient checkouts)."),
     ("dep-cache", 0o750, "Shared dependency cache across worktrees."),

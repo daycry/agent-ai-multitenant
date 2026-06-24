@@ -344,3 +344,81 @@ async def test_list_plans_filters_by_status_and_project(
             f"/projects/{seeded['project_id']}/plans?status=approved", headers=headers
         )
         assert approved.json() == []
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_from_conversation_lifts_plan_draft_attachment(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """chat→plan materialisation (task_03_14): when the planning chat finished with a
+    `{kind: planning_directive, intent: finish_planning, specification}` attachment,
+    POSTing `/plans` with only `conversation_id` lifts that spec so the Plan is born
+    with its tasks (not an empty draft)."""
+    import json
+
+    seeded = await _seed(migrations_pg_dsn)
+    agent_id = uuid4()
+    conv_id = uuid4()
+    spec = {
+        "summary": "Landing CI4 sin BD",
+        "tasks": [
+            {"id": "t1", "title": "Controlador Home", "description": "GET /", "depends_on": []},
+            {"id": "t2", "title": "Vista Twig", "description": "saludo", "depends_on": ["t1"]},
+        ],
+    }
+    attachment = {
+        "kind": "planning_directive",
+        "intent": "finish_planning",
+        "title": "Landing CI4",
+        "specification": spec,
+    }
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO agents (id, tenant_id, name, role, system_prompt, scope)"
+            " VALUES ($1, $2, $3, $4, $5, 'global_tenant_template')",
+            agent_id,
+            seeded["tenant_id"],
+            "PM",
+            "project_manager",
+            "Eres el PM.",
+        )
+        await conn.execute(
+            "INSERT INTO conversations (id, tenant_id, project_id, title, current_mode)"
+            " VALUES ($1, $2, $3, $4, 'planning')",
+            conv_id,
+            seeded["tenant_id"],
+            seeded["project_id"],
+            "Chat",
+        )
+        await conn.execute(
+            "INSERT INTO messages (id, tenant_id, conversation_id, author_kind,"
+            " author_agent_id, content, mode, attachments)"
+            " VALUES ($1, $2, $3, 'agent', $4, $5, 'planning', $6::jsonb)",
+            uuid4(),
+            seeded["tenant_id"],
+            conv_id,
+            agent_id,
+            "Plan listo para insertar.",
+            json.dumps([attachment]),
+        )
+    finally:
+        await conn.close()
+
+    token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            f"/projects/{seeded['project_id']}/plans",
+            json={"conversation_id": str(conv_id)},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["title"] == "Landing CI4"
+        tasks = body["specification"]["tasks"]
+        assert [t["id"] for t in tasks] == ["t1", "t2"]
+        assert tasks[1]["depends_on"] == ["t1"]
+        assert body["conversation_id"] == str(conv_id)

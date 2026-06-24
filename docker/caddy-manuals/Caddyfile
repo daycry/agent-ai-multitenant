@@ -1,0 +1,29 @@
+# Dev-only Caddyfile for the MANUALS containerized stack (single-origin).
+#
+# Mirrors the production routing (ADR 0061): the admin-panel SPA at "/" and the
+# api-server under "/api/*" on ONE origin. Production terminates TLS on 443; here
+# we serve plain HTTP on :8080 so the manuals can screenshot the reverse proxy
+# without a self-signed-cert browser warning. The app is built with
+# NEXT_PUBLIC_API_URL=/api so every REST/WS call is same-origin through Caddy.
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	# Caddy's own liveness (plain 200, no proxy) for the compose healthcheck.
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# /api/* → api-server. handle_path STRIPS the /api prefix so the api-server
+	# sees its real routes (/auth/login, /projects, …) exactly as in dev.
+	handle_path /api/* {
+		reverse_proxy api-server:8000
+	}
+
+	# Everything else → the Next.js admin-panel SPA.
+	reverse_proxy admin-panel:3000
+
+	encode gzip
+}

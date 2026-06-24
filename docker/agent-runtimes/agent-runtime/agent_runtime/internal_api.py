@@ -50,6 +50,12 @@ class InternalAPIHTTPError(InternalAPIError):
         self.body = body
 
 
+class InternalAPIUnreachableError(InternalAPIError):
+    """The internal API host did not answer at all (connect/timeout). Raised by
+    :meth:`InternalAgentAPI.ensure_reachable` so a production boot fails loudly
+    instead of silently degrading (Plan prod-01 task_11 / sandbox-4)."""
+
+
 @dataclass
 class InternalAgentAPI:
     """Bound to one (base_url, bearer_token) pair.
@@ -71,7 +77,11 @@ class InternalAgentAPI:
             raise InternalAPIConfigError("bearer_token is required")
         self.base_url = self.base_url.rstrip("/")
         if self.client is None:
-            self.client = httpx.Client(timeout=self.timeout_s)
+            # trust_env=False: /internal/agent/* must reach the api-server
+            # DIRECTLY over the internal network, NEVER through the
+            # HTTP(S)_PROXY (the deny-by-default egress-proxy has no api-server
+            # allow entry) (Plan prod-01 task_11 / sandbox-4).
+            self.client = httpx.Client(timeout=self.timeout_s, trust_env=False)
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> InternalAgentAPI:
@@ -97,6 +107,28 @@ class InternalAgentAPI:
         if self.client is not None:
             self.client.close()
             self.client = None
+
+    def ensure_reachable(self) -> None:
+        """Fail LOUDLY at boot if the api-server's internal API is not reachable
+        (Plan prod-01 task_11 / sandbox-4). A bare run with no token never gets
+        here (``from_env`` raised first); when a token WAS injected we are a
+        production run with an assigned agent, so an unreachable API is a hard
+        error — not a silent skip of the knowledge/memory families.
+
+        Probes the unauthenticated ``/healthz`` (a route, not the proxy) so a
+        network/route misconfiguration surfaces immediately.
+        """
+        if self.client is None:
+            raise InternalAPIError("client has been closed")
+        try:
+            response = self.client.get(f"{self.base_url}/healthz")
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise InternalAPIUnreachableError(
+                f"internal API at {self.base_url} is not reachable: {exc!r}. The sandbox "
+                "needs a network route to api-server (agentic-agents) and must bypass the "
+                "egress-proxy (trust_env=False)."
+            ) from exc
 
     def _post(self, path: str, json: dict[str, Any]) -> dict[str, Any]:
         if self.client is None:

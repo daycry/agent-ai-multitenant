@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -139,12 +140,29 @@ class CopilotProvider:
         self._jwt_refresh_margin_s = jwt_refresh_margin_s
         self._jwt: str | None = None
         self._jwt_expires_at = 0.0
+        self._timeout = timeout
         if http_client is not None:
             self._client = http_client
             self._owns_client = False
         else:
             self._client = httpx.AsyncClient(timeout=timeout)
             self._owns_client = True
+
+    @asynccontextmanager
+    async def _acquire(self) -> AsyncIterator[httpx.AsyncClient]:
+        """Yield an httpx client valid for THIS call. Owned → a FRESH client bound to
+        the current loop (closed on exit), so the CHAT path (complete/stream/JWT mint)
+        is safe when the same provider is reused across event loops — e.g. the planning
+        bridge calls complete() via asyncio.run per step. Injected → the caller's client.
+        Device-flow methods run during single-loop setup and keep ``self._client``."""
+        if self._owns_client:
+            client = httpx.AsyncClient(timeout=self._timeout)
+            try:
+                yield client
+            finally:
+                await client.aclose()
+        else:
+            yield self._client
 
     # ------------------------------------------------------------------
     # Device flow — interactive auth bootstrap
@@ -261,14 +279,15 @@ class CopilotProvider:
             return self._jwt
         if not self._github_token:
             raise AuthError("no GitHub token — run authenticate_interactive() first")
-        resp = await self._client.get(
-            _COPILOT_TOKEN_URL,
-            headers={
-                "Authorization": f"token {self._github_token}",
-                "Accept": "application/json",
-                "User-Agent": EDITOR_HEADERS["User-Agent"],
-            },
-        )
+        async with self._acquire() as client:
+            resp = await client.get(
+                _COPILOT_TOKEN_URL,
+                headers={
+                    "Authorization": f"token {self._github_token}",
+                    "Accept": "application/json",
+                    "User-Agent": EDITOR_HEADERS["User-Agent"],
+                },
+            )
         if resp.status_code == 401:
             raise AuthError("GitHub token invalid or lacks Copilot access")
         if resp.status_code >= 400:
@@ -315,22 +334,23 @@ class CopilotProvider:
         }
         if tools:
             body["tools"] = tools
-        resp = await self._client.post(
-            f"{_COPILOT_API}/chat/completions",
-            headers=await self._chat_headers(),
-            json=body,
-        )
-        # 401 here means the JWT expired between mint and call — re-mint
-        # once and retry. Anything else is a real provider error.
-        if resp.status_code == 401:
-            self._jwt = None
-            resp = await self._client.post(
+        async with self._acquire() as client:
+            resp = await client.post(
                 f"{_COPILOT_API}/chat/completions",
                 headers=await self._chat_headers(),
                 json=body,
             )
-        check_status(resp, provider=self.name)
-        return parse_chat_completion(resp.json(), provider=self.name, fallback_model=model_id)
+            # 401 here means the JWT expired between mint and call — re-mint
+            # once and retry. Anything else is a real provider error.
+            if resp.status_code == 401:
+                self._jwt = None
+                resp = await client.post(
+                    f"{_COPILOT_API}/chat/completions",
+                    headers=await self._chat_headers(),
+                    json=body,
+                )
+            check_status(resp, provider=self.name)
+            return parse_chat_completion(resp.json(), provider=self.name, fallback_model=model_id)
 
     async def stream(
         self,
@@ -358,28 +378,29 @@ class CopilotProvider:
         # JWT, re-mint, and retry the stream exactly once. We must close
         # the first response body before re-opening, so the retry happens
         # outside the first `async with` block.
-        async with self._client.stream(
-            "POST",
-            f"{_COPILOT_API}/chat/completions",
-            headers=await self._chat_headers(),
-            json=body,
-        ) as resp:
-            if resp.status_code != 401:
-                check_status(resp, provider=self.name)
-                async for chunk in iter_sse_chunks(resp, provider=self.name):
+        async with self._acquire() as client:
+            async with client.stream(
+                "POST",
+                f"{_COPILOT_API}/chat/completions",
+                headers=await self._chat_headers(),
+                json=body,
+            ) as resp:
+                if resp.status_code != 401:
+                    check_status(resp, provider=self.name)
+                    async for chunk in iter_sse_chunks(resp, provider=self.name):
+                        yield chunk
+                    return
+                self._jwt = None
+            # Retry once with a freshly minted JWT (same per-call client).
+            async with client.stream(
+                "POST",
+                f"{_COPILOT_API}/chat/completions",
+                headers=await self._chat_headers(),
+                json=body,
+            ) as retry_resp:
+                check_status(retry_resp, provider=self.name)
+                async for chunk in iter_sse_chunks(retry_resp, provider=self.name):
                     yield chunk
-                return
-            self._jwt = None
-        # Retry once with a freshly minted JWT.
-        async with self._client.stream(
-            "POST",
-            f"{_COPILOT_API}/chat/completions",
-            headers=await self._chat_headers(),
-            json=body,
-        ) as retry_resp:
-            check_status(retry_resp, provider=self.name)
-            async for chunk in iter_sse_chunks(retry_resp, provider=self.name):
-                yield chunk
 
     async def aclose(self) -> None:
         if self._owns_client:

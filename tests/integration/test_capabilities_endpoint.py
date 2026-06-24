@@ -332,6 +332,8 @@ async def test_agent_capabilities_full(configured_app, migrations_pg_dsn: str) -
         assert body["ser"]["model_configured"] is True
         assert body["ser"]["provider"] == "ollama"
         assert body["ser"]["model"] == "qwen2.5-coder"
+        # Ola D / ADR 0065: el agente pinea su propio modelo → origen "agent".
+        assert body["ser"]["model_origin"] == "agent"
 
         # HACER: set efectivo real (read_file + shell_exec, allowed_commands no vacío).
         effective = set(body["hacer"]["effective"])

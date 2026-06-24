@@ -200,6 +200,22 @@ class AgentContainerRunner:
             with contextlib.suppress(Exception):
                 container.remove(force=True)
 
+    def kill_by_label(self, execution_id: str) -> int:
+        """Force-kill any container tagged with ``execution_id`` (cooperative
+        cancellation). Killing the container makes the in-flight ``run_streamed``
+        exit, so the worker can finalise the row as ``cancelled``. It is the
+        container — not the worker process — that burns LLM budget, so this is
+        the authoritative stop. Best-effort and idempotent; returns the count
+        killed (0 if already gone). Reused by the zombie-container sweeper."""
+        label = f"com.agentic-platform.execution-id={execution_id}"
+        killed = 0
+        with contextlib.suppress(Exception):
+            for container in self.client.containers.list(filters={"label": label}):
+                with contextlib.suppress(Exception):
+                    container.kill()
+                killed += 1
+        return killed
+
     @staticmethod
     def _pump_logs(container: Any, on_line: Callable[[str], None]) -> None:
         """Forward the container's log stream line by line to `on_line`.

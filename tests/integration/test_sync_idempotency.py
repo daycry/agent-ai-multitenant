@@ -136,7 +136,15 @@ async def _create_plan(client: AsyncClient, project_id: UUID, headers: dict) -> 
         headers=headers,
     )
     assert create.status_code == 201, create.text
-    return create.json()["id"]
+    plan_id = create.json()["id"]
+    # Lifecycle: only an APPROVED plan may sync to the Kanban; approve before syncing.
+    moved = await client.put(
+        f"/plans/{plan_id}", json={"status": "pending_approval"}, headers=headers
+    )
+    assert moved.status_code == 200, moved.text
+    approved = await client.post(f"/plans/{plan_id}/approve", headers=headers)
+    assert approved.status_code == 200, approved.text
+    return plan_id
 
 
 @pytest.mark.asyncio

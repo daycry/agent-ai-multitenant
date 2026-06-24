@@ -8,6 +8,7 @@ exercised without importing the real package.
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -61,6 +62,24 @@ def _make_query(*messages: Any):  # type: ignore[no-untyped-def]
     return _q
 
 
+def test_api_key_is_exported_to_anthropic_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """API-key mode: the key lands in ANTHROPIC_API_KEY so the SDK authenticates."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    ClaudeAgentProvider(api_key="sk-ant-test-DO-NOT-LEAK", query_fn=_make_query())
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-test-DO-NOT-LEAK"
+
+
+def test_subscription_token_is_exported_to_claude_code_oauth_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Subscription Pro/Max mode (ADR 0063): a `claude setup-token` OAuth token
+    lands in CLAUDE_CODE_OAUTH_TOKEN — the env var the Claude Agent SDK reads to
+    authenticate against a subscription WITHOUT an API key."""
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    ClaudeAgentProvider(oauth_token="sk-ant-oat-test-DO-NOT-LEAK", query_fn=_make_query())
+    assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat-test-DO-NOT-LEAK"
+
+
 @pytest.mark.asyncio
 async def test_complete_collects_text_blocks_and_usage() -> None:
     fake_query = _make_query(
@@ -100,6 +119,74 @@ async def test_stream_yields_text_deltas_and_a_final_done_chunk() -> None:
 
 
 @pytest.mark.asyncio
+async def test_complete_emits_tool_calls_when_model_requests_a_tool() -> None:
+    """Protocol contract (ADR 0021): complete() debe HONRAR `tools` y exponer las
+    peticiones de tool del modelo como CompletionResponse.tool_calls — misma forma
+    que los providers OpenAI-compatibles — para que el host (grafo del asistente /
+    loop del agente) las ejecute. El SDK nombra las tools MCP in-process como
+    ``mcp__<server>__<tool>``; lo recortamos al nombre base que registró el host."""
+    fake_query = _make_query(
+        _AssistantMessage(
+            content=[
+                _ToolUseBlock(
+                    name="mcp__host_tools__remember_about_me",
+                    input={"content": "Mi nombre es Dani"},
+                    id="tu_42",
+                )
+            ]
+        ),
+    )
+    p = ClaudeAgentProvider(query_fn=fake_query, default_model="claude-sonnet-4-5")
+    resp = await p.complete(
+        [Message(role="user", content="me llamo Dani")],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "remember_about_me",
+                    "description": "Guarda un dato del usuario",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"content": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+    )
+    assert resp.tool_calls is not None
+    assert len(resp.tool_calls) == 1
+    assert resp.tool_calls[0].name == "remember_about_me"
+    assert resp.tool_calls[0].arguments == {"content": "Mi nombre es Dani"}
+    assert resp.tool_calls[0].id == "tu_42"
+
+
+@pytest.mark.asyncio
+async def test_complete_with_tools_returns_text_when_model_does_not_call_a_tool() -> None:
+    """Si se ofrecen tools pero el modelo solo responde texto, complete() devuelve
+    el texto y tool_calls=None (paridad con los providers OpenAI-compatibles)."""
+    fake_query = _make_query(
+        _AssistantMessage(content=[_TextBlock(text="Encantado.")]),
+        _ResultMessage(total_cost_usd=0.001, usage=_UsageBlock(input_tokens=5, output_tokens=3)),
+    )
+    p = ClaudeAgentProvider(query_fn=fake_query, default_model="claude-sonnet-4-5")
+    resp = await p.complete(
+        [Message(role="user", content="hola")],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "remember_about_me",
+                    "description": "x",
+                    "parameters": {},
+                },
+            }
+        ],
+    )
+    assert resp.tool_calls is None
+    assert resp.content == "Encantado."
+
+
+@pytest.mark.asyncio
 async def test_run_agent_yields_typed_agent_run_events() -> None:
     fake_query = _make_query(
         _AssistantMessage(content=[_ToolUseBlock(name="Read", input={"path": "file.txt"})]),
@@ -122,6 +209,73 @@ async def test_run_agent_yields_typed_agent_run_events() -> None:
     assert events[2].kind == "result"
     assert events[2].usage is not None
     assert events[2].usage.cost_usd == 0.002
+
+
+@pytest.mark.asyncio
+async def test_run_agent_propagates_effort_to_options() -> None:
+    # Regression (córtex F0 precondición): run_agent no propagaba `effort` a
+    # _build_options (a diferencia de complete/stream), así que el razonamiento
+    # extendido (ADR 0070) se ignoraba en silencio en el modo agéntico.
+    fake_query = _make_query(_AssistantMessage(content=[_TextBlock(text="ok")]))
+    p = ClaudeAgentProvider(query_fn=fake_query, default_model="claude-sonnet-4-5")
+    captured: dict[str, Any] = {}
+    original = p._build_options
+
+    def _spy(**kwargs: Any):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return original(**kwargs)
+
+    p._build_options = _spy  # type: ignore[method-assign]
+    async for _ in p.run_agent("hola", effort="high"):
+        pass
+    assert captured.get("effort") == "high"
+
+
+@pytest.mark.asyncio
+async def test_complete_routes_native_allowed_tools_into_tool_path() -> None:
+    """ADR 0076 (córtex F1): las web tools NATIVAS del SDK (WebSearch/WebFetch) van
+    como `allowed_tools` y deben seguir activas AUN cuando hay host tools (MCP) en
+    juego — el córtex usa ambas a la vez. Verificamos que complete() reenvía
+    `allowed_tools` al camino con tools host (`_complete_with_tools`)."""
+    fake_query = _make_query(_AssistantMessage(content=[_TextBlock(text="ok")]))
+    p = ClaudeAgentProvider(query_fn=fake_query, default_model="claude-sonnet-4-5")
+    captured: dict[str, Any] = {}
+
+    async def _spy(**kwargs: Any):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        from shared_llm.types import CompletionResponse
+
+        return CompletionResponse(content="", model="m", provider="claude_agent")
+
+    p._complete_with_tools = _spy  # type: ignore[method-assign]
+    await p.complete(
+        [Message(role="user", content="busca en la web")],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "cortex_remember", "description": "x", "parameters": {}},
+            }
+        ],
+        allowed_tools=["WebSearch", "WebFetch"],
+    )
+    assert captured.get("allowed_tools") == ["WebSearch", "WebFetch"]
+
+
+def test_build_tool_options_keeps_native_allowed_tools() -> None:
+    """`_build_tool_options` asigna las web tools nativas a `allowed_tools` del
+    `ClaudeAgentOptions` (auto-aprobadas), separadas de las host tools (MCP) que el
+    interceptor `can_use_tool` captura. Requiere el SDK real (opcional)."""
+    pytest.importorskip("claude_agent_sdk")
+    p = ClaudeAgentProvider(default_model="claude-sonnet-4-5")
+    options = p._build_tool_options(  # type: ignore[attr-defined]
+        system="s",
+        model="claude-sonnet-4-5",
+        specs=[{"name": "cortex_remember", "description": "x", "parameters": {}}],
+        max_turns=4,
+        effort="high",
+        allowed_tools=["WebSearch", "WebFetch"],
+    )
+    assert list(options.allowed_tools) == ["WebSearch", "WebFetch"]
 
 
 @pytest.mark.asyncio

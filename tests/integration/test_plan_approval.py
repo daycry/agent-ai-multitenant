@@ -88,10 +88,15 @@ def test_double_firma_second_signature_distinct_signer_approves() -> None:
 # Router integration
 # ===========================================================================
 async def _seed(dsn: str, *, threshold: str = "0") -> dict[str, UUID]:
-    """Seed a tenant + two users (approvers) + a project."""
+    """Seed a tenant + approvers + a project.
+
+    Users: alice/bob (tenant_admin), carol (plan_approver, ADR 0079), dan
+    (tenant_user — cannot approve)."""
     tenant_id = uuid4()
     alice_id = uuid4()
     bob_id = uuid4()
+    carol_id = uuid4()
+    dan_id = uuid4()
     project_id = uuid4()
     conn = await asyncpg.connect(dsn)
     try:
@@ -110,17 +115,24 @@ async def _seed(dsn: str, *, threshold: str = "0") -> dict[str, UUID]:
             "platform-approval",
         )
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash) VALUES" " ($1, $2, $3), ($4, $5, $6)",
+            "INSERT INTO users (id, email, password_hash) VALUES"
+            " ($1, $2, $3), ($4, $5, $6), ($7, $8, $9), ($10, $11, $12)",
             alice_id,
             "alice@approve.test",
             "h",
             bob_id,
             "bob@approve.test",
             "h",
+            carol_id,
+            "carol@approve.test",
+            "h",
+            dan_id,
+            "dan@approve.test",
+            "h",
         )
         await conn.execute(
             "INSERT INTO user_org_memberships (id, tenant_id, user_id, role)"
-            " VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)",
+            " VALUES ($1, $2, $3, $4), ($5, $6, $7, $8), ($9, $10, $11, $12), ($13, $14, $15, $16)",
             uuid4(),
             tenant_id,
             alice_id,
@@ -129,6 +141,14 @@ async def _seed(dsn: str, *, threshold: str = "0") -> dict[str, UUID]:
             tenant_id,
             bob_id,
             "tenant_admin",
+            uuid4(),
+            tenant_id,
+            carol_id,
+            "plan_approver",
+            uuid4(),
+            tenant_id,
+            dan_id,
+            "tenant_user",
         )
         await conn.execute(
             "INSERT INTO projects (id, tenant_id, name) VALUES ($1, $2, $3)",
@@ -148,6 +168,8 @@ async def _seed(dsn: str, *, threshold: str = "0") -> dict[str, UUID]:
         "tenant_id": tenant_id,
         "alice_id": alice_id,
         "bob_id": bob_id,
+        "carol_id": carol_id,
+        "dan_id": dan_id,
         "project_id": project_id,
     }
 
@@ -232,6 +254,124 @@ async def _create_and_open(client: AsyncClient, seeded: dict, spec: dict, header
     )
     assert move.status_code == 200, move.text
     return plan_id
+
+
+@pytest.mark.asyncio
+async def test_plan_approver_role_can_approve(configured_app, migrations_pg_dsn: str) -> None:
+    """ADR 0079 Opción A: un plan_approver (sin ser tenant_admin) puede aprobar."""
+    seeded = await _seed(migrations_pg_dsn, threshold="1000")
+    admin_headers = {
+        "Authorization": f"Bearer {await _mint_token(seeded['alice_id'], seeded['tenant_id'])}"
+    }
+    carol_headers = {
+        "Authorization": f"Bearer {await _mint_token(seeded['carol_id'], seeded['tenant_id'])}"
+    }
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        plan_id = await _create_and_open(client, seeded, _CHEAP_SPEC, admin_headers)
+        resp = await client.post(f"/plans/{plan_id}/approve", headers=carol_headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "approved"
+        assert resp.json()["approved_by"] == str(seeded["carol_id"])
+
+
+@pytest.mark.asyncio
+async def test_plain_tenant_user_cannot_approve(configured_app, migrations_pg_dsn: str) -> None:
+    """Un tenant_user normal NO puede aprobar planes (403)."""
+    seeded = await _seed(migrations_pg_dsn, threshold="1000")
+    admin_headers = {
+        "Authorization": f"Bearer {await _mint_token(seeded['alice_id'], seeded['tenant_id'])}"
+    }
+    dan_headers = {
+        "Authorization": f"Bearer {await _mint_token(seeded['dan_id'], seeded['tenant_id'])}"
+    }
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        plan_id = await _create_and_open(client, seeded, _CHEAP_SPEC, admin_headers)
+        resp = await client.post(f"/plans/{plan_id}/approve", headers=dan_headers)
+        assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.asyncio
+async def test_draft_plan_cannot_sync_to_kanban(configured_app, migrations_pg_dsn: str) -> None:
+    """Un borrador NO debe materializar tareas: sync-to-kanban en draft -> 409."""
+    seeded = await _seed(migrations_pg_dsn, threshold="1000")
+    token = await _mint_token(seeded["alice_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        create = await client.post(
+            f"/projects/{seeded['project_id']}/plans",
+            json={"title": "Plan", "specification": _CHEAP_SPEC},
+            headers=headers,
+        )
+        plan_id = create.json()["id"]  # status defaults to draft
+
+        resp = await client.post(
+            f"/plans/{plan_id}/sync-to-kanban", json={"scope": "total"}, headers=headers
+        )
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["error"] == "plan_not_approved"
+
+
+@pytest.mark.asyncio
+async def test_approved_plan_can_sync_and_start_execution_creates_tasks(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Aprobado -> sync permitido; start-execution lo pone in_progress y crea las
+    tareas en el Kanban (revisa si están y si no las crea)."""
+    seeded = await _seed(migrations_pg_dsn, threshold="1000")
+    token = await _mint_token(seeded["alice_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        plan_id = await _create_and_open(client, seeded, _CHEAP_SPEC, headers)
+        approve = await client.post(f"/plans/{plan_id}/approve", headers=headers)
+        assert approve.json()["status"] == "approved"
+
+        # start-execution: approved -> in_progress AND materialises the tasks.
+        started = await client.post(f"/plans/{plan_id}/start-execution", headers=headers)
+        assert started.status_code == 200, started.text
+        assert started.json()["status"] == "in_progress"
+
+        # The single spec task is now in the Kanban (idempotent re-sync returns it as skipped).
+        resync = await client.post(
+            f"/plans/{plan_id}/sync-to-kanban", json={"scope": "total"}, headers=headers
+        )
+        assert resync.status_code == 200, resync.text
+        assert resync.json()["skipped_task_ids"]  # already materialised by start-execution
+
+
+@pytest.mark.asyncio
+async def test_start_execution_on_unapproved_plan_returns_409(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """start-execution solo es legal desde approved: en draft -> 409."""
+    seeded = await _seed(migrations_pg_dsn, threshold="1000")
+    token = await _mint_token(seeded["alice_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        create = await client.post(
+            f"/projects/{seeded['project_id']}/plans",
+            json={"title": "Plan", "specification": _CHEAP_SPEC},
+            headers=headers,
+        )
+        plan_id = create.json()["id"]  # draft
+
+        resp = await client.post(f"/plans/{plan_id}/start-execution", headers=headers)
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["error"] == "invalid_plan_transition"
 
 
 @pytest.mark.asyncio

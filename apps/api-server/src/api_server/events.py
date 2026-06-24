@@ -157,6 +157,16 @@ async def publish_conversation_event(
         _log.warning("api_server.conversation_event_publish_failed", error=str(exc))
 
 
+async def delete_conversation_stream(redis: Redis, conversation_id: str) -> None:
+    """Drop a conversation's live stream (best-effort) so clearing or deleting a
+    chat leaves NO orphan events in Redis — otherwise a later WebSocket connect
+    would replay messages that no longer exist as ghost entries."""
+    try:
+        await redis.delete(conversation_stream_key(conversation_id))
+    except Exception as exc:  # cleanup is best-effort, never fail the caller
+        _log.warning("api_server.conversation_stream_delete_failed", error=str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Per-document live stream (Plan 04 task_04_15) — KB ingestion progress.
 #
@@ -195,3 +205,77 @@ async def publish_document_event(
         )
     except Exception as exc:
         _log.warning("api_server.document_event_publish_failed", error=str(exc))
+
+
+async def delete_document_stream(redis: Redis, document_id: str) -> None:
+    """Drop a document's ingestion stream (best-effort) so deleting a document
+    leaves NO orphan events in Redis — same cleanup contract as
+    :func:`delete_conversation_stream`. Without this a later WebSocket connect to
+    ``/ws/documents/{id}`` would replay ingestion progress for a document that no
+    longer exists."""
+    try:
+        await redis.delete(document_stream_key(document_id))
+    except Exception as exc:  # cleanup is best-effort, never fail the caller
+        _log.warning("api_server.document_stream_delete_failed", error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Per-owner córtex affect telemetry stream (Córtex F2, ADR 0075).
+#
+# The affective distiller (workers.cortex_distill_affect) publishes one frame
+# per processed turn onto the owner's stream `cortex:telemetry:{owner}`; the
+# WebSocket `/ws/owner/cortex/telemetry` tails it so the Panel de Mente dials
+# update ~1-2s after the response (the appraisal is async, ADR 0075). Same
+# best-effort, per-key-per-owner contract as the conversation streams above —
+# the owner_user_id is the ONLY isolation axis (the córtex tables are
+# tenant-less on BYPASSRLS, ADR 0074), so the key carries it explicitly.
+#
+# > Honestidad (ADR 0075 §6): the frame is a COMPUTATIONAL affect snapshot,
+# > NOT real feelings. The `type:'affect'` payload is a simulation for the
+# > live dials, never a claim of consciousness.
+# ---------------------------------------------------------------------------
+EVENT_CORTEX_AFFECT = "affect"
+
+
+def cortex_telemetry_stream_key(owner_user_id: str) -> str:
+    """Redis stream key for one owner's córtex affect telemetry."""
+    return f"cortex:telemetry:{owner_user_id}"
+
+
+async def publish_cortex_affect_event(
+    redis: Redis,
+    owner_user_id: str,
+    *,
+    payload: dict[str, Any],
+) -> None:
+    """Emit one affect frame onto the owner's telemetry stream (best-effort).
+
+    Mirror of :func:`publish_conversation_event`: never raises (a Redis blip
+    must never break the distiller, which already wrote its snapshot). The
+    frame the WS forwards is ``{type:'affect', occurred_at, payload:{…}}`` —
+    the live PAD/mood/drives + ``appraisal_reason`` the Panel de Mente plots.
+    """
+    try:
+        await redis.xadd(
+            cortex_telemetry_stream_key(owner_user_id),
+            {
+                "type": EVENT_CORTEX_AFFECT,
+                "occurred_at": datetime.now(UTC).isoformat(),
+                "payload": json.dumps(payload),
+            },
+            maxlen=_MAXLEN,
+            approximate=True,
+        )
+    except Exception as exc:  # telemetry is best-effort, never fail the caller
+        _log.warning("api_server.cortex_affect_event_publish_failed", error=str(exc))
+
+
+async def delete_cortex_affect_stream(redis: Redis, owner_user_id: str) -> None:
+    """Drop an owner's telemetry stream (best-effort) — same cleanup contract as
+    :func:`delete_conversation_stream`. The decay-lazy Redis cache key
+    (``cortex:affect:{owner}``) is dropped by the affect cache layer; this only
+    clears the telemetry tail."""
+    try:
+        await redis.delete(cortex_telemetry_stream_key(owner_user_id))
+    except Exception as exc:  # cleanup is best-effort, never fail the caller
+        _log.warning("api_server.cortex_affect_stream_delete_failed", error=str(exc))

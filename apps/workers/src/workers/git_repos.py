@@ -178,18 +178,23 @@ class BareRepoManager:
 
     # --- task_06_17 — periodic fetch + webhook hook --------------------
 
-    def fetch_remote(self, repo_name: str) -> None:
+    def fetch_remote(self, repo_name: str, *, auth_env: dict[str, str] | None = None) -> None:
         """Run ``git fetch origin`` against the bare repo.
 
         Called both periodically (scheduled celery beat task) and from
         the webhook receiver when a push lands at the remote (e.g.
         GitHub / Azure DevOps webhook). Idempotent — fetching twice in
         a row is cheap.
+
+        ``auth_env`` (ADR 0072): variables de entorno de autenticación
+        (GIT_ASKPASS/GIT_SSH_COMMAND) construidas por ``git_auth`` para
+        autenticarse contra el remoto. ``None`` = sin auth (remoto local o
+        ya autenticable por el host).
         """
         path = self._layout.bare_repo_path(repo_name)
         if not path.exists():
             raise GitCommandError(f"bare repo {repo_name!r} does not exist at {path}")
-        _run_git("fetch", "--prune", "origin", cwd=path)
+        _run_git("fetch", "--prune", "origin", cwd=path, env_extra=auth_env)
 
 
 # ---------------------------------------------------------------------------

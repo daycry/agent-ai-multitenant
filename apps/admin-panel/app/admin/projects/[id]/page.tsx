@@ -54,6 +54,12 @@ import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { Select } from "@/components/ui/select";
 import { StateBlock } from "@/components/shared/state-block";
 import { CapabilityHub } from "@/components/capability/capability-hub";
+import { ChatModelSection, type ChatModelConfig } from "@/components/capability/chat-model-section";
+import {
+  GitConfigSection,
+  type GitConfig,
+  type GitPolicies,
+} from "@/components/projects/git-config-section";
 import { ApiError, apiFetch } from "@/lib/api";
 
 type ProjectStatus = "active" | "paused" | "archived";
@@ -65,6 +71,14 @@ interface Project {
   status: string;
   team_id: string | null;
   is_template: boolean;
+  // Ola A: modelo por defecto del proyecto (alias JSON `model_config`). {} = hereda.
+  model_config: ChatModelConfig;
+  // Modelo del CHAT del proyecto (Feature B): proveedor concreto + modelo. {} = hereda.
+  chat_model_config: ChatModelConfig;
+  // ADR 0072: config git del proyecto (sin secreto). null = sin remoto.
+  git_config: GitConfig | null;
+  // worker_config.git_policies guarda las políticas del flujo git del plan (ADR 0072).
+  worker_config?: Record<string, unknown> | null;
 }
 
 interface ProjectUpdate {
@@ -72,6 +86,8 @@ interface ProjectUpdate {
   description?: string | null;
   status?: ProjectStatus;
   team_id?: string | null;
+  model_config?: ChatModelConfig;
+  chat_model_config?: ChatModelConfig;
 }
 
 const STATUS_VARIANT: Record<string, BadgeVariant> = {
@@ -174,6 +190,31 @@ export default function ProjectHubPage() {
     refetchOnWindowFocus: false,
   });
 
+  // Ola A-UI: fija el modelo por defecto del proyecto (PUT /projects/{id}).
+  const saveModel = useMutation<Project, ApiError, ChatModelConfig>({
+    mutationFn: (modelConfig) =>
+      apiFetch<Project>(`/projects/${projectId}`, {
+        method: "PUT",
+        body: { model_config: modelConfig },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      void queryClient.invalidateQueries({ queryKey: ["projects", "tenant"] });
+    },
+  });
+
+  // Modelo del CHAT del proyecto (proveedor concreto; PUT /projects/{id}).
+  const saveChatModel = useMutation<Project, ApiError, ChatModelConfig>({
+    mutationFn: (chatModelConfig) =>
+      apiFetch<Project>(`/projects/${projectId}`, {
+        method: "PUT",
+        body: { chat_model_config: chatModelConfig },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+    },
+  });
+
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8" data-testid="project-hub">
       <PageHeader
@@ -244,6 +285,47 @@ export default function ProjectHubPage() {
               RECORDAR; SER no aplica y HACER no restringe a nivel de proyecto). */}
           <div className="mb-6">
             <CapabilityHub entityType="project" entityId={projectId} />
+          </div>
+
+          {/* Modelo de EJECUCIÓN del proyecto (ADR 0065): proveedor concreto por nombre,
+              uniforme con el del chat y el asistente. Lo heredan los agentes sin modelo. */}
+          <div className="mb-6">
+            <ChatModelSection
+              value={project.model_config}
+              pending={saveModel.isPending}
+              idPrefix="project-exec"
+              title={{ es: "Modelo del proyecto", en: "Project model" }}
+              description={{
+                es:
+                  "Proveedor + modelo por defecto del proyecto, que heredan los agentes sin " +
+                  "modelo propio. Vacío = heredar del nivel superior (equipo → plataforma).",
+                en:
+                  "The project's default provider + model, inherited by agents without their " +
+                  "own. Empty = inherit from the level above (team → platform).",
+              }}
+              onSave={(cfg) => saveModel.mutate(cfg)}
+            />
+          </div>
+
+          {/* Modelo del CHAT del proyecto (Feature B): proveedor concreto por nombre. */}
+          <div className="mb-6">
+            <ChatModelSection
+              value={project.chat_model_config}
+              pending={saveChatModel.isPending}
+              idPrefix="project"
+              onSave={(cfg) => saveChatModel.mutate(cfg)}
+            />
+          </div>
+
+          {/* ADR 0072: configuración del repositorio Git (remoto + PAT/SSH). */}
+          <div className="mb-6">
+            <GitConfigSection
+              projectId={projectId}
+              value={project.git_config}
+              policies={
+                (project.worker_config?.["git_policies"] as GitPolicies | undefined) ?? null
+              }
+            />
           </div>
 
           {/* Sub-sections grid */}
@@ -327,6 +409,15 @@ function ProjectEditDialog({
   const [status, setStatus] = useState<ProjectStatus>(
     (project.status as ProjectStatus) ?? "active",
   );
+  // Equipo del proyecto: "" = sin equipo. Permite asignar/cambiar el equipo de
+  // CUALQUIER proyecto (incluido uno en blanco) — el backend ya lo soporta.
+  const [teamId, setTeamId] = useState(project.team_id ?? "");
+  const teamsQuery = useQuery({
+    queryKey: ["teams", "list"],
+    queryFn: () => apiFetch<{ id: string; name: string }[]>("/teams"),
+    refetchOnWindowFocus: false,
+    enabled: open,
+  });
 
   // Reset form when the dialog reopens with a (possibly stale)
   // project — otherwise an edit, save, reopen still shows the old
@@ -336,8 +427,9 @@ function ProjectEditDialog({
       setName(project.name);
       setDescription(project.description ?? "");
       setStatus((project.status as ProjectStatus) ?? "active");
+      setTeamId(project.team_id ?? "");
     }
-  }, [open, project.name, project.description, project.status]);
+  }, [open, project.name, project.description, project.status, project.team_id]);
 
   const mutation = useMutation<Project, ApiError, ProjectUpdate>({
     mutationFn: (payload) =>
@@ -393,6 +485,26 @@ function ProjectEditDialog({
               ))}
             </Select>
           </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="edit-team">Equipo</Label>
+            <Select
+              id="edit-team"
+              value={teamId}
+              onChange={(e) => setTeamId(e.target.value)}
+              data-testid="edit-project-team"
+            >
+              <option value="">Sin equipo</option>
+              {(teamsQuery.data ?? []).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </Select>
+            <p className="text-muted-foreground text-xs">
+              El equipo del proyecto gobierna qué agentes ejecutan sus tareas y la política de
+              memoria (ADR 0071).
+            </p>
+          </div>
           {mutation.isError && (
             <p
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
@@ -413,6 +525,7 @@ function ProjectEditDialog({
                 name: name.trim(),
                 description: description.trim() || null,
                 status,
+                team_id: teamId || null,
               })
             }
             data-testid="edit-project-save"

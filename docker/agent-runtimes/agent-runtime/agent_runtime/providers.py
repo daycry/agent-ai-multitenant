@@ -44,6 +44,7 @@ from shared_llm import (
     Message,
     OllamaProvider,
 )
+from shared_llm.reasoning import reasoning_call_kwargs
 
 from agent_runtime.model import (
     DecisionKind,
@@ -206,10 +207,14 @@ class _ProviderModelClient:
         provider: LLMProvider,
         model: str,
         tools: list[dict[str, Any]] | None = None,
+        extra_call_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
         self._tools = tools
+        # ADR 0070: extra params del proveedor (p.ej. reasoning_effort/think) que
+        # se vuelcan al body de /chat/completions vía el **kwargs del provider.
+        self._extra_call_kwargs = extra_call_kwargs or {}
 
     def decide(self, state: dict[str, Any]) -> ModelResponse:
         resp = _run(
@@ -217,6 +222,7 @@ class _ProviderModelClient:
                 _decide_messages(state),
                 model=self.model,
                 tools=self._tools,
+                **self._extra_call_kwargs,
             )
         )
         return _decision_from(resp, model=self.model)
@@ -226,9 +232,14 @@ class _ProviderModelClient:
             self.provider.complete(
                 _review_messages(state),
                 model=self.model,
+                **self._extra_call_kwargs,
             )
         )
         return _review_from(resp, model=self.model)
+
+
+# La traducción reasoning_effort → kwarg nativo vive en `shared_llm.reasoning`
+# (fuente única, compartida con el asistente personal — ADR 0070).
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +259,7 @@ class AzureFoundryModelClient(_ProviderModelClient):
         api_version: str = "2024-10-21",
         tools: list[dict[str, Any]] | None = None,
         http_client: httpx.AsyncClient | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         super().__init__(
             provider=AzureFoundryAPIMProvider(
@@ -260,6 +272,7 @@ class AzureFoundryModelClient(_ProviderModelClient):
             ),
             model=model,
             tools=tools,
+            extra_call_kwargs=reasoning_call_kwargs("azure_foundry", reasoning_effort),
         )
 
 
@@ -274,11 +287,13 @@ class CopilotModelClient(_ProviderModelClient):
         github_token: str,
         tools: list[dict[str, Any]] | None = None,
         http_client: httpx.AsyncClient | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         super().__init__(
             provider=CopilotProvider(github_token=github_token, http_client=http_client),
             model=model,
             tools=tools,
+            extra_call_kwargs=reasoning_call_kwargs("copilot", reasoning_effort),
         )
 
 
@@ -293,6 +308,7 @@ class OllamaModelClient(_ProviderModelClient):
         api_key: str | None = None,
         tools: list[dict[str, Any]] | None = None,
         http_client: httpx.AsyncClient | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         super().__init__(
             provider=OllamaProvider(
@@ -303,6 +319,7 @@ class OllamaModelClient(_ProviderModelClient):
             ),
             model=model,
             tools=tools,
+            extra_call_kwargs=reasoning_call_kwargs("ollama", reasoning_effort),
         )
 
 
@@ -315,46 +332,58 @@ SdkQuery = Callable[..., AsyncIterator[Any]]
 class ClaudeSDKModelClient:
     """The Claude Agent SDK as a single-decision `ModelClient`.
 
-    Wraps `shared_llm.providers.ClaudeAgentProvider`. The SDK does not
-    expose `/chat/completions`-style tool_calls in this path — when the
-    loop needs tool use it should run inside the SDK's own agent loop
-    via `provider.run_agent()`, which is a different code path.
-
-    For the per-decision adapter, every turn is FINISH (text). The
-    LangGraph loop drives multi-turn behaviour itself (ADR 0018).
+    Wraps `shared_llm.providers.ClaudeAgentProvider`. That provider's
+    `complete()` now HONOURS `tools` and surfaces the model's requests as
+    `CompletionResponse.tool_calls` (host-executed tool-calling: it advertises
+    the schemas as an in-process MCP server and captures the call via
+    `can_use_tool`). So claude_sdk reaches ACT exactly like the
+    OpenAI-compatible providers — provider-agnostic parity — and the LangGraph
+    loop drives the multi-turn tool use (ADR 0018).
     """
 
     def __init__(
         self,
         *,
         model: str,
+        api_key: str | None = None,
+        oauth_token: str | None = None,
         query_fn: SdkQuery | None = None,
         tools: list[dict[str, Any]] | None = None,
         max_turns: int = 1,
+        reasoning_effort: str | None = None,
     ) -> None:
         self.model = model
         self._tools = tools
         self._max_turns = max_turns
+        # ADR 0070: el SDK de Claude usa `effort` (low/medium/high/xhigh/max).
+        # `off`/vacío → None (sin extended thinking forzado).
+        self._effort = reasoning_call_kwargs("claude_sdk", reasoning_effort).get("effort")
+        # Feed the resolved credential to the SDK: api_key → ANTHROPIC_API_KEY,
+        # oauth_token → CLAUDE_CODE_OAUTH_TOKEN (subscription Pro/Max, ADR 0063).
         self.provider = ClaudeAgentProvider(
+            api_key=api_key,
+            oauth_token=oauth_token,
             default_model=model,
             query_fn=query_fn,
         )
 
     def decide(self, state: dict[str, Any]) -> ModelResponse:
-        resp = _run(self.provider.complete(_decide_messages(state), model=self.model))
-        # SDK never emits OpenAI-style tool_calls through complete();
-        # this is always a FINISH (the SDK's text output).
-        decision = ModelDecision(kind=DecisionKind.FINISH, output=resp.content)
-        return ModelResponse(
-            decision=decision,
-            model=resp.model or self.model,
-            tokens_in=resp.usage.input_tokens,
-            tokens_out=resp.usage.output_tokens,
-            cost_usd=resp.usage.cost_usd,
+        resp = _run(
+            self.provider.complete(
+                _decide_messages(state),
+                model=self.model,
+                tools=self._tools,
+                effort=self._effort,
+            )
         )
+        # complete() now emits tool_calls when the model asks for a tool, so this
+        # ramifies to ACT/FINISH like every other provider (no hardcoded FINISH).
+        return _decision_from(resp, model=self.model)
 
     def review(self, state: dict[str, Any]) -> ReviewResponse:
-        resp = _run(self.provider.complete(_review_messages(state), model=self.model))
+        resp = _run(
+            self.provider.complete(_review_messages(state), model=self.model, effort=self._effort)
+        )
         return _review_from(resp, model=self.model)
 
 
@@ -422,11 +451,16 @@ def _overlay_resolved(
         if secret.get("oauth_token"):
             merged["github_token"] = secret["oauth_token"]
     elif kind in ("claude_sdk", "claude"):
-        # Claude SDK uses ambient subscription auth — the row carries no
-        # spec-level override beyond the (rare) base_url; the OAuth token in
-        # Vault is consumed out-of-band by the SDK environment. Nothing to
-        # overlay onto the spec here.
-        pass
+        # Two auth modes on the same kind (ADR 0063): API key
+        # (secret['api_key'] → ANTHROPIC_API_KEY) and Pro/Max subscription
+        # (secret['oauth_token'] from `claude setup-token` →
+        # CLAUDE_CODE_OAUTH_TOKEN). Carry whichever Vault field is present onto
+        # the spec; `build_provider_client` feeds it to the SDK env. Mirror of
+        # the worker's `model_resolver._overlay_provider_fields`.
+        if secret.get("api_key"):
+            merged["api_key"] = secret["api_key"]
+        if secret.get("oauth_token"):
+            merged["oauth_token"] = secret["oauth_token"]
     elif kind == "ollama":
         if base_url:
             merged["base_url"] = base_url
@@ -474,6 +508,9 @@ def build_provider_client(
             spec = _overlay_resolved(spec, kind, resolved)
     model = spec.get("model", "")
     tools = spec.get("tools")
+    # ADR 0070: esfuerzo de razonamiento por proveedor (clave de model_config que
+    # viaja en el spec). Cada adaptador lo traduce a su parámetro nativo.
+    reasoning = spec.get("reasoning_effort")
     if kind == "azure_foundry":
         return AzureFoundryModelClient(
             model=model,
@@ -483,18 +520,23 @@ def build_provider_client(
             bearer_token=spec.get("bearer_token"),
             api_version=spec.get("api_version", "2024-10-21"),
             tools=tools,
+            reasoning_effort=reasoning,
         )
     if kind == "copilot":
         return CopilotModelClient(
             model=model,
             github_token=spec["github_token"],
             tools=tools,
+            reasoning_effort=reasoning,
         )
     if kind in ("claude_sdk", "claude"):
         return ClaudeSDKModelClient(
             model=model,
+            api_key=spec.get("api_key"),
+            oauth_token=spec.get("oauth_token"),
             tools=tools,
             max_turns=int(spec.get("max_turns", 1)),
+            reasoning_effort=reasoning,
         )
     if kind == "ollama":
         return OllamaModelClient(
@@ -502,6 +544,7 @@ def build_provider_client(
             base_url=spec.get("base_url", "http://localhost:11434/v1"),
             api_key=spec.get("api_key"),
             tools=tools,
+            reasoning_effort=reasoning,
         )
     if kind == "litellm":
         raise ValueError(

@@ -169,6 +169,7 @@ async def create_running_execution(
     task_id: UUID,
     agent_id: UUID | None = None,
     started_at: datetime | None = None,
+    celery_task_id: str | None = None,
 ) -> Execution:
     """Insert an `executions` row in `running` state and return it.
 
@@ -177,6 +178,10 @@ async def create_running_execution(
     stable id the UI can connect to while the run is still live. The
     row is finalised with `finalize_execution` once the container exits.
     The caller owns the transaction — this flushes but does not commit.
+
+    ``celery_task_id`` (the worker's ``self.request.id``) is stored so the
+    cancel endpoint can ``revoke(terminate=True)`` the job; ``None`` for
+    callers that don't run under Celery (tests, the orchestrator demo path).
     """
     execution = Execution(
         tenant_id=tenant_id,
@@ -185,9 +190,43 @@ async def create_running_execution(
         status=ExecutionStatus.RUNNING,
         steps_log=[],
         started_at=started_at or datetime.now(UTC),
+        celery_task_id=celery_task_id,
     )
     session.add(execution)
     await session.flush()
+    return execution
+
+
+class ExecutionNotCancellableError(Exception):
+    """Raised when a cancel is requested on an execution that is not ``running``.
+
+    ``status`` is the execution's current (terminal) status, so the REST surface
+    can return a focused 409 explaining why it can't be cancelled.
+    """
+
+    def __init__(self, status: str) -> None:
+        self.status = status
+        super().__init__(f"execution is {status!r}, not cancellable")
+
+
+async def request_execution_cancel(session: AsyncSession, execution_id: UUID) -> Execution | None:
+    """Flag a ``running`` execution for cooperative cancellation (idempotent).
+
+    Stamps ``cancel_requested_at`` (the worker polls it to kill the container and
+    finalise the row as ``cancelled``). Returns the execution — with its
+    ``celery_task_id`` for the caller to ``revoke`` — or ``None`` if the row is
+    absent/RLS-filtered. Raises :class:`ExecutionNotCancellable` if the execution
+    is already terminal. A second call is a no-op (the timestamp is not bumped).
+    The caller owns the transaction.
+    """
+    execution = await get_execution(session, execution_id)
+    if execution is None:
+        return None
+    if execution.status != ExecutionStatus.RUNNING:
+        raise ExecutionNotCancellableError(execution.status)
+    if execution.cancel_requested_at is None:
+        execution.cancel_requested_at = datetime.now(UTC)
+        await session.flush()
     return execution
 
 
@@ -217,9 +256,17 @@ async def supersede_running_executions(
         return 0
     now = datetime.now(UTC)
     for execution in stale:
-        execution.status = ExecutionStatus.FAILED
-        execution.abort_code = "superseded"
-        execution.output = "superseded by a re-delivered execution (worker retry)"
+        # A row already flagged for cancellation that gets re-delivered (revoke +
+        # task_acks_late) must close as CANCELLED, not FAILED/superseded — otherwise
+        # the supersede would mask the operator's explicit cancel.
+        if execution.cancel_requested_at is not None:
+            execution.status = ExecutionStatus.CANCELLED
+            execution.abort_code = "cancelled"
+            execution.output = "cancelled by operator"
+        else:
+            execution.status = ExecutionStatus.FAILED
+            execution.abort_code = "superseded"
+            execution.output = "superseded by a re-delivered execution (worker retry)"
         execution.completed_at = now
     await session.flush()
     return len(stale)
@@ -242,11 +289,17 @@ async def finalize_execution(
     if execution is None:
         return None
 
+    # A row already CANCELLED by the operator wins: a late finalisation from the
+    # (revoked) worker must not revert it to done/failed. Fold in the streamed
+    # steps_log/usage for the audit trail but preserve the cancelled outcome.
+    preserve_cancel = execution.status == ExecutionStatus.CANCELLED
+
     usage = result.usage
     steps, rollup = await snapshot_execution_prices(session, steps=list(result.steps))
-    execution.status = result.status
-    execution.abort_code = result.abort_code
-    execution.output = result.output
+    if not preserve_cancel:
+        execution.status = result.status
+        execution.abort_code = result.abort_code
+        execution.output = result.output
     execution.steps_log = steps
     _apply_price_snapshot(execution, rollup)
     execution.iterations = result.iterations
@@ -255,9 +308,17 @@ async def finalize_execution(
     execution.tool_call_count = int(usage.get("tool_calls", 0))
     execution.model_call_count = int(usage.get("model_calls", 0))
     # Only a terminal status completes the run — a run parked in
-    # `awaiting_human_approval` has not finished (task_02_33).
-    terminal = {ExecutionStatus.DONE, ExecutionStatus.ABORTED, ExecutionStatus.FAILED}
-    execution.completed_at = datetime.now(UTC) if result.status in terminal else None
+    # `awaiting_human_approval` has not finished (task_02_33). `cancelled` is
+    # terminal too, whether it arrives as the new result (cooperative cancel from
+    # the worker) or was already on the row (preserve_cancel, late finalisation).
+    terminal = {
+        ExecutionStatus.DONE,
+        ExecutionStatus.ABORTED,
+        ExecutionStatus.FAILED,
+        ExecutionStatus.CANCELLED,
+    }
+    is_terminal = preserve_cancel or result.status in terminal
+    execution.completed_at = datetime.now(UTC) if is_terminal else None
     await session.flush()
     return execution
 

@@ -148,6 +148,23 @@ Determinado por el campo `push_policy` del repo:
 - `branch_only_pr_required` (default): PR abierto, merge manual humano.
 - `direct_to_default_allowed`: merge automático si CI passes.
 
+#### Regla de salida: ningún merge a `master` con CI en rojo
+
+Plan prod-02, hallazgo `tests-2`. La auditoría 2026-06 encontró ~19 runs
+consecutivos de CI mergeados en rojo desde 2026-05-29 (y, por el bug de
+triggers `main`/`master`, la mayoría de PRs ni siquiera ejecutaban CI).
+Mientras la protección de rama server-side no esté activa (el repo está hoy
+en plan GitHub Free, sin branch protection; la decisión vive en el
+**ADR 0058**, `proposed`), esta regla se aplica por **disciplina**:
+
+- Antes de mergear cualquier PR, su CI debe estar **en verde**:
+  `gh pr checks <pr> --watch` (espera y muestra el estado de los checks).
+- No mergear con checks en `fail` o `pending`. Si un check no aplica a un PR
+  concreto, justificarlo explícitamente en el PR — nunca ignorarlo en silencio.
+- En cuanto el operador decida la opción de protección (ADR 0058), esta regla
+  pasa de disciplina a **gate técnico** (required status checks) y deja de
+  depender del criterio humano.
+
 ## Documentación
 
 ### Estructura Canónica /docs/

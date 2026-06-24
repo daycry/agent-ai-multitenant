@@ -123,6 +123,10 @@ el problema ya esté documentado.
 - [powershell-ps1-vs-python-py.md](./powershell-ps1-vs-python-py.md)
   — `.ps1` se invoca directo, `.py` con `.venv\Scripts\python.exe`;
   mezclarlos da `SyntaxError` o pantalla en blanco.
+- [docker-msys-build-arg-leading-slash-windows.md](./docker-msys-build-arg-leading-slash-windows.md)
+  — `docker build --build-arg X=/api` desde Git Bash mangla `/api` a
+  `C:/Program Files/Git/api` (MSYS); hornea una URL rota en el admin-panel.
+  Construir desde PowerShell o con `MSYS_NO_PATHCONV=1`. Linux/prod no afectados.
 
 ### admin-panel / next.js
 
@@ -155,3 +159,12 @@ el problema ya esté documentado.
 
 - [ci-github-actions-node-deprecation.md](./ci-github-actions-node-deprecation.md)
   — Node 20 deprecado; `actions/checkout@v4 → v5`, etc.
+- [test-fixture-admin-db-url-override.md](./test-fixture-admin-db-url-override.md)
+  — fixture que setea `API_SERVER_DATABASE_URL` pero NO
+  `API_SERVER_ADMIN_DATABASE_URL`: el admin engine cae al DSN por defecto;
+  verde en local (BD dev migrada) pero `relation X does not exist` solo-en-CI
+  (BD por defecto vacía).
+- [playwright-route-glob-intercepts-navigation.md](./playwright-route-glob-intercepts-navigation.md)
+  — `page.route("**/X")` en Playwright 1.60 intercepta también la navegación
+  `page.goto(".../X")` (misma cola de path) → la página recibe el JSON del mock
+  como documento. Usar predicado por `pathname` exacto, no glob desnudo.

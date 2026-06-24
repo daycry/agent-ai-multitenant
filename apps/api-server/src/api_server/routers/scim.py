@@ -50,6 +50,10 @@ from api_server.auth.scim.tokens import generate_scim_token, hash_scim_token, to
 from api_server.auth.sessions import SessionStore
 from api_server.config import get_settings
 from api_server.db.models import ScimToken, User, UserOrganizationMembership, UserRole
+from api_server.db.platform_settings import (
+    InvalidApiPathPrefixError,
+    validate_api_path_prefix,
+)
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 from api_server.routers._helpers import require_tenant_id
 from api_server.schemas.scim import (
@@ -184,8 +188,16 @@ async def _bind_tenant(session: AsyncSession, tenant_id: UUID) -> None:
 # SCIM <-> domain mapping helpers
 # ===========================================================================
 def _scim_user_location(user_id: UUID) -> str:
-    base = get_settings().sso_redirect_base_url.rstrip("/")
-    return f"{base}/scim/v2/Users/{user_id}"
+    # ADR 0069: include the API path prefix so the Location header is correct
+    # behind a single-origin reverse proxy. SCIM is bootstrap-configured (env),
+    # so it uses the env prefix (not the live DB override, like its base).
+    settings = get_settings()
+    base = settings.sso_redirect_base_url.rstrip("/")
+    try:
+        prefix = validate_api_path_prefix(settings.api_path_prefix)
+    except InvalidApiPathPrefixError:
+        prefix = ""
+    return f"{base}{prefix}/scim/v2/Users/{user_id}"
 
 
 def _email_from_request(payload: ScimUserRequest) -> str:

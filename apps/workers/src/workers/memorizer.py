@@ -35,23 +35,28 @@ Scope mapping for AI agents:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import structlog
-from api_server.db.domain import Agent, HumanWorkSession, MemoryScope, Project, Task
+from api_server.db.domain import Agent, HumanWorkSession, MemoryScope, Project, Task, Team
 from api_server.db.execution_repo import get_execution
 from api_server.db.models import User
-from api_server.db.platform_settings import get_memorizable_statuses
+from api_server.db.platform_settings import get_default_memory_scope, get_memorizable_statuses
 from api_server.memorizer import (
+    count_memories_for_source,
     distil_execution,
     distil_human_work_session,
     persist_memory_candidates,
     should_memorize,
     should_memorize_human_session,
 )
-from api_server.memorizer.policy import MemorizeSkipReason
+from api_server.memorizer.policy import (
+    MemorizeSkipReason,
+    resolve_effective_memory_scope,
+    route_scope_for_type,
+)
 from shared_llm.base import LLMProvider
 from shared_llm.providers import OllamaProvider
 from sqlalchemy import text as sa_text
@@ -116,7 +121,9 @@ def memorize_execution(execution_id: str) -> dict[str, Any]:
     )
 
 
-async def _memorize_execution_async(
+# justified: guard-clause style — each early return is a distinct, named
+# skip/idempotency reason (clearer than nesting them into one exit).
+async def _memorize_execution_async(  # noqa: PLR0911
     execution_id: UUID,
     *,
     settings: Settings,
@@ -133,14 +140,33 @@ async def _memorize_execution_async(
         if ctx is None:
             return _result(execution_id, 0, "skipped:execution_not_found")
 
+        # Idempotency guard (auditoría memoria): task_acks_late is global, so a broker
+        # redelivery / worker crash re-runs this task. If memories already exist for this
+        # execution, skip — re-distilling would make a fresh (non-deterministic) LLM call
+        # and persist duplicate rows that content-dedup wouldn't catch. Mirrors the
+        # supersede guard run_execution uses for the same acks_late re-delivery problem.
+        async with sessionmaker() as guard_session:
+            if await count_memories_for_source(
+                guard_session, tenant_id=ctx["tenant_id"], source_execution_id=execution_id
+            ):
+                return _result(execution_id, 0, "ok:already_memorized")
+
         # Estados elegibles operator-configurable (Plan 06.17 task_06_17_04): el
         # gate ya no asume "solo done"; el operador puede añadir p.ej. 'aborted'.
         async with sessionmaker() as settings_session:
             eligible = await get_memorizable_statuses(settings_session)
+            platform_default_scope = await get_default_memory_scope(settings_session)
+
+        # ADR 0071: scope efectivo = equipo del proyecto > agente > default plataforma.
+        effective_scope = resolve_effective_memory_scope(
+            ctx["team_memory_scope"],
+            ctx["agent"]["memory_scope"],
+            platform_default_scope,
+        )
 
         decision = should_memorize(
             status=ctx["execution"]["status"],
-            memory_scope=ctx["agent"]["memory_scope"],
+            memory_scope=effective_scope,
             eligible_statuses=eligible,
         )
         if not decision.memorise:
@@ -155,22 +181,24 @@ async def _memorize_execution_async(
             )
             return _result(execution_id, 0, f"skipped:{decision.reason}")
 
-        owner, owner_skip = _resolve_owner(
-            scope=ctx["agent"]["memory_scope"],
-            project=ctx["project"],
-            task_project_id=ctx["task"]["project_id"],
+        # ADR 0071: owner por scope ENRUTADO (semantic→efectivo; episodic→acotado a
+        # project_shared). Skip temprano (antes de distilar) solo si NINGÚN scope
+        # posible tiene owner (p.ej. private IA, o sin equipo y sin proyecto).
+        owners, last_skip = _resolve_routed_owners(
+            effective_scope,
+            lambda s: _resolve_owner(
+                scope=s, project=ctx["project"], task_project_id=ctx["task"]["project_id"]
+            ),
         )
-        if owner is None:
-            # private (IA sin owner user) o team_shared sin equipo: motivo
-            # canónico persistido (antes era un skip silencioso, log-only).
-            await _record_skip_reason(sessionmaker, execution_id, owner_skip)
+        if not owners:
+            await _record_skip_reason(sessionmaker, execution_id, last_skip)
             _log.info(
                 "memorizer.skipped",
                 execution_id=str(execution_id),
                 reason="no_owner_for_scope",
-                code=owner_skip.value,
+                code=last_skip.value,
             )
-            return _result(execution_id, 0, f"skipped:{owner_skip.value}")
+            return _result(execution_id, 0, f"skipped:{last_skip.value}")
 
         llm = llm_factory(settings)
         try:
@@ -186,18 +214,17 @@ async def _memorize_execution_async(
 
         embedder = embedder_factory(settings) if embedder_factory is not None else None
         try:
-            async with sessionmaker() as session, session.begin():
-                rows = await persist_memory_candidates(
-                    session,
-                    candidates,
-                    tenant_id=ctx["tenant_id"],
-                    scope=ctx["agent"]["memory_scope"],
-                    agent_id=ctx["agent"]["id"],
-                    source_execution_id=execution_id,
-                    extra_metadata={"distill_model": getattr(llm, "name", "unknown")},
-                    embedder=embedder,
-                    **owner,
-                )
+            total = await _persist_routed(
+                sessionmaker,
+                candidates,
+                effective_scope=effective_scope,
+                owners=owners,
+                tenant_id=ctx["tenant_id"],
+                agent_id=ctx["agent"]["id"],
+                extra_metadata={"distill_model": getattr(llm, "name", "unknown")},
+                embedder=embedder,
+                source_execution_id=execution_id,
+            )
         finally:
             if embedder is not None:
                 await embedder.aclose()
@@ -206,10 +233,10 @@ async def _memorize_execution_async(
         _log.info(
             "memorizer.persisted",
             execution_id=str(execution_id),
-            count=len(rows),
-            scope=ctx["agent"]["memory_scope"],
+            count=total,
+            scope=effective_scope,
         )
-        return _result(execution_id, len(rows), "ok")
+        return _result(execution_id, total, "ok")
     except Exception as exc:
         # Belt + braces: a Memorizer failure must never propagate up
         # into the Celery worker and crash the run pipeline.
@@ -236,6 +263,11 @@ async def _load_context(session: AsyncSession, execution_id: UUID) -> dict[str, 
     if task is None:
         return None
     project = await session.get(Project, task.project_id)
+    # ADR 0071: la política de memoria la gobierna el equipo del proyecto.
+    team_memory_scope: str | None = None
+    if project is not None and project.team_id is not None:
+        team = await session.get(Team, project.team_id)
+        team_memory_scope = team.memory_scope if team is not None else None
     return {
         "tenant_id": execution.tenant_id,
         "execution": {
@@ -256,6 +288,7 @@ async def _load_context(session: AsyncSession, execution_id: UUID) -> dict[str, 
         "project": (
             {"id": project.id, "team_id": project.team_id} if project is not None else None
         ),
+        "team_memory_scope": team_memory_scope,
     }
 
 
@@ -295,6 +328,71 @@ def _resolve_owner(
     # have no created_by; the human POST /memories path covers private.
     _log.info("memorizer.skipped_private_scope_for_ai_agent")
     return None, MemorizeSkipReason.SKIP_PRIVATE
+
+
+def _resolve_routed_owners(
+    effective_scope: str,
+    owner_resolver: Callable[[str], tuple[dict[str, UUID | None] | None, MemorizeSkipReason]],
+) -> tuple[dict[str, dict[str, UUID | None]], MemorizeSkipReason]:
+    """ADR 0071: resuelve el owner de cada scope ENRUTADO (semantic→efectivo;
+    episodic→acotado a project_shared) vía ``owner_resolver`` (distinto para IA y
+    humano). Devuelve ``(owners_por_scope, last_skip)``; ``owners`` vacío ⇒ ningún
+    scope posible tiene owner (skip total)."""
+    owners: dict[str, dict[str, UUID | None]] = {}
+    last_skip = MemorizeSkipReason.OK
+    for routed in (
+        route_scope_for_type(effective_scope, "semantic"),
+        route_scope_for_type(effective_scope, "episodic"),
+    ):
+        if routed in owners:
+            continue
+        owner, skip = owner_resolver(routed)
+        if owner is not None:
+            owners[routed] = owner
+        else:
+            last_skip = skip
+    return owners, last_skip
+
+
+async def _persist_routed(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    candidates: Sequence[Any],
+    *,
+    effective_scope: str,
+    owners: Mapping[str, dict[str, UUID | None]],
+    tenant_id: UUID,
+    agent_id: UUID | None,
+    extra_metadata: dict[str, Any],
+    embedder: Any,
+    source_execution_id: UUID | None = None,
+    source_human_work_session_id: UUID | None = None,
+) -> int:
+    """ADR 0071: agrupa candidatos por scope enrutado y persiste cada grupo con su
+    owner; un grupo cuyo scope no tiene owner (p.ej. semantic team_shared sin
+    equipo) se omite. Devuelve el total persistido."""
+    groups: dict[str, list[Any]] = {}
+    for cand in candidates:
+        groups.setdefault(route_scope_for_type(effective_scope, cand.type), []).append(cand)
+    total = 0
+    for scope, group in groups.items():
+        owner = owners.get(scope)
+        if owner is None:
+            continue
+        async with sessionmaker() as session, session.begin():
+            rows = await persist_memory_candidates(
+                session,
+                group,
+                tenant_id=tenant_id,
+                scope=scope,
+                agent_id=agent_id,
+                source_execution_id=source_execution_id,
+                source_human_work_session_id=source_human_work_session_id,
+                extra_metadata=extra_metadata,
+                embedder=embedder,
+                **owner,
+            )
+        total += len(rows)
+    return total
 
 
 async def _record_skip_reason(
@@ -383,9 +481,18 @@ async def _memorize_human_work_session_async(
         if ctx is None:
             return _human_result(work_session_id, 0, "skipped:work_session_not_found")
 
+        # ADR 0071: scope efectivo = equipo del proyecto > agente > default plataforma.
+        async with sessionmaker() as settings_session:
+            platform_default_scope = await get_default_memory_scope(settings_session)
+        effective_scope = resolve_effective_memory_scope(
+            ctx["team_memory_scope"],
+            ctx["agent"]["memory_scope"] if ctx["agent"] else None,
+            platform_default_scope,
+        )
+
         decision = should_memorize_human_session(
             task_status=ctx["task"]["status"],
-            memory_scope=ctx["agent"]["memory_scope"] if ctx["agent"] else None,
+            memory_scope=effective_scope,
         )
         if not decision.memorise:
             _log.info(
@@ -395,14 +502,21 @@ async def _memorize_human_work_session_async(
             )
             return _human_result(work_session_id, 0, f"skipped:{decision.reason}")
 
-        scope = ctx["agent"]["memory_scope"]  # type: ignore[index]
-        owner = _resolve_human_owner(
-            scope=scope,
-            session_user_id=ctx["session"]["user_id"],
-            project=ctx["project"],
-            task_project_id=ctx["task"]["project_id"],
+        # ADR 0071: owner por scope enrutado, con la resolución HUMANA (atribuye
+        # user en private, a diferencia de la IA).
+        owners, _ = _resolve_routed_owners(
+            effective_scope,
+            lambda s: (
+                _resolve_human_owner(
+                    scope=s,
+                    session_user_id=ctx["session"]["user_id"],
+                    project=ctx["project"],
+                    task_project_id=ctx["task"]["project_id"],
+                ),
+                MemorizeSkipReason.OK,
+            ),
         )
-        if owner is None:
+        if not owners:
             return _human_result(work_session_id, 0, "skipped:no_owner_for_scope")
 
         llm = llm_factory(settings)
@@ -421,35 +535,34 @@ async def _memorize_human_work_session_async(
 
         embedder = embedder_factory(settings) if embedder_factory is not None else None
         try:
-            async with sessionmaker() as write_session, write_session.begin():
-                rows = await persist_memory_candidates(
-                    write_session,
-                    candidates,
-                    tenant_id=ctx["tenant_id"],
-                    scope=scope,
-                    agent_id=ctx["agent"]["id"],  # type: ignore[index]
-                    source_human_work_session_id=work_session_id,
-                    extra_metadata={
-                        "distill_model": getattr(llm, "name", "unknown"),
-                        "source_kind": "human_work_session",
-                        "task_id": str(ctx["task"]["id"]),
-                        "worker_user_id": (
-                            str(ctx["session"]["user_id"]) if ctx["session"]["user_id"] else None
-                        ),
-                    },
-                    embedder=embedder,
-                    **owner,
-                )
+            total = await _persist_routed(
+                sessionmaker,
+                candidates,
+                effective_scope=effective_scope,
+                owners=owners,
+                tenant_id=ctx["tenant_id"],
+                agent_id=ctx["agent"]["id"] if ctx["agent"] else None,
+                extra_metadata={
+                    "distill_model": getattr(llm, "name", "unknown"),
+                    "source_kind": "human_work_session",
+                    "task_id": str(ctx["task"]["id"]),
+                    "worker_user_id": (
+                        str(ctx["session"]["user_id"]) if ctx["session"]["user_id"] else None
+                    ),
+                },
+                embedder=embedder,
+                source_human_work_session_id=work_session_id,
+            )
         finally:
             if embedder is not None:
                 await embedder.aclose()
         _log.info(
             "memorizer.human_persisted",
             work_session_id=str(work_session_id),
-            count=len(rows),
-            scope=scope,
+            count=total,
+            scope=effective_scope,
         )
-        return _human_result(work_session_id, len(rows), "ok")
+        return _human_result(work_session_id, total, "ok")
     except Exception as exc:
         # Belt + braces: a Memorizer failure must never propagate up and crash
         # the worker that picked up the task.
@@ -483,11 +596,17 @@ async def _load_human_context(
         else None
     )
     project = await session.get(Project, task.project_id)
+    # ADR 0071: la política de memoria la gobierna el equipo del proyecto.
+    team_memory_scope: str | None = None
+    if project is not None and project.team_id is not None:
+        team = await session.get(Team, project.team_id)
+        team_memory_scope = team.memory_scope if team is not None else None
     user = (
         await session.get(User, work_session.user_id) if work_session.user_id is not None else None
     )
     return {
         "tenant_id": work_session.tenant_id,
+        "team_memory_scope": team_memory_scope,
         "session": {
             "id": work_session.id,
             "user_id": work_session.user_id,
@@ -587,15 +706,29 @@ def trigger_memorize_human_work_session(work_session_id: UUID, task_status: str)
     return True
 
 
+# Terminal ExecutionStatus values (api_server.db.domain.ExecutionStatus). The
+# trigger hands ANY finished execution to the Memorizer; WHICH terminal statuses
+# are actually memorised is the operator-configurable gate in the task
+# (should_memorize + get_memorizable_statuses, default {"done"}). The old
+# hardcoded `status == "done"` here pre-filtered BEFORE that gate, so the operator
+# setting was unreachable for error statuses — agents could not learn from
+# aborted/failed runs (06.17 added the setting but the trigger shadowed it).
+# Gating on terminal-ness (not the policy) fixes that and keeps this
+# fire-and-forget path free of DB reads.
+_TERMINAL_STATUSES = frozenset({"done", "failed", "aborted", "cancelled"})
+
+
 def trigger_memorize(execution_id: UUID, status: str) -> bool:
-    """Enqueue the Memorizer for one Execution. Returns True if the
-    task was enqueued, False if the status didn't warrant it.
+    """Enqueue the Memorizer for one FINISHED Execution. Returns True if the task
+    was enqueued, False if the status is non-terminal (mid-execution). The task
+    applies the operator-configured ``memorizable_statuses`` gate, so an error
+    status is only actually memorised when the operator opted in.
 
     Imported by :mod:`workers.execution` right after `finalize_execution`.
     Failures (broker down, etc.) are swallowed and logged so a
     Memorizer-side problem can never bring down an agent run.
     """
-    if status != "done":
+    if status not in _TERMINAL_STATUSES:
         return False
     try:
         memorize_execution.apply_async(args=[str(execution_id)], queue="default")

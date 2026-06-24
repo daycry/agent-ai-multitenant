@@ -131,6 +131,195 @@ async def set_app_public_base_url(session: AsyncSession, value: str, *, actor: U
     return normalised
 
 
+# ---------------------------------------------------------------------------
+# API path prefix (ADR 0069). The PATH segment under which the api-server is
+# published behind a single-origin reverse proxy (Caddy/nginx): it sits BETWEEN
+# the public origin (`app.public_base_url`) and the SSO/SCIM paths the routers
+# append. Option C keeps the origin and the prefix as SEPARATE settings so the
+# same origin serves the SPA at `/` and the API under e.g. `/api`. Empty = no
+# prefix (api-server at the origin root — the dev/default, backward-compatible).
+# ---------------------------------------------------------------------------
+APP_API_PATH_PREFIX_KEY = "app.api_path_prefix"
+
+
+class InvalidApiPathPrefixError(ValueError):
+    """Raised when a proposed API path prefix is not a bare path beginning with
+    ``/`` (carries a host/scheme/query/fragment, or omits the leading slash)."""
+
+
+def validate_api_path_prefix(value: str) -> str:
+    """Validate + normalise the API path prefix.
+
+    Empty / whitespace / a bare ``/`` normalise to ``""`` (no prefix). A
+    non-empty value must be a bare absolute path (leading ``/``, no
+    scheme/host/query/fragment); it is returned with a leading slash and NO
+    trailing slash (``/api``, ``/api/v1``). Raises
+    :class:`InvalidApiPathPrefixError` otherwise.
+    """
+    from urllib.parse import urlparse
+
+    candidate = (value or "").strip()
+    if not candidate or candidate == "/":
+        return ""
+    if "://" in candidate or candidate.startswith("//"):
+        raise InvalidApiPathPrefixError("the API path prefix must be a path, not a URL with host")
+    if not candidate.startswith("/"):
+        raise InvalidApiPathPrefixError("the API path prefix must start with '/'")
+    parsed = urlparse(candidate)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        raise InvalidApiPathPrefixError(
+            "the API path prefix must be a bare path (no host, query or fragment)"
+        )
+    inner = parsed.path.strip("/")
+    return f"/{inner}" if inner else ""
+
+
+async def get_api_path_prefix_override(session: AsyncSession) -> str | None:
+    """The System-Admin API-path-prefix override, or ``None`` when unset/invalid.
+
+    When ``None`` the router falls back to the env bootstrap
+    (``settings.api_path_prefix``). A stored value that fails validation is
+    treated as unset (never crashes the URL builders)."""
+    value = await get_platform_setting(session, APP_API_PATH_PREFIX_KEY, default=None)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return validate_api_path_prefix(value)
+    except InvalidApiPathPrefixError:
+        return None
+
+
+async def set_api_path_prefix(session: AsyncSession, value: str, *, actor: User) -> str:
+    """Persist the API path prefix override (System Admin only). Validates first
+    (raising :class:`InvalidApiPathPrefixError`); returns the normalised prefix
+    stored (may be ``""``)."""
+    normalised = validate_api_path_prefix(value)
+    await set_platform_setting(session, APP_API_PATH_PREFIX_KEY, normalised, actor=actor)
+    return normalised
+
+
+# ---------------------------------------------------------------------------
+# Web del córtex (ADR 0067) — habilitar egress web para las host tools
+# ---------------------------------------------------------------------------
+# Gate ON/OFF de las host tools provider-agnósticas ``web_search`` / ``web_fetch``
+# del córtex. Default OFF (deny-by-default, Principio 2: abrir egress web es una
+# decisión de seguridad, no el estado por defecto). Cuando el owner lo enciende desde
+# el panel, el router del córtex pone ``CortexToolContext.web_enabled=True``, las web
+# tools aparecen en los schemas y el modelo puede invocarlas (siempre por el
+# egress-proxy + anti-SSRF). Sólo un System Admin lo escribe — el owner del despliegue
+# lo es (ADR 0074). El proveedor de búsqueda concreto (searxng/brave) es un setting
+# aparte (``cortex.web_search_provider``, leído por la tool desde Settings).
+CORTEX_WEB_ENABLED_KEY = "cortex.web_enabled"
+DEFAULT_CORTEX_WEB_ENABLED = False
+
+
+async def get_cortex_web_enabled(session: AsyncSession) -> bool:
+    """Si la web del córtex (host tools ``web_search`` / ``web_fetch``) está habilitada.
+
+    Lo lee el router del córtex en cada turno para decidir ``web_enabled``. Default OFF
+    (ADR 0067, deny-by-default): abrir egress web es una decisión explícita del owner.
+    Sólo un System Admin lo escribe (``set_platform_setting``)."""
+    value = await get_platform_setting(
+        session, CORTEX_WEB_ENABLED_KEY, default=DEFAULT_CORTEX_WEB_ENABLED
+    )
+    return bool(value)
+
+
+# ---------------------------------------------------------------------------
+# Autonomía del córtex (Córtex F4, ADR 0078) — bucles cognitivos de fondo
+# ---------------------------------------------------------------------------
+# KILL-SWITCH GLOBAL de los bucles autónomos del córtex (curiosidad + reflexión
+# programada + mantenimiento). Default OFF (deny-by-default, ADR 0078): el
+# comportamiento autónomo consume LLM/egress sin que nadie lo dispare, así que
+# arranca APAGADO; el owner lo enciende explícitamente desde el panel. Con OFF, el
+# beat puede tickear pero CADA tarea lee este flag al inicio de la pasada y sale
+# no-op (ni curiosidad ni reflexión programada ni mantenimiento tocan BD/red). Solo
+# un System Admin lo escribe — el owner del despliegue lo es (ADR 0074).
+CORTEX_AUTONOMY_ENABLED_KEY = "cortex.autonomy_enabled"
+DEFAULT_CORTEX_AUTONOMY_ENABLED = False
+
+# Budget caps de la curiosidad por ventana DIARIA (ADR 0078: caps + circuit-breaker
+# son parte del MVP del bucle, no un fast-follow). Se aplican en Redis
+# (``cortex:budget:{owner}:curiosity:{yyyymmdd}`` con INCR + cap). Cuando se superan
+# → la pasada de curiosidad es un no-op (no busca). Solo un System Admin los escribe.
+CORTEX_CURIOSITY_DAILY_SEARCHES_CAP_KEY = "cortex.curiosity_daily_searches_cap"
+DEFAULT_CORTEX_CURIOSITY_DAILY_SEARCHES_CAP = 5
+
+# Umbral del drive: la curiosidad SOLO se dispara si ``curiosity < threshold``
+# (hambre de aprender). Por encima del umbral, el drive está saciado → no-op.
+CORTEX_CURIOSITY_DRIVE_THRESHOLD_KEY = "cortex.curiosity_drive_threshold"
+DEFAULT_CORTEX_CURIOSITY_DRIVE_THRESHOLD = 0.35
+
+# Circuit-breaker: tras N fallos CONSECUTIVOS de una pasada de curiosidad, el
+# breaker se ABRE durante ``cb_cooldown_s`` (worker config) y el bucle deja de
+# intentar (protege coste/egress ante un fallo sistémico). Un éxito lo resetea.
+CORTEX_CURIOSITY_CB_FAILS_KEY = "cortex.curiosity_cb_fails"
+DEFAULT_CORTEX_CURIOSITY_CB_FAILS = 3
+
+
+async def get_cortex_autonomy_enabled(session: AsyncSession) -> bool:
+    """El KILL-SWITCH global de los bucles autónomos del córtex (ADR 0078).
+
+    Lo leen las tres tareas de fondo (curiosidad / reflexión programada /
+    mantenimiento) al inicio de CADA pasada; cuando es False la pasada es un no-op
+    total (no toca BD ni red ni LLM). Default OFF (deny-by-default): el
+    comportamiento autónomo consume coste/egress, así que arranca apagado y el owner
+    lo enciende explícitamente. Solo un System Admin lo escribe (``set_platform_setting``)."""
+    value = await get_platform_setting(
+        session, CORTEX_AUTONOMY_ENABLED_KEY, default=DEFAULT_CORTEX_AUTONOMY_ENABLED
+    )
+    return bool(value)
+
+
+async def get_cortex_curiosity_daily_searches_cap(session: AsyncSession) -> int:
+    """Tope de búsquedas web/día de la curiosidad (default 5).
+
+    Lo lee el budget gate en vivo; al alcanzarse, la siguiente pasada es un no-op
+    (no busca). Un valor < 0 se sanea a 0 (cap a 0 = curiosidad apagada de facto)."""
+    value = await get_platform_setting(
+        session,
+        CORTEX_CURIOSITY_DAILY_SEARCHES_CAP_KEY,
+        default=DEFAULT_CORTEX_CURIOSITY_DAILY_SEARCHES_CAP,
+    )
+    try:
+        cap = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_CORTEX_CURIOSITY_DAILY_SEARCHES_CAP
+    return max(0, cap)
+
+
+async def get_cortex_curiosity_drive_threshold(session: AsyncSession) -> float:
+    """Umbral del drive ``curiosity`` por debajo del cual se dispara la curiosidad.
+
+    Lo lee la tarea de curiosidad en vivo. Un valor fuera de ``[0,1]`` se recorta al
+    rango; un valor no numérico cae al default 0.35."""
+    value = await get_platform_setting(
+        session,
+        CORTEX_CURIOSITY_DRIVE_THRESHOLD_KEY,
+        default=DEFAULT_CORTEX_CURIOSITY_DRIVE_THRESHOLD,
+    )
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_CORTEX_CURIOSITY_DRIVE_THRESHOLD
+    return max(0.0, min(1.0, threshold))
+
+
+async def get_cortex_curiosity_cb_fails(session: AsyncSession) -> int:
+    """Nº de fallos consecutivos que ABRE el circuit-breaker de la curiosidad (default 3).
+
+    Lo lee la tarea de curiosidad en vivo. Un valor < 1 se sanea a 1 (al menos un
+    fallo abre el breaker); un valor no numérico cae al default 3."""
+    value = await get_platform_setting(
+        session, CORTEX_CURIOSITY_CB_FAILS_KEY, default=DEFAULT_CORTEX_CURIOSITY_CB_FAILS
+    )
+    try:
+        fails = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_CORTEX_CURIOSITY_CB_FAILS
+    return max(1, fails)
+
+
 async def get_max_review_retries(session: AsyncSession) -> int:
     """The effective max_review_retries — the platform override, or the
     default. This is what an execution's review-retry budget is built from."""
@@ -349,11 +538,12 @@ MODEL_DEFAULT_CONFIG_KEY = "model.default_config"
 
 # Fallback de código anclado al catálogo cerrado del ADR 0021. Claude SDK es el
 # camino primario de la plataforma (suscripción Pro/Max). ``temperature`` baja
-# por defecto (salida más determinista para tareas de agente).
+# por defecto (salida más determinista para tareas de agente); 0.1 alinea con el
+# valor que envía por defecto el plugin de GitHub Copilot en VS Code.
 DEFAULT_MODEL_CONFIG: dict[str, Any] = {
     "provider": "claude_sdk",
     "model": "claude-sonnet-4",
-    "temperature": 0.2,
+    "temperature": 0.1,
 }
 
 # Rango válido de temperatura (mismo rango que valida el schema de agente).
@@ -404,7 +594,42 @@ def validate_model_config(cfg: dict[str, Any]) -> dict[str, Any]:
                 f"temperature {temp} must be between "
                 f"{MODEL_TEMPERATURE_MIN} and {MODEL_TEMPERATURE_MAX}"
             )
+    # reasoning_effort (ADR 0070): opcional; si está, debe ser una opción válida
+    # del proveedor (incluye "off"). Cada proveedor tiene su set; no hay uno común.
+    reasoning = cfg.get("reasoning_effort")
+    if isinstance(reasoning, str) and reasoning.strip():
+        from api_server.db.llm_providers import REASONING_OPTIONS_BY_KIND
+
+        allowed = REASONING_OPTIONS_BY_KIND.get(provider, ())
+        if reasoning not in allowed:
+            raise InvalidModelConfigError(
+                f"reasoning_effort {reasoning!r} is not valid for provider "
+                f"{provider!r} (ADR 0070); allowed: {allowed}"
+            )
     return cfg
+
+
+def validate_chat_model_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Validate a CHAT model override (Feature B). Two accepted shapes:
+
+      * concrete provider pinned: ``{provider_id: <uuid>, model: <non-empty>}`` —
+        the provider's kind governs at build time, so the closed-catalogue kind
+        check does not apply here (only provider_id well-formed + model present);
+      * kind-based: same rules as :func:`validate_model_config` (ADR 0021).
+
+    Raises :class:`InvalidModelConfigError` (→ 422) on a bad value."""
+    if cfg.get("provider_id"):
+        from uuid import UUID
+
+        try:
+            UUID(str(cfg["provider_id"]))
+        except (ValueError, TypeError) as exc:
+            raise InvalidModelConfigError("provider_id must be a UUID") from exc
+        model = cfg.get("model")
+        if not isinstance(model, str) or not model.strip():
+            raise InvalidModelConfigError("model must be a non-empty string")
+        return cfg
+    return validate_model_config(cfg)
 
 
 def is_model_config_empty(cfg: dict[str, Any] | None) -> bool:
@@ -438,6 +663,72 @@ def config_needs_default_model(cfg: dict[str, Any] | None) -> bool:
     if cfg.get("kind"):
         return False
     return not (cfg.get("provider") and cfg.get("model"))
+
+
+def resolve_model_config_chain(
+    agent_cfg: dict[str, Any] | None,
+    team_cfg: dict[str, Any] | None,
+    project_cfg: dict[str, Any] | None,
+    platform_default: dict[str, Any],
+) -> dict[str, Any]:
+    """Resuelve el ``model_config`` por la cadena de herencia (Ola A / ADR 0055):
+    **plataforma → proyecto → equipo → agente**, gana el más específico que
+    PINEE ``provider``+``model``.
+
+    Si el agente pinea, se devuelve verbatim. Si no, se baja a equipo, luego a
+    proyecto, luego a plataforma, tomando el PRIMER nivel que pinee; ese nivel
+    rellena ``provider``/``model``/``temperature`` y las claves no-modelo del
+    agente (p.ej. ``system_prompts``) se preservan (mismo merge ``{**nivel,
+    **agente}`` que usaba el dispatch con el default de plataforma). Un nivel que
+    solo pinea parcialmente (provider sin model) NO cuenta — se ignora y se baja.
+    """
+    agent = dict(agent_cfg or {})
+    if not config_needs_default_model(agent):
+        return agent
+    for level in (team_cfg, project_cfg, platform_default):
+        level_d = dict(level or {})
+        if not config_needs_default_model(level_d):
+            return _merge_inherited_model(level_d, agent)
+    return _merge_inherited_model(dict(platform_default or {}), agent)
+
+
+def _merge_inherited_model(level_d: dict[str, Any], agent: dict[str, Any]) -> dict[str, Any]:
+    """Merge de herencia cuando el agente NO pinea: el nivel aporta
+    ``provider``/``model``/``temperature`` y el agente preserva sus claves
+    no-modelo (p.ej. ``system_prompts``). ``reasoning_effort`` es
+    provider-específico (ADR 0070): como el provider efectivo lo aporta el NIVEL,
+    el reasoning del agente (que sería de OTRO provider) NO aplica — manda el del
+    nivel o, si el nivel no fija ninguno, se descarta para no dejar un valor
+    cruzado/inválido colgado en un provider incompatible."""
+    merged = {**level_d, **agent}
+    level_reasoning = level_d.get("reasoning_effort")
+    if level_reasoning:
+        merged["reasoning_effort"] = level_reasoning
+    else:
+        merged.pop("reasoning_effort", None)
+    return merged
+
+
+def resolve_model_config_origin(
+    agent_cfg: dict[str, Any] | None,
+    team_cfg: dict[str, Any] | None,
+    project_cfg: dict[str, Any] | None,
+) -> str:
+    """Nivel de la cadena que PINEA el modelo efectivo (Ola D / ADR 0065).
+
+    Devuelve ``"agent" | "team" | "project" | "platform"`` — el más específico que
+    fije ``provider``+``model`` (misma precedencia que ``resolve_model_config_chain``;
+    ``"platform"`` si ninguno de los niveles superiores pinea, por eso no necesita
+    el default de plataforma). Sirve para mostrar el ORIGEN del modelo efectivo en
+    el Hub de Capacidad, no para resolverlo.
+    """
+    if not config_needs_default_model(dict(agent_cfg or {})):
+        return "agent"
+    if team_cfg and not config_needs_default_model(dict(team_cfg)):
+        return "team"
+    if project_cfg and not config_needs_default_model(dict(project_cfg)):
+        return "project"
+    return "platform"
 
 
 async def get_default_model_config(session: AsyncSession) -> dict[str, Any]:

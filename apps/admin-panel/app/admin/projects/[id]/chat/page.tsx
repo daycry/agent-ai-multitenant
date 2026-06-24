@@ -27,9 +27,14 @@ import { PageHeader } from "@/components/layout/page-header";
 import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
+import { chatRefetchInterval, isReplyInFlight } from "@/lib/chat-feed";
+import { conversationLabel, nextActiveAfterDelete } from "@/lib/conversation-history";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { cn } from "@/lib/utils";
+import { useWebSocket, wsUrl } from "@/lib/ws";
 
 // --------------------------------------------------------------------------
 // Types
@@ -42,6 +47,7 @@ interface Conversation {
   current_mode: string;
   custom_mode_name: string | null;
   related_plan_id: string | null;
+  created_at: string;
 }
 
 interface Message {
@@ -160,6 +166,8 @@ export default function ProjectChatPage() {
   const projectId = params.id;
   const queryClient = useQueryClient();
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   const conversationsQuery = useQuery({
     queryKey: ["conversations", projectId],
@@ -240,6 +248,14 @@ export default function ProjectChatPage() {
     queryFn: () => apiFetch<Message[]>(`/conversations/${activeConversationId}/messages`),
     refetchOnWindowFocus: false,
     enabled: Boolean(activeConversationId),
+    // Safety net for live updates: the WebSocket below pushes each step in real time, but if
+    // it never connected or got dropped (proxy idle-timeout, laptop sleep/wake), poll while the
+    // turn is still in flight so the reply lands without a manual reload. A PLANNING turn emits
+    // many messages over minutes (PM → specialists → synthesis), so `isReplyInFlight` keeps
+    // polling for the whole turn — not just until the first agent message — then stops (no idle
+    // polling). See lib/chat-feed.
+    refetchInterval: (query) =>
+      chatRefetchInterval(query.state.data as Message[] | undefined, Date.now()),
   });
 
   // POST a new user message. The composer below uses this; the
@@ -258,6 +274,66 @@ export default function ProjectChatPage() {
       );
     },
   });
+
+  // Empty the chat: clears the conversation's messages (keeps the conversation) so
+  // history doesn't pile up and the next turn starts with fresh context.
+  const clearMessages = useMutation({
+    mutationFn: async (conversationId: string) =>
+      apiFetch<void>(`/conversations/${conversationId}/messages`, { method: "DELETE" }),
+    onSuccess: (_result, conversationId) => {
+      queryClient.setQueryData<Message[]>(["messages", conversationId], []);
+    },
+  });
+
+  // Delete a whole conversation from the history (hard-deletes its messages +
+  // Redis stream server-side). After deleting, jump to the most recent remaining
+  // conversation (or fall back to the empty state when none are left).
+  const deleteConversation = useMutation({
+    mutationFn: async (conversationId: string) =>
+      apiFetch<void>(`/conversations/${conversationId}`, { method: "DELETE" }),
+    onSuccess: (_result, conversationId) => {
+      const current = queryClient.getQueryData<Conversation[]>(["conversations", projectId]) ?? [];
+      const nextActive = nextActiveAfterDelete(current, conversationId);
+      queryClient.setQueryData<Conversation[]>(
+        ["conversations", projectId],
+        current.filter((c) => c.id !== conversationId),
+      );
+      queryClient.removeQueries({ queryKey: ["messages", conversationId] });
+      setActiveConversationId(nextActive);
+    },
+  });
+
+  // Live updates: the team's reply streams in message-by-message over the
+  // per-conversation WebSocket (the responder publishes each step). Without this
+  // the feed only refreshed on reload — the chat looked "hung" while waiting.
+  useWebSocket(
+    activeConversationId ? wsUrl(`/ws/conversation/${activeConversationId}`) : null,
+    (data: unknown) => {
+      const frame = data as { type?: string; payload?: Record<string, unknown> | null };
+      if (frame?.type !== "message.created" || !frame.payload || !activeConversationId) return;
+      const p = frame.payload;
+      const id = String(p.message_id ?? "");
+      if (!id) return;
+      queryClient.setQueryData<Message[]>(["messages", activeConversationId], (prev) => {
+        if (prev?.some((m) => m.id === id)) return prev; // dedup optimistic / echo
+        const msg: Message = {
+          id,
+          tenant_id: "",
+          conversation_id: activeConversationId,
+          author_kind: (p.author_kind as Message["author_kind"]) ?? "agent",
+          author_user_id: (p.author_user_id as string | null) ?? null,
+          author_agent_id: (p.author_agent_id as string | null) ?? null,
+          content: String(p.content ?? ""),
+          mode: String(p.mode ?? ""),
+          attachments: (p.attachments as Array<Record<string, unknown>>) ?? [],
+          related_plan_id: null,
+          is_summary: Boolean(p.is_summary),
+          created_at: new Date().toISOString(),
+        };
+        return prev ? [...prev, msg] : [msg];
+      });
+    },
+  );
 
   // ----------------------------------------------------------------
   // Render
@@ -322,20 +398,76 @@ export default function ProjectChatPage() {
         description={activeConversation?.title ?? "Conversación con el equipo del proyecto"}
         actions={
           activeConversation ? (
-            <ChatModeSelector
-              current={activeConversation.current_mode}
-              pending={updateMode.isPending}
-              onChange={(next) =>
-                updateMode.mutate({
-                  conversationId: activeConversation.id,
-                  mode: next,
-                })
-              }
-            />
+            <div className="flex items-center gap-2">
+              <ChatModeSelector
+                current={activeConversation.current_mode}
+                pending={updateMode.isPending}
+                onChange={(next) =>
+                  updateMode.mutate({
+                    conversationId: activeConversation.id,
+                    mode: next,
+                  })
+                }
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="chat-clear"
+                disabled={clearMessages.isPending}
+                onClick={() => setConfirmClearOpen(true)}
+              >
+                Vaciar chat
+              </Button>
+            </div>
           ) : null
         }
         data-testid="chat-page-header"
       />
+
+      {/* Conversation history: switch between past conversations, start a new one
+          without deleting the others, or delete one from the history. */}
+      <div
+        className="mt-4 flex flex-wrap items-center gap-2"
+        data-testid="conversation-history-bar"
+      >
+        <label htmlFor="conversation-picker" className="text-muted-foreground text-sm">
+          Conversación:
+        </label>
+        <div className="w-full min-w-0 sm:w-72">
+          <Select
+            id="conversation-picker"
+            value={activeConversationId ?? ""}
+            onChange={(e) => setActiveConversationId(e.target.value)}
+            data-testid="conversation-picker"
+          >
+            {conversations.map((c) => (
+              <option key={c.id} value={c.id}>
+                {conversationLabel(c)} · {c.current_mode}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="conversation-new"
+          disabled={createConversation.isPending}
+          onClick={() => createConversation.mutate()}
+        >
+          Nueva conversación
+        </Button>
+        {activeConversation ? (
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="conversation-delete"
+            disabled={deleteConversation.isPending}
+            onClick={() => setConfirmDeleteOpen(true)}
+          >
+            Eliminar conversación
+          </Button>
+        ) : null}
+      </div>
 
       <Card className="mt-6">
         <CardHeader>
@@ -346,6 +478,19 @@ export default function ProjectChatPage() {
         </CardHeader>
         <CardContent>
           <MessageFeed messages={messagesQuery.data ?? []} loading={messagesQuery.isLoading} />
+          {(() => {
+            // "Pensando" mientras el turno sigue en vuelo: en planning abarca toda la ronda
+            // (PM → especialistas → síntesis), no solo hasta el primer mensaje del equipo.
+            const awaitingReply = isReplyInFlight(messagesQuery.data, Date.now());
+            return awaitingReply ? (
+              <p
+                className="text-muted-foreground mt-3 animate-pulse text-sm"
+                data-testid="chat-team-thinking"
+              >
+                El equipo está pensando… <span className="opacity-60">(esto puede tardar)</span>
+              </p>
+            ) : null;
+          })()}
           {activeConversation ? (
             <GeneratePlanButton
               messages={messagesQuery.data ?? []}
@@ -366,6 +511,40 @@ export default function ProjectChatPage() {
           ) : null}
         </CardContent>
       </Card>
+
+      {activeConversation ? (
+        <ConfirmDialog
+          open={confirmClearOpen}
+          onOpenChange={setConfirmClearOpen}
+          title="Vaciar chat"
+          description="Se borrarán todos los mensajes de esta conversación. No se puede deshacer."
+          confirmLabel="Vaciar"
+          destructive
+          pending={clearMessages.isPending}
+          onConfirm={() =>
+            clearMessages.mutate(activeConversation.id, {
+              onSuccess: () => setConfirmClearOpen(false),
+            })
+          }
+        />
+      ) : null}
+
+      {activeConversation ? (
+        <ConfirmDialog
+          open={confirmDeleteOpen}
+          onOpenChange={setConfirmDeleteOpen}
+          title="Eliminar conversación"
+          description="Se eliminará esta conversación y todos sus mensajes. No se puede deshacer."
+          confirmLabel="Eliminar"
+          destructive
+          pending={deleteConversation.isPending}
+          onConfirm={() =>
+            deleteConversation.mutate(activeConversation.id, {
+              onSuccess: () => setConfirmDeleteOpen(false),
+            })
+          }
+        />
+      ) : null}
     </div>
   );
 }
@@ -539,6 +718,10 @@ interface ChatComposerProps {
 
 function ChatComposer({ disabled, onSubmit }: ChatComposerProps) {
   const [value, setValue] = useState("");
+  // Markdown preview toggle. The edit view keeps the raw <textarea> so @-mention
+  // tracking (cursor/onChange) stays intact; preview renders the same markdown
+  // renderer the chat messages use.
+  const [preview, setPreview] = useState(false);
   // The @-trigger is open when the cursor sits in the middle of a
   // partial mention token ("@" followed by 0+ word-chars, no space).
   const mention = parsePendingMention(value);
@@ -568,18 +751,61 @@ function ChatComposer({ disabled, onSubmit }: ChatComposerProps) {
 
   return (
     <form className="mt-4 relative" onSubmit={handleSubmit} data-testid="chat-composer">
-      <textarea
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="Escribe un mensaje. Usa @ para mencionar a un agente."
-        rows={3}
-        disabled={disabled}
-        data-testid="chat-input"
-        className={cn(
-          "w-full resize-none rounded border px-3 py-2 text-sm",
-          "bg-background focus:outline-none focus:ring-2 focus:ring-indigo-500/40",
-        )}
-      />
+      <div className="bg-muted mb-1.5 inline-flex w-fit rounded-md p-0.5" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={!preview}
+          onClick={() => setPreview(false)}
+          data-testid="chat-input-tab-edit"
+          className={cn(
+            "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
+            !preview ? "bg-background text-foreground shadow" : "text-muted-foreground",
+          )}
+        >
+          Editar
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={preview}
+          onClick={() => setPreview(true)}
+          data-testid="chat-input-tab-preview"
+          className={cn(
+            "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
+            preview ? "bg-background text-foreground shadow" : "text-muted-foreground",
+          )}
+        >
+          Vista previa
+        </button>
+      </div>
+      {preview ? (
+        <div
+          data-testid="chat-input-preview"
+          className="bg-muted/30 min-h-[5.5rem] w-full rounded border px-3 py-2 text-sm"
+        >
+          {value.trim().length === 0 ? (
+            <p className="text-muted-foreground/60 text-xs italic">
+              Sin contenido para previsualizar.
+            </p>
+          ) : (
+            renderPlanDraft(value)
+          )}
+        </div>
+      ) : (
+        <textarea
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="Escribe un mensaje. Usa @ para mencionar a un agente. Soporta markdown."
+          rows={3}
+          disabled={disabled}
+          data-testid="chat-input"
+          className={cn(
+            "w-full resize-none rounded border px-3 py-2 text-sm",
+            "bg-background focus:outline-none focus:ring-2 focus:ring-indigo-500/40",
+          )}
+        />
+      )}
       {suggestions.length > 0 ? (
         <ul
           data-testid="mention-suggestions"

@@ -197,6 +197,31 @@ class PublicBaseUrlUpdate(BaseModel):
     base_url: str = Field(min_length=1, max_length=512)
 
 
+class ApiPathPrefixResponse(BaseModel):
+    """The effective API path prefix + how it is sourced (ADR 0069).
+
+    ``prefix`` is the effective value (override if set, else env bootstrap):
+    ``""`` (no prefix) or ``/api``-style. ``is_override`` is True when it comes
+    from the System-Admin platform setting. Sits between the public origin and
+    the SSO/SCIM paths under a single-origin reverse proxy.
+    """
+
+    model_config = _BASE_CONFIG
+
+    prefix: str
+    is_override: bool
+    env_default: str
+
+
+class ApiPathPrefixUpdate(BaseModel):
+    """Set the API path prefix (System Admin). ``""`` (no prefix) or a bare
+    absolute path like ``/api``; host/query/fragment rejected server-side."""
+
+    model_config = _BASE_CONFIG
+
+    prefix: str = Field(default="", max_length=256)
+
+
 # ===========================================================================
 # SAML 2.0 per-tenant config CRUD (Plan 08 task_08_06) — the Tenant-Admin UI.
 #

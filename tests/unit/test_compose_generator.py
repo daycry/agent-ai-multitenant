@@ -37,6 +37,9 @@ from installer_backend.compose_generator import (
     MONITORING_SERVICES,
     OLLAMA_BOOTSTRAP_SERVICE,
     OLLAMA_SERVICE,
+    STT_SERVICE,
+    TTS_SERVICE,
+    VOICE_SERVICES,
     assert_no_dev_secret_markers,
     enabled_providers,
     generate_compose,
@@ -71,21 +74,24 @@ def _config(
     environment: Environment = Environment.PRODUCTION,
     gpu_enabled: bool = False,
     ollama_mode: str | None = None,
+    voice_mode: str | None = None,
     embedding_model: str = "nomic-embed-text",
     providers: ProvidersConfig | None = None,
     data_root: str = "/data/agent-platform",
     worker_replicas: int = 2,
     ports: PortsConfig | None = None,
+    system: SystemConfig | None = None,
 ) -> InstallerConfig:
     if providers is None:
         providers = ProvidersConfig(ollama=OllamaProvider(enabled=True, endpoint="http://o:11434"))
     return InstallerConfig(
-        system=SystemConfig(domain="agentic.example.com", environment=environment),
+        system=system or SystemConfig(domain="agentic.example.com", environment=environment),
         resources=ResourceConfig(
             worker_replicas=worker_replicas,
             worker_memory_gib=4,
             gpu_enabled=gpu_enabled,
             ollama_mode=ollama_mode,
+            voice_mode=voice_mode,
             embedding_model=embedding_model,
         ),
         storage=StorageConfig(
@@ -128,11 +134,13 @@ def test_minimal_compose_top_level_shape() -> None:
     compose = generate_compose(_config())
     assert compose["name"] == "agentic-platform"
     assert "services" in compose
-    # The two canonical networks are declared.
+    # The canonical networks are declared: agentic-net + the two internal ones
+    # (agentic-agents for the sandbox, agentic-docker for the socket-proxy lane).
     networks = compose["networks"]
     assert isinstance(networks, dict)
-    assert set(networks) == {"agentic-net", "agentic-agents"}
+    assert set(networks) == {"agentic-net", "agentic-agents", "agentic-docker"}
     assert networks["agentic-agents"]["internal"] is True
+    assert networks["agentic-docker"]["internal"] is True
 
 
 def test_rendered_yaml_parses_and_round_trips() -> None:
@@ -213,6 +221,101 @@ def test_default_config_has_no_ollama() -> None:
     assert cfg.resources.ollama_mode == "none"
     assert OLLAMA_SERVICE not in generate_compose(cfg)["services"]
     assert GPU_SERVICE not in selected_services(cfg, monitoring=False)
+
+
+# ---------------------------------------------------------------------------
+# Voice mode (stt / tts) — modo voz del Asistente + córtex (ADR 0073).
+#
+# El instalador de producción NO generaba stt/tts, así que el modo voz no
+# arrancaba en instalaciones reales. La definición de referencia vive en
+# docker/docker-compose.yml; estas pruebas fijan que el compose generado los
+# incluye con su imagen + healthcheck en python (NO wget: esas imágenes no lo
+# traen) y que el api-server queda cableado a stt:8000 / tts:8880.
+# ---------------------------------------------------------------------------
+def test_voice_mode_cpu_adds_stt_and_tts_services() -> None:
+    compose = generate_compose(_config(voice_mode="cpu"))
+    services = compose["services"]
+    assert STT_SERVICE in services
+    assert TTS_SERVICE in services
+    # The reference (docker/docker-compose.yml) images.
+    assert services[STT_SERVICE]["image"].startswith("fedirz/faster-whisper-server:")
+    assert services[TTS_SERVICE]["image"].startswith("ghcr.io/remsky/kokoro-fastapi-cpu:")
+
+
+def test_voice_mode_none_omits_stt_and_tts() -> None:
+    compose = generate_compose(_config(voice_mode="none"))
+    services = compose["services"]
+    assert STT_SERVICE not in services
+    assert TTS_SERVICE not in services
+    names = selected_services(_config(voice_mode="none"), monitoring=False)
+    for name in VOICE_SERVICES:
+        assert name not in names
+    # No STT/TTS wiring injected into the api-server when voice is off.
+    api_env = services["api-server"]["environment"]
+    assert "API_SERVER_ASSISTANT_STT_URL" not in api_env
+    assert "API_SERVER_ASSISTANT_TTS_URL" not in api_env
+
+
+def test_voice_enabled_by_default() -> None:
+    # The default config (no voice_mode given) ships the voice stack so the
+    # Assistant/córtex voice mode works out of the box on a real install — the
+    # bug this fixes was that prod NEVER generated stt/tts.
+    cfg = _config()
+    assert cfg.resources.voice_mode == "cpu"
+    services = generate_compose(cfg)["services"]
+    assert STT_SERVICE in services
+    assert TTS_SERVICE in services
+
+
+def test_voice_wiring_points_api_server_at_stt_and_tts() -> None:
+    env = generate_compose(_config(voice_mode="cpu"))["services"]["api-server"]["environment"]
+    assert env["API_SERVER_ASSISTANT_STT_URL"] == "http://stt:8000"
+    assert env["API_SERVER_ASSISTANT_TTS_URL"] == "http://tts:8880"
+
+
+def test_stt_service_matches_reference_definition() -> None:
+    stt = generate_compose(_config(voice_mode="cpu"))["services"][STT_SERVICE]
+    env = stt["environment"]
+    # Whisper model env from docker/docker-compose.yml (ES+EN CPU-friendly).
+    assert env["WHISPER__MODEL"] == "Systran/faster-whisper-small"
+    assert env["WHISPER__INFERENCE_DEVICE"] == "cpu"
+    # Model cache volume under the configured data root.
+    assert any("/.cache/huggingface" in v for v in stt["volumes"])
+    # Internal-only: no host ports, on agentic-net.
+    assert "ports" not in stt
+    assert stt["networks"] == ["agentic-net"]
+
+
+def test_voice_healthchecks_use_python_not_wget() -> None:
+    # The stt/tts images ship NEITHER wget NOR curl — a wget-based probe would
+    # mark them permanently unhealthy. They must probe with python (urllib).
+    services = generate_compose(_config(voice_mode="cpu"))["services"]
+    for name, port in ((STT_SERVICE, 8000), (TTS_SERVICE, 8880)):
+        flat = " ".join(services[name]["healthcheck"]["test"])
+        assert "wget" not in flat and "curl" not in flat, f"{name} healthcheck uses a missing tool"
+        assert "python" in flat, f"{name} healthcheck must use python"
+        assert f":{port}/health" in flat, f"{name} healthcheck must hit :{port}/health"
+
+
+def test_stt_uses_named_model_cache_volume() -> None:
+    # The Whisper model (~hundreds of MB) must persist across restarts so it is
+    # not re-downloaded on every boot — mounted from a named volume declared at
+    # the compose top level.
+    compose = generate_compose(_config(voice_mode="cpu"))
+    stt = compose["services"][STT_SERVICE]
+    vol_name = stt["volumes"][0].split(":", 1)[0]
+    assert vol_name in compose["volumes"], "the whisper model cache volume must be declared"
+
+
+def test_voice_services_are_hardened_like_the_rest() -> None:
+    services = generate_compose(_config(voice_mode="cpu"))["services"]
+    for name in (STT_SERVICE, TTS_SERVICE):
+        svc = services[name]
+        assert svc["cap_drop"] == ["ALL"], name
+        assert "no-new-privileges:true" in svc["security_opt"], name
+        assert "apparmor=agentic-default" in svc["security_opt"], name
+        assert "limits" in svc["deploy"]["resources"], name
+        assert svc["restart"] == "unless-stopped", name
 
 
 # ---------------------------------------------------------------------------
@@ -297,11 +400,81 @@ def test_monitoring_includes_alertmanager_and_cadvisor() -> None:
 # ---------------------------------------------------------------------------
 # Ports / volumes parametrised from the wizard config.
 # ---------------------------------------------------------------------------
-def test_ports_are_parametrised() -> None:
+def test_proxy_is_the_only_service_publishing_host_ports() -> None:
+    # ADR 0061 / deploy-7: after Fase E the single TLS reverse proxy (caddy) is
+    # the ONLY service mapping host ports; everything else is internal-only.
+    compose = generate_compose(_config())
+    publishers = {name for name, svc in compose["services"].items() if "ports" in svc}
+    assert publishers == {"caddy"}
+    assert compose["services"]["caddy"]["ports"] == ["80:80", "443:443"]
+
+
+def test_api_server_and_admin_panel_publish_no_host_ports() -> None:
+    # Both used to publish on 0.0.0.0 (HTTP plano); now they live only on the
+    # internal network behind the proxy. PortsConfig stays in the model but no
+    # longer maps to the host in the generated production compose.
     ports = PortsConfig(admin_panel=18080, api_server=18000)
     compose = generate_compose(_config(ports=ports))
-    assert compose["services"]["admin-panel"]["ports"] == ["18080:3000"]
-    assert compose["services"]["api-server"]["ports"] == ["18000:8000"]
+    assert "ports" not in compose["services"]["api-server"]
+    assert "ports" not in compose["services"]["admin-panel"]
+
+
+def test_proxy_sso_redirect_base_url_carries_api_prefix() -> None:
+    # The IdP redirects the browser to {base}/auth/sso/oidc/callback; the base
+    # must carry the proxy's /api prefix so handle_path strips it to the backend.
+    compose = generate_compose(_config())
+    env = compose["services"]["api-server"]["environment"]
+    assert env["API_SERVER_SSO_REDIRECT_BASE_URL"] == "https://agentic.example.com/api"
+
+
+def test_caddy_proxy_in_core_services_and_hardened() -> None:
+    compose = generate_compose(_config())
+    assert "caddy" in CORE_SERVICES
+    caddy = compose["services"]["caddy"]
+    assert caddy["image"].startswith("caddy:")
+    assert caddy["cap_drop"] == ["ALL"]
+    assert "no-new-privileges:true" in caddy["security_opt"]
+    assert caddy["restart"] == "unless-stopped"
+    assert "limits" in caddy["deploy"]["resources"]
+
+
+def test_caddy_proxy_adds_net_bind_service_cap() -> None:
+    # cap_drop:[ALL] removes the ability to bind 80/443; NET_BIND_SERVICE is the
+    # single capability added back (same pattern as Vault's IPC_LOCK).
+    compose = generate_compose(_config())
+    assert compose["services"]["caddy"]["cap_add"] == ["NET_BIND_SERVICE"]
+
+
+def test_caddy_proxy_on_agentic_net_only() -> None:
+    compose = generate_compose(_config())
+    assert compose["services"]["caddy"]["networks"] == ["agentic-net"]
+
+
+def test_caddy_proxy_depends_on_api_server_and_admin_panel() -> None:
+    compose = generate_compose(_config())
+    deps = compose["services"]["caddy"]["depends_on"]
+    assert deps["api-server"]["condition"] == "service_healthy"
+    assert deps["admin-panel"]["condition"] == "service_healthy"
+
+
+def test_caddy_proxy_mounts_the_generated_caddyfile_readonly() -> None:
+    compose = generate_compose(_config())
+    volumes = compose["services"]["caddy"]["volumes"]
+    assert "./caddy/Caddyfile:/etc/caddy/Caddyfile:ro" in volumes
+    # The internal CA / ACME material persists across restarts.
+    assert any(v.endswith("/caddy/data:/data") for v in volumes)
+
+
+def test_tls_provided_mode_mounts_the_cert_dir_readonly() -> None:
+    sys_cfg = SystemConfig(
+        domain="agentic.example.com",
+        tls_mode="provided",
+        tls_cert_path="/etc/ssl/server.crt",
+        tls_key_path="/etc/ssl/server.key",
+    )
+    compose = generate_compose(_config(system=sys_cfg))
+    volumes = compose["services"]["caddy"]["volumes"]
+    assert any(v.endswith("/caddy/tls:/etc/caddy/tls:ro") for v in volumes)
 
 
 def test_volumes_use_configured_data_root() -> None:
@@ -324,7 +497,7 @@ def test_hardening_defaults_on_every_service() -> None:
     compose = generate_compose(_config(gpu_enabled=True), monitoring=True)
     # One-shot init services pull-and-exit, so they CANNOT be unless-stopped —
     # they still carry the rest of the hardening posture.
-    one_shots = {"ollama-bootstrap"}
+    one_shots = {"ollama-bootstrap", "migrations"}
     # cAdvisor MUST run privileged with host mounts to read container stats, so
     # it is deliberately NOT cap-dropped and does NOT pin AppArmor (both would
     # deny the host access it needs). It still sets no-new-privileges + limits.
@@ -341,11 +514,51 @@ def test_hardening_defaults_on_every_service() -> None:
             continue
         # AppArmor MAC confinement is pinned on every other generated service.
         assert "apparmor=agentic-default" in opts, name
-        # Vault keeps IPC_LOCK; everything else drops ALL caps.
+        # Every non-privileged service drops ALL caps. Official infra images that
+        # self-init as root (chown their data dir + drop to a service user via
+        # gosu/su-exec) add the self-init caps back on top of the blanket drop;
+        # Vault additionally needs IPC_LOCK (mlock) + SETFCAP (setcaps its binary).
+        assert svc["cap_drop"] == ["ALL"], name
+        infra_caps = {"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}
         if name == "vault":
-            assert svc["cap_add"] == ["IPC_LOCK"]
-        else:
-            assert svc["cap_drop"] == ["ALL"], name
+            assert set(svc["cap_add"]) >= infra_caps | {"IPC_LOCK", "SETFCAP"}, name
+        elif name in {"postgres", "redis", "clamav", "egress-proxy"}:
+            assert set(svc["cap_add"]) >= infra_caps, name
+
+
+def test_official_infra_images_keep_self_init_caps() -> None:
+    """postgres/redis/clamav/egress-proxy run official images that self-init as
+    root (chown their data dir + drop to a service user via gosu/su-exec). Under
+    cap_drop:[ALL] they crash-loop ("chmod/chown: Operation not permitted",
+    "Unable to change to group") unless the self-init caps are added back. This
+    guards the prod-01 hardening regression where the blanket cap-drop was too
+    broad for stateful official images."""
+    compose = generate_compose(_config(), monitoring=False)
+    infra_caps = {"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}
+    for name in ("postgres", "redis", "clamav"):
+        svc = compose["services"][name]
+        assert svc["cap_drop"] == ["ALL"], name
+        assert set(svc["cap_add"]) >= infra_caps, name
+    if "egress-proxy" in compose["services"]:  # tinyproxy setgid/setuid on start
+        assert set(compose["services"]["egress-proxy"]["cap_add"]) >= infra_caps
+    # Vault: self-init caps + IPC_LOCK (mlock) + SETFCAP (setcaps its own binary).
+    vault = compose["services"]["vault"]
+    assert set(vault["cap_add"]) >= infra_caps | {"IPC_LOCK", "SETFCAP"}
+
+
+def test_python_app_healthchecks_do_not_rely_on_wget() -> None:
+    """api-server + orchestrator run on python:3.12-slim, which ships NO
+    wget/curl. Their HTTP healthcheck must use python's stdlib — a wget-based
+    check marks them permanently unhealthy, so depends_on:service_healthy is
+    never satisfied and the WHOLE stack fails to come up (prod-01: verified live
+    — the containers only became healthy once the check used python). The Celery
+    lanes (workers, notification-dispatcher) use `celery inspect ping`, which IS
+    in their image, so they are unaffected."""
+    compose = generate_compose(_config(), monitoring=False)
+    for name in ("api-server", "orchestrator"):
+        flat = " ".join(compose["services"][name]["healthcheck"]["test"])
+        assert "wget" not in flat and "curl" not in flat, f"{name} healthcheck uses a missing tool"
+        assert "python" in flat, f"{name} healthcheck must use python (no wget in the image)"
 
 
 def test_generated_services_rely_on_docker_default_seccomp() -> None:
@@ -458,3 +671,248 @@ def test_docker_compose_config_accepts_generated_file(written_compose: str) -> N
     # Unset ${ENV} placeholders only produce warnings on stderr; exit 0 means
     # the schema + structure are valid.
     assert result.returncode == 0, result.stderr
+
+
+# ---------------------------------------------------------------------------
+# task_prod01_06 — workers funcional: command celery explícito, lane privileged
+# separada, binds (data_root + seccomp), envs de backup.
+# ---------------------------------------------------------------------------
+def _queues_of(service: dict) -> set[str]:
+    """Extract the ``--queues=a,b,c`` set from a service's celery command
+    (accepts the command as a string or an argv list)."""
+    command = service.get("command")
+    text = command if isinstance(command, str) else " ".join(command or [])
+    import re
+
+    m = re.search(r"--queues[=\s]+([A-Za-z0-9_,]+)", text)
+    return set(m.group(1).split(",")) if m else set()
+
+
+def test_workers_has_explicit_celery_command_for_generic_queues() -> None:
+    workers = generate_compose(_config())["services"]["workers"]
+    text = (
+        workers["command"] if isinstance(workers["command"], str) else " ".join(workers["command"])
+    )
+    assert (
+        "celery" in text and "worker" in text
+    ), f"workers command is not a celery worker: {text!r}"
+    queues = _queues_of(workers)
+    assert queues, "workers has no --queues"
+    assert "privileged" not in queues, "the generic pool must NOT drain the privileged queue"
+
+
+def test_workers_privileged_lane_drains_only_privileged_as_singleton() -> None:
+    services = generate_compose(_config())["services"]
+    assert "workers-privileged" in services, "no separate workers-privileged service"
+    priv = services["workers-privileged"]
+    assert _queues_of(priv) == {
+        "privileged"
+    }, "workers-privileged must drain exactly the privileged queue"
+    # Singleton: periodic privileged jobs (backup/rotation) must not double-run.
+    assert (
+        priv.get("deploy", {}).get("replicas") == 1
+    ), "workers-privileged must be a singleton (replicas=1)"
+
+
+def test_workers_lanes_cover_every_queue_with_no_orphan() -> None:
+    from workers.celery_app import QUEUE_NAMES
+
+    services = generate_compose(_config())["services"]
+    covered = _queues_of(services["workers"]) | _queues_of(services["workers-privileged"])
+    assert covered == set(QUEUE_NAMES), (
+        f"queues drained {covered} != topology {set(QUEUE_NAMES)} — an orphan queue would "
+        "be enqueued forever (runbook 06-capacity-management)"
+    )
+
+
+def _celery_app_target(service: dict, *, from_healthcheck: bool = False) -> str | None:
+    """Extract the ``-A <target>`` of a service's celery command (or its
+    healthcheck's ``celery inspect`` probe). Accepts string or argv list."""
+    import re
+
+    if from_healthcheck:
+        raw = service.get("healthcheck", {}).get("test")
+        text = raw if isinstance(raw, str) else " ".join(raw or [])
+    else:
+        cmd = service.get("command")
+        text = cmd if isinstance(cmd, str) else " ".join(cmd or [])
+    m = re.search(r"-A\s+([A-Za-z0-9_.]+)", text)
+    return m.group(1) if m else None
+
+
+def test_workers_celery_app_target_is_the_importable_module() -> None:
+    """task_prod01: ``celery -A workers`` does NOT resolve — there is no
+    ``workers/celery.py`` nor a top-level app attribute, so Celery exits with a
+    usage error and the worker (and its ``inspect ping`` healthcheck) never
+    starts. The app lives in ``workers.celery_app``; the command AND the
+    healthcheck must target that module, in BOTH lanes."""
+    services = generate_compose(_config())["services"]
+    for name in ("workers", "workers-privileged"):
+        assert _celery_app_target(services[name]) == "workers.celery_app", (
+            f"{name} command must target -A workers.celery_app (bare 'workers' "
+            "does not resolve and the worker never boots)"
+        )
+        assert (
+            _celery_app_target(services[name], from_healthcheck=True) == "workers.celery_app"
+        ), f"{name} healthcheck 'celery inspect ping' must target -A workers.celery_app"
+
+
+def test_workers_lanes_bind_data_root_and_seccomp_profiles() -> None:
+    services = generate_compose(_config(data_root="/data/agent-platform"))["services"]
+    for name in ("workers", "workers-privileged"):
+        vols = " ".join(services[name].get("volumes", []))
+        assert (
+            "/data/agent-platform" in vols
+        ), f"{name} does not bind the data_root (repos/worktrees)"
+        assert (
+            "seccomp" in vols
+        ), f"{name} does not bind the seccomp profiles (for launched runtimes)"
+
+
+def test_worker_lanes_bind_data_root_same_path_not_named_volume() -> None:
+    """DooD invariant (ADR 0063 / sesión 2026-06-18): the worker launches the
+    agent-runtime / review-runtime through the docker-socket-proxy, so the
+    daemon resolves the bind ``source`` against ITS OWN filesystem. The
+    worktree path the worker passes only resolves if ``data_root`` is bound
+    with the SAME path inside and out. A NAMED volume mounted at ``data_root``
+    would make the daemon bind a nonexistent host path → the launched runtime
+    sees an EMPTY ``/workspace`` and serves nothing. Lock the same-path bind."""
+    import re
+
+    data_root = "/data/agent-platform"
+    services = generate_compose(_config(data_root=data_root))["services"]
+    for name in ("workers", "workers-privileged"):
+        vols = services[name].get("volumes", [])
+        assert f"{data_root}:{data_root}" in vols, (
+            f"{name} must bind data_root SAME-PATH ({data_root}:{data_root}) for DooD "
+            f"worktree resolution; got {vols}"
+        )
+        named = [v for v in vols if re.match(rf"^[A-Za-z0-9_]+:{re.escape(data_root)}(:|$)", v)]
+        assert not named, (
+            f"{name} mounts data_root via a NAMED volume {named} — the daemon would bind "
+            "an empty host dir and the launched runtime would see an EMPTY /workspace"
+        )
+
+
+@pytest.mark.parametrize(
+    "service_name",
+    ["orchestrator", "workers", "workers-privileged", "notification-dispatcher"],
+)
+def test_background_services_have_a_healthcheck(service_name: str) -> None:
+    """task_prod01_07 (deploy-3 pata 3): the long-lived background services need
+    a healthcheck so depends_on conditions + restart policy actually mean
+    'ready', not just 'process started'."""
+    svc = generate_compose(_config())["services"][service_name]
+    hc = svc.get("healthcheck") or {}
+    assert hc.get("test"), f"{service_name} has no healthcheck"
+
+
+def test_background_healthcheck_uses_the_right_probe() -> None:
+    services = generate_compose(_config())["services"]
+
+    def _probe(name: str) -> str:
+        test = services[name]["healthcheck"]["test"]
+        return test if isinstance(test, str) else " ".join(test)
+
+    # Celery workers answer `inspect ping`; the orchestrator is a FastAPI app.
+    assert "celery" in _probe("workers") and "ping" in _probe("workers")
+    assert "celery" in _probe("workers-privileged")
+    assert "celery" in _probe("notification-dispatcher") and "ping" in _probe(
+        "notification-dispatcher"
+    )
+    assert "/healthz" in _probe("orchestrator")
+
+
+def test_workers_emit_backup_env_prefixed() -> None:
+    env = generate_compose(_config())["services"]["workers"]["environment"]
+    for key in (
+        "WORKERS_BACKUP_DATABASE_URL",
+        "WORKERS_BACKUP_ENCRYPTION_ENABLED",
+        "WORKERS_BACKUP_ENCRYPTION_VAULT_KEY",
+    ):
+        assert key in env, f"workers is missing backup env {key}"
+
+
+# ---------------------------------------------------------------------------
+# task_prod01_09 — docker-socket-proxy (ACL minima) + red agentic-agents en los
+# workers. El sandbox NUNCA recibe el socket Docker directo (Principio 2).
+# ---------------------------------------------------------------------------
+def test_docker_socket_proxy_has_minimal_acl_and_mounts_the_socket() -> None:
+    proxy = generate_compose(_config())["services"]["docker-socket-proxy"]
+    env = proxy["environment"]
+    # The worker needs to create/list containers, reference images, attach
+    # networks — and POST to create them. Everything else is denied.
+    for on in ("CONTAINERS", "IMAGES", "NETWORKS", "POST"):
+        assert str(env.get(on)) == "1", f"socket-proxy ACL should allow {on}"
+    for off in ("EXEC", "VOLUMES", "SWARM"):
+        assert str(env.get(off)) == "0", f"socket-proxy ACL must deny {off}"
+    vols = " ".join(proxy.get("volumes", []))
+    assert "/var/run/docker.sock" in vols, "socket-proxy must mount the docker socket"
+
+
+def test_socket_proxy_lives_on_a_dedicated_internal_network_only() -> None:
+    compose = generate_compose(_config())
+    proxy = compose["services"]["docker-socket-proxy"]
+    nets = proxy["networks"]
+    # Dedicated + internal: ONLY the workers reach the Docker API, never the
+    # untrusted agent runtimes (which sit on agentic-agents) nor the internet.
+    assert nets == ["agentic-docker"], f"socket-proxy must be on the dedicated net only: {nets}"
+    netblock = compose["networks"]["agentic-docker"]
+    assert netblock.get("internal") is True, "agentic-docker must be internal"
+    assert compose["networks"]["agentic-net"], "agentic-net still declared"
+
+
+# ---------------------------------------------------------------------------
+# task_prod01_12 — one-shot `migrations` service + apps wait for it.
+# ---------------------------------------------------------------------------
+def test_migrations_is_a_oneshot_alembic_upgrade() -> None:
+    svc = generate_compose(_config())["services"]["migrations"]
+    cmd = svc["command"] if isinstance(svc["command"], str) else " ".join(svc["command"])
+    assert "alembic" in cmd and "upgrade" in cmd and "head" in cmd
+    assert svc["restart"] == "no", "migrations is a one-shot, it must not restart"
+    assert "api-server" in svc["image"], "runs from the api-server image (it ships the migrations)"
+    # Runs as the migrations role (BYPASSRLS) and only needs postgres up.
+    assert svc["environment"]["DATABASE_URL"] == "${ADMIN_DATABASE_URL}"
+    assert svc["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+
+@pytest.mark.parametrize(
+    "service_name",
+    ["api-server", "orchestrator", "workers", "workers-privileged", "notification-dispatcher"],
+)
+def test_app_services_wait_for_migrations_to_complete(service_name: str) -> None:
+    svc = generate_compose(_config())["services"][service_name]
+    dep = svc.get("depends_on", {}).get("migrations")
+    assert dep == {
+        "condition": "service_completed_successfully"
+    }, f"{service_name} must wait for migrations to finish before starting"
+
+
+@pytest.mark.parametrize("service_name", ["workers", "workers-privileged"])
+def test_workers_pin_seccomp_and_apparmor_profiles(service_name: str) -> None:
+    """task_prod01_10 / sandbox-2: the workers must pin the STRICT runtime
+    profiles onto the sandboxes they launch (today the WORKERS_ defaults are ""
+    → the runtimes fall back to Docker's default profiles)."""
+    svc = generate_compose(_config())["services"][service_name]
+    env = svc["environment"]
+    assert env.get("WORKERS_SECCOMP_PROFILE_PATH", "").endswith(
+        "agent-runtime.json"
+    ), f"{service_name} must pin the seccomp profile path"
+    assert (
+        env.get("WORKERS_APPARMOR_PROFILE") == "agent-runtime"
+    ), f"{service_name} must pin the apparmor profile name"
+    # The seccomp profile path must actually be mounted (task_06 bind).
+    assert "seccomp" in " ".join(svc.get("volumes", [])), f"{service_name} seccomp not mounted"
+
+
+@pytest.mark.parametrize("service_name", ["workers", "workers-privileged"])
+def test_workers_reach_docker_via_proxy_and_join_agents_network(service_name: str) -> None:
+    svc = generate_compose(_config())["services"][service_name]
+    env = svc["environment"]
+    assert (
+        env.get("DOCKER_HOST") == "tcp://docker-socket-proxy:2375"
+    ), f"{service_name} must talk to the Docker API through the proxy, not the raw socket"
+    assert "WORKERS_EGRESS_PROXY_URL" in env, f"{service_name} must get WORKERS_EGRESS_PROXY_URL"
+    nets = svc["networks"]
+    assert "agentic-agents" in nets, f"{service_name} must join agentic-agents (launch runtimes)"
+    assert "agentic-docker" in nets, f"{service_name} must join the socket-proxy network"

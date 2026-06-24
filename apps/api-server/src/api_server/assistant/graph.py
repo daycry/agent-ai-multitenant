@@ -30,8 +30,34 @@ from api_server.assistant.tools import AssistantToolContext, run_assistant_tool
 # A node is async because the tool round awaits DB queries.
 AssistantNode = Callable[["AssistantState"], Awaitable["AssistantState"]]
 
+# How the graph executes ONE tool call: ``(name, tool_ctx, arguments) -> result``.
+# Defaults to the assistant's :func:`run_assistant_tool`; the córtex (Plan F1)
+# reuses this very graph with its own runner (``cortex.tools.run_cortex_tool``)
+# so the loop, caps and convergence logic are shared, not duplicated.
+ToolRunner = Callable[[str, Any, dict[str, Any]], Awaitable[dict[str, Any]]]
+
 # Hard ceiling on tool rounds so a misbehaving model can't loop forever.
 MAX_TOOL_ROUNDS = 6
+# Backstop on how many times ONE tool may run in a single turn. The signature
+# dedup below stops a model re-calling a tool with IDENTICAL args, but an
+# over-eager model can re-call the SAME tool with slightly DIFFERENT args (e.g.
+# saving the same fact reworded several times). This caps that runaway per tool
+# name — defence in depth on top of the prompt guidance.
+MAX_CALLS_PER_TOOL = 3
+# Per-tool overrides of the cap. The memory WRITE tool is special: with the
+# claude_sdk provider each round is a stateless SDK query, so an over-eager model
+# re-decides to "remember" the user's fact every round (reworded, so the exact
+# signature dedup misses it). A single user message should yield AT MOST ONE
+# memory write — the model is told to fold several facts into one call — so we
+# hard-cap it to 1/turn. This is the deterministic guarantee on top of the prompt.
+# ``cortex_remember`` (Plan F1) is the córtex's memory WRITE tool and shares the
+# exact same 1/turn guarantee — it reuses this graph, so it reuses this cap.
+_PER_TOOL_CALL_CAP: dict[str, int] = {"remember_about_me": 1, "cortex_remember": 1}
+
+
+def _tool_call_cap(name: str) -> int:
+    """Max times tool ``name`` may run in one turn (write tool capped tighter)."""
+    return _PER_TOOL_CALL_CAP.get(name, MAX_CALLS_PER_TOOL)
 
 
 # ---------------------------------------------------------------------------
@@ -145,21 +171,40 @@ def _signature(call: ToolInvocation) -> str:
     return f"{call.name}|{json.dumps(call.arguments, sort_keys=True, default=str)}"
 
 
+def _admissible_tool_calls(
+    state: AssistantState, calls: tuple[ToolInvocation, ...]
+) -> tuple[ToolInvocation, ...]:
+    """Tool calls from one ``decide`` round the host will actually run: (a) enabled
+    for the tenant, (b) not already executed this turn (same name+args), and (c) under
+    the per-tool cap — counting BOTH prior rounds (``state.tools_called``) AND calls
+    already kept within THIS round. Counting the current round is what stops an
+    over-eager model from exceeding the cap in a single round (e.g. emitting several
+    ``remember_about_me`` with distinct args), which ``state.tools_called`` alone — only
+    updated AFTER the round in ``run_tools`` — would miss."""
+    allowed = set(state.enabled_tools)
+    kept: list[ToolInvocation] = []
+    round_counts: dict[str, int] = {}
+    for tc in calls:
+        if tc.name not in allowed:
+            continue
+        if _signature(tc) in state.executed_signatures:
+            continue
+        used = state.tools_called.count(tc.name) + round_counts.get(tc.name, 0)
+        if used >= _tool_call_cap(tc.name):
+            continue
+        kept.append(tc)
+        round_counts[tc.name] = round_counts.get(tc.name, 0) + 1
+    return tuple(kept)
+
+
 def _node_decide(model: AssistantModelClient) -> AssistantNode:
     async def _run(state: AssistantState) -> AssistantState:
         turn = await model.decide(state)
         if turn.content:
             state.last_content = turn.content
-        # Keep only tool calls that are (a) enabled for the tenant and (b) not
-        # already executed this turn — an over-eager model re-emitting the same
-        # call (e.g. remembering the same fact every round) is dropped, which
-        # lets the loop converge.
-        allowed = set(state.enabled_tools)
-        kept = tuple(
-            tc
-            for tc in turn.tool_calls
-            if tc.name in allowed and _signature(tc) not in state.executed_signatures
-        )
+        # Filter to the calls the host will actually run (enabled, not already
+        # executed, under the per-tool cap incl. this round) — see _admissible_tool_calls.
+        kept = _admissible_tool_calls(state, turn.tool_calls)
         state.pending = ModelTurn(content=turn.content, tool_calls=kept)
         if not kept:
             # No new work to do → this is the answer (the model's content, or
@@ -170,14 +215,14 @@ def _node_decide(model: AssistantModelClient) -> AssistantNode:
     return _run
 
 
-def _node_run_tools() -> AssistantNode:
+def _node_run_tools(tool_runner: ToolRunner) -> AssistantNode:
     async def _run(state: AssistantState) -> AssistantState:
         assert state.pending is not None
         assert state.tool_ctx is not None
         state.rounds += 1
         for call in state.pending.tool_calls:
             state.executed_signatures.add(_signature(call))
-            result = await run_assistant_tool(call.name, state.tool_ctx, call.arguments)
+            result = await tool_runner(call.name, state.tool_ctx, call.arguments)
             state.tools_called.append(call.name)
             state.tool_results.append({"tool": call.name, "result": result})
         return state
@@ -215,10 +260,21 @@ def _node_finish(model: AssistantModelClient) -> AssistantNode:
 # ---------------------------------------------------------------------------
 # Build + run
 # ---------------------------------------------------------------------------
-def build_assistant_graph(model: AssistantModelClient) -> Any:
-    graph: StateGraph[AssistantState] = StateGraph(AssistantState)
+def build_assistant_graph(
+    model: AssistantModelClient,
+    *,
+    state_type: type = AssistantState,
+    tool_runner: ToolRunner = run_assistant_tool,
+) -> Any:
+    """Compile the one-turn tool-use loop.
+
+    ``state_type`` / ``tool_runner`` are the two seams the córtex (Plan F1) reuses
+    to drive the SAME loop with its own state subclass and tool runner — no fork
+    of the convergence/cap logic. The defaults keep the assistant behaviour
+    identical."""
+    graph: StateGraph[Any] = StateGraph(state_type)
     graph.add_node("decide", _node_decide(model))
-    graph.add_node("run_tools", _node_run_tools())
+    graph.add_node("run_tools", _node_run_tools(tool_runner))
     graph.add_node("finish", _node_finish(model))
 
     graph.add_edge(START, "decide")

@@ -1,0 +1,30 @@
+# Build context hygiene for the admin-panel image (prod-01 task_02).
+#
+# Without this, `COPY . .` drags the host's node_modules AND .next (incl. the
+# webpack PERSISTENT cache `.next/cache`) into the build. That cache leaks stale
+# compiled modules — e.g. modules compiled on the host WITHOUT
+# NEXT_PUBLIC_API_URL — so `npm run build` reuses them and the baked
+# NEXT_PUBLIC_* value comes out inconsistent (some chunks `/api`, others the
+# `http://localhost:8001` fallback). Excluding them makes the image build
+# deterministic (deps come from the `deps` stage `npm ci`; .next is built fresh)
+# and much smaller/faster.
+
+node_modules
+.next
+.turbo
+
+# Local-only / non-source
+.env
+.env.*
+*.log
+*.tsbuildinfo
+.git
+.gitignore
+Dockerfile
+.dockerignore
+
+# Test + e2e artifacts (never needed in the runtime image)
+test-results
+playwright-report
+e2e
+coverage

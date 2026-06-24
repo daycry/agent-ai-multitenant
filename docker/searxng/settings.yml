@@ -1,0 +1,37 @@
+# SearXNG settings para la web del córtex (ADR 0067).
+#
+# Mínimo necesario para que el api-server pueda consultar resultados en JSON:
+# `search.formats` DEBE incluir `json` (por defecto SearXNG sólo sirve HTML, y
+# entonces `/search?format=json` devuelve 403 — el córtex no obtendría nada).
+#
+# El `secret_key` se sobreescribe en producción con SEARXNG_SECRET (env del
+# servicio). NO comiteamos un secreto real: el default de dev se cambia en el
+# instalador (igual que el resto de secretos dev-only del stack).
+
+use_default_settings: true
+
+general:
+  instance_name: "agentic-cortex-search"
+  # Sin telemetría/“donation” en una instancia interna.
+  donation_url: false
+  contact_url: false
+
+server:
+  # Reemplazado por SEARXNG_SECRET en runtime; el default dev-only se cambia en prod.
+  secret_key: "changeme-searxng-dev-only"
+  limiter: false
+  image_proxy: false
+  # El api-server habla con SearXNG por la red interna del compose (sin CORS web).
+  method: "GET"
+
+search:
+  # CLAVE: habilitar la salida JSON que consume el córtex (web_search).
+  formats:
+    - html
+    - json
+  safe_search: 0
+  autocomplete: ""
+
+# Sin Redis dedicado para el limiter en esta instancia interna de baja carga.
+redis:
+  url: false

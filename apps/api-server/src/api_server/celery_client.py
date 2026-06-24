@@ -65,6 +65,24 @@ _RESTORE_QUEUE = "privileged"
 _MEMORIZE_HUMAN_WS_TASK = "workers.memorize_human_work_session"
 _MEMORIZE_QUEUE = "default"
 
+# The córtex affective distiller (Córtex F2, ADR 0075). After a córtex turn is
+# persisted, POST /owner/cortex/turns enqueues this by name so the distiller
+# (Ollama-local, fail-open) scores the turn → delta PAD + razón off the hot-path
+# — the dial updates ~1-2s after the answer. The `workers.cortex_affect` module
+# owns the implementation; the api-server only PRODUCES it by name (clean app
+# boundary, same as the Memorizer trigger).
+_CORTEX_DISTILL_AFFECT_TASK = "workers.cortex_distill_affect"
+_CORTEX_AFFECT_QUEUE = "default"
+
+# The córtex identity reflection (Córtex F3, ADR 0074/0077). A background loop
+# (scheduled by F4's beat) that synthesises the owner's recent turns into a
+# rewritten narrative + a CLAMPED trait/baseline adjustment, versioned and never
+# auto-forgotten. The `POST /owner/cortex/reflect` endpoint also fires it by name
+# for a manual/test pass. Ollama-local, fail-open. The `workers.cortex_reflection`
+# module owns the implementation; the api-server only PRODUCES it by name.
+_CORTEX_REFLECT_TASK = "workers.cortex_reflect"
+_CORTEX_REFLECT_QUEUE = "default"
+
 
 @lru_cache(maxsize=1)
 def get_celery_client() -> Celery:
@@ -103,6 +121,61 @@ async def enqueue_ingestion(document_id: UUID) -> bool:
         )
     except Exception as exc:
         _log.warning("ingestion.enqueue_failed", document_id=str(document_id), error=str(exc))
+        return False
+    return True
+
+
+async def enqueue_clone_project_repo(project_id: UUID) -> bool:
+    """Encola el clone/fetch autenticado del repo de un proyecto (ADR 0072).
+
+    Best-effort: un fallo del broker se loguea y se traga — la config git ya está
+    persistida y el clone se puede re-disparar (acción "Sincronizar"). Corre el
+    ``send_task`` (I/O bloqueante) fuera del event loop."""
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            "workers.clone_project_repo",
+            args=[str(project_id)],
+            queue="default",
+        )
+    except Exception as exc:
+        _log.warning("clone_repo.enqueue_failed", project_id=str(project_id), error=str(exc))
+        return False
+    return True
+
+
+async def enqueue_open_plan_pr(project_id: UUID, plan_id: UUID, *, title: str, body: str) -> bool:
+    """Encola el auto-PR de un plan (ADR 0072 fase 2): push autenticado de la rama
+    + apertura del PR/MR por proveedor. La rama se deriva en el worker de
+    ``plan_id`` + ``title``. Best-effort."""
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            "workers.open_plan_pr",
+            args=[str(project_id), str(plan_id), title, body],
+            queue="default",
+        )
+    except Exception as exc:
+        _log.warning("plan_pr.enqueue_failed", project_id=str(project_id), error=str(exc))
+        return False
+    return True
+
+
+async def revoke_execution_job(job_id: str) -> bool:
+    """Revoke a *queued* execution Celery job (cooperative cancellation).
+
+    Dropped before it starts if still queued. NO ``terminate``: hard-killing the
+    worker child of an already-running job would orphan its agent container (which
+    is what actually burns LLM budget). A running job is stopped by the worker's
+    cooperative poll of ``cancel_requested_at`` (it kills the container and
+    finalises as ``cancelled``). Best-effort: the DB flag is the source of truth,
+    so a broker failure is logged and swallowed. ``control.revoke`` does blocking
+    socket I/O, so it runs off the event loop. Returns True iff revoke was published.
+    """
+    try:
+        await asyncio.to_thread(get_celery_client().control.revoke, job_id)
+    except Exception as exc:
+        _log.warning("execution.revoke_failed", job_id=job_id, error=str(exc))
         return False
     return True
 
@@ -207,6 +280,62 @@ async def enqueue_memorize_human_work_session(work_session_id: UUID) -> bool:
     return True
 
 
+async def enqueue_cortex_distill_affect(turn_id: UUID) -> bool:
+    """Hand a freshly-persisted córtex turn to the affective distiller (Córtex F2).
+
+    Called by ``POST /owner/cortex/turns`` right after the cortex turn row is
+    committed — fire-and-forget, off the hot-path. The distiller scores the turn
+    (Ollama-local, fail-open) and writes a ``cortex_affect_snapshots`` row + the
+    live Redis state + a telemetry frame; the appraisal NEVER blocks the answer.
+
+    Best-effort: a broker failure is logged and swallowed (returns False) so the
+    turn the owner already received is never rolled back on a distiller-side
+    outage (the affect dial is a nice-to-have, not part of the turn transaction).
+    ``send_task`` does blocking socket I/O, so we run it off the event loop (same
+    approach as :func:`enqueue_ingestion`).
+    """
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            _CORTEX_DISTILL_AFFECT_TASK,
+            args=[str(turn_id)],
+            queue=_CORTEX_AFFECT_QUEUE,
+        )
+    except Exception as exc:
+        _log.warning("cortex_affect.enqueue_failed", turn_id=str(turn_id), error=str(exc))
+        return False
+    return True
+
+
+async def enqueue_cortex_reflection(owner_user_id: UUID) -> bool:
+    """Trigger one córtex identity-reflection pass for an owner (Córtex F3).
+
+    Called by ``POST /owner/cortex/reflect`` for a manual/test pass (F4's beat
+    schedules the recurring cadence). The reflection synthesises recent turns into
+    a rewritten narrative + a clamped trait/baseline adjustment (Ollama-local,
+    fail-open), versioned in ``cortex_identity_history``.
+
+    Best-effort: a broker failure is logged and swallowed (returns False) so a
+    manual trigger that can't reach the broker degrades gracefully (the reflection
+    is a background nice-to-have, not a transaction). ``send_task`` does blocking
+    socket I/O, so we run it off the event loop (same approach as
+    :func:`enqueue_ingestion`).
+    """
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            _CORTEX_REFLECT_TASK,
+            args=[str(owner_user_id)],
+            queue=_CORTEX_REFLECT_QUEUE,
+        )
+    except Exception as exc:
+        _log.warning(
+            "cortex_reflection.enqueue_failed", owner_user_id=str(owner_user_id), error=str(exc)
+        )
+        return False
+    return True
+
+
 async def enqueue_restore(
     backup_id: str,
     *,
@@ -304,10 +433,14 @@ def _read_restore_status(job_id: str) -> dict[str, Any]:
 
 
 __all__ = [
+    "enqueue_clone_project_repo",
+    "enqueue_cortex_distill_affect",
+    "enqueue_cortex_reflection",
     "enqueue_event_dispatch",
     "enqueue_ingestion",
     "enqueue_memorize_human_work_session",
     "enqueue_notification_send",
+    "enqueue_open_plan_pr",
     "enqueue_restore",
     "get_celery_client",
     "get_restore_job_status",

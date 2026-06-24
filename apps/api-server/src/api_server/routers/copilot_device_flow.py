@@ -115,7 +115,7 @@ async def _load_copilot_provider(session: AsyncSession, provider_id: UUID) -> Ll
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="llm provider not found")
     if provider.kind != LLMProviderKind.COPILOT.value:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="device flow is only valid for a copilot provider",
         )
     return provider

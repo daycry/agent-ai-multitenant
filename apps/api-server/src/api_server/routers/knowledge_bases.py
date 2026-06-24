@@ -22,12 +22,14 @@ import contextlib
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from redis.asyncio import Redis
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import (
     AuthPrincipal,
+    get_redis,
     get_tenant_session,
     require_tenant_admin,
     require_tenant_member,
@@ -41,6 +43,7 @@ from api_server.db.knowledge import (
     KnowledgeBase,
     KnowledgeBaseProject,
 )
+from api_server.events import delete_document_stream
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.logging import get_logger
 from api_server.rag.search import search_kb_chunks
@@ -578,7 +581,9 @@ async def upload_document(
     # Read the upload up-front so we can size-check before we touch MinIO.
     payload = await file.read()
     if not payload:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="empty upload")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="empty upload"
+        )
     if len(payload) > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -662,6 +667,7 @@ async def delete_document(
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
     storage: ObjectStorage = Depends(get_object_storage),
+    redis: Redis = Depends(get_redis),
 ) -> None:
     """Soft-delete the metadata row + drop the MinIO blob. We do the
     blob deletion best-effort — a 503 from the storage backend
@@ -675,6 +681,8 @@ async def delete_document(
     with contextlib.suppress(ObjectStorageError):
         await storage.delete_object(key=doc.source_storage_key)
     await soft_delete(session, doc)
+    # Drop the ingestion stream too so no orphan progress events linger in Redis.
+    await delete_document_stream(redis, str(doc.id))
 
 
 @router.post("/{kb_id}/documents/{document_id}/reindex", response_model=DocumentResponse)

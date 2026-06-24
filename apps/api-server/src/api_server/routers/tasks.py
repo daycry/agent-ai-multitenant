@@ -24,6 +24,7 @@ from api_server.auth.deps import (
     get_tenant_session,
     require_tenant_admin,
     require_tenant_member,
+    schedule_after_commit,
 )
 from api_server.chat.dag_enforcement import (
     DependenciesNotDoneError,
@@ -214,9 +215,13 @@ async def create_task(
 
     await session.refresh(task)
     deps = await _load_dependencies(session, task.id)
-    # Notify the orchestrator. Best-effort: a Redis blip won't fail
-    # the (already-committed-on-return) task creation.
-    await publish_task_created(get_redis(), task)
+    # Notify the orchestrator AFTER the request transaction commits (see
+    # `schedule_after_commit`). Emitting inline — before `open_tenant_session`
+    # commits on return — lets a fast orchestrator read `task is None` in
+    # `_dispatch` and silently skip the dispatch (root cause of the "consumer
+    # se atasca" symptom, sesión 2026-06-18). `expire_on_commit=False` keeps
+    # the task's scalars readable in the post-commit callback.
+    schedule_after_commit(session, lambda: publish_task_created(get_redis(), task))
     return to_task_response(task, deps)
 
 
@@ -257,7 +262,7 @@ async def update_task(
             await assert_dependencies_done(session, task.id, payload.status.value)
         except DependenciesNotDoneError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={
                     "error": "dependencies_not_done",
                     "target_status": payload.status.value,
@@ -287,10 +292,17 @@ async def update_task(
 
     await session.refresh(task)
     deps = await _load_dependencies(session, task.id)
-    # Best-effort orchestrator notification on a real status move.
+    # Best-effort orchestrator notification on a real status move — deferred to
+    # AFTER the request commits (see create_task / schedule_after_commit), so a
+    # consumer reacting to the event reads the committed NEW status, not the
+    # stale one.
     if task.status != old_status:
-        await publish_task_status_changed(
-            get_redis(), task, old_status=old_status, new_status=task.status
+        new_status = task.status
+        schedule_after_commit(
+            session,
+            lambda: publish_task_status_changed(
+                get_redis(), task, old_status=old_status, new_status=new_status
+            ),
         )
     return to_task_response(task, deps)
 

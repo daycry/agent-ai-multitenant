@@ -202,11 +202,15 @@ class PlanGitWorkflow:
         plan_branch: str,
         policies: PlanGitPolicies,
         pr_opener: PrOpener | None = None,
+        auth_env: dict[str, str] | None = None,
     ) -> None:
         self._bare_path = bare_repo_path
         self._plan_branch = plan_branch
         self._policies = policies
         self._pr_opener = pr_opener
+        # ADR 0072: env de auth git (GIT_ASKPASS/GIT_SSH_COMMAND) para el push al
+        # remoto. None = remoto local o ya autenticable por el host.
+        self._auth_env = auth_env
 
     @property
     def plan_branch(self) -> str:
@@ -251,6 +255,7 @@ class PlanGitWorkflow:
             "origin",
             f"refs/heads/{self._plan_branch}:refs/heads/{self._plan_branch}",
             cwd=self._bare_path,
+            env_extra=self._auth_env,  # ADR 0072: auth (PAT/SSH) si la hay
         )
         return True
 

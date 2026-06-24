@@ -1,0 +1,46 @@
+# CI fallback overlay (Plan prod-02 task_prod_02_03, finding tests-3).
+#
+# PRIMARY path: ci.yml's test-integration job loads the real production
+# AppArmor profile with `apparmor_parser -r -W docker/apparmor/
+# agentic-default.profile` BEFORE `docker compose up`, so CI also verifies
+# the profile parses on the runner kernel (Decisión clave 2 de prod-02).
+#
+# This overlay is the DOCUMENTED FALLBACK for the case where a future
+# runner's apparmor_parser rejects the profile (kernel/parser version drift,
+# fsmount, etc.). Applying it neutralises only the host MAC confinement
+# (apparmor=unconfined) on the trusted infra services the integration job
+# starts, while KEEPING no-new-privileges and Docker's default seccomp. Trade-
+# off: CI no longer proves the agentic-default profile loads — that loss is
+# tracked as deuda in the plan; the UNTRUSTED agent/test runtime sandbox is
+# unaffected (it uses its own strict profile applied by the worker at launch).
+#
+# Usage (only when the parser step fails):
+#   docker compose -f docker/docker-compose.yml \
+#                  -f docker/docker-compose.dev.yml \
+#                  -f docker/docker-compose.ci.yml up -d --wait postgres redis vault minio
+#
+# `security_opt: !override` REPLACES the x-seccomp anchor's list instead of
+# concatenating (compose merges sequences by appending, which would leave two
+# conflicting apparmor= values). The repo's check-yaml hook runs with
+# --unsafe, so the !override custom tag does not trip the YAML loader.
+
+services:
+  postgres:
+    security_opt: !override
+      - no-new-privileges:true
+      - apparmor=unconfined
+
+  redis:
+    security_opt: !override
+      - no-new-privileges:true
+      - apparmor=unconfined
+
+  vault:
+    security_opt: !override
+      - no-new-privileges:true
+      - apparmor=unconfined
+
+  minio:
+    security_opt: !override
+      - no-new-privileges:true
+      - apparmor=unconfined

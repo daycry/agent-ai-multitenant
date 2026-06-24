@@ -25,6 +25,7 @@ import { Breadcrumb } from "@/components/layout/breadcrumb";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import {
   Dialog,
   DialogBody,
@@ -41,6 +42,7 @@ import { Select } from "@/components/ui/select";
 import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useLang } from "@/lib/lang-context";
+import { MEMORY_SCOPE_OPTIONS } from "@/lib/memory/constants";
 import { privateScopeMemoryWarning } from "@/lib/memory/honesty";
 import { CapabilityHub } from "@/components/capability/capability-hub";
 import {
@@ -80,6 +82,9 @@ interface Agent {
   scope: string;
   project_id: string | null;
   forked_from_agent_id: string | null;
+  // ADR 0071: equipos a los que pertenece (vacío = sin equipo). Si pertenece a
+  // ≥1, el memory_scope lo gobierna el equipo y el control por-agente se inhabilita.
+  teams: { id: string; name: string }[];
 }
 
 interface AgentUpdate {
@@ -109,13 +114,6 @@ const ROLE_OPTIONS = [
   "devops",
   "security",
   "technical_writer",
-];
-
-const MEMORY_SCOPE_OPTIONS = [
-  { value: "private", label: "Privada" },
-  { value: "team_shared", label: "Compartida con equipo" },
-  { value: "project_shared", label: "Compartida con proyecto" },
-  { value: "global", label: "Global del tenant" },
 ];
 
 const SCOPE_BADGE: Record<string, BadgeVariant> = {
@@ -428,6 +426,10 @@ function AgentEditDialog({
   const personaValid = validateDraft(draft, lang).length === 0 && hasPrompt;
   const privateWarning =
     agent.agent_type === "ai" ? privateScopeMemoryWarning(memoryScope, lang) : null;
+  // ADR 0071: si el agente pertenece a equipo(s), la memoria la gobierna el
+  // equipo — el control por-agente se deshabilita (nota con el/los nombre(s)).
+  const teamNames = (agent.teams ?? []).map((t) => t.name);
+  const governedByTeam = teamNames.length > 0;
 
   useEffect(() => {
     if (open) {
@@ -491,13 +493,11 @@ function AgentEditDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ae-description">Descripción</Label>
-            <textarea
-              id="ae-description"
+            <Label>Descripción</Label>
+            <MarkdownTextarea
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={setDescription}
               rows={2}
-              className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2"
               data-testid="edit-agent-description"
             />
           </div>
@@ -519,6 +519,7 @@ function AgentEditDialog({
                 id="ae-scope"
                 value={memoryScope}
                 onChange={(e) => setMemoryScope(e.target.value)}
+                disabled={governedByTeam}
                 data-testid="edit-agent-memory-scope"
               >
                 {MEMORY_SCOPE_OPTIONS.map((o) => (
@@ -527,7 +528,17 @@ function AgentEditDialog({
                   </option>
                 ))}
               </Select>
-              {privateWarning ? (
+              {governedByTeam ? (
+                <p
+                  className="text-muted-foreground text-xs"
+                  data-testid="edit-agent-memory-team-governed"
+                  role="status"
+                >
+                  {teamNames.length === 1
+                    ? `Se gestiona desde el equipo «${teamNames[0]}»`
+                    : `Se gestiona desde los equipos: ${teamNames.join(", ")}`}
+                </p>
+              ) : privateWarning ? (
                 <p
                   className="text-warning-soft-foreground text-xs"
                   data-testid="edit-agent-private-memory-warning"

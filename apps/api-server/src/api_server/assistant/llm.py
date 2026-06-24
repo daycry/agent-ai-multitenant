@@ -13,8 +13,8 @@ real provider is ever contacted (the established chat-test pattern).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import cast
+from dataclasses import dataclass, field
+from typing import Any, cast
 
 from shared_llm.base import LLMProvider
 from shared_llm.types import Message as LLMMessage
@@ -43,6 +43,9 @@ class LLMAssistantModel:
     model: str | None = None
     max_tokens: int = 1024
     temperature: float = 0.3
+    # ADR 0070: kwargs de razonamiento ya traducidos al proveedor (effort /
+    # reasoning_effort); se vuelcan al `complete()` del provider.
+    extra_call_kwargs: dict[str, Any] = field(default_factory=dict)
 
     async def decide(self, state: AssistantState) -> ModelTurn:
         messages = self._build_messages(state)
@@ -57,6 +60,7 @@ class LLMAssistantModel:
             max_tokens=self.max_tokens,
             temperature=self.temperature,
             tools=tools,
+            **self.extra_call_kwargs,
         )
         if response.tool_calls:
             calls = tuple(

@@ -46,8 +46,12 @@ BYTES_PER_GIB = 1024**3
 MIN_DOCKER_VERSION: tuple[int, int] = (24, 0)
 
 #: Minimum Docker Compose version. The stack uses Compose v2 syntax/CLI
-#: (``docker compose``, not the legacy ``docker-compose`` v1).
-MIN_COMPOSE_VERSION: tuple[int, int] = (2, 0)
+#: (``docker compose``). The floor is 2.21: the installer runs
+#: ``up -d --wait`` with the one-shot ``migrations`` service as a
+#: ``service_completed_successfully`` dependency, and reliable ``--wait``
+#: handling of completed (exit-0) one-shots stabilised in later 2.x
+#: (task_prod01_16 / 20) — an older Compose can hang/false-fail there.
+MIN_COMPOSE_VERSION: tuple[int, int] = (2, 21)
 
 #: Minimum total system RAM. The single-machine stack (PostgreSQL+pgvector,
 #: Redis, MinIO, Vault, API, workers) needs headroom; 8 GiB is the floor.
@@ -55,6 +59,11 @@ DEFAULT_MIN_RAM_GIB: int = 8
 
 #: Minimum free disk on the data volume. Images + pgdata + object storage.
 DEFAULT_MIN_DISK_GIB: int = 50
+
+#: Host ports the published surface (the Caddy reverse proxy) must bind — the
+#: ONLY ports the generated stack exposes to the host (ADR 0061). They must be
+#: free for the install to succeed (task_prod01_17).
+REQUIRED_FREE_PORTS: tuple[int, ...] = (80, 443)
 
 
 @dataclass(frozen=True)
@@ -96,6 +105,13 @@ class HostReadings:
     free_disk_bytes: int
     gpu_present: bool
     gpu_name: str | None = None
+    # AppArmor LSM available on the host kernel. Optional: without it the
+    # agent/test sandboxes degrade to seccomp-only (task_prod01_10 / sandbox-2).
+    apparmor_available: bool = True
+    # Host ports (from REQUIRED_FREE_PORTS) found already in use. The reverse
+    # proxy is the only published surface (ADR 0061), so 80/443 must be free
+    # (task_prod01_17). Empty == all free.
+    ports_in_use: tuple[int, ...] = ()
 
 
 @runtime_checkable
@@ -265,8 +281,87 @@ def check_gpu(readings: HostReadings, thresholds: PrereqThresholds) -> PrereqRes
     )
 
 
+def check_apparmor(
+    readings: HostReadings,
+    thresholds: PrereqThresholds,  # noqa: ARG001 — uniform check signature
+) -> PrereqResult:
+    """AppArmor LSM on the host (OPTIONAL — absence is a WARN, never a FAIL).
+
+    The worker pins ``apparmor=agent-runtime`` onto the UNTRUSTED sandboxes it
+    launches (task_prod01_10, ``WORKERS_APPARMOR_PROFILE``). Without AppArmor the
+    stack still runs but those sandboxes lose that MAC layer and degrade to
+    seccomp-only — less defense-in-depth, so we warn rather than block.
+    """
+
+    key, label = "apparmor", "AppArmor (opcional)"
+    if readings.apparmor_available:
+        return PrereqResult(
+            key=key,
+            label=label,
+            status=PrereqStatus.OK,
+            detail="AppArmor disponible en el kernel.",
+            required=False,
+        )
+    return PrereqResult(
+        key=key,
+        label=label,
+        status=PrereqStatus.WARN,
+        detail="AppArmor no detectado en el host.",
+        remediation=(
+            "AppArmor es opcional pero recomendado: el worker pina "
+            "apparmor=agent-runtime sobre los sandboxes. Sin AppArmor degradan a "
+            "solo-seccomp (menos defensa en profundidad). En hosts con AppArmor, "
+            "carga los perfiles con `apparmor_parser -r -W docker/apparmor/"
+            "agent-runtime.profile` (ver docs/06-runbooks/apparmor-profiles.md)."
+        ),
+        required=False,
+    )
+
+
+def check_ports(
+    readings: HostReadings,
+    thresholds: PrereqThresholds,  # noqa: ARG001 — uniform check signature
+) -> PrereqResult:
+    """The published surface ports (80/443) must be free (REQUIRED).
+
+    After ADR 0061 the Caddy reverse proxy is the ONLY service that binds host
+    ports (80/443). If something else already holds them the stack can't come
+    up, so this is a hard FAIL with remediation.
+    """
+
+    key, label = "ports", "Puertos publicados libres (80/443)"
+    busy = [p for p in REQUIRED_FREE_PORTS if p in readings.ports_in_use]
+    if not busy:
+        return PrereqResult(
+            key=key,
+            label=label,
+            status=PrereqStatus.OK,
+            detail="Los puertos 80 y 443 están libres.",
+        )
+    busy_str = ", ".join(str(p) for p in busy)
+    return PrereqResult(
+        key=key,
+        label=label,
+        status=PrereqStatus.FAIL,
+        detail=f"Puertos ya en uso: {busy_str}.",
+        remediation=(
+            f"El reverse proxy (Caddy) necesita publicar 80/443 (ADR 0061); "
+            f"libera el/los puerto(s) {busy_str} (otro servicio web los está "
+            "usando) o detén el proceso que los ocupa antes de instalar."
+        ),
+    )
+
+
 #: The ordered checks the wizard runs. Required checks first, optional last.
-PREREQ_CHECKS = (check_docker, check_compose, check_ram, check_disk, check_gpu)
+PREREQ_CHECKS = (
+    check_docker,
+    check_compose,
+    check_ram,
+    check_disk,
+    check_ports,
+    check_gpu,
+    check_apparmor,
+)
 
 
 @dataclass
@@ -312,7 +407,46 @@ class SystemHostProbe:
             free_disk_bytes=self._free_disk_bytes(),
             gpu_present=self._gpu_name() is not None,
             gpu_name=self._gpu_name(),
+            apparmor_available=self._apparmor_available(),
+            ports_in_use=self._ports_in_use(),
         )
+
+    def _ports_in_use(self) -> tuple[int, ...]:  # pragma: no cover - host-only
+        """Of REQUIRED_FREE_PORTS, the ones already bound (LISTENing).
+
+        Only ``EADDRINUSE`` counts as taken. Binding 80/443 needs privilege, so a
+        non-root probe gets ``EACCES`` — that is NOT occupancy (the real install
+        runs privileged), so we must not report a false positive on it.
+        """
+        import errno
+        import socket
+
+        busy: list[int] = []
+        for port in REQUIRED_FREE_PORTS:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(("0.0.0.0", port))
+            except OSError as exc:
+                if exc.errno == errno.EADDRINUSE:
+                    busy.append(port)
+                # EACCES (no privilege to bind <1024) ≠ occupied — ignore.
+            finally:
+                sock.close()
+        return tuple(busy)
+
+    def _apparmor_available(self) -> bool:  # pragma: no cover - host-only
+        """True iff the AppArmor LSM is enabled on this kernel. Best-effort: the
+        sysfs flag is the canonical signal; absence/error means 'no AppArmor'."""
+        from pathlib import Path
+
+        try:
+            flag = Path("/sys/module/apparmor/parameters/enabled")
+            if flag.exists():
+                return flag.read_text().strip().upper().startswith("Y")
+            return Path("/sys/kernel/security/apparmor").exists()
+        except OSError:
+            return False
 
     # -- individual real probes (host-only) ---------------------------------
     def _run(self, *args: str) -> str | None:  # pragma: no cover - host-only

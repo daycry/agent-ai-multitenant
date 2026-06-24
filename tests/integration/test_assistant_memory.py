@@ -266,6 +266,64 @@ async def test_chat_converges_on_repeated_tool_calls(
     assert count == 1
 
 
+@pytest.mark.asyncio
+async def test_chat_caps_write_tool_to_once_per_turn(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """An over-eager model re-calling the WRITE tool with DIFFERENT args every
+    round (e.g. saving the same fact reworded several times) must NOT run away:
+    remember_about_me is hard-capped to ONE call per turn (its per-tool cap),
+    so a single user message yields a single memory write."""
+    seeded = await _seed(migrations_pg_dsn)
+    from api_server.assistant.graph import (
+        ModelTurn,
+        ScriptedAssistantModel,
+        ToolInvocation,
+        _tool_call_cap,
+    )
+    from api_server.routers.assistant import get_assistant_model
+
+    cap = _tool_call_cap("remember_about_me")
+    assert cap == 1  # the write tool is capped to a single call per turn
+
+    # Distinct phrasings of the same fact → distinct signatures (NOT deduped),
+    # more of them than the cap allows.
+    turns = [
+        ModelTurn(
+            tool_calls=(
+                ToolInvocation(
+                    name="remember_about_me", arguments={"content": f"Se llama Jose ({i})"}
+                ),
+            )
+        )
+        for i in range(4)
+    ]
+    turns.append(ModelTurn(content="Listo."))
+    scripted = ScriptedAssistantModel(turns=turns)
+    configured_app.dependency_overrides[get_assistant_model] = lambda: scripted
+    token = await _mint(seeded["admin_a"], seeded["tenant"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with _client(configured_app) as client:
+        resp = await client.post(
+            "/assistant/chat", json={"message": "me llamo Jose"}, headers=headers
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # The write tool ran exactly once, not once per reworded phrasing.
+    assert body["tools_called"].count("remember_about_me") == cap
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        count = await conn.fetchval(
+            "SELECT count(*) FROM memory_entries WHERE user_id = $1 AND deleted_at IS NULL",
+            seeded["admin_a"],
+        )
+    finally:
+        await conn.close()
+    assert count == cap
+
+
 # ===========================================================================
 # Chat flow — stored facts are injected into the system prompt
 # ===========================================================================

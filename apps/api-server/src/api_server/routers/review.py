@@ -22,18 +22,36 @@ tenant context.
 from __future__ import annotations
 
 import asyncio
+from typing import Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+import httpx
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from redis.asyncio import Redis
 from sqlalchemy import select
-from workers.review_runtime import verify_review_url
+from workers.review_runtime import sign_review_url, verify_review_url
 
 from api_server.auth.deps import get_redis
+from api_server.celery_client import enqueue_open_plan_pr
 from api_server.config import get_settings
+from api_server.db.domain import Plan
 from api_server.db.models import ReviewSession as ReviewSessionRow
-from api_server.db.review_session_repo import mark_rerun_requested, touch_activity
+from api_server.db.review_session_repo import (
+    mark_rerun_requested,
+    mark_terminal,
+    touch_activity,
+)
 from api_server.db.session import get_admin_sessionmaker
 
 router = APIRouter(tags=["review"])
@@ -252,3 +270,226 @@ async def review_logs_websocket(
     finally:
         await pubsub.unsubscribe(channel_name)
         await pubsub.aclose()  # type: ignore[no-untyped-call]
+
+
+# ---------------------------------------------------------------------------
+# ADR 0062 — signed reviewer URLs (SPA + app preview) for a session.
+# ---------------------------------------------------------------------------
+
+
+def build_review_urls(session_id: UUID | str, expires_at_unix: float) -> dict[str, str]:
+    """Mint the reviewer-facing signed URLs for a session (ADR 0062).
+
+    Returns ``{"review_url", "app_url"}``: the SPA shell URL and the app-preview
+    base URL. Both carry the SAME HMAC ``?exp=&sig=`` (the signature is over
+    ``session_id|exp``), so the app proxy reuses the session's signature.
+    """
+    settings = get_settings()
+    secret = settings.review_url_signing_secret.get_secret_value().encode()
+    review_url = sign_review_url(
+        base_url=settings.review_public_base_url,
+        session_id=str(session_id),
+        expires_at=expires_at_unix,
+        secret=secret,
+    )
+    query = review_url.split("?", 1)[1] if "?" in review_url else ""
+    base = settings.review_public_base_url.rstrip("/")
+    app_url = f"{base}/review/{session_id}/app/?{query}"
+    verdict_url = f"{base}/review/{session_id}/verdict?{query}"
+    return {"review_url": review_url, "app_url": app_url, "verdict_url": verdict_url}
+
+
+def _session_json(row: ReviewSessionRow) -> dict[str, Any]:
+    """Public JSON view of a review session (no secrets)."""
+    spec = row.spec or {}
+    return {
+        "id": str(row.id),
+        "plan_id": str(row.plan_id),
+        "status": row.status,
+        "verdict": row.verdict,
+        "rejection_reason": row.rejection_reason,
+        "rerun_requested": row.rerun_requested,
+        "checklist": spec.get("human_checklist", []),
+        # Relative path the SPA hits for the live app (same signature carried in
+        # the page URL the browser already has).
+        "app_path": f"/review/{row.id}/app/",
+        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+    }
+
+
+@router.get("/review/{session_id}/session.json")
+async def review_session_json(
+    session_id: UUID,
+    exp: int = Query(...),
+    sig: str = Query(...),
+) -> dict[str, Any]:
+    """JSON metadata for the review SPA (checklist, status, app path).
+
+    HMAC-gated like the rest of the reviewer surface. The SPA fetches this
+    instead of scraping the HTML shell.
+    """
+    _verify_signature(session_id, exp, sig)
+    row = await _load_session_cross_tenant(session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="review session not found")
+    return _session_json(row)
+
+
+# ---------------------------------------------------------------------------
+# ADR 0062 — preview proxy: the api-server reverse-proxies the running app.
+# ---------------------------------------------------------------------------
+
+# Hop-by-hop headers MUST NOT be forwarded across a proxy (RFC 7230 §6.1).
+_HOP_BY_HOP = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "content-length",
+    "content-encoding",
+}
+
+
+def _proxy_target(row: ReviewSessionRow) -> tuple[str, int]:
+    """Where the review-runtime serves the app. The container lives on the
+    internal ``agentic-agents`` network addressed by a deterministic name
+    (``agentic-review-{id}``); the worker records it in ``spec.main_host``.
+    Never published to the host (ADR 0062 / zero-trust)."""
+    spec = row.spec or {}
+    host = str(spec.get("main_host") or f"agentic-review-{row.id}")
+    port = int(spec.get("main_port", 8080))
+    return host, port
+
+
+@router.api_route(
+    "/review/{session_id}/app/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+)
+async def proxy_review_app(
+    session_id: UUID,
+    path: str,
+    request: Request,
+    exp: int = Query(...),
+    sig: str = Query(...),
+) -> Response:
+    """Reverse-proxy the reviewer's browser to the running app (ADR 0062).
+
+    HMAC-gated by the same signed URL as the session. The app is reachable ONLY
+    through here — never directly (zero-trust). HTTP request/response only; the
+    app's own WebSocket traffic is out of scope for v1.
+    """
+    _verify_signature(session_id, exp, sig)
+    row = await _load_session_cross_tenant(session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="review session not found")
+    if row.status not in {"running", "suspended"}:
+        raise HTTPException(status_code=410, detail=f"review session is {row.status}")
+
+    # Opening / interacting with the app counts as activity.
+    sm = get_admin_sessionmaker()
+    async with sm() as db, db.begin():
+        await touch_activity(db, session_id)
+
+    host, port = _proxy_target(row)
+    target = f"http://{host}:{port}/{path}"
+    # Forward the query string EXCEPT the signature pair (the app must not see it).
+    fwd_params: list[tuple[str, str | int | float | bool | None]] = [
+        (k, v) for k, v in request.query_params.multi_items() if k not in {"exp", "sig"}
+    ]
+    fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=False) as client:
+            upstream = await client.request(
+                request.method,
+                target,
+                params=fwd_params,
+                content=body,
+                headers=fwd_headers,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"review app unreachable: {exc}") from exc
+
+    resp_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=resp_headers,
+        media_type=upstream.headers.get("content-type"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# ADR 0062 — verdict: approve / reject the plan from the review session.
+# ---------------------------------------------------------------------------
+
+
+class VerdictRequest(BaseModel):
+    verdict: Literal["approved", "rejected"]
+    rejection_reason: str | None = None
+
+
+@router.post("/review/{session_id}/verdict")
+async def submit_verdict(
+    session_id: UUID,
+    body: VerdictRequest,
+    exp: int = Query(...),
+    sig: str = Query(...),
+) -> dict[str, object]:
+    """Record the human verdict + transition the plan.
+
+    HMAC-gated. ``approved`` completes the plan (the human validation is the
+    final gate in the single-machine flow); ``rejected`` moves it to
+    ``rejected`` with the reason. Marks the review session terminal so the
+    lifecycle sweep destroys its container.
+    """
+    _verify_signature(session_id, exp, sig)
+    new_status = "approved" if body.verdict == "approved" else "rejected"
+    sm = get_admin_sessionmaker()
+    async with sm() as db, db.begin():
+        row = await mark_terminal(
+            db,
+            session_id,
+            status=new_status,
+            verdict=body.verdict,
+            rejection_reason=body.rejection_reason,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="review session not found")
+        plan = await db.get(Plan, row.plan_id)
+        plan_status: str | None = None
+        # ADR 0072 fase 2: contexto para el auto-PR si el plan pasa a completed.
+        pr_ctx: tuple[UUID, UUID, str] | None = None
+        if plan is not None:
+            if plan.status == "pending_human_validation":
+                plan.status = "completed" if body.verdict == "approved" else "rejected"
+                if plan.status == "completed" and plan.project_id is not None:
+                    pr_ctx = (plan.project_id, plan.id, plan.title or "")
+            plan_status = plan.status
+        await db.flush()
+    # ADR 0072 fase 2: al VALIDAR el plan (→ completed) se encola el auto-PR. El
+    # gate humano queda respetado por construcción (solo en completed tras
+    # 'approved', NUNCA en pending_human_validation). La task hace el push
+    # autenticado + abre el PR/MR según push_policy (no-op si no hay remoto/PAT).
+    if pr_ctx is not None:
+        project_id, plan_id, plan_title = pr_ctx
+        await enqueue_open_plan_pr(
+            project_id,
+            plan_id,
+            title=f"Plan: {plan_title}" if plan_title else f"Plan {str(plan_id)[:8]}",
+            body=(
+                "PR automático tras la validación humana del plan.\n\n"
+                f"Plan: {plan_title}\nID: {plan_id}"
+            ),
+        )
+    return {
+        "session_id": str(session_id),
+        "verdict": body.verdict,
+        "review_status": new_status,
+        "plan_status": plan_status,
+    }

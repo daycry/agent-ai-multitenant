@@ -52,10 +52,25 @@ class BuiltinAgent:
     # this agent via the `agent_skills` M:N junction. Empty for agents
     # whose curated prompt already carries everything they need.
     skill_slugs: tuple[str, ...] = field(default_factory=tuple)
+    # Slugs de tools built-in (junction agent_tools). Si vacío → default por rol
+    # (built-ins completos, Ola B). Override por agente posible.
+    tool_slugs: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def id(self) -> UUID:
         return _agent_id(self.slug)
+
+    def resolved_skill_slugs(self) -> tuple[str, ...]:
+        """Skills explícitas o, si no hay, las del rol (built-ins completos)."""
+        from api_server.seeds.builtin_role_capabilities import default_skill_slugs
+
+        return self.skill_slugs or default_skill_slugs(self.role)
+
+    def resolved_tool_slugs(self) -> tuple[str, ...]:
+        """Tools explícitas o, si no hay, las del rol (built-ins completos)."""
+        from api_server.seeds.builtin_role_capabilities import default_tool_slugs
+
+        return self.tool_slugs or default_tool_slugs(self.role)
 
     def to_model_config(self) -> dict[str, Any]:
         return {
@@ -580,7 +595,7 @@ async def seed_builtin_agent_skills(session: AsyncSession) -> int:
     """
     links = 0
     for agent in BUILTIN_AGENTS:
-        keep_ids = [str(builtin_skill_id(slug)) for slug in agent.skill_slugs]
+        keep_ids = [str(builtin_skill_id(slug)) for slug in agent.resolved_skill_slugs()]
         for skill_id in keep_ids:
             await session.execute(
                 _UPSERT_AGENT_SKILL_SQL,
@@ -589,6 +604,44 @@ async def seed_builtin_agent_skills(session: AsyncSession) -> int:
             links += 1
         await session.execute(
             _DELETE_STALE_AGENT_SKILLS_SQL,
+            {"agent_id": str(agent.id), "keep_ids": keep_ids},
+        )
+    return links
+
+
+_UPSERT_AGENT_TOOL_SQL = text(
+    """
+    INSERT INTO agent_tools (agent_id, tool_id)
+    VALUES (:agent_id, :tool_id)
+    ON CONFLICT (agent_id, tool_id) DO UPDATE SET updated_at = now()
+    """
+)
+_DELETE_STALE_AGENT_TOOLS_SQL = text(
+    """
+    DELETE FROM agent_tools
+     WHERE agent_id = :agent_id
+       AND tool_id <> ALL(:keep_ids)
+    """
+)
+
+
+async def seed_builtin_agent_tools(session: AsyncSession) -> int:
+    """Wire each built-in agent to its tools (por rol; ver ``resolved_tool_slugs``).
+    Idempotent: upsert + poda de links fuera del spec. Debe correr DESPUÉS de
+    seed_builtin_agents y seed_builtin_tools (FKs de agent_tools)."""
+    from api_server.seeds.builtin_tools import _tool_id
+
+    links = 0
+    for agent in BUILTIN_AGENTS:
+        keep_ids = [str(_tool_id(slug)) for slug in agent.resolved_tool_slugs()]
+        for tool_id in keep_ids:
+            await session.execute(
+                _UPSERT_AGENT_TOOL_SQL,
+                {"agent_id": str(agent.id), "tool_id": tool_id},
+            )
+            links += 1
+        await session.execute(
+            _DELETE_STALE_AGENT_TOOLS_SQL,
             {"agent_id": str(agent.id), "keep_ids": keep_ids},
         )
     return links

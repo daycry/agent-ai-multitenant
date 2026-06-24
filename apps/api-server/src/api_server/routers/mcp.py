@@ -346,7 +346,7 @@ async def import_mcp_tools(
         namespaced[f"{server_name}.{tool_slug}"] = raw
     if not namespaced:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="no importable tool names after normalisation",
         )
 
@@ -421,6 +421,7 @@ def _to_runtime_config(payload: MCPServerConfigModel) -> MCPServerConfig:
         headers=dict(data.get("headers") or {}),
         auth_ref=data.get("auth_ref"),
         timeout_s=float(data.get("timeout_s", 30.0)),
+        max_output_bytes=int(data.get("max_output_bytes", 65536)),
     )
 
 

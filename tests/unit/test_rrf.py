@@ -53,7 +53,7 @@ def test_rrf_score_monotone_decreasing() -> None:
 # ---------------------------------------------------------------------------
 def test_id_only_in_bm25_gets_bm25_only_score() -> None:
     out = fuse_rankings([_uid(1)], [])
-    s, br, vr = out[_uid(1)]
+    s, br, vr, _er = out[_uid(1)]
     assert s == pytest.approx(1.0 / (RRF_K_DEFAULT + 1))
     assert br == 1
     assert vr is None

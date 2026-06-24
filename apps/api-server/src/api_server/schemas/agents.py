@@ -27,6 +27,44 @@ from api_server.db.domain import (
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
 
+class AgentModelOptionsResponse(BaseModel):
+    """Modelos seleccionables por kind de proveedor del catálogo cerrado, para
+    poblar el dropdown de modelo en las pantallas de agente/equipo/proyecto.
+    ``by_kind`` mapea cada kind ACTIVO (claude_sdk/copilot/azure_foundry/ollama)
+    a sus modelos; un kind sin proveedor activo se omite. Sin secretos."""
+
+    model_config = _BASE_CONFIG
+
+    by_kind: dict[str, list[str]] = Field(default_factory=dict)
+    # ADR 0070: opciones de razonamiento por proveedor (off + niveles del provider).
+    # Solo para los proveedores activos (mismas keys que `by_kind`).
+    reasoning_by_kind: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class ProviderOption(BaseModel):
+    """Un proveedor LLM ACTIVO concreto (fila) seleccionable para el chat del
+    proyecto. Sin secretos (la credencial vive en Vault)."""
+
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    kind: str
+    display_name: str
+    slug: str | None = None
+    models: list[str] = Field(default_factory=list)
+    reasoning_options: list[str] = Field(default_factory=list)
+
+
+class AgentProviderOptionsResponse(BaseModel):
+    """Proveedores ACTIVOS concretos (por nombre) + sus modelos, para el selector
+    del «Modelo del chat» (Feature B): a diferencia de ``by_kind``, distingue filas
+    del mismo kind (p.ej. Ollama local vs Ollama cloud)."""
+
+    model_config = _BASE_CONFIG
+
+    providers: list[ProviderOption] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------------
@@ -152,6 +190,15 @@ class AgentForkRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Response
 # ---------------------------------------------------------------------------
+class AgentTeamRef(BaseModel):
+    """Equipo al que pertenece un agente (para badge/filtros/disable — ADR 0071)."""
+
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    name: str
+
+
 class AgentResponse(BaseModel):
     model_config = _BASE_CONFIG
 
@@ -165,6 +212,9 @@ class AgentResponse(BaseModel):
     system_prompt: str
     llm_config: dict[str, Any] = Field(alias="model_config")
     memory_scope: str
+    # ADR 0071: equipos a los que pertenece (vacío = sin equipo). Para el badge/
+    # filtros de la pantalla de Agentes y el disable del memory_scope por-agente.
+    teams: list[AgentTeamRef] = Field(default_factory=list)
     review_capability: bool
     max_concurrent_tasks: int
     is_template: bool
@@ -368,7 +418,7 @@ class AgentSkillResponse(BaseModel):
     is_builtin: bool
 
 
-def to_agent_response(a: Agent) -> AgentResponse:
+def to_agent_response(a: Agent, teams: list[tuple[UUID, str]] | None = None) -> AgentResponse:
     """ORM -> DTO with the `model_config` rename baked in.
 
     We go through `model_validate` with a dict because the field is
@@ -376,6 +426,9 @@ def to_agent_response(a: Agent) -> AgentResponse:
     Pydantic's mypy plugin doesn't expose the field-name kwarg on the
     constructor when an alias is present. The alias is what the API
     contract uses, so the dict key matches the wire format.
+
+    ``teams``: pertenencias del agente (id, nombre) — ADR 0071. El caller las
+    resuelve (en batch para el listado); ``None`` = sin dato (lista vacía).
     """
     payload: dict[str, Any] = {
         "id": a.id,
@@ -388,6 +441,7 @@ def to_agent_response(a: Agent) -> AgentResponse:
         "system_prompt": a.system_prompt,
         "model_config": a.model_config,
         "memory_scope": a.memory_scope,
+        "teams": [{"id": tid, "name": tname} for tid, tname in (teams or [])],
         "review_capability": a.review_capability,
         "max_concurrent_tasks": a.max_concurrent_tasks,
         "is_template": a.is_template,

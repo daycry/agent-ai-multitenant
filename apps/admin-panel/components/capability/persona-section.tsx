@@ -271,6 +271,41 @@ export function PersonaModelFields({
   const errorFor = (field: "provider" | "model" | "temperature") =>
     errors.find((e) => e.field === field)?.message ?? null;
 
+  // Modelos seleccionables por proveedor (catálogo cerrado, GET /agents/model-options).
+  // Si el proveedor elegido tiene modelos activos → dropdown; si no (proveedor sin
+  // backend activo o aún cargando) → input de texto, para no bloquear la edición.
+  const optionsQuery = useQuery({
+    queryKey: ["agent-model-options"],
+    queryFn: () =>
+      apiFetch<{
+        by_kind: Record<string, string[]>;
+        reasoning_by_kind?: Record<string, string[]>;
+      }>("/agents/model-options"),
+    refetchOnWindowFocus: false,
+    staleTime: 5 * 60_000,
+  });
+  const kindModels = optionsQuery.data?.by_kind?.[draft.provider] ?? [];
+  // Si el modelo actual no está en la lista (legacy/custom), lo anteponemos para no perderlo.
+  const modelOptions =
+    draft.model && !kindModels.includes(draft.model) ? [draft.model, ...kindModels] : kindModels;
+  // Opciones de razonamiento por proveedor (ADR 0070). Vacío → ocultar el selector
+  // (proveedor sin backend activo o aún cargando).
+  const reasoningOptions = optionsQuery.data?.reasoning_by_kind?.[draft.provider] ?? [];
+  // Si el valor guardado no está entre las opciones del proveedor (legacy/cruzado),
+  // lo anteponemos para que el select lo MUESTRE en vez de divergir en silencio.
+  const reasoningSelectable =
+    draft.reasoning_effort &&
+    draft.reasoning_effort !== "off" &&
+    !reasoningOptions.includes(draft.reasoning_effort)
+      ? [draft.reasoning_effort, ...reasoningOptions]
+      : reasoningOptions;
+  // claude_sdk no expone `temperature` (el SDK la ignora); el resto sí la envían.
+  const temperatureApplies = draft.provider !== "claude_sdk";
+  const reasoningLabel = (opt: string): string => {
+    if (opt === "off") return lang === "es" ? "Desactivado" : "Off";
+    return opt; // low / medium / high / xhigh / max
+  };
+
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid={`${idPrefix}-model-fields`}>
       <div className="flex flex-col gap-1.5">
@@ -279,7 +314,14 @@ export function PersonaModelFields({
           id={`${idPrefix}-provider`}
           value={draft.provider}
           onChange={(e) =>
-            onChange({ ...draft, provider: e.target.value as ModelConfigDraft["provider"] })
+            // Al cambiar de proveedor, reseteamos modelo y razonamiento: cada
+            // proveedor tiene sus opciones (ADR 0070); el usuario elige válidas.
+            onChange({
+              ...draft,
+              provider: e.target.value as ModelConfigDraft["provider"],
+              model: "",
+              reasoning_effort: "off",
+            })
           }
           data-testid={`${idPrefix}-provider`}
         >
@@ -301,13 +343,30 @@ export function PersonaModelFields({
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={`${idPrefix}-model`}>{lang === "es" ? "Modelo" : "Model"}</Label>
-        <Input
-          id={`${idPrefix}-model`}
-          value={draft.model}
-          onChange={(e) => onChange({ ...draft, model: e.target.value })}
-          placeholder="claude-sonnet-4"
-          data-testid={`${idPrefix}-model`}
-        />
+        {modelOptions.length > 0 ? (
+          <Select
+            id={`${idPrefix}-model`}
+            value={draft.model}
+            onChange={(e) => onChange({ ...draft, model: e.target.value })}
+            data-testid={`${idPrefix}-model`}
+          >
+            <option value="">{lang === "es" ? "— Selecciona —" : "— Select —"}</option>
+            {modelOptions.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </Select>
+        ) : (
+          // Fallback: proveedor sin modelos activos (o aún cargando) → texto libre.
+          <Input
+            id={`${idPrefix}-model`}
+            value={draft.model}
+            onChange={(e) => onChange({ ...draft, model: e.target.value })}
+            placeholder="claude-sonnet-4"
+            data-testid={`${idPrefix}-model`}
+          />
+        )}
         {errorFor("model") && (
           <p
             className="text-danger-soft-foreground text-xs"
@@ -330,9 +389,17 @@ export function PersonaModelFields({
           step={0.1}
           value={draft.temperature}
           onChange={(e) => onChange({ ...draft, temperature: Number(e.target.value) })}
+          disabled={!temperatureApplies}
           data-testid={`${idPrefix}-temperature`}
         />
-        {errorFor("temperature") && (
+        {!temperatureApplies && (
+          <p className="text-muted-foreground text-xs" data-testid={`${idPrefix}-temperature-na`}>
+            {lang === "es"
+              ? "No aplica a Claude (el SDK no la expone)"
+              : "Not applicable to Claude (the SDK does not expose it)"}
+          </p>
+        )}
+        {temperatureApplies && errorFor("temperature") && (
           <p
             className="text-danger-soft-foreground text-xs"
             data-testid={`${idPrefix}-temperature-error`}
@@ -341,6 +408,26 @@ export function PersonaModelFields({
           </p>
         )}
       </div>
+
+      {reasoningOptions.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`${idPrefix}-reasoning`}>
+            {lang === "es" ? "Razonamiento" : "Reasoning"}
+          </Label>
+          <Select
+            id={`${idPrefix}-reasoning`}
+            value={draft.reasoning_effort}
+            onChange={(e) => onChange({ ...draft, reasoning_effort: e.target.value })}
+            data-testid={`${idPrefix}-reasoning`}
+          >
+            {reasoningSelectable.map((opt) => (
+              <option key={opt} value={opt}>
+                {reasoningLabel(opt)}
+              </option>
+            ))}
+          </Select>
+        </div>
+      )}
     </div>
   );
 }

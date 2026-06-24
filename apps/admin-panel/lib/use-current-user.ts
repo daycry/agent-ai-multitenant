@@ -46,6 +46,9 @@ export interface CurrentUser {
   email: string | null;
   full_name: string | null;
   is_system_admin: boolean;
+  // System Owner — dueño del despliegue (córtex F0, ADR 0074). Opcional por compat
+  // con tokens/respuestas previos a F0.
+  is_system_owner?: boolean;
   memberships: MembershipSummary[];
   active_tenant_id: string | null;
 }
@@ -55,6 +58,7 @@ export interface UseCurrentUserResult {
   isLoading: boolean;
   isError: boolean;
   isSystemAdmin: boolean;
+  isSystemOwner: boolean;
   isTenantAdmin: boolean;
   isTenantMember: boolean;
   roleInActiveTenant: UserRole | null;
@@ -73,6 +77,7 @@ export function useCurrentUser(): UseCurrentUserResult {
 
   const user = data ?? null;
   const isSystemAdmin = user?.is_system_admin ?? false;
+  const isSystemOwner = user?.is_system_owner ?? false;
 
   // El tenant activo manda; si no hay tenant_id en /me (fresh login o
   // superadmin sin picker) consideramos que no hay rol "en este
@@ -90,6 +95,7 @@ export function useCurrentUser(): UseCurrentUserResult {
     isLoading,
     isError,
     isSystemAdmin,
+    isSystemOwner,
     isTenantAdmin,
     isTenantMember,
     roleInActiveTenant,

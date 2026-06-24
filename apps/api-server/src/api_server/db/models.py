@@ -45,6 +45,24 @@ from api_server.db.base import (
     UUIDPrimaryKeyMixin,
 )
 
+# Córtex F1 (ADR 0074): import the córtex models so they register on
+# ``Base.metadata``. The Alembic env imports this module, so this guarantees the
+# autogenerate metadata + the running app both see the tenant-less córtex tables
+# (re-exported in ``__all__``).
+from api_server.db.cortex import CortexConversation, CortexTurn
+
+# Córtex F2 (ADR 0075): import the affect-snapshot model so it registers on
+# ``Base.metadata`` (same reason as the F1 models above).
+from api_server.db.cortex_affect import CortexAffectSnapshot
+
+# Córtex F4 (ADR 0078): import the curiosity-pursuit model so it registers on
+# ``Base.metadata`` (same reason as the F1/F2/F3 models above).
+from api_server.db.cortex_curiosity import CortexCuriosityPursuit
+
+# Córtex F3 (ADR 0074/0077): import the identity models so they register on
+# ``Base.metadata`` (same reason as the F1/F2 models above).
+from api_server.db.cortex_identity import CortexIdentity, CortexIdentityHistory
+
 
 class UserRole(enum.StrEnum):
     """Per-membership role inside an organization.
@@ -56,6 +74,10 @@ class UserRole(enum.StrEnum):
     TENANT_ADMIN = "tenant_admin"
     TENANT_USER = "tenant_user"
     SYSTEM_OPERATOR = "system_operator"
+    # Aprobador de planes (ADR 0079, Opción A): puede firmar/aprobar planes del
+    # tenant SIN ser tenant_admin (segregación de funciones). Permiso acotado a la
+    # aprobación de planes; no concede administración del tenant.
+    PLAN_APPROVER = "plan_approver"
 
 
 class AuditAction(enum.StrEnum):
@@ -209,11 +231,28 @@ class Organization(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
 # ---------------------------------------------------------------------------
 class User(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "users"
+    __table_args__ = (
+        # System Owner is a SINGLETON (ADR 0074, córtex F0): at most one user can
+        # be the owner of the deployment. A partial UNIQUE index enforces it at the
+        # DB so a race can't mint two owners.
+        Index(
+            "uq_users_system_owner",
+            "is_system_owner",
+            unique=True,
+            postgresql_where=text("is_system_owner"),
+        ),
+    )
 
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_system_admin: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    # System Owner — el dueño del despliegue (ADR 0074), distinto de is_system_admin.
+    # Cimiento (F0) del Córtex; las fases F1+ (memoria cognitiva, afecto, etc.) están
+    # gated. Booleano global con UNIQUE parcial (singleton) en __table_args__.
+    is_system_owner: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
@@ -1087,6 +1126,12 @@ __all__ = [
     "ApiTokenScope",
     "AuditAction",
     "AuditLog",
+    "CortexAffectSnapshot",
+    "CortexConversation",
+    "CortexCuriosityPursuit",
+    "CortexIdentity",
+    "CortexIdentityHistory",
+    "CortexTurn",
     "IncomingWebhookConfig",
     "IncomingWebhookEvent",
     "Organization",

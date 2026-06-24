@@ -115,7 +115,7 @@ Ver **ADR 0047** para el diseño completo. Resumen de lo que entra:
       tests de aislamiento per-tenant y de SP-metadata per-tenant se ELIMINAN — SP-metadata es global zero-arg).
       `test_saml.py` pasa a las rutas globales (`/auth/sso/{provider_id}/saml/login` + `POST /auth/sso/saml/acs`, seed
       global); la sesión emitida es de **identidad sin tenant** (assert `active_tenant_id is None` + `memberships ==
-  []`); los cross-tenant se sustituyen por **RelayState ligado a su provider** (un RelayState capturado no se puede
+[]`); los cross-tenant se sustituyen por **RelayState ligado a su provider** (un RelayState capturado no se puede
       dirigir a otro provider). `test_saml_crypto.py` mantiene los tests de cripto reescritos al config global y
       reemplaza el `test_sp_signing_config_isolated_per_tenant` por un único test de SP-signing global.
       `test_jit_provisioning.py` se reescribe al **aprovisionamiento de identidad global** (usuario creado con hash

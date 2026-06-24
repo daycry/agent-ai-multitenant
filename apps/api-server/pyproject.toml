@@ -62,6 +62,15 @@ dependencies = [
   # Cache / session store / rate limit
   "redis[hiredis]>=5.0,<6",
 
+  # Celery PRODUCER side: the api-server enqueues tasks (human_inbox approvals,
+  # notifications, …) onto the broker via `api_server.celery_client`. It does
+  # NOT run workers, but it imports `celery` at module load, so the package must
+  # ship in the api-server image — otherwise it crash-loops on boot with
+  # "ModuleNotFoundError: No module named 'celery'" (prod-01: the dev .venv hid
+  # this because the workers package pulled celery in transitively). Same
+  # constraint as apps/workers so producer + consumer stay protocol-compatible.
+  "celery[redis]>=5.4,<6",
+
   # UUID v7 (built-in in PG17+; we keep generating client-side for now)
   "uuid6>=2024.1",
 

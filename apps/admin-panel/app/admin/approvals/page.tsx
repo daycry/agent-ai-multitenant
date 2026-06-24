@@ -18,7 +18,7 @@ import { StateBlock } from "@/components/shared/state-block";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { ApiError, apiFetch } from "@/lib/api";
 
 interface ApprovalRequest {
@@ -120,16 +120,12 @@ function ApprovalCard({ request }: { request: ApprovalRequest }) {
           {JSON.stringify(request.action, null, 2)}
         </pre>
 
-        <textarea
+        <MarkdownTextarea
           data-testid={`reason-${request.id}`}
           value={reason}
-          onChange={(e) => setReason(e.target.value)}
+          onChange={setReason}
           placeholder="Motivo (opcional)"
           rows={2}
-          className={cn(
-            "border-input bg-background w-full rounded-md border px-3 py-2 text-sm",
-            "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
-          )}
         />
 
         {error && (

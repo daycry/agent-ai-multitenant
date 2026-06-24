@@ -45,6 +45,7 @@ async def _truncate_users(dsn: str) -> None:
 def configured_app(
     alembic_config,
     app_database_url: str,
+    admin_database_url: str,
     test_redis_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -58,6 +59,13 @@ def configured_app(
     asyncio.run(_flush_redis(test_redis_url))
 
     monkeypatch.setenv("API_SERVER_DATABASE_URL", app_database_url)
+    # The local-login MFA probe (user_mfa_methods) runs on the ADMIN engine
+    # (BYPASSRLS, no tenant context yet). Without this override the admin engine
+    # falls back to the default DSN — locally that happens to be the migrated
+    # dev DB (so it passed by accident), but in CI it points at an unmigrated DB
+    # and the probe fails with `relation "user_mfa_totp" does not exist`. Point
+    # it at the throwaway test DB, exactly like tests/integration/conftest.py.
+    monkeypatch.setenv("API_SERVER_ADMIN_DATABASE_URL", admin_database_url)
     monkeypatch.setenv("API_SERVER_REDIS_URL", test_redis_url)
     monkeypatch.setenv("API_SERVER_JWT_SECRET", "test-secret")
     # Force a tiny rate-limit window so test_rate_limit doesn't have

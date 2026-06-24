@@ -511,7 +511,7 @@ async def diff_eval_runs(
         )
     except DatasetMismatchError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
     return _diff_to_response(
@@ -602,7 +602,7 @@ async def promote_task_to_dataset(
     # the caller deliberately opts in.
     if task.status != TaskStatus.DONE.value and not payload.allow_unapproved:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "task is not approved (status != 'done'); "
                 "set allow_unapproved=true to promote anyway"

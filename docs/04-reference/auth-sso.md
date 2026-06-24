@@ -168,7 +168,8 @@ por provider (si es `null`, la UI usa un default derivado del `kind`).
   el provider es la única config SAML global habilitada). Un assertion
   forjado/expirado → 400. Acuña una sesión de identidad sin tenant.
 - **`/sp-metadata`** devuelve el SP EntityID + la **ACS URL global** a
-  registrar en el IdP, derivados de `sso_redirect_base_url`.
+  registrar en el IdP, derivados del **origen público + prefijo de API**
+  (`{origen}{prefijo}/auth/sso/saml/...`, ADR 0069).
 - **`/parse-metadata`** parsea metadata XML del IdP (lxml endurecido
   anti-XXE) para pre-rellenar el formulario; no necesita `xmlsec`.
 - **CRUD `/saml/config`**: una config SAML **para toda la plataforma**. La
@@ -334,12 +335,20 @@ mapeo grupo→rol per-tenant. Un grupo **nunca** otorga un rol de plataforma.
 | `API_SERVER_WEBAUTHN_ORIGIN`                | `http://localhost:3000`  |
 | `API_SERVER_WEBAUTHN_CHALLENGE_TTL_SECONDS` | `300`                    |
 
-> **`sso_redirect_base_url` (ADR 0047 §6).** De este valor se derivan la
-> callback OIDC, la **ACS SAML global** y el SP entityID que el operador
-> registra en el IdP. El default `http://localhost:8000` es un placeholder
-> que **no** coincide con el api-server de dev (`:8001`): el operador debe
-> fijarlo según su despliegue. La modal de config SSO muestra estas URLs de
-> forma informativa (con copiar) y avisa si sigue en el default.
+> **Origen público + prefijo de API (ADR 0047 §6 / ADR 0069).** La callback
+> OIDC, la **ACS SAML global** y el SP EntityID se construyen como
+> `{origen}{prefijo}/auth/sso/...` a partir de DOS valores, ambos editables en
+> caliente (System Admin) con bootstrap por env:
+>
+> - **Origen** `app.public_base_url` / `API_SERVER_SSO_REDIRECT_BASE_URL` — el
+>   `scheme://host[:port]` público, sin path.
+> - **Prefijo** `app.api_path_prefix` / `API_SERVER_API_PATH_PREFIX` — `/api`
+>   bajo el reverse proxy single-origin (ADR 0061), o vacío si el API cuelga de
+>   la raíz. Endpoints `GET`/`PUT /auth/sso/api-path-prefix` (System Admin).
+>
+> El default del origen (`localhost`) es un placeholder; la modal de config SSO
+> muestra las URLs efectivas (con copiar) y avisa si sigue en el default. Guía
+> de despliegue bajo dominio propio: `06-runbooks/07-custom-domain.md`.
 
 ## Tests que pinean estos endpoints
 

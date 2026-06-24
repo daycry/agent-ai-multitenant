@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Activity,
   BarChart3,
   Bell,
   BellRing,
@@ -43,7 +44,7 @@ import { GlobalProgress } from "@/components/layout/global-progress";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/use-current-user";
 
-interface NavItem {
+export interface NavItem {
   href: string;
   label: string;
   Icon: typeof LayoutDashboard;
@@ -51,9 +52,11 @@ interface NavItem {
   adminOnly?: boolean;
   /** Si `systemAdminOnly`, sólo se muestra al System Admin global. */
   systemAdminOnly?: boolean;
+  /** Si `systemOwnerOnly`, sólo se muestra al System Owner (córtex F1, ADR 0074). */
+  systemOwnerOnly?: boolean;
 }
 
-interface NavGroup {
+export interface NavGroup {
   /** Identificador estable: clave de localStorage + `data-testid`. */
   id: string;
   label: string;
@@ -62,6 +65,49 @@ interface NavGroup {
   /** Ámbito del grupo entero (RBAC + ADR 0028). */
   adminOnly?: boolean;
   systemAdminOnly?: boolean;
+  /** Ámbito de grupo reservado al System Owner (córtex F1). */
+  systemOwnerOnly?: boolean;
+}
+
+/** Predicados de rol que deciden la visibilidad de un ítem/grupo del NAV. */
+export interface NavScope {
+  isTenantAdmin: boolean;
+  isSystemAdmin: boolean;
+  isSystemOwner: boolean;
+}
+
+/**
+ * ¿Visible este ítem para el rol actual? Lógica pura, factorizada fuera del
+ * componente para poder testearla sin renderizar React (vitest env `node`).
+ * El gating más restrictivo manda; el backend sigue siendo la barrera real.
+ */
+export function navItemVisible(item: NavItem, scope: NavScope): boolean {
+  if (item.systemOwnerOnly) return scope.isSystemOwner;
+  if (item.systemAdminOnly) return scope.isSystemAdmin;
+  if (item.adminOnly) return scope.isTenantAdmin;
+  return true;
+}
+
+/** ¿Visible este grupo (por su propio ámbito) para el rol actual? */
+export function navGroupVisible(group: NavGroup, scope: NavScope): boolean {
+  if (group.systemOwnerOnly) return scope.isSystemOwner;
+  if (group.systemAdminOnly) return scope.isSystemAdmin;
+  if (group.adminOnly) return scope.isTenantAdmin;
+  return true;
+}
+
+/**
+ * Grupos visibles según el rol, con sus ítems ya filtrados por gating de ítem
+ * y descartando los grupos que se quedan sin ítems. Pura → testeable.
+ */
+export function visibleNavGroups(groups: NavGroup[], scope: NavScope): NavGroup[] {
+  return groups
+    .filter((group) => navGroupVisible(group, scope))
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => navItemVisible(item, scope)),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 /**
@@ -75,7 +121,7 @@ interface NavGroup {
  * Las rutas (`href`) y los `data-testid` derivados (`nav-${último-segmento}`)
  * NO cambian: los e2e dependen de ellos.
  */
-const NAV_GROUPS: NavGroup[] = [
+export const NAV_GROUPS: NavGroup[] = [
   {
     id: "trabajo",
     label: "Trabajo",
@@ -173,6 +219,32 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    // Córtex del System Owner (F1, ADR 0074). Grupo separado y reservado al
+    // dueño del despliegue — el backend (require_system_owner, DB-authoritative)
+    // sigue siendo la barrera real; esto es solo UX.
+    id: "cortex",
+    label: "Córtex",
+    Icon: Brain,
+    systemOwnerOnly: true,
+    items: [
+      { href: "/admin/cortex", label: "Córtex", Icon: Brain, systemOwnerOnly: true },
+      // Panel de Mente (Córtex F2, ADR 0075): estado afectivo del córtex en vivo.
+      {
+        href: "/admin/cortex/mind",
+        label: "Panel de Mente",
+        Icon: Activity,
+        systemOwnerOnly: true,
+      },
+      // Identidad evolutiva (Córtex F3, ADR 0074/0077): onboarding co-diseñado.
+      {
+        href: "/admin/cortex/identity",
+        label: "Identidad",
+        Icon: Sparkles,
+        systemOwnerOnly: true,
+      },
+    ],
+  },
+  {
     id: "ayuda",
     label: "Ayuda",
     Icon: HelpCircle,
@@ -230,9 +302,16 @@ export function AdminShell({ children }: { children: ReactNode }) {
       )}
 
       {/* ============================= Main column ============================= */}
-      <div className="flex flex-1 flex-col md:pl-64">
+      {/* `min-w-0`: un flex item arranca con `min-width:auto`, así que NO se encoge
+          por debajo del min-content de su contenido. Sin esto, en cuanto una página
+          tiene un descendiente ancho (una tabla, un grid…) la columna crece más que
+          el viewport y aparece scroll horizontal de PÁGINA. Con min-w-0 la columna
+          se ajusta al viewport y los contenedores overflow-x-auto de dentro hacen su
+          propio scroll. Va en el shell (denominador común) para que valga en TODAS
+          las páginas, no parcheando cada una. */}
+      <div className="flex min-w-0 flex-1 flex-col md:pl-64">
         <AdminHeader onOpenMobileNav={() => setMobileOpen(true)} />
-        <main className="animate-fade-in flex-1">{children}</main>
+        <main className="animate-fade-in min-w-0 flex-1">{children}</main>
       </div>
     </div>
   );
@@ -250,24 +329,16 @@ function SidebarContent({
   onClose?: () => void;
 }) {
   // Plan 06.8 task_06_8_08: ocultar items admin-only para tenant_user.
+  // Córtex F1 (ADR 0074): grupo systemOwnerOnly visible solo al System Owner.
   // El check del backend sigue siendo la fuente de verdad — esto es UX.
-  const { isTenantAdmin, isSystemAdmin } = useCurrentUser();
-
-  const itemVisible = (item: NavItem) => {
-    if (item.systemAdminOnly) return isSystemAdmin;
-    if (item.adminOnly) return isTenantAdmin;
-    return true;
-  };
-  const groupVisible = (group: NavGroup) => {
-    if (group.systemAdminOnly) return isSystemAdmin;
-    if (group.adminOnly) return isTenantAdmin;
-    return true;
-  };
+  const { isTenantAdmin, isSystemAdmin, isSystemOwner } = useCurrentUser();
 
   // Grupos visibles por ámbito, con sus ítems ya filtrados por gating de ítem.
-  const visibleGroups = NAV_GROUPS.filter(groupVisible)
-    .map((group) => ({ ...group, items: group.items.filter(itemVisible) }))
-    .filter((group) => group.items.length > 0);
+  const visibleGroups = visibleNavGroups(NAV_GROUPS, {
+    isTenantAdmin,
+    isSystemAdmin,
+    isSystemOwner,
+  });
 
   return (
     <>

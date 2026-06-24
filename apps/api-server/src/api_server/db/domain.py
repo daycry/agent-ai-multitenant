@@ -332,6 +332,8 @@ class ExecutionStatus(enum.StrEnum):
     FAILED = "failed"
     # Paused mid-run waiting on a human_approval_policy decision (Fase F).
     AWAITING_HUMAN_APPROVAL = "awaiting_human_approval"
+    # Stopped by an explicit operator cancel request (POST /executions/{id}/cancel).
+    CANCELLED = "cancelled"
 
 
 class DocumentStatus(enum.StrEnum):
@@ -643,6 +645,7 @@ class Team(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
             "is_builtin",
             postgresql_where=text("is_builtin = true"),
         ),
+        Index("ix_teams_forked_from", "forked_from_team_id"),
     )
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -658,6 +661,34 @@ class Team(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     # migración 0082 dropea la columna (reversible).
     # Catalog marker -- same pattern as Skill/Tool.is_builtin.
     is_builtin: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+    # Default de modelo del EQUIPO (Ola A / ADR 0055): un nivel de la cadena de
+    # herencia plataforma → proyecto → equipo → agente. JSONB ``{}`` = no fija
+    # modelo (los agentes del equipo heredan del proyecto/plataforma). Cuando
+    # pinea provider+model, sus agentes sin modelo propio lo usan.
+    model_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # Modelo del CHAT del proyecto, separado del de ejecución (`model_config`). El
+    # chat de planificación es interactivo: puede convenir un modelo más rápido/ligero
+    # que el (potente pero lento) que los agentes usan para ejecutar tareas reales.
+    # JSONB ``{}`` = el chat hereda el `model_config` de ejecución (cadena ADR 0065).
+    chat_model_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # Política de memoria del EQUIPO (ADR 0071). NULLABLE: NULL = el equipo no fija
+    # política y sus miembros caen al memory_scope del agente / default plataforma.
+    # Cuando se fija, gobierna la memoria de las ejecuciones de los proyectos de
+    # este equipo (resuelto por project.team_id). Mismo enum que Agent.memory_scope.
+    memory_scope: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Adopción de equipos built-in (Ola C / ADR 0066): espejo de los campos
+    # forked_from de Agent. Un equipo adoptado enlaza al built-in origen para
+    # diff/re-sync; NULL en equipos creados desde cero o built-in de plataforma.
+    forked_from_team_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("teams.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    forked_from_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 # =============================================================================
@@ -746,7 +777,24 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     worker_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+    # Default de modelo del PROYECTO (Ola A / ADR 0055): nivel de la cadena de
+    # herencia plataforma → proyecto → equipo → agente. JSONB ``{}`` = no fija
+    # modelo. Distinto de ``worker_config`` (assignment_policy, etc.).
+    model_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # Modelo del CHAT del proyecto, separado del de ejecución (`model_config`). El
+    # chat de planificación es interactivo: conviene un modelo más rápido/ligero que
+    # el que los agentes usan para ejecutar tareas. JSONB ``{}`` = el chat hereda el
+    # `model_config` de ejecución (cadena ADR 0065). Gana sobre el de equipo.
+    chat_model_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     repository_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Config git tipada del proyecto (ADR 0072): {provider, remote_url,
+    # default_branch, auth_mode}. NULL = sin remoto (solo bare local). El SECRETO
+    # (PAT/clave SSH) NO va aquí — vive en Vault (projects/{id}/git).
+    git_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     human_approval_policy: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     # Plan 06.16 task_06_16_01: polyglot tool catalog. `allowed_commands`
@@ -1071,6 +1119,17 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
 
     started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    # Cooperative cancellation (auditoría / task_prod06_cancel_01). The operator's
+    # POST /executions/{id}/cancel stamps `cancel_requested_at`; the worker polls it
+    # to kill the container and finalises the row as `cancelled`. `celery_task_id` is
+    # stamped by the worker when it picks the job up, so the cancel endpoint can
+    # `revoke(terminate=True)` the still-queued/running task. Both nullable: a run
+    # that was never cancelled (or predates this column) simply leaves them NULL.
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    celery_task_id: Mapped[str | None] = mapped_column(String(155), nullable=True)
 
     # --- per-call price snapshot (Plan 11 Fase C, task_11_13) --------------
     # The catalog price that was IN EFFECT when this run's model calls were

@@ -1,0 +1,300 @@
+# =============================================================================
+# Dev-only overlay: MANUALS containerized stack.
+#
+# Containerizes the APP tier (api-server + admin-panel + Caddy reverse proxy,
+# plus orchestrator + workers for real task execution) ON TOP of the running dev
+# infra (docker/docker-compose.yml + .dev.yml), so the user manuals can capture
+# the REAL production-like stack reached through Caddy on a single origin
+# (http://localhost:8080). This is NOT the production path — prod uses the
+# installer-generated compose (apps/installer). It reuses the dev infra service
+# names + dev-only credentials.
+#
+# Usage (same project name → joins the running networks):
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
+#                  -f docker/docker-compose.manuals.yml up -d \
+#                  api-server admin-panel caddy
+# =============================================================================
+services:
+  # ---------------------------------------------------------------------------
+  # api-server — reached internally as api-server:8000 (Caddy publishes it under
+  # /api). Minimal env: the same DB/Redis/JWT wiring the proven dev runner uses
+  # (scripts/dev/generate-manuals.ps1); the rest of the settings keep their
+  # dev-friendly defaults.
+  # ---------------------------------------------------------------------------
+  api-server:
+    image: agentic-platform/api-server:manuals
+    environment:
+      API_SERVER_DATABASE_URL: postgresql+asyncpg://app_user:changeme-app-dev-only@postgres:5432/agentic_platform
+      API_SERVER_ADMIN_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      API_SERVER_REDIS_URL: redis://redis:6379/0
+      API_SERVER_BROKER_URL: redis://redis:6379/1
+      API_SERVER_RESULT_BACKEND: redis://redis:6379/2
+      API_SERVER_JWT_SECRET: dev-only-jwt-secret-change-me
+      # High limit so the Playwright manual capture is never rate-limited.
+      API_SERVER_LOGIN_RATE_LIMIT_COUNT: "1000"
+      API_SERVER_LOGIN_RATE_LIMIT_WINDOW_SECONDS: "60"
+      API_SERVER_MINIO_URL: http://minio:9000
+      API_SERVER_MINIO_ACCESS_KEY: minioadmin
+      API_SERVER_MINIO_SECRET_KEY: changeme-dev-only
+      # In-network URLs so the dashboard "Salud de servicios" probes all reach
+      # the running infra by service name (otherwise they default to localhost
+      # and report down inside the container).
+      API_SERVER_VAULT_URL: http://vault:8200
+      # Dev-only: token del Vault en modo -dev (docker-compose.dev.yml lo arranca
+      # con `-dev-root-token-id=dev-root-token`). NO es un secreto real (ya está
+      # en el overlay dev). Permite que el stack de manuales gestione proveedores
+      # LLM (escribe el secreto en el mount KV `secret`). Se puede sobrescribir
+      # con el env del host. OJO: NO usar el token de `vault-init-output/` — es
+      # de una instancia de Vault distinta (prod) y el Vault dev lo rechaza (502).
+      API_SERVER_VAULT_TOKEN: ${API_SERVER_VAULT_TOKEN:-dev-root-token}
+      API_SERVER_DOCLING_SERVE_URL: http://docling-serve:5001
+      API_SERVER_OLLAMA_URL: http://ollama:11434
+      # Modo voz (ADR 0073): STT/TTS internos. Sin depends_on duro — descargan el
+      # modelo al 1er arranque; el WS de voz es best-effort si aún no están listos.
+      API_SERVER_ASSISTANT_STT_URL: http://stt:8000
+      API_SERVER_ASSISTANT_TTS_URL: http://tts:8880
+      API_SERVER_CLAMAV_HOST: clamav
+      API_SERVER_CLAMAV_PORT: "3310"
+      API_SERVER_EGRESS_PROXY_HOST: egress-proxy
+      API_SERVER_EGRESS_PROXY_PORT: "8888"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    # The python:3.12-slim runtime has NO wget/curl, so the api-server healthcheck
+    # must use python (the generated compose's wget-based check is broken the same
+    # way — a prod-01 fix tracked in compose_generator).
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz',timeout=5).status==200 else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [agentic-net, agentic-agents]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # admin-panel — Next.js SPA built with NEXT_PUBLIC_API_URL=/api (single-origin
+  # behind Caddy). Image must be built with that build-arg (see manuals runner).
+  # ---------------------------------------------------------------------------
+  admin-panel:
+    image: agentic-platform/admin-panel:manuals
+    environment:
+      NODE_ENV: production
+      PLATFORM_DOMAIN: localhost
+    depends_on:
+      api-server: { condition: service_healthy }
+    networks: [agentic-net]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # caddy — single-origin reverse proxy. The ONLY published port (8080).
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2.8-alpine
+    ports: ["8080:8080"]
+    volumes:
+      - ./caddy-manuals/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      api-server: { condition: service_healthy }
+      admin-panel: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [agentic-net]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # docker-socket-proxy — pasarela de API Docker de mínimo privilegio (ADR 0060).
+  # Los workers lanzan los runtimes efímeros a través de ESTO (DOCKER_HOST=
+  # tcp://docker-socket-proxy:2375), nunca con el socket crudo. Red dedicada
+  # agentic-docker (solo workers ↔ proxy).
+  # ---------------------------------------------------------------------------
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    environment:
+      CONTAINERS: "1"
+      IMAGES: "1"
+      NETWORKS: "1"
+      POST: "1"
+      EXEC: "0"
+      VOLUMES: "0"
+      SWARM: "0"
+      SECRETS: "0"
+      CONFIGS: "0"
+      NODES: "0"
+      SERVICES: "0"
+      TASKS: "0"
+      SYSTEM: "0"
+      INFO: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [agentic-docker]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # orchestrator — asigna tareas listas a los workers (Celery). HTTP /healthz :8002.
+  # ---------------------------------------------------------------------------
+  orchestrator:
+    image: agentic-platform/orchestrator:manuals
+    environment:
+      ORCHESTRATOR_ENVIRONMENT: dev
+      ORCHESTRATOR_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      ORCHESTRATOR_REDIS_URL: redis://redis:6379/0
+      ORCHESTRATOR_BROKER_URL: redis://redis:6379/1
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8002/healthz',timeout=5).status==200 else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [agentic-net]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # workers — pool Celery que ejecuta tareas lanzando agent-runtime efímeros.
+  # DOCKER_HOST → docker-socket-proxy; agent-runtime:v1 (default); JWT igual que
+  # el api-server (token interno del agente). Tres redes (agentic-net + -agents
+  # + -docker).
+  # ---------------------------------------------------------------------------
+  workers:
+    image: agentic-platform/workers:ci
+    command:
+      [
+        "celery",
+        "-A",
+        "workers.celery_app",
+        "worker",
+        "--queues=default,heavy,gpu,ingestion,test,review",
+        "--concurrency=2",
+        "--loglevel=info",
+      ]
+    environment:
+      WORKERS_ENVIRONMENT: dev
+      WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      WORKERS_BROKER_URL: redis://redis:6379/1
+      WORKERS_RESULT_BACKEND: redis://redis:6379/2
+      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/3
+      WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
+      WORKERS_AGENT_INTERNAL_API_URL: http://api-server:8000
+      WORKERS_AGENT_RUNTIME_IMAGE: agent-runtime:v1
+      WORKERS_DATA_ROOT: /data/agent-platform
+      WORKERS_EGRESS_PROXY_URL: http://egress-proxy:8888
+      # ADR 0072: el worker resuelve la credencial git del proyecto desde Vault
+      # (mismo Vault dev que el api-server) al clonar/fetch repos privados.
+      WORKERS_VAULT_URL: http://vault:8200
+      WORKERS_VAULT_TOKEN: ${API_SERVER_VAULT_TOKEN:-dev-root-token}
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+    volumes:
+      - agentic_worktrees:/data/agent-platform
+      - ./seccomp:/etc/agentic/seccomp:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      docker-socket-proxy: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -t 5 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks: [agentic-net, agentic-agents, agentic-docker]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # cortex-beat — Celery beat: agenda los bucles de fondo del córtex (F4):
+  # reflexión / curiosidad / mantenimiento (beat_schedule en workers.celery_app).
+  # SOLO encola por horario; el trabajo lo hace el pool `workers`. Tickea siempre,
+  # pero con el kill-switch `cortex.autonomy_enabled` OFF (default) las tareas salen
+  # no-op → seguro tenerlo levantado. Activar F4 = encender el switch (UI owner).
+  # ---------------------------------------------------------------------------
+  cortex-beat:
+    image: agentic-platform/workers:ci
+    command: ["celery", "-A", "workers.celery_app", "beat", "--loglevel=info"]
+    environment:
+      WORKERS_ENVIRONMENT: dev
+      WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      WORKERS_BROKER_URL: redis://redis:6379/1
+      WORKERS_RESULT_BACKEND: redis://redis:6379/2
+      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/3
+      WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
+    depends_on:
+      redis: { condition: service_healthy }
+    networks: [agentic-net]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # vault — PERSISTENTE (Camino B): deshace el `-dev` de docker-compose.dev.yml
+  # y usa el backend de FICHERO del base (config.hcl sobre el volumen vault_data),
+  # así los secretos SOBREVIVEN a reinicios. El `vault-unsealer` de abajo lo
+  # inicializa/des-sella solo. (El env VAULT_DEV_* del overlay dev es inocuo en
+  # modo server; solo el `command` decide el modo.)
+  # ---------------------------------------------------------------------------
+  vault:
+    command: ["server"]
+    # No tocamos `volumes` (el merge con el `!reset` de dev.yml es problemático y
+    # tira el bind-mount). En su lugar inyectamos la config de servidor (backend de
+    # FICHERO sobre el volumen vault_data) por VAULT_LOCAL_CONFIG: el entrypoint del
+    # contenedor la escribe en /vault/config/ y `vault server` la carga. Equivale a
+    # docker/vault/config.hcl pero sin pelearse con el override de volúmenes.
+    environment:
+      VAULT_LOCAL_CONFIG: >-
+        {"storage":{"file":{"path":"/vault/file"}},
+        "listener":{"tcp":{"address":"0.0.0.0:8200","tls_disable":true}},
+        "api_addr":"http://0.0.0.0:8200","cluster_addr":"http://0.0.0.0:8201",
+        "ui":true,"disable_mlock":false}
+
+  # ---------------------------------------------------------------------------
+  # vault-unsealer — compañero que auto-inicializa + des-sella Vault en cada
+  # arranque (sobrevive reinicios sin pasos manuales) y crea un token FIJO con el
+  # id que las apps ya usan (dev-root-token), para no tocar su env. Usa solo el
+  # CLI de vault contra http://vault:8200 (no arranca servidor). Las unseal keys
+  # viven en el volumen vault_init (trade-off dev consciente — ver gotcha).
+  # ---------------------------------------------------------------------------
+  vault-unsealer:
+    image: hashicorp/vault:1.17
+    entrypoint: ["sh", "/vault/auto-unseal.sh"]
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_FIXED_TOKEN: ${API_SERVER_VAULT_TOKEN:-dev-root-token}
+    volumes:
+      - ./vault/auto-unseal.sh:/vault/auto-unseal.sh:ro
+      - vault_init:/vault/init
+    depends_on:
+      vault: { condition: service_started }
+    networks: [agentic-net]
+    restart: unless-stopped
+
+volumes:
+  agentic_worktrees:
+    name: agentic_worktrees
+  # Unseal keys + root token del Vault persistente (Camino B). Volumen docker,
+  # NO en el repo. Borrarlo obliga a re-inicializar Vault (perderías los secretos).
+  vault_init:
+    name: agentic_vault_init
+
+networks:
+  # Red interna dedicada SOLO al tráfico workers ↔ docker-socket-proxy (ADR 0060).
+  # En el compose generado de prod vive en docker-compose.yml; aquí (dev) la
+  # declara el overlay de manuales.
+  agentic-docker:
+    name: agentic-docker
+    driver: bridge
+    internal: true

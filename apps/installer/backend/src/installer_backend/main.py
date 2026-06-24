@@ -257,11 +257,17 @@ def get_prereq_checker() -> PrereqChecker:
 
 
 def get_step_executor() -> StepExecutor:
-    """The install :class:`StepExecutor` seam.
+    """The install :class:`StepExecutor` seam for the HTTP wizard.
 
-    Defaults to the in-memory :class:`FakeStepExecutor` so the app serves on a
-    host with no Docker. Tests override this to script success/failure; Phase B
-    swaps in the real host binding that shells out to ``docker compose`` etc.
+    ⚠️ The wizard (``POST /api/install/stream``) still defaults to the in-memory
+    :class:`FakeStepExecutor` — it is a **SIMULATION**, it does NOT provision a
+    real stack, and the credentials it reveals are NOT real. The REAL install
+    path is the CLI (``scripts/install.sh`` → :func:`cli.run_install`), which
+    wires the real bindings by default and fails loud on a simulation seam
+    (Plan prod-01 task_19). Wiring the real executor into the wizard (per-request
+    ``compose_dir``/``cfg``/``secrets`` plumbing + a simulation guard on the
+    reveal) is a documented follow-up owned by the installer UI (prod-09). Tests
+    override this to script success/failure.
     """
 
     return _default_step_executor

@@ -15,6 +15,9 @@ mypy>=1.10,<2
 # Test runner.
 pytest>=8.2,<9
 pytest-asyncio>=0.23,<1
+# Per-test timeout — used by the heavy e2e install suite (prod-01 task_20):
+# `pytest tests/e2e/... --timeout=1800`. Required for that CLI flag to parse.
+pytest-timeout>=2.3,<3
 
 # YAML / TOML helpers used by tooling and CI checks.
 pyyaml>=6.0,<7

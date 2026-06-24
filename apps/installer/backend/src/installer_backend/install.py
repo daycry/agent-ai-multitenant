@@ -18,8 +18,10 @@ the earlier ones succeeded):
                           real generators; here it's a seamed executor step).
     2. pull_images      — docker compose pull.
     3. start_stack      — docker compose up -d + wait for health.
-    4. bootstrap_vault  — vault operator init + unseal + KV v2 + policies.
-    5. seed_tenant      — create the initial tenant + admin user.
+    4. run_migrations   — alembic upgrade head via the one-shot `migrations`
+                          service (so the schema exists before seeding).
+    5. bootstrap_vault  — vault operator init + unseal + KV v2 + policies.
+    6. seed_tenant      — create the initial tenant + admin user.
 
 Step state machine
 ------------------
@@ -77,16 +79,20 @@ class InstallStep(str, Enum):
     GENERATE_CONFIG = "generate_config"
     PULL_IMAGES = "pull_images"
     START_STACK = "start_stack"
+    RUN_MIGRATIONS = "run_migrations"
     BOOTSTRAP_VAULT = "bootstrap_vault"
     SEED_TENANT = "seed_tenant"
 
 
 #: Canonical execution order. The tuple IS the source of truth for the
-#: pipeline; the enum only names the steps. Keep these in sync.
+#: pipeline; the enum only names the steps. Keep these in sync. RUN_MIGRATIONS
+#: sits after START_STACK (postgres is up) and before SEED_TENANT (which needs
+#: the schema) — Plan prod-01 task_12, finding deploy-6.
 INSTALL_STEP_ORDER: tuple[InstallStep, ...] = (
     InstallStep.GENERATE_CONFIG,
     InstallStep.PULL_IMAGES,
     InstallStep.START_STACK,
+    InstallStep.RUN_MIGRATIONS,
     InstallStep.BOOTSTRAP_VAULT,
     InstallStep.SEED_TENANT,
 )
@@ -97,6 +103,7 @@ INSTALL_STEP_TITLES_ES: dict[InstallStep, str] = {
     InstallStep.GENERATE_CONFIG: "Generar configuración",
     InstallStep.PULL_IMAGES: "Descargar imágenes",
     InstallStep.START_STACK: "Arrancar el stack",
+    InstallStep.RUN_MIGRATIONS: "Aplicar migraciones",
     InstallStep.BOOTSTRAP_VAULT: "Inicializar Vault",
     InstallStep.SEED_TENANT: "Crear tenant inicial",
 }
@@ -105,6 +112,7 @@ INSTALL_STEP_TITLES_EN: dict[InstallStep, str] = {
     InstallStep.GENERATE_CONFIG: "Generate configuration",
     InstallStep.PULL_IMAGES: "Pull images",
     InstallStep.START_STACK: "Start the stack",
+    InstallStep.RUN_MIGRATIONS: "Run migrations",
     InstallStep.BOOTSTRAP_VAULT: "Bootstrap Vault",
     InstallStep.SEED_TENANT: "Seed initial tenant",
 }

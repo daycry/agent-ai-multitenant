@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from uuid import UUID
 
+import structlog
 from fastapi import Depends, Header, HTTPException, Request, status
 from redis.asyncio import Redis
 from sqlalchemy import select, text
@@ -31,7 +32,7 @@ from api_server.auth.mfa.webauthn_challenge_store import WebauthnChallengeStore
 from api_server.auth.rate_limit import RateLimiter
 from api_server.auth.sessions import SessionStore
 from api_server.config import get_settings
-from api_server.db.models import UserOrganizationMembership, UserRole
+from api_server.db.models import User, UserOrganizationMembership, UserRole
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
 
 
@@ -46,6 +47,9 @@ class AuthPrincipal:
     session_id: UUID
     tenant_id: UUID | None
     is_system_admin: bool = False
+    # Hint from the `own` JWT claim (ADR 0074). NOT authoritative on its own —
+    # `require_system_owner` re-verifies against the DB per request.
+    is_system_owner: bool = False
 
 
 def _parse_bearer(authorization: str | None) -> str:
@@ -168,6 +172,7 @@ async def get_principal(
         )
 
     is_system_admin = bool(claims.get("sys", False))
+    is_system_owner = bool(claims.get("own", False))
 
     # Superadmin tenant override via header. Non-admins can't use this
     # path — even if they send the header, we ignore it.
@@ -185,6 +190,7 @@ async def get_principal(
         session_id=session_id,
         tenant_id=tenant_id,
         is_system_admin=is_system_admin,
+        is_system_owner=is_system_owner,
     )
 
 
@@ -200,9 +206,70 @@ def require_system_admin(
     return principal
 
 
+async def _is_db_system_owner(user_id: UUID) -> bool:
+    """Authoritative System Owner check against the DB (ADR 0074): the ``own``
+    JWT claim is only a hint, so the córtex gate re-reads ``users.is_system_owner``
+    per request — revoking ownership then takes effect immediately. Uses the
+    BYPASSRLS admin engine because ``users`` is global (un-RLSed)."""
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(User.is_system_owner).where(User.id == user_id, User.deleted_at.is_(None))
+        )
+        return bool(result.scalar_one_or_none())
+
+
+async def require_system_owner(
+    principal: AuthPrincipal = Depends(get_principal),
+) -> AuthPrincipal:
+    """Gate an endpoint to the System Owner (córtex F0, ADR 0074). 403 otherwise.
+
+    Verified against the DB per request, NOT just the ``own`` claim."""
+    if not await _is_db_system_owner(principal.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="system owner role required",
+        )
+    return principal
+
+
+async def require_admin_or_owner(
+    principal: AuthPrincipal = Depends(get_principal),
+) -> AuthPrincipal:
+    """Gate to System Admin OR System Owner (ADR 0074). Composite so neither
+    primitive (``require_system_admin`` / ``require_system_owner``) is overloaded
+    in-place."""
+    if principal.is_system_admin:
+        return principal
+    if await _is_db_system_owner(principal.user_id):
+        return principal
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="system admin or system owner role required",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tenant-scoped session dependency
 # ---------------------------------------------------------------------------
+_log = structlog.get_logger("api_server.auth.deps")
+
+_AFTER_COMMIT_KEY = "_after_commit"
+
+
+def schedule_after_commit(session: AsyncSession, factory: Callable[[], Awaitable[None]]) -> None:
+    """Register a zero-arg coroutine factory to run AFTER this request's tenant
+    session commits (see :func:`open_tenant_session`).
+
+    Domain events must be published only once their triggering row is durable:
+    publishing inline (before ``open_tenant_session`` commits on return) lets a
+    fast consumer — the orchestrator — read the not-yet-committed row in
+    ``_dispatch`` and silently skip it (root cause of the "consumer se atasca"
+    symptom). Registering the publish here guarantees it fires post-commit.
+    """
+    session.info.setdefault(_AFTER_COMMIT_KEY, []).append(factory)
+
+
 @asynccontextmanager
 async def open_tenant_session(
     principal: AuthPrincipal,
@@ -239,17 +306,29 @@ async def open_tenant_session(
     else:
         sessionmaker = get_sessionmaker()
 
-    async with sessionmaker() as session, session.begin():
-        await session.execute(
-            text("SELECT set_config('app.user_id', :uid, true)"),
-            {"uid": str(principal.user_id)},
-        )
-        if principal.tenant_id is not None:
+    async with sessionmaker() as session:
+        async with session.begin():
             await session.execute(
-                text("SELECT set_config('app.tenant_id', :tid, true)"),
-                {"tid": str(principal.tenant_id)},
+                text("SELECT set_config('app.user_id', :uid, true)"),
+                {"uid": str(principal.user_id)},
             )
-        yield session
+            if principal.tenant_id is not None:
+                await session.execute(
+                    text("SELECT set_config('app.tenant_id', :tid, true)"),
+                    {"tid": str(principal.tenant_id)},
+                )
+            yield session
+        # The request transaction has COMMITTED here (the `session.begin()`
+        # block exited without an exception — a route that raised would
+        # propagate past this point and skip the callbacks). Run anything
+        # registered via `schedule_after_commit` now, post-commit, so domain
+        # events are published only once their row is durable. Best-effort: a
+        # publish blip must never break the already-committed request.
+        for factory in session.info.get(_AFTER_COMMIT_KEY, ()):
+            try:
+                await factory()
+            except Exception as exc:  # - best-effort, never fail the request
+                _log.warning("api_server.after_commit_failed", error=str(exc))
 
 
 async def get_tenant_session(
@@ -374,6 +453,34 @@ async def require_tenant_admin(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="tenant_admin role required",
+        )
+    return principal
+
+
+async def require_can_approve_plan(
+    principal: AuthPrincipal = Depends(get_principal),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> AuthPrincipal:
+    """Gate to roles allowed to approve plans (ADR 0079, Opción A).
+
+    Accepts ``tenant_admin`` OR ``plan_approver`` (and system admins). Kept
+    SEPARATE from ``require_tenant_admin`` on purpose: approving a plan is a
+    delegable signature (segregation of duties), not full tenant administration,
+    so a ``plan_approver`` can sign without gaining admin over everything else.
+    """
+    if principal.is_system_admin:
+        return principal
+    if principal.tenant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="no active tenant context",
+        )
+    membership = await _load_active_membership(session, principal.user_id, principal.tenant_id)
+    allowed = {UserRole.TENANT_ADMIN.value, UserRole.PLAN_APPROVER.value}
+    if membership is None or membership.role not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="tenant_admin or plan_approver role required",
         )
     return principal
 

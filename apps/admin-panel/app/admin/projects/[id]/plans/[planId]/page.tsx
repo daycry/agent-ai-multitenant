@@ -22,7 +22,14 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ClipboardList, ExternalLink } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ClipboardList,
+  ExternalLink,
+  Rocket,
+  XCircle,
+} from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
@@ -195,12 +202,15 @@ export default function PlanDetailPage() {
         </Card>
       )}
 
+      <PlanLifecycleSection planId={plan.id} status={plan.status} />
+      <HumanValidationSection planId={plan.id} status={plan.status} />
       <PlanDeepLinksSection planId={plan.id} status={plan.status} />
       <SummarySection summary={spec.summary} />
       <EstimatesSection estimates={spec.estimates} />
       <CostBreakdownSection planId={plan.id} />
       <SyncToKanbanSection
         planId={plan.id}
+        status={plan.status}
         phases={spec.phases ?? []}
         taskIds={(spec.tasks ?? []).map((t) => t.id)}
       />
@@ -210,6 +220,114 @@ export default function PlanDetailPage() {
       <TasksSection tasks={spec.tasks} />
       <CommentsSection planId={plan.id} taskIds={(spec.tasks ?? []).map((t) => t.id)} />
     </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Plan lifecycle — explicit state transitions (draft → approval → in_progress)
+//
+// The lifecycle was missing its operator-facing controls: a draft could already
+// sync to the Kanban (now blocked server-side) and there was no button to move a
+// plan through approval or to start its execution. This action bar surfaces only
+// the transition that's legal for the current status.
+// --------------------------------------------------------------------------
+function PlanLifecycleSection({ planId, status }: { planId: string; status: string }) {
+  const queryClient = useQueryClient();
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["plan", planId] });
+    queryClient.invalidateQueries({ queryKey: ["project-tasks"] });
+  };
+  const onErr = (e: unknown) => setErrorMsg(e instanceof ApiError ? e.body : String(e));
+
+  const sendToApproval = useMutation({
+    mutationFn: () =>
+      apiFetch<{ status: string }>(`/plans/${planId}`, {
+        method: "PUT",
+        body: { status: "pending_approval" },
+      }),
+    onSuccess: () => {
+      setErrorMsg(null);
+      invalidate();
+    },
+    onError: onErr,
+  });
+  const approve = useMutation({
+    mutationFn: () => apiFetch<{ status: string }>(`/plans/${planId}/approve`, { method: "POST" }),
+    onSuccess: () => {
+      setErrorMsg(null);
+      invalidate();
+    },
+    onError: onErr,
+  });
+  const startExecution = useMutation({
+    mutationFn: () =>
+      apiFetch<{ status: string }>(`/plans/${planId}/start-execution`, { method: "POST" }),
+    onSuccess: () => {
+      setErrorMsg(null);
+      invalidate();
+    },
+    onError: onErr,
+  });
+
+  const canSendToApproval = status === "draft";
+  const canApprove = status === "pending_approval" || status === "pending_second_approval";
+  const canStart = status === "approved";
+  // Action bar, not a status display: render nothing when no transition is offered.
+  if (!canSendToApproval && !canApprove && !canStart) return null;
+
+  const pending = sendToApproval.isPending || approve.isPending || startExecution.isPending;
+
+  return (
+    <Card className="mt-6" data-testid="plan-lifecycle">
+      <CardHeader className="flex flex-row items-center justify-between gap-2">
+        <CardTitle>Ciclo de vida del plan</CardTitle>
+        <div className="flex flex-wrap gap-2">
+          {canSendToApproval ? (
+            <Button
+              onClick={() => sendToApproval.mutate()}
+              disabled={pending}
+              data-testid="plan-send-to-approval"
+            >
+              Enviar a aprobación
+            </Button>
+          ) : null}
+          {canApprove ? (
+            <Button
+              onClick={() => approve.mutate()}
+              disabled={pending}
+              data-testid="plan-lifecycle-approve"
+            >
+              Aprobar plan
+            </Button>
+          ) : null}
+          {canStart ? (
+            <Button
+              onClick={() => startExecution.mutate()}
+              disabled={pending}
+              data-testid="plan-start-execution"
+            >
+              Empezar ejecución
+            </Button>
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent>
+        <p className="text-muted-foreground text-sm">
+          {canSendToApproval
+            ? "El plan está en borrador. Envíalo a aprobación para revisarlo y aprobarlo."
+            : canApprove
+              ? "El plan espera aprobación. Al aprobarlo podrás sincronizar sus tareas al Kanban."
+              : "El plan está aprobado. «Empezar ejecución» lo marca en curso y crea las tareas en el Kanban."}
+        </p>
+        {errorMsg ? (
+          <p className="text-destructive mt-2 text-xs" data-testid="plan-lifecycle-error">
+            {errorMsg}
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -226,9 +344,11 @@ interface SyncResponse {
 
 function SyncToKanbanSection({
   planId,
+  status,
   phases,
   taskIds,
 }: {
+  status: string;
   planId: string;
   phases: PlanPhaseSpec[];
   taskIds: string[];
@@ -240,6 +360,9 @@ function SyncToKanbanSection({
   const [lastResult, setLastResult] = useState<SyncResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  // Materialising tasks is only legal once the plan is signed off (mirrors the
+  // backend guard). A draft must not seed the Kanban.
+  const syncable = status === "approved" || status === "in_progress";
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -281,14 +404,19 @@ function SyncToKanbanSection({
             setErrorMsg(null);
             setOpen(true);
           }}
-          disabled={taskIds.length === 0}
+          disabled={taskIds.length === 0 || !syncable}
           data-testid="plan-sync-open"
         >
           Sincronizar al Kanban
         </Button>
       </CardHeader>
       <CardContent>
-        {taskIds.length === 0 ? (
+        {!syncable ? (
+          <p className="text-muted-foreground text-sm italic" data-testid="plan-sync-not-approved">
+            Solo se pueden materializar tareas de un plan <strong>aprobado</strong> o en curso.
+            Aprueba el plan primero.
+          </p>
+        ) : taskIds.length === 0 ? (
           <p className="text-muted-foreground text-sm italic" data-testid="plan-sync-empty">
             El plan aún no tiene tareas para materializar.
           </p>
@@ -521,43 +649,48 @@ function CostBreakdownSection({ planId }: { planId: string }) {
               <p className="mb-1 text-xs font-semibold uppercase tracking-wide">
                 Coste humano · {human.currency} · {human.hourly_rate} {human.currency}/h
               </p>
-              <table className="w-full text-xs">
-                <thead className="text-left">
-                  <tr className="border-muted border-b">
-                    <th className="py-1 pr-2 font-semibold">ID</th>
-                    <th className="py-1 pr-2 font-semibold">Tarea</th>
-                    <th className="py-1 pr-2 font-semibold text-right">Horas</th>
-                    <th className="py-1 pr-2 font-semibold text-right">Coste</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {human.tasks.map((t) => (
-                    <tr
-                      key={t.task_id}
-                      data-testid={`plan-cost-human-row-${t.task_id}`}
-                      className="border-muted/40 border-b"
-                    >
-                      <td className="py-1 pr-2 font-mono">{t.task_id}</td>
-                      <td className="py-1 pr-2">{t.title}</td>
-                      <td className="py-1 pr-2 text-right">{t.hours}</td>
-                      <td className="py-1 pr-2 text-right">
-                        {t.cost} {human.currency}
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-left">
+                    <tr className="border-muted border-b">
+                      <th className="py-1 pr-2 font-semibold">ID</th>
+                      <th className="py-1 pr-2 font-semibold">Tarea</th>
+                      <th className="py-1 pr-2 font-semibold text-right">Horas</th>
+                      <th className="py-1 pr-2 font-semibold text-right">Coste</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {human.tasks.map((t) => (
+                      <tr
+                        key={t.task_id}
+                        data-testid={`plan-cost-human-row-${t.task_id}`}
+                        className="border-muted/40 border-b"
+                      >
+                        <td className="py-1 pr-2 font-mono">{t.task_id}</td>
+                        <td className="py-1 pr-2">{t.title}</td>
+                        <td className="py-1 pr-2 text-right">{t.hours}</td>
+                        <td className="py-1 pr-2 text-right">
+                          {t.cost} {human.currency}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="font-semibold">
+                      <td colSpan={2} className="py-1 pr-2 text-right">
+                        Total
+                      </td>
+                      <td
+                        className="py-1 pr-2 text-right"
+                        data-testid="plan-cost-human-total-hours"
+                      >
+                        {human.total_hours}
+                      </td>
+                      <td className="py-1 pr-2 text-right" data-testid="plan-cost-human-total">
+                        {human.total_cost} {human.currency}
                       </td>
                     </tr>
-                  ))}
-                  <tr className="font-semibold">
-                    <td colSpan={2} className="py-1 pr-2 text-right">
-                      Total
-                    </td>
-                    <td className="py-1 pr-2 text-right" data-testid="plan-cost-human-total-hours">
-                      {human.total_hours}
-                    </td>
-                    <td className="py-1 pr-2 text-right" data-testid="plan-cost-human-total">
-                      {human.total_cost} {human.currency}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             {/* AI cost table — range (min / max) */}
@@ -566,49 +699,51 @@ function CostBreakdownSection({ planId }: { planId: string }) {
                 Coste IA · {ai.currency} · modelo por defecto{" "}
                 <span className="font-mono">{ai.default_model_id}</span>
               </p>
-              <table className="w-full text-xs">
-                <thead className="text-left">
-                  <tr className="border-muted border-b">
-                    <th className="py-1 pr-2 font-semibold">ID</th>
-                    <th className="py-1 pr-2 font-semibold">Tarea</th>
-                    <th className="py-1 pr-2 font-semibold">Compl.</th>
-                    <th className="py-1 pr-2 font-semibold">Modelo</th>
-                    <th className="py-1 pr-2 font-semibold text-right">Coste mín</th>
-                    <th className="py-1 pr-2 font-semibold text-right">Coste máx</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ai.tasks.map((t) => (
-                    <tr
-                      key={t.task_id}
-                      data-testid={`plan-cost-ai-row-${t.task_id}`}
-                      className="border-muted/40 border-b"
-                    >
-                      <td className="py-1 pr-2 font-mono">{t.task_id}</td>
-                      <td className="py-1 pr-2">{t.title}</td>
-                      <td className="py-1 pr-2">{t.complexity}</td>
-                      <td className="py-1 pr-2 font-mono">{t.model_id}</td>
-                      <td className="py-1 pr-2 text-right">
-                        {t.cost_min} {ai.currency}
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-left">
+                    <tr className="border-muted border-b">
+                      <th className="py-1 pr-2 font-semibold">ID</th>
+                      <th className="py-1 pr-2 font-semibold">Tarea</th>
+                      <th className="py-1 pr-2 font-semibold">Compl.</th>
+                      <th className="py-1 pr-2 font-semibold">Modelo</th>
+                      <th className="py-1 pr-2 font-semibold text-right">Coste mín</th>
+                      <th className="py-1 pr-2 font-semibold text-right">Coste máx</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ai.tasks.map((t) => (
+                      <tr
+                        key={t.task_id}
+                        data-testid={`plan-cost-ai-row-${t.task_id}`}
+                        className="border-muted/40 border-b"
+                      >
+                        <td className="py-1 pr-2 font-mono">{t.task_id}</td>
+                        <td className="py-1 pr-2">{t.title}</td>
+                        <td className="py-1 pr-2">{t.complexity}</td>
+                        <td className="py-1 pr-2 font-mono">{t.model_id}</td>
+                        <td className="py-1 pr-2 text-right">
+                          {t.cost_min} {ai.currency}
+                        </td>
+                        <td className="py-1 pr-2 text-right">
+                          {t.cost_max} {ai.currency}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="font-semibold">
+                      <td colSpan={4} className="py-1 pr-2 text-right">
+                        Total (rango)
                       </td>
-                      <td className="py-1 pr-2 text-right">
-                        {t.cost_max} {ai.currency}
+                      <td className="py-1 pr-2 text-right" data-testid="plan-cost-ai-total-min">
+                        {ai.cost_min} {ai.currency}
+                      </td>
+                      <td className="py-1 pr-2 text-right" data-testid="plan-cost-ai-total-max">
+                        {ai.cost_max} {ai.currency}
                       </td>
                     </tr>
-                  ))}
-                  <tr className="font-semibold">
-                    <td colSpan={4} className="py-1 pr-2 text-right">
-                      Total (rango)
-                    </td>
-                    <td className="py-1 pr-2 text-right" data-testid="plan-cost-ai-total-min">
-                      {ai.cost_min} {ai.currency}
-                    </td>
-                    <td className="py-1 pr-2 text-right" data-testid="plan-cost-ai-total-max">
-                      {ai.cost_max} {ai.currency}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              </div>
               {ai.missing_models.length > 0 ? (
                 <p
                   className="text-destructive mt-2 text-xs"
@@ -980,34 +1115,193 @@ function TasksSection({ tasks }: { tasks: PlanSpecification["tasks"] | undefined
         <CardTitle>Tareas ({tasks.length})</CardTitle>
       </CardHeader>
       <CardContent>
-        <table className="w-full text-xs">
-          <thead className="text-left">
-            <tr className="border-muted border-b">
-              <th className="py-1 pr-2 font-semibold">ID</th>
-              <th className="py-1 pr-2 font-semibold">Título</th>
-              <th className="py-1 pr-2 font-semibold">Rol</th>
-              <th className="py-1 pr-2 font-semibold">Compl.</th>
-              <th className="py-1 pr-2 font-semibold">Depende de</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tasks.map((task) => (
-              <tr
-                key={task.id}
-                className="border-muted/40 border-b align-top"
-                data-testid={`plan-task-${task.id}`}
-              >
-                <td className="py-1 pr-2 font-mono">{task.id}</td>
-                <td className="py-1 pr-2">{task.title}</td>
-                <td className="py-1 pr-2">{task.role ?? "—"}</td>
-                <td className="py-1 pr-2">{task.complexity ?? "—"}</td>
-                <td className="py-1 pr-2 font-mono">
-                  {task.depends_on && task.depends_on.length > 0 ? task.depends_on.join(", ") : "—"}
-                </td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-left">
+              <tr className="border-muted border-b">
+                <th className="py-1 pr-2 font-semibold">ID</th>
+                <th className="py-1 pr-2 font-semibold">Título</th>
+                <th className="py-1 pr-2 font-semibold">Rol</th>
+                <th className="py-1 pr-2 font-semibold">Compl.</th>
+                <th className="py-1 pr-2 font-semibold">Depende de</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {tasks.map((task) => (
+                <tr
+                  key={task.id}
+                  className="border-muted/40 border-b align-top"
+                  data-testid={`plan-task-${task.id}`}
+                >
+                  <td className="py-1 pr-2 font-mono">{task.id}</td>
+                  <td className="py-1 pr-2">{task.title}</td>
+                  <td className="py-1 pr-2">{task.role ?? "—"}</td>
+                  <td className="py-1 pr-2">{task.complexity ?? "—"}</td>
+                  <td className="py-1 pr-2 font-mono">
+                    {task.depends_on && task.depends_on.length > 0
+                      ? task.depends_on.join(", ")
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Human validation — preview access to the running app (ADR 0062)
+// --------------------------------------------------------------------------
+interface ReviewSessionInfo {
+  session_id: string;
+  status: string;
+  verdict: string | null;
+  expires_at: string | null;
+  review_url: string;
+  app_url: string;
+  verdict_url: string;
+}
+
+function HumanValidationSection({ planId, status }: { planId: string; status: string }) {
+  const queryClient = useQueryClient();
+  const [verdictMsg, setVerdictMsg] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const reviewQuery = useQuery({
+    queryKey: ["plan-review-session", planId],
+    queryFn: () => apiFetch<ReviewSessionInfo>(`/plans/${planId}/review-session`),
+    enabled: status === "pending_human_validation",
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+
+  if (status !== "pending_human_validation") return null;
+
+  const rs = reviewQuery.data;
+
+  const submitVerdict = async (verdict: "approved" | "rejected") => {
+    if (!rs?.verdict_url) return;
+    if (verdict === "rejected" && !window.confirm("¿Rechazar el plan? Volverá al equipo.")) return;
+    setSubmitting(true);
+    setVerdictMsg(null);
+    try {
+      const body =
+        verdict === "rejected"
+          ? { verdict, rejection_reason: "Rechazado desde el panel de validación." }
+          : { verdict };
+      const res = await fetch(rs.verdict_url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      setVerdictMsg(
+        res.ok
+          ? verdict === "approved"
+            ? "Plan aprobado ✓"
+            : "Plan rechazado"
+          : "Error al registrar el veredicto",
+      );
+      queryClient.invalidateQueries({ queryKey: ["plan", planId] });
+      queryClient.invalidateQueries({ queryKey: ["plan-review-session", planId] });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Card className="border-warning/40 mt-6" data-testid="plan-human-validation">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Rocket className="text-primary h-5 w-5" />
+          Validación humana — probar la app
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-muted-foreground text-sm">
+          El plan está en <code>pending_human_validation</code>: los agentes han terminado y la
+          aplicación se ha <b>levantado en un contenedor de revisión</b>. Ábrela para probarla y, si
+          todo está bien, aprueba el plan.
+        </p>
+
+        {reviewQuery.isLoading && (
+          <p className="text-muted-foreground text-sm">Buscando la sesión de revisión…</p>
+        )}
+        {reviewQuery.isError && (
+          <p
+            className="text-muted-foreground text-sm italic"
+            data-testid="plan-human-validation-none"
+          >
+            Aún no hay una sesión de revisión levantada para este plan.
+          </p>
+        )}
+
+        {rs && (
+          <>
+            <div className="flex flex-wrap gap-3">
+              <a
+                href={rs.app_url}
+                target="_blank"
+                rel="noreferrer"
+                data-testid="plan-open-app"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold"
+              >
+                <Rocket className="h-4 w-4" />
+                Abrir app para probar
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+              <a
+                href={rs.review_url}
+                target="_blank"
+                rel="noreferrer"
+                data-testid="plan-open-review-console"
+                className="hover:bg-muted/40 inline-flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-semibold"
+              >
+                <ClipboardList className="h-4 w-4" />
+                Consola de revisión (terminal + logs + checklist)
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            </div>
+
+            <p className="text-muted-foreground text-xs">
+              El enlace abre la app servida por el review-runtime a través del proxy firmado del
+              api-server (no se publica ningún puerto). La sesión caduca el{" "}
+              {rs.expires_at ? new Date(rs.expires_at).toLocaleString("es-ES") : "—"}.
+            </p>
+
+            <div className="flex items-center gap-3 border-t pt-4">
+              <Button
+                onClick={() => void submitVerdict("approved")}
+                disabled={submitting || !!rs.verdict}
+                data-testid="plan-verdict-approve"
+              >
+                <CheckCircle2 className="mr-1.5 h-4 w-4" />
+                Aprobar plan
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => void submitVerdict("rejected")}
+                disabled={submitting || !!rs.verdict}
+                data-testid="plan-verdict-reject"
+              >
+                <XCircle className="mr-1.5 h-4 w-4" />
+                Rechazar
+              </Button>
+              {verdictMsg && (
+                <span className="text-sm" data-testid="plan-verdict-msg">
+                  {verdictMsg}
+                </span>
+              )}
+              {rs.verdict && (
+                <Badge variant={rs.verdict === "approved" ? "success" : "danger"}>
+                  {rs.verdict === "approved" ? "Aprobado" : "Rechazado"}
+                </Badge>
+              )}
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   );

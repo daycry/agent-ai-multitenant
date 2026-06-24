@@ -37,17 +37,21 @@ from api_server.db.domain import (
     HumanAgentConfig,
     HumanTaskAssignment,
     HumanTaskAssignmentStatus,
+    Plan,
     Project,
     Task,
     TaskStatus,
+    Team,
 )
 from api_server.db.platform_settings import (
     config_needs_default_model,
     get_default_model_config,
+    resolve_model_config_chain,
 )
+from api_server.plan_progress import TaskSnapshot, transition_to_pending_human_validation
 from api_server.task_state_machine import transition_task_status
 from celery import Celery
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from orchestrator.assignment import (
@@ -68,6 +72,8 @@ _log = structlog.get_logger("orchestrator.dispatch")
 # A task is dispatchable the moment it reaches `ready`.
 _READY = "ready"
 _IN_PROGRESS = "in_progress"
+# Terminal status that may complete the owning plan.
+_DONE = "done"
 _ASSIGNED_TO_HUMAN = TaskStatus.ASSIGNED_TO_HUMAN.value
 # Agent scopes eligible to take a project's task (spec §5.7.5).
 _GLOBAL_SCOPES = ("global_builtin", "global_tenant_template")
@@ -89,6 +95,12 @@ def _is_ready_trigger(event: TaskEvent) -> bool:
     if event.type == EVENT_TASK_CREATED:
         return event.payload.get("status") == _READY
     return False
+
+
+def _is_done_trigger(event: TaskEvent) -> bool:
+    """True when a task just reached terminal ``done`` — it may complete its
+    plan and so trigger the transition to ``pending_human_validation``."""
+    return event.type == EVENT_TASK_STATUS_CHANGED and event.payload.get("new_status") == _DONE
 
 
 @dataclass(frozen=True)
@@ -134,6 +146,9 @@ class TaskDispatcher:
         AI-assigned (or pool-assigned) task keeps the existing runtime-pool path
         untouched.
         """
+        if _is_done_trigger(event):
+            await self._on_task_done(event)
+            return
         if not _is_ready_trigger(event):
             return
         task_id = UUID(event.task_id)
@@ -144,6 +159,77 @@ class TaskDispatcher:
             await self._notify_human_assignment(event, result)
             return
         await self._enqueue_ai_run(event, task_id, result)
+
+    async def _on_task_done(self, event: TaskEvent) -> None:
+        """A task reached ``done``: if it was the plan's last open task, flip the
+        plan ``in_progress`` → ``pending_human_validation``.
+
+        This is the LIVE wiring of ``plan_progress.transition_to_pending_human_
+        validation``, which until now ran only in the in-memory ``plan_runner``
+        (demos) — so in production a plan whose tasks all completed never
+        auto-moved to human validation (sesión 2026-06-18 gap). The orchestrator
+        is the right home: it is the only live consumer of the task event stream,
+        runs BYPASSRLS with an explicit tenant predicate, and already owns the
+        Celery app for the follow-on review-runtime spawn.
+
+        On a winning transition it emits ``orchestrator.plan_ready_for_review`` —
+        the hook point where the review-runtime container is auto-started. That
+        spawn is deferred to ADR 0063 (the ``main_image`` provenance and the
+        plan-level worktree resolution are open product decisions; enqueuing a
+        ``compose_review_runtime`` without them would only persist a session that
+        can never serve the app).
+        """
+        tenant_id = UUID(event.tenant_id)
+        task_id = UUID(event.task_id)
+        async with self._sessionmaker() as session, session.begin():
+            task = (
+                await session.execute(
+                    select(Task).where(Task.id == task_id, Task.tenant_id == tenant_id)
+                )
+            ).scalar_one_or_none()
+            if task is None or task.plan_id is None:
+                return
+            plan = (
+                await session.execute(
+                    select(Plan).where(Plan.id == task.plan_id, Plan.tenant_id == tenant_id)
+                )
+            ).scalar_one_or_none()
+            if plan is None:
+                return
+            rows = (
+                await session.execute(
+                    select(Task.id, Task.status).where(
+                        Task.plan_id == plan.id, Task.tenant_id == tenant_id
+                    )
+                )
+            ).all()
+            snapshots = [TaskSnapshot(id=str(r.id), status=r.status) for r in rows]
+            result = transition_to_pending_human_validation(plan.status, snapshots)
+            if not result.transitioned:
+                return
+            # Atomic, idempotent guard: only the transaction that still observes
+            # the plan `in_progress` wins. The event stream is at-least-once
+            # (XREADGROUP), and several tasks can finish almost together — the
+            # `WHERE status = in_progress` predicate makes the transition fire
+            # exactly once, never a double review-runtime down the line.
+            won = (
+                await session.execute(
+                    update(Plan)
+                    .where(
+                        Plan.id == plan.id,
+                        Plan.tenant_id == tenant_id,
+                        Plan.status == _IN_PROGRESS,
+                    )
+                    .values(status=result.new_status)
+                    .returning(Plan.id)
+                )
+            ).scalar_one_or_none()
+            if won is not None:
+                _log.info(
+                    "orchestrator.plan_ready_for_review",
+                    plan_id=str(plan.id),
+                    tenant_id=str(tenant_id),
+                )
 
     async def _enqueue_ai_run(self, event: TaskEvent, task_id: UUID, result: _AiDispatch) -> None:
         """Enqueue the worker run for an AI-routed task (the existing path)."""
@@ -394,11 +480,17 @@ class TaskDispatcher:
         model_spec = dict(agent.model_config or {})
         if config_needs_default_model(model_spec):
             # No model pinned (``{}`` legacy, or a SEEDED agent that carries only
-            # ``system_prompts`` and inherits — the CI4 built-in team). Fill the
-            # default's provider/model/temperature while preserving any other keys
-            # (system_prompts). A ``kind`` scripted spec is left untouched.
-            default = await get_default_model_config(session)
-            model_spec = {**default, **model_spec}
+            # ``system_prompts`` and inherits — the CI4 built-in team). Resolve via
+            # la cadena de herencia plataforma → proyecto → equipo → agente (Ola A /
+            # ADR 0055): el nivel MÁS específico que pinee provider+model rellena el
+            # spec, preservando las claves no-modelo del agente (system_prompts). Un
+            # spec ``kind`` scripted no entra aquí (config_needs_default_model=False).
+            platform_default = await get_default_model_config(session)
+            team_cfg = await self._team_model_config(session, project)
+            project_cfg = dict(getattr(project, "model_config", None) or {}) if project else {}
+            model_spec = resolve_model_config_chain(
+                model_spec, team_cfg, project_cfg, platform_default
+            )
 
         request: dict[str, Any] = {
             "tenant_id": str(task.tenant_id),
@@ -464,6 +556,28 @@ class TaskDispatcher:
         if project_mcp_servers:
             request["mcp_servers"] = [dict(server) for server in project_mcp_servers]
         return _AiDispatch(request=request)
+
+    async def _team_model_config(
+        self, session: AsyncSession, project: Project | None
+    ) -> dict[str, Any]:
+        """``model_config`` del equipo del proyecto para la cadena de herencia
+        (Ola A). Vacío si el proyecto no tiene equipo o no se encuentra. El
+        orchestrator corre con BYPASSRLS; aun así filtramos por tenant del
+        proyecto como defensa en profundidad."""
+        if project is None:
+            return {}
+        team_id = getattr(project, "team_id", None)
+        if team_id is None:
+            return {}
+        team = (
+            await session.execute(
+                select(Team).where(
+                    Team.id == team_id,
+                    Team.tenant_id == project.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        return dict(team.model_config or {}) if team is not None else {}
 
     async def _route_human(
         self, session: AsyncSession, task: Task, human_agent: Agent

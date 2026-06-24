@@ -39,7 +39,7 @@ class BuiltinSkill:
 
 
 # ---------------------------------------------------------------------------
-# Catalog -- 33 skills across 6 categories
+# Catalog -- 51 skills across 6 categories (33 base + 18 de la Ola B0.1)
 # ---------------------------------------------------------------------------
 BUILTIN_SKILLS: tuple[BuiltinSkill, ...] = (
     # ------ Backend ------
@@ -370,6 +370,192 @@ BUILTIN_SKILLS: tuple[BuiltinSkill, ...] = (
         "errores típicos con código + cuerpo, y al menos un ejemplo curl "
         "funcional. OpenAPI generado del código; documentación humana "
         "alrededor del schema.",
+    ),
+    # ------ Backend (Ola B0.1: PHP/CI4 + security + data) ------
+    BuiltinSkill(
+        "php-phpunit",
+        "PHP + PHPUnit",
+        "backend",
+        "Tests con PHPUnit en PHP moderno.",
+        "Escribes tests PHPUnit claros: data providers para casos de borde, "
+        "dobles solo cuando la unidad real es cara o no determinista, asserts "
+        "específicos (assertSame sobre assertEquals cuando importa el tipo). "
+        "Cada test nombra el comportamiento que documenta.",
+    ),
+    BuiltinSkill(
+        "codeigniter4-hmvc",
+        "CodeIgniter 4 HMVC",
+        "backend",
+        "Módulos HMVC en CodeIgniter 4.",
+        "Estructuras el código en módulos bajo app/Modules/ con su propio "
+        "routing, controllers, models y views (HMVC). Controllers finos, "
+        "Models con validación, Entities para la lógica de dominio y Services "
+        "para orquestar. Respetas PSR-12.",
+    ),
+    BuiltinSkill(
+        "doctrine-orm",
+        "Doctrine ORM",
+        "backend",
+        "Mapeo y consultas con Doctrine (daycry/doctrine).",
+        "Modelas entidades Doctrine con atributos, repositorios para queries y "
+        "DQL/QueryBuilder en vez de SQL crudo. Evitas el N+1 con fetch joins, "
+        "usas transacciones explícitas para escrituras múltiples y mantienes "
+        "las migraciones de esquema versionadas.",
+    ),
+    BuiltinSkill(
+        "secure-coding-owasp",
+        "Secure coding (OWASP)",
+        "backend",
+        "Defensa contra el OWASP Top 10.",
+        "Validas y sanitizas toda entrada, usas consultas parametrizadas (nunca "
+        "concatenas SQL), escapas la salida según contexto (HTML/JS/URL), "
+        "aplicas authz por recurso (no solo authn) y no logueas secretos. "
+        "Piensas como atacante: ¿qué pasa con input malicioso en cada borde?",
+    ),
+    BuiltinSkill(
+        "sql-optimization",
+        "SQL optimization",
+        "backend",
+        "Consultas e índices eficientes.",
+        "Lees EXPLAIN/ANALYZE antes de optimizar; añades índices que cubran el "
+        "patrón de acceso real (no a ciegas); evitas SELECT *, funciones sobre "
+        "columnas indexadas y el N+1; paginas con keyset cuando el offset "
+        "crece. Mides antes y después.",
+    ),
+    BuiltinSkill(
+        "rag-pgvector",
+        "RAG con pgvector",
+        "backend",
+        "Recuperación híbrida sobre pgvector.",
+        "Combinas recuperación léxica (tsvector/BM25) y semántica (pgvector, "
+        "coseno) fusionadas con RRF; chunkeas con solapamiento sensato; "
+        "normalizas embeddings a la dimensión del índice (HNSW); y citas las "
+        "fuentes. Evalúas el recall con consultas reales.",
+    ),
+    # ------ Frontend (Ola B0.1) ------
+    BuiltinSkill(
+        "twig-templating",
+        "Twig templating",
+        "frontend",
+        "Plantillas Twig (daycry/twig).",
+        "Separas presentación de lógica: la vista Twig solo formatea; los datos "
+        "llegan listos del controller. Usas herencia de plantillas "
+        "(extends/blocks), autoescape activo e includes/macros para reutilizar. "
+        "Nada de queries ni lógica de negocio en la plantilla.",
+    ),
+    BuiltinSkill(
+        "state-management",
+        "Frontend state management",
+        "frontend",
+        "Estado de cliente vs servidor.",
+        "Distingues estado de servidor (cachéalo con TanStack Query: "
+        "invalidación, staleTime) del estado de UI local (useState/useReducer). "
+        "No duplicas estado de servidor en stores globales; levantas el estado "
+        "solo lo necesario; y derivas en vez de sincronizar.",
+    ),
+    BuiltinSkill(
+        "web-performance",
+        "Web performance",
+        "frontend",
+        "Core Web Vitals y carga.",
+        "Optimizas LCP/CLS/INP: imágenes dimensionadas y lazy, code-splitting "
+        "por ruta, reservar espacio para evitar layout shift, y minimizar JS en "
+        "el camino crítico. Mides con Lighthouse/web-vitals antes de afirmar "
+        "mejoras.",
+    ),
+    # ------ DevOps (Ola B0.1) ------
+    BuiltinSkill(
+        "dependency-audit-sca",
+        "Dependency audit (SCA)",
+        "devops",
+        "Análisis de composición de software.",
+        "Ejecutas SCA (pip-audit/npm audit/composer audit) en CI; fijas "
+        "versiones y revisas CVEs por severidad y explotabilidad real; "
+        "priorizas parches de seguridad sin romper; y documentas excepciones "
+        "con justificación y fecha de revisión.",
+    ),
+    BuiltinSkill(
+        "backup-recovery",
+        "Backup & recovery",
+        "devops",
+        "Copias verificables y restauración.",
+        "Diseñas backups con la regla 3-2-1, cifrados en reposo, y — lo más "
+        "importante — pruebas la RESTAURACIÓN periódicamente (un backup no "
+        "verificado no existe). Defines RPO/RTO explícitos y un runbook de "
+        "recuperación paso a paso.",
+    ),
+    # ------ QA (Ola B0.1) ------
+    BuiltinSkill(
+        "contract-testing",
+        "Contract testing",
+        "qa",
+        "Contratos entre servicios/API.",
+        "Verificas que productor y consumidor cumplen el mismo contrato "
+        "(esquema de request/response) con tests de contrato, no solo e2e. "
+        "Versionas el contrato; un cambio incompatible falla el test del "
+        "consumidor antes del deploy.",
+    ),
+    BuiltinSkill(
+        "load-testing",
+        "Load & stress testing",
+        "qa",
+        "Comportamiento bajo carga.",
+        "Defines objetivos (throughput, p95/p99) y escenarios realistas (carga "
+        "sostenida, picos, soak). Mides recursos durante la prueba, identificas "
+        "el cuello de botella, y distingues límites de capacidad de fugas "
+        "(degradación creciente).",
+    ),
+    # ------ Research (Ola B0.1) ------
+    BuiltinSkill(
+        "prompt-engineering",
+        "Prompt engineering",
+        "research",
+        "Prompts efectivos para LLMs.",
+        "Escribes prompts con rol claro, instrucciones específicas y formato de "
+        "salida explícito; das ejemplos (few-shot) cuando la tarea es ambigua; "
+        "pides razonamiento antes de la respuesta en tareas complejas; e iteras "
+        "midiendo contra casos reales, no por intuición.",
+    ),
+    BuiltinSkill(
+        "eval-design",
+        "LLM eval design",
+        "research",
+        "Evaluación de salidas de LLM.",
+        "Diseñas evals con un set representativo + criterios objetivos "
+        "(rúbricas, asserts, o juez-LLM con rúbrica); separas dev/test para no "
+        "sobreajustar; mides regresiones entre versiones de prompt/modelo; y "
+        "reportas con varias corridas, no una sola.",
+    ),
+    BuiltinSkill(
+        "web-research",
+        "Web research",
+        "research",
+        "Buscar y citar en internet con criterio.",
+        "Triangulas fuentes (no te fías de una sola), priorizas fuentes "
+        "primarias y recientes, distingues hecho de opinión, y CITAS cada "
+        "afirmación con su URL. Verificas de forma adversarial las afirmaciones "
+        "clave antes de incorporarlas.",
+    ),
+    # ------ Docs (Ola B0.1) ------
+    BuiltinSkill(
+        "changelog-authoring",
+        "Changelog authoring",
+        "docs",
+        "Changelogs útiles (Keep a Changelog).",
+        "Escribes entradas orientadas al usuario agrupadas por tipo "
+        "(Added/Changed/Fixed/Removed/Security), con el impacto y la acción de "
+        "migración cuando aplica. Nada de volcar mensajes de commit crudos: el "
+        "changelog cuenta QUÉ cambia para QUIÉN lo usa.",
+    ),
+    BuiltinSkill(
+        "openapi-authoring",
+        "OpenAPI authoring",
+        "docs",
+        "Especificaciones OpenAPI precisas.",
+        "Defines OpenAPI con operationId estables, schemas reutilizables ($ref), "
+        "ejemplos por respuesta y códigos de error documentados con su forma. El "
+        "spec es la fuente de verdad del contrato; lo mantienes sincronizado con "
+        "el código (generado del código cuando se puede).",
     ),
 )
 

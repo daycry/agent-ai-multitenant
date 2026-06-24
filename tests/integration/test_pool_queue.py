@@ -38,15 +38,20 @@ def test_acquire_blocks_then_succeeds_after_release() -> None:
     cm2.__enter__()
 
     third_result: dict[str, str] = {}
+    entered = threading.Event()
 
     def grab_third() -> None:
+        entered.set()  # reached the (blocking) acquire — no arbitrary sleep needed
         with pool.acquire("c", timeout_s=5.0) as s:
             third_result["container_id"] = s.container_id
 
     t = threading.Thread(target=grab_third, daemon=True)
     t.start()
-    # Give the worker thread time to enter the loop.
-    time.sleep(0.2)
+    # Deterministic handoff instead of `time.sleep(0.2)` (Plan prod-02 task_12):
+    # wait until the worker reached the acquire. The pool is at max, so that
+    # acquire blocks and cannot return until the main thread releases a slot
+    # below — third_result is therefore guaranteed still empty here, no race.
+    assert entered.wait(timeout=3.0), "worker thread never started"
     assert not third_result, "acquire should be blocked while pool is at max"
 
     # Release one slot — the worker thread should now succeed.

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hello World PHP — app en revisión</title>
+    <style>
+      /* Self-contained (no external assets) so it proxies cleanly under a subpath (ADR 0062). */
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        font-family: "Segoe UI", system-ui, Roboto, Arial, sans-serif;
+        background: radial-gradient(1200px 600px at 50% -10%, #1e1b4b, #0b1020);
+        color: #e8eaff;
+      }
+      .card {
+        width: 560px; max-width: 92vw; background: rgba(255,255,255,.04);
+        border: 1px solid rgba(139,92,246,.35); border-radius: 18px; padding: 38px 40px;
+        box-shadow: 0 20px 60px rgba(0,0,0,.45);
+      }
+      .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; }
+      .logo { width: 40px; height: 40px; border-radius: 11px;
+        background: linear-gradient(135deg,#6366f1,#8b5cf6); display:flex; align-items:center; justify-content:center; }
+      .brand b { font-size: 16px; letter-spacing: -.2px; }
+      .brand small { display:block; color:#a9b0d6; font-size: 10.5px; letter-spacing: 2px; text-transform: uppercase; }
+      h1 { font-size: 30px; margin: 0 0 6px; }
+      .live { display:inline-flex; align-items:center; gap:7px; font-size:12px; color:#34d399; margin-bottom: 18px; }
+      .dot { width:8px; height:8px; border-radius:50%; background:#34d399; box-shadow:0 0 0 4px rgba(52,211,153,.2); }
+      pre { background:#0b1020; border:1px solid #2a2f55; border-radius:12px; padding:16px 18px; color:#c7f9e5;
+        font-family: Consolas, "SF Mono", monospace; font-size:13px; overflow:auto; }
+      .meta { margin-top:18px; font-size:12px; color:#9aa3d4; line-height:1.7; }
+      .meta code { background:#1d2742; padding:1px 7px; border-radius:6px; }
+      .pill { display:inline-block; background: linear-gradient(135deg,#6366f1,#8b5cf6); color:#fff;
+        padding:4px 12px; border-radius:999px; font-size:11px; font-weight:700; }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="brand">
+        <span class="logo">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z" fill="#fff" stroke="none"/>
+          </svg>
+        </span>
+        <div><b>Hello World PHP</b><small>App en revisión · review-runtime</small></div>
+      </div>
+      <span class="pill">GET /hello</span>
+      <h1>Hello, World! 👋</h1>
+      <div class="live"><span class="dot"></span>App levantada y servida por el review-runtime</div>
+      <pre>HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "message": "Hello, World!",
+  "service": "hello-world-php",
+  "runtime": "php-phpunit"
+}</pre>
+      <p class="meta">
+        Esta es la <b>aplicación construida por los agentes</b>, levantada en un contenedor
+        efímero para que la valides. Llegas aquí a través de una <b>URL firmada</b> que el panel
+        te ofrece cuando el plan está en <code>pending_human_validation</code>; el proxy del
+        api-server la sirve sin exponer ningún puerto al exterior (ADR 0062).
+      </p>
+    </main>
+  </body>
+</html>

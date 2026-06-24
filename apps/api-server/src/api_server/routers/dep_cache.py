@@ -99,7 +99,7 @@ async def invalidate_dep_cache(
     """Invalidate one or all cache entries for a runtime."""
     if payload.runtime not in CATALOG:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"unknown runtime {payload.runtime!r}; not in the catalog",
         )
     await _resolve_project(session, project_id)

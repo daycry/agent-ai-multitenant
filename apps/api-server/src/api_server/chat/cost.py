@@ -422,11 +422,14 @@ def compute_ai_cost(
     catalog: PriceCatalog = DEFAULT_AI_PRICE_CATALOG,
     complexity_estimates: dict[str, ComplexityTokenEstimate] | None = None,
     default_complexity: str = "m",
+    task_models: dict[str, str] | None = None,
 ) -> AICostBreakdown:
     """Compute AI cost range for a plan specification.
 
     For each task:
-      1. Resolve the model id (task-level override > ``default_model_id``).
+      1. Resolve the model id by precedence: ``task_models[task_id]``
+         (the model resolved from the task's assigned agent — override or
+         inherited, ADR 0065) > task-level ``model`` override > ``default_model_id``.
       2. Look up the price in the catalog. If missing, the task counts
          as 0 cost and the model id lands in ``missing_models``.
       3. Resolve the complexity to a `ComplexityTokenEstimate`. Unknown
@@ -440,6 +443,7 @@ def compute_ai_cost(
     """
     estimates = complexity_estimates or DEFAULT_COMPLEXITY_ESTIMATES
     tasks_raw = (specification or {}).get("tasks") or []
+    resolved_models = task_models or {}
 
     default_price = catalog.get(default_model_id)
     currency = default_price.currency if default_price else "USD"
@@ -459,7 +463,7 @@ def compute_ai_cost(
             complexity = default_complexity
         est = estimates[complexity]
 
-        model_id = str(task.get("model") or default_model_id)
+        model_id = resolved_models.get(tid) or str(task.get("model") or default_model_id)
         price = catalog.get(model_id)
         if price is None:
             missing.add(model_id)

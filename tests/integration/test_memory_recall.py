@@ -379,3 +379,54 @@ async def test_scope_filter_drops_team_when_not_in_list(
         await engine.dispose()
 
     assert seeded["rest_endpoints_team"] not in [h.memory_id for h in hits]
+
+
+# ---------------------------------------------------------------------------
+# Entity-match path (ADR 0059 Opción A — idea nativa de mem0)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_entity_match_surfaces_memory_not_found_by_text(
+    schema_at_head, migrations_pg_dsn: str, app_database_url: str
+) -> None:
+    """A memory whose CONTENT lacks the query term but whose extracted
+    ``entities`` contain it surfaces via the third RRF signal (entity-match)."""
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seeded = await _seed(migrations_pg_dsn)
+
+    mem_id = uuid4()
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO memory_entries"
+            " (id, tenant_id, scope, type, content, project_id, embedding, entities)"
+            " VALUES ($1, $2, 'project_shared', 'semantic', $3, $4, NULL, $5::jsonb)",
+            mem_id,
+            seeded["tenant_id"],
+            "El bus de eventos del proyecto se apoya en un broker dedicado.",
+            seeded["project_id"],
+            '["kafka"]',
+        )
+    finally:
+        await conn.close()
+
+    engine, session = await _open_session(app_database_url, seeded["tenant_id"])
+    try:
+        hits = await recall(
+            session,
+            query="kafka",
+            tenant_id=seeded["tenant_id"],
+            scopes=["project_shared", "team_shared", "global"],
+            project_id=seeded["project_id"],
+            team_id=seeded["team_id"],
+        )
+    finally:
+        await session.close()
+        await engine.dispose()
+
+    by_id = {h.memory_id: h for h in hits}
+    assert mem_id in by_id, "entity-only memory did not surface via entity-match"
+    hit = by_id[mem_id]
+    assert hit.entity_rank == 1
+    assert hit.bm25_rank is None  # 'kafka' is not in the content

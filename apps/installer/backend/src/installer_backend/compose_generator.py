@@ -77,6 +77,18 @@ IMAGE_GRAFANA = "grafana/grafana:11.2.0"
 IMAGE_NODE_EXPORTER = "prom/node-exporter:v1.8.2"
 IMAGE_ALERTMANAGER = "prom/alertmanager:v0.27.0"
 IMAGE_CADVISOR = "gcr.io/cadvisor/cadvisor:v0.49.1"
+# Read-only Docker API gateway with a per-endpoint ACL (Plan prod-01 task_09,
+# ADR 0060). The workers reach the daemon ONLY through this, never the raw
+# socket (Principio 2).
+IMAGE_DOCKER_SOCKET_PROXY = "tecnativa/docker-socket-proxy:0.3.0"
+IMAGE_CADDY = "caddy:2.8-alpine"
+# Voice mode (ADR 0073): STT (faster-whisper) + TTS (Kokoro), OpenAI-compatible
+# HTTP APIs, kept in lockstep with docker/docker-compose.yml. Both ship CPU
+# images here (the GPU variants are a documented overlay — the canonical compose
+# pins the same CPU tags); upstream uses rolling tags (no semver) so pin by
+# digest for a fully reproducible prod if needed.
+IMAGE_STT = "fedirz/faster-whisper-server:latest-cpu"
+IMAGE_TTS = "ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2"
 
 #: The application images the platform builds. The generator references them by
 #: tag (the installer pulls the released images); the build context lives in the
@@ -102,11 +114,15 @@ CORE_SERVICES: tuple[str, ...] = (
     "clamav",
     "docling-serve",
     "egress-proxy",
+    "docker-socket-proxy",
+    "migrations",
     "api-server",
     "orchestrator",
     "workers",
+    "workers-privileged",
     "notification-dispatcher",
     "admin-panel",
+    "caddy",
 )
 
 #: Services added only when the monitoring overlay is requested. Mirrors
@@ -128,6 +144,19 @@ OLLAMA_SERVICE = "ollama"
 OLLAMA_BOOTSTRAP_SERVICE = "ollama-bootstrap"
 GPU_SERVICE = OLLAMA_SERVICE
 
+#: The in-stack voice services, added when ``voice_mode != "none"`` (ADR 0073).
+#: ``stt`` = faster-whisper (POST /v1/audio/transcriptions), ``tts`` = Kokoro
+#: (POST /v1/audio/speech). Both are reached internally by the api-server (which
+#: also serves the córtex voice turn) at ``stt:8000`` / ``tts:8880``.
+STT_SERVICE = "stt"
+TTS_SERVICE = "tts"
+VOICE_SERVICES: tuple[str, ...] = (STT_SERVICE, TTS_SERVICE)
+
+#: Named volume that caches the Whisper model (downloaded on first use) so it
+#: survives restarts instead of being re-pulled every boot. Matches the
+#: canonical compose's ``whisper_models`` volume.
+WHISPER_MODELS_VOLUME = "whisper_models"
+
 #: Name of the AppArmor MAC profile every generated service pins via
 #: ``security_opt: apparmor=…`` (Plan 15 task_15_16). Unlike seccomp (a path),
 #: AppArmor profiles are referenced by the NAME they were loaded under with
@@ -144,6 +173,17 @@ def _logging_block() -> dict[str, Any]:
         "driver": "json-file",
         "options": {"max-size": "10m", "max-file": "5"},
     }
+
+
+# Capabilities the official infra images need back on top of cap_drop:[ALL] to
+# self-initialise: chown/chmod their data dir as root and drop to their service
+# user via gosu/su-exec. Without them postgres/redis/clamav/egress-proxy
+# crash-loop on start ("chmod/chown: Operation not permitted", "Permission
+# denied", "Unable to change to group"). prod-01: the cap_drop baseline
+# (task_08) was too broad for stateful official images — these add back ONLY the
+# self-init caps, never the dangerous ones (NET_ADMIN, SYS_ADMIN, …). Mirrors the
+# canonical compose's x-infra-caps anchor.
+_INFRA_CAPS = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"]
 
 
 def _hardening(
@@ -185,6 +225,44 @@ def _hardening(
     if cap_drop_all:
         block["cap_drop"] = ["ALL"]
     return block
+
+
+def _healthcheck(test: str, *, start_period: str = "30s", timeout: str = "10s") -> dict[str, Any]:
+    """A CMD-SHELL healthcheck block (task_prod01_07). ``start_period`` gives a
+    grace window for boot before failures count (Celery workers take longer)."""
+
+    return {
+        "test": ["CMD-SHELL", test],
+        "interval": "30s",
+        "timeout": timeout,
+        "retries": 5,
+        "start_period": start_period,
+    }
+
+
+def _http_healthcheck(url: str, *, start_period: str = "30s") -> dict[str, Any]:
+    """HTTP liveness probe using python's stdlib (no shell, no external tool).
+
+    The first-party app images are ``python:3.12-slim``, which ships NEITHER
+    wget NOR curl. A wget-based healthcheck therefore marks api-server /
+    orchestrator permanently unhealthy, so ``depends_on: service_healthy`` is
+    never satisfied and the whole stack fails to come up (prod-01: verified live
+    — the api-server only went healthy once the probe used python). Celery lanes
+    use ``celery inspect ping`` (binary present in their image), so they keep the
+    CMD-SHELL ``_healthcheck`` helper.
+    """
+
+    code = (
+        "import urllib.request,sys;"
+        f"sys.exit(0 if urllib.request.urlopen('{url}',timeout=5).status==200 else 1)"
+    )
+    return {
+        "test": ["CMD", "python", "-c", code],
+        "interval": "30s",
+        "timeout": "5s",
+        "retries": 5,
+        "start_period": start_period,
+    }
 
 
 def _env_ref(var: str, dev_default: str | None, *, prod: bool) -> str:
@@ -233,6 +311,7 @@ def _postgres_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
         "networks": ["agentic-net"],
     }
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    svc["cap_add"] = list(_INFRA_CAPS)  # postgres self-inits PGDATA as root
     return svc
 
 
@@ -263,6 +342,7 @@ def _redis_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # no
         "networks": ["agentic-net"],
     }
     svc.update(_hardening(limits_cpus="1.0", limits_memory="1g"))
+    svc["cap_add"] = list(_INFRA_CAPS)  # redis chowns /data + drops to redis user
     return svc
 
 
@@ -289,11 +369,14 @@ def _minio_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
 
 
 def _vault_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
-    # Vault needs IPC_LOCK to mlock its memory — it opts out of the blanket
-    # cap-drop (matches the canonical compose's `cap_add: [IPC_LOCK]`).
+    # Vault drops ALL caps like every other service but adds IPC_LOCK back to
+    # mlock its memory (matches the canonical compose's cap_drop:[ALL] +
+    # cap_add:[IPC_LOCK] — one hardening criterion, prod-01 task_08).
     svc: dict[str, Any] = {
         "image": IMAGE_VAULT,
-        "cap_add": ["IPC_LOCK"],
+        # IPC_LOCK to mlock memory; SETFCAP because the entrypoint setcaps its
+        # own binary; plus the self-init/user-drop caps (_INFRA_CAPS).
+        "cap_add": ["IPC_LOCK", "SETFCAP", *_INFRA_CAPS],
         "environment": {
             "VAULT_ADDR": "http://0.0.0.0:8200",
             "VAULT_API_ADDR": "http://0.0.0.0:8200",
@@ -317,8 +400,9 @@ def _vault_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # no
         },
         "networks": ["agentic-net"],
     }
-    # cap_drop_all=False: keep IPC_LOCK; no-new-privileges + limits still apply.
-    svc.update(_hardening(limits_cpus="1.0", limits_memory="512m", cap_drop_all=False))
+    # cap_drop:[ALL] + cap_add:[IPC_LOCK] (above) — drop everything, add back
+    # only the cap Vault needs to mlock memory. no-new-privileges + limits apply.
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
     return svc
 
 
@@ -337,6 +421,7 @@ def _clamav_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # n
         "networks": ["agentic-net"],
     }
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    svc["cap_add"] = list(_INFRA_CAPS)  # clamav chowns /var/lib/clamav + drops user
     return svc
 
 
@@ -345,7 +430,9 @@ def _docling_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # 
         "image": IMAGE_DOCLING,
         "environment": {"DOCLING_SERVE_ENABLE_UI": "false"},
         "healthcheck": {
-            "test": ["CMD-SHELL", "wget -q --spider http://localhost:5001/health || exit 1"],
+            # GET, not --spider (HEAD): docling's /health rejects HEAD, so a
+            # spider check wrongly marks it unhealthy though it serves 200 on GET.
+            "test": ["CMD-SHELL", "wget -q -O /dev/null http://localhost:5001/health || exit 1"],
             "interval": "30s",
             "timeout": "5s",
             "retries": 5,
@@ -375,57 +462,179 @@ def _egress_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
         "networks": ["agentic-net", "agentic-agents"],
     }
     svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
+    svc["cap_add"] = list(_INFRA_CAPS)  # tinyproxy setgid/setuid drop on start
     return svc
 
 
-def _app_environment(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
-    """Shared environment for the platform application services.
+def _docker_socket_proxy_service(
+    cfg: InstallerConfig,  # noqa: ARG001 — uniform builder signature
+    *,
+    prod: bool,  # noqa: ARG001 — uniform builder signature
+) -> dict[str, Any]:
+    """Least-privilege Docker API gateway (Plan prod-01 task_09 / sandbox-1, ADR
+    0060). The workers must launch ephemeral runtime containers, but handing them
+    the raw ``/var/run/docker.sock`` is a full host-root escape (Principio 2). So
+    this proxy holds the socket (read-only mount) and exposes a TCP API on a
+    DEDICATED internal network with a per-endpoint ACL: containers/images/
+    networks + POST are allowed (create + wire runtimes); exec/volumes/swarm and
+    everything else are denied (no `docker exec`, no host bind-mounts, no swarm).
+    """
 
-    Wires the DB/Redis/MinIO/Vault references + the deployment environment so
-    the runtime services' prod secret guard sees a real ``environment`` value.
-    Secrets are ``${ENV}`` references only.
+    svc: dict[str, Any] = {
+        "image": IMAGE_DOCKER_SOCKET_PROXY,
+        "environment": {
+            # Allow only what launching a sandbox runtime needs.
+            "CONTAINERS": "1",
+            "IMAGES": "1",
+            "NETWORKS": "1",
+            "POST": "1",
+            # Deny the dangerous surface explicitly (defaults are 0, pinned for
+            # clarity + as a regression guard).
+            "EXEC": "0",
+            "VOLUMES": "0",
+            "SWARM": "0",
+            "SECRETS": "0",
+            "CONFIGS": "0",
+            "NODES": "0",
+            "SERVICES": "0",
+            "TASKS": "0",
+            "PLUGINS": "0",
+            "SYSTEM": "0",
+            "INFO": "0",
+        },
+        "volumes": ["/var/run/docker.sock:/var/run/docker.sock:ro"],
+        "healthcheck": _healthcheck(
+            "wget -q --spider http://localhost:2375/_ping || exit 1", start_period="10s"
+        ),
+        # Dedicated internal net ONLY (no agentic-net, no agentic-agents): only
+        # the workers reach the Docker API, never the untrusted runtimes.
+        "networks": ["agentic-docker"],
+    }
+    svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
+    return svc
+
+
+def _app_environment(cfg: InstallerConfig, prefix: str, *, prod: bool) -> dict[str, Any]:
+    """Config EVERY platform app service reads, emitted PREFIXED with that
+    service's pydantic ``env_prefix`` (``API_SERVER_`` / ``ORCHESTRATOR_`` /
+    ``WORKERS_`` / ``NOTIFY_``).
+
+    Emitting these UNprefixed (the old behaviour) meant the runtime — which reads
+    ``<PREFIX><FIELD>`` — silently fell back to its dev default and the prod
+    dev-secret guard never even saw ``environment=prod`` (finding secrets-2,
+    deploy-3 pata 1). Only the two keys read by every service live here; each
+    service builder adds its own keys (see ``_app_env`` usage). Secrets are
+    ``${ENV}`` references only (no ``:-default`` in prod → fail loud).
     """
 
     return {
-        "ENVIRONMENT": cfg.system.environment.value,
-        "PLATFORM_DOMAIN": cfg.system.domain,
-        "DATABASE_URL": _env_ref("DATABASE_URL", None, prod=prod),
-        "ADMIN_DATABASE_URL": _env_ref("ADMIN_DATABASE_URL", None, prod=prod),
-        "REDIS_URL": _env_ref("REDIS_URL", "redis://redis:6379/0", prod=prod),
-        "MINIO_ENDPOINT": "minio:9000",
-        "MINIO_ACCESS_KEY": _env_ref("MINIO_ACCESS_KEY", None, prod=prod),
-        "MINIO_SECRET_KEY": _env_ref("MINIO_SECRET_KEY", None, prod=prod),
-        "VAULT_ADDR": "http://vault:8200",
+        f"{prefix}ENVIRONMENT": cfg.system.environment.value,
+        # Reference the per-service DSN the .env carries (config_generators
+        # writes one per service: api-server gets the app role, workers/notify
+        # the migrations role, etc.) — NOT a shared bare var.
+        f"{prefix}DATABASE_URL": _env_ref(f"{prefix}DATABASE_URL", None, prod=prod),
     }
 
 
-def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+def _migrations_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    """One-shot that runs ``alembic upgrade head`` before the apps start (Plan
+    prod-01 task_12 / deploy-6). Uses the api-server image (it ships the
+    migrations + alembic) as the migrations role (``ADMIN_DATABASE_URL``,
+    BYPASSRLS). env.py takes a ``pg_advisory_xact_lock`` so concurrent runs
+    serialize. The app services ``depends_on`` it with
+    ``service_completed_successfully`` (wired in :func:`generate_compose`)."""
+
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/api-server:{APP_IMAGE_TAG}",
-        "environment": _app_environment(cfg, prod=prod),
-        "ports": [f"{cfg.ports.api_server}:8000"],
+        "command": "alembic upgrade head",
+        "environment": {
+            # Alembic reads DATABASE_URL; migrations run as the migrations role.
+            "DATABASE_URL": _env_ref("ADMIN_DATABASE_URL", None, prod=prod),
+        },
+        "depends_on": {"postgres": {"condition": "service_healthy"}},
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
+    svc["restart"] = "no"  # one-shot: run once and exit
+    return svc
+
+
+def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    env = _app_environment(cfg, "API_SERVER_", prod=prod)
+    env.update(
+        {
+            "API_SERVER_ADMIN_DATABASE_URL": _env_ref(
+                "API_SERVER_ADMIN_DATABASE_URL", None, prod=prod
+            ),
+            # In-stack service URLs are fixed by this compose → literals (no .env
+            # ref needed). Redis logical DBs: 0 cache, 1 broker, 2 result.
+            "API_SERVER_REDIS_URL": "redis://redis:6379/0",
+            "API_SERVER_BROKER_URL": "redis://redis:6379/1",
+            "API_SERVER_RESULT_BACKEND": "redis://redis:6379/2",
+            "API_SERVER_VAULT_URL": "http://vault:8200",
+            "API_SERVER_MINIO_URL": "http://minio:9000",
+            # Secrets: reference the per-service prefixed .env var that
+            # config_generators.build_env_vars writes (the compose↔.env contract
+            # is asserted by tests/unit/test_compose_env_contract.py). VAULT_TOKEN
+            # is NOT here: it is optional (default None) and injected by the Vault
+            # bootstrap (task 15_09), not the .env.
+            "API_SERVER_JWT_SECRET": _env_ref("API_SERVER_JWT_SECRET", None, prod=prod),
+            "API_SERVER_MINIO_ACCESS_KEY": _env_ref("API_SERVER_MINIO_ACCESS_KEY", None, prod=prod),
+            "API_SERVER_MINIO_SECRET_KEY": _env_ref("API_SERVER_MINIO_SECRET_KEY", None, prod=prod),
+            "API_SERVER_SSO_ENCRYPTION_KEY": _env_ref(
+                "API_SERVER_SSO_ENCRYPTION_KEY", None, prod=prod
+            ),
+            "API_SERVER_NOTIFICATION_ENCRYPTION_KEY": _env_ref(
+                "API_SERVER_NOTIFICATION_ENCRYPTION_KEY", None, prod=prod
+            ),
+            "API_SERVER_REVIEW_URL_SIGNING_SECRET": _env_ref(
+                "API_SERVER_REVIEW_URL_SIGNING_SECRET", None, prod=prod
+            ),
+            "API_SERVER_INCOMING_WEBHOOK_ENCRYPTION_KEY": _env_ref(
+                "API_SERVER_INCOMING_WEBHOOK_ENCRYPTION_KEY", None, prod=prod
+            ),
+            # Public base URL the IdP redirects the BROWSER back to. Carries the
+            # reverse proxy's /api prefix (ADR 0061): the IdP returns to
+            # https://{domain}/api/auth/sso/oidc/callback and Caddy's
+            # handle_path /api/* strips /api before reaching the api-server (the
+            # app's dev default localhost:8001 is wrong for prod).
+            "API_SERVER_SSO_REDIRECT_BASE_URL": f"https://{cfg.system.domain}/api",
+        }
+    )
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/api-server:{APP_IMAGE_TAG}",
+        "environment": env,
+        # No host ports: the TLS reverse proxy (caddy) is the only published
+        # surface (ADR 0061 / deploy-7); api-server is reached internally on
+        # agentic-net as api-server:8000.
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},
             "vault": {"condition": "service_healthy"},
         },
-        "healthcheck": {
-            "test": ["CMD-SHELL", "wget -q --spider http://localhost:8000/healthz || exit 1"],
-            "interval": "30s",
-            "timeout": "5s",
-            "retries": 5,
-            "start_period": "30s",
-        },
-        "networks": ["agentic-net"],
+        "healthcheck": _http_healthcheck("http://localhost:8000/healthz"),
+        # agentic-agents (internal) so the sandbox runtimes can reach the
+        # internal API directly, bypassing the egress-proxy (ADR 0060 B1,
+        # task_11). The PUBLIC surface stays on agentic-net / behind the TLS
+        # reverse proxy (Fase E).
+        "networks": ["agentic-net", "agentic-agents"],
     }
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
     return svc
 
 
 def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    env = _app_environment(cfg, "ORCHESTRATOR_", prod=prod)
+    env.update(
+        {
+            "ORCHESTRATOR_REDIS_URL": "redis://redis:6379/0",
+            "ORCHESTRATOR_BROKER_URL": "redis://redis:6379/1",
+        }
+    )
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/orchestrator:{APP_IMAGE_TAG}",
-        "environment": _app_environment(cfg, prod=prod),
+        "environment": env,
+        "healthcheck": _http_healthcheck("http://localhost:8002/healthz"),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},
@@ -436,31 +645,139 @@ def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
     return svc
 
 
+# Celery queue split (mirror of workers.celery_app.QUEUE_NAMES — the unit test
+# cross-checks this against the real 7-queue topology so it cannot drift). The
+# generic pool drains every non-privileged queue; the ``privileged`` queue
+# (backups, key rotation — touches Vault/secrets) is drained ONLY by the
+# singleton workers-privileged lane under the strictest profile, never the
+# generic pool (runbook 06-capacity-management.md).
+_WORKER_GENERIC_QUEUES = "default,heavy,gpu,ingestion,test,review"
+_WORKER_PRIVILEGED_QUEUE = "privileged"
+
+# Both worker lanes sit on three nets (task_09): agentic-net (general), the
+# internal agentic-agents (reach the egress-proxy + the runtimes they launch),
+# and the internal agentic-docker (reach the docker-socket-proxy).
+_WORKER_NETWORKS = ["agentic-net", "agentic-agents", "agentic-docker"]
+
+
+def _workers_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    """The WORKERS_* environment shared by both worker lanes (same Settings)."""
+    env = _app_environment(cfg, "WORKERS_", prod=prod)
+    env.update(
+        {
+            "WORKERS_BROKER_URL": "redis://redis:6379/1",
+            "WORKERS_RESULT_BACKEND": "redis://redis:6379/2",
+            "WORKERS_EVENTS_REDIS_URL": "redis://redis:6379/3",
+            "WORKERS_DATA_ROOT": cfg.storage.data_root,
+            # Docker API via the least-privilege proxy, never the raw socket
+            # (task_09, ADR 0060). DOCKER_HOST is read by the docker SDK itself,
+            # not a WORKERS_ Settings field, so it stays unprefixed.
+            "DOCKER_HOST": "tcp://docker-socket-proxy:2375",
+            # Launched runtimes reach LLM providers only through the egress
+            # allowlist proxy (field egress_proxy_url).
+            "WORKERS_EGRESS_PROXY_URL": "http://egress-proxy:8888",
+            # STRICT profiles the worker pins onto the UNTRUSTED runtimes it
+            # launches (task_10 / sandbox-2). Without these the defaults are ""
+            # and the sandboxes run with Docker's default profiles. The seccomp
+            # JSON is bind-mounted by _workers_volumes; the AppArmor profile is
+            # referenced by the NAME loaded on the host (runbook + installer
+            # prereq load docker/apparmor/agent-runtime.profile).
+            "WORKERS_SECCOMP_PROFILE_PATH": "/etc/agentic/seccomp/agent-runtime.json",
+            "WORKERS_APPARMOR_PROFILE": "agent-runtime",
+            # Backup wiring (workers-6 / prod-04). The NAMES are pinned here so
+            # the .env contract holds; the correct VALUES (a dedicated pg_dump
+            # DSN, the bind-mount capture path) are prod-04's job — TODO(prod-04).
+            # Default the backup DSN to the migrations-role DSN the workers
+            # already carry (pg_dump needs broad read).
+            "WORKERS_BACKUP_DATABASE_URL": _env_ref("WORKERS_DATABASE_URL", None, prod=prod),
+            "WORKERS_BACKUP_ENCRYPTION_ENABLED": "true",
+            "WORKERS_BACKUP_ENCRYPTION_VAULT_KEY": "agentic-platform/backups/encryption-key",
+        }
+    )
+    return env
+
+
+def _workers_volumes(cfg: InstallerConfig) -> list[str]:
+    """Binds both worker lanes need: the data root (bare repos + per-task git
+    worktrees, same path in/out so worktree paths resolve) and the seccomp
+    profiles the worker pins onto the UNTRUSTED runtimes it launches
+    (``docker/seccomp/agent-runtime.json``; ``WORKERS_SECCOMP_PROFILE`` points
+    at it — set in task_prod01_10)."""
+    return [
+        f"{cfg.storage.data_root}:{cfg.storage.data_root}",
+        "./docker/seccomp:/etc/agentic/seccomp:ro",
+    ]
+
+
 def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     # worker_replicas / worker_memory_gib come from the wizard's ResourceConfig
     # (parametrised resource allocation, task 15_03).
     mem = f"{cfg.resources.worker_memory_gib}g"
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
-        "environment": _app_environment(cfg, prod=prod),
+        "command": f"celery -A workers.celery_app worker --queues={_WORKER_GENERIC_QUEUES}",
+        "environment": _workers_env(cfg, prod=prod),
+        "volumes": _workers_volumes(cfg),
+        "healthcheck": _healthcheck(
+            "celery -A workers.celery_app inspect ping -t 5 || exit 1", start_period="40s"
+        ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},
         },
-        # Connected to the internal agents network too so workers can launch
-        # the egress-proxied agent runtimes.
-        "networks": ["agentic-net"],
+        "networks": _WORKER_NETWORKS,
     }
     svc.update(_hardening(limits_cpus="4.0", limits_memory=mem))
-    # Scale the Celery worker pool per the wizard's resource choice.
+    # Scale the GENERIC Celery worker pool per the wizard's resource choice.
     svc["deploy"]["replicas"] = cfg.resources.worker_replicas
     return svc
 
 
+def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    """Separate lane that drains ONLY the ``privileged`` queue (backups, key
+    rotation). Singleton (replicas=1) — its periodic jobs must not double-run —
+    and meant to carry the strictest sandbox profile (set in task_prod01_10).
+    Same image + WORKERS_* env as the generic pool; different queue + scale."""
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
+        "command": (
+            f"celery -A workers.celery_app worker "
+            f"--queues={_WORKER_PRIVILEGED_QUEUE} --concurrency=1"
+        ),
+        "environment": _workers_env(cfg, prod=prod),
+        "volumes": _workers_volumes(cfg),
+        "healthcheck": _healthcheck(
+            "celery -A workers.celery_app inspect ping -t 5 || exit 1", start_period="40s"
+        ),
+        "depends_on": {
+            "postgres": {"condition": "service_healthy"},
+            "redis": {"condition": "service_healthy"},
+        },
+        "networks": _WORKER_NETWORKS,
+    }
+    svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    svc["deploy"]["replicas"] = 1
+    return svc
+
+
 def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    env = _app_environment(cfg, "NOTIFY_", prod=prod)
+    env.update(
+        {
+            "NOTIFY_BROKER_URL": "redis://redis:6379/1",
+            "NOTIFY_RESULT_BACKEND": "redis://redis:6379/2",
+            "NOTIFY_EVENTS_REDIS_URL": "redis://redis:6379/3",
+            "NOTIFY_NOTIFICATION_ENCRYPTION_KEY": _env_ref(
+                "NOTIFY_NOTIFICATION_ENCRYPTION_KEY", None, prod=prod
+            ),
+        }
+    )
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/notification-dispatcher:{APP_IMAGE_TAG}",
-        "environment": _app_environment(cfg, prod=prod),
+        "environment": env,
+        "healthcheck": _healthcheck(
+            "celery -A notification_dispatcher inspect ping -t 5 || exit 1", start_period="40s"
+        ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
             "redis": {"condition": "service_healthy"},
@@ -472,18 +789,65 @@ def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dic
 
 
 def _admin_panel_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
-    admin_port = cfg.ports.admin_panel
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/admin-panel:{APP_IMAGE_TAG}",
         "environment": {
             "NODE_ENV": "production" if prod else "development",
             "PLATFORM_DOMAIN": cfg.system.domain,
         },
-        "ports": [f"{admin_port}:3000"],
+        # No host ports: the SPA is served through the TLS reverse proxy (caddy),
+        # reached internally as admin-panel:3000 (ADR 0061 / deploy-7). NOTE: the
+        # caddy service depends_on this one with condition=service_healthy; that
+        # is satisfied by the HEALTHCHECK baked into the admin-panel image
+        # (apps/admin-panel/Dockerfile), not a compose-level healthcheck here.
         "depends_on": {"api-server": {"condition": "service_healthy"}},
         "networks": ["agentic-net"],
     }
     svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
+    return svc
+
+
+def _reverse_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    """The single TLS-terminating reverse proxy — and the ONLY service that
+    publishes host ports (ADR 0061, Plan prod-01 task_15 / deploy-7).
+
+    Caddy serves one origin ``https://{domain}``: the admin-panel SPA at ``/``
+    and the api-server under ``/api/*`` (see :mod:`installer_backend.proxy_generator`
+    for the routing). The generated ``Caddyfile`` is bind-mounted read-only; the
+    internal CA / ACME material persists under ``{data_root}/caddy/data`` so the
+    self-signed root is not regenerated on every restart. With ``cap_drop:[ALL]``
+    the process cannot bind 80/443, so ``NET_BIND_SERVICE`` is added back — the
+    single capability needed, mirroring Vault's ``IPC_LOCK`` exception.
+    """
+
+    data_root = cfg.storage.data_root
+    volumes = [
+        "./caddy/Caddyfile:/etc/caddy/Caddyfile:ro",
+        f"{data_root}/caddy/data:/data",
+        f"{data_root}/caddy/config:/config",
+    ]
+    if cfg.system.tls_mode == "provided":
+        # The corporate cert+key the operator dropped under {data_root}/caddy/tls.
+        volumes.append(f"{data_root}/caddy/tls:/etc/caddy/tls:ro")
+
+    svc: dict[str, Any] = {
+        "image": IMAGE_CADDY,
+        # The ONLY published surface. Caddy listens on 80/443 inside the container.
+        "ports": ["80:80", "443:443"],
+        "volumes": volumes,
+        "depends_on": {
+            "api-server": {"condition": "service_healthy"},
+            "admin-panel": {"condition": "service_healthy"},
+        },
+        # Plain-HTTP /healthz on :80 (no redirect to https) so the self-signed
+        # cert + 308 don't mark the proxy unhealthy.
+        "healthcheck": _healthcheck(
+            "wget -q --spider http://127.0.0.1:80/healthz || exit 1", start_period="15s"
+        ),
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
+    svc["cap_add"] = ["NET_BIND_SERVICE"]
     return svc
 
 
@@ -548,6 +912,74 @@ def _ollama_bootstrap_service(
     # restart (it pulls once and exits) — override the restart policy to "no".
     svc.update(_hardening(limits_cpus="1.0", limits_memory="2g"))
     svc["restart"] = "no"
+    return svc
+
+
+def _python_health(binary: str, url: str, *, start_period: str) -> dict[str, Any]:
+    """A python-stdlib HTTP liveness probe (urllib) for the voice images.
+
+    The stt/tts images ship NEITHER wget NOR curl (only a python interpreter),
+    so a wget-based check would mark them permanently unhealthy. ``binary`` is
+    ``python3`` for faster-whisper and ``python`` for Kokoro (its venv exposes
+    ``python``), mirroring docker/docker-compose.yml. ``urlopen`` raises (exit
+    != 0) when /health is not yet serving.
+    """
+
+    return {
+        "test": [
+            "CMD",
+            binary,
+            "-c",
+            f"import urllib.request; urllib.request.urlopen('{url}', timeout=4)",
+        ],
+        "interval": "30s",
+        "timeout": "5s",
+        "retries": 5,
+        "start_period": start_period,
+    }
+
+
+def _stt_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    """Speech-to-Text for the Assistant + córtex voice mode (ADR 0073).
+
+    faster-whisper (CTranslate2) with an OpenAI-compatible API. The Whisper
+    model is downloaded on first use and cached in the ``whisper_models`` named
+    volume (the long ``start_period`` covers that first download). Internal
+    service: no host ports — the api-server reaches it at ``stt:8000``. Mirrors
+    docker/docker-compose.yml; the healthcheck probes with python3 (no wget in
+    the image).
+    """
+
+    svc: dict[str, Any] = {
+        "image": IMAGE_STT,
+        "environment": {
+            # CPU-friendly ES+EN default; large-v3 lives behind the GPU overlay.
+            "WHISPER__MODEL": "Systran/faster-whisper-small",
+            "WHISPER__INFERENCE_DEVICE": "cpu",
+        },
+        "volumes": [f"{WHISPER_MODELS_VOLUME}:/root/.cache/huggingface"],
+        # 1st boot downloads the model → generous grace window.
+        "healthcheck": _python_health(
+            "python3", "http://localhost:8000/health", start_period="120s"
+        ),
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="2.0", limits_memory="4g"))
+    return svc
+
+
+def _tts_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    """Text-to-Speech for the voice mode (ADR 0073) — Kokoro-82M with an
+    OpenAI-compatible API (ES+EN voices). Internal: the api-server reaches it at
+    ``tts:8880``. Mirrors docker/docker-compose.yml; healthcheck probes with
+    python (the image exposes ``python`` in its venv, not wget)."""
+
+    svc: dict[str, Any] = {
+        "image": IMAGE_TTS,
+        "healthcheck": _python_health("python", "http://localhost:8880/health", start_period="60s"),
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
     return svc
 
 
@@ -638,9 +1070,18 @@ def _cadvisor_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  #
 
     Unlike the other trusted services it MUST run ``privileged`` with host
     cgroup/Docker mounts to read container stats, so it is NOT cap-dropped and
-    does NOT pin the AppArmor profile (both would deny the host access it needs).
-    All mounts are read-only and ``no-new-privileges`` is still set. Mirrors
-    docker/docker-compose.monitoring.yml.
+    does NOT pin the AppArmor profile here. NOTE: this CONTRADICTS
+    docker/docker-compose.monitoring.yml, which DOES pin
+    ``apparmor=agentic-default`` on cAdvisor. Whether the profile is the right
+    posture for a privileged container (could it deny the host access it needs
+    on real Linux?) is an UNRESOLVED question, and the test suite encodes both
+    sides: tests/unit/test_compose_generator.py asserts NO apparmor here, while
+    tests/security/test_apparmor.py asserts apparmor on every generated service.
+    Resolving the contradiction is owned by the monitoring/sandbox hardening
+    plans (finding sandbox-8); until then the generator keeps its committed
+    behaviour (no apparmor on privileged cAdvisor) and the two security
+    assertions are xfail-quarantined. All mounts are read-only;
+    ``no-new-privileges`` is still set.
     """
     return {
         "image": IMAGE_CADVISOR,
@@ -709,13 +1150,19 @@ _BUILDERS = {
     "clamav": _clamav_service,
     "docling-serve": _docling_service,
     "egress-proxy": _egress_proxy_service,
+    "docker-socket-proxy": _docker_socket_proxy_service,
+    "migrations": _migrations_service,
     "api-server": _api_server_service,
     "orchestrator": _orchestrator_service,
     "workers": _workers_service,
+    "workers-privileged": _workers_privileged_service,
     "notification-dispatcher": _notification_dispatcher_service,
     "admin-panel": _admin_panel_service,
+    "caddy": _reverse_proxy_service,
     "ollama": _ollama_service,
     "ollama-bootstrap": _ollama_bootstrap_service,
+    "stt": _stt_service,
+    "tts": _tts_service,
     "prometheus": _prometheus_service,
     "node-exporter": _node_exporter_service,
     "alertmanager": _alertmanager_service,
@@ -760,6 +1207,16 @@ def _provider_env_for(cfg: InstallerConfig) -> dict[str, str]:
         env["API_SERVER_OLLAMA_URL"] = "http://ollama:11434"
         env["API_SERVER_EMBEDDING_MODEL"] = cfg.resources.embedding_model
         env["WORKERS_MEMORY_EMBEDDER_BASE_URL"] = "http://ollama:11434"
+
+    # Voice wiring (ADR 0073): when the in-stack stt/tts are deployed, point the
+    # api-server (which serves BOTH the Assistant voice loop and the córtex voice
+    # turn — they read the same assistant_{stt,tts}_url settings) at them.
+    # Without these the runtime falls back to its localhost dev defaults and the
+    # voice mode silently fails in production (the bug this fixes). API_SERVER_*
+    # are read only by the api-server → harmless on the other app services.
+    if cfg.resources.voice_mode != "none":
+        env["API_SERVER_ASSISTANT_STT_URL"] = f"http://{STT_SERVICE}:8000"
+        env["API_SERVER_ASSISTANT_TTS_URL"] = f"http://{TTS_SERVICE}:8880"
     return env
 
 
@@ -783,20 +1240,27 @@ def selected_services(cfg: InstallerConfig, *, monitoring: bool) -> list[str]:
 
     Core services are always present; the in-stack ``ollama`` service + its
     ``ollama-bootstrap`` one-shot are added when ``ollama_mode != "none"`` (ADR
-    0056); the monitoring overlay services only when requested.
+    0056); the voice ``stt``/``tts`` services when ``voice_mode != "none"`` (ADR
+    0073); the monitoring overlay services only when requested.
     """
 
     services = list(CORE_SERVICES)
     if cfg.resources.ollama_mode != "none":
         services.append(OLLAMA_SERVICE)
         services.append(OLLAMA_BOOTSTRAP_SERVICE)
+    if cfg.resources.voice_mode != "none":
+        services.extend(VOICE_SERVICES)
     if monitoring:
         services.extend(MONITORING_SERVICES)
     return services
 
 
 def _networks_block() -> dict[str, Any]:
-    """The two canonical networks (agentic-net + the internal agentic-agents)."""
+    """The platform networks: agentic-net (egress), the internal agentic-agents
+    (sandbox ↔ egress-proxy), and the internal agentic-docker — a DEDICATED net
+    that carries ONLY the workers ↔ docker-socket-proxy traffic so the Docker
+    API is never reachable from the untrusted agent runtimes (Plan prod-01
+    task_09, ADR 0060)."""
 
     return {
         "agentic-net": {"name": "agentic-net", "driver": "bridge"},
@@ -805,6 +1269,11 @@ def _networks_block() -> dict[str, Any]:
             "driver": "bridge",
             "internal": True,
             "driver_opts": {"com.docker.network.bridge.enable_icc": "true"},
+        },
+        "agentic-docker": {
+            "name": "agentic-docker",
+            "driver": "bridge",
+            "internal": True,
         },
     }
 
@@ -821,7 +1290,10 @@ def generate_compose(
         ``gpu``) with an NVIDIA device reservation.
       * ``cfg.providers`` → only the enabled ADR-0021 providers get their wiring
         injected into the application services' environment.
-      * ``cfg.ports`` → host port mappings (admin panel, etc.).
+      * ``cfg.ports`` → retained in the wizard model for back-compat / dev
+        overrides, but NO LONGER mapped to the host in the generated production
+        compose: the TLS reverse proxy (``caddy``) is the only published surface
+        (ADR 0061).
       * ``cfg.storage.data_root`` → the bind-mount base for every stateful
         service.
       * ``monitoring`` → adds the Prometheus/Grafana/node-exporter overlay.
@@ -835,6 +1307,16 @@ def generate_compose(
     service_names = selected_services(cfg, monitoring=monitoring)
     provider_env = _provider_env_for(cfg)
 
+    # The platform app services that read the schema → must wait for the
+    # one-shot migrations to finish (task_12 / deploy-6).
+    migration_dependents = (
+        "api-server",
+        "orchestrator",
+        "workers",
+        "workers-privileged",
+        "notification-dispatcher",
+    )
+
     services: dict[str, Any] = {}
     for name in service_names:
         builder = _BUILDERS[name]
@@ -844,6 +1326,11 @@ def generate_compose(
             env = svc.setdefault("environment", {})
             assert isinstance(env, dict)
             env.update(provider_env)
+        # Gate the apps on the schema being migrated.
+        if name in migration_dependents:
+            deps = svc.setdefault("depends_on", {})
+            assert isinstance(deps, dict)
+            deps["migrations"] = {"condition": "service_completed_successfully"}
         services[name] = svc
 
     compose: dict[str, Any] = {
@@ -851,6 +1338,12 @@ def generate_compose(
         "services": services,
         "networks": _networks_block(),
     }
+    # Declare the named volume(s) any generated service references. The only one
+    # is the Whisper model cache for the voice stt service (every other stateful
+    # service uses a {data_root} bind mount). Declared only when voice is on so
+    # the compose carries no dangling volume otherwise.
+    if STT_SERVICE in services:
+        compose["volumes"] = {WHISPER_MODELS_VOLUME: None}
     return compose
 
 

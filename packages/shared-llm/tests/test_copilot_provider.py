@@ -407,3 +407,17 @@ async def test_poll_once_unknown_error_raises_auth_error() -> None:
     p = CopilotProvider(http_client=_mock_client(handler))
     with pytest.raises(AuthError, match="Device flow poll failed"):
         await p.poll_device_flow_once("dev-abc")
+
+
+@pytest.mark.asyncio
+async def test_owned_client_is_fresh_per_call() -> None:
+    """Regression: the chat path (complete/stream/JWT mint) uses an OWNED client per
+    call bound to the current loop, so the provider survives being reused across event
+    loops (planning bridge → asyncio.run per step)."""
+    p = CopilotProvider(github_token="gho_test")  # owned (no injected http_client)
+    async with p._acquire() as c1:
+        first = c1
+    async with p._acquire() as c2:
+        second = c2
+    assert first is not second
+    assert first.is_closed and second.is_closed

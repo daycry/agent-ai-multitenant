@@ -168,6 +168,57 @@ class Settings(BaseSettings):
         "a small local model is the right trade-off (no quota, no egress).",
     )
 
+    # ----- Córtex F2: distilador afectivo (ADR 0075) -----
+    # El distilador afectivo (``workers.cortex_distill_affect``) puntúa cada turno
+    # del córtex contra los drives/identidad y emite un ``delta PAD + razón`` que
+    # el motor determinista aplica. Corre POST-turno, FAIL-OPEN (Ollama caído ⇒
+    # delta=0) y SIN egress: usa Ollama LOCAL (ya en el catálogo cerrado, ADR
+    # 0021), un modelo pequeño y barato (el razonamiento profundo sigue saliendo
+    # de claude_sdk en F1). Estos envs son sólo el cableado del host hacia Ollama;
+    # default local sin egress.
+    cortex_affect_llm_base_url: str = Field(
+        default="http://localhost:11434/v1",
+        description="OpenAI-compatible base URL que el distilador afectivo del "
+        "córtex (ADR 0075) llama. Default Ollama LOCAL (`ollama serve`) — sin "
+        "egress. Apúntalo a un endpoint gestionado en entornos sin Ollama local.",
+    )
+    cortex_affect_llm_model: str = Field(
+        default="llama3.1",
+        description="Modelo que el distilador afectivo pide. El appraisal es "
+        "barato; un modelo local pequeño es la decisión correcta (sin cuota, sin "
+        "egress). El catálogo LLM cerrado (ADR 0021) queda intacto.",
+    )
+
+    # ----- Córtex F4: bucles cognitivos de fondo (ADR 0078) -----
+    # Las tres tareas autónomas (curiosidad / reflexión programada / mantenimiento)
+    # corren por Celery beat a una cadencia operator-tunable; el ENABLE real es el
+    # kill-switch `cortex.autonomy_enabled` (platform setting, default OFF) leído EN
+    # VIVO dentro de cada tarea — la entrada del beat siempre existe (como price-sync),
+    # pero con el kill-switch OFF cada pasada sale no-op. Estos crons los lee el beat
+    # PROCESS al boot. La curiosidad consume coste/egress, así que su cadencia es
+    # conservadora por defecto.
+    cortex_curiosity_cron: str = Field(
+        default="*/30 * * * *",
+        description="Cron (minute hour day-of-month month day-of-week) del bucle de "
+        "curiosidad autónoma del córtex. Default cada 30 minutos. Operator-tunable; "
+        "el enable real es el kill-switch `cortex.autonomy_enabled` (platform setting).",
+    )
+    cortex_reflection_cron: str = Field(
+        default="17 */6 * * *",
+        description="Cron de la reflexión periódica de identidad del córtex. Default "
+        "cada 6 horas (minuto 17 para descolgarlo de otros jobs). Operator-tunable.",
+    )
+    cortex_maintenance_cron: str = Field(
+        default="42 4 * * *",
+        description="Cron del mantenimiento de fondo del córtex (decay snapshot, "
+        "olvido/consolidación, poda). Default diario 04:42 UTC. Operator-tunable.",
+    )
+    cortex_curiosity_cb_cooldown_s: int = Field(
+        default=3600,
+        description="Cooldown (segundos) que el circuit-breaker de la curiosidad "
+        "permanece ABIERTO tras N fallos consecutivos. Default 1h. Operator-tunable.",
+    )
+
     # ----- Back-fill de embeddings de memoria (Plan 06.17 task_06_17_03) -----
     # El worker dedicado ``workers.backfill_memory_embeddings`` rellena los
     # ``memory_entries.embedding`` NULL embebiendo el contenido con Ollama
@@ -191,6 +242,18 @@ class Settings(BaseSettings):
             "(prune_worktrees, purge_dep_cache) resolve their working "
             "directories under this root."
         ),
+    )
+
+    # ----- ADR 0072: Vault para resolver la credencial git del proyecto -----
+    # El worker lee el secreto git (PAT/SSH) de Vault al clonar/fetch. Sin estos
+    # (None) la task de clone no puede autenticar repos privados (sí públicos).
+    vault_url: str | None = Field(
+        default=None,
+        description="URL de Vault para resolver la credencial git del proyecto (ADR 0072).",
+    )
+    vault_token: str | None = Field(
+        default=None,
+        description="Token de Vault (dev/install). Secreto — no loguear.",
     )
 
     # ----- Scheduled price-catalog sync (Plan 11 task_11_18) -----

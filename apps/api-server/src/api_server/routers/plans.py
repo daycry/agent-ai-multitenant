@@ -16,6 +16,7 @@ Creation paths:
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -27,14 +28,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_server.auth.deps import (
     AuthPrincipal,
     get_tenant_session,
+    require_can_approve_plan,
     require_tenant_admin,
     require_tenant_member,
 )
 from api_server.chat.cost import (
     DEFAULT_HOURLY_RATE_EUR,
+    AICostBreakdown,
     compute_ai_cost,
     compute_human_cost,
 )
+from api_server.chat.cost_resolution import load_price_catalog, resolve_plan_task_models
 from api_server.chat.dag import DAGCycleError, validate_dag
 from api_server.chat.plan_state_machine import (
     PlanTransitionError,
@@ -42,11 +46,12 @@ from api_server.chat.plan_state_machine import (
     transition_plan_status,
 )
 from api_server.chat.sync_to_kanban import SyncScopeError, sync_plan_to_kanban
-from api_server.db.conversation import Conversation
+from api_server.db.conversation import Conversation, Message
 from api_server.db.domain import Plan, PlanStatus, Project, Task
 from api_server.db.models import Organization
 from api_server.db.plan_comment import PlanComment
 from api_server.db.platform_settings import get_double_signature_threshold
+from api_server.db.review_session_repo import list_review_sessions_for_plan
 from api_server.routers._helpers import (
     get_writable_or_404,
     require_tenant_id,
@@ -57,6 +62,7 @@ from api_server.routers._pagination import (
     limit_query,
     offset_query,
 )
+from api_server.routers.review import build_review_urls
 from api_server.schemas.plans import (
     AICostBreakdownResponse,
     CostBreakdownResponse,
@@ -111,6 +117,43 @@ async def _verify_conversation_in_project(
     return conv
 
 
+async def _draft_from_conversation(
+    session: AsyncSession, conversation_id: UUID
+) -> tuple[str | None, dict[str, Any]] | None:
+    """The plan draft the planning chat produced: the latest ``agent`` message's
+    ``{kind: planning_directive, intent: finish_planning}`` attachment, as
+    ``(title, specification)``. ``None`` when the chat never finalised a plan.
+
+    This is the chat→plan materialisation (task_03_14): the planning sub-graph
+    attaches a structured ``specification`` when the PM finishes; ``create_plan``
+    with only a ``conversation_id`` lifts it so the Plan is born with its tasks."""
+    rows = (
+        (
+            await session.execute(
+                select(Message)
+                .where(
+                    Message.conversation_id == conversation_id,
+                    Message.author_kind == "agent",
+                )
+                .order_by(Message.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for msg in rows:
+        for att in msg.attachments or []:
+            if (
+                isinstance(att, dict)
+                and att.get("kind") == "planning_directive"
+                and att.get("intent") == "finish_planning"
+                and isinstance(att.get("specification"), dict)
+            ):
+                title = att.get("title")
+                return (str(title) if title else None, dict(att["specification"]))
+    return None
+
+
 # ===========================================================================
 # Project-scoped endpoints
 # ===========================================================================
@@ -127,7 +170,17 @@ async def create_plan(
     if payload.conversation_id is not None:
         await _verify_conversation_in_project(session, payload.conversation_id, project_id)
 
-    spec_dict = payload.specification.model_dump() if payload.specification else {}
+    # Spec sources: inline body wins; else lift the planning chat's draft attachment
+    # (chat→plan materialisation, task_03_14); else an empty draft.
+    draft_title: str | None = None
+    if payload.specification is not None:
+        spec_dict = payload.specification.model_dump()
+    elif payload.conversation_id is not None:
+        drafted = await _draft_from_conversation(session, payload.conversation_id)
+        spec_dict = drafted[1] if drafted is not None else {}
+        draft_title = drafted[0] if drafted is not None else None
+    else:
+        spec_dict = {}
 
     # Cycle check (task_03_15). The Pydantic validator handles unknown
     # deps + duplicate ids; the cycle check needs the full graph.
@@ -136,14 +189,14 @@ async def create_plan(
             validate_dag(spec_dict["tasks"])
         except DAGCycleError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={"error": "dag_cycle", "cycle": exc.cycle},
             ) from exc
 
     plan = Plan(
         tenant_id=tenant_id,
         project_id=project_id,
-        title=payload.title or "Borrador del plan",
+        title=payload.title or draft_title or "Borrador del plan",
         description=payload.description,
         status=payload.status.value,
         conversation_id=payload.conversation_id,
@@ -210,6 +263,41 @@ async def get_plan(
     return to_plan_response(await _load_plan(session, plan_id))
 
 
+@plans_router.get("/{plan_id}/review-session")
+async def get_plan_review_session(
+    plan_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, object]:
+    """Latest review session of a plan + freshly-signed reviewer URLs (ADR 0062).
+
+    When a plan is in ``pending_human_validation`` the orchestrator spawns a
+    review-runtime that serves the built app. This endpoint hands the operator a
+    CLICKABLE link to open + test that app (``app_url``) and the reviewer SPA
+    (``review_url``); both are HMAC-signed. 404 if the plan has no review
+    session yet.
+    """
+    await _load_plan(session, plan_id)  # 404 + RLS visibility check
+    sessions = await list_review_sessions_for_plan(session, plan_id)
+    if not sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="no review session for this plan yet",
+        )
+    # Prefer a live (running/suspended) session; otherwise the newest.
+    row = next((s for s in sessions if s.status in {"running", "suspended"}), sessions[0])
+    urls = build_review_urls(row.id, row.expires_at.timestamp())
+    return {
+        "session_id": str(row.id),
+        "status": row.status,
+        "verdict": row.verdict,
+        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+        "review_url": urls["review_url"],
+        "app_url": urls["app_url"],
+        "verdict_url": urls["verdict_url"],
+    }
+
+
 @plans_router.put("/{plan_id}", response_model=PlanResponse)
 async def update_plan(
     plan_id: UUID,
@@ -242,7 +330,7 @@ async def update_plan(
             validate_dag(spec_dict["tasks"])
         except DAGCycleError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={"error": "dag_cycle", "cycle": exc.cycle},
             ) from exc
 
@@ -306,7 +394,7 @@ async def post_plan_comment(
             idx = int(payload.target_ref or "")
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="phase target_ref must be the phase index as a string",
             ) from exc
         if idx < 0 or idx >= len(phases):
@@ -352,6 +440,35 @@ async def list_plan_comments(
 # ===========================================================================
 # Cost breakdown (task_03_24)
 # ===========================================================================
+async def _compute_plan_ai_cost(
+    session: AsyncSession,
+    plan: Plan,
+    *,
+    default_model_override: str | None = None,
+) -> AICostBreakdown:
+    """AI cost for a plan, pricing each task by its assigned agent's resolved
+    model (override or inherited — ADR 0065) instead of a blanket ``gpt-4o``.
+
+    Tasks whose ``role`` maps to a team agent are priced with that agent's
+    effective model; the rest fall back to the ``default_model_override`` (the
+    ``?model=`` query) → plan ``metadata.default_model_id`` → ``gpt-4o`` chain.
+    The price catalog comes from the ``model_prices`` table. Shared by the
+    cost-breakdown endpoint and the approval double-signature threshold so both
+    see the same numbers."""
+    spec = plan.specification or {}
+    default_model_id = (
+        default_model_override or (spec.get("metadata") or {}).get("default_model_id") or "gpt-4o"
+    )
+    task_models = await resolve_plan_task_models(session, plan)
+    catalog = await load_price_catalog(session)
+    return compute_ai_cost(
+        spec,
+        default_model_id=default_model_id,
+        catalog=catalog,
+        task_models=task_models,
+    )
+
+
 @plans_router.get(
     "/{plan_id}/cost-breakdown",
     response_model=CostBreakdownResponse,
@@ -398,8 +515,7 @@ async def get_plan_cost_breakdown(
 
     human = compute_human_cost(spec, hourly_rate=rate, currency=currency)
 
-    default_model_id = model or (spec.get("metadata") or {}).get("default_model_id") or "gpt-4o"
-    ai = compute_ai_cost(spec, default_model_id=default_model_id)
+    ai = await _compute_plan_ai_cost(session, plan, default_model_override=model)
 
     return CostBreakdownResponse(
         human=HumanCostBreakdownResponse(
@@ -448,7 +564,7 @@ async def get_plan_cost_breakdown(
 @plans_router.post("/{plan_id}/approve", response_model=PlanResponse)
 async def approve_plan(
     plan_id: UUID,
-    principal: AuthPrincipal = Depends(require_tenant_admin),
+    principal: AuthPrincipal = Depends(require_can_approve_plan),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanResponse:
     """Cast an approval signature on a plan.
@@ -542,9 +658,7 @@ async def _resolve_first_signature_target(session: AsyncSession, plan: Plan) -> 
     except (ArithmeticError, ValueError):
         threshold = Decimal("0")
 
-    spec = plan.specification or {}
-    default_model_id = (spec.get("metadata") or {}).get("default_model_id") or "gpt-4o"
-    ai = compute_ai_cost(spec, default_model_id=default_model_id)
+    ai = await _compute_plan_ai_cost(session, plan)
     # We compare against `cost_max` (worst case) so the four-eye review
     # only kicks in when the plan is *potentially* expensive.
     if threshold > 0 and ai.cost_max > threshold:
@@ -555,6 +669,69 @@ async def _resolve_first_signature_target(session: AsyncSession, plan: Plan) -> 
 # ===========================================================================
 # Sync to Kanban (task_03_27, task_03_28, task_03_29)
 # ===========================================================================
+# Materialising a plan's tasks is only legal once the plan is signed off: an
+# unapproved draft must not seed the Kanban with work. `in_progress` is included
+# so start-execution (and re-syncs while running) keep working.
+_SYNCABLE_STATUSES = frozenset({PlanStatus.APPROVED.value, PlanStatus.IN_PROGRESS.value})
+
+
+def _require_syncable_status(plan: Plan) -> None:
+    """409 unless the plan is approved (or already in progress). Blocks
+    materialising tasks from a draft / pending-approval plan."""
+    if plan.status not in _SYNCABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "plan_not_approved",
+                "message": (
+                    "Solo un plan aprobado (o en curso) puede sincronizar tareas al Kanban; "
+                    f"este plan está en estado '{plan.status}'. Apruébalo primero."
+                ),
+                "status": plan.status,
+            },
+        )
+
+
+@plans_router.post("/{plan_id}/start-execution", response_model=PlanResponse)
+async def start_plan_execution(
+    plan_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> PlanResponse:
+    """Mark an APPROVED plan as ``in_progress`` and ensure its tasks exist in the
+    Kanban so the team can start implementing them.
+
+    This is the explicit, operator-driven hand-off the lifecycle was missing: the
+    plan stays APPROVED (signed off, not running) until someone starts it. The
+    transition ``approved -> in_progress`` goes through the state machine (a draft
+    or pending-approval plan yields 409); then we materialise every still-missing
+    spec task (idempotent — already-synced tasks are skipped). Calling it again on
+    an already-running plan is a no-op that just re-ensures the Kanban.
+    """
+    require_tenant_id(principal)
+    plan = await get_writable_or_404(
+        session, Plan, plan_id, principal, not_found_detail="plan not found"
+    )
+    try:
+        transition_plan_status(plan, PlanStatus.IN_PROGRESS.value, actor=principal.user_id)
+    except PlanTransitionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "invalid_plan_transition",
+                "from": exc.from_status,
+                "to": exc.to_status,
+                "message": "Solo un plan aprobado puede marcarse en curso.",
+            },
+        ) from exc
+
+    # Ensure the tasks are in the Kanban (creates any missing ones; idempotent).
+    await sync_plan_to_kanban(session, plan, scope="total")
+    await session.flush()
+    await session.refresh(plan)
+    return to_plan_response(plan)
+
+
 @plans_router.post("/{plan_id}/sync-to-kanban", response_model=PlanSyncResponse)
 async def sync_plan_kanban(
     plan_id: UUID,
@@ -562,7 +739,12 @@ async def sync_plan_kanban(
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanSyncResponse:
-    """Materialise the plan's tasks into the Kanban.
+    """Materialise the plan's APPROVED tasks into the Kanban.
+
+    Requires ``plan.status in (approved, in_progress)``: a draft (or a plan still
+    awaiting approval) must NOT materialise tasks — that would seed the Kanban with
+    work nobody signed off on. Tasks start in ``backlog``; the orchestrator promotes
+    dependency-free ones to ``ready``.
 
     The scope mirrors the UI dialog: ``total`` syncs every spec task,
     ``phase`` only those of one ``phases[i]``, ``selection`` only the
@@ -577,6 +759,7 @@ async def sync_plan_kanban(
     plan = await get_writable_or_404(
         session, Plan, plan_id, principal, not_found_detail="plan not found"
     )
+    _require_syncable_status(plan)
 
     try:
         result = await sync_plan_to_kanban(
@@ -588,7 +771,7 @@ async def sync_plan_kanban(
         )
     except SyncScopeError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"error": "invalid_sync_scope", "message": str(exc)},
         ) from exc
 

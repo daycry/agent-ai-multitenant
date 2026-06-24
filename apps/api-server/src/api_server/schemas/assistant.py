@@ -98,6 +98,8 @@ class AssistantModelResponse(BaseModel):
     provider_kind: str | None = None
     provider_display_name: str | None = None
     has_tenant_override: bool = False
+    # ADR 0070: esfuerzo de razonamiento efectivo (None = sin razonar).
+    reasoning_effort: str | None = None
 
 
 class AssistantModelUpdateRequest(BaseModel):
@@ -112,6 +114,8 @@ class AssistantModelUpdateRequest(BaseModel):
 
     provider_id: str | None = Field(default=None, max_length=64)
     model_id: str | None = Field(default=None, max_length=255)
+    # ADR 0070: opcional; validado por proveedor en el router. "off"/None = sin razonar.
+    reasoning_effort: str | None = Field(default=None, max_length=16)
 
     @model_validator(mode="after")
     def _both_or_neither(self) -> AssistantModelUpdateRequest:
@@ -142,6 +146,8 @@ class AssistantModelOptionsResponse(BaseModel):
     model_config = _BASE_CONFIG
 
     providers: list[AssistantModelOption]
+    # ADR 0070: opciones de razonamiento por kind de proveedor (off + niveles).
+    reasoning_by_kind: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class AssistantDefaultModelResponse(BaseModel):
@@ -158,6 +164,8 @@ class AssistantDefaultModelResponse(BaseModel):
     model_id: str | None = None
     is_valid: bool = False
     provider_display_name: str | None = None
+    # ADR 0070: esfuerzo de razonamiento del default de plataforma.
+    reasoning_effort: str | None = None
 
 
 class AssistantDefaultModelUpdateRequest(BaseModel):
@@ -167,6 +175,7 @@ class AssistantDefaultModelUpdateRequest(BaseModel):
 
     provider_id: str | None = Field(default=None, max_length=64)
     model_id: str | None = Field(default=None, max_length=255)
+    reasoning_effort: str | None = Field(default=None, max_length=16)
 
     @model_validator(mode="after")
     def _both_or_neither(self) -> AssistantDefaultModelUpdateRequest:

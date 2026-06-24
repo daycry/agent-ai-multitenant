@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -62,6 +63,12 @@ export default function NewProjectWizardPage() {
   // whether its default_kb_grants are actually applied. Default true (the
   // template's KBs are the point of picking it); a blank project ignores it.
   const [applyKbGrants, setApplyKbGrants] = useState(true);
+  // Ola C / ADR 0068: forkear el equipo de la plantilla a una copia editable del
+  // proyecto (default off = referenciar el equipo tal cual).
+  const [forkTeam, setForkTeam] = useState(false);
+  // Equipo para un proyecto EN BLANCO (sin plantilla): "" = sin equipo. En los
+  // basados en plantilla el equipo lo aporta la plantilla (selected.team_id).
+  const [teamId, setTeamId] = useState("");
   // The stack's default runtime template (06.18 GET /runtime-templates). "" =
   // no default (the run_* tools fall back to per-tool defaults).
   const [runtime, setRuntime] = useState("");
@@ -119,9 +126,13 @@ export default function NewProjectWizardPage() {
         body.template_id = selected.id;
         body.apply_template_kb_grants = applyKbGrants;
         body.team_id = selected.team_id;
+        if (selected.team_id) body.fork_team = forkTeam;
         body.worker_config = selected.worker_config;
         body.repository_config = selected.repository_config;
         body.human_approval_policy = selected.human_approval_policy;
+      } else {
+        // Proyecto en blanco: el equipo lo elige el operador (o ninguno).
+        body.team_id = teamId || null;
       }
       return apiFetch<Project>("/projects", { method: "POST", body });
     },
@@ -263,13 +274,11 @@ export default function NewProjectWizardPage() {
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="description">Descripción</Label>
-                <textarea
-                  id="description"
+                <Label>Descripción</Label>
+                <MarkdownTextarea
                   value={description}
-                  onChange={(e) => setDescription(e.target.value)}
+                  onChange={setDescription}
                   rows={4}
-                  className="border-input bg-background ring-offset-background focus-visible:ring-ring rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
                   data-testid="wizard-description"
                 />
               </div>
@@ -300,6 +309,31 @@ export default function NewProjectWizardPage() {
                   </p>
                 )}
               </div>
+
+              {/* Proyecto EN BLANCO: elegir equipo (en los de plantilla lo aporta
+                  la plantilla — se muestra abajo). ADR 0071. */}
+              {!selected && (
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="wizard-team">Equipo</Label>
+                  <Select
+                    id="wizard-team"
+                    value={teamId}
+                    onChange={(e) => setTeamId(e.target.value)}
+                    data-testid="wizard-team-select"
+                  >
+                    <option value="">Sin equipo</option>
+                    {(teamsQuery.data ?? []).map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </Select>
+                  <p className="text-muted-foreground text-xs">
+                    El equipo gobierna qué agentes ejecutan las tareas y la política de memoria.
+                    También puedes asignarlo/cambiarlo luego desde la ficha del proyecto.
+                  </p>
+                </div>
+              )}
 
               {/* KB grants de la plantilla — solo si hay plantilla elegida. */}
               {selected && (
@@ -363,6 +397,22 @@ export default function NewProjectWizardPage() {
                   <span className="text-muted-foreground text-xs uppercase">Equipo</span>
                   <p>{teamsById.get(selected.team_id)?.name ?? selected.team_id}</p>
                 </div>
+              )}
+              {selected?.team_id && (
+                <label className="flex items-start gap-2" data-testid="wizard-fork-team">
+                  <Checkbox
+                    checked={forkTeam}
+                    onChange={(e) => setForkTeam(e.target.checked)}
+                    data-testid="wizard-fork-team-checkbox"
+                  />
+                  <span>
+                    Personalizar el equipo para este proyecto
+                    <span className="text-muted-foreground block text-xs">
+                      Crea una copia editable del equipo (agentes propios del proyecto). Si no, se
+                      referencia el equipo de la plantilla (compartido; no editable si es built-in).
+                    </span>
+                  </span>
+                </label>
               )}
               {selected?.human_approval_policy?.preset != null && (
                 <div>

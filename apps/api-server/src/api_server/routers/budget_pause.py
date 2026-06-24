@@ -139,7 +139,7 @@ async def override_pause(
     tenant_id = require_tenant_id(principal)
     if payload.scope is BudgetScope.PROJECT and payload.project_id is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="project_id is required for scope=project",
         )
     project_id = payload.project_id if payload.scope is BudgetScope.PROJECT else None

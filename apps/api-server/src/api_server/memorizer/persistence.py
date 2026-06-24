@@ -23,6 +23,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.db.domain import MemoryScope
@@ -31,6 +32,32 @@ from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer.distillation import MemoryCandidate
 
 logger = structlog.get_logger(__name__)
+
+
+async def count_memories_for_source(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    source_execution_id: UUID | None = None,
+    source_human_work_session_id: UUID | None = None,
+) -> int:
+    """Count live (non-deleted) memories already persisted for one source.
+
+    Used by the memorizer as an idempotency guard before re-distilling: with
+    ``task_acks_late=True`` global a broker redelivery / worker crash re-runs the
+    memorize task, and re-distilling would make a fresh (non-deterministic) LLM
+    call and persist duplicate rows. The worker is BYPASSRLS, so ``tenant_id`` is
+    filtered explicitly (defence in depth on top of the source filter)."""
+    stmt = (
+        select(func.count())
+        .select_from(MemoryEntry)
+        .where(MemoryEntry.tenant_id == tenant_id, MemoryEntry.deleted_at.is_(None))
+    )
+    if source_execution_id is not None:
+        stmt = stmt.where(MemoryEntry.source_execution_id == source_execution_id)
+    if source_human_work_session_id is not None:
+        stmt = stmt.where(MemoryEntry.source_human_work_session_id == source_human_work_session_id)
+    return int((await session.execute(stmt)).scalar_one())
 
 
 async def _embed_contents(
@@ -164,6 +191,7 @@ async def persist_memory_candidates(
             source_execution_id=source_execution_id,
             source_human_work_session_id=source_human_work_session_id,
             tags=list(cand.tags),
+            entities=list(cand.entities),
             metadata_={**metadata_base, "tags": list(cand.tags)},
             **owner,
         )

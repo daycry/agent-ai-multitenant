@@ -28,6 +28,7 @@ as their default model and the per-call ``model`` overrides it.
 from __future__ import annotations
 
 import contextlib
+from typing import Any
 from uuid import UUID
 
 from shared_llm.base import LLMProvider
@@ -53,14 +54,19 @@ def _build_claude(
     # Uniform builder signature for the dispatch; base_url is unused for the
     # subscription-based claude_sdk path.
     del base_url
-    # The OAuth token (when present) becomes the SDK api key; absent token
-    # leaves ambient SDK auth in place.
+    # Two auth modes on the same kind (ADR 0063): an Anthropic api_key
+    # (→ ANTHROPIC_API_KEY) or a Pro/Max subscription oauth_token from
+    # `claude setup-token` (→ CLAUDE_CODE_OAUTH_TOKEN). Absent both leaves
+    # ambient SDK auth in place.
     try:
         from shared_llm.providers.claude_agent import ClaudeAgentProvider
     except ImportError:
         return None
-    token = secret.get(SECRET_FIELD_OAUTH_TOKEN)
-    return ClaudeAgentProvider(api_key=token or None, default_model=model)
+    return ClaudeAgentProvider(
+        api_key=secret.get(SECRET_FIELD_API_KEY) or None,
+        oauth_token=secret.get(SECRET_FIELD_OAUTH_TOKEN) or None,
+        default_model=model,
+    )
 
 
 def _build_copilot(
@@ -108,7 +114,7 @@ def _build_ollama(
     except ImportError:
         return None
     token = secret.get(SECRET_FIELD_BEARER_TOKEN)
-    kwargs: dict[str, str] = {"default_model": model}
+    kwargs: dict[str, Any] = {"default_model": model}
     if base_url:
         kwargs["base_url"] = base_url
     if token:

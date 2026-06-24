@@ -67,7 +67,9 @@ from typing import TYPE_CHECKING, Protocol, TextIO, runtime_checkable
 import yaml
 from pydantic import ValidationError
 
+from installer_backend.command_runner import SubprocessRunner
 from installer_backend.config import InstallerConfig, validate_config
+from installer_backend.config_generators import generate_secrets
 from installer_backend.finalize import FinalizeService, InstallCredentials, RevealPayload
 from installer_backend.install import (
     INSTALL_STEP_ORDER,
@@ -75,6 +77,13 @@ from installer_backend.install import (
     InstallOrchestrator,
     StepExecutor,
 )
+from installer_backend.prereqs import RealPrereqChecker, SystemHostProbe
+from installer_backend.real_bindings import (
+    RealDataTreeProvisioner,
+    RealEnvFileWriter,
+    build_hvac_vault_client,
+)
+from installer_backend.real_step_executor import RealStepExecutor
 from installer_backend.reinstall import (
     ReinstallAbortedError,
     Reinstaller,
@@ -89,6 +98,8 @@ from installer_backend.seams import (
 )
 from installer_backend.uninstall import (
     Confirmer,
+    StubDataPurger,
+    StubStackTeardown,
     UninstallAbortedError,
     Uninstaller,
     UninstallRequest,
@@ -183,6 +194,39 @@ class StubCredentialBuilder:
             admin_password=self.admin_password,
             vault_root_token=self.vault_root_token,
             vault_unseal_keys=self.vault_unseal_keys,
+        )
+
+
+@dataclass
+class RealCredentialBuilder:
+    """Real :class:`CredentialBuilder` — reads what a :class:`RealStepExecutor`
+    captured during the install (Plan prod-01 task_17 / secrets-1).
+
+    No credential is minted here: the Vault root token + unseal keys come from the
+    BOOTSTRAP_VAULT init, and the admin password from the SEED_TENANT step. They
+    live ONLY in memory (redacted ``repr``s) for the one-time finalize reveal —
+    never persisted in the repo tree (the sole secret-bearing write is the ``.env``
+    at 0600 under the compose dir). A re-bootstrap (Vault already initialised →
+    ``init is None``) or an un-run seed fails loud rather than revealing nothing.
+    """
+
+    executor: RealStepExecutor
+
+    def build(self, config: InstallerConfig) -> InstallCredentials:
+        result = self.executor.vault_bootstrap_result
+        password = self.executor.seeded_admin_password
+        init = result.init if result is not None else None
+        if init is None or not password:
+            raise CliError(
+                "No hay credenciales reales que revelar: el bootstrap de Vault y/o "
+                "la siembra del tenant no se completaron en esta ejecución.",
+                ExitCode.PROVISION,
+            )
+        return InstallCredentials(
+            admin_username=str(config.tenant.admin_email),
+            admin_password=password,
+            vault_root_token=init.root_token,
+            vault_unseal_keys=init.unseal_keys,
         )
 
 
@@ -412,22 +456,105 @@ class HeadlessInstaller:
 # Seam factory — built fresh per run so the in-memory stubs don't leak state.
 # Phase B / tests override these with real / fake bindings.
 # ---------------------------------------------------------------------------
-def build_default_installer(out: TextIO) -> HeadlessInstaller:
-    """Build a :class:`HeadlessInstaller` wired to the in-memory stub seams.
+#: The simulation seams (used by ``--dry-run``). The no-silent-stubs guard
+#: (:func:`_assert_real_install_seams`) rejects these when ``--dry-run`` is absent
+#: so a fake install can never masquerade as a real one (task_prod01_19 / deploy-1).
+_SIMULATION_INSTALL_SEAMS = (FakeStepExecutor, StubPrereqChecker)
+_SIMULATION_UNINSTALL_SEAMS = (StubStackTeardown, StubDataPurger)
 
-    The defaults make ``python -m installer_backend.cli`` import-safe and
-    runnable on a host with no Docker (it goes through the fakes). The real
-    install replaces these with host bindings; tests inject scripted fakes.
+_SIMULATION_BANNER = (
+    "====================================================================\n"
+    "  SIMULACIÓN (--dry-run): NO se aprovisiona NADA. No se arranca el\n"
+    "  stack, no se migra, no se siembra. Las credenciales mostradas son\n"
+    "  FALSAS (placeholders). NO uses esto como instalación real.\n"
+    "===================================================================="
+)
+
+
+def build_default_installer(
+    out: TextIO, config: InstallerConfig, *, dry_run: bool = False
+) -> HeadlessInstaller:
+    """Build a :class:`HeadlessInstaller` with the REAL host bindings by default.
+
+    ``dry_run=True`` wires the in-memory simulation seams instead (FakeStepExecutor
+    / StubPrereqChecker / StubCredentialBuilder) for an explicitly-marked dry run.
+    Otherwise it wires the real provisioner: a :class:`RealStepExecutor` writing
+    config + driving ``docker compose`` under ``{data_root}`` (the compose dir),
+    real prereq probes, and a :class:`RealCredentialBuilder` reading the captured
+    Vault init + seeded admin password. The real seams only touch the host when
+    :meth:`HeadlessInstaller.run` executes — construction is side-effect-free.
     """
 
     lifecycle: InstallerLifecycle = StubInstallerLifecycle()
+    if dry_run:
+        return HeadlessInstaller(
+            prereq_checker=StubPrereqChecker(),
+            executor=FakeStepExecutor(),
+            credential_builder=StubCredentialBuilder(),
+            finalize=FinalizeService(lifecycle=lifecycle),
+            out=out,
+        )
+
+    compose_dir = config.storage.data_root
+    executor = RealStepExecutor(
+        compose_dir=compose_dir,
+        runner=SubprocessRunner(),
+        env_writer=RealEnvFileWriter(),
+        tree=RealDataTreeProvisioner(),
+        vault_client_factory=build_hvac_vault_client,
+        cfg=config,
+        secrets=generate_secrets(),
+    )
     return HeadlessInstaller(
-        prereq_checker=StubPrereqChecker(),
-        executor=FakeStepExecutor(),
-        credential_builder=StubCredentialBuilder(),
+        prereq_checker=RealPrereqChecker(probe=SystemHostProbe(data_path=compose_dir)),
+        executor=executor,
+        credential_builder=RealCredentialBuilder(executor),
         finalize=FinalizeService(lifecycle=lifecycle),
         out=out,
     )
+
+
+def _assert_real_install_seams(installer: HeadlessInstaller, *, dry_run: bool) -> None:
+    """Fail loud if a simulation seam is wired without ``--dry-run`` (deploy-1).
+
+    Inspects the attributes that actually exist on :class:`HeadlessInstaller`
+    (``prereq_checker`` / ``executor``); a stub there without ``--dry-run`` means
+    the run would silently fake an install, so we abort with a clear message.
+    """
+
+    if dry_run:
+        return
+    offenders = sorted(
+        type(seam).__name__
+        for seam in (installer.prereq_checker, installer.executor)
+        if isinstance(seam, _SIMULATION_INSTALL_SEAMS)
+    )
+    if offenders:
+        raise CliError(
+            "Abortado: el instalador tiene seams de SIMULACIÓN cableados sin "
+            f"--dry-run ({', '.join(offenders)}). Usa --dry-run para una "
+            "simulación explícita (no instala nada, credenciales FALSAS), o "
+            "ejecuta con los bindings reales.",
+            ExitCode.PROVISION,
+        )
+
+
+def _assert_real_uninstall_seams(uninstaller: Uninstaller, *, dry_run: bool) -> None:
+    """Fail loud if an uninstall simulation seam is wired without ``--dry-run``."""
+
+    if dry_run:
+        return
+    offenders = sorted(
+        type(seam).__name__
+        for seam in (uninstaller.teardown, uninstaller.purger)
+        if isinstance(seam, _SIMULATION_UNINSTALL_SEAMS)
+    )
+    if offenders:
+        raise CliError(
+            "Abortado: el desinstalador tiene seams de SIMULACIÓN cableados sin "
+            f"--dry-run ({', '.join(offenders)}). Usa --dry-run para simular.",
+            ExitCode.PROVISION,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +581,16 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="install.yaml",
         help="Ruta al fichero YAML de configuración de la instalación.",
+    )
+    install.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "SIMULACIÓN explícita: no aprovisiona nada (no docker, no migración, "
+            "no Vault, no seed) y muestra credenciales FALSAS. Sin este flag, un "
+            "instalador con seams de simulación aborta con error (no se permite "
+            "una instalación falsa silenciosa)."
+        ),
     )
 
     uninstall = sub.add_parser(
@@ -508,6 +645,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--interactive",
         action="store_true",
         help="Pide las confirmaciones por terminal en lugar de derivarlas de los flags.",
+    )
+    uninstall.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "SIMULACIÓN explícita: no detiene el stack ni borra datos (seams "
+            "stub). Sin este flag se ejecuta el teardown/purga REAL (tras la "
+            "doble confirmación)."
+        ),
     )
 
     reinstall = sub.add_parser(
@@ -583,20 +729,31 @@ def run_install(
     *,
     installer: HeadlessInstaller | None = None,
     out: TextIO | None = None,
+    dry_run: bool = False,
 ) -> ExitCode:
     """Load *config_path* and run the unattended install.
 
     Returns the :class:`ExitCode`. ``installer`` is injectable (tests pass one
-    wired to fakes / failure scenarios); when omitted a default stub-wired
-    installer is built against *out*. The config gate runs FIRST, so a malformed
-    config returns :data:`ExitCode.CONFIG` with no provisioning attempted.
+    wired to fakes / failure scenarios); when omitted a default installer is
+    built with the REAL host bindings (``dry_run=True`` wires the simulation
+    seams). The config gate runs FIRST, so a malformed config returns
+    :data:`ExitCode.CONFIG` with no provisioning attempted. The no-silent-stubs
+    guard then aborts a simulation-wired run unless ``--dry-run`` was passed.
     """
 
     stream = out if out is not None else sys.stdout
-    inst = installer if installer is not None else build_default_installer(stream)
 
     text = _read_config_file(config_path)
     config = load_install_config(text)
+
+    inst = (
+        installer
+        if installer is not None
+        else build_default_installer(stream, config, dry_run=dry_run)
+    )
+    _assert_real_install_seams(inst, dry_run=dry_run)
+    if dry_run:
+        print(_SIMULATION_BANNER, file=stream)
     inst.run(config)
     return ExitCode.OK
 
@@ -611,6 +768,7 @@ def run_uninstall(
     interactive: bool = False,
     uninstaller: Uninstaller | None = None,
     out: TextIO | None = None,
+    dry_run: bool = False,
 ) -> ExitCode:
     """Run the gated uninstall; return the :class:`ExitCode`.
 
@@ -631,7 +789,12 @@ def run_uninstall(
             confirmer = InteractiveConfirmer()
         else:
             confirmer = FlagConfirmer(confirm_name_value=confirm_name, yes=yes)
-        uninstaller = build_default_uninstaller(stream, confirmer)
+        uninstaller = build_default_uninstaller(
+            stream, confirmer, dry_run=dry_run, compose_dir=data_root
+        )
+    _assert_real_uninstall_seams(uninstaller, dry_run=dry_run)
+    if dry_run:
+        print(_SIMULATION_BANNER, file=stream)
 
     req = UninstallRequest(
         deployment_name=deployment_name,
@@ -714,7 +877,7 @@ def main(argv: Sequence[str] | None = None, *, out: TextIO | None = None) -> int
 
     try:
         if args.command == "install":
-            return int(run_install(args.config, out=out))
+            return int(run_install(args.config, out=out, dry_run=args.dry_run))
         if args.command == "uninstall":
             return int(
                 run_uninstall(
@@ -725,6 +888,7 @@ def main(argv: Sequence[str] | None = None, *, out: TextIO | None = None) -> int
                     yes=args.yes,
                     interactive=args.interactive,
                     out=out,
+                    dry_run=args.dry_run,
                 )
             )
         if args.command == "reinstall":

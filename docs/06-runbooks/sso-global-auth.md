@@ -78,12 +78,25 @@ la referencia de endpoints ver
    plataforma. SAML requiere `xmlsec` nativo; en un nodo sin ese backend
    los endpoints de cripto devuelven 501 y el resto de la auth sigue intacto.
 
-### 1.3 `sso_redirect_base_url`
+### 1.3 Origen público + prefijo de API (`sso_redirect_base_url` + `api_path_prefix`)
 
-Fija `API_SERVER_SSO_REDIRECT_BASE_URL` al host público desde el que el IdP
-alcanzará la callback/ACS (p.ej. `https://plataforma.example.com`). De este
-valor se derivan la callback OIDC, la ACS SAML global y el SP entityID. Si
-sigue en el default, la modal avisa. Reinicia el api-server tras cambiarlo.
+La callback OIDC, la ACS SAML global y el SP EntityID se derivan de **dos**
+valores (ADR 0069), editables en caliente desde la tarjeta "URL base pública" de
+la pantalla SSO (o por env como bootstrap):
+
+- **Origen público** (`API_SERVER_SSO_REDIRECT_BASE_URL` / override
+  `app.public_base_url`): el `scheme://host[:port]` público, sin path
+  (p.ej. `https://plataforma.example.com`).
+- **Prefijo de API** (`API_SERVER_API_PATH_PREFIX` / override `app.api_path_prefix`):
+  el segmento bajo el que se publica el API tras el reverse proxy single-origin
+  (`/api`); **vacío** si el api-server cuelga de la raíz del dominio (subdominio
+  propio o dev directo).
+
+Las URLs efectivas son `{origen}{prefijo}/auth/sso/...`. Si el origen sigue en el
+default, la modal avisa. El override (UI) gana sobre el env y aplica sin
+reiniciar; el env es el bootstrap. **Publicar bajo un dominio propio** (DNS, TLS,
+estos settings y el re-registro en el IdP) tiene su guía dedicada:
+[07-custom-domain.md](07-custom-domain.md).
 
 ## 2. Login por provider (qué ve el usuario)
 

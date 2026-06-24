@@ -9,6 +9,7 @@ integration job *does* have a daemon, so they run there.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 import pytest
@@ -34,7 +35,27 @@ def _docker_available() -> bool:
 
 DOCKER_AVAILABLE = _docker_available()
 
-requires_docker = pytest.mark.skipif(not DOCKER_AVAILABLE, reason="Docker daemon not reachable")
+# In CI a missing precondition (no Docker daemon, agent-runtime image not built)
+# must FAIL the job, not silently skip — otherwise the Docker-backed gates (e2e
+# agent pipeline, sandbox invariants) vanish without anyone noticing, exactly the
+# regression finding tests-6 flagged. Locally (no CI env var) they still skip
+# cleanly so a dev box without Docker Desktop can run the rest of the suite.
+IN_CI = bool(os.environ.get("CI"))
+
+# Skip locally when Docker is unreachable; under CI do NOT skip — let the test
+# run and fail loudly (CI's integration job always has a daemon).
+requires_docker = pytest.mark.skipif(
+    not DOCKER_AVAILABLE and not IN_CI,
+    reason="Docker daemon not reachable",
+)
+
+
+def skip_or_fail(reason: str) -> None:
+    """Skip a missing-precondition test locally, but FAIL it under CI so a
+    silently-disappearing Docker gate is caught (finding tests-6)."""
+    if IN_CI:
+        pytest.fail(f"[CI] required precondition missing: {reason}")
+    pytest.skip(reason)
 
 
 def docker_client() -> Any:

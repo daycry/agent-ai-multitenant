@@ -22,6 +22,7 @@ constraints don't currently exist on agents.
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -59,6 +60,8 @@ from api_server.db.domain import (
     AgentTool,
     Project,
     Skill,
+    Team,
+    TeamMember,
     Tool,
     ToolImplementationType,
 )
@@ -81,6 +84,8 @@ from api_server.schemas.agents import (
     AgentFieldDiff,
     AgentForkRequest,
     AgentMergeRequest,
+    AgentModelOptionsResponse,
+    AgentProviderOptionsResponse,
     AgentResponse,
     AgentSkillResponse,
     AgentToolResponse,
@@ -150,7 +155,108 @@ async def list_agents(
     stmt = stmt.order_by(Agent.created_at, Agent.id)
     stmt = apply_pagination(stmt, limit=limit, offset=offset)
     result = await session.execute(stmt)
-    return [to_agent_response(a) for a in result.scalars().all()]
+    agents = list(result.scalars().all())
+    teams_by_agent = await _teams_by_agent(session, [a.id for a in agents])
+    return [to_agent_response(a, teams_by_agent.get(a.id, [])) for a in agents]
+
+
+async def _teams_by_agent(
+    session: AsyncSession, agent_ids: list[UUID]
+) -> dict[UUID, list[tuple[UUID, str]]]:
+    """Pertenencias (team_id, nombre) por agente, en UNA query (ADR 0071). Team es
+    tenant-scoped (RLS), así que el join filtra al tenant del request."""
+    if not agent_ids:
+        return {}
+    rows = await session.execute(
+        select(TeamMember.agent_id, Team.id, Team.name)
+        .join(Team, Team.id == TeamMember.team_id)
+        .where(TeamMember.agent_id.in_(agent_ids), Team.deleted_at.is_(None))
+        .order_by(Team.name)
+    )
+    out: dict[UUID, list[tuple[UUID, str]]] = {}
+    for agent_id, team_id, team_name in rows.all():
+        out.setdefault(agent_id, []).append((team_id, team_name))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# GET /agents/model-options — modelos por kind para los selectores de modelo
+# ---------------------------------------------------------------------------
+# DEBE declararse ANTES de `GET /{agent_id}`, o "model-options" se intentaría
+# parsear como un UUID de agente. Tenant-accesible (require_tenant_member): los
+# proveedores LLM son platform-global (sin secretos), leídos en la sesión admin
+# como hace `/assistant/model/options`. Por kind se exponen SOLO los modelos del
+# proveedor que el dispatch resolverá (el más nuevo activo), igual que el
+# endpoint System-Admin de platform-settings.
+@router.get("/model-options", response_model=AgentModelOptionsResponse)
+async def get_agent_model_options(
+    _: AuthPrincipal = Depends(require_tenant_member),
+) -> AgentModelOptionsResponse:
+    from api_server.assistant.model_config import list_available_models_for_provider
+    from api_server.db.llm_providers import (
+        LLM_PROVIDER_KINDS,
+        REASONING_OPTIONS_BY_KIND,
+        list_active_llm_providers_by_kind,
+    )
+    from api_server.db.session import get_admin_sessionmaker
+
+    by_kind: dict[str, list[str]] = {}
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        for kind in LLM_PROVIDER_KINDS:
+            rows = await list_active_llm_providers_by_kind(session, kind)
+            if not rows:
+                continue
+            models = await list_available_models_for_provider(session, rows[0])
+            if models:
+                by_kind[kind] = sorted(set(models))
+    # ADR 0070: opciones de razonamiento por proveedor, solo para los activos.
+    reasoning_by_kind = {
+        kind: list(REASONING_OPTIONS_BY_KIND[kind])
+        for kind in by_kind
+        if kind in REASONING_OPTIONS_BY_KIND
+    }
+    return AgentModelOptionsResponse(by_kind=by_kind, reasoning_by_kind=reasoning_by_kind)
+
+
+# ---------------------------------------------------------------------------
+# GET /agents/provider-options — proveedores ACTIVOS concretos (por nombre) + modelos
+# ---------------------------------------------------------------------------
+# Para el selector del «Modelo del chat» (Feature B): a diferencia de model-options
+# (agrega por kind, el más nuevo activo), lista CADA fila activa para que el operador
+# distinga p.ej. Ollama local vs cloud y fije un provider_id concreto SOLO para el
+# chat. Tenant-accesible; sin secretos (la credencial vive en Vault). DEBE ir antes
+# de GET /{agent_id}.
+@router.get("/provider-options", response_model=AgentProviderOptionsResponse)
+async def get_agent_provider_options(
+    _: AuthPrincipal = Depends(require_tenant_member),
+) -> AgentProviderOptionsResponse:
+    from api_server.assistant.model_config import list_available_models_for_provider
+    from api_server.db.llm_providers import (
+        LLM_PROVIDER_KINDS,
+        REASONING_OPTIONS_BY_KIND,
+        list_active_llm_providers_by_kind,
+    )
+    from api_server.db.session import get_admin_sessionmaker
+    from api_server.schemas.agents import ProviderOption
+
+    providers: list[ProviderOption] = []
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        for kind in LLM_PROVIDER_KINDS:
+            for row in await list_active_llm_providers_by_kind(session, kind):
+                models = await list_available_models_for_provider(session, row)
+                providers.append(
+                    ProviderOption(
+                        id=row.id,
+                        kind=row.kind,
+                        display_name=row.display_name,
+                        slug=row.slug,
+                        models=sorted(set(models)),
+                        reasoning_options=list(REASONING_OPTIONS_BY_KIND.get(kind, ())),
+                    )
+                )
+    return AgentProviderOptionsResponse(providers=providers)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +274,8 @@ async def get_agent(
     agent = result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent not found")
-    return to_agent_response(agent)
+    teams_by_agent = await _teams_by_agent(session, [agent.id])
+    return to_agent_response(agent, teams_by_agent.get(agent.id, []))
 
 
 # ---------------------------------------------------------------------------
@@ -927,7 +1034,7 @@ async def set_agent_tools(
     missing = [tool_id for tool_id in requested if tool_id not in tools_by_id]
     if missing:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "unknown or non-assignable tool_id(s): "
                 + ", ".join(str(tool_id) for tool_id in missing)
@@ -947,7 +1054,7 @@ async def set_agent_tools(
     ]
     if not_wired:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "tool(s) not executable in the agent-runtime (no wired executor): "
                 + ", ".join(sorted(tool.name for tool in not_wired))
@@ -966,7 +1073,7 @@ async def set_agent_tools(
             server = _mcp_server_name(tool.implementation_ref)
             if server is None or server not in project_server_names:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=(
                         f"MCP tool {tool.name!r} requires MCP server {server!r} "
                         "on the agent's project; not declared"
@@ -1139,7 +1246,7 @@ async def set_agent_skills(
     missing = [skill_id for skill_id in requested if skill_id not in skills_by_id]
     if missing:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "unknown or non-assignable skill_id(s): "
                 + ", ".join(str(skill_id) for skill_id in missing)
@@ -1268,7 +1375,7 @@ async def get_agent_effective_tools(
             # Built-in lookup miss (custom modes are resolved elsewhere with a
             # tenant registry). Treat an unknown built-in name as a bad request.
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"unknown chat mode: {mode!r}",
             ) from None
         mode_allowed_tools = mode_config.allowed_tools
@@ -1352,6 +1459,29 @@ async def get_agent_effective_tools(
 # DELEGA/COMPONE con la pieza pura `compute_effective_tools` de 06.18 — NO
 # recalcula la intersección (frontera con 06.18). Read-only, tenant-scoped: RLS
 # oculta agentes cross-tenant, así que un agente oculto/inexistente → 404.
+async def _resolve_model_origin(session: AsyncSession, agent: Agent) -> str:
+    """Nivel que fija el modelo EFECTIVO del agente en la cadena de herencia
+    (Ola D / ADR 0065): carga el proyecto del agente y su equipo para resolver
+    ``agent → team → project → platform``."""
+    from api_server.db.platform_settings import resolve_model_config_origin
+
+    project_cfg: dict[str, Any] = {}
+    team_cfg: dict[str, Any] = {}
+    if agent.project_id is not None:
+        project = (
+            await session.execute(select(Project).where(Project.id == agent.project_id))
+        ).scalar_one_or_none()
+        if project is not None:
+            project_cfg = dict(project.model_config or {})
+            if project.team_id is not None:
+                team = (
+                    await session.execute(select(Team).where(Team.id == project.team_id))
+                ).scalar_one_or_none()
+                if team is not None:
+                    team_cfg = dict(team.model_config or {})
+    return resolve_model_config_origin(dict(agent.model_config or {}), team_cfg, project_cfg)
+
+
 @router.get("/{agent_id}/capabilities", response_model=CapabilitiesResponse)
 async def get_agent_capabilities(
     agent_id: UUID,
@@ -1395,6 +1525,8 @@ async def get_agent_capabilities(
     # SER: persona/modelo (ADR 0055).
     ser, ser_warnings = build_ser(agent)
     warnings += ser_warnings
+    # Ola D / ADR 0065: nivel que fija el modelo EFECTIVO en la cadena de herencia.
+    ser.model_origin = await _resolve_model_origin(session, agent)
 
     # HACER: delega en compute_effective_tools (06.18).
     hacer, hacer_warnings = await hacer_for_agent(session, agent=agent)

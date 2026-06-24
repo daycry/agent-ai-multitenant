@@ -23,6 +23,30 @@
 # alcanzarlo basta con que el contenedor del modelo esté en el
 # network `agentic-agents`.
 ^ollama\.com$
+# Ollama IN-STACK (dev/manuales): el agent-runtime enruta las llamadas LLM por
+# este proxy (HTTP_PROXY), así que el host interno `ollama` debe permitirse para
+# usar el modelo local (p.ej. llama3.2:1b) sin credenciales externas.
+^ollama(:[0-9]+)?$
+
+# --- Web del córtex (ADR 0067 — web-search / web-fetch) ----------------
+# Las host tools provider-agnósticas del córtex (web_search / web_fetch)
+# salen SIEMPRE por este proxy (nunca conexión directa desde el api-server),
+# además del anti-SSRF de api_server.cortex.web_safety. Estos son los hosts
+# del PROVEEDOR DE BÚSQUEDA del catálogo cerrado:
+#
+# Brave Search API (proveedor gestionado; la API key viaja en cabecera, no
+# en la URL, y vive en Vault/env — nunca aquí).
+^api\.search\.brave\.com$
+#
+# SearXNG self-host. El api-server lo alcanza por la red INTERNA del compose
+# (`searxng:8080` en `agentic-net`), no por este proxy; se lista igualmente
+# por si una instancia SearXNG se despliega fuera del stack y debe salir por
+# el proxy. El host interno `searxng:<port>` también se permite explícito.
+^searxng(:[0-9]+)?$
+#
+# NOTA web_fetch: leer una URL ARBITRARIA de Internet abierto exige que su
+# host esté en esta allowlist (deny-by-default, Principio 2). Añade aquí los
+# dominios que el operador autorice a que el córtex lea (p.ej. ^docs\.python\.org$).
 
 # --- Plantilla para per-proyecto -------------------------------------
 # El tool `http_request` (Fase D) sigue aplicando su propia allowlist

@@ -65,6 +65,7 @@ def _to_user_response(u: User) -> UserResponse:
         email=u.email,
         full_name=u.full_name,
         is_system_admin=u.is_system_admin,
+        is_system_owner=u.is_system_owner,
         is_active=u.is_active,
     )
 
@@ -136,6 +137,7 @@ async def _mint_tenant_session(
     user_id: UUID,
     tenant_id: UUID | None,
     is_system_admin: bool,
+    is_system_owner: bool = False,
 ) -> LoginResponse:
     """Mint a session + JWT bound to ``tenant_id`` (or tenant-less if None).
 
@@ -159,6 +161,7 @@ async def _mint_tenant_session(
         session_id=session_id,
         tenant_id=tenant_id,
         is_system_admin=is_system_admin,
+        is_system_owner=is_system_owner,
     )
     return LoginResponse(access_token=token, token_type="bearer", expires_in=ttl_seconds)
 
@@ -196,6 +199,10 @@ async def register(payload: RegisterRequest) -> UserResponse:
             password_hash=hash_password(payload.password),
             full_name=payload.full_name,
             is_system_admin=is_first_user,
+            # The very first operator is also the System Owner (córtex F0, ADR 0074).
+            # Singleton enforced by the partial unique index; subsequent users default
+            # to false and ownership is never granted via SSO.
+            is_system_owner=is_first_user,
         )
         session.add(user)
         try:
@@ -279,6 +286,7 @@ async def login(
 
         user_id = user.id
         is_system_admin = user.is_system_admin
+        is_system_owner = user.is_system_owner
 
     # First factor passed. If the user has ANY confirmed second factor
     # (TOTP or WebAuthn), do NOT mint a session here — return an interim
@@ -312,6 +320,7 @@ async def login(
         session_id=session_id,
         tenant_id=None,
         is_system_admin=is_system_admin,
+        is_system_owner=is_system_owner,
     )
 
     return LoginResponse(
@@ -394,6 +403,7 @@ async def resolve_session(
             user_id=principal.user_id,
             tenant_id=only.tenant_id,
             is_system_admin=principal.is_system_admin,
+            is_system_owner=principal.is_system_owner,
         )
         return SessionResolutionResponse(
             state=RESOLUTION_STATE_SINGLE,
@@ -440,6 +450,7 @@ async def select_tenant(
         user_id=principal.user_id,
         tenant_id=payload.tenant_id,
         is_system_admin=principal.is_system_admin,
+        is_system_owner=principal.is_system_owner,
     )
 
 

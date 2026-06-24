@@ -58,6 +58,9 @@ export interface CapabilitySer {
   model: string | null;
   temperature: number | null;
   system_prompt_present: boolean;
+  // Ola D / ADR 0065: nivel que fija el modelo efectivo en la cadena de herencia
+  // ("agent" | "team" | "project" | "platform").
+  model_origin?: string | null;
 }
 
 export interface CapabilityHacer {

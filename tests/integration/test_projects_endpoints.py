@@ -218,6 +218,88 @@ async def test_project_crud_roundtrip(configured_app, migrations_pg_dsn: str) ->
 
 
 @pytest.mark.asyncio
+async def test_project_model_config_roundtrip(configured_app, migrations_pg_dsn: str) -> None:
+    """Ola A-UI: PUT /projects/{id} fija el modelo por defecto del proyecto y GET
+    lo devuelve (clave JSON `model_config`, alias del `llm_config` Python)."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    cfg = {"provider": "ollama", "model": "qwen3-coder:480b", "temperature": 0.2}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        project_id = (
+            await client.post(
+                "/projects", json=_minimal_payload(team_id=str(seeded["team_a"])), headers=headers
+            )
+        ).json()["id"]
+        # Recién creado: sin modelo (hereda del default de plataforma).
+        assert (await client.get(f"/projects/{project_id}", headers=headers)).json()[
+            "model_config"
+        ] == {}
+
+        upd = await client.put(
+            f"/projects/{project_id}", json={"model_config": cfg}, headers=headers
+        )
+        assert upd.status_code == 200, upd.text
+        assert upd.json()["model_config"] == cfg
+
+        got = await client.get(f"/projects/{project_id}", headers=headers)
+        assert got.json()["model_config"]["model"] == "qwen3-coder:480b"
+
+
+@pytest.mark.asyncio
+async def test_create_project_fork_team_opt_in(configured_app, migrations_pg_dsn: str) -> None:
+    """Ola C / ADR 0068: `fork_team=True` al crear forkea el equipo referenciado a
+    una copia editable del tenant y repunta `project.team_id` al fork; el default
+    (`False`) referencia el equipo tal cual (linked)."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    team_a = str(seeded["team_a"])
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        # Default: referencia el equipo tal cual.
+        ref = await client.post(
+            "/projects",
+            json=_minimal_payload(name="Linked", team_id=team_a),
+            headers=headers,
+        )
+        assert ref.status_code == 201, ref.text
+        assert ref.json()["team_id"] == team_a
+
+        # Opt-in: forkea el equipo y repunta.
+        forked = await client.post(
+            "/projects",
+            json=_minimal_payload(name="Forked", team_id=team_a, fork_team=True),
+            headers=headers,
+        )
+        assert forked.status_code == 201, forked.text
+        new_team_id = forked.json()["team_id"]
+        assert new_team_id is not None and new_team_id != team_a
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        row = await conn.fetchrow(
+            "SELECT is_builtin, forked_from_team_id, tenant_id FROM teams WHERE id = $1",
+            UUID(new_team_id),
+        )
+        assert row["is_builtin"] is False
+        assert row["forked_from_team_id"] == seeded["team_a"]
+        assert row["tenant_id"] == seeded["tenant_a"]
+        # El equipo original no se muta.
+        src = await conn.fetchrow(
+            "SELECT is_builtin, forked_from_team_id FROM teams WHERE id = $1", seeded["team_a"]
+        )
+        assert src["forked_from_team_id"] is None
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_project_cannot_reference_other_tenants_team(
     configured_app, migrations_pg_dsn: str
 ) -> None:

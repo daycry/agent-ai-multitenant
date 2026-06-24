@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import pytest
 from api_server.db.platform_settings import (
+    InvalidApiPathPrefixError,
     InvalidPublicBaseUrlError,
+    validate_api_path_prefix,
     validate_public_base_url,
 )
 
@@ -47,3 +49,38 @@ def test_valid_urls_normalise(raw: str, expected: str) -> None:
 def test_invalid_urls_raise(raw: str) -> None:
     with pytest.raises(InvalidPublicBaseUrlError):
         validate_public_base_url(raw)
+
+
+# ---------------------------------------------------------------------------
+# api_path_prefix (ADR 0069 — single-origin reverse proxy)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("", ""),  # no prefix (default / backward-compatible)
+        ("   ", ""),
+        ("/", ""),  # bare root = no prefix
+        ("/api", "/api"),
+        ("/api/", "/api"),  # trailing slash stripped
+        ("  /api  ", "/api"),
+        ("/api/v1", "/api/v1"),
+        ("/api/v1/", "/api/v1"),
+    ],
+)
+def test_valid_api_path_prefix_normalises(raw: str, expected: str) -> None:
+    assert validate_api_path_prefix(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "api",  # no leading slash
+        "http://example.com/api",  # carries a host
+        "//example.com/api",  # protocol-relative host
+        "/api?x=1",  # carries a query
+        "/api#frag",  # carries a fragment
+    ],
+)
+def test_invalid_api_path_prefix_raises(raw: str) -> None:
+    with pytest.raises(InvalidApiPathPrefixError):
+        validate_api_path_prefix(raw)
