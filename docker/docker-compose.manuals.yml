@@ -219,6 +219,28 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
+  # cortex-beat — Celery beat: agenda los bucles de fondo del córtex (F4):
+  # reflexión / curiosidad / mantenimiento (beat_schedule en workers.celery_app).
+  # SOLO encola por horario; el trabajo lo hace el pool `workers`. Tickea siempre,
+  # pero con el kill-switch `cortex.autonomy_enabled` OFF (default) las tareas salen
+  # no-op → seguro tenerlo levantado. Activar F4 = encender el switch (UI owner).
+  # ---------------------------------------------------------------------------
+  cortex-beat:
+    image: agentic-platform/workers:ci
+    command: ["celery", "-A", "workers.celery_app", "beat", "--loglevel=info"]
+    environment:
+      WORKERS_ENVIRONMENT: dev
+      WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      WORKERS_BROKER_URL: redis://redis:6379/1
+      WORKERS_RESULT_BACKEND: redis://redis:6379/2
+      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/3
+      WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
+    depends_on:
+      redis: { condition: service_healthy }
+    networks: [agentic-net]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # vault — PERSISTENTE (Camino B): deshace el `-dev` de docker-compose.dev.yml
   # y usa el backend de FICHERO del base (config.hcl sobre el volumen vault_data),
   # así los secretos SOBREVIVEN a reinicios. El `vault-unsealer` de abajo lo

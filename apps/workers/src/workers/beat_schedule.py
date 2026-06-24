@@ -174,4 +174,24 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
         "schedule": _parse_cron(cfg.human_escalation_cron),
         "options": {"queue": "default"},
     }
+    # Córtex F4 (ADR 0078) — bucles cognitivos de fondo del system_owner. Cada tarea
+    # comprueba el KILL-SWITCH `cortex.autonomy_enabled` (default OFF ⇒ no-op), así que
+    # estas entradas pueden tickear siempre sin coste: encolan barato y la tarea sale
+    # enseguida si la autonomía está apagada. Queue `default` (Ollama local + web
+    # acotada, sin infra). Activación = encender el switch desde la UI del owner.
+    sched["cortex-curiosity"] = {
+        "task": "workers.cortex_curiosity_loop",
+        "schedule": schedule(run_every=900.0),  # cada 15 min
+        "options": {"queue": "default"},
+    }
+    sched["cortex-reflection"] = {
+        "task": "workers.cortex_reflect_scheduled",
+        "schedule": crontab(hour="4", minute="15"),  # reflexión diaria (madrugada)
+        "options": {"queue": "default"},
+    }
+    sched["cortex-maintenance"] = {
+        "task": "workers.cortex_maintenance",
+        "schedule": crontab(hour="4", minute="45"),  # mantenimiento/olvido diario
+        "options": {"queue": "default"},
+    }
     return sched

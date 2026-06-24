@@ -103,6 +103,55 @@ def cortex_reflect(owner_user_id: str) -> dict[str, Any]:
     )
 
 
+@app.task(name="workers.cortex_reflect_scheduled")  # type: ignore[misc]
+def cortex_reflect_scheduled() -> dict[str, Any]:
+    """Entry point del BEAT (sin args): reflexión AUTÓNOMA del córtex.
+
+    A diferencia de ``cortex_reflect`` (disparo manual del owner, sin gate), la
+    versión programada respeta el KILL-SWITCH ``cortex.autonomy_enabled`` (default
+    OFF ⇒ no-op) y resuelve el owner singleton ella misma. Best-effort: jamás
+    propaga al worker (no tumba el beat)."""
+    settings = get_settings()
+    return asyncio.run(_reflect_scheduled_async(settings, llm_factory=_default_llm_factory))
+
+
+async def _reflect_scheduled_async(
+    settings: Settings, *, llm_factory: LLMFactory
+) -> dict[str, Any]:
+    """Núcleo del beat: kill-switch → owners(singleton) → reflexión por owner."""
+    engine = create_async_engine(settings.database_url)
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        from api_server.db.models import User
+        from api_server.db.platform_settings import get_cortex_autonomy_enabled
+
+        async with sessionmaker() as session:
+            if not await get_cortex_autonomy_enabled(session):
+                return {"skipped": "disabled"}
+            owners = [
+                r[0]
+                for r in (
+                    await session.execute(
+                        select(User.id).where(
+                            User.is_system_owner.is_(True), User.deleted_at.is_(None)
+                        )
+                    )
+                ).all()
+            ]
+        if not owners:
+            return {"skipped": "no_owner"}
+        results = [
+            await _reflect_async(owner_id, settings=settings, llm_factory=llm_factory)
+            for owner_id in owners
+        ]
+        return {"owners": len(owners), "results": results}
+    except Exception as exc:  # best-effort: jamás propaga al beat
+        _log.exception("cortex_reflect_scheduled.failed", error=str(exc))
+        return {"error": str(exc)}
+    finally:
+        await engine.dispose()
+
+
 async def _reflect_async(
     owner_user_id: UUID,
     *,
