@@ -326,17 +326,19 @@ converja a un estado terminal visible.
 
 #### `task_prod06_budget_01` — Cablear auto-pausa y alertas de presupuesto
 
-- [ ] **Título**: Dar caller productivo a `refresh_budget_pause_flags` (budgets/pause.py:124)
+- [x] **Título**: Dar caller productivo a `refresh_budget_pause_flags` (budgets/pause.py:124)
       y `maybe_alert_budgets` (budgets/consumption.py:665), hoy solo invocados por tests:
       (a) entrada en beat_schedule.py (sweep periódico por tenant); (b) hook tras
       `finalize_execution` en el worker, después de registrar el coste (coordinación con
-      prod-07). El guard lector (dispatch.py:298) ya existe; faltan los escritores.
+      prod-07). El guard lector (dispatch.py:298) ya existe; faltan los escritores. > Hecho: seam compartido `sweep_tenant_budgets` (api_server.budgets) → beat > `workers.refresh_budgets` (cada 5 min, por tenant) + hook `refresh_budgets_after_run` > en conduct_execution (tras el commit de finalize_execution).
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod06_budget_01_a
     runtime: python-pytest
-    command: "pytest tests/e2e/test_budget_pause_end_to_end.py -v"
+    # Ubicado en tests/integration (necesita los fixtures Postgres+Redis del
+    # conftest de integración; tests/e2e está reservado al gate de install Docker).
+    command: "pytest tests/integration/test_budget_pause_end_to_end.py -v"
   ```
 
 #### `task_prod06_budget_02` — Budgets de run configurables por proyecto/tenant

@@ -27,23 +27,40 @@ def test_valid_cron_parses() -> None:
     assert result == crontab(minute="0", hour="4")
 
 
+class _RecordingLogger:
+    """Captures ``error`` calls regardless of the global logging config — other
+    tests load the app's logging setup (which can call ``logging.disable`` or kill
+    propagation), so asserting via stdlib/caplog is order-dependent. Monkeypatched
+    over the module ``logger`` so the test sees the call directly."""
+
+    def __init__(self) -> None:
+        self.errors: list[str] = []
+
+    def error(self, msg: str, *args: object, **_kwargs: object) -> None:
+        self.errors.append(msg % args if args else msg)
+
+    def debug(self, *_args: object, **_kwargs: object) -> None:
+        pass
+
+
 def test_malformed_falls_back_to_this_entrys_default_in_dev(
-    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    rec = _RecordingLogger()
+    monkeypatch.setattr("workers.beat_schedule.logger", rec)
+
     # A 4-field typo of the 10-minute escalation sweep.
-    with caplog.at_level(logging.ERROR):
-        result = _parse_cron(
-            "*/10 * * *",
-            env_var="WORKERS_HUMAN_ESCALATION_CRON",
-            default="*/10 * * * *",
-            environment="dev",
-        )
+    result = _parse_cron(
+        "*/10 * * *",
+        env_var="WORKERS_HUMAN_ESCALATION_CRON",
+        default="*/10 * * * *",
+        environment="dev",
+    )
     # Fell back to THIS entry's documented default (every 10 min), NOT 04:00.
     assert result == crontab(minute="*/10")
     assert result != crontab(minute="0", hour="4")
     # Logged loudly, naming the offending env var.
-    assert any("WORKERS_HUMAN_ESCALATION_CRON" in r.message for r in caplog.records)
-    assert any(r.levelno >= logging.ERROR for r in caplog.records)
+    assert any("WORKERS_HUMAN_ESCALATION_CRON" in line for line in rec.errors)
 
 
 def test_out_of_range_field_is_treated_as_malformed() -> None:

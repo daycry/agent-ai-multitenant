@@ -45,6 +45,7 @@ from api_server.budgets.period import (
     InvalidBudgetPeriodError,
     current_budget_period,
 )
+from api_server.budgets.sweep import TenantBudgetSweep, sweep_tenant_budgets
 
 __all__ = [
     "BUDGET_ALERT_EVENT_TYPE",
@@ -57,6 +58,7 @@ __all__ = [
     "BudgetPauseBlock",
     "BudgetPauseRefresh",
     "BudgetPeriodWindow",
+    "TenantBudgetSweep",
     "CeleryBudgetAlertDispatcher",
     "HumanCostScope",
     "InvalidBudgetPeriodError",
@@ -69,5 +71,6 @@ __all__ = [
     "maybe_alert_budgets",
     "refresh_budget_pause_flags",
     "resolve_execution_budgets",
+    "sweep_tenant_budgets",
     "tenant_budget_summary",
 ]

@@ -71,6 +71,15 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": schedule(run_every=300.0),
         "options": {"queue": "review"},
     },
+    # prod-06 task_prod06_budget_01 — per-tenant budget sweep: re-derive the
+    # auto-pause flags + fire threshold alerts. The post-execution hook keeps a
+    # single run immediate; this is the safety net (period rollover auto-clear,
+    # missed hook, manual spend correction). Cheap per tenant; every 5 min.
+    "refresh-budgets-every-5m": {
+        "task": "workers.refresh_budgets",
+        "schedule": schedule(run_every=300.0),
+        "options": {"queue": "default"},
+    },
     "purge-dep-cache-daily": {
         "task": "workers.purge_dep_cache",
         "schedule": crontab(hour="3", minute="0"),

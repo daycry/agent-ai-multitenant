@@ -490,6 +490,30 @@ async def transition_task_after_run(
     return (task, old_status, task.status)
 
 
+async def refresh_budgets_after_run(
+    sessionmaker: async_sessionmaker[AsyncSession], tenant_id: UUID
+) -> None:
+    """Re-derive the tenant's budget auto-pause + fire alerts after a run ends.
+
+    prod-06 task_prod06_budget_01: the run's cost is persisted by
+    ``finalize_execution``; this re-derives ``paused_by_budget`` for the tenant
+    so a run that tipped a scope over 100% pauses the NEXT start immediately
+    (instead of waiting for the ``workers.refresh_budgets`` beat). Best-effort —
+    a budget failure must never break the finished run; the periodic beat is the
+    safety net. Opens its own short transaction on the BYPASSRLS worker engine.
+    """
+    from api_server.budgets import sweep_tenant_budgets
+    from api_server.budgets.consumption import CeleryBudgetAlertDispatcher
+
+    try:
+        async with sessionmaker() as session, session.begin():
+            await sweep_tenant_budgets(
+                session, tenant_id=tenant_id, dispatcher=CeleryBudgetAlertDispatcher()
+            )
+    except Exception as exc:  # pragma: no cover - defensive best-effort
+        _log.warning("workers.budget_refresh_failed", tenant_id=str(tenant_id), error=str(exc))
+
+
 async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll de cancelación
     request: ExecutionRequest,
     *,
@@ -707,6 +731,12 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
     if task_event is not None:
         task_obj, old, new = task_event
         await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
+
+    # prod-06 task_prod06_budget_01: now that the run's cost is persisted
+    # (finalize_execution above), re-derive the tenant's budget auto-pause +
+    # fire any threshold alerts, so a run that tipped a scope over 100% pauses
+    # the NEXT start immediately. Best-effort — never breaks the finished run.
+    await refresh_budgets_after_run(sessionmaker, tenant_id)
 
     # Fire-and-forget Memorizer (Plan 04.5 task_04_5_02). The Celery
     # task does the LLM distillation off the executor's critical path,
