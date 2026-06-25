@@ -1,10 +1,16 @@
 ---
 title: "Plan — Unificación de selección+resolución de modelo por provider_id (ADR 0082)"
 date: 2026-06-25
-status: approved
+status: in_progress
 adr: "0082"
 docs_language: es
 ---
+
+> **Progreso (2026-06-25):** Fase 0 ✅ (auditoría: default era ollama-cloud pero resolvía
+> mal a local), Fase 1 ✅ (`f2ad7d9`), Fase 2 ✅ (`ce5d2f6`), Fase 3 ✅ (`6c81a99`:
+> `ProviderModelSelects` reutilizable + persona/agente/equipo/adopt por provider_id +
+> borrado `DefaultModelSection`). Pendiente: deploy + (follow-up) converger
+> `chat-model-section` al mismo componente y deprecar `/agents/model-options`.
 
 # Plan — Unificación de modelo por `provider_id` (ADR 0082)
 
