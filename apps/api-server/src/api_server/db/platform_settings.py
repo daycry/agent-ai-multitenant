@@ -683,6 +683,12 @@ def config_needs_default_model(cfg: dict[str, Any] | None) -> bool:
         return True
     if cfg.get("kind"):
         return False
+    # ADR 0082: pineado por provider CONCRETO (provider_id + model) cuenta como
+    # spec intencional aunque no traiga `provider` (kind) alongside — el row
+    # gobierna el kind. Sin esto, un config solo-provider_id heredaría el default
+    # por kind, perdiendo la elección de fila (p.ej. ollama-cloud vs local).
+    if cfg.get("provider_id") and cfg.get("model"):
+        return False
     return not (cfg.get("provider") and cfg.get("model"))
 
 

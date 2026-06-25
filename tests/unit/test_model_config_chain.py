@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 from api_server.db.platform_settings import (
+    config_needs_default_model,
     resolve_model_config_chain,
     resolve_model_config_origin,
 )
@@ -17,6 +18,38 @@ pytestmark = pytest.mark.unit
 
 _PLATFORM = {"provider": "ollama", "model": "llama3.2:1b", "temperature": 0.2}
 _PINNED = {"provider": "claude_sdk", "model": "claude-sonnet-4-5"}
+_PID = "019e83cd-bb5c-7f43-9031-b3a75f3bdd29"
+
+
+# ---------------------------------------------------------------------------
+# ADR 0082 — un config pineado por provider_id concreto cuenta como pin y se
+# propaga por la cadena (sin necesitar provider/kind alongside).
+# ---------------------------------------------------------------------------
+def test_config_needs_default_recognizes_provider_id_pin() -> None:
+    assert config_needs_default_model({"provider_id": _PID, "model": "gpt-oss:120b"}) is False
+    # provider_id sin model NO es un pin → sigue heredando.
+    assert config_needs_default_model({"provider_id": _PID}) is True
+    # legacy por kind sigue contando como pin.
+    assert config_needs_default_model({"provider": "ollama", "model": "x"}) is False
+
+
+def test_agent_pinned_by_provider_id_only_is_returned_verbatim() -> None:
+    agent = {"provider_id": _PID, "model": "gpt-oss:120b"}
+    out = resolve_model_config_chain(agent, {}, {}, _PLATFORM)
+    assert out == agent  # no hereda el default por kind
+
+
+def test_platform_default_provider_id_propagates_to_empty_agent() -> None:
+    default = {
+        "provider": "ollama",
+        "provider_id": _PID,
+        "model": "gpt-oss:120b",
+        "temperature": 0.1,
+    }
+    out = resolve_model_config_chain({"system_prompts": {"es": "hola"}}, {}, {}, default)
+    assert out["provider_id"] == _PID
+    assert out["model"] == "gpt-oss:120b"
+    assert out["system_prompts"] == {"es": "hola"}
 
 
 def test_agent_pin_wins_over_all() -> None:
