@@ -56,13 +56,17 @@ def run_agent_container(
     return runner.run(spec).as_dict()
 
 
-@app.task(name="workers.run_execution")  # type: ignore[misc]
-def run_execution(request: dict[str, Any]) -> dict[str, Any]:
+@app.task(bind=True, name="workers.run_execution")  # type: ignore[misc]
+def run_execution(self: Any, request: dict[str, Any]) -> dict[str, Any]:
     """Conduct one agent execution end to end (Plan 02 Fase G).
 
     The orchestrator (task_02_31) enqueues this with the execution
     request as a plain dict. The DB and Redis handles are built from
     `Settings`; the result is the JSON-safe `ExecutionOutcome` dict.
+
+    Bound (``bind=True``) so we can persist ``self.request.id`` — the Celery job
+    id — onto the `executions` row (prod-06 cancel_01). Without it the operator
+    cancel endpoint's `revoke` branch was dead code (the column stayed NULL).
 
     On an unhandled failure (e.g. a tampered cross-tenant payload, or a
     DB/broker outage) the job is recorded to a dead-letter stream and the
@@ -71,8 +75,15 @@ def run_execution(request: dict[str, Any]) -> dict[str, Any]:
     reprocesses from the dead-letter stream (task_06_14_04).
     """
     settings = get_settings()
+    celery_task_id = getattr(self.request, "id", None)
     try:
-        return asyncio.run(_run_execution(ExecutionRequest.from_dict(request), settings))
+        return asyncio.run(
+            _run_execution(
+                ExecutionRequest.from_dict(request),
+                settings,
+                celery_task_id=celery_task_id,
+            )
+        )
     except Exception as exc:
         _record_execution_dead_letter(settings, request, exc)
         raise
@@ -114,14 +125,20 @@ async def _push_execution_dead_letter(
         await redis.aclose()
 
 
-async def _run_execution(request: ExecutionRequest, settings: Settings) -> dict[str, Any]:
+async def _run_execution(
+    request: ExecutionRequest, settings: Settings, *, celery_task_id: str | None = None
+) -> dict[str, Any]:
     """Async core of `run_execution` — owns the engine + Redis lifecycle."""
     engine = create_async_engine(settings.database_url)
     redis: Redis = Redis.from_url(settings.events_redis_url, decode_responses=True)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         outcome = await conduct_execution(
-            request, settings=settings, sessionmaker=sessionmaker, redis=redis
+            request,
+            settings=settings,
+            sessionmaker=sessionmaker,
+            redis=redis,
+            celery_task_id=celery_task_id,
         )
         return outcome.as_dict()
     finally:

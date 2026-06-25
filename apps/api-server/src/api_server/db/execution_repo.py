@@ -230,6 +230,39 @@ async def request_execution_cancel(session: AsyncSession, execution_id: UUID) ->
     return execution
 
 
+async def cancel_running_executions_for_task(
+    session: AsyncSession, task_id: UUID
+) -> list[Execution]:
+    """Request cooperative cancellation of every still-`running` execution of a
+    task (prod-06 cancel_01/cancel_02).
+
+    Seals ``cancel_requested_at`` on each (the worker polls it to kill the
+    container + finalise as ``cancelled``) and returns them — with their
+    ``celery_task_id`` — so the caller can ``revoke`` the queued jobs. Used when a
+    task is moved to ``cancelled`` (in_progress→cancelled) and by the plan-level
+    cancellation cascade. Idempotent; the caller owns the transaction.
+    """
+    rows = (
+        (
+            await session.execute(
+                select(Execution).where(
+                    Execution.task_id == task_id,
+                    Execution.status == ExecutionStatus.RUNNING,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    cancelled: list[Execution] = []
+    for execution in rows:
+        execution.cancel_requested_at = execution.cancel_requested_at or datetime.now(UTC)
+        cancelled.append(execution)
+    if cancelled:
+        await session.flush()
+    return cancelled
+
+
 async def supersede_running_executions(
     session: AsyncSession, *, tenant_id: UUID, task_id: UUID
 ) -> int:

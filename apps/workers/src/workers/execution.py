@@ -499,6 +499,7 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
     vault_store: Any | None = None,
     runner: AgentContainerRunner | None = None,
     cancel_poll_interval_s: float = _CANCEL_POLL_INTERVAL_S,
+    celery_task_id: str | None = None,
 ) -> ExecutionOutcome:
     """Run one task end to end: container → Redis stream → `executions` row."""
     task_id = UUID(request.task_id)
@@ -534,6 +535,9 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
             tenant_id=tenant_id,
             task_id=task_id,
             agent_id=UUID(request.agent_id) if request.agent_id else None,
+            # prod-06 cancel_01: persist the Celery job id so an operator cancel
+            # can `revoke` a still-queued/running job (was NULL → revoke dead code).
+            celery_task_id=celery_task_id,
         )
         execution_id = execution.id
         project = await session.get(Project, task.project_id)
