@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -429,3 +429,86 @@ async def _promote_ready_plans_async(settings: Settings) -> dict[str, Any]:
         promoted=promoted,
     )
     return {"plans_touched": plans_touched, "promoted": promoted}
+
+
+# ---------------------------------------------------------------------------
+# sweep_stale_executions — every 5 min (prod-06 task_prod06_zombi_01)
+# ---------------------------------------------------------------------------
+# A `running` execution older than this is presumed lost: the Celery child was
+# SIGKILLed (OOM or the hard time limit) without finalising the row, leaving it
+# `running` forever and possibly an orphan container. 7h = the 6h hard-limit cap
+# (prod-06 decision 2 / zombi_03) + a 1h margin so a legitimately-long run is
+# never reaped early.
+_STALE_EXECUTION_AFTER = timedelta(hours=7)
+
+
+@app.task(name="workers.sweep_stale_executions")  # type: ignore[misc]
+def sweep_stale_executions() -> dict[str, Any]:
+    """Close zombie executions + reap their orphan containers.
+
+    No sweeper existed (workers-2): a hard-limit/OOM SIGKILL of the Celery child
+    left ``executions.running`` rows and dangling agent-runtime containers. This
+    beat finds ``running`` rows older than the stale threshold, marks them
+    ``failed`` (``abort_code=stale_after_worker_loss``), transitions their task off
+    ``in_progress`` (reusing the dag_01 policy → ``blocked``), and ``docker rm -f``
+    their container by label. Best-effort (never crashes beat)."""
+    settings = get_settings()
+    return asyncio.run(_sweep_stale_executions_async(settings))
+
+
+async def _sweep_stale_executions_async(
+    settings: Settings,
+    *,
+    runner: Any = None,
+    stale_after: timedelta = _STALE_EXECUTION_AFTER,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Async core. ``runner`` (a container runner with ``kill_by_label``) and
+    ``now`` are injectable so the test drives it without Docker or wall-clock."""
+    from api_server.db.domain import Execution, ExecutionStatus
+    from sqlalchemy import select
+
+    from workers.container import AgentContainerRunner
+    from workers.execution import transition_task_after_run
+
+    moment = now or datetime.now(UTC)
+    cutoff = moment - stale_after
+    engine = create_async_engine(settings.database_url)
+    swept = 0
+    reaped = 0
+    try:
+        if runner is None:
+            runner = AgentContainerRunner(settings)
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessionmaker() as db, db.begin():
+            stale = list(
+                (
+                    await db.execute(
+                        select(Execution).where(
+                            Execution.status == ExecutionStatus.RUNNING.value,
+                            Execution.started_at < cutoff,
+                        )
+                    )
+                ).scalars()
+            )
+            stale_ids = [str(e.id) for e in stale]
+            for execution in stale:
+                execution.status = ExecutionStatus.FAILED.value
+                execution.abort_code = "stale_after_worker_loss"
+                execution.completed_at = moment
+                # Move the orphaned task off in_progress (dag_01 policy → blocked).
+                await transition_task_after_run(db, execution.task_id, ExecutionStatus.FAILED.value)
+                swept += 1
+        # Reap lingering containers OUTSIDE the txn — Docker I/O must never hold
+        # the DB transaction open. Best-effort per execution.
+        for execution_id in stale_ids:
+            with contextlib.suppress(Exception):
+                reaped += runner.kill_by_label(execution_id)
+    except Exception as exc:  # pragma: no cover — defensive logging
+        _log.warning("maintenance.sweep_stale_executions.error", error=str(exc))
+        return {"swept": swept, "reaped": reaped, "error": str(exc)}
+    finally:
+        await engine.dispose()
+
+    _log.info("maintenance.sweep_stale_executions.done", swept=swept, reaped=reaped)
+    return {"swept": swept, "reaped": reaped}

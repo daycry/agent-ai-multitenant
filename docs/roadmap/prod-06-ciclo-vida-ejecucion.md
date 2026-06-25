@@ -158,7 +158,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_dag_03` — Cablear el reviewer bridge al flujo post-ejecución
 
-- [ ] **Título**: Dar caller productivo a `apply_reviewer_verdict`
+- [ ] **Título** ⏸️ **DIFERIDO (depende de ADR 0063 — ejecución del reviewer)**: Dar caller productivo a `apply_reviewer_verdict`
       (apps/api-server/src/api_server/reviewer_bridge.py:95, hoy 0 callers fuera de tests):
       cuando una tarea entra en `in_review`, el flujo post-test-runtime invoca
       `parse_reviewer_output` + `apply_reviewer_verdict` y la tarea avanza a `done` o vuelve
@@ -177,7 +177,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_zombi_01` — Sweeper de ejecuciones zombi + reaper de contenedores
 
-- [ ] **Título**: Nuevo beat task en apps/workers/src/workers/maintenance.py (registrado en
+- [x] **Título**: Nuevo beat task en apps/workers/src/workers/maintenance.py (registrado en
       beat_schedule.py): cerrar como `failed` (motivo `stale_after_worker_loss`) las
       `executions.running` cuya antigüedad supere `hard_time_limit + margen`, transicionar su
       tarea (reusa task_prod06_dag_01) y hacer `docker rm -f` de los contenedores con label

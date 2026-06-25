@@ -49,6 +49,14 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": schedule(run_every=30.0),
         "options": {"queue": "default"},
     },
+    # prod-06 task_prod06_zombi_01 — close zombie executions (running rows whose
+    # Celery child was SIGKILLed by OOM/hard-limit) and reap their orphan
+    # containers. Every 5 min; only touches rows older than the stale threshold.
+    "sweep-stale-executions-every-5m": {
+        "task": "workers.sweep_stale_executions",
+        "schedule": schedule(run_every=300.0),
+        "options": {"queue": "default"},
+    },
     "expire-review-runtimes-every-5m": {
         "task": "workers.expire_review_runtimes",
         "schedule": schedule(run_every=300.0),
