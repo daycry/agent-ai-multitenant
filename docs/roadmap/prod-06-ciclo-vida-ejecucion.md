@@ -355,7 +355,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_budget_03` — No despachar proyectos soft-borrados
 
-- [ ] **Título**: Añadir `Project.deleted_at IS NULL` al cargar el proyecto en `_route_ai`
+- [x] **Título**: Añadir `Project.deleted_at IS NULL` al cargar el proyecto en `_route_ai`
       (dispatch.py:338-340) y devolver None con log si está borrado. La cascada de
       cancelación al soft-borrar ya la cubre task_prod06_cancel_02.
 - **Tiempo**: 0,5 días · **Complejidad**: s

@@ -421,9 +421,26 @@ class TaskDispatcher:
     async def _route_ai(self, session: AsyncSession, task: Task) -> _AiDispatch | None:
         """The existing AI route: pick an agent, move to ``in_progress``,
         build the worker payload. Untouched behaviour for AI tasks."""
+        # prod-06 task_prod06_budget_03 (db-5): never start an execution for a
+        # task whose project was soft-deleted. The cancellation cascade
+        # (task_prod06_cancel_02) cleans up in-flight work on delete, but a stale
+        # `ready` event could still arrive afterwards — load the project with the
+        # `deleted_at IS NULL` filter and skip if it is gone.
         project = (
-            await session.execute(select(Project).where(Project.id == task.project_id))
+            await session.execute(
+                select(Project).where(
+                    Project.id == task.project_id,
+                    Project.deleted_at.is_(None),
+                )
+            )
         ).scalar_one_or_none()
+        if project is None:
+            _log.info(
+                "orchestrator.skip_deleted_project",
+                task_id=str(task.id),
+                project_id=str(task.project_id),
+            )
+            return None
         candidates = await self._candidates(session, task)
         agent_id = self._pick(project, task, candidates)
         if agent_id is None:
