@@ -1,9 +1,9 @@
 ---
 plan_id: prod-06-ciclo-vida-ejecucion
 title: Ciclo de vida de ejecución robusto — DAG, zombis, cancelación y budgets
-status: pending_approval
+status: in_progress
 blocking_plan: null
-started_at: null
+started_at: 2026-06-25
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 20
@@ -123,7 +123,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_dag_01` — Transición de la tarea al finalizar la ejecución
 
-- [ ] **Título**: En `conduct_execution` (apps/workers/src/workers/execution.py:571-598),
+- [x] **Título**: En `conduct_execution` (apps/workers/src/workers/execution.py:571-598),
       tras `finalize_execution`, transicionar SIEMPRE la tarea: `done` → `in_review`/`done`
       según política (decisión 4), `failed` → `blocked` con motivo; publicar el evento de
       cambio de estado. Hoy solo existe la rama `_AWAITING_APPROVAL` (execution.py:578) y

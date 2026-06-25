@@ -22,13 +22,14 @@ import asyncio
 import contextlib
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 import structlog
 from api_server.auth.internal_agent import mint_agent_token
 from api_server.db.approval_repo import request_approval_if_needed
-from api_server.db.domain import Project, Task
+from api_server.db.domain import Project, Task, TaskStatus
 from api_server.db.execution_repo import (
     create_running_execution,
     finalize_execution,
@@ -36,6 +37,7 @@ from api_server.db.execution_repo import (
     supersede_running_executions,
 )
 from api_server.events import publish_execution_event, publish_task_status_changed
+from api_server.task_state_machine import transition_task_status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -446,7 +448,49 @@ def _default_vault_store() -> Any:
     return get_provider_vault_store()
 
 
-async def conduct_execution(  # noqa: PLR0915 - tramos lineales + poll de cancelación
+async def transition_task_after_run(
+    session: AsyncSession, task_id: UUID, result_status: str
+) -> tuple[Task, str, str] | None:
+    """Move a task off ``in_progress`` after its run reaches a terminal status.
+
+    prod-06 task_prod06_dag_01. Until now nothing transitioned a task once its
+    execution finished (only the ``awaiting_human_approval`` branch did), so a
+    ``done``/``failed`` run left the task ``in_progress`` forever — inflating the
+    agent's load counter and stalling the DAG. Returns ``(task, old, new)`` for
+    event publication, or ``None`` when no transition applies:
+
+      - ``done`` -> ``in_review`` if the task has a reviewer, else ``done``
+        (stamping ``completed_at``).
+      - any other terminal status (``failed``/``aborted``/…) -> ``blocked``; the
+        motive is the linked execution row (``abort_code``/output), not a task column.
+      - ``awaiting_human_approval`` is owned by the approval branch -> ``None``.
+
+    The ``in_progress`` guard keeps it idempotent and avoids stepping on a task
+    another path already moved (e.g. a cancellation that set it ``cancelled``).
+    """
+    if result_status == _AWAITING_APPROVAL:
+        return None
+    task = await session.get(Task, task_id)
+    if task is None or task.status != TaskStatus.IN_PROGRESS.value:
+        return None
+    old_status = task.status
+    if result_status == "done":
+        target = (
+            TaskStatus.IN_REVIEW.value
+            if task.reviewer_agent_id is not None
+            else TaskStatus.DONE.value
+        )
+    else:
+        target = TaskStatus.BLOCKED.value
+    transition_task_status(task, target)
+    if task.status == TaskStatus.DONE.value:
+        task.completed_at = datetime.now(UTC)
+    if task.status == old_status:
+        return None
+    return (task, old_status, task.status)
+
+
+async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll de cancelación
     request: ExecutionRequest,
     *,
     settings: Settings,
@@ -649,6 +693,10 @@ async def conduct_execution(  # noqa: PLR0915 - tramos lineales + poll de cancel
                 )
                 if task.status != old_status:
                     task_event = (task, old_status, task.status)
+        else:
+            # prod-06 task_prod06_dag_01: every other terminal run moves the
+            # task off in_progress (done -> in_review/done, failed -> blocked).
+            task_event = await transition_task_after_run(session, task_id, result.status)
 
     # Publish the task event AFTER the commit so the board sees a
     # consistent state. publish_* is best-effort and swallows its own errors.
