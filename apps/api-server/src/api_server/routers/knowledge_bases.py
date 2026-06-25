@@ -19,6 +19,7 @@ returns 201 immediately.
 from __future__ import annotations
 
 import contextlib
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -627,7 +628,12 @@ async def upload_document(
     # Plan 06.11: hand the document to the ingestion worker. Best-effort
     # — a broker hiccup must not fail the upload (the row is persisted as
     # `pending` and the beat sweep re-enqueues it).
-    await enqueue_ingestion(doc.id)
+    # prod-06 task_prod06_beat_02: stamp the enqueue LEASE on a successful
+    # enqueue so the sweep does not re-enqueue a doc that is still legitimately
+    # queued. A failed enqueue leaves it NULL → the sweep claims it (after the
+    # age cutoff) as a missed enqueue.
+    if await enqueue_ingestion(doc.id):
+        doc.enqueued_at = datetime.now(UTC)
 
     return to_document_response(doc)
 
@@ -711,10 +717,15 @@ async def reindex_document(
     doc.error_message = None
     doc.indexed_at = None
     doc.page_count = 0
+    doc.enqueued_at = None
     await session.flush()
     await session.refresh(doc)
 
-    await enqueue_ingestion(doc.id)
+    # prod-06 task_prod06_beat_02: refresh the enqueue lease on a successful
+    # re-enqueue (see upload_document); a failed enqueue leaves it NULL so the
+    # sweep retries.
+    if await enqueue_ingestion(doc.id):
+        doc.enqueued_at = datetime.now(UTC)
     return to_document_response(doc)
 
 

@@ -310,7 +310,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_beat_02` — Claim/lease en el sweep de ingestión
 
-- [ ] **Título**: En ingestion.py:179-215, marcar el documento al encolar (campo
+- [x] **Título**: En ingestion.py:179-215, marcar el documento al encolar (campo
       `enqueued_at` o SETNX en Redis con TTL) y filtrar `sweep_pending_documents` por esa
       marca, para que un backlog >5 min de la cola `ingestion` no re-encole documentos que
       siguen legítimamente en cola.

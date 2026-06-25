@@ -165,6 +165,14 @@ class Document(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Sof
 
     indexed_at: Mapped[Any | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
+    # prod-06 task_prod06_beat_02 — ingestion enqueue LEASE. Stamped each time the
+    # document is handed to the ingestion worker (at upload/reindex on a successful
+    # enqueue, and by the beat sweep when it claims a stuck `pending` doc). The
+    # sweep re-enqueues only documents whose lease is NULL (enqueue never landed)
+    # or has expired, so a >5-min backlog on the `ingestion` queue no longer causes
+    # the sweep to re-enqueue documents that are still legitimately queued.
+    enqueued_at: Mapped[Any | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
     created_by: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
