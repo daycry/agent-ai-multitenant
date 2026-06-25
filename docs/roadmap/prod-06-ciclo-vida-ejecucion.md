@@ -255,7 +255,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_cancel_02` — Cascada de cancelación a nivel plan
 
-- [ ] **Título**: Al cancelar un plan, cancelar sus tareas no terminales y solicitar la
+- [x] **Título**: Al cancelar un plan, cancelar sus tareas no terminales y solicitar la
       cancelación de las ejecuciones en vuelo (reusa task_prod06_cancel_01). Al soft-borrar
       un proyecto (projects.py:270-279), cancelar en la misma transacción sus tareas no
       terminales — segunda mitad de la recomendación de db-5.

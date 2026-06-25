@@ -17,7 +17,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.db.domain import Execution, ExecutionStatus
+from api_server.db.domain import Execution, ExecutionStatus, Task, TaskStatus
 from api_server.db.price_snapshot import PriceSnapshot, snapshot_model_call
 
 # The step kind that carries an LLM call's tokens + cost (the canonical
@@ -261,6 +261,45 @@ async def cancel_running_executions_for_task(
     if cancelled:
         await session.flush()
     return cancelled
+
+
+async def cancel_tasks_and_executions(
+    session: AsyncSession,
+    *,
+    plan_id: UUID | None = None,
+    project_id: UUID | None = None,
+) -> list[Execution]:
+    """Cancel every NON-terminal task of a plan OR a project and request
+    cancellation of their running executions (prod-06 cancel_02).
+
+    Used by the plan-level cancellation (``PUT /plans/{id}`` → ``cancelled``) and
+    the project soft-delete cascade — neither cancelled in-flight work before.
+    Returns the cancelled executions (with ``celery_task_id``) so the caller can
+    revoke the queued jobs. Pass exactly one of ``plan_id``/``project_id``.
+    Idempotent; the caller owns the transaction.
+    """
+    if (plan_id is None) == (project_id is None):
+        raise ValueError("pass exactly one of plan_id / project_id")
+    scope = Task.plan_id == plan_id if plan_id is not None else Task.project_id == project_id
+    tasks = (
+        (
+            await session.execute(
+                select(Task).where(
+                    scope,
+                    Task.status.notin_([TaskStatus.DONE.value, TaskStatus.CANCELLED.value]),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    cancelled_execs: list[Execution] = []
+    for task in tasks:
+        task.status = TaskStatus.CANCELLED.value
+        cancelled_execs.extend(await cancel_running_executions_for_task(session, task.id))
+    if tasks:
+        await session.flush()
+    return cancelled_execs
 
 
 async def supersede_running_executions(

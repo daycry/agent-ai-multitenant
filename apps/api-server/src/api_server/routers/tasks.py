@@ -10,7 +10,6 @@ a task move it to status='cancelled' or 'done' via PUT instead.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -27,7 +26,7 @@ from api_server.auth.deps import (
     require_tenant_member,
     schedule_after_commit,
 )
-from api_server.celery_client import revoke_execution_job
+from api_server.celery_client import revoke_job_callback
 from api_server.chat.dag_enforcement import (
     DependenciesNotDoneError,
     assert_dependencies_done,
@@ -58,18 +57,6 @@ router = APIRouter(prefix="/projects/{project_id}/tasks", tags=["tasks"])
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _revoke_job_callback(job_id: str) -> Callable[[], Awaitable[None]]:
-    """An after-commit callback that revokes a queued Celery job (best-effort),
-    dropping the bool result so it matches ``schedule_after_commit``'s
-    ``Awaitable[None]`` contract. A factory (not a default-arg lambda) so the
-    captured ``job_id`` is unambiguous and mypy can infer the type."""
-
-    async def _cb() -> None:
-        await revoke_execution_job(job_id)
-
-    return _cb
-
-
 async def _verify_project_visible(session: AsyncSession, project_id: UUID) -> Project:
     """RLS already hides cross-tenant projects. This turns "0 rows" into
     an explicit 404 instead of letting downstream FK errors surface."""
@@ -326,7 +313,7 @@ async def update_task(
         if new_status == TaskStatus.CANCELLED.value:
             for execution in await cancel_running_executions_for_task(session, task.id):
                 if execution.celery_task_id:
-                    schedule_after_commit(session, _revoke_job_callback(execution.celery_task_id))
+                    schedule_after_commit(session, revoke_job_callback(execution.celery_task_id))
     return to_task_response(task, deps)
 
 

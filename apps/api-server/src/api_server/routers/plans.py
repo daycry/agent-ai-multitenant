@@ -33,7 +33,9 @@ from api_server.auth.deps import (
     require_can_approve_plan,
     require_tenant_admin,
     require_tenant_member,
+    schedule_after_commit,
 )
+from api_server.celery_client import revoke_job_callback
 from api_server.chat.cost import (
     DEFAULT_HOURLY_RATE_EUR,
     AICostBreakdown,
@@ -51,6 +53,7 @@ from api_server.chat.sync_to_kanban import SyncScopeError, sync_plan_to_kanban
 from api_server.dag_promotion import announce_ready_tasks, promote_ready_tasks
 from api_server.db.conversation import Conversation, Message
 from api_server.db.domain import Plan, PlanStatus, Project, Task
+from api_server.db.execution_repo import cancel_tasks_and_executions
 from api_server.db.models import Organization
 from api_server.db.plan_comment import PlanComment
 from api_server.db.platform_settings import get_double_signature_threshold
@@ -326,6 +329,14 @@ async def update_plan(
                     "to": exc.to_status,
                 },
             ) from exc
+        # prod-06 task_prod06_cancel_02: cancelling a plan cascades — cancel its
+        # non-terminal tasks and request cancellation of their running executions
+        # (the worker kills the containers), then revoke the queued jobs after
+        # commit. Without this a cancelled plan left its tasks/runs in flight.
+        if plan.status == PlanStatus.CANCELLED.value:
+            for execution in await cancel_tasks_and_executions(session, plan_id=plan.id):
+                if execution.celery_task_id:
+                    schedule_after_commit(session, revoke_job_callback(execution.celery_task_id))
 
     spec_dict = payload.specification.model_dump() if payload.specification else None
     if spec_dict is not None and spec_dict.get("tasks"):
