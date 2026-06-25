@@ -71,6 +71,7 @@ describe("persona — catálogo cerrado de proveedores (ADR 0021/0055)", () => {
 
 describe("persona — validación del borrador (catálogo + temperatura)", () => {
   const ok: ModelConfigDraft = {
+    provider_id: "019e0000-0000-7000-8000-000000000001",
     provider: "claude_sdk",
     model: "claude-opus-4",
     temperature: 0.2,
@@ -81,8 +82,8 @@ describe("persona — validación del borrador (catálogo + temperatura)", () =>
     expect(validateDraft(ok, "es")).toHaveLength(0);
   });
 
-  it("proveedor fuera de catálogo → error de provider", () => {
-    const errs = validateDraft({ ...ok, provider: "openai" as never }, "es");
+  it("sin provider_id (ninguna fila elegida) → error de provider (ADR 0082)", () => {
+    const errs = validateDraft({ ...ok, provider_id: "" }, "es");
     expect(errs.some((e) => e.field === "provider")).toBe(true);
   });
 
@@ -103,8 +104,8 @@ describe("persona — validación del borrador (catálogo + temperatura)", () =>
   });
 
   it("los mensajes de error son bilingües", () => {
-    const es = validateDraft({ ...ok, provider: "x" as never }, "es")[0];
-    const en = validateDraft({ ...ok, provider: "x" as never }, "en")[0];
+    const es = validateDraft({ ...ok, model: "" }, "es")[0];
+    const en = validateDraft({ ...ok, model: "" }, "en")[0];
     expect(es.message).not.toBe(en.message);
   });
 });
@@ -113,11 +114,23 @@ describe("persona — draftFromConfig (carga inicial)", () => {
   it("extrae provider/model/temperature de un model_config válido", () => {
     const d = draftFromConfig({ provider: "ollama", model: "llama3", temperature: 0.7 });
     expect(d).toEqual({
+      provider_id: "",
       provider: "ollama",
       model: "llama3",
       temperature: 0.7,
       reasoning_effort: "off",
     });
+  });
+
+  it("extrae provider_id si el config lo trae (ADR 0082)", () => {
+    const d = draftFromConfig({
+      provider: "ollama",
+      provider_id: "019e0000-0000-7000-8000-000000000009",
+      model: "gpt-oss:120b",
+    });
+    expect(d.provider_id).toBe("019e0000-0000-7000-8000-000000000009");
+    expect(d.provider).toBe("ollama");
+    expect(d.model).toBe("gpt-oss:120b");
   });
 
   it("un model_config vacío / legacy cae al default seguro (provider del catálogo)", () => {
@@ -213,10 +226,17 @@ describe("persona — buildModelConfig (envío preservando bilingüe)", () => {
   it("aplica el borrador y persiste los prompts es/en editados", () => {
     const next = buildModelConfig({
       current: { provider: "claude_sdk", model: "old", temperature: 0.1 },
-      draft: { provider: "ollama", model: "llama3", temperature: 0.5, reasoning_effort: "off" },
+      draft: {
+        provider_id: "019e0000-0000-7000-8000-000000000002",
+        provider: "ollama",
+        model: "llama3",
+        temperature: 0.5,
+        reasoning_effort: "off",
+      },
       prompts: { es: "Nuevo ES", en: "Nuevo EN" },
     });
     expect(next.provider).toBe("ollama");
+    expect(next.provider_id).toBe("019e0000-0000-7000-8000-000000000002");
     expect(next.model).toBe("llama3");
     expect(next.temperature).toBe(0.5);
     expect(next.system_prompts).toEqual({ es: "Nuevo ES", en: "Nuevo EN" });
@@ -225,7 +245,13 @@ describe("persona — buildModelConfig (envío preservando bilingüe)", () => {
   it("conserva claves del model_config actual que la UI no edita", () => {
     const next = buildModelConfig({
       current: { provider: "claude_sdk", model: "m", temperature: 0.2, extra_flag: true },
-      draft: { provider: "claude_sdk", model: "m", temperature: 0.2, reasoning_effort: "off" },
+      draft: {
+        provider_id: "019e0000-0000-7000-8000-000000000003",
+        provider: "claude_sdk",
+        model: "m",
+        temperature: 0.2,
+        reasoning_effort: "off",
+      },
       prompts: {},
     });
     expect(next.extra_flag).toBe(true);
@@ -234,7 +260,13 @@ describe("persona — buildModelConfig (envío preservando bilingüe)", () => {
   it("persiste reasoning_effort cuando no es 'off' (ADR 0070)", () => {
     const next = buildModelConfig({
       current: null,
-      draft: { provider: "claude_sdk", model: "m", temperature: 0.2, reasoning_effort: "xhigh" },
+      draft: {
+        provider_id: "019e0000-0000-7000-8000-000000000004",
+        provider: "claude_sdk",
+        model: "m",
+        temperature: 0.2,
+        reasoning_effort: "xhigh",
+      },
       prompts: {},
     });
     expect(next.reasoning_effort).toBe("xhigh");
@@ -243,7 +275,13 @@ describe("persona — buildModelConfig (envío preservando bilingüe)", () => {
   it("omite reasoning_effort 'off' y borra el heredado del current (ADR 0070)", () => {
     const next = buildModelConfig({
       current: { provider: "claude_sdk", model: "m", temperature: 0.2, reasoning_effort: "high" },
-      draft: { provider: "claude_sdk", model: "m", temperature: 0.2, reasoning_effort: "off" },
+      draft: {
+        provider_id: "019e0000-0000-7000-8000-000000000005",
+        provider: "claude_sdk",
+        model: "m",
+        temperature: 0.2,
+        reasoning_effort: "off",
+      },
       prompts: {},
     });
     expect(next.reasoning_effort).toBeUndefined();

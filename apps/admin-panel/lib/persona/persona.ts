@@ -54,10 +54,14 @@ export function isProviderKind(value: string): value is ProviderKind {
   return (PROVIDER_KINDS as readonly string[]).includes(value);
 }
 
-/** Default seguro de código, anclado al catálogo (espeja `DEFAULT_MODEL_CONFIG`). */
+/** Default seguro de código. Tras ADR 0082 la selección es por PROVEEDOR CONCRETO
+ * (`provider_id`), así que no hay un provider_id por defecto: arranca vacío y el
+ * operador elige una fila de `/agents/provider-options`. `provider` (kind) queda
+ * como etiqueta del proveedor seleccionado. */
 export const DEFAULT_MODEL_CONFIG: ModelConfigDraft = {
+  provider_id: "",
   provider: "claude_sdk",
-  model: "claude-sonnet-4",
+  model: "",
   // 0.1 alinea con el default del plugin de GitHub Copilot en VS Code.
   temperature: 0.1,
   reasoning_effort: "off",
@@ -83,7 +87,12 @@ export interface SystemPrompts {
  * (p. ej. `system_prompts`) conviven sin que los borremos.
  */
 export interface ModelConfig {
+  /** Kind del proveedor (claude_sdk/…). Se conserva junto a `provider_id` para la
+   * cadena de herencia + display + back-compat (ADR 0082). */
   provider?: string;
+  /** Fila CONCRETA del proveedor elegida (ollama-local vs ollama-cloud). La
+   * resolución prefiere esto; sin él, cae a kind→fila-más-nueva (ADR 0082). */
+  provider_id?: string;
   model?: string;
   temperature?: number;
   /** Esfuerzo de razonamiento por proveedor (ADR 0070). "off"/ausente = sin razonar. */
@@ -92,9 +101,14 @@ export interface ModelConfig {
   [key: string]: unknown;
 }
 
-/** El borrador que el formulario edita y envía (proveedor ya restringido). */
+/** El borrador que el formulario edita y envía. ADR 0082: la selección es por
+ * PROVEEDOR CONCRETO (`provider_id`); `provider` es el kind de esa fila (para
+ * herencia/validación/display). */
 export interface ModelConfigDraft {
-  provider: ProviderKind;
+  /** Fila concreta elegida en `/agents/provider-options` ("" = ninguna aún). */
+  provider_id: string;
+  /** Kind del proveedor elegido (derivado de la fila); "" si aún no se eligió. */
+  provider: string;
   model: string;
   temperature: number;
   /** Opción de razonamiento elegida; "off" = sin razonamiento (ADR 0070). */
@@ -118,13 +132,13 @@ export interface ModelConfigError {
  */
 export function validateDraft(draft: ModelConfigDraft, lang: Lang): ModelConfigError[] {
   const errors: ModelConfigError[] = [];
-  if (!isProviderKind(draft.provider)) {
+  // ADR 0082: se elige un PROVEEDOR CONCRETO (provider_id). El kind lo gobierna la
+  // fila (siempre ∈ catálogo cerrado por el CHECK de DB), así que validamos que se
+  // haya seleccionado una fila, no el enum de kinds.
+  if (!draft.provider_id.trim()) {
     errors.push({
       field: "provider",
-      message:
-        lang === "es"
-          ? "Proveedor fuera del catálogo cerrado (ADR 0021)."
-          : "Provider not in the closed catalogue (ADR 0021).",
+      message: lang === "es" ? "Selecciona un proveedor." : "Select a provider.",
     });
   }
   if (!draft.model.trim()) {
@@ -149,11 +163,18 @@ export function validateDraft(draft: ModelConfigDraft, lang: Lang): ModelConfigE
   return errors;
 }
 
-/** Extrae un borrador editable a partir del `model_config` actual del agente. */
+/** Extrae un borrador editable a partir del `model_config` actual del agente.
+ *
+ * ADR 0082: lee `provider_id` (la fila concreta). Un config LEGACY (solo `provider`
+ * kind, sin `provider_id`) arranca con `provider_id=""` → el selector queda sin
+ * elegir y el operador re-selecciona la fila una vez (no se puede inferir qué fila
+ * concreta era). `provider` (kind) se conserva como etiqueta. */
 export function draftFromConfig(cfg: ModelConfig | null | undefined): ModelConfigDraft {
   const provider = cfg?.provider;
   const temperature = typeof cfg?.temperature === "number" ? cfg.temperature : undefined;
   return {
+    provider_id:
+      typeof cfg?.provider_id === "string" && cfg.provider_id.trim() ? cfg.provider_id : "",
     provider: provider && isProviderKind(provider) ? provider : DEFAULT_MODEL_CONFIG.provider,
     model: typeof cfg?.model === "string" && cfg.model.trim() ? cfg.model : "",
     temperature: temperature ?? DEFAULT_MODEL_CONFIG.temperature,
@@ -298,6 +319,13 @@ export interface BuildConfigInput {
 export function buildModelConfig(input: BuildConfigInput): ModelConfig {
   const { current, draft, prompts } = input;
   const next: ModelConfig = { ...(current ?? {}) };
+  // ADR 0082: persistimos la fila concreta (provider_id) + su kind (provider). La
+  // resolución prefiere provider_id; el kind se conserva para herencia/display.
+  if (draft.provider_id.trim()) {
+    next.provider_id = draft.provider_id;
+  } else {
+    delete next.provider_id;
+  }
   next.provider = draft.provider;
   next.model = draft.model.trim();
   next.temperature = draft.temperature;

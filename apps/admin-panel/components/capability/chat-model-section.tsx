@@ -1,11 +1,12 @@
 "use client";
 
 /**
- * Sección "Modelo del chat" (Feature B) para Equipo y Proyecto. A diferencia de
- * `DefaultModelSection` (modelo de EJECUCIÓN, por kind), aquí el operador elige un
+ * Sección "Modelo del chat" (Feature B) para Equipo y Proyecto. El operador elige un
  * PROVEEDOR CONCRETO por nombre (fila activa: p.ej. "Ollama local" vs "Ollama cloud")
- * y uno de SUS modelos. Persiste `chat_model_config = {provider_id, model, temperature?,
- * reasoning_effort?}` (o `{}` para heredar el modelo de ejecución). Solo afecta al chat.
+ * y uno de SUS modelos — mismo patrón por-provider que el resto de selectores de
+ * modelo (ADR 0082; el reutilizable `ProviderModelSelects`). Persiste
+ * `chat_model_config = {provider_id, model, temperature?, reasoning_effort?}` (o `{}`
+ * para heredar el modelo de ejecución). Solo afecta al chat.
  *
  * El padre cablea la mutación (PUT /teams/{id} o /projects/{id} con `chat_model_config`).
  */
