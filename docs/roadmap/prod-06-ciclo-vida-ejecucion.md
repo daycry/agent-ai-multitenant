@@ -139,7 +139,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_dag_02` — Promotor de DAG: backlog → ready en el orchestrator
 
-- [ ] **Título**: Implementar en apps/orchestrator el promotor que sync_to_kanban.py:215-216
+- [x] **Título**: Implementar en apps/orchestrator el promotor que sync_to_kanban.py:215-216
       promete y no existe: al recibir el evento de tarea `done` (y en un beat de respaldo),
       mover a `ready` las tareas `backlog` del mismo plan cuyas dependencias estén todas
       `done`, publicando el evento `ready` que el dispatcher ya consume (dispatch.py:85-91).

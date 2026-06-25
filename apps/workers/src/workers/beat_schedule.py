@@ -40,6 +40,15 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": schedule(run_every=30.0),
         "options": {"queue": "default"},
     },
+    # prod-06 task_prod06_dag_02 — safety-net DAG promotion: across in_progress
+    # plans, promote eligible backlog tasks to ready and re-announce undispatched
+    # ready tasks (the DB trigger flips status without publishing an event). Cheap
+    # query; every 30s. Roots get the instant path in start-execution.
+    "promote-ready-plans-every-30s": {
+        "task": "workers.promote_ready_plans",
+        "schedule": schedule(run_every=30.0),
+        "options": {"queue": "default"},
+    },
     "expire-review-runtimes-every-5m": {
         "task": "workers.expire_review_runtimes",
         "schedule": schedule(run_every=300.0),
