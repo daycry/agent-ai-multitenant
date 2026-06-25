@@ -296,7 +296,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_beat_01` — `_parse_cron` ruidoso con fallback por entrada
 
-- [ ] **Título**: En beat_schedule.py:100-116, ante cron malformado: log ERROR con la
+- [x] **Título**: En beat_schedule.py:100-116, ante cron malformado: log ERROR con la
       variable de entorno afectada y fallback al default documentado DE ESA entrada (no al
       04:00 global); en entorno staging/prod, rechazar el boot de beat. Hoy un typo en
       `WORKERS_HUMAN_ESCALATION_CRON` convierte el barrido de 10 min en diario sin aviso.
