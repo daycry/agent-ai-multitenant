@@ -192,7 +192,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_zombi_02` — `task_reject_on_worker_lost` + test de redelivery
 
-- [ ] **Título**: Añadir `task_reject_on_worker_lost=True` en
+- [x] **Título**: Añadir `task_reject_on_worker_lost=True` en
       apps/workers/src/workers/celery_app.py (decisión 1) y verificar con test que un
       worker-lost reentrega y `supersede_running_executions` (execution_repo.py:194-225)
       absorbe el duplicado sin doble contenedor.

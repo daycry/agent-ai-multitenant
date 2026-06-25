@@ -83,6 +83,13 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
         # Agent runs are long; ack only after completion so a worker
         # crash re-queues the job instead of losing it.
         task_acks_late=True,
+        # prod-06 task_prod06_zombi_02 (decision 1): when a worker is LOST
+        # mid-task (OOM/SIGKILL/hard-limit), reject + requeue the in-flight
+        # message so the run is retried instead of silently dropped. The
+        # `supersede_running_executions` guard (execution_repo) absorbs the
+        # duplicate so the redelivery never spawns a second container. Defence
+        # in depth with the stale-execution sweeper (zombi_01).
+        task_reject_on_worker_lost=True,
         # One job at a time per worker process — agent runs are not
         # cheap, prefetching would stall the queue behind a slow job.
         worker_prefetch_multiplier=1,
