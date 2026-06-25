@@ -148,8 +148,9 @@ producción:
    en el worker. Las 4 maintenance tasks dejan de correr; los modulos
    in-memory siguen funcionando hasta la próxima limpieza manual.
 2. **Detener workers de las colas afectadas**: `celery -A workers
-control shutdown -Q test,review` deja `default` / `heavy` / `gpu` /
-   `ingestion` corriendo. Los planes nuevos esperan; los existentes en
+control shutdown -Q test,review` deja `default` / `ingestion` /
+   `privileged` corriendo (las colas `heavy`/`gpu` se retiraron — ADR 0083).
+   Los planes nuevos esperan; los existentes en
    `pending_human_validation` se sirven desde `review_sessions` (la
    tabla persiste su estado).
 3. **Volver a sync para los humanos**: la doc de troubleshooting

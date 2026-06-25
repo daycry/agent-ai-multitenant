@@ -182,7 +182,7 @@ services:
         "-A",
         "workers.celery_app",
         "worker",
-        "--queues=default,heavy,gpu,ingestion,test,review",
+        "--queues=default,ingestion,test,review",
         "--concurrency=2",
         "--loglevel=info",
       ]

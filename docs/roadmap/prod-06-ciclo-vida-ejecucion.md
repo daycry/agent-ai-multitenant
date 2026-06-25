@@ -280,18 +280,19 @@ converja a un estado terminal visible.
 
 #### `task_prod06_colas_02` — Implementar la opción aprobada del ADR
 
-- [ ] **Título**: Si (a): routing en dispatch.py:247-258 usando `Task.estimated_complexity`
+- [x] **Título**: Si (a): routing en dispatch.py:247-258 usando `Task.estimated_complexity`
       (persistido en sync_to_kanban.py:242 y hoy sin uso) y el requisito GPU del runtime
       template, con fallback documentado a `default` si la lane no tiene workers. Si (b):
       eliminar heavy/gpu de celery_app.py:32-40, runbook y ADR 0027. En ambos casos: detectar
-      y loguear cola sin consumidores al despachar (alerta de cola huérfana → prod-08).
+      y loguear cola sin consumidores al despachar (alerta de cola huérfana → prod-08). > Hecho: **Opción B** (operador 2026-06-26). `heavy`/`gpu` fuera de `QUEUE_NAMES`; > runbook 06-capacity-management + ADR 0027 + ADR 0083 (`accepted`) + compose > (generator + manuals) actualizados. ADR 0083 cierra que la observabilidad de cola > huérfana (la alerta) vive en prod-08; aquí la topología ya no tiene colas muertas.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Depende de**: task_prod06_colas_01
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod06_colas_02_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_dispatch_queue_routing.py -v"
+    # Opción B → topología recortada (no hay routing por complejidad que testear).
+    command: "pytest tests/unit/test_queue_topology_trimmed.py tests/integration/test_celery_queues.py -v"
   ```
 
 #### `task_prod06_beat_01` — `_parse_cron` ruidoso con fallback por entrada

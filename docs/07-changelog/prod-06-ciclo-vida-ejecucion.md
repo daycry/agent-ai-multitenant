@@ -59,8 +59,12 @@ Entregadas las Fases A–E; quedan dos ítems con gate de decisión humana (ver
 
 ### Fase D — Colas y schedule
 
-- **ADR 0083 colas heavy/gpu** (`colas_01`): redactado (`proposed`) con dos opciones
-  (routing real vs recortar el contrato). **Gated** a aprobación del operador.
+- **ADR 0083 colas heavy/gpu** (`colas_01`): redactado y `accepted` — el operador
+  eligió la **Opción B (recortar)** el 2026-06-26.
+- **Recorte de colas heavy/gpu** (`colas_02`): `heavy`/`gpu` eliminadas de
+  `QUEUE_NAMES` (eran lanes muertas en single-host); runbook 06-capacity-management,
+  ADR 0027 y el compose (generator + manuals) actualizados a la topología
+  `default + ingestion + test + review + privileged`.
 - **`_parse_cron` ruidoso** (`beat_01`): un cron malformado ya no degrada en
   silencio al 04:00 global — en staging/prod RECHAZA el boot de beat; en dev loguea
   ERROR (nombrando la env var) y cae al default DOCUMENTADO de esa entrada.
@@ -88,12 +92,10 @@ Entregadas las Fases A–E; quedan dos ítems con gate de decisión humana (ver
 
 (La cancelación de ejecuciones `0090` se entregó en el trabajo previo de Fase C.)
 
-## Pendiente (gate de decisión humana)
+## Pendiente
 
-- **`colas_02`** (routing/recorte de colas heavy/gpu): **BLOQUEADO** hasta que el
-  operador apruebe una opción del **ADR 0083**.
 - **`dag_03`** (métrica de profundidad de cola + reviewer-runtime): **DIFERIDO**,
   depende del **ADR 0063** (reviewer-runtime) de otro plan.
 
-Por estos dos ítems el plan permanece en `in_progress`/`blocked` y NO se marca
-`completed` (protocolo CLAUDE.md).
+Por este único ítem el plan permanece en `in_progress` y NO se marca `completed`
+(protocolo CLAUDE.md). El resto de Fases A–E están entregadas.

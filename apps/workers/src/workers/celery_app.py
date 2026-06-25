@@ -1,20 +1,25 @@
-"""Celery application + the 7-queue topology (task_02_02).
+"""Celery application + the queue topology (task_02_02).
 
 The orchestrator enqueues work onto these queues; worker processes
 (task_02_06) consume them. Each queue is a separate Celery worker
-deployment so heavy / GPU / privileged work is isolated from the
-default lane and can scale independently.
+deployment so privileged / runtime work is isolated from the default
+lane and can scale independently.
 
-Queues (spec §12, Plan 02 Fase A):
+Queues (spec §12, Plan 02 Fase A; trimmed by ADR 0083 / prod-06 colas_02):
 
-  default      ordinary agent tasks — the common lane.
-  heavy        long / memory-hungry agent runs.
-  gpu          tasks needing a GPU host (optional deployment).
+  default      ordinary agent runs — the common lane.
   ingestion    document ingestion pipelines (Docling — Plan 04).
-  test         test-runtime execution (placeholder until Plan 06).
-  review       review-runtime execution (placeholder until Plan 06).
+  test         test-runtime execution.
+  review       review-runtime execution.
   privileged   tasks touching secrets / infra — drained by a worker
                with a tighter security profile.
+
+The ``heavy`` and ``gpu`` lanes were REMOVED (ADR 0083, Option B): they were
+declared but had no producer (the dispatcher always uses ``dispatch_queue`` =
+``default``) and no dedicated worker to drain them on a single host — dead
+queues that promised an isolation the deployment never delivered. Reintroducing
+a lane the day a GPU host or a heavy worker exists is a config change + an ADR,
+not a migration. See `docs/06-runbooks/06-capacity-management.md`.
 
 Routing: `workers.tasks` registers the tasks (task_02_06); a task
 picks its queue at apply time via `apply_async(queue=...)`, and
@@ -28,11 +33,11 @@ from kombu import Queue
 
 from workers.config import Settings, get_settings
 
-# Canonical queue names. Order is informational only.
+# Canonical queue names. Order is informational only. ``heavy``/``gpu`` removed
+# by ADR 0083 (prod-06 colas_02): dead lanes with no producer/consumer on a
+# single host.
 QUEUE_NAMES: tuple[str, ...] = (
     "default",
-    "heavy",
-    "gpu",
     "ingestion",
     "test",
     "review",

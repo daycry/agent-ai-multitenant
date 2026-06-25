@@ -1,8 +1,9 @@
 ---
 adr_id: "0083"
 title: "Colas heavy/gpu: routing real por complejidad/GPU o recorte del contrato de colas"
-status: proposed
+status: accepted
 date: 2026-06-25
+decided_at: 2026-06-26
 authors: [claude-opus]
 plan_referenced: prod-06-ciclo-vida-ejecucion
 docs_language: es
@@ -12,9 +13,9 @@ supersedes: []
 
 # ADR 0083 — Colas `heavy`/`gpu`: routing real o recorte del contrato
 
-> **Estado: `proposed`** — decisión de PRODUCTO que requiere aprobación humana
-> (prod-06, decisión 3 / hallazgo workers-7). `task_prod06_colas_02` (la
-> implementación) queda **bloqueado** hasta que el operador elija una opción.
+> **Estado: `accepted`** — el operador eligió la **Opción B (recortar)** el
+> 2026-06-26. `task_prod06_colas_02` implementa el recorte: `heavy`/`gpu`
+> eliminadas de `QUEUE_NAMES`, runbook + este ADR + ADR 0027 actualizados.
 
 ## Contexto
 
@@ -85,3 +86,19 @@ y la Opción A añade complejidad operativa sin un consumidor real. La Opción B
 
 En AMBOS casos, el dispatcher debe **loguear** cuando enrute a una cola sin
 consumidores (observabilidad; la regla de alerta vive en prod-08).
+
+## Decisión (2026-06-26)
+
+El operador eligió la **Opción B (recortar)**. Implementado en
+`task_prod06_colas_02`:
+
+- `heavy` y `gpu` eliminadas de `QUEUE_NAMES`
+  (`apps/workers/src/workers/celery_app.py`); topología = `default + ingestion +
+test + review + privileged` (las lanes con productor + consumidor real).
+- `docs/06-runbooks/06-capacity-management.md` y **ADR 0027** actualizados a la
+  topología recortada.
+- Tests: `tests/unit/test_queue_topology_trimmed.py` (heavy/gpu fuera; toda cola
+  de beat/dispatch es una cola declarada) + `tests/integration/test_celery_queues.py`.
+
+Reintroducir un lane el día que exista un host GPU o un worker pesado dedicado es
+un cambio de config + un ADR, no una migración.
