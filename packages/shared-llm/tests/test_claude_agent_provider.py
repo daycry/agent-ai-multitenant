@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from shared_llm.exceptions import ProviderError
 from shared_llm.providers import ClaudeAgentProvider
 from shared_llm.types import AgentRunEvent, Message
 
@@ -62,6 +63,31 @@ def _make_query(*messages: Any):  # type: ignore[no-untyped-def]
     return _q
 
 
+@dataclass
+class _ErrorResultMessage:
+    """A ResultMessage shaped like the CLI's failing result: is_error=True with
+    the real text in `result` (e.g. 'Not logged in'), while `errors` is empty and
+    `subtype` is the misleading 'success' the SDK falls back to."""
+
+    is_error: bool = True
+    result: str | None = "Not logged in · Please run /login"
+    subtype: str = "success"
+    errors: list[str] | None = None
+    api_error_status: int | None = None
+
+
+def _make_query_then_raise(*messages: Any, exc: Exception):  # type: ignore[no-untyped-def]
+    """Yield the messages, then raise — mirrors the SDK emitting a failing
+    ResultMessage and then a trailing ProcessError on stream close."""
+
+    async def _q(prompt: str, options: Any) -> AsyncIterator[Any]:
+        for m in messages:
+            yield m
+        raise exc
+
+    return _q
+
+
 def test_api_key_is_exported_to_anthropic_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """API-key mode: the key lands in ANTHROPIC_API_KEY so the SDK authenticates."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -97,6 +123,39 @@ async def test_complete_collects_text_blocks_and_usage() -> None:
     assert resp.usage.input_tokens == 10
     assert resp.usage.output_tokens == 20
     assert resp.usage.cost_usd == 0.005
+
+
+@pytest.mark.asyncio
+async def test_complete_surfaces_real_error_text_on_auth_failure() -> None:
+    """When the CLI returns is_error with the real reason in `result` and the SDK
+    raises a cryptic 'error result: success', the provider must surface the REAL
+    text and raise AuthError (the failure is 'Not logged in'), not the useless
+    SDK string."""
+    from shared_llm.exceptions import AuthError
+
+    fake_query = _make_query_then_raise(
+        _ErrorResultMessage(result="Not logged in · Please run /login"),
+        exc=RuntimeError("Claude Code returned an error result: success"),
+    )
+    p = ClaudeAgentProvider(query_fn=fake_query, default_model="claude-sonnet-4-5")
+    with pytest.raises(AuthError) as ei:
+        await p.complete([Message(role="user", content="hi")])
+    assert "Not logged in" in str(ei.value)
+    assert "error result: success" not in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_complete_surfaces_real_error_text_on_non_auth_failure() -> None:
+    """A non-auth failing result (e.g. an API 529) surfaces its real text as a
+    ProviderError — still better than the cryptic SDK string."""
+    fake_query = _make_query_then_raise(
+        _ErrorResultMessage(result="Overloaded", subtype="success", api_error_status=529),
+        exc=RuntimeError("Claude Code returned an error result: success"),
+    )
+    p = ClaudeAgentProvider(query_fn=fake_query, default_model="claude-sonnet-4-5")
+    with pytest.raises(ProviderError) as ei:
+        await p.complete([Message(role="user", content="hi")])
+    assert "Overloaded" in str(ei.value)
 
 
 @pytest.mark.asyncio

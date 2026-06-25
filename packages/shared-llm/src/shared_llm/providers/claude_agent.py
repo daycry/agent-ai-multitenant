@@ -22,7 +22,7 @@ import os
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
-from shared_llm.exceptions import AuthError, ProviderError
+from shared_llm.exceptions import AuthError, LLMError, ProviderError
 from shared_llm.types import (
     AgentRunEvent,
     CompletionResponse,
@@ -35,6 +35,55 @@ from shared_llm.types import (
 # In-process MCP server name used to advertise host tool schemas to the SDK.
 # The SDK namespaces these tools as ``mcp__{_HOST_TOOLS_SERVER}__{tool}``.
 _HOST_TOOLS_SERVER = "host_tools"
+
+# Markers in the CLI's error ``result`` text that mean "fix your credential", so a
+# failed run raises the typed ``AuthError`` (actionable: tell the operator to set
+# the provider's api_key / oauth_token — ADR 0064) instead of a generic error.
+_AUTH_RESULT_MARKERS = (
+    "not logged in",
+    "/login",
+    "invalid api key",
+    "invalid x-api-key",
+    "authentication",
+    "unauthorized",
+    "oauth",
+    "credit balance",
+)
+
+
+def _surface_result_error(collected: list[Any]) -> str | None:
+    """Recover the human-readable failure reason from a failing ``ResultMessage``.
+
+    The SDK replaces the CLI's trailing non-zero exit with "Claude Code returned
+    an error result: <subtype>", built from the ``errors`` field only — so an auth
+    failure whose real reason lives in ``result`` ("Not logged in · Please run
+    /login") degrades to the useless "...: success". We read the real text back off
+    the result message the SDK already yielded before raising.
+    """
+    for msg in reversed(collected):
+        if not getattr(msg, "is_error", False):
+            continue
+        text = (getattr(msg, "result", None) or "").strip()
+        if not text:
+            errors = getattr(msg, "errors", None) or []
+            text = "; ".join(str(e) for e in errors).strip()
+        if not text:
+            continue
+        status = getattr(msg, "api_error_status", None)
+        return f"{text} (HTTP {status})" if status else text
+    return None
+
+
+def _run_error(exc: Exception, collected: list[Any]) -> LLMError:
+    """Map a failed SDK run to a typed error, preferring the CLI's real reason over
+    the SDK's cryptic 'error result: <subtype>'. Auth failures become ``AuthError``
+    (so the assistant's handler tells the operator to fix the provider credential —
+    ADR 0064); everything else is a ``ProviderError`` carrying the real text."""
+    surfaced = _surface_result_error(collected)
+    message = surfaced or str(exc)
+    if surfaced and any(marker in surfaced.lower() for marker in _AUTH_RESULT_MARKERS):
+        return AuthError(message)
+    return ProviderError(message)
 
 
 class ClaudeAgentProvider:
@@ -219,8 +268,8 @@ class ClaudeAgentProvider:
         try:
             async for msg in query_fn(prompt=prompt, options=options):
                 collected.append(msg)
-        except Exception as exc:  # — wrap into typed error
-            raise ProviderError(str(exc)) from exc
+        except Exception as exc:  # — surface the CLI's real reason, typed
+            raise _run_error(exc, collected) from exc
         text_parts, usage = self._harvest(collected)
         return CompletionResponse(
             content="".join(text_parts),
@@ -280,7 +329,7 @@ class ClaudeAgentProvider:
             # si ya cosechamos la tool-call, ESO es el resultado. Si no, es error.
             tool_calls = _harvest_tool_calls(collected)
             if not tool_calls:
-                raise ProviderError(str(exc)) from exc
+                raise _run_error(exc, collected) from exc
             _, usage = self._harvest(collected)
             # Tool-call turn → DROP any partial text: the SDK's interrupt notice
             # / the model's preamble is NOT the user-facing answer (the host runs
@@ -404,8 +453,10 @@ class ClaudeAgentProvider:
         )
         query_fn = self._query()
         last_usage: Usage | None = None
+        collected: list[Any] = []
         try:
             async for msg in query_fn(prompt=prompt, options=options):
+                collected.append(msg)
                 content = getattr(msg, "content", None)
                 if isinstance(content, list):
                     for block in content:
@@ -426,7 +477,7 @@ class ClaudeAgentProvider:
                         cost_usd=float(getattr(msg, "total_cost_usd", 0.0) or 0.0),
                     )
         except Exception as exc:
-            raise ProviderError(str(exc)) from exc
+            raise _run_error(exc, collected) from exc
         yield StreamChunk(delta="", done=True, usage=last_usage)
 
     # ------------------------------------------------------------------
