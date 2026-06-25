@@ -272,9 +272,9 @@ converja a un estado terminal visible.
 
 #### `task_prod06_colas_01` — ADR: colas heavy/gpu reales o recorte del contrato
 
-- [ ] **Título**: Redactar ADR en docs/05-architecture-decisions/ con las dos opciones de la
+- [x] **Título**: Redactar ADR en docs/05-architecture-decisions/ con las dos opciones de la
       decisión 3 (routing por `estimated_complexity`/runtime-GPU vs. recorte de topología y
-      runbook 06-capacity-management.md) y someterlo a aprobación humana.
+      runbook 06-capacity-management.md) y someterlo a aprobación humana. > Hecho: **ADR 0083** (`proposed`) — opción A (routing real) vs B (recortar), recomienda > B para single-host. `task_prod06_colas_02` BLOQUEADO hasta que el operador apruebe.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**: no aplica (documento); el gate es la aprobación del ADR.
 
