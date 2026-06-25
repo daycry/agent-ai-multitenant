@@ -41,6 +41,15 @@ QUEUE_NAMES: tuple[str, ...] = (
 
 DEFAULT_QUEUE = "default"
 
+# prod-06 task_prod06_zombi_03 (decision 2): the Redis broker's per-message
+# visibility window. If a task runs LONGER than this, Redis assumes the worker
+# died and REDELIVERS the message — duplicating a still-live run. So this MUST
+# stay strictly above the execution hard time limit. We pin it at 7h and cap the
+# operator-tunable `execution_hard_time_limit_s` at 6h in the platform-settings
+# registry (its `max_value`); `tests/unit/test_hard_limit_registry_validation.py`
+# enforces `hard_limit.max_value < EXECUTION_VISIBILITY_TIMEOUT_S` as a cross-check.
+EXECUTION_VISIBILITY_TIMEOUT_S = 25200
+
 
 def build_celery_app(settings: Settings | None = None) -> Celery:
     """Construct the Celery app. `settings` is injectable for tests."""
@@ -102,6 +111,11 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
         # Redis broker can drop the connection; retry on boot rather
         # than crash if Redis isn't up yet.
         broker_connection_retry_on_startup=True,
+        # prod-06 task_prod06_zombi_03 (decision 2): pin the Redis broker
+        # visibility timeout ABOVE the execution hard limit (capped at 6h in the
+        # registry) so a long-but-legitimate run is never redelivered as a
+        # duplicate while still alive.
+        broker_transport_options={"visibility_timeout": EXECUTION_VISIBILITY_TIMEOUT_S},
         # Serialise as JSON (no pickle — never trust the broker payload).
         task_serializer="json",
         result_serializer="json",

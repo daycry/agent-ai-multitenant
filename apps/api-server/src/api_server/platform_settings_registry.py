@@ -98,7 +98,9 @@ PLATFORM_KNOWN_SETTINGS: dict[str, PlatformCategoryDef] = {
                 label_es="Límite de tiempo soft (s)",
                 description_es="SoftTimeLimit por ejecución; el agente puede capturarlo.",
                 min_value=60,
-                max_value=86400,
+                # prod-06 zombi_03 (decision 2): acotado a 6h (< hard) — el cap
+                # real lo fija el hard, que a su vez debe quedar < visibility_timeout.
+                max_value=21600,
             ),
             "execution_hard_time_limit_s": PlatformSettingDef(
                 type="int",
@@ -106,7 +108,11 @@ PLATFORM_KNOWN_SETTINGS: dict[str, PlatformCategoryDef] = {
                 label_es="Límite de tiempo hard (s)",
                 description_es="HardTimeLimit por ejecución (SIGKILL). Debe ser > soft.",
                 min_value=60,
-                max_value=86400,
+                # prod-06 zombi_03 (decision 2): 6h. DEBE quedar < el
+                # broker visibility_timeout (7h) o Redis redeliver-ía un run vivo
+                # (ejecución duplicada). Antes era 24h, mayor que la ventana del
+                # broker — la causa raíz de workers-3.
+                max_value=21600,
             ),
         },
     ),

@@ -52,6 +52,10 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
         # Redis broker can drop the connection; retry on boot rather than
         # crash if Redis isn't up yet.
         broker_connection_retry_on_startup=True,
+        # prod-06 task_prod06_zombi_03: pin the Redis broker visibility timeout
+        # (7h) so no task is redelivered while still alive — same invariant as the
+        # workers app (kept in sync deliberately; this app's tasks are short).
+        broker_transport_options={"visibility_timeout": 25200},
         # Serialise as JSON (no pickle — never trust the broker payload).
         task_serializer="json",
         result_serializer="json",

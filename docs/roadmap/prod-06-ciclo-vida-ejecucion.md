@@ -206,7 +206,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_zombi_03` — visibility_timeout coherente con el hard limit
 
-- [ ] **Título**: Fijar `broker_transport_options={"visibility_timeout": ...}` en
+- [x] **Título**: Fijar `broker_transport_options={"visibility_timeout": ...}` en
       celery_app.py de workers Y de notification-dispatcher (mismo patrón acks_late,
       notification-dispatcher/celery_app.py:45-50), acotar
       `execution_hard_time_limit_s.max_value` (platform_settings_registry.py:103-110, hoy 86400) según la decisión 2, y añadir validación cruzada en el registry que rechace
