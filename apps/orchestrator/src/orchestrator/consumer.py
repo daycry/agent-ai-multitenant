@@ -38,6 +38,14 @@ DEAD_LETTER_STREAM = "dlq:orchestrator_events"
 # grow Redis unbounded; approximate trimming keeps XADD O(1).
 _DEAD_LETTER_MAXLEN = 10_000
 
+# prod-06 task_prod06_evento_01: an entry idle longer than this in the Pending
+# Entries List is presumed orphaned — its consumer crashed after delivery but
+# before XACK, and XREADGROUP('>') never re-delivers it. We reclaim it.
+_RECLAIM_MIN_IDLE_MS = 60_000
+# Safety cap on XAUTOCLAIM cursor pages per reclaim call (each page is
+# `read_count` entries) so a huge PEL can't spin the loop unbounded.
+_RECLAIM_MAX_PAGES = 100
+
 
 async def _noop_handler(event: TaskEvent) -> None:
     """Default handler until task_02_03 wires assignment policies."""
@@ -142,6 +150,51 @@ class StreamConsumer:
                 await self._dispatch(entry_id, fields, result)
                 await self._redis.xack(s.events_stream, s.consumer_group, entry_id)
 
+        return result
+
+    async def reclaim_stale_pending(
+        self, *, min_idle_ms: int = _RECLAIM_MIN_IDLE_MS
+    ) -> ConsumeResult:
+        """Reclaim + reprocess PEL entries orphaned by a crashed consumer.
+
+        prod-06 task_prod06_evento_01 (workers-4). ``XREADGROUP('>')`` only yields
+        NEW entries, so an entry delivered to a consumer that died before ``XACK``
+        sits in the Pending Entries List forever. This ``XAUTOCLAIM``s entries idle
+        longer than ``min_idle_ms`` onto THIS consumer and runs them through the
+        normal dispatch+ack path (dead-lettering one that still fails). Idempotent;
+        bounded per call by ``read_count`` and drained across the cursor. Called at
+        startup (orphans from the previous process) and safe to call periodically.
+        """
+        s = self._settings
+        result = ConsumeResult()
+        cursor = "0-0"
+        for _ in range(_RECLAIM_MAX_PAGES):
+            next_cursor, entries, _deleted = await self._redis.xautoclaim(
+                name=s.events_stream,
+                groupname=s.consumer_group,
+                consumername=s.consumer_name,
+                min_idle_time=min_idle_ms,
+                start_id=cursor,
+                count=s.read_count,
+            )
+            for entry_id, fields in entries:
+                if not fields:
+                    # Entry was trimmed/deleted from the stream — drop it from the PEL.
+                    await self._redis.xack(s.events_stream, s.consumer_group, entry_id)
+                    continue
+                result.ids.append(entry_id)
+                await self._dispatch(entry_id, fields, result)
+                await self._redis.xack(s.events_stream, s.consumer_group, entry_id)
+            if not entries or next_cursor in ("0-0", b"0-0"):
+                break
+            cursor = next_cursor
+        if result.ids:
+            _log.info(
+                "orchestrator.pel_reclaimed",
+                count=len(result.ids),
+                processed=result.processed,
+                failed=result.failed,
+            )
         return result
 
     async def _dispatch(self, entry_id: str, fields: dict[str, str], result: ConsumeResult) -> None:

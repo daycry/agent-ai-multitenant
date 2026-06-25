@@ -221,11 +221,11 @@ converja a un estado terminal visible.
 
 #### `task_prod06_evento_01` — Reconciliación de la PEL + barrido de tareas ready varadas
 
-- [ ] **Título**: (a) En el arranque del consumer del orchestrator
+- [x] **Título**: (a) En el arranque del consumer del orchestrator
       (consumer.py:120-145), XAUTOCLAIM de entradas pendientes envejecidas antes de leer con
       `>`; (b) nuevo beat tipo `sweep_pending_documents` que re-emita el trigger para tareas
       en `ready` sin dispatch en N minutos — el dispatcher ya es idempotente
-      (dispatch.py:283-285). Cubre el hueco de events.py:38-50 (publicación best-effort).
+      (dispatch.py:283-285). Cubre el hueco de events.py:38-50 (publicación best-effort). > Hecho: (a) `reclaim_stale_pending` (XAUTOCLAIM) llamado tras `ensure_group` en > app.py. (b) YA lo cubre el beat de dag_02 `promote_ready_plans`, que re-anuncia las > tareas `ready` sin fila de execution (no despachadas) cada 30s — no se duplica.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
