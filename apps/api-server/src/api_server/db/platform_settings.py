@@ -574,8 +574,26 @@ def validate_model_config(cfg: dict[str, Any]) -> dict[str, Any]:
     """
     from api_server.db.llm_providers import LLM_PROVIDER_KINDS
 
+    # ADR 0082: a config pinned by a CONCRETE provider row carries `provider_id`.
+    # The row governs the kind at build time (its kind is guaranteed ∈ catálogo by
+    # the DB CHECK), so we don't re-check the kind against the closed catalogue —
+    # only that `provider_id` is a UUID. The `provider` (kind) may be stored
+    # alongside (for inheritance/display/back-compat); if present it must be valid.
+    pinned_by_id = bool(cfg.get("provider_id"))
     provider = cfg.get("provider")
-    if provider not in LLM_PROVIDER_KINDS:
+    if pinned_by_id:
+        from uuid import UUID
+
+        try:
+            UUID(str(cfg["provider_id"]))
+        except (ValueError, TypeError) as exc:
+            raise InvalidModelConfigError("provider_id must be a UUID") from exc
+        if provider is not None and provider not in LLM_PROVIDER_KINDS:
+            raise InvalidModelConfigError(
+                f"provider {provider!r} is not in the closed catalogue "
+                f"{LLM_PROVIDER_KINDS} (ADR 0021)"
+            )
+    elif provider not in LLM_PROVIDER_KINDS:
         raise InvalidModelConfigError(
             f"provider {provider!r} is not in the closed catalogue "
             f"{LLM_PROVIDER_KINDS} (ADR 0021)"
@@ -597,7 +615,10 @@ def validate_model_config(cfg: dict[str, Any]) -> dict[str, Any]:
     # reasoning_effort (ADR 0070): opcional; si está, debe ser una opción válida
     # del proveedor (incluye "off"). Cada proveedor tiene su set; no hay uno común.
     reasoning = cfg.get("reasoning_effort")
-    if isinstance(reasoning, str) and reasoning.strip():
+    if isinstance(reasoning, str) and reasoning.strip() and provider is not None:
+        # Validate against the kind when known. With a provider_id pin and no kind
+        # alongside, the row's kind governs the allowed set at build time, so we
+        # skip the kind-check here rather than reject every reasoning value.
         from api_server.db.llm_providers import REASONING_OPTIONS_BY_KIND
 
         allowed = REASONING_OPTIONS_BY_KIND.get(provider, ())

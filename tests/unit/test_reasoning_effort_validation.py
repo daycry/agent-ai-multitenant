@@ -37,6 +37,55 @@ def test_valid_reasoning_passes(cfg: dict[str, object]) -> None:
     assert validate_model_config(cfg) is cfg
 
 
+# ---------------------------------------------------------------------------
+# ADR 0082 — model_config pinned by concrete provider_id (unificación)
+# ---------------------------------------------------------------------------
+_PID = "019e83cd-bb5c-7f43-9031-b3a75f3bdd29"
+
+
+def test_provider_id_pinned_with_kind_alongside_is_valid() -> None:
+    cfg = {"provider_id": _PID, "provider": "ollama", "model": "gpt-oss:120b", "temperature": 0.1}
+    assert validate_model_config(cfg) is cfg
+
+
+def test_provider_id_pinned_without_kind_is_valid() -> None:
+    # provider(kind) is optional alongside provider_id; the row governs the kind.
+    cfg = {"provider_id": _PID, "model": "gpt-oss:120b"}
+    assert validate_model_config(cfg) is cfg
+
+
+def test_provider_id_malformed_uuid_is_rejected_even_with_valid_kind() -> None:
+    with pytest.raises(InvalidModelConfigError):
+        validate_model_config({"provider_id": "not-a-uuid", "provider": "ollama", "model": "x"})
+
+
+def test_provider_id_pinned_still_requires_model() -> None:
+    with pytest.raises(InvalidModelConfigError):
+        validate_model_config({"provider_id": _PID, "model": ""})
+
+
+def test_provider_id_with_invalid_kind_alongside_is_rejected() -> None:
+    with pytest.raises(InvalidModelConfigError):
+        validate_model_config({"provider_id": _PID, "provider": "openai", "model": "x"})
+
+
+def test_legacy_kind_only_config_still_validates() -> None:
+    assert validate_model_config({"provider": "ollama", "model": "llama3.2"})["model"] == "llama3.2"
+
+
+def test_kind_not_in_catalog_still_rejected_without_provider_id() -> None:
+    with pytest.raises(InvalidModelConfigError):
+        validate_model_config({"provider": "openai", "model": "gpt-4o"})
+
+
+def test_provider_id_reasoning_validated_against_kind_alongside() -> None:
+    # xhigh is invalid for ollama → rejected even when pinned by provider_id.
+    with pytest.raises(InvalidModelConfigError):
+        validate_model_config(
+            {"provider_id": _PID, "provider": "ollama", "model": "x", "reasoning_effort": "xhigh"}
+        )
+
+
 @pytest.mark.parametrize(
     ("cfg"),
     [
