@@ -238,7 +238,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_cancel_01` — Cancelación cooperativa end-to-end
 
-- [ ] **Título**: (a) Columna/flag `cancel_requested_at` en executions + endpoint que lo
+- [x] **Título**: (a) Columna/flag `cancel_requested_at` en executions + endpoint que lo
       marca al cancelar la tarea (routers/task_lifecycle.py:140-148 y la transición
       `in_progress → cancelled` de task_state_machine.py:68-77); (b) el bucle de drenado de
       `conduct_execution` (execution.py:514-569) consulta el flag periódicamente y mata el
