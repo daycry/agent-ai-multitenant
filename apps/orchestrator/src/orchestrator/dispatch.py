@@ -30,7 +30,7 @@ from api_server.agent_tools_enforcement import (
     resolve_agent_tool_names,
     serialize_agent_tool_specs,
 )
-from api_server.budgets import budget_pause_block
+from api_server.budgets import budget_pause_block, resolve_execution_budgets
 from api_server.db.domain import (
     Agent,
     AgentType,
@@ -45,6 +45,7 @@ from api_server.db.domain import (
 )
 from api_server.db.platform_settings import (
     config_needs_default_model,
+    get_default_execution_budgets,
     get_default_model_config,
     resolve_model_config_chain,
 )
@@ -509,6 +510,17 @@ class TaskDispatcher:
                 model_spec, team_cfg, project_cfg, platform_default
             )
 
+        # Per-run budget envelope (prod-06 task_prod06_budget_02 / workers-10).
+        # Resolve platform-default ← project-override and clamp every key to the
+        # runtime ceiling, so a runaway loop is bounded by an operator-tunable
+        # budget instead of only the agent-runtime's compiled-in defaults. `None`
+        # when nothing overrides → the runtime keeps its own dataclass defaults.
+        platform_budgets = await get_default_execution_budgets(session)
+        budgets = resolve_execution_budgets(
+            platform_default=platform_budgets,
+            project_override=getattr(project, "execution_budgets", None),
+        )
+
         request: dict[str, Any] = {
             "tenant_id": str(task.tenant_id),
             "task_id": str(task.id),
@@ -521,7 +533,7 @@ class TaskDispatcher:
             # The agent carries its ModelClient spec; the worker
             # feeds it to the agent-runtime verbatim.
             "model": model_spec,
-            "budgets": None,
+            "budgets": budgets,
         }
         # Only emit the key when a restriction applies — `None` means "no
         # key", which `ExecutionRequest.from_dict` / `_agent_spec` read as

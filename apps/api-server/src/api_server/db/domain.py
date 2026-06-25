@@ -792,6 +792,13 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     chat_model_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+    # prod-06 task_prod06_budget_02 (workers-10): per-run budget OVERRIDE for this
+    # project's executions. A subset of the agent-runtime ``Budgets`` keys
+    # (max_iterations / max_tokens / max_cost_usd / max_wall_clock_s /
+    # max_tool_calls). NULL = no override → the platform default applies. The
+    # dispatcher clamps both project + platform values to the runtime ceiling
+    # (``EXECUTION_BUDGET_CEILING``), so an override can tighten but never loosen.
+    execution_budgets: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     repository_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # Config git tipada del proyecto (ADR 0072): {provider, remote_url,
     # default_branch, auth_mode}. NULL = sin remoto (solo bare local). El SECRETO

@@ -341,7 +341,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_budget_02` — Budgets de run configurables por proyecto/tenant
 
-- [ ] **Título**: Sustituir el `"budgets": None` incondicional de dispatch.py:403-416 por un
+- [x] **Título**: Sustituir el `"budgets": None` incondicional de dispatch.py:403-416 por un
       envelope resuelto proyecto → plataforma (decisión 5: columna JSONB en projects +
       platform setting), con clamp a los defaults actuales del dataclass
       (agent-runtime/safeguards.py:38-47) como techo. Migración Alembic reversible.

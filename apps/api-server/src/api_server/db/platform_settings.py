@@ -860,6 +860,27 @@ async def get_execution_time_limits(session: AsyncSession) -> tuple[int, int]:
     return soft, hard
 
 
+# prod-06 task_prod06_budget_02 (workers-10): the platform-wide DEFAULT per-run
+# budget envelope a dispatched ``run_execution`` carries. A subset of the
+# agent-runtime ``Budgets`` keys (max_iterations / max_tokens / max_cost_usd /
+# max_wall_clock_s / max_tool_calls); a project's ``execution_budgets`` column
+# overrides key-by-key, and the dispatcher clamps both to the runtime ceiling
+# (``EXECUTION_BUDGET_CEILING``). Empty default ``{}`` = use the runtime's own
+# dataclass defaults (= the ceiling). ``max_review_retries`` is NOT here — it is
+# the separate hard platform limit of ADR 0013.
+EXECUTION_DEFAULT_BUDGETS_KEY = "execution_default_budgets"
+
+
+async def get_default_execution_budgets(session: AsyncSession) -> dict[str, Any]:
+    """The platform-wide default per-run budget envelope (operator-tunable).
+
+    Returns the stored dict, or ``{}`` when unset / malformed — the dispatcher
+    merges it under the project override and clamps the result to the runtime
+    ceiling, so a junk value here can never loosen a budget."""
+    value = await get_platform_setting(session, EXECUTION_DEFAULT_BUDGETS_KEY, default={})
+    return dict(value) if isinstance(value, dict) else {}
+
+
 async def get_double_signature_threshold(session: AsyncSession) -> str:
     """Threshold (string-decimal) above which an AI cost estimate
     triggers the double-signature path. Returned as a string so the
