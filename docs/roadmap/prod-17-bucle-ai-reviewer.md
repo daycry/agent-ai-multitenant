@@ -140,7 +140,7 @@ a `backlog` con feedback estructurado y, al agotar reintentos, escala a validaci
 
 #### `task_prod17_loop_01` — Trigger `in_review` + dispatch de la ejecución de review
 
-- [ ] **Título**: En `orchestrator/dispatch.py`, añadir `_is_in_review_trigger` + un manejador
+- [x] **Título**: En `orchestrator/dispatch.py`, añadir `_is_in_review_trigger` + un manejador
       que, ante `task.status_changed → in_review`, resuelva `reviewer_agent_id`: si es AI
       (agent_type reviewer/ai), construir una `ExecutionRequest` con `agent_id =
 reviewer_agent_id` y un contexto de review (Fase B task_loop_02) y encolarla; si es
@@ -157,7 +157,7 @@ reviewer_agent_id` y un contexto de review (Fase B task_loop_02) y encolarla; si
 
 #### `task_prod17_loop_02` — Builder del spec de review
 
-- [ ] **Título**: Función que arma el contexto de review: tarea (título/descr/criterios de
+- [x] **Título**: Función que arma el contexto de review: tarea (título/descr/criterios de
       aceptación) + salida/diff del implementador (de la ejecución previa, `executions`/audit).
       Marca la ejecución como de review (p.ej. un flag/labels en el spec) para que el worker
       sepa aplicar el veredicto al terminar.

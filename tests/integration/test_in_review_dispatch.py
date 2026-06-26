@@ -1,0 +1,212 @@
+"""Integration test — prod-17 task_prod17_loop_01 + loop_02.
+
+When a task enters ``in_review`` with an AI ``reviewer_agent_id``, the orchestrator
+dispatches a REVIEW execution: a normal ``run_execution`` for the reviewer agent,
+marked ``review=True`` and carrying the review context (acceptance criteria + the
+implementer's prior output). A human reviewer (or none) is a no-op here (the
+peer-review path owns it).
+"""
+
+from __future__ import annotations
+
+import json
+from uuid import UUID, uuid4
+
+import pytest
+from alembic import command
+from api_server.db.domain import Agent, Execution, Project, Task
+from api_server.db.models import Organization
+from orchestrator.config import Settings as OrchestratorSettings
+from orchestrator.dispatch import TaskDispatcher
+from orchestrator.events import EVENT_TASK_STATUS_CHANGED, TaskEvent
+from redis.asyncio import Redis
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from workers.celery_app import build_celery_app
+from workers.config import Settings as WorkerSettings
+
+pytestmark = pytest.mark.integration
+
+TEST_REDIS_URL = "redis://localhost:6379/15"
+_SCRIPTED = {"kind": "scripted", "decisions": [{"kind": "finish", "output": "verdict"}]}
+
+
+@pytest.fixture()
+def _migrated(alembic_config: object) -> None:
+    command.upgrade(alembic_config, "head")
+
+
+async def _seed(
+    sm: async_sessionmaker, *, reviewer_type: str | None, prior_output: str = "did the work"
+) -> dict[str, UUID]:
+    """A task in ``in_review``; ``reviewer_type`` = 'ai' | 'human' | None decides
+    whether a reviewer agent is attached and of which kind."""
+    ids = {"tenant": uuid4(), "project": uuid4(), "task": uuid4(), "reviewer": uuid4()}
+    async with sm() as s, s.begin():
+        await s.execute(
+            text(
+                "TRUNCATE executions, task_dependencies, tasks, agents, projects,"
+                " organizations RESTART IDENTITY CASCADE"
+            )
+        )
+        s.add(Organization(id=ids["tenant"], name="T", slug="t-rev-disp"))
+        await s.flush()
+        s.add(
+            Project(
+                id=ids["project"],
+                tenant_id=ids["tenant"],
+                name="P",
+                status="active",
+                is_template=False,
+                worker_config={},
+            )
+        )
+        await s.flush()
+        reviewer_agent_id = None
+        if reviewer_type is not None:
+            s.add(
+                Agent(
+                    id=ids["reviewer"],
+                    tenant_id=ids["tenant"],
+                    name="Rev",
+                    role="reviewer",
+                    system_prompt="review it",
+                    agent_type=reviewer_type,
+                    scope="project_local",
+                    project_id=ids["project"],
+                    model_config=_SCRIPTED,
+                )
+            )
+            await s.flush()
+            reviewer_agent_id = ids["reviewer"]
+        s.add(
+            Task(
+                id=ids["task"],
+                tenant_id=ids["tenant"],
+                project_id=ids["project"],
+                title="implement X",
+                description="acceptance: X must work",
+                status="in_review",
+                priority="medium",
+                reviewer_agent_id=reviewer_agent_id,
+            )
+        )
+        await s.flush()
+        # A prior implementer execution whose output the reviewer will judge.
+        s.add(
+            Execution(
+                id=uuid4(),
+                tenant_id=ids["tenant"],
+                task_id=ids["task"],
+                status="done",
+                output=prior_output,
+                steps_log=[],
+            )
+        )
+    return ids
+
+
+def _dispatcher(sm: async_sessionmaker) -> TaskDispatcher:
+    return TaskDispatcher(
+        sessionmaker=sm,
+        celery_app=build_celery_app(WorkerSettings(broker_url=TEST_REDIS_URL)),
+        settings=OrchestratorSettings(redis_url=TEST_REDIS_URL, dispatch_queue="default"),
+    )
+
+
+def _in_review_event(ids: dict[str, UUID]) -> TaskEvent:
+    return TaskEvent(
+        stream_id="1-0",
+        type=EVENT_TASK_STATUS_CHANGED,
+        tenant_id=str(ids["tenant"]),
+        project_id=str(ids["project"]),
+        task_id=str(ids["task"]),
+        occurred_at="2026-06-26T00:00:00+00:00",
+        payload={"old_status": "in_progress", "new_status": "in_review"},
+    )
+
+
+async def _drain(redis: Redis, queue: str) -> list[dict]:
+    raw = await redis.lrange(queue, 0, -1)
+    await redis.delete(queue)
+    return [json.loads(item) for item in raw]
+
+
+def _run_request(messages: list[dict]) -> dict:
+    """Extract the run_execution `request` kwarg from a drained Celery message."""
+    for msg in messages:
+        body = msg.get("body")
+        # Celery protocol v2: body is base64 (args, kwargs, embed).
+        import base64
+
+        decoded = json.loads(base64.b64decode(body))
+        _args, kwargs, _embed = decoded
+        if "request" in kwargs:
+            return kwargs["request"]
+    raise AssertionError("no run_execution request enqueued")
+
+
+@pytest.mark.asyncio
+async def test_ai_reviewer_dispatches_review_execution(
+    _migrated: None, admin_database_url: str
+) -> None:
+    engine = create_async_engine(admin_database_url)
+    redis = Redis.from_url(TEST_REDIS_URL)
+    await redis.delete("default")
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm, reviewer_type="ai", prior_output="implemented the parser")
+
+        await _dispatcher(sm).handle(_in_review_event(ids))
+
+        messages = await _drain(redis, "default")
+        request = _run_request(messages)
+        # A review execution for the reviewer agent, marked + with context.
+        assert request["review"] is True
+        assert request["agent_id"] == str(ids["reviewer"])
+        assert request["task_id"] == str(ids["task"])
+        assert request["review_context"]["implementer_output"] == "implemented the parser"
+        assert "acceptance: X must work" in request["review_context"]["acceptance_criteria"]
+    finally:
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_human_reviewer_is_not_dispatched_here(
+    _migrated: None, admin_database_url: str
+) -> None:
+    engine = create_async_engine(admin_database_url)
+    redis = Redis.from_url(TEST_REDIS_URL)
+    await redis.delete("default")
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm, reviewer_type="human")
+
+        await _dispatcher(sm).handle(_in_review_event(ids))
+
+        # Human reviewer → peer-review path owns it; nothing enqueued here.
+        assert await _drain(redis, "default") == []
+    finally:
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_no_reviewer_is_noop(_migrated: None, admin_database_url: str) -> None:
+    engine = create_async_engine(admin_database_url)
+    redis = Redis.from_url(TEST_REDIS_URL)
+    await redis.delete("default")
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm, reviewer_type=None)
+
+        await _dispatcher(sm).handle(_in_review_event(ids))
+
+        assert await _drain(redis, "default") == []
+    finally:
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
