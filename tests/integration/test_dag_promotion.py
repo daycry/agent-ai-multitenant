@@ -131,5 +131,21 @@ async def test_promote_ready_tasks(
         async with sessionmaker() as session, session.begin():
             announced3 = await promote_ready_tasks(session, ids["plan"])
         assert ids["dep"] not in {t.id for t in announced3}
+
+        # --- Case 4: a TERMINAL execution (aborted/failed) must NOT block ---
+        # A run that died (worker killed, crash, timeout) leaves a terminal
+        # executions row, but the task is still `ready` and must be re-dispatchable
+        # — otherwise it strands forever (the abort-residue bug). Only an ACTIVE
+        # (running / awaiting_human_approval) execution blocks re-announce.
+        conn = await asyncpg.connect(migrations_pg_dsn)
+        try:
+            await conn.execute(
+                "UPDATE executions SET status = 'aborted' WHERE task_id = $1", ids["dep"]
+            )
+        finally:
+            await conn.close()
+        async with sessionmaker() as session, session.begin():
+            announced4 = await promote_ready_tasks(session, ids["plan"])
+        assert ids["dep"] in {t.id for t in announced4}
     finally:
         await engine.dispose()

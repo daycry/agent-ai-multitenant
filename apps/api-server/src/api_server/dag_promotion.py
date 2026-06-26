@@ -20,15 +20,20 @@ periodic beat (safety net). It:
   1. flips every eligible ``backlog`` task of the plan to ``ready`` (a task is
      eligible when it has no dependency that is not yet ``done`` — roots qualify
      vacuously); then
-  2. returns every ``ready`` task of the plan that has **no execution row yet**
-     — the undispatched ones the caller must announce with a ready event.
+  2. returns every ``ready`` task of the plan that has **no LIVE execution**
+     (none ``running`` / ``awaiting_human_approval``) — the undispatched ones the
+     caller must announce with a ready event.
 
 Returning the *undispatched* set (not only the just-flipped ones) means a task
 the trigger flipped without an event is still announced, and the operation stays
-idempotent: once a task has been dispatched (an ``executions`` row exists) it is
-never re-announced. A per-plan transaction-scoped advisory lock serialises
-concurrent promoters (start vs. beat vs. on-done) so a task is never announced
-twice in the same instant.
+idempotent: a task with a LIVE execution is skipped so it is never
+double-dispatched. Crucially, a task whose only executions are TERMINAL (a prior
+run died — worker killed, crash, timeout — leaving an ``aborted``/``failed`` row)
+IS re-announced, so the DAG self-heals instead of stranding the task forever
+behind a dead executions row. A per-plan transaction-scoped advisory lock
+serialises concurrent promoters (start vs. beat vs. on-done) so a task is never
+announced twice in the same instant; the orchestrator's own ``status == ready``
+re-check is the final double-dispatch guard.
 """
 
 from __future__ import annotations
@@ -39,12 +44,23 @@ from sqlalchemy import exists, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from api_server.db.domain import Execution, Task, TaskDependency, TaskStatus
+from api_server.db.domain import Execution, ExecutionStatus, Task, TaskDependency, TaskStatus
 from api_server.events import publish_task_status_changed
 
 _BACKLOG = TaskStatus.BACKLOG.value
 _READY = TaskStatus.READY.value
 _DONE = TaskStatus.DONE.value
+
+# An execution in one of these states is LIVE — the task is actively being run
+# (or paused mid-run waiting on a human), so it must not be re-announced/double-
+# dispatched. Every OTHER execution state is TERMINAL (done / aborted / failed /
+# cancelled): the run ended, so a task still in `ready` is free to be re-announced
+# — that is what lets the DAG self-heal after a run dies (worker killed, crash,
+# timeout) instead of stranding the task forever behind a dead executions row.
+_ACTIVE_EXECUTION_STATUSES = (
+    ExecutionStatus.RUNNING.value,
+    ExecutionStatus.AWAITING_HUMAN_APPROVAL.value,
+)
 
 
 async def promote_ready_tasks(session: AsyncSession, plan_id: UUID) -> list[Task]:
@@ -86,15 +102,24 @@ async def promote_ready_tasks(session: AsyncSession, plan_id: UUID) -> list[Task
     if eligible:
         await session.execute(update(Task).where(Task.id.in_(eligible)).values(status=_READY))
 
-    # 2. Collect every ready task of the plan that has not been dispatched yet
-    #    (no executions row). Idempotent: a dispatched/running task is skipped.
+    # 2. Collect every ready task of the plan with no LIVE execution — the
+    #    undispatched set the caller announces. Idempotent: a task with a
+    #    running/awaiting execution is skipped (no double-dispatch), but a task
+    #    whose only executions are TERMINAL (a prior run died/failed) IS returned
+    #    so it re-dispatches instead of stranding. The orchestrator's own
+    #    `status == ready` re-check is the final double-dispatch guard.
     undispatched = (
         (
             await session.execute(
                 select(Task).where(
                     Task.plan_id == plan_id,
                     Task.status == _READY,
-                    ~exists(select(Execution.id).where(Execution.task_id == Task.id)),
+                    ~exists(
+                        select(Execution.id).where(
+                            Execution.task_id == Task.id,
+                            Execution.status.in_(_ACTIVE_EXECUTION_STATUSES),
+                        )
+                    ),
                 )
             )
         )
