@@ -172,7 +172,7 @@ reviewer_agent_id` y un contexto de review (Fase B task_loop_02) y encolarla; si
 
 #### `task_prod17_loop_03` — Aplicación del veredicto al terminar la ejecución de review
 
-- [ ] **Título**: En el flujo post-ejecución del worker (`conduct_execution`), cuando la
+- [x] **Título**: En el flujo post-ejecución del worker (`conduct_execution`), cuando la
       ejecución es de review: pasar su salida por `parse_reviewer_output` y llamar a
       `apply_reviewer_verdict` (Fase A). `unknown` → re-prompt acotado una vez (re-encola la
       review), luego `reject` defensivo. Publicar el evento de tarea resultante (done/backlog/

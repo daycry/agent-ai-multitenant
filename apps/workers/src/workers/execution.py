@@ -152,6 +152,14 @@ class ExecutionRequest:
     # key (no skills assigned) -> the runtime keeps the current prompt untouched
     # (backward-compatible).
     skill_prompt_fragments: list[str] | None = None
+    # prod-17 (bucle del AI reviewer): when True, this run is a REVIEW of the task
+    # by its reviewer agent. On finish the worker applies the parsed verdict
+    # (parse_reviewer_output → apply_reviewer_verdict) instead of the normal
+    # done/failed task transition (dag_01). `review_context` carries the review
+    # input (acceptance criteria + the implementer's prior output) the runtime
+    # injects into the reviewer's prompt. Default False/None = a normal run.
+    review: bool = False
+    review_context: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict — the Celery payload the orchestrator sends."""
@@ -168,6 +176,8 @@ class ExecutionRequest:
             "tool_specs": self.tool_specs,
             "mcp_servers": self.mcp_servers,
             "skill_prompt_fragments": self.skill_prompt_fragments,
+            "review": self.review,
+            "review_context": self.review_context,
         }
 
     @classmethod
@@ -186,6 +196,8 @@ class ExecutionRequest:
             tool_specs=raw.get("tool_specs"),
             mcp_servers=raw.get("mcp_servers"),
             skill_prompt_fragments=raw.get("skill_prompt_fragments"),
+            review=bool(raw.get("review", False)),
+            review_context=raw.get("review_context"),
         )
 
 
@@ -490,6 +502,45 @@ async def transition_task_after_run(
     return (task, old_status, task.status)
 
 
+async def _apply_review_verdict(
+    session: AsyncSession,
+    task_id: UUID,
+    tenant_id: UUID,
+    result: _RuntimeResult,
+) -> tuple[Task, str, str] | None:
+    """Apply an AI reviewer run's verdict to the reviewed task (prod-17 loop_03).
+
+    Parses the reviewer's stdout (``<verdict>…</verdict>`` tags) and calls
+    ``apply_reviewer_verdict``: approve → ``done``, reject → ``backlog`` (or
+    ``blocked`` once ``max_retries`` is hit). An UNPARSEABLE verdict (``unknown``)
+    is treated as a defensive ``reject`` so the task converges instead of stalling
+    in ``in_review`` (a bounded re-prompt is a future refinement — ADR 0084 / plan
+    decision 6). Returns ``(task, old, new)`` for event publication, or ``None``
+    when no transition applies (task already moved / guarded by apply)."""
+    from api_server.reviewer_bridge import (
+        ReviewerVerdict,
+        apply_reviewer_verdict,
+        parse_reviewer_output,
+    )
+
+    task = await session.get(Task, task_id)
+    if task is None or task.status != TaskStatus.IN_REVIEW.value:
+        return None
+    old_status = task.status
+    verdict = parse_reviewer_output(result.output or "")
+    if verdict.label == "unknown":
+        verdict = ReviewerVerdict(
+            label="reject",
+            failed_criterion="reviewer produced no parseable verdict",
+            what_to_fix="re-run the review and end with a <verdict>approve|reject</verdict> tag",
+        )
+    await apply_reviewer_verdict(session, task_id=task_id, tenant_id=tenant_id, verdict=verdict)
+    # apply_* loaded the SAME identity-mapped Task in this session → status updated.
+    if task.status == old_status:
+        return None
+    return (task, old_status, task.status)
+
+
 async def refresh_budgets_after_run(
     sessionmaker: async_sessionmaker[AsyncSession], tenant_id: UUID
 ) -> None:
@@ -706,7 +757,12 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         # ApprovalRequest — the approval engine on the live run (task_02_33).
         # request_approval_if_needed also moves the TASK to
         # `awaiting_human_approval` and frees its agent (ADR 0020).
-        if result.status == _AWAITING_APPROVAL and approval:
+        if request.review:
+            # prod-17 task_prod17_loop_03: this run was the AI reviewer reviewing
+            # the task. Apply its parsed verdict (approve -> done, reject ->
+            # backlog/blocked) instead of the normal post-run transition.
+            task_event = await _apply_review_verdict(session, task_id, tenant_id, result)
+        elif result.status == _AWAITING_APPROVAL and approval:
             execution = await get_execution(session, execution_id)
             project = await _load_project(session, task_id)
             task = await session.get(Task, task_id)
