@@ -174,6 +174,52 @@ async def test_ai_reviewer_dispatches_review_execution(
 
 
 @pytest.mark.asyncio
+async def test_review_request_includes_test_report_when_present(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """prod-17 test_02: a persisted test_run_completed outcome is folded into the
+    reviewer's <test-report> block."""
+    from api_server.db.models import TaskAuditEvent
+
+    engine = create_async_engine(admin_database_url)
+    redis = Redis.from_url(TEST_REDIS_URL)
+    await redis.delete("default")
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm, reviewer_type="ai")
+        # A failed test run persisted for the task (what test_01 will emit).
+        async with sm() as s, s.begin():
+            s.add(
+                TaskAuditEvent(
+                    id=uuid4(),
+                    tenant_id=ids["tenant"],
+                    task_id=ids["task"],
+                    kind="test_run_completed",
+                    actor="system:celery",
+                    payload={
+                        "runtime": "python-pytest",
+                        "exit_codes": [1],
+                        "all_passed": False,
+                        "timed_out": False,
+                        "logs_tail": "E   assert 1 == 2",
+                    },
+                )
+            )
+
+        await _dispatcher(sm).handle(_in_review_event(ids))
+
+        request = _run_request(await _drain(redis, "default"))
+        block = request["review_context"]["test_report"]
+        assert "<test-report>" in block
+        assert "runtime python-pytest: FAILED" in block
+        assert "assert 1 == 2" in block
+    finally:
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_human_reviewer_is_not_dispatched_here(
     _migrated: None, admin_database_url: str
 ) -> None:

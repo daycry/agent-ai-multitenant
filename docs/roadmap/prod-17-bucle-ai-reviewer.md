@@ -190,10 +190,11 @@ reviewer_agent_id` y un contexto de review (Fase B task_loop_02) y encolarla; si
 
 #### `task_prod17_test_01` — Cableo productivo de `run_test_runtime` → TestReport
 
-- [ ] **Título**: Dar caller productivo a `run_test_runtime` (hoy sin productor) tras la
-      ejecución del implementador: ejecutar los tests del proyecto en el test-runtime, persistir
-      el `TestReport` en `task_audit_events`. Coordinar con prod-06 (la tarea ya pasa a
-      `in_review`); el TestReport debe estar disponible antes de la review.
+- [ ] **Título** ⏸️ **BLOQUEADO (cableado de worktree en la ejecución)**: Dar caller
+      productivo a `run_test_runtime` (hoy sin productor) tras la ejecución del implementador:
+      ejecutar los tests del proyecto en el test-runtime, persistir el `TestReport` en
+      `task_audit_events`. Coordinar con prod-06 (la tarea ya pasa a `in_review`); el
+      TestReport debe estar disponible antes de la review. > **BLOQUEO descubierto (2026-06-26):** `conduct_execution` NO fija > `ContainerSpec.workspace_host_path` — el agente implementador corre **sin el repo > del proyecto montado** ("la pool con reuso de worktree llega en Plan 06", ver > `container.py`). Sin un worktree con el código del implementador, el test-runtime no > tiene QUÉ testear. Es el subsistema de **git-worktrees / ejecución en worktree** > (CLAUDE.md principios 4/5), separado y mayor que esta tarea. test_01 espera ese > cableado; mientras tanto no se produce TestReport y test_02 (consumidor) degrada > elegantemente (revisa el diff). Candidato a un plan dedicado de worktree-execution.
 - **Tiempo**: 2 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -204,17 +205,17 @@ reviewer_agent_id` y un contexto de review (Fase B task_loop_02) y encolarla; si
 
 #### `task_prod17_test_02` — Inyección de `<test-report>` en el prompt del reviewer
 
-- [ ] **Título**: En el builder del spec de review (task_loop_02), si hay TestReport para la
+- [x] **Título**: En el builder del spec de review (task_loop_02), si hay TestReport para la
       tarea, envolverlo con `reviewer_input.reviewer_input_block` e inyectarlo en el prompt del
       reviewer, completando el bucle de ADR 0027:106-118. Sin TestReport (proyecto sin tests) el
-      reviewer revisa solo el diff (degradación elegante).
+      reviewer revisa solo el diff (degradación elegante). > Hecho (consumidor): `_build_review_request` lee los `test_run_completed` persistidos > y `_format_test_report_block` arma el `<test-report>` que va en `review_context`. > Independiente del productor (test_01, bloqueado): cuando el test-runtime persista esos > eventos, el reviewer los usa automáticamente. Sin eventos → bloque vacío (degrada). > Test en `test_in_review_dispatch.py::test_review_request_includes_test_report_when_present`.
 - **Tiempo**: 1 día · **Complejidad**: s
 - **Depende de**: task_prod17_loop_02, task_prod17_test_01
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod17_test_02_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_reviewer_receives_testreport.py -v"
+    command: "pytest tests/integration/test_in_review_dispatch.py -v -k test_report"
   ```
 
 ### Fase D — e2e, cierre y ratificación

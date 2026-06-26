@@ -44,6 +44,7 @@ from api_server.db.domain import (
     TaskStatus,
     Team,
 )
+from api_server.db.models import TaskAuditEvent
 from api_server.db.platform_settings import (
     config_needs_default_model,
     get_default_execution_budgets,
@@ -110,6 +111,46 @@ def _is_in_review_trigger(event: TaskEvent) -> bool:
     """True when a task just entered ``in_review`` — if its reviewer is an AI
     agent, the orchestrator dispatches a review execution (prod-17 loop_01)."""
     return event.type == EVENT_TASK_STATUS_CHANGED and event.payload.get("new_status") == _IN_REVIEW
+
+
+# Cap on test-run outcomes folded into the reviewer's `<test-report>` block — a
+# single run emits one per runtime (usually 1-3); we keep the freshest few.
+_MAX_TEST_REPORT_RUNTIMES = 6
+# Per-runtime log tail kept in the reviewer block (the full logs live in the
+# audit event / `docker logs`); enough for the reviewer to see what failed.
+_TEST_REPORT_LOG_TAIL = 1500
+
+
+def _format_test_report_block(outcomes: list[dict[str, Any]]) -> str:
+    """Render persisted ``test_run_completed`` outcomes as the reviewer's
+    ``<test-report>`` prompt block (prod-17 task_prod17_test_02).
+
+    Reads the outcome dicts the test-runtime persists (``runtime``, ``exit_codes``,
+    ``all_passed``, ``timed_out``, ``logs_tail``) — no dependency on the sandboxed
+    runtime package. Returns ``""`` when there are no outcomes (the reviewer then
+    reviews the diff alone — graceful degradation)."""
+    if not outcomes:
+        return ""
+    lines = ["<test-report>"]
+    for o in outcomes:
+        runtime = str(o.get("runtime", "unknown"))
+        passed = bool(o.get("all_passed", False))
+        status = "PASSED" if passed else "FAILED"
+        exit_codes = o.get("exit_codes")
+        timed_out = bool(o.get("timed_out", False))
+        header = f"- runtime {runtime}: {status} (exit_codes={exit_codes}"
+        if timed_out:
+            header += ", timed_out=true"
+        header += ")"
+        lines.append(header)
+        logs_tail = str(o.get("logs_tail") or "")
+        if not passed and logs_tail:
+            lines.append("  logs (tail):")
+            lines.append("  ```")
+            lines.append(logs_tail[-_TEST_REPORT_LOG_TAIL:])
+            lines.append("  ```")
+    lines.append("</test-report>")
+    return "\n".join(lines)
 
 
 @dataclass(frozen=True)
@@ -354,6 +395,27 @@ class TaskDispatcher:
             )
         ).scalar_one_or_none()
 
+        # prod-17 task_prod17_test_02: fold the latest test-runtime outcomes into a
+        # `<test-report>` block the reviewer reads (ADR 0027 loop). The test-runtime
+        # (task_prod17_test_01) persists `test_run_completed` audit events; we read
+        # the freshest few. Absent (no tests run yet) → empty → the reviewer reviews
+        # the diff alone (graceful degradation).
+        test_outcomes = list(
+            (
+                await session.execute(
+                    select(TaskAuditEvent.payload)
+                    .where(
+                        TaskAuditEvent.task_id == task.id,
+                        TaskAuditEvent.tenant_id == task.tenant_id,
+                        TaskAuditEvent.kind == "test_run_completed",
+                    )
+                    .order_by(TaskAuditEvent.at.desc())
+                    .limit(_MAX_TEST_REPORT_RUNTIMES)
+                )
+            ).scalars()
+        )
+        test_report = _format_test_report_block(list(reversed(test_outcomes)))
+
         request: dict[str, Any] = {
             "tenant_id": str(task.tenant_id),
             "task_id": str(task.id),
@@ -369,6 +431,8 @@ class TaskDispatcher:
             "review_context": {
                 "acceptance_criteria": task.description or "",
                 "implementer_output": prior_output or "",
+                # `<test-report>` block (prod-17 test_02); "" when no tests ran yet.
+                "test_report": test_report,
             },
             "model": model_spec,
             "budgets": budgets,
