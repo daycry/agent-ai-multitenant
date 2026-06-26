@@ -80,6 +80,15 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": schedule(run_every=300.0),
         "options": {"queue": "default"},
     },
+    # prod-06 task_prod06_dag_03 (parte B) — sample Celery queue depth (Redis LLEN)
+    # + task counts per status into the node-exporter textfile. prod-08 scrapes it
+    # (CeleryQueueGrowing alert + dashboard). Cheap; every 30s so a piling-up queue
+    # or a stuck state (e.g. growing in_review) shows up promptly.
+    "sample-queue-metrics-every-30s": {
+        "task": "workers.sample_queue_metrics",
+        "schedule": schedule(run_every=30.0),
+        "options": {"queue": "default"},
+    },
     "purge-dep-cache-daily": {
         "task": "workers.purge_dep_cache",
         "schedule": crontab(hour="3", minute="0"),
