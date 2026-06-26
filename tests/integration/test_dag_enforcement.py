@@ -210,6 +210,61 @@ async def test_starting_a_task_succeeds_once_dependency_is_done(
 
 
 @pytest.mark.asyncio
+async def test_moving_to_ready_with_pending_dependency_returns_422(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """A user must not be able to drag a card to ``ready`` while an upstream
+    dependency is still pending — the Kanban now gates ``ready`` too, so a
+    blocked task can't be hand-promoted past its DAG order."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        ids = await _bootstrap(client, seeded["project_id"], headers)
+        task_b = ids["b"]
+
+        # b depends on a; a is still in backlog → ready is refused.
+        resp = await client.put(
+            f"/projects/{seeded['project_id']}/tasks/{task_b}",
+            json={"status": "ready"},
+            headers=headers,
+        )
+        assert resp.status_code == 422, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error"] == "dependencies_not_done"
+        assert detail["target_status"] == "ready"
+        assert detail["pending"][0]["task_id"] == ids["a"]
+
+
+@pytest.mark.asyncio
+async def test_moving_a_dependency_free_task_to_ready_is_allowed(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """A root task (no dependencies) may always be moved to ``ready`` — the
+    gate only blocks tasks whose upstream graph is unfinished."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        ids = await _bootstrap(client, seeded["project_id"], headers)
+        task_a = ids["a"]  # no dependencies
+
+        ok = await client.put(
+            f"/projects/{seeded['project_id']}/tasks/{task_a}",
+            json={"status": "ready"},
+            headers=headers,
+        )
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["status"] == "ready"
+
+
+@pytest.mark.asyncio
 async def test_non_gated_transitions_are_not_blocked(
     configured_app, migrations_pg_dsn: str
 ) -> None:
