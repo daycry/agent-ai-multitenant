@@ -1,8 +1,9 @@
 ---
 adr_id: "0084"
 title: "Cableado del bucle del AI reviewer (in_review → veredicto → done/backlog)"
-status: proposed
+status: accepted
 date: 2026-06-26
+decided_at: 2026-06-26
 authors: [claude-opus]
 plan_referenced: prod-06-ciclo-vida-ejecucion
 docs_language: es
@@ -12,10 +13,12 @@ supersedes: []
 
 # ADR 0084 — Cableado del bucle del AI reviewer
 
-> **Estado: `proposed`** — decisión de PRODUCTO (la review automática añade una
-> SEGUNDA ejecución de agente por tarea revisada = coste, y cambia la semántica
-> de `reviewer_agent_id`). Es la **parte A** de `task_prod06_dag_03`; la parte B
-> (métrica de cola/estado) ya está entregada.
+> **Estado: `accepted`** — el operador eligió la **Opción B (diferir a un plan
+> dedicado)** el 2026-06-26. La **parte A** de `task_prod06_dag_03` queda fuera de
+> prod-06: el bucle completo (test-runtime → reviewer → veredicto + escalado +
+> inyección de test-report) se diseñará en su propio plan, usando este ADR como
+> semilla de diseño. La **parte B** (métrica de cola/estado) ya está entregada.
+> `reviewer_bridge` permanece como biblioteca lista sin caller productivo.
 
 ## Contexto y corrección de una conflación
 
@@ -127,3 +130,17 @@ coste automático.
 
 En los tres casos, la métrica de profundidad/estado (parte B) **ya está emitida** y es
 independiente.
+
+## Decisión (2026-06-26)
+
+El operador eligió la **Opción B (diferir a un plan dedicado)**. Consecuencias:
+
+- `task_prod06_dag_03` parte A queda **fuera del alcance de prod-06**; este ADR es la
+  semilla de diseño del plan dedicado (bucle completo: test-runtime → reviewer agent →
+  `parse_reviewer_output` → `apply_reviewer_verdict` con approve→done y escalado a
+  `awaiting_human` en `max_retries`, + inyección de `<test-report>`).
+- `reviewer_bridge` (parser + aplicador) se mantiene como biblioteca probada **sin
+  caller productivo**; no se borra (es el contrato que el plan futuro cableará).
+- La parte B (`agentic_celery_queue_depth` + `agentic_tasks_by_status`) ya hace
+  **observable** el problema: un `in_review` creciente aparece en el dashboard, así
+  que el hueco no es silencioso mientras la parte A espera su plan.

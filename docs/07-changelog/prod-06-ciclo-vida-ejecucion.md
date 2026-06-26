@@ -33,6 +33,11 @@ Entregadas las Fases A–E; quedan dos ítems con gate de decisión humana (ver
   (api_server.dag_promotion) en `start-execution` (raíces) y un beat
   `workers.promote_ready_plans` cada 30 s como safety-net (el trigger de BD
   promueve dependientes sin publicar evento). Lock `pg_advisory_xact_lock` por plan.
+- **Métrica de cola/estado** (`dag_03`, parte B): beat `workers.sample_queue_metrics`
+  (cada 30 s) emite `agentic_celery_queue_depth{queue}` (Redis LLEN) +
+  `agentic_tasks_by_status{status}` vía el textfile-collector de node-exporter
+  (mismo patrón que `backup_metrics`). prod-08 añade el scrape + alerta + dashboard.
+  La parte A de `dag_03` (cablear el AI reviewer) se DIFIRIÓ — ver "Pendiente".
 
 ### Fase B — Recuperación de fallos de larga duración
 
@@ -94,8 +99,16 @@ Entregadas las Fases A–E; quedan dos ítems con gate de decisión humana (ver
 
 ## Pendiente
 
-- **`dag_03`** (métrica de profundidad de cola + reviewer-runtime): **DIFERIDO**,
-  depende del **ADR 0063** (reviewer-runtime) de otro plan.
+- **`dag_03` parte A** (cablear el AI reviewer al flujo post-ejecución): **DIFERIDA a
+  un plan dedicado** por decisión del operador (2026-06-26, **ADR 0084 Opción B**). Al
+  mapear el subsistema se corrigió la atribución original: NO depende de ADR 0063 (ése
+  es el contenedor review-runtime de preview humano); el AI reviewer es una ejecución
+  de agente normal cuyo bucle completo (test-runtime → reviewer → veredicto + escalado)
+  se diseñará aparte. `reviewer_bridge` queda como biblioteca lista sin caller. La parte
+  B (métrica) ya está entregada y deja el `in_review` observable.
+
+Por este único ítem el plan permanece en `in_progress` y NO se marca `completed`
+(protocolo CLAUDE.md). El resto de Fases A–E están entregadas.
 
 Por este único ítem el plan permanece en `in_progress` y NO se marca `completed`
 (protocolo CLAUDE.md). El resto de Fases A–E están entregadas.
