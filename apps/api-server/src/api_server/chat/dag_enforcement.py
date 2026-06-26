@@ -7,15 +7,22 @@ guard so a user can't manually drag a card into ``in_progress`` while
 upstream work is still pending.
 
 This module exposes one pure-async helper, ``assert_dependencies_done``,
-that the tasks router calls before letting a PUT promote a task to
-``in_progress`` / ``awaiting_human_approval`` / ``in_review``. The
-router maps ``DependenciesNotDoneError`` to a 422 with the offending
-dependency ids so the UI can render the explanation in-place.
+that the tasks router calls before letting a PUT promote a task to a
+gated status. The router maps ``DependenciesNotDoneError`` to a 422 with
+the offending dependency ids so the UI can render the explanation in-place.
 
-We intentionally keep the list of "starts-work" target statuses small:
-moving a card to ``ready``, ``blocked``, ``done`` or ``cancelled`` is
-free — only transitions that imply *the agent will start spending
-budget on it* must wait on the upstream graph.
+Gated targets are the ones that imply the task is being moved *forward*
+through its DAG order: ``ready`` (eligible to start), ``in_progress``,
+``awaiting_human_approval`` and ``in_review``. A user must not be able to
+hand-promote a card into ``ready`` (let alone start it) while upstream
+work is still pending — the Kanban shows a padlock on such cards and the
+server refuses the move. Moving a card *back/aside* to ``backlog``,
+``blocked``, ``done`` or ``cancelled`` stays free (no DAG precondition).
+
+Note the automatic promotion ``backlog -> ready`` (the ``fn_compute_task_ready``
+DB trigger / ``promote_ready_tasks``) bypasses this REST guard entirely and
+only ever fires once all dependencies are ``done``, so gating ``ready`` here
+constrains *manual* moves without touching the autonomous DAG cascade.
 """
 
 from __future__ import annotations
@@ -29,10 +36,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.db.domain import Task, TaskDependency, TaskStatus
 
-# Target statuses that count as "starting work" and must therefore wait
-# on all dependencies being ``done``.
+# Target statuses that move a task FORWARD through its DAG order and must
+# therefore wait on all dependencies being ``done``. ``ready`` is included so
+# a card can't be hand-dragged past a pending dependency (the autonomous
+# backlog->ready promotion bypasses this guard — see module docstring).
 GATED_TARGET_STATUSES: frozenset[str] = frozenset(
     {
+        TaskStatus.READY.value,
         TaskStatus.IN_PROGRESS.value,
         TaskStatus.AWAITING_HUMAN_APPROVAL.value,
         TaskStatus.IN_REVIEW.value,

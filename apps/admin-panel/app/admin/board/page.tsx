@@ -21,13 +21,14 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid } from "lucide-react";
+import { LayoutGrid, Lock, LockOpen } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
+import { computeDepState } from "@/lib/task-deps";
 import { useWebSocket, wsUrl } from "@/lib/ws";
 
 // --------------------------------------------------------------------------
@@ -51,6 +52,9 @@ interface Task {
   status: string;
   priority: string;
   assigned_agent_id: string | null;
+  // Upstream task ids this one depends on (TaskResponse.depends_on). Drives the
+  // card padlock + the "can't go ready while a dependency is pending" guard.
+  depends_on: string[];
 }
 
 interface Team {
@@ -84,6 +88,30 @@ const PRIORITY_VARIANT: Record<string, BadgeVariant> = {
   high: "warning",
   critical: "danger",
 };
+
+/**
+ * Turn a failed move into a human message. The server gates DAG-forward moves
+ * (ready / in_progress / …) and replies 422 `dependencies_not_done`; surface
+ * that as a friendly Spanish line instead of the raw JSON body.
+ */
+function describeMoveError(err: unknown, target: Task["status"]): string {
+  if (err instanceof ApiError) {
+    try {
+      const parsed = JSON.parse(err.body) as {
+        detail?: { error?: string; pending?: unknown[] };
+      };
+      if (parsed.detail?.error === "dependencies_not_done") {
+        const n = parsed.detail.pending?.length ?? 0;
+        const label = COLUMNS.find((c) => c.id === target)?.label ?? target;
+        return `No se puede mover a «${label}»: ${n} dependencia${n === 1 ? "" : "s"} sin completar.`;
+      }
+    } catch {
+      // body wasn't the structured DAG error — fall back to the raw text.
+    }
+    return err.body;
+  }
+  return String(err);
+}
 
 // --------------------------------------------------------------------------
 // Page
@@ -126,6 +154,13 @@ export default function BoardPage() {
     refetchOnWindowFocus: false,
   });
 
+  // taskId -> status, for resolving each card's dependency state (the padlock)
+  // and the "can't go ready while a dependency is pending" drag guard.
+  const statusById = useMemo(
+    () => new Map((tasksQuery.data ?? []).map((t) => [t.id, t.status] as const)),
+    [tasksQuery.data],
+  );
+
   const moveTask = useMutation({
     mutationFn: async ({ task, newStatus }: { task: Task; newStatus: Task["status"] }) => {
       return apiFetch<Task>(`/projects/${task.project_id}/tasks/${task.id}`, {
@@ -144,11 +179,11 @@ export default function BoardPage() {
       );
       return { prev };
     },
-    onError: (err, _vars, context) => {
+    onError: (err, vars, context) => {
       if (context?.prev) {
         queryClient.setQueryData(["tasks", "by-project", effectiveSelected], context.prev);
       }
-      setDragError(err instanceof ApiError ? err.body : String(err));
+      setDragError(describeMoveError(err, vars.newStatus));
     },
     onSuccess: () => setDragError(null),
   });
@@ -156,6 +191,20 @@ export default function BoardPage() {
   function onDrop(newStatus: Task["status"], taskId: string) {
     const task = (tasksQuery.data ?? []).find((t) => t.id === taskId);
     if (!task || task.status === newStatus) return;
+    // Mirror the server DAG guard in the UI: refuse to drag a card into `ready`
+    // while an upstream dependency is still pending (the card shows a padlock).
+    // Other gated moves (in_progress, …) are caught by the server 422 below.
+    if (newStatus === "ready") {
+      const dep = computeDepState(task.depends_on, statusById);
+      if (dep.blocked) {
+        setDragError(
+          `No se puede mover «${task.title}» a Ready: ${dep.pendingCount} ` +
+            `dependencia${dep.pendingCount === 1 ? "" : "s"} sin completar.`,
+        );
+        return;
+      }
+    }
+    setDragError(null);
     moveTask.mutate({ task, newStatus });
   }
 
@@ -328,6 +377,7 @@ export default function BoardPage() {
                   tasks={colTasks}
                   loading={tasksQuery.isLoading}
                   onDrop={onDrop}
+                  statusById={statusById}
                 />
               );
             })}
@@ -348,6 +398,7 @@ function KanbanColumn({
   tasks,
   loading,
   onDrop,
+  statusById,
 }: {
   status: Task["status"];
   label: string;
@@ -355,6 +406,7 @@ function KanbanColumn({
   tasks: Task[];
   loading: boolean;
   onDrop: (status: Task["status"], taskId: string) => void;
+  statusById: ReadonlyMap<string, string>;
 }) {
   const [over, setOver] = useState(false);
 
@@ -409,13 +461,15 @@ function KanbanColumn({
       )}
 
       {tasks.map((t) => (
-        <TaskCard key={t.id} task={t} />
+        <TaskCard key={t.id} task={t} statusById={statusById} />
       ))}
     </div>
   );
 }
 
-function TaskCard({ task }: { task: Task }) {
+function TaskCard({ task, statusById }: { task: Task; statusById: ReadonlyMap<string, string> }) {
+  const dep = computeDepState(task.depends_on, statusById);
+
   function handleDragStart(e: React.DragEvent<HTMLDivElement>) {
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", task.id);
@@ -426,13 +480,41 @@ function TaskCard({ task }: { task: Task }) {
       draggable
       onDragStart={handleDragStart}
       data-testid={`task-card-${task.id}`}
+      data-blocked={dep.blocked ? "true" : "false"}
       className={cn(
         "bg-card rounded-md border p-2 text-sm shadow-sm",
         "cursor-grab transition-shadow active:cursor-grabbing",
         "hover:border-primary/40 hover:shadow-md",
+        dep.blocked && "border-danger/40",
       )}
     >
-      <p className="font-medium leading-tight">{task.title}</p>
+      <div className="flex items-start justify-between gap-2">
+        <p className="font-medium leading-tight">{task.title}</p>
+        {dep.blocked ? (
+          <span
+            title={`Bloqueada por ${dep.pendingCount} dependencia${
+              dep.pendingCount === 1 ? "" : "s"
+            } sin completar`}
+            data-testid={`task-lock-${task.id}`}
+            className="mt-0.5 shrink-0"
+          >
+            <Lock className="text-danger h-3.5 w-3.5" aria-label="Bloqueada por dependencias" />
+          </span>
+        ) : (
+          dep.hasDeps && (
+            <span
+              title="Todas las dependencias completadas"
+              data-testid={`task-lock-open-${task.id}`}
+              className="mt-0.5 shrink-0"
+            >
+              <LockOpen
+                className="text-muted-foreground h-3.5 w-3.5"
+                aria-label="Dependencias completadas"
+              />
+            </span>
+          )
+        )}
+      </div>
       <div className="mt-1.5 flex items-center justify-between gap-2">
         <Badge variant={PRIORITY_VARIANT[task.priority] ?? "muted"}>{task.priority}</Badge>
         {task.description && (
