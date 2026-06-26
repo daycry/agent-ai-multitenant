@@ -180,7 +180,13 @@ services:
     command:
       ["sh", "-c", "mkdir -p /data/agent-platform && chown -R 1000:1000 /data/agent-platform"]
     volumes:
-      - agentic_worktrees:/data/agent-platform
+      # DooD identity bind: the worker creates worktrees here and then asks the
+      # host daemon to bind them into the ephemeral agent-runtime. The daemon
+      # resolves the bind SOURCE on the host FS, so it must be the SAME path in
+      # worker and host — a named volume only exists inside the worker and the
+      # daemon can't find it (bind source path does not exist). See gotcha
+      # worktree-bind-dood-empty-vs-named-volume. Matches the installer (prod).
+      - /data/agent-platform:/data/agent-platform
     networks: [agentic-net]
     restart: "no"
 
@@ -233,7 +239,13 @@ services:
       API_SERVER_CLAMAV_HOST: clamav
       API_SERVER_CLAMAV_PORT: "3310"
     volumes:
-      - agentic_worktrees:/data/agent-platform
+      # DooD identity bind: the worker creates worktrees here and then asks the
+      # host daemon to bind them into the ephemeral agent-runtime. The daemon
+      # resolves the bind SOURCE on the host FS, so it must be the SAME path in
+      # worker and host — a named volume only exists inside the worker and the
+      # daemon can't find it (bind source path does not exist). See gotcha
+      # worktree-bind-dood-empty-vs-named-volume. Matches the installer (prod).
+      - /data/agent-platform:/data/agent-platform
       - ./seccomp:/etc/agentic/seccomp:ro
     depends_on:
       postgres: { condition: service_healthy }
@@ -335,8 +347,6 @@ services:
     restart: unless-stopped
 
 volumes:
-  agentic_worktrees:
-    name: agentic_worktrees
   # Unseal keys + root token del Vault persistente (Camino B). Volumen docker,
   # NO en el repo. Borrarlo obliga a re-inicializar Vault (perderías los secretos).
   vault_init:
