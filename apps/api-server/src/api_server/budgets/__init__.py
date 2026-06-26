@@ -27,6 +27,10 @@ from api_server.budgets.consumption import (
     maybe_alert_budgets,
     tenant_budget_summary,
 )
+from api_server.budgets.envelope import (
+    EXECUTION_BUDGET_CEILING,
+    resolve_execution_budgets,
+)
 from api_server.budgets.human_cost import HumanCostScope, compute_human_cost_usd
 from api_server.budgets.pause import (
     BUDGET_PAUSE_OVERRIDE_ACTION,
@@ -41,10 +45,12 @@ from api_server.budgets.period import (
     InvalidBudgetPeriodError,
     current_budget_period,
 )
+from api_server.budgets.sweep import TenantBudgetSweep, sweep_tenant_budgets
 
 __all__ = [
     "BUDGET_ALERT_EVENT_TYPE",
     "BUDGET_PAUSE_OVERRIDE_ACTION",
+    "EXECUTION_BUDGET_CEILING",
     "BudgetAlertDispatcher",
     "BudgetConsumption",
     "BudgetEvaluationResult",
@@ -52,6 +58,7 @@ __all__ = [
     "BudgetPauseBlock",
     "BudgetPauseRefresh",
     "BudgetPeriodWindow",
+    "TenantBudgetSweep",
     "CeleryBudgetAlertDispatcher",
     "HumanCostScope",
     "InvalidBudgetPeriodError",
@@ -63,5 +70,7 @@ __all__ = [
     "evaluate_budget_alerts",
     "maybe_alert_budgets",
     "refresh_budget_pause_flags",
+    "resolve_execution_budgets",
+    "sweep_tenant_budgets",
     "tenant_budget_summary",
 ]

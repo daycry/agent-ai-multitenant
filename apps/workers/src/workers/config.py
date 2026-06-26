@@ -361,6 +361,18 @@ class Settings(BaseSettings):
         "atomically (temp + rename) so node-exporter never reads a half-written "
         "file.",
     )
+    # prod-06 task_prod06_dag_03 (parte B): the node-exporter TEXTFILE-COLLECTOR
+    # file the `workers.sample_queue_metrics` beat writes — `agentic_celery_queue_depth`
+    # (Redis LLEN per Celery queue) + `agentic_tasks_by_status` (task count per
+    # lifecycle status). Same atomic-write + node-exporter re-export pattern as the
+    # backup metric above; prod-08 adds the scrape job + CeleryQueueGrowing alert.
+    queue_metrics_textfile_path: str = Field(
+        default="/host/textfile/agentic_queue_depth.prom",
+        description="Path to the node-exporter textfile the queue-depth + "
+        "task-state metrics sampler writes (task_prod06_dag_03). Written atomically "
+        "(temp + rename) so node-exporter never reads a half-written file.",
+    )
+
     # ----- Optional at-rest encryption (Plan 12 task_12_02) -----
     # AES-256 (Decisiones Clave). OFF by default: encryption is OPTIONAL and
     # adds a Vault dependency, so an operator opts in explicitly. When ON, the

@@ -1,9 +1,9 @@
 ---
 plan_id: prod-06-ciclo-vida-ejecucion
 title: Ciclo de vida de ejecución robusto — DAG, zombis, cancelación y budgets
-status: pending_approval
+status: in_progress
 blocking_plan: null
-started_at: null
+started_at: 2026-06-25
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 20
@@ -123,7 +123,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_dag_01` — Transición de la tarea al finalizar la ejecución
 
-- [ ] **Título**: En `conduct_execution` (apps/workers/src/workers/execution.py:571-598),
+- [x] **Título**: En `conduct_execution` (apps/workers/src/workers/execution.py:571-598),
       tras `finalize_execution`, transicionar SIEMPRE la tarea: `done` → `in_review`/`done`
       según política (decisión 4), `failed` → `blocked` con motivo; publicar el evento de
       cambio de estado. Hoy solo existe la rama `_AWAITING_APPROVAL` (execution.py:578) y
@@ -139,7 +139,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_dag_02` — Promotor de DAG: backlog → ready en el orchestrator
 
-- [ ] **Título**: Implementar en apps/orchestrator el promotor que sync_to_kanban.py:215-216
+- [x] **Título**: Implementar en apps/orchestrator el promotor que sync_to_kanban.py:215-216
       promete y no existe: al recibir el evento de tarea `done` (y en un beat de respaldo),
       mover a `ready` las tareas `backlog` del mismo plan cuyas dependencias estén todas
       `done`, publicando el evento `ready` que el dispatcher ya consume (dispatch.py:85-91).
@@ -163,7 +163,7 @@ converja a un estado terminal visible.
       cuando una tarea entra en `in_review`, el flujo post-test-runtime invoca
       `parse_reviewer_output` + `apply_reviewer_verdict` y la tarea avanza a `done` o vuelve
       con feedback según el veredicto, conforme al bucle descrito en ADR 0027:106-118.
-      Emitir métrica de profundidad por cola/estado para prod-08.
+      Emitir métrica de profundidad por cola/estado para prod-08. > **PARTE B (métrica) HECHA** (commit dag_03 parte B): beat `workers.sample_queue_metrics` > emite `agentic_celery_queue_depth{queue}` + `agentic_tasks_by_status{status}` vía > textfile de node-exporter. prod-08 añade scrape/alerta/dashboard. > **PARTE A (cablear el AI reviewer): NO depende de ADR 0063** (era una conflación con el > review-runtime de preview humano). Decisión del operador 2026-06-26 → **ADR 0084 `accepted`, Opción B: DIFERIDA a un plan dedicado** (el bucle completo test-runtime → reviewer → veredicto se diseña aparte). `reviewer_bridge` queda como biblioteca lista sin caller. Fuera del alcance de prod-06; la métrica de la parte B lo deja observable.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Depende de**: task_prod06_dag_01, task_prod06_dag_02
 - **Tests automáticos**:
@@ -177,7 +177,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_zombi_01` — Sweeper de ejecuciones zombi + reaper de contenedores
 
-- [ ] **Título**: Nuevo beat task en apps/workers/src/workers/maintenance.py (registrado en
+- [x] **Título**: Nuevo beat task en apps/workers/src/workers/maintenance.py (registrado en
       beat_schedule.py): cerrar como `failed` (motivo `stale_after_worker_loss`) las
       `executions.running` cuya antigüedad supere `hard_time_limit + margen`, transicionar su
       tarea (reusa task_prod06_dag_01) y hacer `docker rm -f` de los contenedores con label
@@ -192,7 +192,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_zombi_02` — `task_reject_on_worker_lost` + test de redelivery
 
-- [ ] **Título**: Añadir `task_reject_on_worker_lost=True` en
+- [x] **Título**: Añadir `task_reject_on_worker_lost=True` en
       apps/workers/src/workers/celery_app.py (decisión 1) y verificar con test que un
       worker-lost reentrega y `supersede_running_executions` (execution_repo.py:194-225)
       absorbe el duplicado sin doble contenedor.
@@ -206,7 +206,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_zombi_03` — visibility_timeout coherente con el hard limit
 
-- [ ] **Título**: Fijar `broker_transport_options={"visibility_timeout": ...}` en
+- [x] **Título**: Fijar `broker_transport_options={"visibility_timeout": ...}` en
       celery_app.py de workers Y de notification-dispatcher (mismo patrón acks_late,
       notification-dispatcher/celery_app.py:45-50), acotar
       `execution_hard_time_limit_s.max_value` (platform_settings_registry.py:103-110, hoy 86400) según la decisión 2, y añadir validación cruzada en el registry que rechace
@@ -221,11 +221,11 @@ converja a un estado terminal visible.
 
 #### `task_prod06_evento_01` — Reconciliación de la PEL + barrido de tareas ready varadas
 
-- [ ] **Título**: (a) En el arranque del consumer del orchestrator
+- [x] **Título**: (a) En el arranque del consumer del orchestrator
       (consumer.py:120-145), XAUTOCLAIM de entradas pendientes envejecidas antes de leer con
       `>`; (b) nuevo beat tipo `sweep_pending_documents` que re-emita el trigger para tareas
       en `ready` sin dispatch en N minutos — el dispatcher ya es idempotente
-      (dispatch.py:283-285). Cubre el hueco de events.py:38-50 (publicación best-effort).
+      (dispatch.py:283-285). Cubre el hueco de events.py:38-50 (publicación best-effort). > Hecho: (a) `reclaim_stale_pending` (XAUTOCLAIM) llamado tras `ensure_group` en > app.py. (b) YA lo cubre el beat de dag_02 `promote_ready_plans`, que re-anuncia las > tareas `ready` sin fila de execution (no despachadas) cada 30s — no se duplica.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -238,7 +238,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_cancel_01` — Cancelación cooperativa end-to-end
 
-- [ ] **Título**: (a) Columna/flag `cancel_requested_at` en executions + endpoint que lo
+- [x] **Título**: (a) Columna/flag `cancel_requested_at` en executions + endpoint que lo
       marca al cancelar la tarea (routers/task_lifecycle.py:140-148 y la transición
       `in_progress → cancelled` de task_state_machine.py:68-77); (b) el bucle de drenado de
       `conduct_execution` (execution.py:514-569) consulta el flag periódicamente y mata el
@@ -255,7 +255,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_cancel_02` — Cascada de cancelación a nivel plan
 
-- [ ] **Título**: Al cancelar un plan, cancelar sus tareas no terminales y solicitar la
+- [x] **Título**: Al cancelar un plan, cancelar sus tareas no terminales y solicitar la
       cancelación de las ejecuciones en vuelo (reusa task_prod06_cancel_01). Al soft-borrar
       un proyecto (projects.py:270-279), cancelar en la misma transacción sus tareas no
       terminales — segunda mitad de la recomendación de db-5.
@@ -272,31 +272,32 @@ converja a un estado terminal visible.
 
 #### `task_prod06_colas_01` — ADR: colas heavy/gpu reales o recorte del contrato
 
-- [ ] **Título**: Redactar ADR en docs/05-architecture-decisions/ con las dos opciones de la
+- [x] **Título**: Redactar ADR en docs/05-architecture-decisions/ con las dos opciones de la
       decisión 3 (routing por `estimated_complexity`/runtime-GPU vs. recorte de topología y
-      runbook 06-capacity-management.md) y someterlo a aprobación humana.
+      runbook 06-capacity-management.md) y someterlo a aprobación humana. > Hecho: **ADR 0083** (`proposed`) — opción A (routing real) vs B (recortar), recomienda > B para single-host. `task_prod06_colas_02` BLOQUEADO hasta que el operador apruebe.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**: no aplica (documento); el gate es la aprobación del ADR.
 
 #### `task_prod06_colas_02` — Implementar la opción aprobada del ADR
 
-- [ ] **Título**: Si (a): routing en dispatch.py:247-258 usando `Task.estimated_complexity`
+- [x] **Título**: Si (a): routing en dispatch.py:247-258 usando `Task.estimated_complexity`
       (persistido en sync_to_kanban.py:242 y hoy sin uso) y el requisito GPU del runtime
       template, con fallback documentado a `default` si la lane no tiene workers. Si (b):
       eliminar heavy/gpu de celery_app.py:32-40, runbook y ADR 0027. En ambos casos: detectar
-      y loguear cola sin consumidores al despachar (alerta de cola huérfana → prod-08).
+      y loguear cola sin consumidores al despachar (alerta de cola huérfana → prod-08). > Hecho: **Opción B** (operador 2026-06-26). `heavy`/`gpu` fuera de `QUEUE_NAMES`; > runbook 06-capacity-management + ADR 0027 + ADR 0083 (`accepted`) + compose > (generator + manuals) actualizados. ADR 0083 cierra que la observabilidad de cola > huérfana (la alerta) vive en prod-08; aquí la topología ya no tiene colas muertas.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Depende de**: task_prod06_colas_01
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod06_colas_02_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_dispatch_queue_routing.py -v"
+    # Opción B → topología recortada (no hay routing por complejidad que testear).
+    command: "pytest tests/unit/test_queue_topology_trimmed.py tests/integration/test_celery_queues.py -v"
   ```
 
 #### `task_prod06_beat_01` — `_parse_cron` ruidoso con fallback por entrada
 
-- [ ] **Título**: En beat_schedule.py:100-116, ante cron malformado: log ERROR con la
+- [x] **Título**: En beat_schedule.py:100-116, ante cron malformado: log ERROR con la
       variable de entorno afectada y fallback al default documentado DE ESA entrada (no al
       04:00 global); en entorno staging/prod, rechazar el boot de beat. Hoy un typo en
       `WORKERS_HUMAN_ESCALATION_CRON` convierte el barrido de 10 min en diario sin aviso.
@@ -310,7 +311,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_beat_02` — Claim/lease en el sweep de ingestión
 
-- [ ] **Título**: En ingestion.py:179-215, marcar el documento al encolar (campo
+- [x] **Título**: En ingestion.py:179-215, marcar el documento al encolar (campo
       `enqueued_at` o SETNX en Redis con TTL) y filtrar `sweep_pending_documents` por esa
       marca, para que un backlog >5 min de la cola `ingestion` no re-encole documentos que
       siguen legítimamente en cola.
@@ -326,22 +327,24 @@ converja a un estado terminal visible.
 
 #### `task_prod06_budget_01` — Cablear auto-pausa y alertas de presupuesto
 
-- [ ] **Título**: Dar caller productivo a `refresh_budget_pause_flags` (budgets/pause.py:124)
+- [x] **Título**: Dar caller productivo a `refresh_budget_pause_flags` (budgets/pause.py:124)
       y `maybe_alert_budgets` (budgets/consumption.py:665), hoy solo invocados por tests:
       (a) entrada en beat_schedule.py (sweep periódico por tenant); (b) hook tras
       `finalize_execution` en el worker, después de registrar el coste (coordinación con
-      prod-07). El guard lector (dispatch.py:298) ya existe; faltan los escritores.
+      prod-07). El guard lector (dispatch.py:298) ya existe; faltan los escritores. > Hecho: seam compartido `sweep_tenant_budgets` (api_server.budgets) → beat > `workers.refresh_budgets` (cada 5 min, por tenant) + hook `refresh_budgets_after_run` > en conduct_execution (tras el commit de finalize_execution).
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod06_budget_01_a
     runtime: python-pytest
-    command: "pytest tests/e2e/test_budget_pause_end_to_end.py -v"
+    # Ubicado en tests/integration (necesita los fixtures Postgres+Redis del
+    # conftest de integración; tests/e2e está reservado al gate de install Docker).
+    command: "pytest tests/integration/test_budget_pause_end_to_end.py -v"
   ```
 
 #### `task_prod06_budget_02` — Budgets de run configurables por proyecto/tenant
 
-- [ ] **Título**: Sustituir el `"budgets": None` incondicional de dispatch.py:403-416 por un
+- [x] **Título**: Sustituir el `"budgets": None` incondicional de dispatch.py:403-416 por un
       envelope resuelto proyecto → plataforma (decisión 5: columna JSONB en projects +
       platform setting), con clamp a los defaults actuales del dataclass
       (agent-runtime/safeguards.py:38-47) como techo. Migración Alembic reversible.
@@ -355,7 +358,7 @@ converja a un estado terminal visible.
 
 #### `task_prod06_budget_03` — No despachar proyectos soft-borrados
 
-- [ ] **Título**: Añadir `Project.deleted_at IS NULL` al cargar el proyecto en `_route_ai`
+- [x] **Título**: Añadir `Project.deleted_at IS NULL` al cargar el proyecto en `_route_ai`
       (dispatch.py:338-340) y devolver None con log si está borrado. La cascada de
       cancelación al soft-borrar ya la cubre task_prod06_cancel_02.
 - **Tiempo**: 0,5 días · **Complejidad**: s

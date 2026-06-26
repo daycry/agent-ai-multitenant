@@ -21,9 +21,18 @@ beat`) — `build_celery_app` reads this schedule when running with the
 
 from __future__ import annotations
 
+import logging
+
 from celery.schedules import crontab, schedule
 
 from workers.config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
+
+# Environments where a malformed operator cron must REJECT beat boot rather than
+# silently fall back — a typo that turns a 10-minute sweep into a daily one is a
+# production incident, not a warning.
+_STRICT_ENVIRONMENTS = frozenset({"staging", "prod"})
 
 # Each schedule entry is the standard Celery shape:
 # `{task: <name>, schedule: <celery.schedules.*>, options: {queue: <name>}}`.
@@ -40,10 +49,45 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": schedule(run_every=30.0),
         "options": {"queue": "default"},
     },
+    # prod-06 task_prod06_dag_02 — safety-net DAG promotion: across in_progress
+    # plans, promote eligible backlog tasks to ready and re-announce undispatched
+    # ready tasks (the DB trigger flips status without publishing an event). Cheap
+    # query; every 30s. Roots get the instant path in start-execution.
+    "promote-ready-plans-every-30s": {
+        "task": "workers.promote_ready_plans",
+        "schedule": schedule(run_every=30.0),
+        "options": {"queue": "default"},
+    },
+    # prod-06 task_prod06_zombi_01 — close zombie executions (running rows whose
+    # Celery child was SIGKILLed by OOM/hard-limit) and reap their orphan
+    # containers. Every 5 min; only touches rows older than the stale threshold.
+    "sweep-stale-executions-every-5m": {
+        "task": "workers.sweep_stale_executions",
+        "schedule": schedule(run_every=300.0),
+        "options": {"queue": "default"},
+    },
     "expire-review-runtimes-every-5m": {
         "task": "workers.expire_review_runtimes",
         "schedule": schedule(run_every=300.0),
         "options": {"queue": "review"},
+    },
+    # prod-06 task_prod06_budget_01 — per-tenant budget sweep: re-derive the
+    # auto-pause flags + fire threshold alerts. The post-execution hook keeps a
+    # single run immediate; this is the safety net (period rollover auto-clear,
+    # missed hook, manual spend correction). Cheap per tenant; every 5 min.
+    "refresh-budgets-every-5m": {
+        "task": "workers.refresh_budgets",
+        "schedule": schedule(run_every=300.0),
+        "options": {"queue": "default"},
+    },
+    # prod-06 task_prod06_dag_03 (parte B) — sample Celery queue depth (Redis LLEN)
+    # + task counts per status into the node-exporter textfile. prod-08 scrapes it
+    # (CeleryQueueGrowing alert + dashboard). Cheap; every 30s so a piling-up queue
+    # or a stuck state (e.g. growing in_review) shows up promptly.
+    "sample-queue-metrics-every-30s": {
+        "task": "workers.sample_queue_metrics",
+        "schedule": schedule(run_every=30.0),
+        "options": {"queue": "default"},
     },
     "purge-dep-cache-daily": {
         "task": "workers.purge_dep_cache",
@@ -97,23 +141,76 @@ FX_FETCH_BEAT_ENTRY = "fetch-exchange-rates"
 HUMAN_ESCALATION_BEAT_ENTRY = "escalate-human-assignments"
 
 
-def _parse_cron(expr: str) -> crontab:
-    """Parse a 5-field cron string (minute hour dom month dow) to a crontab.
+def _try_crontab(expr: str) -> crontab | None:
+    """Return a crontab for a 5-field expr, or None if it is malformed.
 
-    Falls back to daily 04:00 UTC on a malformed expression so a typo in the
-    operator's ``WORKERS_PRICE_SYNC_CRON`` never crashes beat boot.
+    Malformed means either the wrong field count OR a field celery rejects
+    (out-of-range value, bad weekday literal, …) — both surface as None so the
+    caller decides whether to fall back or reject.
     """
     parts = expr.split()
     if len(parts) != 5:
-        return crontab(minute="0", hour="4")
+        return None
     minute, hour, dom, month, dow = parts
-    return crontab(
-        minute=minute,
-        hour=hour,
-        day_of_month=dom,
-        month_of_year=month,
-        day_of_week=dow,
+    try:
+        return crontab(
+            minute=minute,
+            hour=hour,
+            day_of_month=dom,
+            month_of_year=month,
+            day_of_week=dow,
+        )
+    except (ValueError, KeyError) as exc:  # celery raises ValueError on bad fields
+        logger.debug("crontab rejected %r: %s", expr, exc)
+        return None
+
+
+def _parse_cron(
+    expr: str,
+    *,
+    env_var: str,
+    default: str,
+    environment: str = "dev",
+) -> crontab:
+    """Parse a 5-field cron string (minute hour dom month dow) to a crontab, LOUDLY.
+
+    On a malformed expression we never silently degrade to a global daily 04:00
+    (a typo in ``WORKERS_HUMAN_ESCALATION_CRON`` used to turn a 10-minute sweep
+    into a daily one with no warning):
+
+      - ``staging``/``prod``: RAISE to reject beat boot — a bad cadence in
+        production is an incident, not a warning;
+      - ``dev``/anything else: log an ERROR naming the offending env var and fall
+        back to THIS entry's documented ``default`` (not a global 04:00).
+    """
+    parsed = _try_crontab(expr)
+    if parsed is not None:
+        return parsed
+    if environment in _STRICT_ENVIRONMENTS:
+        raise ValueError(
+            f"Refusing to start beat: {env_var}={expr!r} is not a valid 5-field "
+            "cron 'minute hour day-of-month month day-of-week'."
+        )
+    logger.error(
+        "Malformed cron in %s=%r (expected 5 fields 'minute hour dom month dow'); "
+        "falling back to this entry's documented default %r.",
+        env_var,
+        expr,
+        default,
     )
+    fallback = _try_crontab(default)
+    if fallback is None:  # our own built-in default is broken — a programming error
+        raise ValueError(f"Built-in default cron {default!r} for {env_var} is itself invalid")
+    return fallback
+
+
+def _cron_default(field: str) -> str:
+    """The documented default of a ``Settings`` cron field (single source of truth).
+
+    Reading it from the model keeps the per-entry fallback in lock-step with the
+    configured default — no drifting literals duplicated at the call sites.
+    """
+    return str(Settings.model_fields[field].default)
 
 
 def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str, object]]:
@@ -129,7 +226,12 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
     sched: dict[str, dict[str, object]] = dict(BEAT_SCHEDULE)
     sched[PRICE_SYNC_BEAT_ENTRY] = {
         "task": "workers.sync_model_prices",
-        "schedule": _parse_cron(cfg.price_sync_cron),
+        "schedule": _parse_cron(
+            cfg.price_sync_cron,
+            env_var="WORKERS_PRICE_SYNC_CRON",
+            default=_cron_default("price_sync_cron"),
+            environment=cfg.environment,
+        ),
         "options": {"queue": "default"},
     }
     # Plan 12 task_12_01/12_04: daily full backup on a CONFIGURABLE cadence
@@ -139,7 +241,12 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
     # `backup_enabled` platform setting a System Admin owns.
     sched[BACKUP_BEAT_ENTRY] = {
         "task": "workers.run_daily_backup",
-        "schedule": _parse_cron(cfg.backup_cron),
+        "schedule": _parse_cron(
+            cfg.backup_cron,
+            env_var="WORKERS_BACKUP_CRON",
+            default=_cron_default("backup_cron"),
+            environment=cfg.environment,
+        ),
         "options": {"queue": "privileged"},
     }
     # Plan 15 task_15_17: Vault credential rotation on a CONFIGURABLE cadence
@@ -150,7 +257,12 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
     # Admin owns.
     sched[CRED_ROTATION_BEAT_ENTRY] = {
         "task": "workers.rotate_credentials",
-        "schedule": _parse_cron(cfg.cred_rotation_cron),
+        "schedule": _parse_cron(
+            cfg.cred_rotation_cron,
+            env_var="WORKERS_CRED_ROTATION_CRON",
+            default=_cron_default("cred_rotation_cron"),
+            environment=cfg.environment,
+        ),
         "options": {"queue": "privileged"},
     }
     # Plan 11.1 task_11_1_02: daily exchange-rates fetch on a CONFIGURABLE
@@ -160,7 +272,12 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
     # `fx_fetch_enabled` / `fx_source` platform settings a System Admin owns.
     sched[FX_FETCH_BEAT_ENTRY] = {
         "task": "workers.fetch_exchange_rates",
-        "schedule": _parse_cron(cfg.fx_fetch_cron),
+        "schedule": _parse_cron(
+            cfg.fx_fetch_cron,
+            env_var="WORKERS_FX_FETCH_CRON",
+            default=_cron_default("fx_fetch_cron"),
+            environment=cfg.environment,
+        ),
         "options": {"queue": "default"},
     }
     # Plan 16 task_16_06: acceptance-timeout escalation sweep on a CONFIGURABLE
@@ -171,7 +288,12 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
     # platform setting a System Admin owns.
     sched[HUMAN_ESCALATION_BEAT_ENTRY] = {
         "task": "workers.escalate_human_assignments",
-        "schedule": _parse_cron(cfg.human_escalation_cron),
+        "schedule": _parse_cron(
+            cfg.human_escalation_cron,
+            env_var="WORKERS_HUMAN_ESCALATION_CRON",
+            default=_cron_default("human_escalation_cron"),
+            environment=cfg.environment,
+        ),
         "options": {"queue": "default"},
     }
     # Córtex F4 (ADR 0078) — bucles cognitivos de fondo del system_owner. Cada tarea

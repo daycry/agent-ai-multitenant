@@ -15,8 +15,9 @@ beat scheduler keeps firing on its cadence regardless.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -366,3 +367,299 @@ async def _backfill_memory_embeddings_async(
         batches=batches,
     )
     return {"updated": updated, "batches": batches}
+
+
+# ---------------------------------------------------------------------------
+# promote_ready_plans — every 30s (prod-06 task_prod06_dag_02, safety net)
+# ---------------------------------------------------------------------------
+@app.task(name="workers.promote_ready_plans")  # type: ignore[misc]
+def promote_ready_plans() -> dict[str, Any]:
+    """Safety-net DAG promotion: across every ``in_progress`` plan, promote
+    eligible ``backlog`` tasks to ``ready`` and announce the undispatched ones.
+
+    The instant path is ``start-execution`` (roots) + the DB trigger (dependents),
+    but the trigger flips status WITHOUT publishing the event the dispatcher
+    consumes, and an event can be lost — so a ready task could sit undispatched.
+    This beat reconciles every 30s: it re-announces any ``ready`` task of an
+    in-progress plan with no execution row. Idempotent (a dispatched task is
+    skipped) and best-effort (never crashes beat)."""
+    settings = get_settings()
+    return asyncio.run(_promote_ready_plans_async(settings))
+
+
+async def _promote_ready_plans_async(settings: Settings) -> dict[str, Any]:
+    """Async core — owns the engine + redis lifecycle."""
+    from api_server.dag_promotion import announce_ready_tasks, promote_ready_tasks
+    from api_server.db.domain import Plan, PlanStatus
+    from redis.asyncio import Redis
+    from sqlalchemy import select
+
+    engine = create_async_engine(settings.database_url)
+    redis = Redis.from_url(settings.events_redis_url)
+    plans_touched = 0
+    promoted = 0
+    try:
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessionmaker() as db:
+            plan_ids = list(
+                (
+                    await db.execute(
+                        select(Plan.id).where(Plan.status == PlanStatus.IN_PROGRESS.value)
+                    )
+                ).scalars()
+            )
+        for plan_id in plan_ids:
+            async with sessionmaker() as db, db.begin():
+                announced = await promote_ready_tasks(db, plan_id)
+            if announced:
+                plans_touched += 1
+                promoted += len(announced)
+                await announce_ready_tasks(redis, announced)
+    except Exception as exc:  # pragma: no cover — defensive logging
+        _log.warning("maintenance.promote_ready_plans.error", error=str(exc))
+        return {"plans_touched": plans_touched, "promoted": promoted, "error": str(exc)}
+    finally:
+        await engine.dispose()
+        with contextlib.suppress(Exception):
+            await redis.aclose()
+
+    _log.info(
+        "maintenance.promote_ready_plans.done",
+        plans_touched=plans_touched,
+        promoted=promoted,
+    )
+    return {"plans_touched": plans_touched, "promoted": promoted}
+
+
+# ---------------------------------------------------------------------------
+# sweep_stale_executions — every 5 min (prod-06 task_prod06_zombi_01)
+# ---------------------------------------------------------------------------
+# A `running` execution older than this is presumed lost: the Celery child was
+# SIGKILLed (OOM or the hard time limit) without finalising the row, leaving it
+# `running` forever and possibly an orphan container. 7h = the 6h hard-limit cap
+# (prod-06 decision 2 / zombi_03) + a 1h margin so a legitimately-long run is
+# never reaped early.
+_STALE_EXECUTION_AFTER = timedelta(hours=7)
+
+
+@app.task(name="workers.sweep_stale_executions")  # type: ignore[misc]
+def sweep_stale_executions() -> dict[str, Any]:
+    """Close zombie executions + reap their orphan containers.
+
+    No sweeper existed (workers-2): a hard-limit/OOM SIGKILL of the Celery child
+    left ``executions.running`` rows and dangling agent-runtime containers. This
+    beat finds ``running`` rows older than the stale threshold, marks them
+    ``failed`` (``abort_code=stale_after_worker_loss``), transitions their task off
+    ``in_progress`` (reusing the dag_01 policy → ``blocked``), and ``docker rm -f``
+    their container by label. Best-effort (never crashes beat)."""
+    settings = get_settings()
+    return asyncio.run(_sweep_stale_executions_async(settings))
+
+
+async def _sweep_stale_executions_async(
+    settings: Settings,
+    *,
+    runner: Any = None,
+    stale_after: timedelta = _STALE_EXECUTION_AFTER,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Async core. ``runner`` (a container runner with ``kill_by_label``) and
+    ``now`` are injectable so the test drives it without Docker or wall-clock."""
+    from api_server.db.domain import Execution, ExecutionStatus
+    from sqlalchemy import select
+
+    from workers.container import AgentContainerRunner
+    from workers.execution import transition_task_after_run
+
+    moment = now or datetime.now(UTC)
+    cutoff = moment - stale_after
+    engine = create_async_engine(settings.database_url)
+    swept = 0
+    reaped = 0
+    try:
+        if runner is None:
+            runner = AgentContainerRunner(settings)
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessionmaker() as db, db.begin():
+            stale = list(
+                (
+                    await db.execute(
+                        select(Execution).where(
+                            Execution.status == ExecutionStatus.RUNNING.value,
+                            Execution.started_at < cutoff,
+                        )
+                    )
+                ).scalars()
+            )
+            stale_ids = [str(e.id) for e in stale]
+            for execution in stale:
+                execution.status = ExecutionStatus.FAILED.value
+                execution.abort_code = "stale_after_worker_loss"
+                execution.completed_at = moment
+                # Move the orphaned task off in_progress (dag_01 policy → blocked).
+                await transition_task_after_run(db, execution.task_id, ExecutionStatus.FAILED.value)
+                swept += 1
+        # Reap lingering containers OUTSIDE the txn — Docker I/O must never hold
+        # the DB transaction open. Best-effort per execution.
+        for execution_id in stale_ids:
+            with contextlib.suppress(Exception):
+                reaped += runner.kill_by_label(execution_id)
+    except Exception as exc:  # pragma: no cover — defensive logging
+        _log.warning("maintenance.sweep_stale_executions.error", error=str(exc))
+        return {"swept": swept, "reaped": reaped, "error": str(exc)}
+    finally:
+        await engine.dispose()
+
+    _log.info("maintenance.sweep_stale_executions.done", swept=swept, reaped=reaped)
+    return {"swept": swept, "reaped": reaped}
+
+
+# ---------------------------------------------------------------------------
+# refresh_budgets — every 5 min (prod-06 task_prod06_budget_01 / db-1)
+# ---------------------------------------------------------------------------
+@app.task(name="workers.refresh_budgets")  # type: ignore[misc]
+def refresh_budgets() -> dict[str, Any]:
+    """Periodic per-tenant budget sweep: re-derive the auto-pause flags and fire
+    any threshold alerts.
+
+    The dispatch START path reads ``paused_by_budget`` (``budget_pause_block``)
+    but NOTHING wrote it in production (db-1): ``refresh_budget_pause_flags`` +
+    ``maybe_alert_budgets`` had only tests as callers. The worker's
+    post-execution hook keeps a single run's over-budget immediate; this beat is
+    the safety net — it auto-clears a pause when a new period drops a scope back
+    under 100%, and catches a missed hook or a manual spend correction. Cheap
+    (one consumption query per tenant) and best-effort (per-tenant failures are
+    isolated; never crashes beat)."""
+    return asyncio.run(_refresh_budgets_async(get_settings()))
+
+
+async def _refresh_budgets_async(
+    settings: Settings,
+    *,
+    dispatcher: Any | None = None,
+) -> dict[str, Any]:
+    """Async core — owns the engine lifecycle. ``dispatcher`` is injectable so a
+    test asserts the alert fan-out without a real broker; production builds the
+    Celery dispatcher."""
+    from api_server.budgets import sweep_tenant_budgets
+    from api_server.budgets.consumption import CeleryBudgetAlertDispatcher
+    from api_server.db.models import Organization
+    from sqlalchemy import select
+
+    engine = create_async_engine(settings.database_url)
+    tenants = 0
+    newly_paused = 0
+    newly_cleared = 0
+    try:
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessionmaker() as db:
+            tenant_ids = list(
+                (
+                    await db.execute(
+                        select(Organization.id).where(Organization.deleted_at.is_(None))
+                    )
+                ).scalars()
+            )
+        alert_dispatcher = dispatcher if dispatcher is not None else CeleryBudgetAlertDispatcher()
+        for tenant_id in tenant_ids:
+            try:
+                async with sessionmaker() as db, db.begin():
+                    result = await sweep_tenant_budgets(
+                        db, tenant_id=tenant_id, dispatcher=alert_dispatcher
+                    )
+                tenants += 1
+                newly_paused += len(result.refresh.newly_paused)
+                newly_cleared += len(result.refresh.newly_cleared)
+            except Exception as exc:  # isolate a single tenant's failure
+                _log.warning(
+                    "maintenance.refresh_budgets.tenant_error",
+                    tenant_id=str(tenant_id),
+                    error=str(exc),
+                )
+    finally:
+        await engine.dispose()
+
+    _log.info(
+        "maintenance.refresh_budgets.done",
+        tenants=tenants,
+        newly_paused=newly_paused,
+        newly_cleared=newly_cleared,
+    )
+    return {"tenants": tenants, "newly_paused": newly_paused, "newly_cleared": newly_cleared}
+
+
+# ---------------------------------------------------------------------------
+# sample_queue_metrics — every 30s (prod-06 task_prod06_dag_03, parte B)
+# ---------------------------------------------------------------------------
+@app.task(name="workers.sample_queue_metrics")  # type: ignore[misc]
+def sample_queue_metrics() -> dict[str, Any]:
+    """Sample Celery queue depth + task counts per status and write the
+    node-exporter textfile (prod-06 task_prod06_dag_03).
+
+    Emits ``agentic_celery_queue_depth{queue}`` (Redis LLEN per Celery queue) and
+    ``agentic_tasks_by_status{status}`` (non-deleted tasks per lifecycle status,
+    all tenants). prod-08 owns the scrape job + CeleryQueueGrowing alert + the
+    dashboard; this only EMITS. Cheap (one LLEN per queue + one GROUP BY) and
+    best-effort (a sampling failure never crashes beat)."""
+    return asyncio.run(_sample_queue_metrics_async(get_settings()))
+
+
+async def _collect_queue_depths(redis: Any, queue_names: tuple[str, ...]) -> dict[str, int]:
+    """Redis ``LLEN`` per Celery queue (a queue is a Redis list under its name)."""
+    depths: dict[str, int] = {}
+    for name in queue_names:
+        with contextlib.suppress(Exception):  # a missing key LLENs to 0; other errors skip
+            depths[name] = int(await redis.llen(name))
+    return depths
+
+
+async def _collect_status_counts(session: Any) -> dict[str, int]:
+    """Count ``tasks`` rows grouped by lifecycle status (all tenants — the worker
+    engine is BYPASSRLS). ``tasks`` is not soft-deletable (no ``deleted_at``)."""
+    rows = await session.execute(sa_text("SELECT status, count(*) FROM tasks GROUP BY status"))
+    return {str(status): int(count) for status, count in rows.all()}
+
+
+async def _sample_queue_metrics_async(
+    settings: Settings,
+    *,
+    redis: Any | None = None,
+) -> dict[str, Any]:
+    """Async core — owns the redis + engine lifecycle. ``redis`` is injectable for
+    tests. Always writes the textfile (even if a collector fails → that dimension
+    is simply absent), so the file reflects the freshest successful sample."""
+    from redis.asyncio import Redis
+
+    from workers.celery_app import QUEUE_NAMES
+    from workers.queue_metrics import write_queue_metrics
+
+    own_redis = redis is None
+    redis_client = redis if redis is not None else Redis.from_url(settings.broker_url)
+    engine = create_async_engine(settings.database_url)
+    queue_depths: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+    try:
+        queue_depths = await _collect_queue_depths(redis_client, QUEUE_NAMES)
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessionmaker() as db:
+            status_counts = await _collect_status_counts(db)
+    except Exception as exc:  # pragma: no cover — best-effort: never crash beat
+        _log.warning("maintenance.sample_queue_metrics.error", error=str(exc))
+    finally:
+        await engine.dispose()
+        if own_redis:
+            with contextlib.suppress(Exception):
+                await redis_client.aclose()
+
+    written = write_queue_metrics(
+        settings.queue_metrics_textfile_path,
+        queue_depths=queue_depths,
+        status_counts=status_counts,
+    )
+    _log.info(
+        "maintenance.sample_queue_metrics.done",
+        queues=len(queue_depths),
+        statuses=len(status_counts),
+        written=written,
+    )
+    return {"queue_depths": queue_depths, "status_counts": status_counts, "written": written}

@@ -26,7 +26,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_member
@@ -167,6 +167,23 @@ async def _assert_can_write_global(
         )
 
 
+def _can_access_memory(row: MemoryEntry, principal: AuthPrincipal) -> bool:
+    """Owner isolation for the human-facing CRUD (H1/H2/M3).
+
+    ``memory_entries`` is shared across three systems: the AGENTS (team_shared /
+    project_shared / global), the tenant ASSISTANT and the owner CÓRTEX (both
+    ``private`` with the human's ``user_id``). A ``private`` row therefore holds
+    personal data and may be read / deleted / merged ONLY by its owning user —
+    another user's private row is invisible (treated as 404). Shared / global
+    rows are agent learnings within the tenant: any tenant member may manage them
+    (the merge owner-pointer match already prevents cross-owner folds), and RLS
+    fences the tenant boundary.
+    """
+    if row.scope == "private":
+        return row.user_id is not None and row.user_id == principal.user_id
+    return True
+
+
 # ---------------------------------------------------------------------------
 # POST /memories
 # ---------------------------------------------------------------------------
@@ -232,13 +249,21 @@ async def list_memories(
     project_id: UUID | None = Query(default=None),
     team_id: UUID | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
-    _: AuthPrincipal = Depends(require_tenant_member),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[MemoryResponse]:
     """Visible memories in the tenant, optionally filtered by scope /
-    type / owner pointer. RLS handles the tenant boundary; this
-    endpoint is for the operator's Memory UI (task_04_06)."""
-    stmt = select(MemoryEntry).where(MemoryEntry.deleted_at.is_(None))
+    type / owner pointer. RLS handles the tenant boundary; on top of it
+    a ``private`` row is visible ONLY to its owning user (H1) — it holds
+    personal data (assistant prefs + córtex owner). Shared / global rows
+    are visible to any tenant member. This is the operator's Memory UI
+    (task_04_06)."""
+    stmt = select(MemoryEntry).where(
+        MemoryEntry.deleted_at.is_(None),
+        # Owner isolation: private rows only for their owner; non-private rows
+        # (team_shared / project_shared / global) for any tenant member.
+        or_(MemoryEntry.scope != "private", MemoryEntry.user_id == principal.user_id),
+    )
     if scope is not None:
         stmt = stmt.where(MemoryEntry.scope == scope)
     if type is not None:
@@ -313,13 +338,18 @@ async def delete_memory(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> None:
     """Soft-delete a memory. RLS + tenant check; we stamp `deleted_at`
-    rather than dropping the row so audits survive."""
+    rather than dropping the row so audits survive.
+
+    Owner authorization (H2): a ``private`` memory can only be deleted by its
+    owning user — another user's private row is invisible (404). Shared / global
+    rows stay manageable by any tenant member (RLS fences the tenant)."""
     require_tenant_id(principal)
     result = await session.execute(
         select(MemoryEntry).where(MemoryEntry.id == memory_id, MemoryEntry.deleted_at.is_(None))
     )
     row = result.scalar_one_or_none()
-    if row is None:
+    if row is None or not _can_access_memory(row, principal):
+        # Hide another user's private memory behind the same 404 as a missing row.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
     from datetime import UTC
     from datetime import datetime as _dt
@@ -371,7 +401,9 @@ async def list_similar_memories(
             select(MemoryEntry).where(MemoryEntry.id == memory_id, MemoryEntry.deleted_at.is_(None))
         )
     ).scalar_one_or_none()
-    if src is None:
+    # Owner authorization (M3): another user's private memory is invisible —
+    # surfacing its "similar" candidates would leak its content/existence.
+    if src is None or not _can_access_memory(src, principal):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
     if src.embedding is None:
         return []
@@ -490,6 +522,12 @@ async def merge_memory_into(
     ).scalar_one_or_none()
     if src is None or tgt is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
+    # Owner authorization (M3): another user's private memory is invisible (404),
+    # so it can be neither source nor target of a merge. Shared/global folds stay
+    # guarded by the owner-pointer match below (no cross-project/team leak).
+    for row in (src, tgt):
+        if not _can_access_memory(row, principal):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
     if src.scope != tgt.scope:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

@@ -21,6 +21,7 @@ from api_server.auth.deps import (
     get_tenant_session,
     require_tenant_admin,
     require_tenant_member,
+    schedule_after_commit,
 )
 from api_server.capabilities import (
     CapabilitiesResponse,
@@ -30,8 +31,9 @@ from api_server.capabilities import (
     kbs_for_project,
     memory_counts,
 )
-from api_server.celery_client import enqueue_clone_project_repo
+from api_server.celery_client import enqueue_clone_project_repo, revoke_job_callback
 from api_server.db.domain import Project, ProjectStatus, Team
+from api_server.db.execution_repo import cancel_tasks_and_executions
 from api_server.git_integration import project_git_secret_path
 from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._helpers import (
@@ -384,6 +386,13 @@ async def delete_project(
         session, Project, project_id, principal, not_found_detail="project not found"
     )
     await soft_delete(session, project)
+    # prod-06 task_prod06_cancel_02: soft-deleting a project cascades — cancel its
+    # non-terminal tasks and the running executions still in flight (the worker
+    # kills the containers), then revoke the queued jobs after commit. The dispatch
+    # hot path also skips deleted projects (budget_03), but in-flight work must stop.
+    for execution in await cancel_tasks_and_executions(session, project_id=project.id):
+        if execution.celery_task_id:
+            schedule_after_commit(session, revoke_job_callback(execution.celery_task_id))
 
 
 # ---------------------------------------------------------------------------

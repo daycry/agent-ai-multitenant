@@ -62,6 +62,14 @@ def create_app(
         redis: Redis = Redis.from_url(cfg.redis_url, decode_responses=True)
         consumer = StreamConsumer(redis, cfg, handler)
         await consumer.ensure_group()
+        # prod-06 task_prod06_evento_01: reclaim any PEL entries orphaned by a
+        # previous process that crashed after delivery but before XACK — XREADGROUP
+        # with '>' would never re-deliver them. Best-effort: a reclaim hiccup must
+        # not block the consumer from starting its read loop.
+        try:
+            await consumer.reclaim_stale_pending()
+        except Exception as exc:  # pragma: no cover - startup best-effort
+            _log.warning("orchestrator.reclaim_on_start_failed", error=str(exc))
 
         loop_task = asyncio.create_task(_run_loop(consumer))
         app.state.redis = redis

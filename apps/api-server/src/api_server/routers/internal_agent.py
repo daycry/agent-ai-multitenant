@@ -307,7 +307,12 @@ async def memory_store(
     falla (Ollama caído), la fila nace con ``embedding=NULL`` y el worker de
     back-fill la rellena después — el store no se bloquea.
     """
-    agent, project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+    agent, _ = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+    # Resolve the EFFECTIVE project (ADR 0054 / M2): a global agent (project_id
+    # NULL) operating on a task writes project_shared into the TASK's project,
+    # exactly as `memory_recall` reads it — closing the store/recall asymmetry.
+    # For a project-bound agent this is just its own project (no change).
+    project = await _resolve_effective_project(session, agent=agent, principal=principal)
 
     scope = payload.scope or agent.memory_scope
     if scope not in {s.value for s in MemoryScope}:
@@ -324,7 +329,7 @@ async def memory_store(
             ),
         )
 
-    owner = _resolve_store_owner(scope=scope, project=project, agent=agent)
+    owner = _resolve_store_owner(scope=scope, project=project)
     if owner is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -766,16 +771,21 @@ async def promote_to_kb_endpoint(
     )
 
 
-def _resolve_store_owner(
-    *, scope: str, project: Project | None, agent: Agent
-) -> dict[str, UUID | None] | None:
-    """Compute the owner kwargs ``persist_memory_candidates`` needs."""
+def _resolve_store_owner(*, scope: str, project: Project | None) -> dict[str, UUID | None] | None:
+    """Compute the owner kwargs ``persist_memory_candidates`` needs.
+
+    ``project`` is the agent's EFFECTIVE project (its own, or — for a global
+    agent under ADR 0054 — the project of the task it is running). Using it for
+    ``project_shared`` (rather than ``agent.project_id``) keeps store symmetric
+    with recall (M2): a global agent writes into the task's project, and a
+    project-bound agent writes into its own (the effective project IS its own).
+    """
     if scope == MemoryScope.GLOBAL.value:
         return {"user_id": None, "team_id": None, "project_id": None}
     if scope == MemoryScope.PROJECT_SHARED.value:
-        if agent.project_id is None:
+        if project is None:
             return None
-        return {"user_id": None, "team_id": None, "project_id": agent.project_id}
+        return {"user_id": None, "team_id": None, "project_id": project.id}
     if scope == MemoryScope.TEAM_SHARED.value:
         if project is None or project.team_id is None:
             return None

@@ -26,11 +26,13 @@ from api_server.auth.deps import (
     require_tenant_member,
     schedule_after_commit,
 )
+from api_server.celery_client import revoke_job_callback
 from api_server.chat.dag_enforcement import (
     DependenciesNotDoneError,
     assert_dependencies_done,
 )
-from api_server.db.domain import Project, Task, TaskDependency
+from api_server.db.domain import Project, Task, TaskDependency, TaskStatus
+from api_server.db.execution_repo import cancel_running_executions_for_task
 from api_server.events import publish_task_created, publish_task_status_changed
 from api_server.routers._helpers import (
     apply_partial_update,
@@ -304,6 +306,14 @@ async def update_task(
                 get_redis(), task, old_status=old_status, new_status=new_status
             ),
         )
+        # prod-06 cancel_01: cancelling a task in flight must also cancel its
+        # running execution(s) — seal cancel_requested_at (the worker polls it
+        # to kill the container + finalise as cancelled) and revoke the queued
+        # Celery job after commit (no-op if it never started).
+        if new_status == TaskStatus.CANCELLED.value:
+            for execution in await cancel_running_executions_for_task(session, task.id):
+                if execution.celery_task_id:
+                    schedule_after_commit(session, revoke_job_callback(execution.celery_task_id))
     return to_task_response(task, deps)
 
 

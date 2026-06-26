@@ -81,8 +81,9 @@ Todos en `status: pending_approval` — **ningún plan se ha empezado; requieren
 | [prod-14-tenancy-defensa-profundidad](./prod-14-tenancy-defensa-profundidad.md)       | P2   | 11     | 7 pd     | 7-10 d   | —             |
 | [prod-15-gobernanza-roadmap-docs](./prod-15-gobernanza-roadmap-docs.md)               | P2   | 11     | 9 pd     | 2-3 sem  | —             |
 | [prod-16-frontend-i18n-calidad](./prod-16-frontend-i18n-calidad.md)                   | P2   | 12     | 18,5 pd  | 3-4 sem  | —             |
+| [prod-17-bucle-ai-reviewer](./prod-17-bucle-ai-reviewer.md)                           | P2   | 7      | 10-13 pd | 2-3 sem  | prod-06       |
 
-Coste humano estimado total: **~112.000–149.000 €** (a 450-600 €/persona-día). Cada hallazgo vigente está asignado a exactamente un plan (verificado automáticamente; `db-9` se cierra en prod-14 y prod-13 lo referencia).
+Coste humano estimado total: **~112.000–149.000 €** (a 450-600 €/persona-día). Cada hallazgo vigente está asignado a exactamente un plan (verificado automáticamente; `db-9` se cierra en prod-14 y prod-13 lo referencia). **prod-17** se añadió después (2026-06-26): es la parte A de `task_prod06_dag_03` que prod-06 difirió a un plan dedicado (ADR 0084 Opción B) — el bucle del AI reviewer (workers-1).
 
 ## Orden de ejecución recomendado
 

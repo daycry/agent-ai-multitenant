@@ -1,8 +1,11 @@
 """Integration tests for the Celery queue topology (task_02_02).
 
-These assert the Celery app is wired with the 7 queues and the
+These assert the Celery app is wired with the 5 queues and the
 safety-oriented defaults (acks_late, prefetch=1, JSON-only). They
 don't need a running broker — the config is the unit under test.
+
+The ``heavy``/``gpu`` lanes were removed by ADR 0083 (prod-06 colas_02): dead
+queues with no producer/consumer on a single host.
 """
 
 from __future__ import annotations
@@ -23,19 +26,21 @@ def _app():
     )
 
 
-def test_seven_queues_are_declared() -> None:
+def test_queues_are_declared() -> None:
     app = _app()
     declared = {q.name for q in app.conf.task_queues}
+    # ADR 0083 Option B: only the lanes with a real producer + consumer.
     assert declared == {
         "default",
-        "heavy",
-        "gpu",
         "ingestion",
         "test",
         "review",
         "privileged",
     }
-    assert len(QUEUE_NAMES) == 7
+    assert len(QUEUE_NAMES) == 5
+    # The retired lanes must not creep back in.
+    assert "heavy" not in declared
+    assert "gpu" not in declared
 
 
 def test_default_queue_is_default() -> None:

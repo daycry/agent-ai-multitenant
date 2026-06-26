@@ -159,26 +159,45 @@ def test_agent_spec_omits_allowlist_when_none() -> None:
     assert "allowed_tools" not in spec
 
 
+_SYSTEM_TOOLS = {"memory_recall", "memory_store", "kanban_update", "task_comment", "agent_invoke"}
+
+
 def test_agent_spec_injects_model_tool_schemas_for_allowlisted_tools() -> None:
-    # Agentes #2: the model spec must carry the OpenAI schemas of the agent's
-    # tools so the LLM can actually CALL them (memory_recall/read_file/…). Without
-    # this the model never sees any tool and can't recall memory or work.
+    # Agentes #2 + H0: the model spec carries the OpenAI schemas of the agent's
+    # ASSIGNED tools AND the always-available system family tools (memory +
+    # orchestration), so the LLM can call them and recall/store memory.
     spec = _agent_spec(_request(["memory_recall", "read_file"]), None)
     tools = spec["model"].get("tools")
     assert tools is not None
     names = [t["function"]["name"] for t in tools]
-    assert names == ["memory_recall", "read_file"]
+    # Assigned tools come first, in order; the remaining system tools follow.
+    assert names[:2] == ["memory_recall", "read_file"]
+    assert set(names) >= _SYSTEM_TOOLS
     # The original model fields are preserved.
     assert spec["model"]["kind"] == "scripted"
 
 
-def test_agent_spec_omits_model_tools_when_no_allowlist() -> None:
+def test_agent_spec_injects_system_tools_even_without_allowlist() -> None:
+    # H0 regression: a tool-less agent (no agent_tools) still gets the memory +
+    # orchestration tools advertised so it can recall/store and participate.
     spec = _agent_spec(_request(None), None)
-    assert "tools" not in spec["model"]
+    names = [t["function"]["name"] for t in spec["model"]["tools"]]
+    assert set(names) == _SYSTEM_TOOLS
 
 
-def test_agent_spec_omits_model_tools_when_no_known_schemas() -> None:
+def test_agent_spec_skips_unknown_tool_but_keeps_system_tools() -> None:
+    # An assigned tool with no known schema is skipped; the system family tools
+    # are still advertised.
     spec = _agent_spec(_request(["totally_unknown_tool"]), None)
+    names = [t["function"]["name"] for t in spec["model"]["tools"]]
+    assert "totally_unknown_tool" not in names
+    assert set(names) >= _SYSTEM_TOOLS
+
+
+def test_agent_spec_block_all_allowlist_omits_model_tools() -> None:
+    # The discussion mode's explicit empty allowlist suppresses EVERY model
+    # tool — system tools are not a back door around block-all.
+    spec = _agent_spec(_request([]), None)
     assert "tools" not in spec["model"]
 
 

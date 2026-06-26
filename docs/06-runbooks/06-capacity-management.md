@@ -53,15 +53,13 @@ después de escalar, [health-check.md](./health-check.md).
 
 ## Topología de colas (el modelo de escalado)
 
-El trabajo se reparte en **7 colas Celery** (`apps/workers/src/workers/celery_app.py`),
-de modo que la carga pesada / GPU / privilegiada queda aislada del carril común y
+El trabajo se reparte en **5 colas Celery** (`apps/workers/src/workers/celery_app.py`),
+de modo que la carga de runtime / privilegiada queda aislada del carril común y
 **escala por separado**:
 
 | Cola         | Qué drena                                                    |
 | ------------ | ------------------------------------------------------------ |
 | `default`    | Tareas de agente ordinarias — el carril común.               |
-| `heavy`      | Runs largos / con mucha memoria.                             |
-| `gpu`        | Tareas que necesitan host con GPU (deployment opcional).     |
 | `ingestion`  | Pipelines de ingestión documental (Docling — Plan 04).       |
 | `test`       | Ejecución del test-runtime (Plan 06).                        |
 | `review`     | Ejecución del review-runtime (Plan 06).                      |
@@ -69,12 +67,18 @@ de modo que la carga pesada / GPU / privilegiada queda aislada del carril común
 |              | backup) — la drena un worker con el perfil de seguridad      |
 |              | más estricto.                                                |
 
+> **Colas `heavy`/`gpu` retiradas (ADR 0083 / prod-06).** Estaban declaradas pero
+> ningún productor enrutaba hacia ellas y, en mono-máquina, no había un worker
+> dedicado que las drenara — colas muertas. Si algún día hace falta aislar runs
+> pesados o añadir un host GPU, reintroducir el lane es un cambio de config + un
+> ADR, no una migración.
+
 El instalador genera **un** servicio `workers` (compose generator,
 `task_15_07`), escalado por `deploy.replicas` a partir de la elección del wizard
 (`resources.worker_replicas`). Por defecto ese pool consume **todas** las colas.
-Para dar a un carril su propia capacity (que `heavy` no ahogue a `default`, que
-`privileged` corra siempre en el worker endurecido) se despliega **un servicio de
-worker por cola** apuntándolo con `--queues`.
+Para dar a un carril su propia capacity (que los runtimes de `test`/`review` no
+ahoguen a `default`, que `privileged` corra siempre en el worker endurecido) se
+despliega **un servicio de worker por cola** apuntándolo con `--queues`.
 
 ## Escalar workers
 
@@ -122,7 +126,7 @@ services:
       replicas: 3
       resources: { limits: { cpus: "4.0", memory: "8g" } }
 
-  workers-heavy:
+  workers-runtimes:
     image: ${PLATFORM_REGISTRY}/workers:${PLATFORM_IMAGE_TAG}
     command:
       [
@@ -131,7 +135,7 @@ services:
         "workers.celery_app",
         "worker",
         "--queues",
-        "heavy,test,review",
+        "test,review",
         "--concurrency",
         "2",
       ]
@@ -159,7 +163,7 @@ services:
 
 Reglas al separar carriles:
 
-- **No dejes ninguna cola huérfana.** Si repartes las 7 colas entre varios
+- **No dejes ninguna cola huérfana.** Si repartes las 5 colas entre varios
   servicios, asegúrate de que **cada** cola figura en el `--queues` de algún
   worker, o sus tareas quedan encoladas para siempre. La cola `privileged`
   **debe** drenarla el worker con el perfil de seguridad más estricto, nunca el
@@ -274,7 +278,7 @@ encoladas que no arrancan. Inspecciónala en Redis con la longitud de cada cola:
 
 ```bash
 docker compose -f docker/docker-compose.yml exec redis \
-  redis-cli -n 1 LLEN heavy        # nº de tareas esperando en la cola `heavy`
+  redis-cli -n 1 LLEN default      # nº de tareas esperando en la cola `default`
 ```
 
 Si una cola crece de forma sostenida **y** el host tiene RAM/CPU libres, ese es
@@ -305,9 +309,10 @@ Consideraciones de capacity de GPU:
   un modelo que no cabe falla al cargar. Dimensiona el modelo (cuantización,
   tamaño) a la VRAM, no al revés.
 - **Una sola GPU = un punto de serialización.** En el modelo mono-máquina hay una
-  GPU; las tareas de la cola `gpu` se serializan sobre ese recurso. Mantén la
-  concurrencia del worker `gpu` **baja** (1-2) para no encolar peticiones que la
-  GPU no puede atender en paralelo.
+  GPU; las peticiones de inferencia se serializan sobre ese recurso del servicio
+  `ollama` (no hay una cola Celery `gpu` — la inferencia local va al servicio
+  Ollama directamente). El límite es la VRAM frente al modelo cargado, no la
+  concurrencia de los workers.
 - El grueso del trabajo va a **proveedores gestionados** (Claude SDK, Copilot,
   Azure Foundry — ADR 0021); la GPU local (Ollama) es para inferencia local
   (p. ej. la distilación del Memorizer) o cuando se quiere mantener el dato en

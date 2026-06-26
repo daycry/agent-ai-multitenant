@@ -646,12 +646,13 @@ def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
 
 
 # Celery queue split (mirror of workers.celery_app.QUEUE_NAMES — the unit test
-# cross-checks this against the real 7-queue topology so it cannot drift). The
+# cross-checks this against the real queue topology so it cannot drift). The
 # generic pool drains every non-privileged queue; the ``privileged`` queue
 # (backups, key rotation — touches Vault/secrets) is drained ONLY by the
 # singleton workers-privileged lane under the strictest profile, never the
-# generic pool (runbook 06-capacity-management.md).
-_WORKER_GENERIC_QUEUES = "default,heavy,gpu,ingestion,test,review"
+# generic pool (runbook 06-capacity-management.md). ``heavy``/``gpu`` removed by
+# ADR 0083 (prod-06 colas_02) — dead lanes on a single host.
+_WORKER_GENERIC_QUEUES = "default,ingestion,test,review"
 _WORKER_PRIVILEGED_QUEUE = "privileged"
 
 # Both worker lanes sit on three nets (task_09): agentic-net (general), the

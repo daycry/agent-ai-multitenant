@@ -1,0 +1,113 @@
+---
+title: "Plan — Unificación de selección+resolución de modelo por provider_id (ADR 0082)"
+date: 2026-06-25
+status: in_progress
+adr: "0082"
+docs_language: es
+---
+
+> **Progreso (2026-06-25):** Fase 0 ✅ (auditoría: default era ollama-cloud pero resolvía
+> mal a local), Fase 1 ✅ (`f2ad7d9`), Fase 2 ✅ (`ce5d2f6`), Fase 3 ✅ (`6c81a99`:
+> `ProviderModelSelects` reutilizable + persona/agente/equipo/adopt por provider_id +
+> borrado `DefaultModelSection`). Pendiente: deploy + (follow-up) converger
+> `chat-model-section` al mismo componente y deprecar `/agents/model-options`.
+
+# Plan — Unificación de modelo por `provider_id` (ADR 0082)
+
+> **Objetivo:** que TODA selección y resolución de modelo use `{provider_id, model}` (con
+> `provider`=kind en paralelo), reutilizando **un único selector** y la infra por-provider_id
+> ya existente. Backward-compatible (fallback kind→fila-más-nueva). TDD por tarea, commit +
+> deploy incremental por fase. Sin big-bang.
+
+**Estado actual (del mapa):** lo bueno YA existe — `build_llm_provider`,
+`_resolve_by_provider_id` (worker, con fallback), `_resolve_chat_provider`,
+`is_valid_selection`/`validate_chat_model_config`, `GET /agents/provider-options`,
+`ChatModelSection`/`ProviderModelSelects`. Lo por-kind vive en `PersonaModelFields`
+(persona-section.tsx) + 3 consumidores + `DefaultModelSection` (huérfano) + la pata de
+ejecución (`validate_model_config`, `resolve_model_config_chain`, dispatch).
+
+---
+
+## Fase 0 — Auditoría de datos (antes de activar nada) ⚠️
+
+La UI de platform-defaults YA guardó `provider_id` que el backend ignora. Al activarlo,
+empezará a aplicarse.
+
+- [ ] Inventariar `model.default_config` + `model_config` de agentes/equipos/proyectos con
+      `provider_id` ya presente; confirmar que apuntan a la fila intencionada (no a una vieja).
+- [ ] Documentar el valor esperado del default antes del rollout.
+
+## Fase 1 — Backend: validación provider_id-aware (sin cambiar resolución todavía)
+
+- [ ] **`validate_model_config`** (`db/platform_settings.py:560`): aceptar la forma
+      `{provider_id, model}` validando contra la **fila** (activa + `model` ∈ sus modelos, vía
+      `is_valid_selection`), conservando el camino kind-based para legacy. Reusar la lógica de
+      `validate_chat_model_config`/`is_valid_selection` (no duplicar).
+  - TDD: `tests/unit/test_model_config_chain.py` + nuevos casos: provider_id válido → ok;
+    provider_id inactivo/model ajeno → 422; legacy kind-only → ok.
+- [ ] **Schema de agente** (`schemas/agents.py:106,150`): que `_validate_model_config` use
+      la validación provider_id-aware. Mantener 422 esperado por tests existentes.
+
+## Fase 2 — Backend: herencia + dispatch propagan provider_id
+
+- [ ] **`config_needs_default_model`** (`platform_settings.py:649`): un cfg `{provider_id,
+model}` cuenta como **pineado** (no heredar). TDD.
+- [ ] **`resolve_model_config_chain`** (`:668`) + `_merge_inherited_model` (`:695`): propagar
+      `provider_id` verbatim al mergear; decidir `reasoning_effort` coherente con el nivel que
+      pinea. TDD (cadena agente→equipo→proyecto→plataforma con provider_id en cada nivel).
+- [ ] **Dispatch** (`orchestrator/dispatch.py:480-506`): confirmar que el spec resultante
+      lleva `provider_id` cuando el config lo tiene → el worker `_resolve_by_provider_id` ya
+      hace el resto. Test de integración: agente con `provider_id` de `ollama-cloud` → el spec
+      resuelto trae el base_url cloud (no el local).
+- [ ] **`cost_resolution.resolve_plan_task_models`**: hereda automáticamente al usar la
+      misma cadena; verificar coste con provider_id.
+
+## Fase 3 — Selector reutilizable (frontend, el corazón del mensaje del operador)
+
+- [ ] **Extraer `ProviderModelSelects` compartido** (hoy privado en `model-cards.tsx` / la
+      lógica de `chat-model-section.tsx`) a `components/capability/` (o `components/ui/`):
+      consume `GET /agents/provider-options`, dropdown de filas concretas (`display_name (kind)`),
+      emite `{provider_id, provider:kind, model, temperature?, reasoning_effort?}`, reasoning por
+      kind de la fila, maneja "provider borrado/inactivo" (como cortex/asistente).
+- [ ] **`persona.ts`**: añadir `provider_id` a `ModelConfigDraft`, `buildModelConfig`,
+      `draftFromConfig` (reconstruir provider_id; vacío si legacy solo-kind), `validateDraft`.
+      `PROVIDER_KINDS`/`PROVIDER_LABEL` pasan a "etiqueta del kind heredado", no fuente del dropdown.
+  - TDD: `lib/persona/persona.test.ts`.
+- [ ] **`PersonaModelFields`** (`persona-section.tsx`): usar el selector compartido (deja
+      `/agents/model-options`). El resumen read-only `PersonaSection` muestra `display_name`.
+- [ ] **Consumidores** (sin cambios de API, heredan el componente): alta de agente
+      (`agents/page.tsx`), edición (`agents/[id]/page.tsx`), **adopción de equipo**
+      (`adopt-team-dialog.tsx`).
+- [ ] **Converger** chat/asistente/córtex/platform-defaults al MISMO componente compartido
+      (hoy son variantes equivalentes) para que sea literalmente uno solo. (Si el coste es alto,
+      dejar asistente/córtex como follow-up — ya son por-provider correctos.)
+- [ ] **Borrar `DefaultModelSection`** (huérfano, confirmado sin consumidores).
+
+## Fase 4 — Limpieza + deprecación
+
+- [ ] Deprecar/eliminar `GET /agents/model-options` si queda sin consumidores (o dejar el
+      arreglo de union como red de seguridad). Decidir en su momento.
+- [ ] Changelog + actualizar `04-reference` afectados.
+
+## Backward-compat (transversal, en TODA fase)
+
+- Configs legacy `{provider:kind, model}` (sin provider_id) → resolución por kind→fila-más-
+  nueva (worker `_resolve_by_provider_id`→None→camino kind; `_resolve_chat_provider` rama 2).
+  **No quitar el camino por kind.**
+- Spec `kind` (scripted de tests) pasa intacto.
+- `provider_id` que apunta a fila borrada/inactiva → fallback a kind (no romper el run).
+
+## Riesgos (del mapa) a vigilar
+
+- Coexistencia kind+provider_id en la misma columna (mantener ambos).
+- `reasoning_effort` sigue por-kind (derivado de `row.kind`), no mover a por-fila.
+- `azure_foundry`: el `model` es el _deployment_ que pinea la URL — seguir pasándolo.
+- Overlay por kind duplicado worker↔agent-runtime — tocar ambos si cambia.
+- Sesión admin BYPASSRLS para resolver provider_id.
+- Datos "mentirosos" de platform-defaults (Fase 0).
+
+## Orden de entrega sugerido
+
+Fase 0 (auditoría) → Fase 1 (validación) → Fase 2 (herencia+dispatch) → Fase 3 (selector
+reutilizable) → Fase 4 (limpieza). Cada fase deja la plataforma funcionando (backward-compat),
+con tests verdes, y es desplegable por sí sola.

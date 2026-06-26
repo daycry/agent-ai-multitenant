@@ -228,6 +228,47 @@ async def test_skills_crud_roundtrip(configured_app, migrations_pg_dsn: str) -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_create_skill_validates_required_tools(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """required_tools must reference LIVE tools visible to the tenant (built-in
+    or own). A bogus / cross-tenant / soft-deleted UUID → 422 (L1); the seeded
+    built-in tool (visible via RLS) → 201."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        bad = await client.post(
+            "/skills",
+            json={
+                "name": "Bad refs",
+                "category": "backend",
+                "prompt_fragment": "x",
+                "required_tools": [str(uuid4())],
+            },
+            headers=headers,
+        )
+        assert bad.status_code == 422, bad.text
+
+        ok = await client.post(
+            "/skills",
+            json={
+                "name": "Good refs",
+                "category": "backend",
+                "prompt_fragment": "x",
+                "required_tools": [str(seeded["builtin_tool"])],
+            },
+            headers=headers,
+        )
+        assert ok.status_code == 201, ok.text
+        assert ok.json()["required_tools"] == [str(seeded["builtin_tool"])]
+
+
+@pytest.mark.asyncio
 async def test_skills_builtin_is_readable_but_not_writable(
     configured_app, migrations_pg_dsn: str
 ) -> None:

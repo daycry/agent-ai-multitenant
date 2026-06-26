@@ -390,8 +390,10 @@ async def test_merge_different_users_rejected(configured_app, migrations_pg_dsn:
         transport=ASGITransport(app=configured_app), base_url="http://test"
     ) as client:
         resp = await _merge(client, seeded["priv_a_mem"], seeded["priv_a2_mem"], headers)
-    assert resp.status_code == 422, resp.text
-    assert "user_id" in resp.json()["detail"]
+    # Owner isolation (H1/M3): another user's private memory is invisible, so the
+    # cross-user merge is rejected as 404 (hidden) — stricter than the previous
+    # 422, which revealed the target existed.
+    assert resp.status_code == 404, resp.text
 
 
 # ---------------------------------------------------------------------------

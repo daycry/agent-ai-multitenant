@@ -21,17 +21,21 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import (
     AuthPrincipal,
+    get_redis,
     get_tenant_session,
     require_can_approve_plan,
     require_tenant_admin,
     require_tenant_member,
+    schedule_after_commit,
 )
+from api_server.celery_client import revoke_job_callback
 from api_server.chat.cost import (
     DEFAULT_HOURLY_RATE_EUR,
     AICostBreakdown,
@@ -46,8 +50,10 @@ from api_server.chat.plan_state_machine import (
     transition_plan_status,
 )
 from api_server.chat.sync_to_kanban import SyncScopeError, sync_plan_to_kanban
+from api_server.dag_promotion import announce_ready_tasks, promote_ready_tasks
 from api_server.db.conversation import Conversation, Message
 from api_server.db.domain import Plan, PlanStatus, Project, Task
+from api_server.db.execution_repo import cancel_tasks_and_executions
 from api_server.db.models import Organization
 from api_server.db.plan_comment import PlanComment
 from api_server.db.platform_settings import get_double_signature_threshold
@@ -323,6 +329,14 @@ async def update_plan(
                     "to": exc.to_status,
                 },
             ) from exc
+        # prod-06 task_prod06_cancel_02: cancelling a plan cascades — cancel its
+        # non-terminal tasks and request cancellation of their running executions
+        # (the worker kills the containers), then revoke the queued jobs after
+        # commit. Without this a cancelled plan left its tasks/runs in flight.
+        if plan.status == PlanStatus.CANCELLED.value:
+            for execution in await cancel_tasks_and_executions(session, plan_id=plan.id):
+                if execution.celery_task_id:
+                    schedule_after_commit(session, revoke_job_callback(execution.celery_task_id))
 
     spec_dict = payload.specification.model_dump() if payload.specification else None
     if spec_dict is not None and spec_dict.get("tasks"):
@@ -697,6 +711,7 @@ async def start_plan_execution(
     plan_id: UUID,
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
+    redis: Redis = Depends(get_redis),
 ) -> PlanResponse:
     """Mark an APPROVED plan as ``in_progress`` and ensure its tasks exist in the
     Kanban so the team can start implementing them.
@@ -727,8 +742,14 @@ async def start_plan_execution(
 
     # Ensure the tasks are in the Kanban (creates any missing ones; idempotent).
     await sync_plan_to_kanban(session, plan, scope="total")
+    # prod-06 task_prod06_dag_02: promote the plan's ROOT tasks (and any whose
+    # deps are already done) to `ready` and announce them, so the orchestrator
+    # dispatches them. Without this a started plan sat in `backlog` forever —
+    # nothing left it without a human moving cards by hand.
+    ready_tasks = await promote_ready_tasks(session, plan.id)
     await session.flush()
     await session.refresh(plan)
+    await announce_ready_tasks(redis, ready_tasks)
     return to_plan_response(plan)
 
 

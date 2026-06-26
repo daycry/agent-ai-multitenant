@@ -14,6 +14,7 @@ The single producer here is `enqueue_ingestion`, called by
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from typing import Any
 from uuid import UUID
@@ -178,6 +179,19 @@ async def revoke_execution_job(job_id: str) -> bool:
         _log.warning("execution.revoke_failed", job_id=job_id, error=str(exc))
         return False
     return True
+
+
+def revoke_job_callback(job_id: str) -> Callable[[], Awaitable[None]]:
+    """An after-commit callback (for ``schedule_after_commit``) that revokes a
+    queued Celery job, dropping the bool result so it matches the
+    ``Awaitable[None]`` contract. A factory (not a default-arg lambda) so the
+    captured ``job_id`` is unambiguous and mypy can infer the type. Shared by the
+    task/plan/project cancellation paths (prod-06 cancel_01/cancel_02)."""
+
+    async def _cb() -> None:
+        await revoke_execution_job(job_id)
+
+    return _cb
 
 
 async def enqueue_notification_send(

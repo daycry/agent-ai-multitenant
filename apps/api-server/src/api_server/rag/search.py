@@ -234,7 +234,12 @@ async def recall_chunks(
     for chunk_id in top_ids:
         if chunk_id not in by_id:
             continue
-        s, bm25_r, vec_r = fused[chunk_id]
+        # fuse_rankings returns a 4-tuple (score, bm25_rank, vector_rank,
+        # entity_rank); RAG search passes no entity list, so the 4th element is
+        # always None and is discarded. Unpacking only 3 crashed the endpoint
+        # with ValueError once the entity rank was added (ADR 0059) — the memory
+        # consumer (recall.py) was updated, this one was missed.
+        s, bm25_r, vec_r, _entity_r = fused[chunk_id]
         d = by_id[chunk_id]
         hits.append(
             ChunkHit(
@@ -318,7 +323,12 @@ async def search_kb_chunks(
     for chunk_id in top_ids:
         if chunk_id not in by_id:
             continue
-        s, bm25_r, vec_r = fused[chunk_id]
+        # fuse_rankings returns a 4-tuple (score, bm25_rank, vector_rank,
+        # entity_rank); RAG search passes no entity list, so the 4th element is
+        # always None and is discarded. Unpacking only 3 crashed the endpoint
+        # with ValueError once the entity rank was added (ADR 0059) — the memory
+        # consumer (recall.py) was updated, this one was missed.
+        s, bm25_r, vec_r, _entity_r = fused[chunk_id]
         d = by_id[chunk_id]
         hits.append(
             ChunkHit(

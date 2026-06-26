@@ -182,7 +182,7 @@ services:
         "-A",
         "workers.celery_app",
         "worker",
-        "--queues=default,heavy,gpu,ingestion,test,review",
+        "--queues=default,ingestion,test,review",
         "--concurrency=2",
         "--loglevel=info",
       ]
@@ -202,6 +202,20 @@ services:
       WORKERS_VAULT_URL: http://vault:8200
       WORKERS_VAULT_TOKEN: ${API_SERVER_VAULT_TOKEN:-dev-root-token}
       DOCKER_HOST: tcp://docker-socket-proxy:2375
+      # La ingesta de KB (workers.ingestion) reutiliza las dependencias de
+      # api_server (storage MinIO, docling-serve, ClamAV, embedder Ollama):
+      # cada factory "lee sus propios Settings de api-server del env"
+      # (ingestion.py), o sea settings con prefijo API_SERVER_*. Sin estas,
+      # caen a sus defaults `localhost:*` y fallan dentro del contenedor
+      # ("connection refused"). Mismos endpoints/credenciales dev que el
+      # servicio api-server.
+      API_SERVER_MINIO_URL: http://minio:9000
+      API_SERVER_MINIO_ACCESS_KEY: minioadmin
+      API_SERVER_MINIO_SECRET_KEY: changeme-dev-only
+      API_SERVER_DOCLING_SERVE_URL: http://docling-serve:5001
+      API_SERVER_OLLAMA_URL: http://ollama:11434
+      API_SERVER_CLAMAV_HOST: clamav
+      API_SERVER_CLAMAV_PORT: "3310"
     volumes:
       - agentic_worktrees:/data/agent-platform
       - ./seccomp:/etc/agentic/seccomp:ro
@@ -237,6 +251,24 @@ services:
       WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
     depends_on:
       redis: { condition: service_healthy }
+    # beat es un SCHEDULER sin endpoint HTTP: el healthcheck HTTP que la imagen
+    # workers:ci hereda del api-server (FROM api-server) NUNCA pasa para beat.
+    # `celery inspect ping` tampoco aplica (beat no es un worker que responda a
+    # inspect). Verificamos que el proceso beat es el PID 1 vivo del contenedor
+    # (si beat muere, PID 1 muere y el contenedor reinicia). Python puro, sin
+    # herramientas extra en la imagen slim.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys; sys.exit(0 if b'beat' in open('/proc/1/cmdline', 'rb').read() else 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     networks: [agentic-net]
     restart: unless-stopped
 

@@ -181,26 +181,43 @@ async def _sweep_pending_documents_async(
     settings: Settings,
     enqueue: Callable[[UUID], bool],
     older_than_seconds: int = 300,
+    lease_seconds: int = 600,
 ) -> dict[str, Any]:
-    """Find documents stuck in ``pending`` older than the cutoff and
-    re-enqueue them via ``enqueue``. Returns ``{"reenqueued": int}``.
+    """Claim documents stuck in ``pending`` and re-enqueue them via
+    ``enqueue``. Returns ``{"reenqueued": int}``.
 
-    Runs on the BYPASSRLS worker engine so it sweeps every tenant. The
-    age cutoff avoids racing a just-uploaded document whose own enqueue
-    is still in flight.
+    Runs on the BYPASSRLS worker engine so it sweeps every tenant. Two guards
+    keep it from re-enqueueing documents that are still legitimately in flight
+    (workers-11 — a >5-min backlog on the ``ingestion`` queue used to cause a
+    re-enqueue storm):
+
+      - ``older_than_seconds`` — the age cutoff that avoids racing a
+        just-uploaded document whose own enqueue is still in flight.
+      - ``lease_seconds`` — the enqueue LEASE. A document is re-enqueued only if
+        its lease (``enqueued_at``) is NULL (the enqueue never landed) or has
+        expired; a document enqueued within the lease window is presumed still
+        queued and is left alone.
+
+    The claim is a single ``UPDATE … RETURNING`` that stamps the lease and
+    returns the claimed ids in one statement, so two concurrent sweeps never
+    both claim the same document (the second's predicate no longer matches the
+    freshly-stamped rows).
     """
     engine = create_async_engine(settings.database_url)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        async with sessionmaker() as session:
+        async with sessionmaker() as session, session.begin():
             rows = await session.execute(
                 text(
-                    "SELECT id FROM documents"
+                    "UPDATE documents SET enqueued_at = now()"
                     " WHERE status = 'pending'"
                     "   AND deleted_at IS NULL"
                     "   AND created_at < now() - make_interval(secs => :age)"
+                    "   AND (enqueued_at IS NULL"
+                    "        OR enqueued_at < now() - make_interval(secs => :lease))"
+                    " RETURNING id"
                 ),
-                {"age": older_than_seconds},
+                {"age": older_than_seconds, "lease": lease_seconds},
             )
             doc_ids = [row[0] for row in rows.all()]
     finally:

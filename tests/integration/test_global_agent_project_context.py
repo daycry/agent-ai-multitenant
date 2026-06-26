@@ -357,6 +357,66 @@ async def test_global_agent_sees_task_project_memory(
 
 
 # ---------------------------------------------------------------------------
+# 1b. Flag ON: el agente global ESCRIBE project_shared en el proyecto de la
+# tarea (simetría store=recall, ADR 0054 / M2). Antes: memory-store daba 400.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_global_agent_stores_project_shared_into_task_project(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """memory-store scope project_shared persiste en el proyecto de la TAREA para
+    el agente global (project_id efectivo = task.project_id), y es recuperable —
+    cierra la asimetría read=write del recall."""
+    from api_server.auth.internal_agent import mint_agent_token
+
+    seeded = await _seed_two_tenants(migrations_pg_dsn)
+    a = seeded["a"]
+    await _set_flag(migrations_pg_dsn, enabled=True)
+    token = mint_agent_token(agent_id=a["agent_id"], tenant_id=a["tenant_id"], task_id=a["task_id"])
+
+    learned = "El agente global aprendió que P1 despliega los martes."
+    stored = await _post(
+        configured_app,
+        "/internal/agent/memory-store",
+        token,
+        {"content": learned, "type": "semantic", "scope": "project_shared"},
+    )
+    assert stored.status_code == 201, stored.text
+
+    recalled = await _post(
+        configured_app,
+        "/internal/agent/memory-recall",
+        token,
+        {"query": learned, "scopes": ["project_shared"], "limit": 5},
+    )
+    assert recalled.status_code == 200, recalled.text
+    hits = recalled.json()["hits"]
+    assert any("despliega los martes" in h["content"] for h in hits), hits
+
+
+@pytest.mark.asyncio
+async def test_flag_off_global_agent_cannot_store_project_shared(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Con el flag OFF no hay proyecto efectivo → el store project_shared del
+    agente global falla cerrado (400), simétrico con el recall vacío."""
+    from api_server.auth.internal_agent import mint_agent_token
+
+    seeded = await _seed_two_tenants(migrations_pg_dsn)
+    a = seeded["a"]
+    await _set_flag(migrations_pg_dsn, enabled=False)
+    token = mint_agent_token(agent_id=a["agent_id"], tenant_id=a["tenant_id"], task_id=a["task_id"])
+
+    stored = await _post(
+        configured_app,
+        "/internal/agent/memory-store",
+        token,
+        {"content": "no debería persistir", "type": "semantic", "scope": "project_shared"},
+    )
+    assert stored.status_code == 400, stored.text
+
+
+# ---------------------------------------------------------------------------
 # 2. Aislamiento cross-tenant: un token de B con task_id de A NO ve A
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio

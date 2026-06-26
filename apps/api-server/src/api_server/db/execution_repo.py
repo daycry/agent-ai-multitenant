@@ -17,7 +17,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.db.domain import Execution, ExecutionStatus
+from api_server.db.domain import Execution, ExecutionStatus, Task, TaskStatus
 from api_server.db.price_snapshot import PriceSnapshot, snapshot_model_call
 
 # The step kind that carries an LLM call's tokens + cost (the canonical
@@ -228,6 +228,78 @@ async def request_execution_cancel(session: AsyncSession, execution_id: UUID) ->
         execution.cancel_requested_at = datetime.now(UTC)
         await session.flush()
     return execution
+
+
+async def cancel_running_executions_for_task(
+    session: AsyncSession, task_id: UUID
+) -> list[Execution]:
+    """Request cooperative cancellation of every still-`running` execution of a
+    task (prod-06 cancel_01/cancel_02).
+
+    Seals ``cancel_requested_at`` on each (the worker polls it to kill the
+    container + finalise as ``cancelled``) and returns them — with their
+    ``celery_task_id`` — so the caller can ``revoke`` the queued jobs. Used when a
+    task is moved to ``cancelled`` (in_progress→cancelled) and by the plan-level
+    cancellation cascade. Idempotent; the caller owns the transaction.
+    """
+    rows = (
+        (
+            await session.execute(
+                select(Execution).where(
+                    Execution.task_id == task_id,
+                    Execution.status == ExecutionStatus.RUNNING,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    cancelled: list[Execution] = []
+    for execution in rows:
+        execution.cancel_requested_at = execution.cancel_requested_at or datetime.now(UTC)
+        cancelled.append(execution)
+    if cancelled:
+        await session.flush()
+    return cancelled
+
+
+async def cancel_tasks_and_executions(
+    session: AsyncSession,
+    *,
+    plan_id: UUID | None = None,
+    project_id: UUID | None = None,
+) -> list[Execution]:
+    """Cancel every NON-terminal task of a plan OR a project and request
+    cancellation of their running executions (prod-06 cancel_02).
+
+    Used by the plan-level cancellation (``PUT /plans/{id}`` → ``cancelled``) and
+    the project soft-delete cascade — neither cancelled in-flight work before.
+    Returns the cancelled executions (with ``celery_task_id``) so the caller can
+    revoke the queued jobs. Pass exactly one of ``plan_id``/``project_id``.
+    Idempotent; the caller owns the transaction.
+    """
+    if (plan_id is None) == (project_id is None):
+        raise ValueError("pass exactly one of plan_id / project_id")
+    scope = Task.plan_id == plan_id if plan_id is not None else Task.project_id == project_id
+    tasks = (
+        (
+            await session.execute(
+                select(Task).where(
+                    scope,
+                    Task.status.notin_([TaskStatus.DONE.value, TaskStatus.CANCELLED.value]),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    cancelled_execs: list[Execution] = []
+    for task in tasks:
+        task.status = TaskStatus.CANCELLED.value
+        cancelled_execs.extend(await cancel_running_executions_for_task(session, task.id))
+    if tasks:
+        await session.flush()
+    return cancelled_execs
 
 
 async def supersede_running_executions(

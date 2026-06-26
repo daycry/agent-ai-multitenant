@@ -12,11 +12,12 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, ChevronDown, ChevronRight } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PromoteToDataset } from "@/components/evals/promote-to-dataset";
 import { cn } from "@/lib/utils";
@@ -104,6 +105,17 @@ export default function ExecutionTimelinePage() {
     refetchOnWindowFocus: false,
   });
 
+  // prod-06 cancel_01: cooperative cancellation of a running execution. POSTs the
+  // cancel flag (the worker polls it to kill the container + finalise as
+  // `cancelled`) and refreshes the row.
+  const queryClient = useQueryClient();
+  const cancelMutation = useMutation<unknown, ApiError>({
+    mutationFn: () => apiFetch(`/executions/${executionId}/cancel`, { method: "POST" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["execution", executionId] });
+    },
+  });
+
   const onWsMessage = useCallback((data: unknown) => {
     const frame = data as { payload?: unknown };
     const payload = frame?.payload;
@@ -151,7 +163,22 @@ export default function ExecutionTimelinePage() {
 
       {execution && (
         <>
-          <div className="mb-4 flex justify-end" data-testid="execution-actions">
+          <div className="mb-4 flex justify-end gap-2" data-testid="execution-actions">
+            {execution.status === "running" && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  if (window.confirm("¿Cancelar esta ejecución en curso?")) {
+                    cancelMutation.mutate();
+                  }
+                }}
+                disabled={cancelMutation.isPending}
+                data-testid="execution-cancel-button"
+              >
+                {cancelMutation.isPending ? "Cancelando…" : "Cancelar ejecución"}
+              </Button>
+            )}
             <PromoteToDataset taskId={execution.task_id} executionId={execution.id} />
           </div>
           <ExecutionSummary execution={execution} liveCount={liveSteps.length} />

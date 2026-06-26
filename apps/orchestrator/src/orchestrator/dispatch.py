@@ -30,7 +30,7 @@ from api_server.agent_tools_enforcement import (
     resolve_agent_tool_names,
     serialize_agent_tool_specs,
 )
-from api_server.budgets import budget_pause_block
+from api_server.budgets import budget_pause_block, resolve_execution_budgets
 from api_server.db.domain import (
     Agent,
     AgentType,
@@ -45,6 +45,7 @@ from api_server.db.domain import (
 )
 from api_server.db.platform_settings import (
     config_needs_default_model,
+    get_default_execution_budgets,
     get_default_model_config,
     resolve_model_config_chain,
 )
@@ -421,9 +422,26 @@ class TaskDispatcher:
     async def _route_ai(self, session: AsyncSession, task: Task) -> _AiDispatch | None:
         """The existing AI route: pick an agent, move to ``in_progress``,
         build the worker payload. Untouched behaviour for AI tasks."""
+        # prod-06 task_prod06_budget_03 (db-5): never start an execution for a
+        # task whose project was soft-deleted. The cancellation cascade
+        # (task_prod06_cancel_02) cleans up in-flight work on delete, but a stale
+        # `ready` event could still arrive afterwards — load the project with the
+        # `deleted_at IS NULL` filter and skip if it is gone.
         project = (
-            await session.execute(select(Project).where(Project.id == task.project_id))
+            await session.execute(
+                select(Project).where(
+                    Project.id == task.project_id,
+                    Project.deleted_at.is_(None),
+                )
+            )
         ).scalar_one_or_none()
+        if project is None:
+            _log.info(
+                "orchestrator.skip_deleted_project",
+                task_id=str(task.id),
+                project_id=str(task.project_id),
+            )
+            return None
         candidates = await self._candidates(session, task)
         agent_id = self._pick(project, task, candidates)
         if agent_id is None:
@@ -492,6 +510,17 @@ class TaskDispatcher:
                 model_spec, team_cfg, project_cfg, platform_default
             )
 
+        # Per-run budget envelope (prod-06 task_prod06_budget_02 / workers-10).
+        # Resolve platform-default ← project-override and clamp every key to the
+        # runtime ceiling, so a runaway loop is bounded by an operator-tunable
+        # budget instead of only the agent-runtime's compiled-in defaults. `None`
+        # when nothing overrides → the runtime keeps its own dataclass defaults.
+        platform_budgets = await get_default_execution_budgets(session)
+        budgets = resolve_execution_budgets(
+            platform_default=platform_budgets,
+            project_override=getattr(project, "execution_budgets", None),
+        )
+
         request: dict[str, Any] = {
             "tenant_id": str(task.tenant_id),
             "task_id": str(task.id),
@@ -504,7 +533,7 @@ class TaskDispatcher:
             # The agent carries its ModelClient spec; the worker
             # feeds it to the agent-runtime verbatim.
             "model": model_spec,
-            "budgets": None,
+            "budgets": budgets,
         }
         # Only emit the key when a restriction applies — `None` means "no
         # key", which `ExecutionRequest.from_dict` / `_agent_spec` read as

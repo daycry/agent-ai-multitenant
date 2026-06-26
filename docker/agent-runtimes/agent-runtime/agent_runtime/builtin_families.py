@@ -183,6 +183,58 @@ def register_builtin_families(
     return registered
 
 
+# Runtime-only SYSTEM family tools (memory + orchestration). They have NO
+# catalog row (not in api_server.seeds.builtin_tools), so they can NEVER be in
+# a per-agent allowlist — yet every agent needs them to recall/store memory
+# (H0) and move the Kanban / invoke subagents (H3). They are therefore wired
+# regardless of `agent_tools` and exempt from the per-agent allowlist.
+# MUST stay in sync with workers.agent_tool_schemas.SYSTEM_TOOL_NAMES (the two
+# packages deliberately do not import one another — the runtime is container-side).
+SYSTEM_FAMILY_TOOL_NAMES: frozenset[str] = frozenset(
+    {"memory_recall", "memory_store", "kanban_update", "task_comment", "agent_invoke"}
+)
+
+
+def register_system_families(
+    registry: ToolRegistry,
+    *,
+    api: InternalAgentAPI | None,
+    sink: OrchestrationSink,
+    flags: dict[str, bool] | None = None,
+) -> list[str]:
+    """Register ONLY the runtime-only SYSTEM families — orchestration + memory.
+
+    These are wired ALWAYS by the boot path (even when the agent has no
+    ``agent_tools`` and the catalog families stay un-wired), so memory recall /
+    store and the Kanban tools are available to every agent (H0/H3 / L5). The
+    catalog families (file / network / knowledge) remain gated on the presence
+    of ``tool_specs`` via :func:`register_builtin_families`.
+
+    Honours the same per-family flags as :func:`register_builtin_families`.
+    ``api is None`` (a bare run with no minted token) skips the api-backed
+    memory family but still wires orchestration (sink-only). Returns the
+    canonical names actually registered.
+    """
+    registered: list[str] = []
+
+    def _add(name: str, fn: ToolFn) -> None:
+        registry.register(name, fn)
+        registered.append(name)
+
+    if family_enabled(FAMILY_ORQUESTACION, flags):
+        orch = OrchestrationTools(sink)
+        _add("kanban_update", orch.kanban_update)
+        _add("task_comment", orch.task_comment)
+        _add("agent_invoke", orch.agent_invoke)
+
+    if api is not None and family_enabled(FAMILY_MEMORIA, flags):
+        memory = MemoryTools(api)
+        _add("memory_recall", memory.memory_recall)
+        _add("memory_store", memory.memory_store)
+
+    return registered
+
+
 def _verb_bound(http: HttpRequestTool, method: str) -> ToolFn:
     """Bind ``HttpRequestTool`` to a fixed HTTP verb so ``http_get`` and
     ``http_post`` are distinct canonical tools (the catalog splits the generic
@@ -198,6 +250,8 @@ def _verb_bound(http: HttpRequestTool, method: str) -> ToolFn:
 __all__ = [
     "ALL_FAMILIES",
     "FAMILY_FLAG_PREFIX",
+    "SYSTEM_FAMILY_TOOL_NAMES",
     "family_enabled",
     "register_builtin_families",
+    "register_system_families",
 ]
