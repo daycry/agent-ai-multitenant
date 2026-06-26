@@ -169,6 +169,22 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
+  # worktrees-init — one-shot: a Docker named volume is created owned by root,
+  # but the worker runs as UID 1000 and must create bare repos + worktrees under
+  # /data/agent-platform (prod-18). chown the mount once so it survives
+  # `docker compose down -v` (which drops the volume and recreates it root-owned).
+  # ---------------------------------------------------------------------------
+  worktrees-init:
+    image: busybox:1.36
+    user: "0:0"
+    command:
+      ["sh", "-c", "mkdir -p /data/agent-platform && chown -R 1000:1000 /data/agent-platform"]
+    volumes:
+      - agentic_worktrees:/data/agent-platform
+    networks: [agentic-net]
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
   # workers — pool Celery que ejecuta tareas lanzando agent-runtime efímeros.
   # DOCKER_HOST → docker-socket-proxy; agent-runtime:v1 (default); JWT igual que
   # el api-server (token interno del agente). Tres redes (agentic-net + -agents
@@ -191,7 +207,7 @@ services:
       WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
       WORKERS_BROKER_URL: redis://redis:6379/1
       WORKERS_RESULT_BACKEND: redis://redis:6379/2
-      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/3
+      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/0 # MUST match ORCHESTRATOR_REDIS_URL / API_SERVER_REDIS_URL (events:tasks stream); /3 has no consumer so dispatch stalls
       WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
       WORKERS_AGENT_INTERNAL_API_URL: http://api-server:8000
       WORKERS_AGENT_RUNTIME_IMAGE: agent-runtime:v1
@@ -223,6 +239,10 @@ services:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       docker-socket-proxy: { condition: service_started }
+      # Named volumes are created root:root; the worker runs as UID 1000 and
+      # would get EACCES creating /data/agent-platform/projects (worktree
+      # provisioning). Gate startup on the one-shot chown below.
+      worktrees-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -t 5 || exit 1"]
       interval: 30s
@@ -247,7 +267,7 @@ services:
       WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
       WORKERS_BROKER_URL: redis://redis:6379/1
       WORKERS_RESULT_BACKEND: redis://redis:6379/2
-      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/3
+      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/0 # MUST match ORCHESTRATOR_REDIS_URL / API_SERVER_REDIS_URL (events:tasks stream); /3 has no consumer so dispatch stalls
       WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
     depends_on:
       redis: { condition: service_healthy }

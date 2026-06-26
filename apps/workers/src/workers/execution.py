@@ -451,14 +451,28 @@ def _assemble_result(
 
 
 def _default_vault_store() -> Any:
-    """El store de Vault del worker — el mismo builder cacheado del api-server.
+    """El store de Vault del worker, construido desde la config DEL WORKER.
 
-    Lazy-import para no cargar el módulo router (FastAPI) al importar el
-    worker. Devuelve ``None`` si Vault no está configurado (la resolución
-    degrada a sin-credencial, suficiente para Ollama local)."""
-    from api_server.routers.llm_providers import get_provider_vault_store
+    El worker corre con su propia config (``WORKERS_VAULT_URL`` /
+    ``WORKERS_VAULT_TOKEN``) y NO lleva el env ``API_SERVER_VAULT_*`` que el
+    builder del api-server (``get_provider_vault_store``) lee — usarlo aquí
+    devolvía ``None`` en el worker, así que la credencial del proveedor NUNCA se
+    leía de Vault y toda ejecución corría con ``has_credential=False``.
 
-    return get_provider_vault_store()
+    Construimos el store con el MISMO :class:`HvacLLMProviderVaultStore` (mismo
+    mount KV) que el api-server, pero a partir de los settings del worker.
+    Devuelve ``None`` si no hay token (la resolución degrada a sin-credencial,
+    suficiente para un Ollama local sin clave)."""
+    from workers.config import get_settings
+
+    settings = get_settings()
+    if not settings.vault_token:
+        return None
+    import hvac
+    from api_server.llm_providers.vault import HvacLLMProviderVaultStore
+
+    client = hvac.Client(url=settings.vault_url, token=settings.vault_token)
+    return HvacLLMProviderVaultStore(client=client)
 
 
 async def transition_task_after_run(
