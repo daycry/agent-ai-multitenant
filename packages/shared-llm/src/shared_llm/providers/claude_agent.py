@@ -69,6 +69,19 @@ _SDK_NATIVE_TOOLS: tuple[str, ...] = (
     "ReadMcpResource",
 )
 
+
+def _usage_get(u: Any, name: str, default: int = 0) -> int:
+    """Read a usage field whether the SDK exposes ``usage`` as an OBJECT (attribute)
+    or a DICT (key). The Claude Agent SDK's ResultMessage carries ``total_cost_usd``
+    as a message attribute but its ``usage`` may arrive as a plain dict — in which
+    case ``getattr(u, "input_tokens")`` silently returned 0, so runs showed cost>0
+    with tokens=0. This reads both shapes."""
+    if u is None:
+        return default
+    val = u.get(name, default) if isinstance(u, dict) else getattr(u, name, default)
+    return int(val or 0)
+
+
 # Markers in the CLI's error ``result`` text that mean "fix your credential", so a
 # failed run raises the typed ``AuthError`` (actionable: tell the operator to set
 # the provider's api_key / oauth_token — ADR 0064) instead of a generic error.
@@ -238,10 +251,10 @@ class ClaudeAgentProvider:
                         text_parts.append(text)
             u = getattr(msg, "usage", None)
             if u:
-                usage.input_tokens = int(getattr(u, "input_tokens", usage.input_tokens) or 0)
-                usage.output_tokens = int(getattr(u, "output_tokens", usage.output_tokens) or 0)
-                usage.cache_read_tokens = int(getattr(u, "cache_read_input_tokens", 0) or 0)
-                usage.cache_write_tokens = int(getattr(u, "cache_creation_input_tokens", 0) or 0)
+                usage.input_tokens = _usage_get(u, "input_tokens", usage.input_tokens)
+                usage.output_tokens = _usage_get(u, "output_tokens", usage.output_tokens)
+                usage.cache_read_tokens = _usage_get(u, "cache_read_input_tokens")
+                usage.cache_write_tokens = _usage_get(u, "cache_creation_input_tokens")
             cost = getattr(msg, "total_cost_usd", None)
             if cost is not None:
                 usage.cost_usd = float(cost)
@@ -507,14 +520,10 @@ class ClaudeAgentProvider:
                 u = getattr(msg, "usage", None)
                 if u or getattr(msg, "total_cost_usd", None) is not None:
                     last_usage = Usage(
-                        input_tokens=int(getattr(u, "input_tokens", 0) or 0) if u else 0,
-                        output_tokens=int(getattr(u, "output_tokens", 0) or 0) if u else 0,
-                        cache_read_tokens=(
-                            int(getattr(u, "cache_read_input_tokens", 0) or 0) if u else 0
-                        ),
-                        cache_write_tokens=(
-                            int(getattr(u, "cache_creation_input_tokens", 0) or 0) if u else 0
-                        ),
+                        input_tokens=_usage_get(u, "input_tokens"),
+                        output_tokens=_usage_get(u, "output_tokens"),
+                        cache_read_tokens=_usage_get(u, "cache_read_input_tokens"),
+                        cache_write_tokens=_usage_get(u, "cache_creation_input_tokens"),
                         cost_usd=float(getattr(msg, "total_cost_usd", 0.0) or 0.0),
                     )
         except Exception as exc:
@@ -570,14 +579,10 @@ def _to_agent_event(msg: Any) -> AgentRunEvent:
     raw_usage = getattr(msg, "usage", None)
     if cost is not None:
         usage = Usage(
-            input_tokens=int(getattr(raw_usage, "input_tokens", 0) or 0) if raw_usage else 0,
-            output_tokens=int(getattr(raw_usage, "output_tokens", 0) or 0) if raw_usage else 0,
-            cache_read_tokens=(
-                int(getattr(raw_usage, "cache_read_input_tokens", 0) or 0) if raw_usage else 0
-            ),
-            cache_write_tokens=(
-                int(getattr(raw_usage, "cache_creation_input_tokens", 0) or 0) if raw_usage else 0
-            ),
+            input_tokens=_usage_get(raw_usage, "input_tokens"),
+            output_tokens=_usage_get(raw_usage, "output_tokens"),
+            cache_read_tokens=_usage_get(raw_usage, "cache_read_input_tokens"),
+            cache_write_tokens=_usage_get(raw_usage, "cache_creation_input_tokens"),
             cost_usd=float(cost),
         )
         return AgentRunEvent(kind="result", usage=usage, raw=msg)
