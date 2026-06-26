@@ -82,8 +82,9 @@ Todos en `status: pending_approval` — **ningún plan se ha empezado; requieren
 | [prod-15-gobernanza-roadmap-docs](./prod-15-gobernanza-roadmap-docs.md)               | P2   | 11     | 9 pd     | 2-3 sem  | —             |
 | [prod-16-frontend-i18n-calidad](./prod-16-frontend-i18n-calidad.md)                   | P2   | 12     | 18,5 pd  | 3-4 sem  | —             |
 | [prod-17-bucle-ai-reviewer](./prod-17-bucle-ai-reviewer.md)                           | P2   | 7      | 10-13 pd | 2-3 sem  | prod-06       |
+| [prod-18-worktree-en-ejecucion](./prod-18-worktree-en-ejecucion.md)                   | P2   | 6      | 14-18 pd | 3-4 sem  | —             |
 
-Coste humano estimado total: **~112.000–149.000 €** (a 450-600 €/persona-día). Cada hallazgo vigente está asignado a exactamente un plan (verificado automáticamente; `db-9` se cierra en prod-14 y prod-13 lo referencia). **prod-17** se añadió después (2026-06-26): es la parte A de `task_prod06_dag_03` que prod-06 difirió a un plan dedicado (ADR 0084 Opción B) — el bucle del AI reviewer (workers-1).
+Coste humano estimado total: **~112.000–149.000 €** (a 450-600 €/persona-día). Cada hallazgo vigente está asignado a exactamente un plan (verificado automáticamente; `db-9` se cierra en prod-14 y prod-13 lo referencia). **prod-17** se añadió después (2026-06-26): es la parte A de `task_prod06_dag_03` que prod-06 difirió a un plan dedicado (ADR 0084 Opción B) — el bucle del AI reviewer (workers-1). **prod-18** (2026-06-26): cablear el worktree en la ejecución del agente (las bibliotecas de Plan 06 existen pero `conduct_execution` no las usa → el agente corre en tmpfs efímero); desbloquea prod-17 `test_01`/`e2e`, ADR 0063 B2 y el auto-PR con contenido de ADR 0072. Hallazgo `[critical]` de `auditoria-zonas-2026-06.md:82`.
 
 ## Orden de ejecución recomendado
 
