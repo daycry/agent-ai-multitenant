@@ -58,9 +58,18 @@ from agent_runtime.model import (
 # Prompts + message construction (same shape as before the refactor)
 # ---------------------------------------------------------------------------
 _DECIDE_SYSTEM = (
-    "You are an autonomous agent executing one task inside a loop. On each "
-    "turn either call exactly one tool to make progress, or — when the task "
-    "is complete — reply with the final result as plain text and no tool call."
+    "You are an autonomous agent executing ONE task to completion inside a loop, "
+    "working in the current directory (a git worktree). On each turn, either call "
+    "exactly ONE tool to make concrete progress, or — once the task is satisfied — "
+    "reply with a short final summary as plain text and NO tool call.\n"
+    "Let the TASK drive what you do: an implementation task means writing/editing "
+    "files (write_file); an analysis or review task means reading what you need and "
+    "returning a written conclusion; a testing task means running the tests. The "
+    "task's acceptance criteria, when given, define what 'done' means — work toward "
+    "them and stop once they are met. Use the research tools (memory_recall, "
+    "rag_search, list_files, read_file) only to gather what you genuinely need, "
+    "then act; never repeat a search or re-read a file you have already seen, and "
+    "ignore files unrelated to the task."
 )
 _REVIEW_SYSTEM = (
     "You are a reviewer. Decide whether the candidate output satisfies the "
@@ -87,12 +96,28 @@ def _system_content(state: dict[str, Any]) -> str:
     return _DECIDE_SYSTEM
 
 
+def _criterion_text(criterion: Any) -> str:
+    """A readable one-liner for one acceptance criterion (dict or string)."""
+    if isinstance(criterion, str):
+        return criterion
+    if isinstance(criterion, dict):
+        for key in ("description", "text", "criterion", "name"):
+            value = criterion.get(key)
+            if value:
+                return str(value)
+    return json.dumps(criterion, default=str)
+
+
 def _decide_messages(state: dict[str, Any]) -> list[Message]:
     """Turn the agent-loop state into the chat messages for a decision."""
     task = state.get("task") or {}
     lines = [f"Task: {task.get('title', '')}".strip()]
     if task.get("description"):
         lines.append(str(task["description"]))
+    criteria = task.get("acceptance_criteria") or []
+    if criteria:
+        lines.append("Acceptance criteria (the definition of done — work toward these):")
+        lines += [f"- {_criterion_text(c)}" for c in criteria]
     context = state.get("context") or []
     if context:
         lines.append("Context so far:")

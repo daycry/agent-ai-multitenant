@@ -237,14 +237,25 @@ def _agent_spec(
     approval_policy: dict[str, Any] | None,
     *,
     model_spec: dict[str, Any] | None = None,
+    acceptance_criteria: list[Any] | None = None,
 ) -> dict[str, Any]:
     """The `AGENT_TASK_SPEC` payload for the container.
 
     ``model_spec`` is the RESOLVED model (kind + endpoint + credential,
     ADR 0057 F1) the worker computed from ``request.model``; ``None`` keeps
     the request's spec verbatim (pure-function callers / scripted tests).
+
+    ``acceptance_criteria`` (the task's definition of "done") is merged into
+    ``spec["task"]`` so the agent's decision prompt can show what completing the
+    task means — letting the TASK drive read/write/test behaviour instead of a
+    blanket rule. ``None``/empty keeps ``task`` as the request sent it.
     """
-    spec: dict[str, Any] = {"task": request.task, "model": model_spec or request.model}
+    task_payload = (
+        {**request.task, "acceptance_criteria": acceptance_criteria}
+        if acceptance_criteria
+        else request.task
+    )
+    spec: dict[str, Any] = {"task": task_payload, "model": model_spec or request.model}
     if request.budgets:
         spec["budgets"] = request.budgets
     # With a policy the loop gates sensitive tool calls (task_02_33).
@@ -313,6 +324,7 @@ def _build_runtime_env(
     *,
     agent_internal_api_url: str,
     model_spec: dict[str, Any] | None = None,
+    acceptance_criteria: list[Any] | None = None,
 ) -> dict[str, str]:
     """El env del contenedor `agent-runtime` para una ejecución (función PURA).
 
@@ -338,7 +350,14 @@ def _build_runtime_env(
     gracia si el token expira o el api-server no responde.
     """
     env: dict[str, str] = {
-        "AGENT_TASK_SPEC": json.dumps(_agent_spec(request, approval_policy, model_spec=model_spec)),
+        "AGENT_TASK_SPEC": json.dumps(
+            _agent_spec(
+                request,
+                approval_policy,
+                model_spec=model_spec,
+                acceptance_criteria=acceptance_criteria,
+            )
+        ),
     }
     # Sin agente asignado no hay sujeto para el token: lo dejamos fuera y el
     # runtime mantiene su comportamiento sin API interna (backward-compat).
@@ -893,6 +912,9 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 agent_internal_api_url=settings.agent_internal_api_url,
                 # El spec RESUELTO (kind + endpoint + credencial) — ADR 0057 F1.
                 model_spec=resolved_model,
+                # La definición de "hecho" de la tarea → al prompt de decisión,
+                # para que el comportamiento (leer/escribir/test) lo dicte la tarea.
+                acceptance_criteria=task_acceptance_criteria,
             ),
             labels={"com.agentic-platform.execution-id": exec_id},
             workspace_host_path=workspace_host_path,

@@ -16,6 +16,11 @@ from agent_runtime.tools import ToolResult
 # Cap on a single file_read so a huge file cannot blow up the steps_log.
 _MAX_READ_BYTES = 1_000_000
 
+# The Claude Code CLI drops its own state (.claude.json ~25KB, .claude/) into the
+# working dir. Hide it from listings so the agent never wastes a turn reading CLI
+# config into its context — it is not part of the task's workspace.
+_CLI_ARTIFACTS = frozenset({".claude", ".claude.json"})
+
 
 @dataclass
 class WorkspaceFiles:
@@ -79,5 +84,6 @@ class WorkspaceFiles:
                 "size": child.stat().st_size if child.is_file() else None,
             }
             for child in sorted(resolved.iterdir())
+            if child.name not in _CLI_ARTIFACTS
         ]
         return ToolResult(ok=True, output={"path": args.get("path", "."), "entries": entries})

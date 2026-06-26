@@ -43,10 +43,14 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "scopes": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "items": {
+                        "type": "string",
+                        "enum": ["private", "team_shared", "project_shared", "global"],
+                    },
                     "description": (
-                        "Scopes a consultar (private/team_shared/project_shared/global). "
-                        "Opcional; por defecto los disponibles."
+                        "Scopes a consultar. Valores válidos EXACTOS: 'private', "
+                        "'team_shared', 'project_shared', 'global'. Opcional; por "
+                        "defecto los disponibles."
                     ),
                 },
                 "limit": {

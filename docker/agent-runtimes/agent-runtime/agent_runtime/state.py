@@ -9,7 +9,7 @@ last wrote them.
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, NotRequired, TypedDict
 
 # Execution status vocabulary — shared with the `executions` table.
 STATUS_RUNNING = "running"
@@ -25,6 +25,10 @@ class AgentTask(TypedDict):
     id: str
     title: str
     description: str
+    # The task's definition of "done" (worker merges it into the spec). Drives
+    # the decision prompt so read/write/test behaviour follows the TASK, not a
+    # blanket rule. Absent for tasks without criteria (backward-compat).
+    acceptance_criteria: NotRequired[list[Any]]
 
 
 class AgentState(TypedDict):
