@@ -10,8 +10,9 @@ this module only EMITS the samples it consumes.
 On a single-machine Docker host the dependency-free way to surface app metrics to
 Prometheus is the **node-exporter textfile collector** — the same pattern as
 :mod:`workers.backup_metrics`. A beat task samples the metrics and drops a
-``*.prom`` file into the directory node-exporter watches; we write it ATOMICALLY
-(temp file + ``os.replace``) so node-exporter never reads a half-written file.
+``*.prom`` file into the directory node-exporter watches via the shared
+:func:`workers.textfile_collector.write_textfile_metric` helper (atomic write +
+"sink-absent is expected, not a fault" semantics — see that module).
 
 Exposed samples
 ---------------
@@ -21,20 +22,14 @@ Exposed samples
 ``agentic_tasks_by_status{status}`` (gauge)
     Count of non-deleted ``tasks`` rows in each lifecycle status, across tenants.
 
-Best-effort: emitting metrics must never break the worker. A failure to write the
-file (collector dir absent, permission error, …) is logged and swallowed.
+Best-effort: emitting metrics must never break the worker.
 """
 
 from __future__ import annotations
 
-import contextlib
 import os
-import tempfile
-from pathlib import Path
 
-import structlog
-
-_log = structlog.get_logger("workers.queue_metrics")
+from workers.textfile_collector import write_textfile_metric
 
 # Metric names — namespace ``agentic_`` (mirrors agentic_backup_*). prod-08's
 # scrape rules / dashboards reference these; keep in sync.
@@ -80,23 +75,11 @@ def write_queue_metrics(
     status_counts: dict[str, int],
 ) -> bool:
     """Atomically write the queue-metrics file. Returns ``True`` on success,
-    ``False`` on any (swallowed) error — best-effort, never breaks the worker."""
-    target = Path(path)
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        body = render_queue_metrics(queue_depths=queue_depths, status_counts=status_counts)
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(target.parent), prefix=target.name + ".", suffix=".tmp"
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(body)
-            os.replace(tmp_name, target)
-        except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp_name)
-            raise
-    except OSError as exc:  # pragma: no cover — defensive: metrics never break the worker
-        _log.warning("queue_metrics.write_error", path=str(target), error=str(exc))
-        return False
-    return True
+    ``False`` otherwise — best-effort, never breaks the worker. Delegates the
+    publish (and the sink-absent-vs-real-failure log semantics) to
+    :func:`workers.textfile_collector.write_textfile_metric`."""
+    return write_textfile_metric(
+        path,
+        lambda: render_queue_metrics(queue_depths=queue_depths, status_counts=status_counts),
+        event_prefix="queue_metrics",
+    )

@@ -32,21 +32,23 @@ Exposed samples
 
 Best-effort
 -----------
-Emitting metrics must never break a backup. A failure to write the file (the
-collector dir is missing because the monitoring overlay is not up, a permission
-error, ...) is logged and swallowed — the backup itself already succeeded or
-failed independently of whether we managed to record it.
+Emitting metrics must never break a backup. The publish goes through the shared
+:func:`workers.textfile_collector.write_textfile_metric` helper, which treats an
+absent textfile sink (the monitoring overlay isn't up, so the collector dir
+can't be provisioned) as an expected posture logged quietly, and a genuine write
+failure on a provisioned sink as a loud fault — the backup itself already
+succeeded or failed independently of whether we managed to record it.
 """
 
 from __future__ import annotations
 
-import contextlib
 import os
-import tempfile
 import time
 from pathlib import Path
 
 import structlog
+
+from workers.textfile_collector import write_textfile_metric
 
 _log = structlog.get_logger("workers.backup_metrics")
 
@@ -108,27 +110,16 @@ def write_backup_metrics(path: str | os.PathLike[str], *, success: bool) -> bool
     """
     target = Path(path)
     now = time.time()
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # On success, advance the success clock to now; on failure, preserve the
-        # previously-published success timestamp so the age alert keeps measuring
-        # from the last GOOD backup.
+
+    def _render() -> str:
+        # Called only once the collector dir is known to exist (phase 1 of the
+        # helper). On success advance the success clock to now; on failure
+        # preserve the previously-published success timestamp so the age alert
+        # keeps measuring from the last GOOD backup.
         last_success_ts = now if success else _read_last_success_ts(target)
-        body = render_backup_metrics(success=success, now=now, last_success_ts=last_success_ts)
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(target.parent), prefix=target.name + ".", suffix=".tmp"
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(body)
-            os.replace(tmp_name, target)
-        except BaseException:
-            # Clean up the temp file on any failure mid-write.
-            with contextlib.suppress(OSError):
-                os.unlink(tmp_name)
-            raise
-    except OSError as exc:  # pragma: no cover — defensive: metrics never break backup
-        _log.warning("backup.metrics.write_error", path=str(target), error=str(exc))
-        return False
-    _log.info("backup.metrics.written", path=str(target), success=success)
-    return True
+        return render_backup_metrics(success=success, now=now, last_success_ts=last_success_ts)
+
+    ok = write_textfile_metric(target, _render, event_prefix="backup.metrics")
+    if ok:
+        _log.info("backup.metrics.written", path=str(target), success=success)
+    return ok
