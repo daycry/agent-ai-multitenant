@@ -1,9 +1,9 @@
 ---
 plan_id: prod-17-bucle-ai-reviewer
 title: Bucle del AI reviewer — in_review → veredicto → done/backlog (cierre del ciclo autónomo)
-status: pending_approval
+status: in_progress
 blocking_plan: [prod-06-ciclo-vida-ejecucion]
-started_at: null
+started_at: 2026-06-26
 completed_at: null
 estimated_duration_calendar: 2-3 semanas
 estimated_effort_person_days: 10-13
@@ -22,7 +22,7 @@ priority: P2
 | Campo                            | Valor                                                        |
 | -------------------------------- | ------------------------------------------------------------ |
 | **ID del Plan**                  | `prod-17-bucle-ai-reviewer`                                  |
-| **Estado**                       | `pending_approval`                                           |
+| **Estado**                       | `in_progress`                                                |
 | **Prioridad**                    | P2                                                           |
 | **Bloqueado por**                | prod-06 (usa su transición a `in_review` y la promoción DAG) |
 | **Tiempo estimado (calendario)** | 2-3 semanas                                                  |
@@ -64,9 +64,9 @@ a `backlog` con feedback estructurado y, al agotar reintentos, escala a validaci
 **Entra**:
 
 - Reconciliación de `apply_reviewer_verdict`: `approve` mueve `in_review → done` (hoy es
-  no-op); `reject` → `backlog` + `retry_count++` (ya existe) **+ escalado a
-  `awaiting_human_approval` al llegar a `max_retries`** (reconcilia con
-  `TaskLifecycle.reject_review`, evita bucle infinito reject↔retry).
+  no-op); `reject` → `backlog` + `retry_count++` (ya existe) **+ escalado a `blocked` al
+  llegar a `max_retries`** (DB-legal desde `in_review`; ver decisión 2; evita bucle infinito
+  reject↔retry).
 - Trigger en el orchestrator: reacciona a `task.status_changed → in_review` y, si el
   `reviewer_agent_id` resuelve a un agente **AI**, encola una ejecución de review.
 - Routing por `agent_type`: AI reviewer (este plan) vs peer-review **humano** (camino
@@ -97,9 +97,13 @@ a `backlog` con feedback estructurado y, al agotar reintentos, escala a validaci
    (`conduct_execution`) es agnóstico; solo cambia el spec (agent_id del reviewer + contexto
    de review) y la captura de salida. Alternativa descartada: un review-runtime dedicado
    (over-engineering; el AI reviewer no sirve una app, solo emite texto).
-2. **Escalado en reject**: `reject` → `backlog` + `retry_count++`; al alcanzar `max_retries`
-   → `awaiting_human_approval` (no `backlog` infinito). Reconcilia el path DB
-   (`apply_reviewer_verdict`, que hoy no escala) con el in-memory (`TaskLifecycle`, que sí).
+2. **Escalado en reject**: `reject` con `retry_count < max_retries` → `backlog` (reintento);
+   al alcanzar `max_retries` → **`blocked`** (no `backlog` infinito). NOTA de reconciliación:
+   el in-memory `TaskLifecycle` escala a `awaiting_human`, pero la **state machine de BD NO
+   permite `in_review → awaiting_human_approval`** (ese estado es de la approval-engine de
+   ADR 0020, alcanzable solo desde `in_progress`). La salida DB-legal desde `in_review` para
+   "review agotado, interviene un humano" es `blocked` (`in_review → blocked` ✓), coherente
+   con `dag_01` (failed → blocked). El audit `review_comment` registra el motivo.
 3. **`approve` cierra la tarea**: `in_review → done` vía `transition_task_status` (state
    machine), no mutación directa. Hoy `approve` es no-op y deja la tarea colgada.
 4. **Routing por `agent_type`**: `reviewer_agent_id` con `agent_type` AI/reviewer → bucle de
@@ -116,12 +120,14 @@ a `backlog` con feedback estructurado y, al agotar reintentos, escala a validaci
 
 #### `task_prod17_bridge_01` — `approve → done` + escalado en reject
 
-- [ ] **Título**: Extender `apply_reviewer_verdict` (reviewer_bridge.py:95): en `approve`
+- [x] **Título**: Extender `apply_reviewer_verdict` (reviewer_bridge.py:95): en `approve`
       mover `in_review → done` vía `transition_task_status` (+ `completed_at`); en `reject`,
-      tras `retry_count++`, si `retry_count >= max_retries` transicionar a
-      `awaiting_human_approval` en lugar de `backlog`. Mantener el audit `review_comment`.
-      Cargar la Task con predicado `tenant_id` explícito (defensa en profundidad, como
-      `human_agents/review.py`). `unknown` sigue siendo no-op (lo gestiona el caller, Fase B).
+      tras `retry_count++`, si `retry_count >= max_retries` transicionar a **`blocked`** (DB-legal
+      desde `in_review`; ver decisión 2) en lugar de `backlog`. Mantener el audit
+      `review_comment` (en el escalado, anotar el motivo `max_retries`). Cargar la Task con
+      predicado `tenant_id` explícito (defensa en profundidad, como `human_agents/review.py`).
+      `unknown` sigue siendo no-op (lo gestiona el caller, Fase B). El `approve`/escalado solo
+      aplican si la tarea está en `in_review` (idempotencia; guard de estado).
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -134,10 +140,10 @@ a `backlog` con feedback estructurado y, al agotar reintentos, escala a validaci
 
 #### `task_prod17_loop_01` — Trigger `in_review` + dispatch de la ejecución de review
 
-- [ ] **Título**: En `orchestrator/dispatch.py`, añadir `_is_in_review_trigger` + un manejador
+- [x] **Título**: En `orchestrator/dispatch.py`, añadir `_is_in_review_trigger` + un manejador
       que, ante `task.status_changed → in_review`, resuelva `reviewer_agent_id`: si es AI
       (agent_type reviewer/ai), construir una `ExecutionRequest` con `agent_id =
-    reviewer_agent_id` y un contexto de review (Fase B task_loop_02) y encolarla; si es
+reviewer_agent_id` y un contexto de review (Fase B task_loop_02) y encolarla; si es
       humano o no hay reviewer, no hacer nada (lo cubre el peer-review existente). BYPASSRLS
       con predicado `tenant_id`.
 - **Tiempo**: 2 días · **Complejidad**: m
@@ -151,7 +157,7 @@ a `backlog` con feedback estructurado y, al agotar reintentos, escala a validaci
 
 #### `task_prod17_loop_02` — Builder del spec de review
 
-- [ ] **Título**: Función que arma el contexto de review: tarea (título/descr/criterios de
+- [x] **Título**: Función que arma el contexto de review: tarea (título/descr/criterios de
       aceptación) + salida/diff del implementador (de la ejecución previa, `executions`/audit).
       Marca la ejecución como de review (p.ej. un flag/labels en el spec) para que el worker
       sepa aplicar el veredicto al terminar.
@@ -166,7 +172,7 @@ a `backlog` con feedback estructurado y, al agotar reintentos, escala a validaci
 
 #### `task_prod17_loop_03` — Aplicación del veredicto al terminar la ejecución de review
 
-- [ ] **Título**: En el flujo post-ejecución del worker (`conduct_execution`), cuando la
+- [x] **Título**: En el flujo post-ejecución del worker (`conduct_execution`), cuando la
       ejecución es de review: pasar su salida por `parse_reviewer_output` y llamar a
       `apply_reviewer_verdict` (Fase A). `unknown` → re-prompt acotado una vez (re-encola la
       review), luego `reject` defensivo. Publicar el evento de tarea resultante (done/backlog/
@@ -184,10 +190,11 @@ a `backlog` con feedback estructurado y, al agotar reintentos, escala a validaci
 
 #### `task_prod17_test_01` — Cableo productivo de `run_test_runtime` → TestReport
 
-- [ ] **Título**: Dar caller productivo a `run_test_runtime` (hoy sin productor) tras la
-      ejecución del implementador: ejecutar los tests del proyecto en el test-runtime, persistir
-      el `TestReport` en `task_audit_events`. Coordinar con prod-06 (la tarea ya pasa a
-      `in_review`); el TestReport debe estar disponible antes de la review.
+- [ ] **Título** ⏸️ **BLOQUEADO (cableado de worktree en la ejecución)**: Dar caller
+      productivo a `run_test_runtime` (hoy sin productor) tras la ejecución del implementador:
+      ejecutar los tests del proyecto en el test-runtime, persistir el `TestReport` en
+      `task_audit_events`. Coordinar con prod-06 (la tarea ya pasa a `in_review`); el
+      TestReport debe estar disponible antes de la review. > **BLOQUEO descubierto (2026-06-26):** `conduct_execution` NO fija > `ContainerSpec.workspace_host_path` — el agente implementador corre **sin el repo > del proyecto montado** ("la pool con reuso de worktree llega en Plan 06", ver > `container.py`). Sin un worktree con el código del implementador, el test-runtime no > tiene QUÉ testear. Es el subsistema de **git-worktrees / ejecución en worktree** > (CLAUDE.md principios 4/5), separado y mayor que esta tarea. test_01 espera ese > cableado; mientras tanto no se produce TestReport y test_02 (consumidor) degrada > elegantemente (revisa el diff). Candidato a un plan dedicado de worktree-execution.
 - **Tiempo**: 2 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -198,28 +205,28 @@ a `backlog` con feedback estructurado y, al agotar reintentos, escala a validaci
 
 #### `task_prod17_test_02` — Inyección de `<test-report>` en el prompt del reviewer
 
-- [ ] **Título**: En el builder del spec de review (task_loop_02), si hay TestReport para la
+- [x] **Título**: En el builder del spec de review (task_loop_02), si hay TestReport para la
       tarea, envolverlo con `reviewer_input.reviewer_input_block` e inyectarlo en el prompt del
       reviewer, completando el bucle de ADR 0027:106-118. Sin TestReport (proyecto sin tests) el
-      reviewer revisa solo el diff (degradación elegante).
+      reviewer revisa solo el diff (degradación elegante). > Hecho (consumidor): `_build_review_request` lee los `test_run_completed` persistidos > y `_format_test_report_block` arma el `<test-report>` que va en `review_context`. > Independiente del productor (test_01, bloqueado): cuando el test-runtime persista esos > eventos, el reviewer los usa automáticamente. Sin eventos → bloque vacío (degrada). > Test en `test_in_review_dispatch.py::test_review_request_includes_test_report_when_present`.
 - **Tiempo**: 1 día · **Complejidad**: s
 - **Depende de**: task_prod17_loop_02, task_prod17_test_01
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod17_test_02_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_reviewer_receives_testreport.py -v"
+    command: "pytest tests/integration/test_in_review_dispatch.py -v -k test_report"
   ```
 
 ### Fase D — e2e, cierre y ratificación
 
 #### `task_prod17_e2e_01` — e2e del bucle + presupuesto + ratificación ADR
 
-- [ ] **Título**: Test e2e del ciclo completo (implementador → test-runtime → reviewer →
-      approve=done / reject=backlog → reintento → escalado a awaiting_human). Verificar que la
-      ejecución de review cuenta contra el budget del proyecto (reusa prod-06 budget_02).
-      Ratificar ADR 0084 (de `accepted` Opción B a IMPLEMENTADO) + entrada de changelog +
-      actualizar el diagrama de ADR 0027 si procede.
+- [ ] **Título** ⏸️ **BLOQUEADO (Docker real + test_01)**: Test e2e del ciclo completo
+      (implementador → test-runtime → reviewer → approve=done / reject=backlog → reintento →
+      escalado a `blocked`). Verificar que la ejecución de review cuenta contra el budget del
+      proyecto (reusa prod-06 budget_02). Ratificar ADR 0084 + entrada de changelog +
+      actualizar el diagrama de ADR 0027 si procede. > **BLOQUEADO:** el e2e corre contenedores reales (la ejecución del reviewer de punta a > punta) → gateado por Docker como el e2e de instalación; y el tramo con test-runtime > depende de `task_prod17_test_01` (a su vez bloqueado por el worktree-en-ejecución). El > bucle SIN test-report (Fases A–B + test_02 consumidor) está cubierto por los tests de > integración (`test_reviewer_bridge_wiring`, `test_in_review_dispatch`, > `test_review_execution_applies_verdict`). Changelog de progreso emitido en > `docs/07-changelog/prod-17-bucle-ai-reviewer.md`.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml

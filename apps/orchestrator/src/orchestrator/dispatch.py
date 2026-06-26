@@ -34,6 +34,7 @@ from api_server.budgets import budget_pause_block, resolve_execution_budgets
 from api_server.db.domain import (
     Agent,
     AgentType,
+    Execution,
     HumanAgentConfig,
     HumanTaskAssignment,
     HumanTaskAssignmentStatus,
@@ -43,6 +44,7 @@ from api_server.db.domain import (
     TaskStatus,
     Team,
 )
+from api_server.db.models import TaskAuditEvent
 from api_server.db.platform_settings import (
     config_needs_default_model,
     get_default_execution_budgets,
@@ -75,6 +77,7 @@ _READY = "ready"
 _IN_PROGRESS = "in_progress"
 # Terminal status that may complete the owning plan.
 _DONE = "done"
+_IN_REVIEW = TaskStatus.IN_REVIEW.value
 _ASSIGNED_TO_HUMAN = TaskStatus.ASSIGNED_TO_HUMAN.value
 # Agent scopes eligible to take a project's task (spec §5.7.5).
 _GLOBAL_SCOPES = ("global_builtin", "global_tenant_template")
@@ -102,6 +105,52 @@ def _is_done_trigger(event: TaskEvent) -> bool:
     """True when a task just reached terminal ``done`` — it may complete its
     plan and so trigger the transition to ``pending_human_validation``."""
     return event.type == EVENT_TASK_STATUS_CHANGED and event.payload.get("new_status") == _DONE
+
+
+def _is_in_review_trigger(event: TaskEvent) -> bool:
+    """True when a task just entered ``in_review`` — if its reviewer is an AI
+    agent, the orchestrator dispatches a review execution (prod-17 loop_01)."""
+    return event.type == EVENT_TASK_STATUS_CHANGED and event.payload.get("new_status") == _IN_REVIEW
+
+
+# Cap on test-run outcomes folded into the reviewer's `<test-report>` block — a
+# single run emits one per runtime (usually 1-3); we keep the freshest few.
+_MAX_TEST_REPORT_RUNTIMES = 6
+# Per-runtime log tail kept in the reviewer block (the full logs live in the
+# audit event / `docker logs`); enough for the reviewer to see what failed.
+_TEST_REPORT_LOG_TAIL = 1500
+
+
+def _format_test_report_block(outcomes: list[dict[str, Any]]) -> str:
+    """Render persisted ``test_run_completed`` outcomes as the reviewer's
+    ``<test-report>`` prompt block (prod-17 task_prod17_test_02).
+
+    Reads the outcome dicts the test-runtime persists (``runtime``, ``exit_codes``,
+    ``all_passed``, ``timed_out``, ``logs_tail``) — no dependency on the sandboxed
+    runtime package. Returns ``""`` when there are no outcomes (the reviewer then
+    reviews the diff alone — graceful degradation)."""
+    if not outcomes:
+        return ""
+    lines = ["<test-report>"]
+    for o in outcomes:
+        runtime = str(o.get("runtime", "unknown"))
+        passed = bool(o.get("all_passed", False))
+        status = "PASSED" if passed else "FAILED"
+        exit_codes = o.get("exit_codes")
+        timed_out = bool(o.get("timed_out", False))
+        header = f"- runtime {runtime}: {status} (exit_codes={exit_codes}"
+        if timed_out:
+            header += ", timed_out=true"
+        header += ")"
+        lines.append(header)
+        logs_tail = str(o.get("logs_tail") or "")
+        if not passed and logs_tail:
+            lines.append("  logs (tail):")
+            lines.append("  ```")
+            lines.append(logs_tail[-_TEST_REPORT_LOG_TAIL:])
+            lines.append("  ```")
+    lines.append("</test-report>")
+    return "\n".join(lines)
 
 
 @dataclass(frozen=True)
@@ -149,6 +198,9 @@ class TaskDispatcher:
         """
         if _is_done_trigger(event):
             await self._on_task_done(event)
+            return
+        if _is_in_review_trigger(event):
+            await self._on_task_in_review(event)
             return
         if not _is_ready_trigger(event):
             return
@@ -231,6 +283,175 @@ class TaskDispatcher:
                     plan_id=str(plan.id),
                     tenant_id=str(tenant_id),
                 )
+
+    async def _on_task_in_review(self, event: TaskEvent) -> None:
+        """A task entered ``in_review``: if its reviewer is an AI agent, dispatch a
+        review execution (prod-17 loop_01).
+
+        The reviewer runs as a NORMAL agent execution (the engine is agnostic); the
+        worker applies its verdict on completion (loop_03). Routing by agent_type: a
+        human reviewer (``agent_type='human'``) is left to the peer-review path
+        (unchanged); a missing / cross-tenant / absent reviewer is a no-op. Best-effort
+        enqueue — a failure leaves the task ``in_review`` and a re-delivered event (or a
+        future sweep) retries; we never strand a half-state."""
+        tenant_id = UUID(event.tenant_id)
+        task_id = UUID(event.task_id)
+        async with self._sessionmaker() as session:
+            task = (
+                await session.execute(
+                    select(Task).where(Task.id == task_id, Task.tenant_id == tenant_id)
+                )
+            ).scalar_one_or_none()
+            if task is None or task.status != _IN_REVIEW or task.reviewer_agent_id is None:
+                return
+            reviewer = (
+                await session.execute(
+                    select(Agent).where(
+                        Agent.id == task.reviewer_agent_id, Agent.tenant_id == tenant_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if reviewer is None or reviewer.agent_type == AgentType.HUMAN.value:
+                # No AI reviewer → human peer-review path / nothing. Not our concern.
+                return
+            project = (
+                await session.execute(
+                    select(Project).where(
+                        Project.id == task.project_id, Project.deleted_at.is_(None)
+                    )
+                )
+            ).scalar_one_or_none()
+            if project is None:
+                _log.info("orchestrator.review_skip_deleted_project", task_id=str(task_id))
+                return
+            reviewer_agent_id_str = str(reviewer.id)
+            review_request = await self._build_review_request(
+                session, task=task, reviewer=reviewer, project=project
+            )
+
+        # Enqueue OUTSIDE the read txn — blocking broker I/O off the loop.
+        soft_limit, hard_limit = await self._execution_time_limits()
+        try:
+            await asyncio.to_thread(
+                self._send_run_execution, review_request, soft_limit, hard_limit
+            )
+            _log.info(
+                "orchestrator.review_dispatched",
+                task_id=str(task_id),
+                reviewer_agent_id=reviewer_agent_id_str,
+            )
+        except Exception as exc:
+            _log.error(
+                "orchestrator.review_enqueue_failed",
+                task_id=str(task_id),
+                error=str(exc),
+            )
+
+    async def _build_review_request(
+        self,
+        session: AsyncSession,
+        *,
+        task: Task,
+        reviewer: Agent,
+        project: Project,
+    ) -> dict[str, Any]:
+        """Assemble the worker payload for a REVIEW execution of ``task`` by the AI
+        ``reviewer`` (prod-17 loop_02).
+
+        Mirrors `_route_ai`'s agent-payload assembly (model inheritance chain, per-agent
+        tools/skills, per-run budget envelope) but: (a) marks the run ``review=True`` so
+        the worker applies the verdict instead of the normal post-run transition; (b)
+        carries the review context (acceptance criteria + the prior implementer
+        execution's output) instead of mutating the task status. Kept separate from
+        `_route_ai` to leave the central dispatch path untouched. The ``<test-report>``
+        injection is layered in Fase C (task_prod17_test_02)."""
+        agent_tool_names = await resolve_agent_tool_names(session, reviewer.id)
+        allowed_tools = combine_tool_allowlists(agent_tool_names, None)
+        tool_specs = await serialize_agent_tool_specs(session, reviewer.id)
+        skill_prompt_fragments = await resolve_agent_skill_prompt_fragments(session, reviewer.id)
+
+        model_spec = dict(reviewer.model_config or {})
+        if config_needs_default_model(model_spec):
+            platform_default = await get_default_model_config(session)
+            team_cfg = await self._team_model_config(session, project)
+            project_cfg = dict(getattr(project, "model_config", None) or {})
+            model_spec = resolve_model_config_chain(
+                model_spec, team_cfg, project_cfg, platform_default
+            )
+
+        platform_budgets = await get_default_execution_budgets(session)
+        budgets = resolve_execution_budgets(
+            platform_default=platform_budgets,
+            project_override=getattr(project, "execution_budgets", None),
+        )
+
+        # The implementer's most recent output for this task — what the reviewer judges.
+        prior_output = (
+            await session.execute(
+                select(Execution.output)
+                .where(Execution.task_id == task.id, Execution.tenant_id == task.tenant_id)
+                .order_by(Execution.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+        # prod-17 task_prod17_test_02: fold the latest test-runtime outcomes into a
+        # `<test-report>` block the reviewer reads (ADR 0027 loop). The test-runtime
+        # (task_prod17_test_01) persists `test_run_completed` audit events; we read
+        # the freshest few. Absent (no tests run yet) → empty → the reviewer reviews
+        # the diff alone (graceful degradation).
+        test_outcomes = list(
+            (
+                await session.execute(
+                    select(TaskAuditEvent.payload)
+                    .where(
+                        TaskAuditEvent.task_id == task.id,
+                        TaskAuditEvent.tenant_id == task.tenant_id,
+                        TaskAuditEvent.kind == "test_run_completed",
+                    )
+                    .order_by(TaskAuditEvent.at.desc())
+                    .limit(_MAX_TEST_REPORT_RUNTIMES)
+                )
+            ).scalars()
+        )
+        test_report = _format_test_report_block(list(reversed(test_outcomes)))
+
+        request: dict[str, Any] = {
+            "tenant_id": str(task.tenant_id),
+            "task_id": str(task.id),
+            "agent_id": str(reviewer.id),
+            # Marks this as a review run — the worker applies the verdict (loop_03)
+            # instead of the normal done/failed task transition (dag_01).
+            "review": True,
+            "task": {
+                "id": str(task.id),
+                "title": task.title,
+                "description": task.description or "",
+            },
+            "review_context": {
+                "acceptance_criteria": task.description or "",
+                "implementer_output": prior_output or "",
+                # `<test-report>` block (prod-17 test_02); "" when no tests ran yet.
+                "test_report": test_report,
+            },
+            "model": model_spec,
+            "budgets": budgets,
+        }
+        if allowed_tools is not None:
+            request["allowed_tools"] = allowed_tools
+        if tool_specs is not None:
+            request["tool_specs"] = tool_specs
+        if skill_prompt_fragments is not None:
+            request["skill_prompt_fragments"] = skill_prompt_fragments
+        project_commands = getattr(project, "allowed_commands", None)
+        request["allowed_commands"] = [str(c) for c in (project_commands or [])]
+        project_runtime = getattr(project, "default_runtime_template", None)
+        if project_runtime:
+            request["default_runtime_template"] = str(project_runtime)
+        project_mcp_servers = getattr(project, "mcp_servers", None)
+        if project_mcp_servers:
+            request["mcp_servers"] = [dict(server) for server in project_mcp_servers]
+        return request
 
     async def _enqueue_ai_run(self, event: TaskEvent, task_id: UUID, result: _AiDispatch) -> None:
         """Enqueue the worker run for an AI-routed task (the existing path)."""
