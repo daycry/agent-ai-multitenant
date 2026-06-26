@@ -238,6 +238,18 @@ services:
       API_SERVER_OLLAMA_URL: http://ollama:11434
       API_SERVER_CLAMAV_HOST: clamav
       API_SERVER_CLAMAV_PORT: "3310"
+      # Worker-NATIVE Ollama wiring (distinct from the API_SERVER_* ingestion
+      # factories above). The memory-embedding backfill, the Memorizer and the
+      # córtex affect distiller read the worker's OWN settings, which default to
+      # localhost:11434 and so fail inside the container ("All connection attempts
+      # failed"). Point them at the in-stack ollama. The embedder model
+      # (nomic-embed-text) matches what's pulled; the chat distillers use the
+      # small model pulled in this stack (llama3.2:1b) vs the llama3.1 code default.
+      WORKERS_MEMORY_EMBEDDER_BASE_URL: http://ollama:11434
+      WORKERS_MEMORIZER_LLM_BASE_URL: http://ollama:11434/v1
+      WORKERS_MEMORIZER_LLM_MODEL: llama3.2:1b
+      WORKERS_CORTEX_AFFECT_LLM_BASE_URL: http://ollama:11434/v1
+      WORKERS_CORTEX_AFFECT_LLM_MODEL: llama3.2:1b
     volumes:
       # DooD identity bind: the worker creates worktrees here and then asks the
       # host daemon to bind them into the ephemeral agent-runtime. The daemon
