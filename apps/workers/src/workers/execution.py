@@ -29,13 +29,14 @@ from uuid import UUID
 import structlog
 from api_server.auth.internal_agent import mint_agent_token
 from api_server.db.approval_repo import request_approval_if_needed
-from api_server.db.domain import Project, Task, TaskStatus
+from api_server.db.domain import Plan, Project, Task, TaskStatus
 from api_server.db.execution_repo import (
     create_running_execution,
     finalize_execution,
     get_execution,
     supersede_running_executions,
 )
+from api_server.db.models import Organization
 from api_server.events import publish_execution_event, publish_task_status_changed
 from api_server.task_state_machine import transition_task_status
 from redis.asyncio import Redis
@@ -541,6 +542,154 @@ async def _apply_review_verdict(
     return (task, old_status, task.status)
 
 
+async def _provision_worktree(
+    settings: Settings,
+    *,
+    tenant_slug: str,
+    project_slug: str,
+    plan_id: str,
+    plan_slug: str,
+    task_id: str,
+) -> str | None:
+    """Materialise the per-task git worktree and return its host path (prod-18
+    task_prod18_provision_01 / ADR 0085).
+
+    Ensures the project's bare repo, adds a worktree for ``task_id`` on the plan
+    branch (``plan/{id8}-{slug}``, HEAD detached so sibling tasks share it), and
+    syncs it to the branch HEAD — reusing the Plan 06 libraries. The returned path
+    is the absolute HOST path the daemon resolves for the ``/workspace`` bind (DooD).
+    Best-effort: any failure logs and returns ``None`` so the agent falls back to an
+    ephemeral ``/workspace`` tmpfs (no worktree) instead of failing the run."""
+    from pathlib import Path
+
+    from workers.git_repos import BareRepoLayout, BareRepoManager, WorktreeManager
+    from workers.plan_git import make_plan_branch_name
+
+    def _git() -> str:
+        layout = BareRepoLayout(
+            data_root=Path(settings.data_root),
+            tenant_slug=tenant_slug,
+            project_slug=project_slug,
+        )
+        repo_name = project_slug  # ADR 0085 decision 2: one bare repo per project (MVP).
+        branch = make_plan_branch_name(plan_id, plan_slug)
+        mgr = BareRepoManager(layout)
+        mgr.ensure_repo(repo_name)
+        # A fresh local bare (no remote/clone) is empty → seed a root commit so the
+        # worktree can branch off a valid HEAD.
+        mgr.seed_initial_commit_if_empty(repo_name)
+        wt = WorktreeManager(layout, repo_name)
+        path = wt.add(task_id, branch=branch)
+        wt.sync_to_head(task_id, branch=branch)
+        return str(path)
+
+    try:
+        return await asyncio.to_thread(_git)
+    except Exception as exc:  # pragma: no cover - defensive: never fail the run on git
+        _log.warning("workers.worktree_provision_failed", task_id=task_id, error=str(exc))
+        return None
+
+
+async def _commit_and_push_worktree(
+    settings: Settings,
+    *,
+    host_path: str,
+    tenant_slug: str,
+    project_slug: str,
+    plan_id: str,
+    plan_slug: str,
+    task_id: str,
+    execution_id: str,
+) -> None:
+    """Commit the agent's worktree output (with the mandatory trailers) and push it
+    to the plan branch on the local bare repo (prod-18 task_prod18_commit_01 / ADR 0085).
+
+    The WORKER does this — the sandbox has no git credentials (principle 2). A clean
+    tree (the agent produced no file change) or any git error logs and is swallowed:
+    the run already succeeded. The bare→remote push stays with the existing
+    ``open_plan_pr`` path (final_only at plan close)."""
+    from pathlib import Path
+
+    from workers.git_repos import BareRepoLayout, GitCommandError
+    from workers.plan_git import (
+        CommitTrailers,
+        PlanGitPolicies,
+        PlanGitWorkflow,
+        commit_task,
+        make_plan_branch_name,
+    )
+
+    def _git() -> str | None:
+        layout = BareRepoLayout(
+            data_root=Path(settings.data_root),
+            tenant_slug=tenant_slug,
+            project_slug=project_slug,
+        )
+        branch = make_plan_branch_name(plan_id, plan_slug)
+        try:
+            sha = commit_task(
+                Path(host_path),
+                message=f"task {task_id}",
+                trailers=CommitTrailers(
+                    plan_id=plan_id, task_id=task_id, execution_id=execution_id
+                ),
+            )
+        except GitCommandError as exc:
+            if "clean" in str(exc).lower():
+                return None  # agent produced no file change — not an error
+            raise
+        PlanGitWorkflow(
+            bare_repo_path=layout.bare_repo_path(project_slug),
+            plan_branch=branch,
+            policies=PlanGitPolicies(),
+        ).push_review_to_bare(Path(host_path))
+        return sha
+
+    try:
+        sha = await asyncio.to_thread(_git)
+        if sha is not None:
+            _log.info("workers.worktree_committed", task_id=task_id, sha=sha[:8])
+    except Exception as exc:  # pragma: no cover - never break a finished run on git
+        _log.warning("workers.worktree_commit_failed", task_id=task_id, error=str(exc))
+
+
+async def _run_task_tests(
+    settings: Settings,
+    *,
+    tenant_id: UUID,
+    task_id: UUID,
+    worktree_host_path: str,
+    acceptance_criteria: list[Any],
+) -> None:
+    """Run the project's automated tests in the test-runtime over the agent's
+    worktree and persist the TestReport (prod-18 task_prod18_test_01).
+
+    Closes the loop so the AI reviewer (prod-17 task_prod17_test_02) finds a real
+    ``<test-report>`` when it is dispatched. Only runs when the task carries
+    automated acceptance criteria; Docker-aware (``run_test_runtime`` falls back to
+    a stub when no daemon). Best-effort — a test-runtime failure never breaks the
+    finished agent run (the task still moves to review)."""
+    autos = [
+        c
+        for c in acceptance_criteria
+        if isinstance(c, dict) and c.get("runtime") and c.get("command")
+    ]
+    if not autos:
+        return
+    from workers.tasks import _run_test_runtime
+
+    test_request = {
+        "tenant_id": str(tenant_id),
+        "task_id": str(task_id),
+        "acceptance_criteria": autos,
+        "worktree_host_path": worktree_host_path,
+    }
+    try:
+        await _run_test_runtime(test_request, settings)
+    except Exception as exc:  # pragma: no cover - never break a finished run on tests
+        _log.warning("workers.task_tests_failed", task_id=str(task_id), error=str(exc))
+
+
 async def refresh_budgets_after_run(
     sessionmaker: async_sessionmaker[AsyncSession], tenant_id: UUID
 ) -> None:
@@ -579,6 +728,10 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
     """Run one task end to end: container → Redis stream → `executions` row."""
     task_id = UUID(request.task_id)
     tenant_id = UUID(request.tenant_id)
+    # The task's git worktree host path (prod-18), set when an implementer run is
+    # provisioned with one; used to bind /workspace and, on success, to commit +
+    # push the agent's output (Fase C). `None` keeps the legacy tmpfs behaviour.
+    workspace_host_path: str | None = None
     async with sessionmaker() as session, session.begin():
         # The worker is BYPASSRLS, so RLS cannot stop a Celery payload that
         # pairs a tenant with another tenant's task. Validate task↔tenant
@@ -617,6 +770,19 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         execution_id = execution.id
         project = await session.get(Project, task.project_id)
         approval_policy = project.human_approval_policy if project is not None else None
+        # prod-18 task_prod18_provision_01: gather the (stable) slugs needed to
+        # materialise the task's git worktree. Only for a real IMPLEMENTER run with a
+        # plan + slugs (NOT a review run — ADR 0085: RW worktree is the implementer's;
+        # the reviewer reads `review_context`). Missing any → no worktree (tmpfs).
+        worktree_inputs: tuple[str, str, str, str] | None = None
+        # The task's automated acceptance criteria, captured here (the session closes
+        # below) to drive the test-runtime after the agent commits (prod-18 test_01).
+        task_acceptance_criteria: list[Any] = list(task.acceptance_criteria or [])
+        if not request.review and task.plan_id is not None and project is not None and project.slug:
+            plan = await session.get(Plan, task.plan_id)
+            org = await session.get(Organization, tenant_id)
+            if plan is not None and plan.slug and org is not None and org.slug:
+                worktree_inputs = (org.slug, project.slug, str(plan.id), plan.slug)
         # ADR 0057 F1: resolver el model_config (clave `provider` = kind, sin
         # endpoint/credencial) a un spec EJECUTABLE (kind + base_url +
         # credencial de Vault) ANTES de lanzar el contenedor — el sandbox no
@@ -691,6 +857,20 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 await publish_execution_event(redis, exec_id, event_type=kind, payload=payload)
 
         drainer = asyncio.create_task(drain())
+        # prod-18 task_prod18_provision_01: materialise the task's git worktree
+        # OUTSIDE the DB transaction (git subprocess I/O) and bind-mount it RW as
+        # /workspace so the agent's file writes persist (the worker commits them in
+        # Fase C). `None` → ephemeral tmpfs (no plan/slugs, or provisioning failed).
+        if worktree_inputs is not None:
+            tenant_slug, project_slug, plan_id_str, plan_slug = worktree_inputs
+            workspace_host_path = await _provision_worktree(
+                settings,
+                tenant_slug=tenant_slug,
+                project_slug=project_slug,
+                plan_id=plan_id_str,
+                plan_slug=plan_slug,
+                task_id=str(task_id),
+            )
         container_spec = ContainerSpec(
             image=settings.agent_runtime_image,
             env=_build_runtime_env(
@@ -701,6 +881,7 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 model_spec=resolved_model,
             ),
             labels={"com.agentic-platform.execution-id": exec_id},
+            workspace_host_path=workspace_host_path,
         )
         active_runner = runner or AgentContainerRunner(settings)
         cancel_seen = False
@@ -751,6 +932,11 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
             )
         approval = final_result.get("approval") if final_result else None
     task_event: tuple[Any, str, str] | None = None
+    # The implementer-path transition (dag_01) is DEFERRED until after the worktree
+    # is committed and the tests have run (prod-18 ordering): the in_review event
+    # must fire only once the AI reviewer can find the committed diff + the
+    # <test-report>. The review + approval paths transition inside the txn (no git).
+    implementer_path = False
     async with sessionmaker() as session, session.begin():
         await finalize_execution(session, execution_id, result=result)
         # A run parked on a sensitive action becomes a real
@@ -778,15 +964,50 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 if task.status != old_status:
                     task_event = (task, old_status, task.status)
         else:
-            # prod-06 task_prod06_dag_01: every other terminal run moves the
-            # task off in_progress (done -> in_review/done, failed -> blocked).
-            task_event = await transition_task_after_run(session, task_id, result.status)
+            implementer_path = True  # transition deferred (after commit + tests)
 
-    # Publish the task event AFTER the commit so the board sees a
-    # consistent state. publish_* is best-effort and swallows its own errors.
+    # Publish the review / approval event now (these paths have no git/test follow-up).
     if task_event is not None:
         task_obj, old, new = task_event
         await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
+
+    # prod-18 implementer post-processing — BEFORE the in_review transition:
+    if implementer_path:
+        # task_prod18_commit_01: a successful run that wrote into a worktree gets
+        # committed (with trailers) + pushed to the plan branch by the WORKER (the
+        # sandbox has no git credentials). task_prod18_test_01: then the project's
+        # tests run over that worktree and persist the TestReport. Both best-effort.
+        if (
+            result.status == "done"
+            and workspace_host_path is not None
+            and worktree_inputs is not None
+        ):
+            c_tenant_slug, c_project_slug, c_plan_id, c_plan_slug = worktree_inputs
+            await _commit_and_push_worktree(
+                settings,
+                host_path=workspace_host_path,
+                tenant_slug=c_tenant_slug,
+                project_slug=c_project_slug,
+                plan_id=c_plan_id,
+                plan_slug=c_plan_slug,
+                task_id=str(task_id),
+                execution_id=exec_id,
+            )
+            await _run_task_tests(
+                settings,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                worktree_host_path=workspace_host_path,
+                acceptance_criteria=task_acceptance_criteria,
+            )
+        # prod-06 task_prod06_dag_01: NOW move the task off in_progress (done ->
+        # in_review/done, failed -> blocked) — after the commit + report exist, so the
+        # reviewer dispatched by the in_review event finds them.
+        async with sessionmaker() as session, session.begin():
+            task_event = await transition_task_after_run(session, task_id, result.status)
+        if task_event is not None:
+            task_obj, old, new = task_event
+            await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
 
     # prod-06 task_prod06_budget_01: now that the run's cost is persisted
     # (finalize_execution above), re-derive the tenant's budget auto-pause +

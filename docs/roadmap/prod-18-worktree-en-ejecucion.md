@@ -1,9 +1,9 @@
 ---
 plan_id: prod-18-worktree-en-ejecucion
 title: Worktree en la ejecución del agente — código persistente, commit y test-runtime real
-status: pending_approval
+status: in_progress
 blocking_plan: null
-started_at: null
+started_at: 2026-06-26
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 14-18
@@ -22,7 +22,7 @@ priority: P2
 | Campo                            | Valor                                                                    |
 | -------------------------------- | ------------------------------------------------------------------------ |
 | **ID del Plan**                  | `prod-18-worktree-en-ejecucion`                                          |
-| **Estado**                       | `pending_approval`                                                       |
+| **Estado**                       | `in_progress`                                                            |
 | **Prioridad**                    | P2                                                                       |
 | **Bloqueado por**                | — (las bibliotecas son de Plan 06, `completed`)                          |
 | **Tiempo estimado (calendario)** | 3-4 semanas                                                              |
@@ -122,7 +122,7 @@ task_id, branch=make_plan_branch_name(plan))` + `sync_to_head` antes de lanzar e
 
 #### `task_prod18_design_01` — ADR de worktree-en-ejecución + columnas slug
 
-- [ ] **Título**: Redactar ADR con las decisiones 1-6 (granularidad, quién commitea, cadencia,
+- [x] **Título**: Redactar ADR con las decisiones 1-6 (granularidad, quién commitea, cadencia,
       `repo_name` por tarea, columnas slug, bind RW/RO). Migración Alembic reversible:
       `projects.slug` + `plans.slug` (con backfill) y, si se aprueba, el hook de `repo_name`.
 - **Tiempo**: 2 días · **Complejidad**: m
@@ -137,7 +137,7 @@ task_id, branch=make_plan_branch_name(plan))` + `sync_to_head` antes de lanzar e
 
 #### `task_prod18_provision_01` — Montar el worktree en `conduct_execution`
 
-- [ ] **Título**: En `conduct_execution` (execution.py:694), antes de lanzar el agente:
+- [x] **Título**: En `conduct_execution` (execution.py:694), antes de lanzar el agente:
       resolver `BareRepoLayout` (slugs del Project ya cargado) → `BareRepoManager.ensure_repo` →
       `WorktreeManager.add(task_id, branch=make_plan_branch_name(plan))` → `sync_to_head`;
       pasar `workspace_host_path=str(wt_path)` al `ContainerSpec`. Path absoluto del host
@@ -155,7 +155,7 @@ task_id, branch=make_plan_branch_name(plan))` + `sync_to_head` antes de lanzar e
 
 #### `task_prod18_commit_01` — Commit con trailers + push al bare tras el run
 
-- [ ] **Título**: Tras `finalize_execution` con `done`, si el worktree tiene cambios:
+- [x] **Título**: Tras `finalize_execution` con `done`, si el worktree tiene cambios:
       `commit_task(wt_path, trailers=CommitTrailers(plan_id, task_id, execution_id, "agent"))` + `push_review_to_bare(wt_path)`; `push_branch_to_remote` según `branch_push_mode`.
       Árbol limpio (`commit_task` lanza "worktree is clean") → la tarea no produjo cambio (no
       es error). Lo hace el worker (el sandbox no tiene credenciales).
@@ -172,7 +172,7 @@ task_id, branch=make_plan_branch_name(plan))` + `sync_to_head` antes de lanzar e
 
 #### `task_prod18_test_01` — Disparar `run_test_runtime` sobre el worktree
 
-- [ ] **Título**: Tras el commit del implementador (Fase C), si la tarea tiene
+- [x] **Título**: Tras el commit del implementador (Fase C), si la tarea tiene
       `acceptance_criteria` automáticos, disparar `run_test_runtime` con el mismo
       `worktree_host_path` (reusa `group_tasks_by_runtime`); persiste `test_run_completed`.
       Esto cierra **prod-17 `task_prod17_test_01`** — el consumidor (`_build_review_request` →
@@ -191,11 +191,11 @@ task_id, branch=make_plan_branch_name(plan))` + `sync_to_head` antes de lanzar e
 
 #### `task_prod18_e2e_01` — e2e implementador→worktree→commit→tests + gotcha DooD
 
-- [ ] **Título**: Test e2e (Docker real, skip-guarded como el e2e de instalación): un agente
-      escribe en el worktree → el worker commitea con trailers → push al bare → el test-runtime
-      monta el mismo worktree y persiste el TestReport. Documentar el **gotcha DooD del bind**
-      (no existe hoy; CLAUDE.md: si lo resuelves, añádelo) en `docs/03-guides/gotchas/`.
-      Verificar el bind `{data_root}:{data_root}` en el compose generado (no volumen nombrado).
+- [ ] **Título** ⏸️ **REQUIERE RUNNER DOCKER (no acreditable localmente)**: Test e2e (Docker
+      real, skip-guarded como el e2e de instalación): un agente escribe en el worktree → el
+      worker commitea con trailers → push al bare → el test-runtime monta el mismo worktree y
+      persiste el TestReport. Documentar el **gotcha DooD del bind** en `docs/03-guides/gotchas/`.
+      Verificar el bind `{data_root}:{data_root}` en el compose generado (no volumen nombrado). > Parcial: **gotcha DooD escrito** (`worktree-bind-dood-empty-vs-named-volume.md`) + > **esqueleto e2e skip-guarded** (`tests/e2e/test_worktree_execution.py`). El run GREEN > real necesita un runner Linux+Docker + modelo capaz (como prod-01 task_20: el skip NO > lo acredita). Las piezas (1)-(4) están cubiertas en integración (sin Docker).
 - **Tiempo**: 2 días · **Complejidad**: m
 - **Depende de**: task_prod18_test_01
 - **Tests automáticos**:

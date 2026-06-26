@@ -190,8 +190,10 @@ reviewer_agent_id` y un contexto de review (Fase B task_loop_02) y encolarla; si
 
 #### `task_prod17_test_01` — Cableo productivo de `run_test_runtime` → TestReport
 
-- [ ] **Título** ⏸️ **BLOQUEADO (cableado de worktree en la ejecución)**: Dar caller
-      productivo a `run_test_runtime` (hoy sin productor) tras la ejecución del implementador:
+- [x] **Título** ✅ **DESBLOQUEADO por prod-18 Fase D** (`task_prod18_test_01`): el productor
+      (`run_test_runtime` encadenado tras el commit del worktree, antes de `in_review`) ya
+      existe; el consumidor (`test_02`) ya leía el report. Falta solo el e2e Docker (prod-18
+      Fase E). Dar caller productivo a `run_test_runtime` tras la ejecución del implementador:
       ejecutar los tests del proyecto en el test-runtime, persistir el `TestReport` en
       `task_audit_events`. Coordinar con prod-06 (la tarea ya pasa a `in_review`); el
       TestReport debe estar disponible antes de la review. > **BLOQUEO descubierto (2026-06-26):** `conduct_execution` NO fija > `ContainerSpec.workspace_host_path` — el agente implementador corre **sin el repo > del proyecto montado** ("la pool con reuso de worktree llega en Plan 06", ver > `container.py`). Sin un worktree con el código del implementador, el test-runtime no > tiene QUÉ testear. Es el subsistema de **git-worktrees / ejecución en worktree** > (CLAUDE.md principios 4/5), separado y mayor que esta tarea. test_01 espera ese > cableado; mientras tanto no se produce TestReport y test_02 (consumidor) degrada > elegantemente (revisa el diff). Candidato a un plan dedicado de worktree-execution.
