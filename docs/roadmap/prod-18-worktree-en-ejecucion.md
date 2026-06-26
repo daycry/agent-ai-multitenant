@@ -155,7 +155,7 @@ task_id, branch=make_plan_branch_name(plan))` + `sync_to_head` antes de lanzar e
 
 #### `task_prod18_commit_01` — Commit con trailers + push al bare tras el run
 
-- [ ] **Título**: Tras `finalize_execution` con `done`, si el worktree tiene cambios:
+- [x] **Título**: Tras `finalize_execution` con `done`, si el worktree tiene cambios:
       `commit_task(wt_path, trailers=CommitTrailers(plan_id, task_id, execution_id, "agent"))` + `push_review_to_bare(wt_path)`; `push_branch_to_remote` según `branch_push_mode`.
       Árbol limpio (`commit_task` lanza "worktree is clean") → la tarea no produjo cambio (no
       es error). Lo hace el worker (el sandbox no tiene credenciales).

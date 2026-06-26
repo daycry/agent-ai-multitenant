@@ -590,6 +590,69 @@ async def _provision_worktree(
         return None
 
 
+async def _commit_and_push_worktree(
+    settings: Settings,
+    *,
+    host_path: str,
+    tenant_slug: str,
+    project_slug: str,
+    plan_id: str,
+    plan_slug: str,
+    task_id: str,
+    execution_id: str,
+) -> None:
+    """Commit the agent's worktree output (with the mandatory trailers) and push it
+    to the plan branch on the local bare repo (prod-18 task_prod18_commit_01 / ADR 0085).
+
+    The WORKER does this — the sandbox has no git credentials (principle 2). A clean
+    tree (the agent produced no file change) or any git error logs and is swallowed:
+    the run already succeeded. The bare→remote push stays with the existing
+    ``open_plan_pr`` path (final_only at plan close)."""
+    from pathlib import Path
+
+    from workers.git_repos import BareRepoLayout, GitCommandError
+    from workers.plan_git import (
+        CommitTrailers,
+        PlanGitPolicies,
+        PlanGitWorkflow,
+        commit_task,
+        make_plan_branch_name,
+    )
+
+    def _git() -> str | None:
+        layout = BareRepoLayout(
+            data_root=Path(settings.data_root),
+            tenant_slug=tenant_slug,
+            project_slug=project_slug,
+        )
+        branch = make_plan_branch_name(plan_id, plan_slug)
+        try:
+            sha = commit_task(
+                Path(host_path),
+                message=f"task {task_id}",
+                trailers=CommitTrailers(
+                    plan_id=plan_id, task_id=task_id, execution_id=execution_id
+                ),
+            )
+        except GitCommandError as exc:
+            if "clean" in str(exc).lower():
+                return None  # agent produced no file change — not an error
+            raise
+        PlanGitWorkflow(
+            bare_repo_path=layout.bare_repo_path(project_slug),
+            plan_branch=branch,
+            policies=PlanGitPolicies(),
+        ).push_review_to_bare(Path(host_path))
+        return sha
+
+    try:
+        sha = await asyncio.to_thread(_git)
+        if sha is not None:
+            _log.info("workers.worktree_committed", task_id=task_id, sha=sha[:8])
+    except Exception as exc:  # pragma: no cover - never break a finished run on git
+        _log.warning("workers.worktree_commit_failed", task_id=task_id, error=str(exc))
+
+
 async def refresh_budgets_after_run(
     sessionmaker: async_sessionmaker[AsyncSession], tenant_id: UUID
 ) -> None:
@@ -628,6 +691,10 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
     """Run one task end to end: container → Redis stream → `executions` row."""
     task_id = UUID(request.task_id)
     tenant_id = UUID(request.tenant_id)
+    # The task's git worktree host path (prod-18), set when an implementer run is
+    # provisioned with one; used to bind /workspace and, on success, to commit +
+    # push the agent's output (Fase C). `None` keeps the legacy tmpfs behaviour.
+    workspace_host_path: str | None = None
     async with sessionmaker() as session, session.begin():
         # The worker is BYPASSRLS, so RLS cannot stop a Celery payload that
         # pairs a tenant with another tenant's task. Validate task↔tenant
@@ -754,7 +821,6 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         # OUTSIDE the DB transaction (git subprocess I/O) and bind-mount it RW as
         # /workspace so the agent's file writes persist (the worker commits them in
         # Fase C). `None` → ephemeral tmpfs (no plan/slugs, or provisioning failed).
-        workspace_host_path: str | None = None
         if worktree_inputs is not None:
             tenant_slug, project_slug, plan_id_str, plan_slug = worktree_inputs
             workspace_host_path = await _provision_worktree(
@@ -862,6 +928,22 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
     if task_event is not None:
         task_obj, old, new = task_event
         await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
+
+    # prod-18 task_prod18_commit_01: a successful implementer run that wrote into a
+    # worktree gets committed (with trailers) + pushed to the plan branch by the
+    # WORKER (the sandbox has no git credentials). Best-effort, off the run's path.
+    if result.status == "done" and workspace_host_path is not None and worktree_inputs is not None:
+        c_tenant_slug, c_project_slug, c_plan_id, c_plan_slug = worktree_inputs
+        await _commit_and_push_worktree(
+            settings,
+            host_path=workspace_host_path,
+            tenant_slug=c_tenant_slug,
+            project_slug=c_project_slug,
+            plan_id=c_plan_id,
+            plan_slug=c_plan_slug,
+            task_id=str(task_id),
+            execution_id=exec_id,
+        )
 
     # prod-06 task_prod06_budget_01: now that the run's cost is persisted
     # (finalize_execution above), re-derive the tenant's budget auto-pause +
