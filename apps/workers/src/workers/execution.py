@@ -238,6 +238,7 @@ def _agent_spec(
     *,
     model_spec: dict[str, Any] | None = None,
     acceptance_criteria: list[Any] | None = None,
+    wall_clock_budget_s: float | None = None,
 ) -> dict[str, Any]:
     """The `AGENT_TASK_SPEC` payload for the container.
 
@@ -256,8 +257,15 @@ def _agent_spec(
         else request.task
     )
     spec: dict[str, Any] = {"task": task_payload, "model": model_spec or request.model}
-    if request.budgets:
-        spec["budgets"] = request.budgets
+    # Agent-loop safeguard budgets. Align the internal wall-clock with the
+    # per-provider container budget so a slow claude_sdk run isn't aborted early
+    # by the 600s default (max_wall_clock_exceeded). An operator-supplied value in
+    # request.budgets always wins (setdefault).
+    budgets = dict(request.budgets or {})
+    if wall_clock_budget_s is not None:
+        budgets.setdefault("max_wall_clock_s", float(wall_clock_budget_s))
+    if budgets:
+        spec["budgets"] = budgets
     # With a policy the loop gates sensitive tool calls (task_02_33).
     if approval_policy:
         spec["approval_policy"] = approval_policy
@@ -325,6 +333,7 @@ def _build_runtime_env(
     agent_internal_api_url: str,
     model_spec: dict[str, Any] | None = None,
     acceptance_criteria: list[Any] | None = None,
+    wall_clock_budget_s: float | None = None,
 ) -> dict[str, str]:
     """El env del contenedor `agent-runtime` para una ejecución (función PURA).
 
@@ -356,6 +365,7 @@ def _build_runtime_env(
                 approval_policy,
                 model_spec=model_spec,
                 acceptance_criteria=acceptance_criteria,
+                wall_clock_budget_s=wall_clock_budget_s,
             )
         ),
     }
@@ -904,6 +914,14 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 plan_slug=plan_slug,
                 task_id=str(task_id),
             )
+        # Per-provider wall-clock budget: claude_sdk spawns the Node CLI and its
+        # high-effort/xhigh model calls are slow, so it gets a much longer budget
+        # than the fast HTTP providers (ollama/azure_foundry/copilot). The SAME
+        # value caps both the container (run_streamed timeout, the hard backstop)
+        # AND the agent loop's internal wall-clock safeguard — otherwise the
+        # internal default (600s) silently aborts a long claude_sdk run with
+        # `max_wall_clock_exceeded` long before the container budget is reached.
+        run_timeout = settings.container_timeout_for_kind((resolved_model or {}).get("kind"))
         container_spec = ContainerSpec(
             image=settings.agent_runtime_image,
             env=_build_runtime_env(
@@ -915,6 +933,8 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 # La definición de "hecho" de la tarea → al prompt de decisión,
                 # para que el comportamiento (leer/escribir/test) lo dicte la tarea.
                 acceptance_criteria=task_acceptance_criteria,
+                # Alinea el budget interno de wall-clock del loop con el del contenedor.
+                wall_clock_budget_s=run_timeout,
             ),
             labels={"com.agentic-platform.execution-id": exec_id},
             workspace_host_path=workspace_host_path,
@@ -937,11 +957,8 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                     return
 
         watcher = asyncio.create_task(_watch_for_cancel())
-        # Per-provider wall-clock budget: claude_sdk spawns the Node CLI and its
-        # high-effort/xhigh model calls are slow, so it gets a much longer timeout
-        # than the fast HTTP providers (ollama/azure_foundry/copilot).
-        run_timeout = settings.container_timeout_for_kind((resolved_model or {}).get("kind"))
         try:
+            # `run_timeout` (computed above) is the container's hard backstop.
             container_result = await asyncio.to_thread(
                 active_runner.run_streamed, container_spec, on_line, timeout=run_timeout
             )
