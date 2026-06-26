@@ -106,8 +106,33 @@ class Settings(BaseSettings):
         default=600,
         description="Default wall-clock budget for one container run before "
         "the worker kills it. Per-task overrides land with the Fase C "
-        "safeguards (task_02_13).",
+        "safeguards (task_02_13). Applies to the fast HTTP providers "
+        "(ollama/azure_foundry/copilot); claude_sdk uses the longer budget below.",
     )
+    container_run_timeout_claude_sdk_s: int = Field(
+        default=3600,
+        description="Wall-clock budget for a `claude_sdk` agent container. Much "
+        "longer than the base timeout: the Claude Agent SDK spawns the Claude Code "
+        "CLI (Node) and its high-effort / xhigh-reasoning model calls are slow, "
+        "whereas the HTTP providers finish well within container_run_timeout_s. "
+        "Override with WORKERS_CONTAINER_RUN_TIMEOUT_CLAUDE_SDK_S.",
+    )
+    container_home_size: str = Field(
+        default="64m",
+        description="Size of the agent container's HOME tmpfs (/home/agent). The "
+        "Claude Code CLI writes its config (.claude.json, .claude/) into HOME; "
+        "keeping HOME on its own tmpfs OUTSIDE /workspace stops that config from "
+        "polluting the project worktree (and the agent's model context).",
+    )
+
+    def container_timeout_for_kind(self, kind: str | None) -> int:
+        """Per-provider container wall-clock budget. ``claude_sdk`` gets the
+        longer SDK timeout (Node CLI + slow high-effort/xhigh calls); every other
+        kind uses the base ``container_run_timeout_s``."""
+        if kind == "claude_sdk":
+            return self.container_run_timeout_claude_sdk_s
+        return self.container_run_timeout_s
+
     seccomp_profile_path: str = Field(
         default="",
         description="Path to a custom seccomp JSON profile for the untrusted "

@@ -108,7 +108,16 @@ def build_hardened_run_kwargs(
     if apparmor:
         security_opt.append("apparmor=" + apparmor)
 
-    tmpfs = {"/tmp": f"rw,noexec,nosuid,size={settings.container_tmp_size}"}
+    # HOME is the CLI's own size-capped tmpfs OUTSIDE /workspace. The Claude Code
+    # CLI writes its config (.claude.json ~25KB, .claude/) into HOME; with
+    # HOME=/workspace that landed in the agent's project worktree and the agent
+    # read it back, polluting every model_call's context. nosuid like the rest;
+    # NOT noexec (the CLI may exec from its own cache), matching /workspace.
+    agent_home = "/home/agent"
+    tmpfs = {
+        "/tmp": f"rw,noexec,nosuid,size={settings.container_tmp_size}",
+        agent_home: f"rw,nosuid,size={settings.container_home_size},uid=1000,gid=1000",
+    }
 
     kwargs: dict[str, Any] = {
         "cap_drop": ["ALL"],
@@ -119,7 +128,7 @@ def build_hardened_run_kwargs(
         "pids_limit": settings.container_pids_limit,
         "user": AGENT_UID_GID,
         "working_dir": "/workspace",
-        "environment": {"HOME": "/workspace", "PYTHONDONTWRITEBYTECODE": "1"},
+        "environment": {"HOME": agent_home, "PYTHONDONTWRITEBYTECODE": "1"},
     }
 
     if workspace_host_path:

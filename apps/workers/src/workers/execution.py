@@ -915,9 +915,13 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                     return
 
         watcher = asyncio.create_task(_watch_for_cancel())
+        # Per-provider wall-clock budget: claude_sdk spawns the Node CLI and its
+        # high-effort/xhigh model calls are slow, so it gets a much longer timeout
+        # than the fast HTTP providers (ollama/azure_foundry/copilot).
+        run_timeout = settings.container_timeout_for_kind((resolved_model or {}).get("kind"))
         try:
             container_result = await asyncio.to_thread(
-                active_runner.run_streamed, container_spec, on_line
+                active_runner.run_streamed, container_spec, on_line, timeout=run_timeout
             )
         finally:
             watcher.cancel()
