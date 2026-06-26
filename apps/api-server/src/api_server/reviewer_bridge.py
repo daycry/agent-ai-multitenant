@@ -31,14 +31,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.db.domain import Task
+from api_server.db.domain import Task, TaskStatus
 from api_server.db.task_audit_repo import append_audit_event
+from api_server.task_state_machine import transition_task_status
 
 VerdictLabel = Literal["approve", "reject", "unknown"]
 
@@ -100,35 +102,61 @@ async def apply_reviewer_verdict(
     verdict: ReviewerVerdict,
     reviewer_actor: str = "agent:reviewer",
 ) -> dict[str, object]:
-    """Apply the verdict to the task — DB-side equivalent of
-    `TaskLifecycle.reject_review` / approve flow.
+    """Apply the AI reviewer's verdict to a task in ``in_review`` (prod-17 Fase A).
 
-    Returns ``{action, task_status, retry_count, event_id?}``.
+    Returns ``{action, verdict, task_id, task_status?, retry_count?, event_id?}``.
 
-    For ``label='reject'``:
-      * Task moves to ``backlog``.
-      * ``retry_count`` increments.
-      * One audit event ``kind='review_comment'`` is appended with the
-        ``ReviewComment`` shape (`failed_criterion`,
-        `testreport_evidence`, `what_to_fix`) as payload.
+    Verdicts (all moves go through the §7.2 state machine, never a raw mutation):
 
-    For ``label='approve'`` or ``'unknown'``: no state change, no
-    audit event. The caller decides whether to re-prompt (unknown)
-    or to advance the task to the next phase (approve).
+      * ``approve`` → ``in_review → done`` (+ ``completed_at``). ``action='approved'``.
+      * ``reject`` with ``retry_count < max_retries`` → ``backlog`` + ``retry_count++``
+        + one audit ``review_comment`` (the ``ReviewComment`` shape). ``action='rejected'``.
+      * ``reject`` reaching ``max_retries`` → ``blocked`` (DB-legal escalation from
+        ``in_review`` — ``awaiting_human_approval`` is NOT reachable from there; it is
+        ADR 0020's approval-engine state). The audit payload carries ``reason=max_retries``.
+        ``action='escalated'``.
+      * ``unknown`` → no-op; the caller re-prompts the reviewer.
+
+    Idempotency: a verdict on a task that is no longer ``in_review`` (a stale or
+    re-delivered review execution, a task cancelled meanwhile) is a guarded no-op
+    (``note='not_in_review'``) — never raises, never re-acts. The task is loaded with
+    an explicit ``tenant_id`` predicate (defence in depth beyond RLS).
     """
-    if verdict.label != "reject":
+    if verdict.label == "unknown":
+        return {"action": "noop", "verdict": "unknown", "task_id": str(task_id)}
+
+    task_row = (
+        await session.execute(select(Task).where(Task.id == task_id, Task.tenant_id == tenant_id))
+    ).scalar_one_or_none()
+    if task_row is None:
+        raise ValueError(f"task {task_id!r} not visible to current session")
+
+    # Only act on a task awaiting review — guards stale/duplicate verdicts.
+    if task_row.status != TaskStatus.IN_REVIEW.value:
         return {
             "action": "noop",
             "verdict": verdict.label,
             "task_id": str(task_id),
+            "task_status": task_row.status,
+            "note": "not_in_review",
         }
 
-    task_row = (await session.execute(select(Task).where(Task.id == task_id))).scalar_one_or_none()
-    if task_row is None:
-        raise ValueError(f"task {task_id!r} not visible to current session")
+    if verdict.label == "approve":
+        transition_task_status(task_row, TaskStatus.DONE.value)
+        task_row.completed_at = datetime.now(UTC)
+        await session.flush()
+        return {
+            "action": "approved",
+            "verdict": "approve",
+            "task_id": str(task_id),
+            "task_status": TaskStatus.DONE.value,
+        }
 
-    task_row.status = "backlog"
+    # reject — retry until max, then escalate to `blocked` (stops the reject↔retry loop).
     task_row.retry_count += 1
+    exhausted = task_row.retry_count >= task_row.max_retries
+    target = TaskStatus.BLOCKED.value if exhausted else TaskStatus.BACKLOG.value
+    transition_task_status(task_row, target)
     await session.flush()
 
     event = await append_audit_event(
@@ -141,14 +169,16 @@ async def apply_reviewer_verdict(
             "failed_criterion": verdict.failed_criterion,
             "testreport_evidence": verdict.testreport_evidence,
             "what_to_fix": verdict.what_to_fix,
+            "escalated": exhausted,
+            "reason": "max_retries" if exhausted else None,
         },
     )
 
     return {
-        "action": "rejected",
+        "action": "escalated" if exhausted else "rejected",
         "verdict": "reject",
         "task_id": str(task_id),
-        "task_status": "backlog",
+        "task_status": target,
         "retry_count": task_row.retry_count,
         "event_id": str(event.id),
     }
