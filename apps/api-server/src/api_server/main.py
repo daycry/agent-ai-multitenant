@@ -85,6 +85,7 @@ from api_server.routers.plans import plans_router, project_plans_router
 from api_server.routers.platform_settings import admin_router as platform_settings_admin_router
 from api_server.routers.projects import router as projects_router
 from api_server.routers.review import router as review_router
+from api_server.routers.runs import router as runs_router
 from api_server.routers.runtimes import router as runtime_templates_router
 from api_server.routers.scim import router as scim_router
 from api_server.routers.skills import router as skills_router
@@ -197,6 +198,7 @@ def _register_routers(app: FastAPI) -> None:
         approval_policies_router,
         approvals_router,
         executions_router,
+        runs_router,
         evals_router,
         eval_quality_router,
         tenant_stats_router,

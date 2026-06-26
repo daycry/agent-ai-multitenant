@@ -386,6 +386,53 @@ async def _compute_consumption(
 
 
 # ===========================================================================
+# Reusable runs query — the single source of truth for the runs explorer.
+# Both this admin endpoint and the member-facing GET /runs (routers/runs.py)
+# call it, so the filtering / fetch / currency logic lives in one place (DRY).
+# ===========================================================================
+async def query_execution_runs(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    limit: int,
+    offset: int,
+    window_days: int,
+    agent_id: UUID | None = None,
+    role: str | None = None,
+    plan_id: UUID | None = None,
+    task_id: UUID | None = None,
+    verdict: str | None = None,
+    model: str | None = None,
+    min_cost: Decimal | None = None,
+    display_currency: str | None = None,
+) -> list[ExecutionRunRow]:
+    """This tenant's executions, newest first, paginated + filtered + currency-applied.
+
+    Tenant-scoped (the caller's session is RLS-bound) with a defence-in-depth
+    ``tenant_id`` predicate inside ``_exec_filters``. Returns one
+    :class:`ExecutionRunRow` per execution; never leaks prompts / completions /
+    credentials / ``steps_log``.
+    """
+    since = datetime.now(tz=UTC) - timedelta(days=window_days)
+    filters = _exec_filters(
+        tenant_id=tenant_id,
+        since=since,
+        agent_id=agent_id,
+        role=role,
+        plan_id=plan_id,
+        task_id=task_id,
+        verdict=verdict,
+        model=model,
+        min_cost=min_cost,
+    )
+    target_currency = await _resolve_display_currency(
+        session, tenant_id=tenant_id, override=display_currency
+    )
+    rows = await _fetch_runs(session, filters, limit=limit, offset=offset)
+    return await _apply_display_currency(session, rows, target_currency)
+
+
+# ===========================================================================
 # GET /tenant-stats/runs — paginated, filterable runs explorer
 # ===========================================================================
 @router.get("/runs", response_model=list[ExecutionRunRow])
@@ -431,10 +478,12 @@ async def list_execution_runs(
     with the FX rate of that run's OWN date. The stored USD is never changed.
     """
     tenant_id = require_tenant_id(principal)
-    since = datetime.now(tz=UTC) - timedelta(days=window_days)
-    filters = _exec_filters(
+    return await query_execution_runs(
+        session,
         tenant_id=tenant_id,
-        since=since,
+        limit=limit,
+        offset=offset,
+        window_days=window_days,
         agent_id=agent_id,
         role=role,
         plan_id=plan_id,
@@ -442,12 +491,8 @@ async def list_execution_runs(
         verdict=verdict,
         model=model,
         min_cost=min_cost,
+        display_currency=display_currency,
     )
-    target_currency = await _resolve_display_currency(
-        session, tenant_id=tenant_id, override=display_currency
-    )
-    rows = await _fetch_runs(session, filters, limit=limit, offset=offset)
-    return await _apply_display_currency(session, rows, target_currency)
 
 
 # ===========================================================================

@@ -697,3 +697,108 @@ async def test_cross_tenant_isolation(
         runs = await client.get("/tenant-stats/runs", headers=_auth(jwt_a))
         assert runs.status_code == 200, runs.text
         assert runs.json() == []
+
+
+# ---------------------------------------------------------------------------
+# Member-facing GET /runs (Work menu) — open to ANY tenant member, same query
+# + tenant isolation as the admin explorer (routers/runs.py, runs-visor A2).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_member_can_list_runs(
+    configured_app, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    """A plain member is DENIED /tenant-stats/runs but ALLOWED /runs."""
+    await _truncate_all(migrations_pg_dsn)
+    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
+    _uid, member_jwt = await _seed_user_with_jwt(
+        migrations_pg_dsn,
+        test_redis_url,
+        tenant_id=tenant,
+        email="member@acme.example.com",
+        role="tenant_user",
+    )
+    project = await _seed_project(migrations_pg_dsn, tenant=tenant, name="P")
+    task = await _seed_task(
+        migrations_pg_dsn, tenant=tenant, project_id=project, plan_id=None, title="T"
+    )
+    await _seed_execution(
+        migrations_pg_dsn,
+        tenant=tenant,
+        task_id=task,
+        agent_id=None,
+        status="done",
+        total_cost_usd=0.5,
+        duration_ms=1000,
+    )
+
+    async with _client(configured_app) as client:
+        assert (
+            await client.get("/tenant-stats/runs", headers=_auth(member_jwt))
+        ).status_code == 403
+        resp = await client.get("/runs", headers=_auth(member_jwt))
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()
+        assert len(rows) == 1
+        assert rows[0]["task_title"] == "T"
+
+
+@pytest.mark.asyncio
+async def test_member_runs_filter_by_task(
+    configured_app, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    """``/runs?task_id=`` narrows to one task — the Kanban run-history panel."""
+    await _truncate_all(migrations_pg_dsn)
+    tenant = await _seed_tenant(migrations_pg_dsn, slug="acme")
+    _uid, member_jwt = await _seed_user_with_jwt(
+        migrations_pg_dsn,
+        test_redis_url,
+        tenant_id=tenant,
+        email="member@acme.example.com",
+        role="tenant_user",
+    )
+    project = await _seed_project(migrations_pg_dsn, tenant=tenant, name="P")
+    task1 = await _seed_task(
+        migrations_pg_dsn, tenant=tenant, project_id=project, plan_id=None, title="T1"
+    )
+    task2 = await _seed_task(
+        migrations_pg_dsn, tenant=tenant, project_id=project, plan_id=None, title="T2"
+    )
+    await _seed_execution(migrations_pg_dsn, tenant=tenant, task_id=task1, agent_id=None)
+    await _seed_execution(migrations_pg_dsn, tenant=tenant, task_id=task2, agent_id=None)
+
+    async with _client(configured_app) as client:
+        resp = await client.get(f"/runs?task_id={task1}", headers=_auth(member_jwt))
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()
+        assert len(rows) == 1
+        assert rows[0]["task_id"] == str(task1)
+
+
+@pytest.mark.cross_tenant
+@pytest.mark.asyncio
+async def test_member_runs_cross_tenant_isolation(
+    configured_app, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    """A member of tenant A never sees tenant B's runs through /runs (RLS)."""
+    await _truncate_all(migrations_pg_dsn)
+    tenant_a = await _seed_tenant(migrations_pg_dsn, slug="alpha")
+    tenant_b = await _seed_tenant(migrations_pg_dsn, slug="bravo")
+    _uid, member_jwt_a = await _seed_user_with_jwt(
+        migrations_pg_dsn,
+        test_redis_url,
+        tenant_id=tenant_a,
+        email="member@alpha.example.com",
+        role="tenant_user",
+    )
+    project_b = await _seed_project(migrations_pg_dsn, tenant=tenant_b, name="PB")
+    task_b = await _seed_task(
+        migrations_pg_dsn, tenant=tenant_b, project_id=project_b, plan_id=None, title="B-task"
+    )
+    await _seed_execution(
+        migrations_pg_dsn, tenant=tenant_b, task_id=task_b, agent_id=None, status="done"
+    )
+
+    async with _client(configured_app) as client:
+        resp = await client.get("/runs", headers=_auth(member_jwt_a))
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == []
