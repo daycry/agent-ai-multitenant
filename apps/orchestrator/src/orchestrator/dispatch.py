@@ -51,9 +51,11 @@ from api_server.db.platform_settings import (
     get_default_model_config,
     resolve_model_config_chain,
 )
+from api_server.events import publish_task_status_changed
 from api_server.plan_progress import TaskSnapshot, transition_to_pending_human_validation
 from api_server.task_state_machine import transition_task_status
 from celery import Celery
+from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -181,11 +183,35 @@ class TaskDispatcher:
         sessionmaker: async_sessionmaker[AsyncSession],
         celery_app: Celery,
         settings: Settings,
+        redis: Redis | None = None,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._celery = celery_app
         self._settings = settings
+        # Producer side of the task event bus (events:tasks). The dispatcher is
+        # the ONLY place a task goes ready -> in_progress / assigned_to_human, so
+        # it must emit that transition for the board's /ws/kanban to update live
+        # (without it the Kanban only refreshes on a manual reload). Optional so
+        # the unit/integration harness can construct a publish-less dispatcher.
+        self._redis = redis
         self._round_robin = RoundRobin()
+
+    async def _publish_status_changed(self, event: TaskEvent, new_status: str) -> None:
+        """Best-effort emit of the post-dispatch ``ready -> new_status`` event.
+
+        ``publish_task_status_changed`` swallows its own Redis errors, so a blip
+        never breaks dispatch. We build a transient :class:`Task` from the event
+        ids purely as the value carrier the publisher reads (id/tenant/project)."""
+        if self._redis is None:
+            return
+        task_ref = Task(
+            id=UUID(event.task_id),
+            tenant_id=UUID(event.tenant_id),
+            project_id=UUID(event.project_id),
+        )
+        await publish_task_status_changed(
+            self._redis, task_ref, old_status=_READY, new_status=new_status
+        )
 
     async def handle(self, event: TaskEvent) -> None:
         """Event handler — dispatch a task that has just gone `ready`.
@@ -209,8 +235,10 @@ class TaskDispatcher:
         if result is None:
             return
         if isinstance(result, _HumanDispatch):
+            await self._publish_status_changed(event, _ASSIGNED_TO_HUMAN)
             await self._notify_human_assignment(event, result)
             return
+        await self._publish_status_changed(event, _IN_PROGRESS)
         await self._enqueue_ai_run(event, task_id, result)
 
     async def _on_task_done(self, event: TaskEvent) -> None:
@@ -951,5 +979,10 @@ def build_dispatch_handler(settings: Settings) -> EventHandler:
     engine = create_async_engine(settings.database_url)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     celery_app = Celery(broker=settings.broker_url)
-    dispatcher = TaskDispatcher(sessionmaker=sessionmaker, celery_app=celery_app, settings=settings)
+    # Publish post-dispatch status events onto the same events:tasks stream the
+    # consumer reads (settings.redis_url) so the Kanban updates live.
+    redis: Redis = Redis.from_url(settings.redis_url)
+    dispatcher = TaskDispatcher(
+        sessionmaker=sessionmaker, celery_app=celery_app, settings=settings, redis=redis
+    )
     return dispatcher.handle

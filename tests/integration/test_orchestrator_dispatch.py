@@ -124,12 +124,13 @@ def _ready_event(ids: dict[str, UUID], *, new_status: str = "ready") -> TaskEven
     )
 
 
-def _dispatcher(sm: async_sessionmaker) -> TaskDispatcher:
+def _dispatcher(sm: async_sessionmaker, *, redis: Redis | None = None) -> TaskDispatcher:
     celery_app = build_celery_app(WorkerSettings(broker_url=TEST_REDIS_URL))
     return TaskDispatcher(
         sessionmaker=sm,
         celery_app=celery_app,
         settings=OrchestratorSettings(redis_url=TEST_REDIS_URL),
+        redis=redis,
     )
 
 
@@ -163,6 +164,44 @@ async def test_dispatch_moves_task_to_in_progress_and_assigns_an_agent(
         assert task.started_at is not None
     finally:
         await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_publishes_in_progress_status_event(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """The board's ``/ws/kanban`` tails ``events:tasks``. The dispatcher is the
+    ONLY place a task goes ``ready`` -> ``in_progress``, so it must publish that
+    transition — otherwise the Kanban shows the task as ready until a manual
+    refresh (the reported symptom)."""
+    engine = create_async_engine(admin_database_url)
+    redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm)
+        await redis.delete("default", "events:tasks")
+
+        await _dispatcher(sm, redis=redis).handle(_ready_event(ids))
+
+        entries = await redis.xrange("events:tasks")
+        status_events = [
+            fields
+            for (_id, fields) in entries
+            if fields.get("type") == EVENT_TASK_STATUS_CHANGED
+            and fields.get("task_id") == str(ids["task"])
+        ]
+        assert status_events, "dispatcher published no task.status_changed event"
+        last = status_events[-1]
+        # Scoped so the api-server's _pump forwards it to the right board socket.
+        assert last["project_id"] == str(ids["project"])
+        assert last["tenant_id"] == str(ids["tenant"])
+        payload = json.loads(last["payload"])
+        assert payload["old_status"] == "ready"
+        assert payload["new_status"] == "in_progress"
+    finally:
+        await redis.delete("default", "events:tasks")
         await redis.aclose()
         await engine.dispose()
 
