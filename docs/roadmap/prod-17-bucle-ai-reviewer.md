@@ -222,11 +222,11 @@ reviewer_agent_id` y un contexto de review (Fase B task_loop_02) y encolarla; si
 
 #### `task_prod17_e2e_01` — e2e del bucle + presupuesto + ratificación ADR
 
-- [ ] **Título**: Test e2e del ciclo completo (implementador → test-runtime → reviewer →
-      approve=done / reject=backlog → reintento → escalado a awaiting_human). Verificar que la
-      ejecución de review cuenta contra el budget del proyecto (reusa prod-06 budget_02).
-      Ratificar ADR 0084 (de `accepted` Opción B a IMPLEMENTADO) + entrada de changelog +
-      actualizar el diagrama de ADR 0027 si procede.
+- [ ] **Título** ⏸️ **BLOQUEADO (Docker real + test_01)**: Test e2e del ciclo completo
+      (implementador → test-runtime → reviewer → approve=done / reject=backlog → reintento →
+      escalado a `blocked`). Verificar que la ejecución de review cuenta contra el budget del
+      proyecto (reusa prod-06 budget_02). Ratificar ADR 0084 + entrada de changelog +
+      actualizar el diagrama de ADR 0027 si procede. > **BLOQUEADO:** el e2e corre contenedores reales (la ejecución del reviewer de punta a > punta) → gateado por Docker como el e2e de instalación; y el tramo con test-runtime > depende de `task_prod17_test_01` (a su vez bloqueado por el worktree-en-ejecución). El > bucle SIN test-report (Fases A–B + test_02 consumidor) está cubierto por los tests de > integración (`test_reviewer_bridge_wiring`, `test_in_review_dispatch`, > `test_review_execution_applies_verdict`). Changelog de progreso emitido en > `docs/07-changelog/prod-17-bucle-ai-reviewer.md`.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
