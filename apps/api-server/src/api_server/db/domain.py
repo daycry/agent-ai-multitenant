@@ -750,6 +750,12 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # prod-18 / ADR 0085: stable kebab slug for the project's git worktree path
+    # (`BareRepoLayout`). Generated once at creation (api_server.slug.slugify), never
+    # changes when `name` does, so the worktree/bare repo is not orphaned on rename.
+    # Nullable: backfilled by migration 0099; a NULL slug falls back to ephemeral
+    # tmpfs in execution (no worktree) — safe degradation.
+    slug: Mapped[str | None] = mapped_column(String(80), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'active'"))
 
@@ -885,6 +891,10 @@ class Plan(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
         nullable=False,
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    # prod-18 / ADR 0085: stable kebab slug for the plan's git branch
+    # (`make_plan_branch_name` → plan/{id8}-{slug}). Generated once at creation, never
+    # changes when `title` does. Nullable: backfilled by migration 0099.
+    slug: Mapped[str | None] = mapped_column(String(80), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 32 chars so the wide ten-state machine (pending_approval,
     # pending_human_validation, ...) introduced in task_03_16 fits.

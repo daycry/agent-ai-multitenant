@@ -53,6 +53,7 @@ from api_server.schemas.projects import (
 )
 from api_server.seeds import PLATFORM_TENANT_ID
 from api_server.seeds.template_adoption import apply_template_kb_grants
+from api_server.slug import slugify
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -192,6 +193,8 @@ async def create_project(
     project = Project(
         tenant_id=tenant_id,
         name=payload.name,
+        # prod-18 / ADR 0085: stable worktree slug, generated once at creation.
+        slug=slugify(payload.name),
         description=payload.description,
         status=payload.status.value,
         team_id=payload.team_id,

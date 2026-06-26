@@ -1,9 +1,9 @@
 ---
 plan_id: prod-18-worktree-en-ejecucion
 title: Worktree en la ejecución del agente — código persistente, commit y test-runtime real
-status: pending_approval
+status: in_progress
 blocking_plan: null
-started_at: null
+started_at: 2026-06-26
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 14-18
@@ -122,7 +122,7 @@ task_id, branch=make_plan_branch_name(plan))` + `sync_to_head` antes de lanzar e
 
 #### `task_prod18_design_01` — ADR de worktree-en-ejecución + columnas slug
 
-- [ ] **Título**: Redactar ADR con las decisiones 1-6 (granularidad, quién commitea, cadencia,
+- [x] **Título**: Redactar ADR con las decisiones 1-6 (granularidad, quién commitea, cadencia,
       `repo_name` por tarea, columnas slug, bind RW/RO). Migración Alembic reversible:
       `projects.slug` + `plans.slug` (con backfill) y, si se aprueba, el hook de `repo_name`.
 - **Tiempo**: 2 días · **Complejidad**: m

@@ -85,6 +85,7 @@ from api_server.schemas.plans import (
     to_plan_comment_response,
     to_plan_response,
 )
+from api_server.slug import slugify
 
 project_plans_router = APIRouter(prefix="/projects/{project_id}/plans", tags=["plans"])
 plans_router = APIRouter(prefix="/plans", tags=["plans"])
@@ -199,10 +200,13 @@ async def create_plan(
                 detail={"error": "dag_cycle", "cycle": exc.cycle},
             ) from exc
 
+    plan_title = payload.title or draft_title or "Borrador del plan"
     plan = Plan(
         tenant_id=tenant_id,
         project_id=project_id,
-        title=payload.title or draft_title or "Borrador del plan",
+        title=plan_title,
+        # prod-18 / ADR 0085: stable slug for the plan branch (plan/{id8}-{slug}).
+        slug=slugify(plan_title),
         description=payload.description,
         status=payload.status.value,
         conversation_id=payload.conversation_id,
