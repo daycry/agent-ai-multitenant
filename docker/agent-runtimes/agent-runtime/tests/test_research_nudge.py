@@ -75,3 +75,28 @@ def test_reflect_resets_streak_on_producing_tool() -> None:
     loop.research_streak = 4
     loop.reflect(_state("write_file", {"path": "a.py", "content": "x"}))
     assert loop.research_streak == 0
+
+
+# --- the over-verification trap: once produced, the nudge says FINISH ----------
+def test_finish_nudge_when_already_produced_and_streak() -> None:
+    msg = _research_nudge(
+        tool="list_files", research_streak=_RESEARCH_STREAK_LIMIT, repeat_count=1, has_produced=True
+    )
+    assert msg is not None and "FINISH" in msg and "NO tool call" in msg
+
+
+def test_finish_nudge_on_repeat_after_producing() -> None:
+    msg = _research_nudge(tool="read_file", research_streak=1, repeat_count=3, has_produced=True)
+    assert msg is not None and "FINISH" in msg
+
+
+def test_reflect_latches_has_produced_and_nudges_to_finish() -> None:
+    loop = _loop()
+    # Produce once → latches has_produced (and resets the streak).
+    loop.reflect(_state("write_file", {"path": "a.php", "content": "x"}))
+    assert loop.has_produced is True and loop.research_streak == 0
+    # Then it slips back into verifying; after the streak the nudge pushes FINISH.
+    out: dict[str, Any] = {}
+    for i in range(_RESEARCH_STREAK_LIMIT):
+        out = loop.reflect(_state("list_files", {"path": f"dir{i}"}))
+    assert "context" in out and "FINISH" in out["context"][0]["note"]

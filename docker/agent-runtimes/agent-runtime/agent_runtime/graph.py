@@ -60,34 +60,51 @@ NODE_NAMES: tuple[str, ...] = (
 # Read/search tools that gather context but produce no deliverable. A run that
 # only calls these is researching, not making progress.
 _RESEARCH_TOOLS = frozenset({"list_files", "read_file", "memory_recall", "rag_search"})
-# After this many research-only tool calls in a row, push the agent to produce.
+# Tools that produce/modify the deliverable — calling one means real progress
+# (and that the agent HAS produced, which changes the nudge from "write" to "finish").
+_PRODUCING_TOOLS = frozenset(
+    {"write_file", "edit_file", "create_file", "shell_exec", "apply_patch"}
+)
+# After this many research-only tool calls in a row, push the agent off research.
 _RESEARCH_STREAK_LIMIT = 5
 
 
-def _research_nudge(*, tool: str | None, research_streak: int, repeat_count: int) -> str | None:
-    """Guidance pushing the agent from research toward producing the deliverable.
+def _research_nudge(
+    *, tool: str | None, research_streak: int, repeat_count: int, has_produced: bool = False
+) -> str | None:
+    """Guidance pushing the agent off a research rut toward the right next move.
 
-    Two triggers (the loop-detector already aborts on the 4th *identical* action;
-    this nudges earlier and more gently, without killing an otherwise-fine run):
+    Triggers (the loop-detector already aborts on the 4th *identical* action; this
+    nudges earlier and more gently, without killing an otherwise-fine run):
 
       * a research tool repeated with the SAME args (``repeat_count > 1``) — the
         agent re-listing a directory / re-running a search it already has;
-      * a long research-only streak — many reads/searches and still no output.
+      * a long research-only streak — many reads/searches with no progress.
 
-    Returns ``None`` when no nudge is warranted.
+    The DIRECTION depends on whether the agent has already produced (``has_produced``):
+    if it has written the deliverable and is now re-listing/re-reading to verify, the
+    fix is to FINISH (reply with a summary, no tool call) — not to write more. This is
+    the over-verification trap that left a run looping until ``repetitive_loop_detected``
+    even though every file was already written. Returns ``None`` when no nudge applies.
     """
-    if tool in _RESEARCH_TOOLS and repeat_count > 1:
+    is_repeat = tool in _RESEARCH_TOOLS and repeat_count > 1
+    if not (is_repeat or research_streak >= _RESEARCH_STREAK_LIMIT):
+        return None
+    if has_produced:
+        return (
+            "You have ALREADY written the deliverable files. Stop verifying/re-reading and "
+            "FINISH now: reply with a short summary of what you did and NO tool call."
+        )
+    if is_repeat:
         return (
             f"You already ran '{tool}' with these exact arguments {repeat_count} times. "
             "Do not repeat it — use the result you already have and move forward."
         )
-    if research_streak >= _RESEARCH_STREAK_LIMIT:
-        return (
-            f"You have made {research_streak} research calls in a row without producing "
-            "anything. STOP researching — you have enough context. Produce the task's "
-            "deliverable now (e.g. write_file) instead of more reads or searches."
-        )
-    return None
+    return (
+        f"You have made {research_streak} research calls in a row without producing "
+        "anything. STOP researching — you have enough context. Produce the task's "
+        "deliverable now (e.g. write_file) instead of more reads or searches."
+    )
 
 
 def _no_recall(_task: AgentTask) -> list[dict[str, Any]]:
@@ -166,6 +183,9 @@ class _AgentLoop:
         # Consecutive research-only tool calls (reset by any producing tool) —
         # drives the "stop researching, write" nudge in `reflect`.
         self.research_streak = 0
+        # Whether a producing tool (write_file/…) has run — flips the nudge from
+        # "write the deliverable" to "you're done, FINISH" (avoids over-verification).
+        self.has_produced = False
 
     # -- nodes ---------------------------------------------------------------
     @staticmethod
@@ -333,11 +353,14 @@ class _AgentLoop:
         research rut (repeated reads/searches with no deliverable) when needed."""
         observation = state["last_observation"] or {}
         tool = observation.get("tool")
-        # Track the research-only streak: any producing tool resets it.
+        # Track the research-only streak: any producing tool resets it. A producing
+        # tool also latches `has_produced`, which flips the nudge to "now FINISH".
         if tool in _RESEARCH_TOOLS:
             self.research_streak += 1
         else:
             self.research_streak = 0
+        if tool in _PRODUCING_TOOLS:
+            self.has_produced = True
         decision = state["last_decision"] or {}
         repeat_count = self.detector.count_of(
             {"tool": decision.get("tool"), "args": decision.get("tool_args")}
@@ -348,7 +371,10 @@ class _AgentLoop:
             else "tool failed — will reconsider"
         )
         nudge = _research_nudge(
-            tool=tool, research_streak=self.research_streak, repeat_count=repeat_count
+            tool=tool,
+            research_streak=self.research_streak,
+            repeat_count=repeat_count,
+            has_produced=self.has_produced,
         )
         updates: dict[str, Any] = {"reflections": [note]}
         summary = f"Reflection: {note}"
