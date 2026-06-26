@@ -57,6 +57,39 @@ NODE_NAMES: tuple[str, ...] = (
 )
 
 
+# Read/search tools that gather context but produce no deliverable. A run that
+# only calls these is researching, not making progress.
+_RESEARCH_TOOLS = frozenset({"list_files", "read_file", "memory_recall", "rag_search"})
+# After this many research-only tool calls in a row, push the agent to produce.
+_RESEARCH_STREAK_LIMIT = 5
+
+
+def _research_nudge(*, tool: str | None, research_streak: int, repeat_count: int) -> str | None:
+    """Guidance pushing the agent from research toward producing the deliverable.
+
+    Two triggers (the loop-detector already aborts on the 4th *identical* action;
+    this nudges earlier and more gently, without killing an otherwise-fine run):
+
+      * a research tool repeated with the SAME args (``repeat_count > 1``) — the
+        agent re-listing a directory / re-running a search it already has;
+      * a long research-only streak — many reads/searches and still no output.
+
+    Returns ``None`` when no nudge is warranted.
+    """
+    if tool in _RESEARCH_TOOLS and repeat_count > 1:
+        return (
+            f"You already ran '{tool}' with these exact arguments {repeat_count} times. "
+            "Do not repeat it — use the result you already have and move forward."
+        )
+    if research_streak >= _RESEARCH_STREAK_LIMIT:
+        return (
+            f"You have made {research_streak} research calls in a row without producing "
+            "anything. STOP researching — you have enough context. Produce the task's "
+            "deliverable now (e.g. write_file) instead of more reads or searches."
+        )
+    return None
+
+
 def _no_recall(_task: AgentTask) -> list[dict[str, Any]]:
     """Default memory recall — empty until real memory lands in Plan 04."""
     return []
@@ -130,6 +163,9 @@ class _AgentLoop:
         self.deps = deps
         self.tracker = tracker
         self.detector = detector
+        # Consecutive research-only tool calls (reset by any producing tool) —
+        # drives the "stop researching, write" nudge in `reflect`.
+        self.research_streak = 0
 
     # -- nodes ---------------------------------------------------------------
     @staticmethod
@@ -292,17 +328,37 @@ class _AgentLoop:
         )
         return {"context": [context], "steps": [step]}
 
-    @staticmethod
-    def reflect(state: AgentState) -> dict[str, Any]:
-        """Note progress before the next planning turn."""
+    def reflect(self, state: AgentState) -> dict[str, Any]:
+        """Note progress before the next planning turn, nudging the agent off a
+        research rut (repeated reads/searches with no deliverable) when needed."""
         observation = state["last_observation"] or {}
+        tool = observation.get("tool")
+        # Track the research-only streak: any producing tool resets it.
+        if tool in _RESEARCH_TOOLS:
+            self.research_streak += 1
+        else:
+            self.research_streak = 0
+        decision = state["last_decision"] or {}
+        repeat_count = self.detector.count_of(
+            {"tool": decision.get("tool"), "args": decision.get("tool_args")}
+        )
         note = (
             "tool succeeded — continuing"
             if observation.get("ok")
             else "tool failed — will reconsider"
         )
-        step = node_step(len(state["steps"]), "reflect", f"Reflection: {note}")
-        return {"reflections": [note], "steps": [step]}
+        nudge = _research_nudge(
+            tool=tool, research_streak=self.research_streak, repeat_count=repeat_count
+        )
+        updates: dict[str, Any] = {"reflections": [note]}
+        summary = f"Reflection: {note}"
+        if nudge is not None:
+            # Surface the nudge in the working context so the model SEES it next turn
+            # (_decide_messages feeds the recent context tail to the model).
+            updates["context"] = [{"role": "guidance", "note": nudge}]
+            summary = f"Reflection: {note} — guidance: stop researching, produce output"
+        updates["steps"] = [node_step(len(state["steps"]), "reflect", summary)]
+        return updates
 
     @staticmethod
     def finalize(state: AgentState) -> dict[str, Any]:
