@@ -127,6 +127,17 @@ class Settings(BaseSettings):
         "polluting the project worktree (and the agent's model context).",
     )
 
+    agent_max_iterations_claude_sdk: int = Field(
+        default=50,
+        description="Agent-loop iteration cap for `claude_sdk` runs. The runtime "
+        "default (25) cut off multi-file tasks right as they finished writing — "
+        "the agent produced all deliverables but couldn't reach the final FINISH "
+        "turn, leaving the run `aborted` (max_iterations_exceeded) instead of "
+        "`done`. claude_sdk writes one file per iteration and is slow, so it needs "
+        "more headroom; the nudge + loop-detector keep the extra iterations "
+        "productive. Override with WORKERS_AGENT_MAX_ITERATIONS_CLAUDE_SDK.",
+    )
+
     def container_timeout_for_kind(self, kind: str | None) -> int:
         """Per-provider container wall-clock budget. ``claude_sdk`` gets the
         longer SDK timeout (Node CLI + slow high-effort/xhigh calls); every other
@@ -134,6 +145,14 @@ class Settings(BaseSettings):
         if kind == "claude_sdk":
             return self.container_run_timeout_claude_sdk_s
         return self.container_run_timeout_s
+
+    def agent_max_iterations_for_kind(self, kind: str | None) -> int | None:
+        """Per-provider agent-loop iteration cap. ``claude_sdk`` gets a higher cap
+        so multi-file tasks write every deliverable AND reach the final FINISH
+        turn; other kinds return ``None`` (the runtime keeps its built-in default)."""
+        if kind == "claude_sdk":
+            return self.agent_max_iterations_claude_sdk
+        return None
 
     seccomp_profile_path: str = Field(
         default="",

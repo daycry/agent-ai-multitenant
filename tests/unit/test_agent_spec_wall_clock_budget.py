@@ -38,3 +38,19 @@ def test_operator_budget_wins_over_injected() -> None:
 def test_no_budgets_key_when_nothing_to_set() -> None:
     spec = _agent_spec(_request(), None, wall_clock_budget_s=None)
     assert "budgets" not in spec
+
+
+def test_max_iterations_injected_when_absent() -> None:
+    spec = _agent_spec(_request(), None, max_iterations_budget=50)
+    assert spec["budgets"]["max_iterations"] == 50
+
+
+def test_operator_max_iterations_wins_over_injected() -> None:
+    spec = _agent_spec(_request({"max_iterations": 12}), None, max_iterations_budget=50)
+    assert spec["budgets"]["max_iterations"] == 12
+
+
+def test_both_budgets_injected_together() -> None:
+    spec = _agent_spec(_request(), None, wall_clock_budget_s=7200, max_iterations_budget=50)
+    assert spec["budgets"]["max_wall_clock_s"] == 7200.0
+    assert spec["budgets"]["max_iterations"] == 50

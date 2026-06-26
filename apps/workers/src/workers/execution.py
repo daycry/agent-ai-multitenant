@@ -239,6 +239,7 @@ def _agent_spec(
     model_spec: dict[str, Any] | None = None,
     acceptance_criteria: list[Any] | None = None,
     wall_clock_budget_s: float | None = None,
+    max_iterations_budget: int | None = None,
 ) -> dict[str, Any]:
     """The `AGENT_TASK_SPEC` payload for the container.
 
@@ -264,6 +265,8 @@ def _agent_spec(
     budgets = dict(request.budgets or {})
     if wall_clock_budget_s is not None:
         budgets.setdefault("max_wall_clock_s", float(wall_clock_budget_s))
+    if max_iterations_budget is not None:
+        budgets.setdefault("max_iterations", int(max_iterations_budget))
     if budgets:
         spec["budgets"] = budgets
     # With a policy the loop gates sensitive tool calls (task_02_33).
@@ -334,6 +337,7 @@ def _build_runtime_env(
     model_spec: dict[str, Any] | None = None,
     acceptance_criteria: list[Any] | None = None,
     wall_clock_budget_s: float | None = None,
+    max_iterations_budget: int | None = None,
 ) -> dict[str, str]:
     """El env del contenedor `agent-runtime` para una ejecución (función PURA).
 
@@ -366,6 +370,7 @@ def _build_runtime_env(
                 model_spec=model_spec,
                 acceptance_criteria=acceptance_criteria,
                 wall_clock_budget_s=wall_clock_budget_s,
+                max_iterations_budget=max_iterations_budget,
             )
         ),
     }
@@ -921,7 +926,8 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         # AND the agent loop's internal wall-clock safeguard — otherwise the
         # internal default (600s) silently aborts a long claude_sdk run with
         # `max_wall_clock_exceeded` long before the container budget is reached.
-        run_timeout = settings.container_timeout_for_kind((resolved_model or {}).get("kind"))
+        resolved_kind = (resolved_model or {}).get("kind")
+        run_timeout = settings.container_timeout_for_kind(resolved_kind)
         container_spec = ContainerSpec(
             image=settings.agent_runtime_image,
             env=_build_runtime_env(
@@ -935,6 +941,9 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 acceptance_criteria=task_acceptance_criteria,
                 # Alinea el budget interno de wall-clock del loop con el del contenedor.
                 wall_clock_budget_s=run_timeout,
+                # Tope de iteraciones por-provider (claude_sdk necesita más para
+                # escribir todos los ficheros Y finalizar).
+                max_iterations_budget=settings.agent_max_iterations_for_kind(resolved_kind),
             ),
             labels={"com.agentic-platform.execution-id": exec_id},
             workspace_host_path=workspace_host_path,
