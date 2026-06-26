@@ -110,12 +110,14 @@ class Settings(BaseSettings):
         "(ollama/azure_foundry/copilot); claude_sdk uses the longer budget below.",
     )
     container_run_timeout_claude_sdk_s: int = Field(
-        default=3600,
-        description="Wall-clock budget for a `claude_sdk` agent container. Much "
+        default=7200,
+        description="Wall-clock budget for a `claude_sdk` agent container (2h). Much "
         "longer than the base timeout: the Claude Agent SDK spawns the Claude Code "
-        "CLI (Node) and its high-effort / xhigh-reasoning model calls are slow, "
-        "whereas the HTTP providers finish well within container_run_timeout_s. "
-        "Override with WORKERS_CONTAINER_RUN_TIMEOUT_CLAUDE_SDK_S.",
+        "CLI (Node) and its high-effort / xhigh-reasoning model calls are slow "
+        "(~1-2 min each), whereas the HTTP providers finish well within "
+        "container_run_timeout_s. This value caps BOTH the container and the agent "
+        "loop's internal wall-clock safeguard (execution.py aligns them). Override "
+        "with WORKERS_CONTAINER_RUN_TIMEOUT_CLAUDE_SDK_S.",
     )
     container_home_size: str = Field(
         default="64m",
