@@ -36,6 +36,42 @@ from shared_llm.types import (
 # The SDK namespaces these tools as ``mcp__{_HOST_TOOLS_SERVER}__{tool}``.
 _HOST_TOOLS_SERVER = "host_tools"
 
+# The Claude Agent SDK exposes its full native toolset (Claude Code's tools) to
+# the model by default. When we advertise the platform's HOST tools (MCP,
+# host-executed), the model must use THOSE: a native tool call is harvested with
+# its native name, which the host's ToolRegistry doesn't know and rejects
+# ("tool '<X>' not allowed in this mode") — the agent then spins on rejected
+# calls and times out. So on the host-tool path we DISABLE the natives via
+# ``disallowed_tools``; a caller re-enables specific ones (the córtex's
+# WebSearch/WebFetch, ADR 0076) by listing them in ``allowed_tools``, which is
+# subtracted from this set.
+_SDK_NATIVE_TOOLS: tuple[str, ...] = (
+    "Bash",
+    "BashOutput",
+    "KillBash",
+    "KillShell",
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookEdit",
+    "Glob",
+    "Grep",
+    "LS",
+    "Task",
+    "Agent",
+    "TodoWrite",
+    "ToolSearch",
+    "AskUserQuestion",
+    "Workflow",
+    "ExitPlanMode",
+    "WebSearch",
+    "WebFetch",
+    "SlashCommand",
+    "ListMcpResources",
+    "ReadMcpResource",
+)
+
 # Markers in the CLI's error ``result`` text that mean "fix your credential", so a
 # failed run raises the typed ``AuthError`` (actionable: tell the operator to set
 # the provider's api_key / oauth_token — ADR 0064) instead of a generic error.
@@ -421,6 +457,14 @@ class ClaudeAgentProvider:
         # host) — así coexisten con las host tools sin disparar el interceptor.
         if allowed_tools:
             extra["allowed_tools"] = list(allowed_tools)
+        # Disable the SDK's native tools so the model can only use the HOST (MCP)
+        # tools we advertised — otherwise it calls Bash/Read/Write/… which the host
+        # rejects. Whatever the caller auto-approved via `allowed_tools` (córtex
+        # WebSearch/WebFetch, ADR 0076) is kept enabled (subtracted here).
+        _allowed = set(allowed_tools or ())
+        disabled = [name for name in _SDK_NATIVE_TOOLS if name not in _allowed]
+        if disabled:
+            extra["disallowed_tools"] = disabled
         return ClaudeAgentOptions(
             model=model or self._default_model,
             system_prompt=system if system is not None else self._default_system_prompt,
