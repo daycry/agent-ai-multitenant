@@ -22,7 +22,7 @@ priority: P2
 | Campo                            | Valor                                                                    |
 | -------------------------------- | ------------------------------------------------------------------------ |
 | **ID del Plan**                  | `prod-18-worktree-en-ejecucion`                                          |
-| **Estado**                       | `pending_approval`                                                       |
+| **Estado**                       | `in_progress`                                                            |
 | **Prioridad**                    | P2                                                                       |
 | **Bloqueado por**                | — (las bibliotecas son de Plan 06, `completed`)                          |
 | **Tiempo estimado (calendario)** | 3-4 semanas                                                              |
@@ -191,11 +191,11 @@ task_id, branch=make_plan_branch_name(plan))` + `sync_to_head` antes de lanzar e
 
 #### `task_prod18_e2e_01` — e2e implementador→worktree→commit→tests + gotcha DooD
 
-- [ ] **Título**: Test e2e (Docker real, skip-guarded como el e2e de instalación): un agente
-      escribe en el worktree → el worker commitea con trailers → push al bare → el test-runtime
-      monta el mismo worktree y persiste el TestReport. Documentar el **gotcha DooD del bind**
-      (no existe hoy; CLAUDE.md: si lo resuelves, añádelo) en `docs/03-guides/gotchas/`.
-      Verificar el bind `{data_root}:{data_root}` en el compose generado (no volumen nombrado).
+- [ ] **Título** ⏸️ **REQUIERE RUNNER DOCKER (no acreditable localmente)**: Test e2e (Docker
+      real, skip-guarded como el e2e de instalación): un agente escribe en el worktree → el
+      worker commitea con trailers → push al bare → el test-runtime monta el mismo worktree y
+      persiste el TestReport. Documentar el **gotcha DooD del bind** en `docs/03-guides/gotchas/`.
+      Verificar el bind `{data_root}:{data_root}` en el compose generado (no volumen nombrado). > Parcial: **gotcha DooD escrito** (`worktree-bind-dood-empty-vs-named-volume.md`) + > **esqueleto e2e skip-guarded** (`tests/e2e/test_worktree_execution.py`). El run GREEN > real necesita un runner Linux+Docker + modelo capaz (como prod-01 task_20: el skip NO > lo acredita). Las piezas (1)-(4) están cubiertas en integración (sin Docker).
 - **Tiempo**: 2 días · **Complejidad**: m
 - **Depende de**: task_prod18_test_01
 - **Tests automáticos**:
