@@ -172,7 +172,7 @@ task_id, branch=make_plan_branch_name(plan))` + `sync_to_head` antes de lanzar e
 
 #### `task_prod18_test_01` — Disparar `run_test_runtime` sobre el worktree
 
-- [ ] **Título**: Tras el commit del implementador (Fase C), si la tarea tiene
+- [x] **Título**: Tras el commit del implementador (Fase C), si la tarea tiene
       `acceptance_criteria` automáticos, disparar `run_test_runtime` con el mismo
       `worktree_host_path` (reusa `group_tasks_by_runtime`); persiste `test_run_completed`.
       Esto cierra **prod-17 `task_prod17_test_01`** — el consumidor (`_build_review_request` →

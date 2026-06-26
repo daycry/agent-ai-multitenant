@@ -108,3 +108,60 @@ async def test_commit_and_push_noop_on_clean_worktree(tmp_path: Path) -> None:
     # commit), but NO agent commit was added — its tree is empty.
     tree = _run_git("-C", bare, "ls-tree", "--name-only", branch)
     assert tree.strip() == ""
+
+
+@pytest.mark.asyncio
+async def test_run_task_tests_threads_worktree_and_filters_criteria(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """prod-18 test_01: the test-runtime is invoked with the worktree path and ONLY
+    the automated acceptance criteria (manual/human checks dropped)."""
+    from workers.execution import _run_task_tests
+
+    captured: dict = {}
+
+    async def _fake_run(request: dict, _settings: Settings) -> dict:
+        captured["request"] = request
+        return {"status": "completed"}
+
+    monkeypatch.setattr("workers.tasks._run_test_runtime", _fake_run)
+    tenant, task = uuid4(), uuid4()
+    criteria = [
+        {"id": "a", "runtime": "python-pytest", "command": "pytest -q"},
+        {"id": "manual", "kind": "human"},  # no runtime/command → dropped
+    ]
+    await _run_task_tests(
+        Settings(data_root=str(tmp_path)),
+        tenant_id=tenant,
+        task_id=task,
+        worktree_host_path="/data/agent-platform/wt/task-1",
+        acceptance_criteria=criteria,
+    )
+    req = captured["request"]
+    assert req["worktree_host_path"] == "/data/agent-platform/wt/task-1"
+    assert req["task_id"] == str(task)
+    assert [c["id"] for c in req["acceptance_criteria"]] == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_run_task_tests_noop_without_automated_criteria(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from workers.execution import _run_task_tests
+
+    called = False
+
+    async def _fake_run(request: dict, _settings: Settings) -> dict:
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr("workers.tasks._run_test_runtime", _fake_run)
+    await _run_task_tests(
+        Settings(data_root=str(tmp_path)),
+        tenant_id=uuid4(),
+        task_id=uuid4(),
+        worktree_host_path="/x",
+        acceptance_criteria=[{"id": "m", "kind": "human"}],  # no automated checks
+    )
+    assert called is False

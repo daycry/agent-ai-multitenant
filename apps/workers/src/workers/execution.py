@@ -653,6 +653,43 @@ async def _commit_and_push_worktree(
         _log.warning("workers.worktree_commit_failed", task_id=task_id, error=str(exc))
 
 
+async def _run_task_tests(
+    settings: Settings,
+    *,
+    tenant_id: UUID,
+    task_id: UUID,
+    worktree_host_path: str,
+    acceptance_criteria: list[Any],
+) -> None:
+    """Run the project's automated tests in the test-runtime over the agent's
+    worktree and persist the TestReport (prod-18 task_prod18_test_01).
+
+    Closes the loop so the AI reviewer (prod-17 task_prod17_test_02) finds a real
+    ``<test-report>`` when it is dispatched. Only runs when the task carries
+    automated acceptance criteria; Docker-aware (``run_test_runtime`` falls back to
+    a stub when no daemon). Best-effort — a test-runtime failure never breaks the
+    finished agent run (the task still moves to review)."""
+    autos = [
+        c
+        for c in acceptance_criteria
+        if isinstance(c, dict) and c.get("runtime") and c.get("command")
+    ]
+    if not autos:
+        return
+    from workers.tasks import _run_test_runtime
+
+    test_request = {
+        "tenant_id": str(tenant_id),
+        "task_id": str(task_id),
+        "acceptance_criteria": autos,
+        "worktree_host_path": worktree_host_path,
+    }
+    try:
+        await _run_test_runtime(test_request, settings)
+    except Exception as exc:  # pragma: no cover - never break a finished run on tests
+        _log.warning("workers.task_tests_failed", task_id=str(task_id), error=str(exc))
+
+
 async def refresh_budgets_after_run(
     sessionmaker: async_sessionmaker[AsyncSession], tenant_id: UUID
 ) -> None:
@@ -738,6 +775,9 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         # plan + slugs (NOT a review run — ADR 0085: RW worktree is the implementer's;
         # the reviewer reads `review_context`). Missing any → no worktree (tmpfs).
         worktree_inputs: tuple[str, str, str, str] | None = None
+        # The task's automated acceptance criteria, captured here (the session closes
+        # below) to drive the test-runtime after the agent commits (prod-18 test_01).
+        task_acceptance_criteria: list[Any] = list(task.acceptance_criteria or [])
         if not request.review and task.plan_id is not None and project is not None and project.slug:
             plan = await session.get(Plan, task.plan_id)
             org = await session.get(Organization, tenant_id)
@@ -892,6 +932,11 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
             )
         approval = final_result.get("approval") if final_result else None
     task_event: tuple[Any, str, str] | None = None
+    # The implementer-path transition (dag_01) is DEFERRED until after the worktree
+    # is committed and the tests have run (prod-18 ordering): the in_review event
+    # must fire only once the AI reviewer can find the committed diff + the
+    # <test-report>. The review + approval paths transition inside the txn (no git).
+    implementer_path = False
     async with sessionmaker() as session, session.begin():
         await finalize_execution(session, execution_id, result=result)
         # A run parked on a sensitive action becomes a real
@@ -919,31 +964,50 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 if task.status != old_status:
                     task_event = (task, old_status, task.status)
         else:
-            # prod-06 task_prod06_dag_01: every other terminal run moves the
-            # task off in_progress (done -> in_review/done, failed -> blocked).
-            task_event = await transition_task_after_run(session, task_id, result.status)
+            implementer_path = True  # transition deferred (after commit + tests)
 
-    # Publish the task event AFTER the commit so the board sees a
-    # consistent state. publish_* is best-effort and swallows its own errors.
+    # Publish the review / approval event now (these paths have no git/test follow-up).
     if task_event is not None:
         task_obj, old, new = task_event
         await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
 
-    # prod-18 task_prod18_commit_01: a successful implementer run that wrote into a
-    # worktree gets committed (with trailers) + pushed to the plan branch by the
-    # WORKER (the sandbox has no git credentials). Best-effort, off the run's path.
-    if result.status == "done" and workspace_host_path is not None and worktree_inputs is not None:
-        c_tenant_slug, c_project_slug, c_plan_id, c_plan_slug = worktree_inputs
-        await _commit_and_push_worktree(
-            settings,
-            host_path=workspace_host_path,
-            tenant_slug=c_tenant_slug,
-            project_slug=c_project_slug,
-            plan_id=c_plan_id,
-            plan_slug=c_plan_slug,
-            task_id=str(task_id),
-            execution_id=exec_id,
-        )
+    # prod-18 implementer post-processing — BEFORE the in_review transition:
+    if implementer_path:
+        # task_prod18_commit_01: a successful run that wrote into a worktree gets
+        # committed (with trailers) + pushed to the plan branch by the WORKER (the
+        # sandbox has no git credentials). task_prod18_test_01: then the project's
+        # tests run over that worktree and persist the TestReport. Both best-effort.
+        if (
+            result.status == "done"
+            and workspace_host_path is not None
+            and worktree_inputs is not None
+        ):
+            c_tenant_slug, c_project_slug, c_plan_id, c_plan_slug = worktree_inputs
+            await _commit_and_push_worktree(
+                settings,
+                host_path=workspace_host_path,
+                tenant_slug=c_tenant_slug,
+                project_slug=c_project_slug,
+                plan_id=c_plan_id,
+                plan_slug=c_plan_slug,
+                task_id=str(task_id),
+                execution_id=exec_id,
+            )
+            await _run_task_tests(
+                settings,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                worktree_host_path=workspace_host_path,
+                acceptance_criteria=task_acceptance_criteria,
+            )
+        # prod-06 task_prod06_dag_01: NOW move the task off in_progress (done ->
+        # in_review/done, failed -> blocked) — after the commit + report exist, so the
+        # reviewer dispatched by the in_review event finds them.
+        async with sessionmaker() as session, session.begin():
+            task_event = await transition_task_after_run(session, task_id, result.status)
+        if task_event is not None:
+            task_obj, old, new = task_event
+            await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
 
     # prod-06 task_prod06_budget_01: now that the run's cost is persisted
     # (finalize_execution above), re-derive the tenant's budget auto-pause +
