@@ -49,6 +49,13 @@ _log = structlog.get_logger("workers.git_repos")
 # task_06_20 ("Cleanup de worktrees a los 30 días sin actividad").
 DEFAULT_WORKTREE_TTL_S = 30 * 24 * 60 * 60
 
+# Git's well-known empty-tree object id — used to seed an empty ROOT commit in a
+# fresh local bare repo (prod-18) so worktrees can branch off a valid HEAD.
+_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+# Identity for platform-authored git ops with no human author (the seed commit).
+_PLATFORM_GIT_NAME = "Agentic Platform"
+_PLATFORM_GIT_EMAIL = "platform@agentic.local"
+
 
 # ---------------------------------------------------------------------------
 # task_06_16 — Layout
@@ -104,10 +111,24 @@ def _run_git(*args: str, cwd: Path | None = None, env_extra: dict[str, str] | No
     would normally ask for a password fails loudly instead of
     hanging the worker forever. Each caller adds a ``timeout=`` to
     bound wall-clock too.
+
+    Also injects ``safe.bareRepository=all`` (prod-18): the platform operates on
+    its OWN bare repos under ``data_root`` (``git -C <repo>.git branch``…), but
+    modern git defaults ``safe.bareRepository=explicit`` for some setups, which
+    rejects bare-repo operations with "cannot use bare repository". Allowing it is
+    safe — the bare repos are the platform's, not untrusted clones — and it makes
+    worktree provisioning work regardless of the host's git config.
     """
     import os
 
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    # Append our config to any inherited GIT_CONFIG_PARAMETERS (don't clobber).
+    inherited = os.environ.get("GIT_CONFIG_PARAMETERS", "")
+    config_params = (inherited + " " if inherited else "") + "'safe.bareRepository=all'"
+    env = {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_PARAMETERS": config_params,
+    }
     if env_extra:
         env.update(env_extra)
     result = subprocess.run(  # — explicit args, no shell
@@ -154,6 +175,35 @@ class BareRepoManager:
         if remote_url is not None:
             self._set_remote(path, remote_url)
         return path
+
+    def seed_initial_commit_if_empty(self, repo_name: str) -> bool:
+        """Ensure the bare repo has a commit so worktrees can branch off it (prod-18).
+
+        A fresh LOCAL bare (``git init --bare``, no remote/clone) is empty: HEAD is
+        unborn and ``git worktree add … HEAD`` fails ("not a valid object name").
+        Seed an empty ROOT commit (the well-known empty tree) on the bare's current
+        HEAD branch, with a platform git identity. No-op if the repo already has
+        commits (e.g. it was cloned from a remote). Returns ``True`` iff it seeded."""
+        path = self._layout.bare_repo_path(repo_name)
+        try:
+            _run_git("-C", str(path), "rev-parse", "--verify", "HEAD")
+            return False  # already has at least one commit
+        except GitCommandError:
+            pass
+        ident = {
+            "GIT_AUTHOR_NAME": _PLATFORM_GIT_NAME,
+            "GIT_AUTHOR_EMAIL": _PLATFORM_GIT_EMAIL,
+            "GIT_COMMITTER_NAME": _PLATFORM_GIT_NAME,
+            "GIT_COMMITTER_EMAIL": _PLATFORM_GIT_EMAIL,
+        }
+        sha = _run_git(
+            "-C", str(path), "commit-tree", _EMPTY_TREE_SHA, "-m", "Initial commit", env_extra=ident
+        ).strip()
+        # Point the bare's current (unborn) HEAD branch at the seed commit.
+        head_ref = _run_git("-C", str(path), "symbolic-ref", "HEAD").strip()
+        _run_git("-C", str(path), "update-ref", head_ref, sha)
+        _log.info("bare_repo.seed_initial_commit", tenant=self._layout.tenant_slug, repo=repo_name)
+        return True
 
     def _set_remote(self, repo_path: Path, url: str) -> None:
         """Configure (or update) ``origin`` to point at ``url``."""

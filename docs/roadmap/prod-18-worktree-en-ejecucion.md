@@ -137,7 +137,7 @@ task_id, branch=make_plan_branch_name(plan))` + `sync_to_head` antes de lanzar e
 
 #### `task_prod18_provision_01` — Montar el worktree en `conduct_execution`
 
-- [ ] **Título**: En `conduct_execution` (execution.py:694), antes de lanzar el agente:
+- [x] **Título**: En `conduct_execution` (execution.py:694), antes de lanzar el agente:
       resolver `BareRepoLayout` (slugs del Project ya cargado) → `BareRepoManager.ensure_repo` →
       `WorktreeManager.add(task_id, branch=make_plan_branch_name(plan))` → `sync_to_head`;
       pasar `workspace_host_path=str(wt_path)` al `ContainerSpec`. Path absoluto del host

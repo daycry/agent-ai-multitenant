@@ -29,13 +29,14 @@ from uuid import UUID
 import structlog
 from api_server.auth.internal_agent import mint_agent_token
 from api_server.db.approval_repo import request_approval_if_needed
-from api_server.db.domain import Project, Task, TaskStatus
+from api_server.db.domain import Plan, Project, Task, TaskStatus
 from api_server.db.execution_repo import (
     create_running_execution,
     finalize_execution,
     get_execution,
     supersede_running_executions,
 )
+from api_server.db.models import Organization
 from api_server.events import publish_execution_event, publish_task_status_changed
 from api_server.task_state_machine import transition_task_status
 from redis.asyncio import Redis
@@ -541,6 +542,54 @@ async def _apply_review_verdict(
     return (task, old_status, task.status)
 
 
+async def _provision_worktree(
+    settings: Settings,
+    *,
+    tenant_slug: str,
+    project_slug: str,
+    plan_id: str,
+    plan_slug: str,
+    task_id: str,
+) -> str | None:
+    """Materialise the per-task git worktree and return its host path (prod-18
+    task_prod18_provision_01 / ADR 0085).
+
+    Ensures the project's bare repo, adds a worktree for ``task_id`` on the plan
+    branch (``plan/{id8}-{slug}``, HEAD detached so sibling tasks share it), and
+    syncs it to the branch HEAD — reusing the Plan 06 libraries. The returned path
+    is the absolute HOST path the daemon resolves for the ``/workspace`` bind (DooD).
+    Best-effort: any failure logs and returns ``None`` so the agent falls back to an
+    ephemeral ``/workspace`` tmpfs (no worktree) instead of failing the run."""
+    from pathlib import Path
+
+    from workers.git_repos import BareRepoLayout, BareRepoManager, WorktreeManager
+    from workers.plan_git import make_plan_branch_name
+
+    def _git() -> str:
+        layout = BareRepoLayout(
+            data_root=Path(settings.data_root),
+            tenant_slug=tenant_slug,
+            project_slug=project_slug,
+        )
+        repo_name = project_slug  # ADR 0085 decision 2: one bare repo per project (MVP).
+        branch = make_plan_branch_name(plan_id, plan_slug)
+        mgr = BareRepoManager(layout)
+        mgr.ensure_repo(repo_name)
+        # A fresh local bare (no remote/clone) is empty → seed a root commit so the
+        # worktree can branch off a valid HEAD.
+        mgr.seed_initial_commit_if_empty(repo_name)
+        wt = WorktreeManager(layout, repo_name)
+        path = wt.add(task_id, branch=branch)
+        wt.sync_to_head(task_id, branch=branch)
+        return str(path)
+
+    try:
+        return await asyncio.to_thread(_git)
+    except Exception as exc:  # pragma: no cover - defensive: never fail the run on git
+        _log.warning("workers.worktree_provision_failed", task_id=task_id, error=str(exc))
+        return None
+
+
 async def refresh_budgets_after_run(
     sessionmaker: async_sessionmaker[AsyncSession], tenant_id: UUID
 ) -> None:
@@ -617,6 +666,16 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         execution_id = execution.id
         project = await session.get(Project, task.project_id)
         approval_policy = project.human_approval_policy if project is not None else None
+        # prod-18 task_prod18_provision_01: gather the (stable) slugs needed to
+        # materialise the task's git worktree. Only for a real IMPLEMENTER run with a
+        # plan + slugs (NOT a review run — ADR 0085: RW worktree is the implementer's;
+        # the reviewer reads `review_context`). Missing any → no worktree (tmpfs).
+        worktree_inputs: tuple[str, str, str, str] | None = None
+        if not request.review and task.plan_id is not None and project is not None and project.slug:
+            plan = await session.get(Plan, task.plan_id)
+            org = await session.get(Organization, tenant_id)
+            if plan is not None and plan.slug and org is not None and org.slug:
+                worktree_inputs = (org.slug, project.slug, str(plan.id), plan.slug)
         # ADR 0057 F1: resolver el model_config (clave `provider` = kind, sin
         # endpoint/credencial) a un spec EJECUTABLE (kind + base_url +
         # credencial de Vault) ANTES de lanzar el contenedor — el sandbox no
@@ -691,6 +750,21 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 await publish_execution_event(redis, exec_id, event_type=kind, payload=payload)
 
         drainer = asyncio.create_task(drain())
+        # prod-18 task_prod18_provision_01: materialise the task's git worktree
+        # OUTSIDE the DB transaction (git subprocess I/O) and bind-mount it RW as
+        # /workspace so the agent's file writes persist (the worker commits them in
+        # Fase C). `None` → ephemeral tmpfs (no plan/slugs, or provisioning failed).
+        workspace_host_path: str | None = None
+        if worktree_inputs is not None:
+            tenant_slug, project_slug, plan_id_str, plan_slug = worktree_inputs
+            workspace_host_path = await _provision_worktree(
+                settings,
+                tenant_slug=tenant_slug,
+                project_slug=project_slug,
+                plan_id=plan_id_str,
+                plan_slug=plan_slug,
+                task_id=str(task_id),
+            )
         container_spec = ContainerSpec(
             image=settings.agent_runtime_image,
             env=_build_runtime_env(
@@ -701,6 +775,7 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 model_spec=resolved_model,
             ),
             labels={"com.agentic-platform.execution-id": exec_id},
+            workspace_host_path=workspace_host_path,
         )
         active_runner = runner or AgentContainerRunner(settings)
         cancel_seen = False
