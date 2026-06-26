@@ -158,12 +158,12 @@ converja a un estado terminal visible.
 
 #### `task_prod06_dag_03` — Cablear el reviewer bridge al flujo post-ejecución
 
-- [ ] **Título** ⏸️ **DIFERIDO (depende de ADR 0063 — ejecución del reviewer)**: Dar caller productivo a `apply_reviewer_verdict`
+- [ ] **Título**: Dar caller productivo a `apply_reviewer_verdict`
       (apps/api-server/src/api_server/reviewer_bridge.py:95, hoy 0 callers fuera de tests):
       cuando una tarea entra en `in_review`, el flujo post-test-runtime invoca
       `parse_reviewer_output` + `apply_reviewer_verdict` y la tarea avanza a `done` o vuelve
       con feedback según el veredicto, conforme al bucle descrito en ADR 0027:106-118.
-      Emitir métrica de profundidad por cola/estado para prod-08.
+      Emitir métrica de profundidad por cola/estado para prod-08. > **PARTE B (métrica) HECHA** (commit dag_03 parte B): beat `workers.sample_queue_metrics` > emite `agentic_celery_queue_depth{queue}` + `agentic_tasks_by_status{status}` vía > textfile de node-exporter. prod-08 añade scrape/alerta/dashboard. > **PARTE A (cablear el AI reviewer): NO depende de ADR 0063** (era una conflación con el > review-runtime de preview humano). Es decisión de producto → **ADR 0084** (`proposed`): > la review automática añade una 2ª ejecución de agente por tarea. Pendiente de que el > operador elija opción (A construir MVP / B diferir a plan dedicado / C caller mínimo).
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Depende de**: task_prod06_dag_01, task_prod06_dag_02
 - **Tests automáticos**:
