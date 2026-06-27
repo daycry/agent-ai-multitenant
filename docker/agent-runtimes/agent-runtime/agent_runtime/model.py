@@ -34,6 +34,11 @@ class ModelDecision:
     tool_args: dict[str, Any] = field(default_factory=dict)
     output: str | None = None
     rationale: str = ""
+    # The agent's self-reported finish status (ADR 0087, structured finish):
+    # "success" | "failed" | "partial" when the model finished via the
+    # `submit_result` tool, else None (prose finish / ACT). It is a HINT shown in
+    # the UI and given to the reviewer — NOT the authoritative verdict.
+    finish_status: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -42,6 +47,7 @@ class ModelDecision:
             "tool_args": dict(self.tool_args),
             "output": self.output,
             "rationale": self.rationale,
+            "finish_status": self.finish_status,
         }
 
 

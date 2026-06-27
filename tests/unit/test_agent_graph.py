@@ -39,9 +39,14 @@ def _act(tool: str = "echo", *, rationale: str = "", **args: object) -> ModelRes
     )
 
 
-def _finish(output: str = "done") -> ModelResponse:
+def _finish(output: str = "done", *, finish_status: str | None = None) -> ModelResponse:
     return ModelResponse(
-        decision=ModelDecision(kind=DecisionKind.FINISH, output=output, rationale="finish"),
+        decision=ModelDecision(
+            kind=DecisionKind.FINISH,
+            output=output,
+            rationale="finish",
+            finish_status=finish_status,
+        ),
         tokens_in=80,
         tokens_out=20,
         cost_usd=0.001,
@@ -161,6 +166,20 @@ def test_review_retry_budget_escalates_to_human() -> None:
     assert result.status == STATUS_NEEDS_HUMAN_REVIEW
     assert result.abort_code == "max_review_retries_exhausted"
     assert result.output == "v1"  # the work is kept for the human reviewer
+
+
+def test_finish_status_surfaces_in_result() -> None:
+    # ADR 0087: a structured finish (submit_result) carries status into the result.
+    deps = _deps(_finish("Hecho.", finish_status="success"))
+    result = run_agent(deps, _TASK)
+    assert result.status == STATUS_DONE
+    assert result.finish_status == "success"
+    assert result.as_dict()["finish_status"] == "success"
+
+
+def test_prose_finish_has_no_status() -> None:
+    result = run_agent(_deps(_finish("Terminé.")), _TASK)
+    assert result.finish_status is None
 
 
 def test_inconclusive_review_escalates_immediately() -> None:

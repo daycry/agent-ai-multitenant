@@ -92,9 +92,12 @@ def _research_nudge(
     if not (is_repeat or research_streak >= _RESEARCH_STREAK_LIMIT):
         return None
     if has_produced:
+        # C0 (ADR 0087): provider-neutral wording — do NOT prescribe "no tool call".
+        # FINISH on the HTTP providers IS a `submit_result` tool call; on claude_sdk
+        # it is a prose summary. Either way: report the final result and stop.
         return (
-            "You have ALREADY written the deliverable files. Stop verifying/re-reading and "
-            "FINISH now: reply with a short summary of what you did and NO tool call."
+            "You have ALREADY produced the deliverable. Stop verifying/re-reading and "
+            "FINISH now: report the final result and stop working."
         )
     if is_repeat:
         return (
@@ -136,6 +139,10 @@ class ExecutionResult:
     usage: dict[str, float | int]
     # Set when status is `awaiting_human_approval`: {category, action}.
     approval: dict[str, Any] | None = None
+    # The agent's self-reported finish status (ADR 0087): "success"|"failed"|
+    # "partial" when it finished via `submit_result`, else None. A HINT for the UI
+    # + reviewer, distinct from `status` (the execution lifecycle outcome).
+    finish_status: str | None = None
 
     def succeeded(self) -> bool:
         return self.status == STATUS_DONE
@@ -149,6 +156,7 @@ class ExecutionResult:
             "iterations": self.iterations,
             "usage": self.usage,
             "approval": self.approval,
+            "finish_status": self.finish_status,
         }
 
 
@@ -605,6 +613,7 @@ def run_agent(
             for step in steps[emitted:]:
                 on_step(step)
             emitted = len(steps)
+    last_decision = final["last_decision"] or {}
     return ExecutionResult(
         status=final["status"],
         abort_code=final["abort_code"],
@@ -613,4 +622,7 @@ def run_agent(
         steps=final["steps"],
         usage=tracker.usage.as_dict(),
         approval=final["approval"],
+        # The structured finish status (ADR 0087) rides on the last decision; it
+        # is set only when the agent finished via `submit_result`.
+        finish_status=last_decision.get("finish_status"),
     )

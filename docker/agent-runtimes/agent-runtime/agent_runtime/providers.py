@@ -100,6 +100,37 @@ _SUBMIT_VERDICT_TOOL: dict[str, Any] = {
     },
 }
 
+# ADR 0087 (structured FINISH): the agent reports its outcome via this tool. It
+# is advertised on the HTTP providers' decide() (azure/copilot/ollama), where the
+# tool call arrives pre-parsed; claude_sdk does NOT get it (a tool call there
+# forces content="" and would drop the rich prose deliverable) — it finishes in
+# prose and `_decision_from` wraps it. `status` is a HINT for the UI + reviewer,
+# NOT the authoritative verdict (the self-review decides done/escalate).
+_FINISH_STATUSES = ("success", "failed", "partial")
+_SUBMIT_RESULT_TOOL: dict[str, Any] = {
+    "name": "submit_result",
+    "description": (
+        "Finish the task and report the outcome. Call this exactly once, when the "
+        "task is complete, instead of replying in plain text."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": list(_FINISH_STATUSES),
+                "description": "success = done; failed = could not complete; partial = partly.",
+            },
+            "summary": {
+                "type": "string",
+                "description": "A short summary of what was done (the task's final output).",
+            },
+        },
+        "required": ["status", "summary"],
+        "additionalProperties": False,
+    },
+}
+
 # How many context fragments to feed the model — the loop's context list
 # grows unbounded; the tail is the relevant part.
 _CONTEXT_WINDOW = 8
@@ -155,15 +186,31 @@ def _decide_messages(state: dict[str, Any]) -> list[Message]:
 
 
 def _review_messages(state: dict[str, Any]) -> list[Message]:
-    """Turn the agent-loop state into the chat messages for a review."""
+    """Turn the agent-loop state into the chat messages for a review.
+
+    The authoritative reviewer (ADR 0087) sees the task's ACCEPTANCE CRITERIA —
+    the definition of done it must certify against — and, when present, the
+    agent's self-reported finish status as a HINT (the reviewer still judges the
+    output itself; the status is not the verdict).
+    """
     task = state.get("task") or {}
-    body = (
-        f"Task: {task.get('title', '')}\n{task.get('description', '')}\n\n"
-        f"Candidate output:\n{state.get('output') or ''}"
-    )
+    lines = [f"Task: {task.get('title', '')}".strip()]
+    if task.get("description"):
+        lines.append(str(task["description"]))
+    criteria = task.get("acceptance_criteria") or []
+    if criteria:
+        lines.append("Acceptance criteria (the definition of done to certify against):")
+        lines += [f"- {_criterion_text(c)}" for c in criteria]
+    status = (state.get("last_decision") or {}).get("finish_status")
+    if status:
+        lines.append(
+            f"The agent self-reported status='{status}' — a HINT only; verify it "
+            "yourself against the criteria."
+        )
+    lines.append(f"\nCandidate output:\n{state.get('output') or ''}")
     return [
         Message(role="system", content=_REVIEW_SYSTEM),
-        Message(role="user", content=body),
+        Message(role="user", content="\n".join(lines)),
     ]
 
 
@@ -269,17 +316,33 @@ def _parse_verdict(content: str) -> tuple[bool | None, str]:
 
 
 def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
-    """Turn one `CompletionResponse` into a `ModelResponse`.
+    """Turn one `CompletionResponse` into a `ModelResponse`, routing BY TOOL NAME.
 
-    If the model emitted a tool call, this is an ACT; otherwise a
-    FINISH whose output is the text content.
+    ADR 0087 (structured FINISH): the FINISH route is no longer "no tool call".
+
+      * ``submit_result`` -> FINISH (output = its ``summary``; ``finish_status`` =
+        its ``status`` if valid against the enum, else None — a bad hint is
+        dropped, never crashes; it is NOT routed to ACT against a registry that
+        has no such tool);
+      * any other tool    -> ACT;
+      * no tool (prose)   -> FINISH wrapping the text content (``finish_status``
+        None — the claude_sdk path, where we can't get a structured status).
     """
-    if resp.tool_calls:
-        call = resp.tool_calls[0]
+    first = resp.tool_calls[0] if resp.tool_calls else None
+    if first is not None and first.name == "submit_result":
+        args = dict(first.arguments)
+        status = args.get("status")
+        decision = ModelDecision(
+            kind=DecisionKind.FINISH,
+            output=str(args.get("summary", "") or "") or (resp.content or ""),
+            rationale=resp.content or "",
+            finish_status=status if status in _FINISH_STATUSES else None,
+        )
+    elif first is not None:
         decision = ModelDecision(
             kind=DecisionKind.ACT,
-            tool=call.name,
-            tool_args=dict(call.arguments),
+            tool=first.name,
+            tool_args=dict(first.arguments),
             rationale=resp.content or "",
         )
     else:
@@ -373,11 +436,16 @@ class _ProviderModelClient:
         self._extra_call_kwargs = extra_call_kwargs or {}
 
     def decide(self, state: dict[str, Any]) -> ModelResponse:
+        # ADR 0087: advertise `submit_result` ALONGSIDE the agent's tools so the
+        # HTTP model finishes with a structured outcome. claude_sdk does NOT do
+        # this (see ClaudeSDKModelClient.decide) — a tool call there forces
+        # content="" and would drop the rich prose deliverable.
+        tools = [*(self._tools or []), _SUBMIT_RESULT_TOOL]
         resp = _run(
             self.provider.complete(
                 _decide_messages(state),
                 model=self.model,
-                tools=self._tools,
+                tools=tools,
                 **self._extra_call_kwargs,
             )
         )

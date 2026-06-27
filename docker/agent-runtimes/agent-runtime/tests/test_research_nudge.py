@@ -82,7 +82,11 @@ def test_finish_nudge_when_already_produced_and_streak() -> None:
     msg = _research_nudge(
         tool="list_files", research_streak=_RESEARCH_STREAK_LIMIT, repeat_count=1, has_produced=True
     )
-    assert msg is not None and "FINISH" in msg and "NO tool call" in msg
+    # C0 (ADR 0087): the nudge must NOT prescribe "NO tool call" — under the
+    # structured-finish contract, FINISH on HTTP providers IS a submit_result tool
+    # call. The guidance is provider-neutral: report the result and stop.
+    assert msg is not None and "FINISH" in msg
+    assert "NO tool call" not in msg and "no tool call" not in msg.lower()
 
 
 def test_finish_nudge_on_repeat_after_producing() -> None:
