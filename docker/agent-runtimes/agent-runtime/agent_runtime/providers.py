@@ -181,28 +181,31 @@ def _extract_json(text: str) -> Any:
     return None
 
 
-# Explicit rejection signals in a prose self-review. Kept specific (not a bare
-# "fail", which matches "does not fail to…") so an approving review is never
-# misread. ES + EN, since the agent reviews in either.
+# Explicit rejection signals in a PROSE self-review (fallback path only — the
+# structured `submit_verdict` tool is preferred). Deliberately CONSERVATIVE: only
+# verdict-context phrases, NOT bare domain words. The previous set ("falla",
+# "fallo", "rechaz", "incompleto", "reject"…) caused FALSE rejections on auth/JWT
+# reviews ("el filtro RECHAZA tokens", "maneja el FALLO de auth", "no FALLA ante
+# expirados") — which is why only the JWT task aborted while specs/migrations
+# passed. Prose-sniffing is fragile by nature, so we err toward PASS unless the
+# review clearly states a negative verdict; the authoritative gates are the
+# test-runtime + human plan-level validation (CLAUDE.md), not this heuristic.
 _REVIEW_FAIL_MARKERS = (
     '"passed": false',
     '"passed":false',
     "passed: false",
-    "no pasa",
+    "passed=false",
     "no cumple",
+    "no se cumplen",
     "no satisface",
-    "no supera",
-    "rechaz",  # rechazada / rechazo
-    "incompleto",
-    "incompleta",
-    "falla",
-    "fallo",
+    "no supera la",
+    "no aprobad",
+    "veredicto: no",
     "does not satisfy",
     "doesn't satisfy",
     "not satisfied",
-    "fails to",
-    "incomplete",
-    "reject",
+    "fails the review",
+    "verdict: fail",
 )
 
 

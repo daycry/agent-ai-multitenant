@@ -26,15 +26,25 @@ def test_approving_prose_passes() -> None:
 
 
 def test_explicit_rejection_fails() -> None:
+    # Only clear negative-VERDICT phrases fail (conservative markers).
     assert _parse_verdict("La salida no cumple el criterio 2.")[0] is False
+    assert _parse_verdict("Resultado: no satisface los criterios de aceptación.")[0] is False
     assert _parse_verdict("This output does not satisfy the task.")[0] is False
-    assert _parse_verdict("Rechazada: faltan los tests.")[0] is False
-    assert _parse_verdict("La entrega está incompleta.")[0] is False
+    assert _parse_verdict("passed: false — falta el endpoint de refresh")[0] is False
 
 
 def test_bare_fail_word_is_not_a_rejection() -> None:
     # Contains "fail" but is approving — must NOT be read as a rejection.
     assert _parse_verdict("The implementation does not fail to meet any requirement.")[0] is True
+
+
+def test_auth_domain_prose_passes() -> None:
+    # Regression (2026-06-27): an APPROVING review of auth/JWT code is full of
+    # domain words (rechaza/falla/fallo) that must NOT be read as a rejection —
+    # this is exactly why only the JWT task aborted while specs/migrations passed.
+    assert _parse_verdict("El filtro rechaza tokens inválidos y maneja el fallo de auth.")[0]
+    assert _parse_verdict("La implementación no falla ante tokens expirados. Correcta.")[0]
+    assert _parse_verdict("JWT completada; rechazo de tokens revocados OK.")[0] is True
 
 
 # --- ADR 0086: the verdict travels as a `submit_verdict` tool call ------------

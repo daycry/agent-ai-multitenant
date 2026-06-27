@@ -443,7 +443,12 @@ class _AgentLoop:
                 tokens_in=review.tokens_in,
                 tokens_out=review.tokens_out,
                 cost_usd=review.cost_usd,
-                summary=f"Self-review: {'pass' if review.passed else 'fail'}",
+                # Surface the verdict reason in the step so a failing review is
+                # debuggable from steps_log (instrument, ADR 0086 / 2026-06-27).
+                summary=(
+                    f"Self-review: {'pass' if review.passed else 'fail'}"
+                    + (f" — {review.feedback[:160]}" if review.feedback else "")
+                ),
             )
         )
 
