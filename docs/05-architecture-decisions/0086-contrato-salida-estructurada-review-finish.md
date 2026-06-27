@@ -129,3 +129,31 @@ Mantener SIEMPRE el fallback tolerante (no es deuda, es el contrato realista del
   decisión del loop (recién estabilizado). Se implementa (aditiva/backward-compatible)
   **cuando exista un consumidor** (p.ej. el visor de Runs mostrando campos del
   resultado, o automatización downstream). YAGNI hasta entonces.
+
+### Actualización 2026-06-27 (PM) — Fase 2 DES-DIFERIDA e implementada
+
+Tras el análisis multi-agente del refactor del pipeline (ver
+`docs/roadmap/refactor-pipeline-ejecucion-review.md`) y tres decisiones del operador,
+la Fase 2 se implementa con **ajustes honestos** sobre el plan original:
+
+- **Apareció el consumidor** que faltaba: el operador comprometió la UI del visor de
+  Runs (render del output + badge de estado), así que `submit_result` deja de ser YAGNI.
+- **Rechazada** la idea de una sección de texto "Resultado final" parseada por regex
+  como contrato primario: recrea exactamente la colisión de dominio de
+  `_REVIEW_FAIL_MARKERS` (un header `estado: fallido` es string-indistinguible de prosa
+  auth/JWT) y en los 3 providers HTTP sería un retroceso frente a la tool ya parseada.
+  Sobrevive solo como la **forma del fallback** (envolver prosa).
+- **`submit_result(status, summary)`** (sin `criteria_met[]` — YAGNI, sin lector) se
+  advierte en `decide()` **solo en los providers HTTP**; en `claude_sdk` **NO** se
+  fuerza (su `content=""` al disparar una tool tiraría el output rico) → finaliza en
+  prosa y el wrap sintetiza el resultado. `_decision_from` enruta por **nombre** de tool
+  (`submit_result → FINISH`), reescritura gated del hot-path con tests que la pinan.
+- **NO** se añade `response_schema` genérico a `shared-llm` (era over-engineering: el
+  review ya es tool-based en los 4 providers). Forzar vía `tool_choice` no es
+  implementable en el SDK (`can_use_tool` intercepta, no compele).
+- `finish_status` es un **HINT** (no veredicto): lo juzga el self-review autoritativo
+  (ver **ADR 0087**, que define la nueva semántica del review y el escalado a humano).
+
+Implementado en commits `f6b1a94` (A+A2), `5e4752c` (B), `bcdd9cb` (C0–C3 runtime),
+`77f37fe` (persistencia + UI). El `_parse_verdict` tolerante sigue siendo la red de
+seguridad documentada (invariante).
