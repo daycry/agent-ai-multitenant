@@ -263,4 +263,32 @@ anti-regresión transversal y debe seguir verde tras A.
   en los 4 providers y queda **verificada end-to-end** por `test_claude_sdk_review`
   (harvest deny+interrupt + fallback 3-estados a través del provider real). La red
   A2 cubre la degradación a prosa.
-- **Fases C0–C3, D, ADRs — pendientes.**
+- **Fase C0 — HECHA** (`bcdd9cb`): nudge de finish provider-neutral (sin "NO tool call").
+- **Fase C1 — HECHA** (`bcdd9cb`): `_decision_from` enruta por nombre (`submit_result→FINISH`).
+- **Fase C2 — HECHA** (`bcdd9cb` runtime + `77f37fe` persistencia): tool
+  `submit_result(status,summary)` en HTTP, prosa+wrap en claude_sdk;
+  `finish_status` propagado a `ExecutionResult` → columna `executions.finish_status`
+  (migración 0100, reversible) + `ExecutionStatus.NEEDS_HUMAN_REVIEW`; API expone el campo.
+- **Fase C3 — HECHA** (`bcdd9cb`): `_review_messages` incluye `acceptance_criteria` + el
+  `finish_status` como pista.
+- **Fase D — HECHA** (`77f37fe`): la página de detalle del run pinta el `output` +
+  badge "Resultado del agente" + variante `needs_human_review`.
+- **ADRs — HECHO** (`9e5501b`): ADR 0087 (nuevo) + ADR 0086 (actualización) + changelog.
+
+### Verificación
+
+- agent-runtime: 54 tests verdes. Repo unit: 1670 passed (el único rojo,
+  `test_user_role_values`, es **preexistente** y ajeno — verificado en el commit base).
+- admin-panel: `tsc --noEmit` limpio, vitest verde, prettier OK.
+- Migración 0100: SQL offline válido (`ALTER TABLE executions ADD COLUMN finish_status
+VARCHAR(16)` ↔ `DROP COLUMN`), reversible.
+
+### Deploy (paso del operador — flujo de tags propio `:manuals`, sin auto-migrate)
+
+1. Rebuild `agent-runtime` **WITH_CLAUDE=1** (desde PowerShell, gotcha de `--build-arg`),
+   `api-server`, `workers`, `admin-panel`.
+2. Aplicar migración: `docker compose run --rm api-server alembic upgrade head` (o el
+   flujo equivalente que aplica las migraciones en este stack).
+3. Recreate de los servicios. Smoke: re-lanzar la tarea JWT y confirmar que el run
+   llega a `done` (review por tool) o, si el veredicto es inconcluso, a
+   `needs_human_review` → tarea `blocked` en la bandeja.
