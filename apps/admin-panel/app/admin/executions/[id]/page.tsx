@@ -53,6 +53,8 @@ interface Execution {
   status: string;
   abort_code: string | null;
   output: string | null;
+  // ADR 0087: the agent's self-reported finish status (hint), or null.
+  finish_status: string | null;
   steps_log: Step[];
   iterations: number;
   total_tokens: number;
@@ -69,8 +71,23 @@ const STATUS_VARIANT: Record<string, BadgeVariant> = {
   ok: "success",
   done: "success",
   aborted: "warning",
+  // ADR 0087: escalated to a human for validation — an attention state, not a hard fail.
+  needs_human_review: "warning",
   error: "danger",
   failed: "danger",
+};
+
+// ADR 0087: the agent's self-reported finish status (success|failed|partial) — a HINT,
+// distinct from the execution status. Spanish labels for the badge.
+const FINISH_STATUS_VARIANT: Record<string, BadgeVariant> = {
+  success: "success",
+  partial: "warning",
+  failed: "danger",
+};
+const FINISH_STATUS_LABEL: Record<string, string> = {
+  success: "Exitoso",
+  partial: "Parcial",
+  failed: "Fallido",
 };
 
 const KIND_VARIANT: Record<string, BadgeVariant> = {
@@ -192,6 +209,19 @@ export default function ExecutionTimelinePage() {
           </div>
           <ExecutionSummary execution={execution} liveCount={liveSteps.length} />
 
+          {execution.output && (
+            <Card className="mt-4" data-testid="execution-output">
+              <CardContent className="py-4">
+                <h2 className="text-muted-foreground mb-2 text-xs font-medium uppercase tracking-wide">
+                  Resultado de la ejecución
+                </h2>
+                <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words text-sm">
+                  {execution.output}
+                </pre>
+              </CardContent>
+            </Card>
+          )}
+
           <ol className="mt-6 space-y-2" data-testid="execution-timeline">
             {steps.length === 0 && (
               <li className="text-muted-foreground text-sm italic" data-testid="timeline-empty">
@@ -225,6 +255,16 @@ function ExecutionSummary({ execution, liveCount }: { execution: Execution; live
               : execution.status}
           </Badge>
         </Metric>
+        {execution.finish_status && (
+          <Metric label="Resultado del agente">
+            <Badge
+              variant={FINISH_STATUS_VARIANT[execution.finish_status] ?? "muted"}
+              data-testid="execution-finish-status"
+            >
+              {FINISH_STATUS_LABEL[execution.finish_status] ?? execution.finish_status}
+            </Badge>
+          </Metric>
+        )}
         <Metric label="Iteraciones">
           <span data-testid="execution-iterations">{execution.iterations}</span>
         </Metric>

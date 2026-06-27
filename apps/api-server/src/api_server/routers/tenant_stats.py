@@ -649,6 +649,7 @@ async def _fetch_runs(
             model=model_name,
             verdict=ex.status,
             succeeded=ex.status == _DONE,
+            finish_status=ex.finish_status,
             retry_count=int(retry_count) if retry_count is not None else 0,
             duration_ms=int(duration) if duration is not None else None,
             total_tokens=ex.total_tokens,

@@ -336,6 +336,10 @@ class ExecutionStatus(enum.StrEnum):
     AWAITING_HUMAN_APPROVAL = "awaiting_human_approval"
     # Stopped by an explicit operator cancel request (POST /executions/{id}/cancel).
     CANCELLED = "cancelled"
+    # The AUTHORITATIVE self-review could not certify the output (ADR 0087):
+    # inconclusive verdict or exhausted retries. Terminal; the worker maps the
+    # TASK to `blocked` and the human inbox surfaces it for validation.
+    NEEDS_HUMAN_REVIEW = "needs_human_review"
 
 
 class DocumentStatus(enum.StrEnum):
@@ -1110,9 +1114,15 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
         String(32), nullable=False, server_default=text("'running'")
     )
     # Set when status='aborted' — a SafeguardCode (max_iterations_exceeded,
-    # repetitive_loop_detected, …). NULL on a clean run.
+    # repetitive_loop_detected, …). NULL on a clean run. ADR 0087 also uses it as
+    # the escalation reason (review_inconclusive / max_review_retries_exhausted).
     abort_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The agent's self-reported finish status (ADR 0087): 'success'|'failed'|
+    # 'partial' when it finished via the `submit_result` tool, else NULL (prose
+    # finish / claude_sdk). A HINT shown in the UI + given to the reviewer —
+    # distinct from `status` (the execution lifecycle outcome).
+    finish_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     # Por qué el Memorizer NO produjo memoria a partir de este run, como código
     # canónico (:class:`~api_server.memorizer.policy.MemorizeSkipReason`):

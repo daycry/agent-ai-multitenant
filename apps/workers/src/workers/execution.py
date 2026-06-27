@@ -230,6 +230,9 @@ class _RuntimeResult:
     iterations: int
     steps: list[dict[str, Any]]
     usage: dict[str, Any]
+    # ADR 0087: the agent's structured finish status (success|failed|partial) or
+    # None — carried from the runtime's execution.finished result.
+    finish_status: str | None = None
 
 
 def _agent_spec(
@@ -466,6 +469,7 @@ def _assemble_result(
             iterations=int(final_result.get("iterations", 0)),
             steps=steps,
             usage=final_result.get("usage") or dict(_EMPTY_USAGE),
+            finish_status=final_result.get("finish_status"),
         )
 
     if runtime_error is not None:

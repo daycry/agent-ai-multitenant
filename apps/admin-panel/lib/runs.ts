@@ -20,6 +20,8 @@ export interface ExecutionRunRow {
   model: string | null;
   verdict: string;
   succeeded: boolean;
+  // ADR 0087: the agent's self-reported finish status (success|failed|partial) or null.
+  finish_status: string | null;
   retry_count: number;
   duration_ms: number | null;
   total_tokens: number;

@@ -27,6 +27,9 @@ class ExecutionResponse(BaseModel):
     status: str
     abort_code: str | None
     output: str | None
+    # ADR 0087: the agent's structured finish status (success|failed|partial) or
+    # None — a hint rendered as a badge in the Runs detail.
+    finish_status: str | None = None
 
     steps_log: list[Any]
     iterations: int
@@ -50,6 +53,7 @@ def to_execution_response(execution: Execution) -> ExecutionResponse:
         status=execution.status,
         abort_code=execution.abort_code,
         output=execution.output,
+        finish_status=execution.finish_status,
         steps_log=execution.steps_log,
         iterations=execution.iterations,
         total_tokens=execution.total_tokens,

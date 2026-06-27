@@ -42,6 +42,9 @@ class ExecutionResultLike(Protocol):
     iterations: int
     steps: list[dict[str, Any]]
     usage: dict[str, Any]
+    # ADR 0087: the agent's structured finish status (success|failed|partial) or
+    # None. Optional on the Protocol so older/partial result shapes still satisfy it.
+    finish_status: str | None
 
 
 def _int_field(step: dict[str, Any], *names: str, default: int = 0) -> int:
@@ -372,6 +375,9 @@ async def finalize_execution(
         execution.status = result.status
         execution.abort_code = result.abort_code
         execution.output = result.output
+        # ADR 0087: persist the structured finish status (None when absent / for
+        # older result shapes without the field).
+        execution.finish_status = getattr(result, "finish_status", None)
     execution.steps_log = steps
     _apply_price_snapshot(execution, rollup)
     execution.iterations = result.iterations
@@ -388,6 +394,8 @@ async def finalize_execution(
         ExecutionStatus.ABORTED,
         ExecutionStatus.FAILED,
         ExecutionStatus.CANCELLED,
+        # ADR 0087: escalated-to-human is terminal for the RUN (a human takes over).
+        ExecutionStatus.NEEDS_HUMAN_REVIEW,
     }
     is_terminal = preserve_cancel or result.status in terminal
     execution.completed_at = datetime.now(UTC) if is_terminal else None
