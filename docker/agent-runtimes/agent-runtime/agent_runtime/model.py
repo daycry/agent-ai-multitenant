@@ -58,7 +58,15 @@ class ModelResponse:
 
 @dataclass(frozen=True)
 class ReviewResponse:
-    """A `review` result — did the output pass self-review?"""
+    """A `review` result — did the output pass self-review?
+
+    The self-review is an AUTHORITATIVE gate (ADR 0087). The verdict is
+    three-state: ``passed`` is True (certified) or False, and when the verdict
+    could NOT be determined reliably — no structured verdict and ambiguous prose,
+    or malformed tool args — ``inconclusive`` is True (``passed`` stays False so
+    it never auto-passes). The loop ESCALATES an inconclusive verdict (and an
+    exhausted retry budget) to a human instead of passing or aborting.
+    """
 
     passed: bool
     feedback: str = ""
@@ -66,6 +74,8 @@ class ReviewResponse:
     tokens_in: int = 0
     tokens_out: int = 0
     cost_usd: float = 0.0
+    # True when the verdict is untrustworthy → escalate to human (ADR 0087).
+    inconclusive: bool = False
 
 
 @runtime_checkable

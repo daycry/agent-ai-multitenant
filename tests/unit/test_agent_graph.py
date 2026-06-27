@@ -16,7 +16,7 @@ from agent_runtime.model import (
     ReviewResponse,
     ScriptedModelClient,
 )
-from agent_runtime.state import STATUS_ABORTED, STATUS_DONE
+from agent_runtime.state import STATUS_DONE, STATUS_NEEDS_HUMAN_REVIEW
 from agent_runtime.steps import StepKind
 
 pytestmark = pytest.mark.unit
@@ -152,8 +152,22 @@ def test_failed_review_retries_then_passes() -> None:
     assert result.iterations == 2
 
 
-def test_review_retry_budget_is_enforced() -> None:
+def test_review_retry_budget_escalates_to_human() -> None:
+    # ADR 0087: explicit-fail reviews retried until the budget is exhausted now
+    # ESCALATE to a human instead of aborting — the deliverable is preserved for
+    # human validation rather than discarded as a hard failure.
     deps = _deps(_finish("v1"), reviews=[ReviewResponse(passed=False, feedback="no")])
     result = run_agent(deps, _TASK)
-    assert result.status == STATUS_ABORTED
-    assert result.abort_code == "max_review_retries_exceeded"
+    assert result.status == STATUS_NEEDS_HUMAN_REVIEW
+    assert result.abort_code == "max_review_retries_exhausted"
+    assert result.output == "v1"  # the work is kept for the human reviewer
+
+
+def test_inconclusive_review_escalates_immediately() -> None:
+    # ADR 0087: an inconclusive verdict (untrustworthy) escalates WITHOUT burning
+    # retries — retrying an ambiguous review just wastes budget.
+    deps = _deps(_finish("v1"), reviews=[ReviewResponse(passed=False, inconclusive=True)])
+    result = run_agent(deps, _TASK)
+    assert result.status == STATUS_NEEDS_HUMAN_REVIEW
+    assert result.abort_code == "review_inconclusive"
+    assert result.iterations == 1  # no retry spent

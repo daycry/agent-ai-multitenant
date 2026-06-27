@@ -37,6 +37,7 @@ from agent_runtime.state import (
     STATUS_ABORTED,
     STATUS_AWAITING_APPROVAL,
     STATUS_DONE,
+    STATUS_NEEDS_HUMAN_REVIEW,
     AgentState,
     AgentTask,
     initial_state,
@@ -168,7 +169,8 @@ def _route_after_reflect(state: AgentState) -> str:
 
 
 def _route_after_review(state: AgentState) -> str:
-    if state["review_passed"] or state["status"] in (STATUS_ABORTED, STATUS_AWAITING_APPROVAL):
+    terminal = (STATUS_ABORTED, STATUS_AWAITING_APPROVAL, STATUS_NEEDS_HUMAN_REVIEW)
+    if state["review_passed"] or state["status"] in terminal:
         return "end"
     return "retry"
 
@@ -458,21 +460,46 @@ class _AgentLoop:
             )
             return {"review_passed": True, "status": STATUS_DONE, "steps": steps}
 
+        # Authoritative gate (ADR 0087): an INCONCLUSIVE verdict (untrustworthy —
+        # no structured verdict + ambiguous prose, or malformed tool args) is
+        # escalated to a human WITHOUT spending retries. Re-prompting an ambiguous
+        # reviewer just burns budget; the human is the authoritative fallback
+        # (CLAUDE.md ppio 7). The deliverable produced by `finalize` is preserved.
+        if review.inconclusive:
+            steps.append(
+                node_step(
+                    base + len(steps),
+                    "self_review",
+                    "Self-review inconclusive — escalating to human validation",
+                    status=STATUS_NEEDS_HUMAN_REVIEW,
+                )
+            )
+            return {
+                "review_passed": False,
+                "status": STATUS_NEEDS_HUMAN_REVIEW,
+                "abort_code": "review_inconclusive",
+                "steps": steps,
+            }
+
         retries = state["review_retries"] + 1
         budget = self.tracker.budgets.max_review_retries
+        # An EXPLICIT rejection is retried with feedback up to the budget; once the
+        # budget is exhausted the run is ESCALATED to a human (ADR 0087), NOT
+        # aborted — the work stands and a human decides, instead of being discarded
+        # as a hard failure (the old `max_review_retries_exceeded` abort).
         if retries > budget:
             steps.append(
                 node_step(
                     base + len(steps),
                     "self_review",
-                    "Self-review failed — retry budget exhausted",
-                    status="aborted",
+                    "Self-review retry budget exhausted — escalating to human validation",
+                    status=STATUS_NEEDS_HUMAN_REVIEW,
                 )
             )
             return {
                 "review_passed": False,
-                "status": STATUS_ABORTED,
-                "abort_code": str(SafeguardCode.MAX_REVIEW_RETRIES),
+                "status": STATUS_NEEDS_HUMAN_REVIEW,
+                "abort_code": "max_review_retries_exhausted",
                 "review_retries": retries,
                 "steps": steps,
             }

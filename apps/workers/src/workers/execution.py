@@ -522,6 +522,13 @@ async def transition_task_after_run(
 
       - ``done`` -> ``in_review`` if the task has a reviewer, else ``done``
         (stamping ``completed_at``).
+      - ``needs_human_review`` (ADR 0087: the authoritative self-review could not
+        certify the output — inconclusive verdict / exhausted retries) -> ``blocked``;
+        the deliverable is preserved on the execution row and the human inbox
+        surfaces the blocked task with the motive (``abort_code`` =
+        ``review_inconclusive`` / ``max_review_retries_exhausted``). At the TASK
+        level there is no ``pending_human_validation`` (that is a PLAN status,
+        CLAUDE.md ppio 7), so escalation REUSES the existing ``blocked`` + inbox path.
       - any other terminal status (``failed``/``aborted``/…) -> ``blocked``; the
         motive is the linked execution row (``abort_code``/output), not a task column.
       - ``awaiting_human_approval`` is owned by the approval branch -> ``None``.
@@ -542,6 +549,9 @@ async def transition_task_after_run(
             else TaskStatus.DONE.value
         )
     else:
+        # `needs_human_review` and the hard-failure codes all converge on
+        # `blocked`; the execution row's status + abort_code distinguish an
+        # escalation-for-validation from a genuine failure for the inbox/UI.
         target = TaskStatus.BLOCKED.value
     transition_task_status(task, target)
     if task.status == TaskStatus.DONE.value:

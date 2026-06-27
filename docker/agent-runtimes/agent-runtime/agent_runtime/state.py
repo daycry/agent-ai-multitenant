@@ -17,6 +17,11 @@ STATUS_DONE = "done"
 STATUS_ABORTED = "aborted"
 # Parked on a sensitive action awaiting a human decision (task_02_33).
 STATUS_AWAITING_APPROVAL = "awaiting_human_approval"
+# The AUTHORITATIVE self-review could not certify the output (ADR 0087): an
+# inconclusive verdict, or an exhausted retry budget. The run is NOT aborted and
+# NOT silently passed — it is escalated to a human (the worker maps this to a
+# `blocked` task surfaced via the human inbox). The deliverable is preserved.
+STATUS_NEEDS_HUMAN_REVIEW = "needs_human_review"
 
 
 class AgentTask(TypedDict):

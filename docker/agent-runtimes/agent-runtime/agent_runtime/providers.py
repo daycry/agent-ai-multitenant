@@ -181,15 +181,27 @@ def _extract_json(text: str) -> Any:
     return None
 
 
-# Explicit rejection signals in a PROSE self-review (fallback path only — the
-# structured `submit_verdict` tool is preferred). Deliberately CONSERVATIVE: only
-# verdict-context phrases, NOT bare domain words. The previous set ("falla",
-# "fallo", "rechaz", "incompleto", "reject"…) caused FALSE rejections on auth/JWT
-# reviews ("el filtro RECHAZA tokens", "maneja el FALLO de auth", "no FALLA ante
-# expirados") — which is why only the JWT task aborted while specs/migrations
-# passed. Prose-sniffing is fragile by nature, so we err toward PASS unless the
-# review clearly states a negative verdict; the authoritative gates are the
-# test-runtime + human plan-level validation (CLAUDE.md), not this heuristic.
+# ============================================================================
+# SAFETY-NET ONLY — conservative prose-marker verdict parsing (ADR 0086/0087).
+#
+# This prose-sniffing is the DOCUMENTED LAST RESORT, reached only when neither a
+# structured `submit_verdict` tool call NOR an embedded JSON object is available
+# (the claude_sdk CLI may still answer in text). It is NOT the contract — the
+# tool call is (ADR 0086). Never delete it as dead code: the CLI genuinely
+# degrades to prose and this is its net. Keep BOTH lists CONSERVATIVE: a wrong
+# marker is a wrong authoritative verdict.
+#
+# Three-state under the authoritative gate (ADR 0087):
+#   * an explicit FAIL phrase  → False (retry with feedback);
+#   * an explicit PASS phrase  → True  (certified);
+#   * NEITHER                  → None  (INCONCLUSIVE → escalate to a human).
+#
+# Postmortem (2026-06-27): the fail list must NOT contain bare domain words
+# ("falla", "fallo", "rechaz", "incompleto", "reject"…). Auth/JWT reviews are
+# full of them ("el filtro RECHAZA tokens", "maneja el FALLO de auth", "no FALLA
+# ante expirados") and the old set read them as rejections, aborting the JWT task
+# while specs/migrations passed. Only verdict-context phrases belong here.
+# ============================================================================
 _REVIEW_FAIL_MARKERS = (
     '"passed": false',
     '"passed":false',
@@ -208,23 +220,52 @@ _REVIEW_FAIL_MARKERS = (
     "verdict: fail",
 )
 
+# Explicit APPROVAL phrases — equally conservative. A loose pass marker is the
+# dangerous direction under an authoritative gate (it lets bad output through),
+# so only clear, verdict-context approvals belong here. Checked AFTER the fail
+# list, so "no cumple los criterios" fails (the fail marker wins) rather than
+# matching "cumple los criterios".
+_REVIEW_PASS_MARKERS = (
+    '"passed": true',
+    '"passed":true',
+    "passed: true",
+    "passed=true",
+    "satisface los criterios",
+    "cumple los criterios",
+    "cumple con los criterios",
+    "cumple todos los criterios",
+    "veredicto: aprobad",
+    "veredicto: sí",
+    "satisfies the task",
+    "satisfies all",
+    "meets the acceptance",
+    "meets every acceptance",
+    "meets all acceptance",
+    "verdict: pass",
+)
 
-def _parse_verdict(content: str) -> tuple[bool, str]:
-    """Turn a review reply into a (passed, feedback) pair.
 
-    Prefers the documented JSON object. When the model ignores the format and
-    replies in prose — the claude_sdk CLI routinely does — default to PASS unless
-    the text carries an EXPLICIT rejection signal. The old logic REQUIRED the word
-    "pass"/"approve" to pass, so an approving prose review ("la implementación
-    satisface los criterios") was mis-read as a failure and looped the run to
-    ``max_review_retries_exceeded`` even though the deliverable was complete.
+def _parse_verdict(content: str) -> tuple[bool | None, str]:
+    """Turn a review reply into a ``(passed, feedback)`` pair — THREE-state.
+
+    ``passed`` is ``True`` / ``False`` for an explicit verdict, or ``None`` when
+    the verdict is INCONCLUSIVE (ambiguous prose with no clear signal). The
+    authoritative loop (ADR 0087) escalates ``None`` to a human rather than
+    silently passing — the old logic defaulted ambiguous prose to PASS
+    (fail-open), which an authoritative gate must not do.
+
+    Order: the documented JSON object first; then conservative prose markers —
+    explicit FAIL wins over explicit PASS; neither → ``None``.
     """
     obj = _extract_json(content.strip())
     if isinstance(obj, dict) and "passed" in obj:
         return bool(obj["passed"]), str(obj.get("feedback", ""))
     lowered = content.lower()
-    is_explicit_fail = any(marker in lowered for marker in _REVIEW_FAIL_MARKERS)
-    return (not is_explicit_fail), content.strip()
+    if any(marker in lowered for marker in _REVIEW_FAIL_MARKERS):
+        return False, content.strip()
+    if any(marker in lowered for marker in _REVIEW_PASS_MARKERS):
+        return True, content.strip()
+    return None, content.strip()
 
 
 def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
@@ -252,24 +293,46 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
     )
 
 
-def _verdict_from_tool_calls(resp: CompletionResponse) -> tuple[bool, str] | None:
-    """The structured verdict if the model called `submit_verdict` (ADR 0086);
-    None if it didn't (then the prose fallback in `_review_from` kicks in)."""
+def _verdict_from_tool_calls(resp: CompletionResponse) -> tuple[bool | None, str] | None:
+    """The structured verdict if the model called `submit_verdict` (ADR 0086).
+
+    Returns the OUTER ``None`` when no ``submit_verdict`` call is present (then
+    `_review_from` falls through to the prose net). When the call IS present its
+    `passed` is honoured ONLY if it is a real boolean — a missing/malformed
+    `passed` yields ``(None, feedback)`` (INCONCLUSIVE), NOT a default pass: the
+    structured path is fail-closed too under the authoritative gate (ADR 0087).
+    """
     for call in resp.tool_calls or []:
         if call.name == "submit_verdict":
             args = dict(call.arguments)
-            return bool(args.get("passed", True)), str(args.get("feedback", "") or "")
+            passed = args.get("passed")
+            feedback = str(args.get("feedback", "") or "")
+            if isinstance(passed, bool):
+                return passed, feedback
+            return None, feedback
     return None
 
 
 def _review_from(resp: CompletionResponse, *, model: str) -> ReviewResponse:
-    # Prefer the structured tool-call verdict; fall back to prose parsing (the
-    # claude_sdk CLI may still answer in text — kept as the safety net, c8b78c2).
-    verdict = _verdict_from_tool_calls(resp)
-    passed, feedback = verdict if verdict is not None else _parse_verdict(resp.content or "")
+    """Build a `ReviewResponse` via the CANONICAL verdict order (ADR 0086/0087):
+
+      1. structured ``submit_verdict`` tool call (the contract);
+      2. else the prose net (`_parse_verdict`: embedded JSON > conservative
+         markers) — kept permanently because the claude_sdk CLI may degrade.
+
+    Three-state: ``passed is None`` (inconclusive) maps to
+    ``ReviewResponse(passed=False, inconclusive=True)`` so it never auto-passes;
+    the loop escalates it to a human.
+    """
+    tool_verdict = _verdict_from_tool_calls(resp)
+    if tool_verdict is not None:
+        passed, feedback = tool_verdict
+    else:
+        passed, feedback = _parse_verdict(resp.content or "")
     return ReviewResponse(
-        passed=passed,
+        passed=bool(passed),
         feedback=feedback,
+        inconclusive=passed is None,
         model=resp.model or model,
         tokens_in=resp.usage.input_tokens,
         tokens_out=resp.usage.output_tokens,
