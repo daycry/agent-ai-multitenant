@@ -158,18 +158,47 @@ def _extract_json(text: str) -> Any:
     return None
 
 
+# Explicit rejection signals in a prose self-review. Kept specific (not a bare
+# "fail", which matches "does not fail to…") so an approving review is never
+# misread. ES + EN, since the agent reviews in either.
+_REVIEW_FAIL_MARKERS = (
+    '"passed": false',
+    '"passed":false',
+    "passed: false",
+    "no pasa",
+    "no cumple",
+    "no satisface",
+    "no supera",
+    "rechaz",  # rechazada / rechazo
+    "incompleto",
+    "incompleta",
+    "falla",
+    "fallo",
+    "does not satisfy",
+    "doesn't satisfy",
+    "not satisfied",
+    "fails to",
+    "incomplete",
+    "reject",
+)
+
+
 def _parse_verdict(content: str) -> tuple[bool, str]:
     """Turn a review reply into a (passed, feedback) pair.
 
-    Prefers the documented JSON object; falls back to keyword sniffing
-    so a model that ignores the format instruction still yields a verdict.
+    Prefers the documented JSON object. When the model ignores the format and
+    replies in prose — the claude_sdk CLI routinely does — default to PASS unless
+    the text carries an EXPLICIT rejection signal. The old logic REQUIRED the word
+    "pass"/"approve" to pass, so an approving prose review ("la implementación
+    satisface los criterios") was mis-read as a failure and looped the run to
+    ``max_review_retries_exceeded`` even though the deliverable was complete.
     """
     obj = _extract_json(content.strip())
     if isinstance(obj, dict) and "passed" in obj:
         return bool(obj["passed"]), str(obj.get("feedback", ""))
     lowered = content.lower()
-    passed = "fail" not in lowered and ("pass" in lowered or "approve" in lowered)
-    return passed, content.strip()
+    is_explicit_fail = any(marker in lowered for marker in _REVIEW_FAIL_MARKERS)
+    return (not is_explicit_fail), content.strip()
 
 
 def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
