@@ -35,3 +35,39 @@ def test_explicit_rejection_fails() -> None:
 def test_bare_fail_word_is_not_a_rejection() -> None:
     # Contains "fail" but is approving — must NOT be read as a rejection.
     assert _parse_verdict("The implementation does not fail to meet any requirement.")[0] is True
+
+
+# --- ADR 0086: the verdict travels as a `submit_verdict` tool call ------------
+from types import SimpleNamespace  # noqa: E402
+
+from agent_runtime.providers import _review_from  # noqa: E402
+
+
+def _resp(*, tool_calls=None, content: str = ""):  # type: ignore[no-untyped-def]
+    return SimpleNamespace(
+        tool_calls=tool_calls or [],
+        content=content,
+        model="m",
+        usage=SimpleNamespace(input_tokens=1, output_tokens=2, cost_usd=0.0),
+    )
+
+
+def _call(name: str, **args):  # type: ignore[no-untyped-def]
+    return SimpleNamespace(name=name, arguments=args)
+
+
+def test_review_reads_submit_verdict_tool_call() -> None:
+    r = _review_from(
+        _resp(tool_calls=[_call("submit_verdict", passed=True, feedback="ok")]), model="m"
+    )
+    assert r.passed is True and r.feedback == "ok"
+    r2 = _review_from(
+        _resp(tool_calls=[_call("submit_verdict", passed=False, feedback="falta test")]), model="m"
+    )
+    assert r2.passed is False and r2.feedback == "falta test"
+
+
+def test_review_falls_back_to_prose_without_tool_call() -> None:
+    # No tool call → prose fallback (the claude_sdk safety net).
+    assert _review_from(_resp(content="satisface los criterios"), model="m").passed is True
+    assert _review_from(_resp(content="no cumple el criterio 2"), model="m").passed is False

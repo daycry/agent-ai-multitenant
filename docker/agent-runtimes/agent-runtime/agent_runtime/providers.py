@@ -72,10 +72,33 @@ _DECIDE_SYSTEM = (
     "ignore files unrelated to the task."
 )
 _REVIEW_SYSTEM = (
-    "You are a reviewer. Decide whether the candidate output satisfies the "
-    "task. Reply with a JSON object and nothing else: "
-    '{"passed": <true|false>, "feedback": "<short reason>"}.'
+    "You are a reviewer. Decide whether the candidate output satisfies the task. "
+    "Call the `submit_verdict` tool with `passed` (true/false) and a short "
+    "`feedback`. Do not reply with prose."
 )
+
+# ADR 0086: the verdict travels as a TOOL CALL, not formatted text — the contract
+# every provider handles well (HTTP: tool_choice; claude_sdk: the host-tool path it
+# already uses reliably). `_review_from` reads this call; prose is the fallback.
+_SUBMIT_VERDICT_TOOL: dict[str, Any] = {
+    "name": "submit_verdict",
+    "description": "Submit the self-review verdict for the candidate output.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "passed": {
+                "type": "boolean",
+                "description": "True if the output satisfies the task's acceptance criteria.",
+            },
+            "feedback": {
+                "type": "string",
+                "description": "Short reason; if not passed, what is missing or wrong.",
+            },
+        },
+        "required": ["passed"],
+        "additionalProperties": False,
+    },
+}
 
 # How many context fragments to feed the model — the loop's context list
 # grows unbounded; the tail is the relevant part.
@@ -226,8 +249,21 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
     )
 
 
+def _verdict_from_tool_calls(resp: CompletionResponse) -> tuple[bool, str] | None:
+    """The structured verdict if the model called `submit_verdict` (ADR 0086);
+    None if it didn't (then the prose fallback in `_review_from` kicks in)."""
+    for call in resp.tool_calls or []:
+        if call.name == "submit_verdict":
+            args = dict(call.arguments)
+            return bool(args.get("passed", True)), str(args.get("feedback", "") or "")
+    return None
+
+
 def _review_from(resp: CompletionResponse, *, model: str) -> ReviewResponse:
-    passed, feedback = _parse_verdict(resp.content or "")
+    # Prefer the structured tool-call verdict; fall back to prose parsing (the
+    # claude_sdk CLI may still answer in text — kept as the safety net, c8b78c2).
+    verdict = _verdict_from_tool_calls(resp)
+    passed, feedback = verdict if verdict is not None else _parse_verdict(resp.content or "")
     return ReviewResponse(
         passed=passed,
         feedback=feedback,
@@ -286,6 +322,7 @@ class _ProviderModelClient:
             self.provider.complete(
                 _review_messages(state),
                 model=self.model,
+                tools=[_SUBMIT_VERDICT_TOOL],  # ADR 0086: verdict as a tool call
                 **self._extra_call_kwargs,
             )
         )
@@ -436,7 +473,12 @@ class ClaudeSDKModelClient:
 
     def review(self, state: dict[str, Any]) -> ReviewResponse:
         resp = _run(
-            self.provider.complete(_review_messages(state), model=self.model, effort=self._effort)
+            self.provider.complete(
+                _review_messages(state),
+                model=self.model,
+                tools=[_SUBMIT_VERDICT_TOOL],  # ADR 0086: verdict as a tool call
+                effort=self._effort,
+            )
         )
         return _review_from(resp, model=self.model)
 
