@@ -113,8 +113,19 @@ Mantener SIEMPRE el fallback tolerante (no es deuda, es el contrato realista del
   camino que el CLI ya domina → fiable en los 4 providers (HTTP: `tool_choice`/
   `response_format`; claude_sdk: host-tool). El `_parse_verdict` tolerante (`c8b78c2`)
   se queda como **red de seguridad**, no como solución.
-- **Alcance: Fase 1 (review) + Fase 2 (finish)**, por fases y con TDD: Fase 1 aislada
-  (bajo riesgo) verde antes de tocar la Fase 2 (cambia la semántica terminal del loop
-  —`FINISH`=texto→`submit_result`— recién estabilizada; mayor riesgo de regresión).
+- **Alcance: Fase 1 (review) + Fase 2 (finish)**, por fases y con TDD.
 - **Invariante:** mantener SIEMPRE el fallback tolerante; un provider/modelo que
   degrade no debe romper el run.
+
+### Estado de implementación
+
+- **Fase 1 (review) — IMPLEMENTADA** (commit `e53f960`): `submit_verdict` advertida en
+  ambos `review()`; `_review_from` la lee, prosa como fallback. Tests por forma.
+- **Fase 2 (finish `submit_result`) — DIFERIDA** (decisión operador 2026-06-27).
+  Razón (descubierta al implementar la Fase 1): **la Fase 1 por sí sola ya cierra el
+  problema del review** — el review emite veredicto estructurado leyendo el output del
+  agente en cualquier forma; no necesita un finish estructurado. La Fase 2 pasa a ser
+  "salida de tarea uniforme", que **hoy no consume nadie** y tocaría el camino de
+  decisión del loop (recién estabilizado). Se implementa (aditiva/backward-compatible)
+  **cuando exista un consumidor** (p.ej. el visor de Runs mostrando campos del
+  resultado, o automatización downstream). YAGNI hasta entonces.
