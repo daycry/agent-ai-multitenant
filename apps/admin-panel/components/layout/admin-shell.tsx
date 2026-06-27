@@ -130,6 +130,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/admin/dashboard", label: "Dashboard", Icon: LayoutDashboard },
       { href: "/admin/inbox", label: "Mis tareas", Icon: ListChecks },
       { href: "/admin/board", label: "Tablero", Icon: LayoutGrid },
+      { href: "/admin/runs", label: "Runs", Icon: Activity },
       { href: "/admin/approvals", label: "Aprobaciones", Icon: BellRing },
       { href: "/admin/notifications/inbox", label: "Bandeja", Icon: Inbox },
       { href: "/admin/assistant", label: "Asistente", Icon: Bot, adminOnly: true },

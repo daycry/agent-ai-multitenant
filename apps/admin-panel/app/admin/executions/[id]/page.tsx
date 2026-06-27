@@ -11,9 +11,10 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ChevronDown, ChevronRight } from "lucide-react";
+import { Activity, ArrowLeft, ChevronDown, ChevronRight } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
@@ -140,6 +141,14 @@ export default function ExecutionTimelinePage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+      <Link
+        href="/admin/runs"
+        data-testid="execution-back-link"
+        className="text-muted-foreground hover:text-foreground mb-4 inline-flex items-center gap-1.5 text-sm transition-colors"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Volver a Runs
+      </Link>
       <PageHeader
         icon={<Activity className="h-6 w-6 sm:h-7 sm:w-7" />}
         title="Timeline de ejecución"

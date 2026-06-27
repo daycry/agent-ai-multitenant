@@ -19,11 +19,12 @@
  * updates the cache; on failure we revert and surface an inline banner.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LayoutGrid, Lock, LockOpen } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { RunHistorySheet } from "@/components/runs/run-history-sheet";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -469,58 +470,84 @@ function KanbanColumn({
 
 function TaskCard({ task, statusById }: { task: Task; statusById: ReadonlyMap<string, string> }) {
   const dep = computeDepState(task.depends_on, statusById);
+  const [runsOpen, setRunsOpen] = useState(false);
+  // A drag fires dragstart (not click), but guard anyway so a drag that ends on
+  // the same card never opens the panel — click-vs-drag (runs-visor C2).
+  const draggingRef = useRef(false);
 
   function handleDragStart(e: React.DragEvent<HTMLDivElement>) {
+    draggingRef.current = true;
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", task.id);
   }
 
+  function handleClick() {
+    if (draggingRef.current) return;
+    setRunsOpen(true);
+  }
+
   return (
-    <div
-      draggable
-      onDragStart={handleDragStart}
-      data-testid={`task-card-${task.id}`}
-      data-blocked={dep.blocked ? "true" : "false"}
-      className={cn(
-        "bg-card rounded-md border p-2 text-sm shadow-sm",
-        "cursor-grab transition-shadow active:cursor-grabbing",
-        "hover:border-primary/40 hover:shadow-md",
-        dep.blocked && "border-danger/40",
-      )}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <p className="font-medium leading-tight">{task.title}</p>
-        {dep.blocked ? (
-          <span
-            title={`Bloqueada por ${dep.pendingCount} dependencia${
-              dep.pendingCount === 1 ? "" : "s"
-            } sin completar`}
-            data-testid={`task-lock-${task.id}`}
-            className="mt-0.5 shrink-0"
-          >
-            <Lock className="text-danger h-3.5 w-3.5" aria-label="Bloqueada por dependencias" />
-          </span>
-        ) : (
-          dep.hasDeps && (
+    <>
+      <div
+        draggable
+        onDragStart={handleDragStart}
+        onDragEnd={() => {
+          // Clear after the click event would have fired, so the drag never
+          // counts as a click that opens the panel.
+          window.setTimeout(() => {
+            draggingRef.current = false;
+          }, 0);
+        }}
+        onClick={handleClick}
+        data-testid={`task-card-${task.id}`}
+        data-blocked={dep.blocked ? "true" : "false"}
+        className={cn(
+          "bg-card rounded-md border p-2 text-sm shadow-sm",
+          "cursor-grab transition-shadow active:cursor-grabbing",
+          "hover:border-primary/40 hover:shadow-md",
+          dep.blocked && "border-danger/40",
+        )}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <p className="font-medium leading-tight">{task.title}</p>
+          {dep.blocked ? (
             <span
-              title="Todas las dependencias completadas"
-              data-testid={`task-lock-open-${task.id}`}
+              title={`Bloqueada por ${dep.pendingCount} dependencia${
+                dep.pendingCount === 1 ? "" : "s"
+              } sin completar`}
+              data-testid={`task-lock-${task.id}`}
               className="mt-0.5 shrink-0"
             >
-              <LockOpen
-                className="text-muted-foreground h-3.5 w-3.5"
-                aria-label="Dependencias completadas"
-              />
+              <Lock className="text-danger h-3.5 w-3.5" aria-label="Bloqueada por dependencias" />
             </span>
-          )
-        )}
+          ) : (
+            dep.hasDeps && (
+              <span
+                title="Todas las dependencias completadas"
+                data-testid={`task-lock-open-${task.id}`}
+                className="mt-0.5 shrink-0"
+              >
+                <LockOpen
+                  className="text-muted-foreground h-3.5 w-3.5"
+                  aria-label="Dependencias completadas"
+                />
+              </span>
+            )
+          )}
+        </div>
+        <div className="mt-1.5 flex items-center justify-between gap-2">
+          <Badge variant={PRIORITY_VARIANT[task.priority] ?? "muted"}>{task.priority}</Badge>
+          {task.description && (
+            <span className="text-muted-foreground line-clamp-1 text-xs">{task.description}</span>
+          )}
+        </div>
       </div>
-      <div className="mt-1.5 flex items-center justify-between gap-2">
-        <Badge variant={PRIORITY_VARIANT[task.priority] ?? "muted"}>{task.priority}</Badge>
-        {task.description && (
-          <span className="text-muted-foreground line-clamp-1 text-xs">{task.description}</span>
-        )}
-      </div>
-    </div>
+      <RunHistorySheet
+        taskId={runsOpen ? task.id : null}
+        taskTitle={task.title}
+        open={runsOpen}
+        onOpenChange={setRunsOpen}
+      />
+    </>
   );
 }
