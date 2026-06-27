@@ -114,6 +114,32 @@ cuenta. El status del agente nunca es auto-veredicto.
   sigue siendo el límite duro de plataforma de 0013, ahora con escalado en vez de
   abort al agotarse.
 
+## Refinamiento (2026-06-27 PM) — el reviewer ve el CÓDIGO producido (Opción 1)
+
+El primer run real con el gate autoritativo (tarea JWT) escaló a `needs_human_review`
+no porque el código fuera malo, sino porque `_review_messages` le pasaba al reviewer
+**solo el resumen en prosa** del agente ("los ficheros están escritos") — que NO puede
+verificar — así que lo rechazó 4 veces y agotó retries. El agente SÍ había escrito 4
+ficheros (`write_file`×4).
+
+**Decisión (Opción 1, sin tocar D1):** cuando el agente produce ficheros, el loop
+inyecta en el estado del review los **contenidos reales** (`written_files`: path →
+último contenido, recogido de los args de las tool-calls productoras en `reflect`), y
+`_review_messages` los muestra para que el veredicto se base en el CÓDIGO, no en la
+prosa. Runs de análisis/diseño (sin ficheros producidos) → review solo-prosa, igual
+que antes (el output ES el entregable).
+
+Por qué Opción 1 y no "advisory" (Opción 2): el self-review **ya corre siempre**, así
+que darle el código como contexto **no añade ninguna llamada LLM** — solo arregla su
+ceguera; mantiene D1 intacto; es puro runtime (sin acoplar al `reviewer_agent`/tipo de
+tarea del worker); y arregla la causa raíz directa. Caps `_REVIEW_MAX_FILES=15` /
+`_REVIEW_MAX_FILE_CHARS=4000` acotan el prompt. Limitación conocida: se recoge el
+contenido de `write_file` (forma dominante); ediciones por patch (`apply_patch`/
+`edit_file` parciales) podrían no reflejar el estado final — re-leer el workspace queda
+como mejora futura si hiciera falta. El gate autoritativo de implementación aguas abajo
+(test-runtime + AI reviewer del diff, prod-17) sigue siendo el de fondo cuando el run
+llega a `done`.
+
 ## Referencias
 
 - Spec del refactor: `docs/roadmap/refactor-pipeline-ejecucion-review.md`.

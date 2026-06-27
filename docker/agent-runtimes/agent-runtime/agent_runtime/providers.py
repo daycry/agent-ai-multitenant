@@ -135,6 +135,13 @@ _SUBMIT_RESULT_TOOL: dict[str, Any] = {
 # grows unbounded; the tail is the relevant part.
 _CONTEXT_WINDOW = 8
 
+# ADR 0087 (Option 1 refinement): when the agent produced files, the reviewer must
+# judge the ACTUAL code — not just the prose summary it cannot verify (which led the
+# JWT run to escalate even though files were written). The graph injects the written
+# files into the review state; these caps bound the review prompt size.
+_REVIEW_MAX_FILES = 15
+_REVIEW_MAX_FILE_CHARS = 4000
+
 
 def _system_content(state: dict[str, Any]) -> str:
     """The EFFECTIVE system prompt for this run (Plan 06.18 task_06_18_13).
@@ -207,7 +214,22 @@ def _review_messages(state: dict[str, Any]) -> list[Message]:
             f"The agent self-reported status='{status}' — a HINT only; verify it "
             "yourself against the criteria."
         )
-    lines.append(f"\nCandidate output:\n{state.get('output') or ''}")
+    # Option 1 (ADR 0087): for an implementation run the agent's prose summary is
+    # NOT verifiable — show the reviewer the ACTUAL files it wrote so the verdict is
+    # grounded in the code, not a description. Empty for analysis/design runs (the
+    # output IS the deliverable) → prose-only review, unchanged.
+    written = state.get("written_files") or []
+    if written:
+        lines.append(
+            "Files the agent wrote — base your verdict on this ACTUAL code, not on "
+            "the prose summary:"
+        )
+        for entry in written[:_REVIEW_MAX_FILES]:
+            path = (entry or {}).get("path") or "?"
+            content = str((entry or {}).get("content") or "")
+            lines.append(f"--- {path} ---")
+            lines.append(content[:_REVIEW_MAX_FILE_CHARS])
+    lines.append(f"\nCandidate output (the agent's own summary):\n{state.get('output') or ''}")
     return [
         Message(role="system", content=_REVIEW_SYSTEM),
         Message(role="user", content="\n".join(lines)),

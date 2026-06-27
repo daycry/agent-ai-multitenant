@@ -196,6 +196,10 @@ class _AgentLoop:
         # Whether a producing tool (write_file/…) has run — flips the nudge from
         # "write the deliverable" to "you're done, FINISH" (avoids over-verification).
         self.has_produced = False
+        # ADR 0087 (Option 1): path → latest content the agent wrote, harvested from
+        # producing tool-call args. Fed to the self-review so it judges the ACTUAL
+        # code (not the unverifiable prose summary). Empty for analysis/design runs.
+        self.written_files: dict[str, str] = {}
 
     # -- nodes ---------------------------------------------------------------
     @staticmethod
@@ -372,6 +376,13 @@ class _AgentLoop:
         if tool in _PRODUCING_TOOLS:
             self.has_produced = True
         decision = state["last_decision"] or {}
+        # ADR 0087 (Option 1): harvest the file the agent just wrote (path+content)
+        # so the self-review can judge the real code. Keeps the latest per path.
+        if tool in _PRODUCING_TOOLS:
+            args = decision.get("tool_args") or {}
+            path, content = args.get("path"), args.get("content")
+            if isinstance(path, str) and path and isinstance(content, str):
+                self.written_files[path] = content
         repeat_count = self.detector.count_of(
             {"tool": decision.get("tool"), "args": decision.get("tool_args")}
         )
@@ -443,7 +454,15 @@ class _AgentLoop:
             )
             return {"review_passed": False, "steps": steps}
 
-        review = self.deps.model.review(dict(state))
+        # ADR 0087 (Option 1): when the agent produced files, hand the reviewer the
+        # ACTUAL code (not just the prose summary it can't verify). Analysis/design
+        # runs have no written_files → prose-only review, unchanged.
+        review_state = dict(state)
+        if self.written_files:
+            review_state["written_files"] = [
+                {"path": path, "content": content} for path, content in self.written_files.items()
+            ]
+        review = self.deps.model.review(review_state)
         self.tracker.record_model_call(review.tokens_in, review.tokens_out, review.cost_usd)
         steps.append(
             model_call_step(

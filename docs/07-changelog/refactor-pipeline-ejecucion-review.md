@@ -44,6 +44,16 @@ operador. Spec: `docs/roadmap/refactor-pipeline-ejecucion-review.md`.
 - El `_parse_verdict` tolerante permanece como **red de seguridad documentada**
   (invariante): el CLI puede degradar a prosa.
 
+## Refinamiento (validación en vivo)
+
+El primer run real con el gate autoritativo (tarea JWT) escaló correctamente a
+`needs_human_review` → tarea `blocked` (sin abort, deliverable preservado), pero por
+una causa que reveló un hueco: el reviewer solo veía el **resumen en prosa**, no el
+código. **Opción 1**: el loop ahora inyecta en el review los **ficheros que el agente
+escribió** (`written_files`, recogidos en `reflect`) y `_review_messages` los muestra
+para que el veredicto se base en el código real. No añade llamadas LLM (el self-review
+ya corría), no toca D1, es puro runtime. Caps de tamaño para acotar el prompt.
+
 ## Commits
 
 `f6b1a94` (A+A2 verdict 3-estados + escalado) · `5e4752c` (B pin claude_sdk) ·

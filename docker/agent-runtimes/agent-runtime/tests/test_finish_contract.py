@@ -105,3 +105,42 @@ def test_review_prompt_omits_status_when_absent() -> None:
     user = next(m for m in _review_messages(state) if m.role == "user")
     # No structured status → no status-hint line (prose finish / claude_sdk).
     assert "self-reported" not in user.content.lower()
+
+
+# --- Option 1 (ADR 0087 refinement): the reviewer SEES the produced code --------
+def test_review_prompt_includes_written_files() -> None:
+    # An implementation run: the reviewer must judge the ACTUAL file contents, not
+    # just the agent's prose summary (which it can't verify and would reject).
+    state = {
+        "task": {"title": "JWT", "description": "implement"},
+        "output": "Los tres archivos están escritos.",
+        "written_files": [
+            {"path": "app/Controllers/Login.php", "content": "<?php class Login {}"},
+            {"path": "app/Config/Auth.php", "content": "<?php return ['jwt'=>true];"},
+        ],
+    }
+    user = next(m for m in _review_messages(state) if m.role == "user")
+    assert "app/Controllers/Login.php" in user.content
+    assert "<?php class Login {}" in user.content
+    assert "app/Config/Auth.php" in user.content
+
+
+def test_review_prompt_caps_written_file_content() -> None:
+    # Big files must not blow the review prompt: per-file content is truncated.
+    big = "X" * 20000
+    state = {
+        "task": {"title": "T", "description": "d"},
+        "output": "done",
+        "written_files": [{"path": "big.py", "content": big}],
+    }
+    user = next(m for m in _review_messages(state) if m.role == "user")
+    assert "big.py" in user.content
+    assert user.content.count("X") < 20000  # truncated, not the full 20k
+
+
+def test_review_prompt_no_files_section_when_absent() -> None:
+    state = {"task": {"title": "T", "description": "d"}, "output": "analysis result"}
+    user = next(m for m in _review_messages(state) if m.role == "user")
+    # Analysis run (no produced files) → prose-only review, no files section.
+    assert "wrote" not in user.content.lower()
+    assert "analysis result" in user.content
