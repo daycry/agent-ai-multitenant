@@ -250,3 +250,17 @@ anti-regresión transversal y debe seguir verde tras A.
 - **El riesgo real** está en C1/C2 (routing del FINISH). Por eso van gated,
   secuenciados tras C0, y con tests que pinen `submit_result→FINISH`,
   `prosa→FINISH (wrap)`, y `act() nunca recibe submit_result`.
+
+## 9. Estado de implementación
+
+- **Fase A — HECHA** (commit `f6b1a94`): `_review_from` orden canónico, verdict
+  3-estados, `_REVIEW_PASS_MARKERS` conservadores, fail-closed. Tests verdes.
+- **Fase A2 — HECHA** (`f6b1a94`): `STATUS_NEEDS_HUMAN_REVIEW`; `self_review`
+  escala (inconcluso → directo; retries-agotados → escalar, no abort); worker
+  mapea `needs_human_review` → `blocked`. Tests grafo + integración.
+- **Fase B — HECHA (ajustada)**: forzar vía `tool_choice` NO es implementable en
+  el SDK (`can_use_tool` intercepta, no compele). `submit_verdict` ya se advierte
+  en los 4 providers y queda **verificada end-to-end** por `test_claude_sdk_review`
+  (harvest deny+interrupt + fallback 3-estados a través del provider real). La red
+  A2 cubre la degradación a prosa.
+- **Fases C0–C3, D, ADRs — pendientes.**
