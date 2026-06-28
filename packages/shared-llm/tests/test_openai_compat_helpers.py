@@ -9,7 +9,9 @@ import httpx
 import pytest
 from shared_llm.exceptions import AuthError, ProviderError, RateLimitError
 from shared_llm.providers._openai_compat import (
+    _loads_args,
     check_status,
+    completion_signals,
     iter_sse_chunks,
     parse_chat_completion,
     parse_sse_delta,
@@ -130,6 +132,100 @@ def test_parse_chat_completion_raises_provider_error_on_malformed_body(
     KeyError/IndexError escaping the LLM layer."""
     with pytest.raises(ProviderError):
         parse_chat_completion(body, provider="x", fallback_model="default")
+
+
+# ---------------------------------------------------------------------------
+# F32 — robustness signals: tell "corrupt/truncated args" from "no args"
+# ---------------------------------------------------------------------------
+def test_loads_args_still_degrades_malformed_to_empty_for_execution() -> None:
+    """The parse path always needs *a* dict, so a corrupt payload still degrades
+    to {} here (best-effort) — backward-compatible. The distinction lives in
+    `completion_signals`, not in this helper."""
+    assert _loads_args('{"a": 1}') == {"a": 1}
+    assert _loads_args(None) == {}
+    assert _loads_args("") == {}
+    assert _loads_args('{"a": 1') == {}  # truncated/corrupt -> still {}
+    assert _loads_args("not json") == {}
+
+
+def test_completion_signals_flags_truncated_response() -> None:
+    """finish_reason == 'length' means the body (incl. tool-call args JSON) may be
+    cut off — exposed so the caller does not trust a half-baked tool call."""
+    data = {
+        "choices": [{"finish_reason": "length", "message": {"role": "assistant", "content": "x"}}],
+    }
+    sig = completion_signals(data)
+    assert sig.truncated is True
+    assert sig.malformed_tool_args is False
+
+
+def test_completion_signals_flags_malformed_tool_args_not_absent_args() -> None:
+    """A tool call whose `arguments` is present-but-corrupt is flagged; a tool call
+    with NO/empty args is NOT flagged (the key distinction the audit asked for)."""
+    corrupt = {
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "tool_calls": [
+                        {"id": "1", "function": {"name": "submit_result", "arguments": '{"a": 1'}}
+                    ]
+                },
+            }
+        ]
+    }
+    assert completion_signals(corrupt).malformed_tool_args is True
+
+    empty = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {"id": "1", "function": {"name": "submit_result", "arguments": ""}}
+                    ]
+                },
+            }
+        ]
+    }
+    sig_empty = completion_signals(empty)
+    assert sig_empty.malformed_tool_args is False
+    assert sig_empty.truncated is False
+
+
+def test_completion_signals_is_safe_on_unexpected_shapes() -> None:
+    """`raw` can be any shape across providers; signals must never raise."""
+    for bad in (None, "nope", {}, {"choices": "x"}, {"choices": [None]}):
+        sig = completion_signals(bad)
+        assert sig.truncated is False
+        assert sig.malformed_tool_args is False
+
+
+def test_parse_chat_completion_keeps_raw_for_signal_extraction() -> None:
+    """The caller derives signals from `CompletionResponse.raw`, which is the
+    original payload — verify a truncated/corrupt tool call round-trips."""
+    data = {
+        "model": "m1",
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {"id": "c1", "function": {"name": "submit_result", "arguments": '{"a"'}}
+                    ],
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+    }
+    resp = parse_chat_completion(data, provider="x", fallback_model="default")
+    # Execution still gets a (best-effort empty) dict...
+    assert resp.tool_calls is not None
+    assert resp.tool_calls[0].arguments == {}
+    # ...but the signal recovers the lost information.
+    sig = completion_signals(resp.raw)
+    assert sig.truncated is True
+    assert sig.malformed_tool_args is True
 
 
 def test_parse_sse_delta_recognises_content_and_done() -> None:

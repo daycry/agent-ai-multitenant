@@ -197,6 +197,7 @@ class ClaudeAgentProvider:
         allowed_tools: list[str] | None,
         max_turns: int,
         effort: str | None = None,
+        disallow_native_tools: bool = False,
     ) -> Any:
         if self._query_fn is not None:
             return None  # the injected fake accepts whatever we pass
@@ -212,12 +213,26 @@ class ClaudeAgentProvider:
         extra: dict[str, Any] = {}
         if effort:
             extra["effort"] = effort
+        resolved_allowed = (
+            allowed_tools if allowed_tools is not None else self._default_allowed_tools
+        )
+        # F31/P1.6: the chat-shaped path (`complete()`/`stream()` con `tools` vacías)
+        # NO debe permitir que el SDK auto-ejecute sus tools NATIVAS (Bash/Write/
+        # Read/WebSearch…) fuera del ToolRegistry/approval/loop-detection del host.
+        # Sin esto, un `decide()` "sin tools" podía disparar ejecución nativa fuera
+        # del lazo mediado por el host. Desactivamos las nativas salvo las que el
+        # caller permita explícitamente (córtex WebSearch/WebFetch, ADR 0076). El
+        # camino `run_agent()` (escape hatch agéntico) NO activa esto: ahí las
+        # nativas son justo lo que se quiere.
+        if disallow_native_tools:
+            _allowed = set(resolved_allowed)
+            disabled = [name for name in _SDK_NATIVE_TOOLS if name not in _allowed]
+            if disabled:
+                extra["disallowed_tools"] = disabled
         return ClaudeAgentOptions(
             model=model or self._default_model,
             system_prompt=system if system is not None else self._default_system_prompt,
-            allowed_tools=(
-                allowed_tools if allowed_tools is not None else self._default_allowed_tools
-            ),
+            allowed_tools=resolved_allowed,
             max_turns=max_turns,
             **extra,
         )
@@ -308,6 +323,9 @@ class ClaudeAgentProvider:
             # turns (1)". 8 deja responder + algún paso interno; overridable.
             max_turns=max_turns,
             effort=effort,
+            # F31/P1.6: sin host tools, NO permitir ejecución nativa del SDK fuera
+            # del lazo mediado por el host (salvo lo que el caller permita).
+            disallow_native_tools=True,
         )
         query_fn = self._query()
         collected: list[Any] = []
@@ -504,6 +522,9 @@ class ClaudeAgentProvider:
             # turns (1)". 8 deja responder + algún paso interno; overridable.
             max_turns=int(kwargs.pop("max_turns", 8)),
             effort=kwargs.pop("effort", None),
+            # F31/P1.6: same chat-shaped guard as complete() — no native SDK tool
+            # execution outside the host-mediated loop.
+            disallow_native_tools=True,
         )
         query_fn = self._query()
         last_usage: Usage | None = None

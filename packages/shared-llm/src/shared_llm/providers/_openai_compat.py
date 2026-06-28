@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -166,20 +167,91 @@ async def iter_sse_chunks(resp: httpx.Response, *, provider: str) -> AsyncIterat
 
 
 def _loads_args(raw: Any) -> dict[str, Any]:
-    """Parse a tool-call arguments payload leniently."""
+    """Parse a tool-call arguments payload leniently (best-effort dict).
+
+    Kept for the parse path: tool execution always needs *a* dict, so a
+    malformed payload still degrades to ``{}`` here. To tell a *corrupt*
+    payload apart from genuinely *absent* args, use `completion_signals`
+    (F32) — this helper alone cannot, by design.
+    """
+    args, _ = _parse_args_checked(raw)
+    return args
+
+
+def _parse_args_checked(raw: Any) -> tuple[dict[str, Any], bool]:
+    """Parse tool-call ``arguments``; return ``(args, malformed)``.
+
+    ``malformed`` is ``True`` only when the payload was *present* but could
+    not be decoded into a JSON object (corrupt or truncated mid-string).
+    A genuinely absent/empty payload is NOT malformed — it yields
+    ``({}, False)`` — so the caller never confuses "no args" with "the
+    model produced garbage we silently dropped".
+    """
     if isinstance(raw, dict):
-        return raw
+        return raw, False
     if not raw:
-        return {}
+        return {}, False
     try:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        return {}, True
+    if isinstance(parsed, dict):
+        return parsed, False
+    # Valid JSON but not an object (a bare string/number/list) — not usable
+    # as tool arguments, so it is just as corrupt as undecodable text.
+    return {}, True
+
+
+@dataclass
+class CompletionSignals:
+    """Robustness flags for one ``/chat/completions`` payload (F32).
+
+    Without these, `_loads_args` collapses a corrupt tool-call into ``{}``
+    and the layer above turns an empty ``submit_result`` into an empty
+    deliverable / an empty ``submit_verdict`` into ``inconclusive`` — and
+    runs *real* tools with empty args — all silently. These flags let the
+    caller distinguish "the model gave us nothing" from "we lost what the
+    model gave us".
+    """
+
+    # finish_reason == "length": the provider hit the token cap, so the body
+    # (incl. any tool-call ``arguments`` JSON) may be cut off mid-string.
+    truncated: bool = False
+    # At least one tool call carried an ``arguments`` payload that was present
+    # but not a valid JSON object (corrupt / truncated) — see `_parse_args_checked`.
+    malformed_tool_args: bool = False
+
+
+def completion_signals(data: Any) -> CompletionSignals:
+    """Derive `CompletionSignals` from a raw ``/chat/completions`` payload.
+
+    Safe on any shape (re-uses the same defensive walk as `parse_chat_completion`),
+    so callers can pass ``CompletionResponse.raw`` directly. A non-dict / unexpected
+    payload yields the all-``False`` default rather than raising.
+    """
+    if not isinstance(data, dict):
+        return CompletionSignals()
+    choices = data.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    if not isinstance(choice, dict):
+        return CompletionSignals()
+    truncated = choice.get("finish_reason") == "length"
+    message = choice.get("message")
+    malformed = False
+    if isinstance(message, dict):
+        for tc in message.get("tool_calls") or []:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            _, tc_malformed = _parse_args_checked((fn or {}).get("arguments"))
+            if tc_malformed:
+                malformed = True
+                break
+    return CompletionSignals(truncated=truncated, malformed_tool_args=malformed)
 
 
 __all__ = [
+    "CompletionSignals",
     "check_status",
+    "completion_signals",
     "iter_sse_chunks",
     "parse_chat_completion",
     "parse_sse_delta",
