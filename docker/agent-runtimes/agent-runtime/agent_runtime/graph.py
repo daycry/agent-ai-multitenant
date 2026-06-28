@@ -22,9 +22,11 @@ so the loop is exercised offline and deterministically by the tests.
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -137,6 +139,74 @@ def _research_nudge(
 def _no_recall(_task: AgentTask) -> list[dict[str, Any]]:
     """Default memory recall — empty until real memory lands in Plan 04."""
     return []
+
+
+# --- review harvest: the agent's CUMULATIVE deliverable, read from the worktree ---
+_WORKSPACE_ROOT_ENV = "AGENT_WORKSPACE_ROOT"
+# Never part of the reviewable deliverable: VCS, framework deps, agent scratch,
+# build noise. Mirrors what file_tools/list_files already hide from the agent.
+_REVIEW_EXCLUDE_DIRS = frozenset(
+    {".git", "vendor", "node_modules", "__pycache__", ".venv", "venv", ".claude"}
+)
+_REVIEW_EXCLUDE_NAMES = frozenset({"agent_task.json", ".claude.json"})
+_REVIEW_EXCLUDE_SUFFIXES = (".pyc", ".lock", ".log", ".map")
+# Bound the worktree scan (the review prompt caps further to _REVIEW_MAX_FILES).
+_WORKTREE_SCAN_MAX_FILES = 40
+_WORKTREE_SKIP_FILE_BYTES = 200_000
+
+
+def _workspace_root() -> Path:
+    """The worktree root the agent's file tools resolve against (``/workspace``,
+    or ``AGENT_WORKSPACE_ROOT`` for tests). Mirrors ``builtin_families``."""
+    return Path(os.environ.get(_WORKSPACE_ROOT_ENV) or "/workspace")
+
+
+def _harvest_worktree_files(root: Path, prefer: list[str]) -> list[dict[str, str]]:
+    """Read the agent's CUMULATIVE deliverable from the worktree on disk.
+
+    The per-run write capture (``_AgentLoop.written_files``) only sees files
+    written in the CURRENT run; an incremental run that builds on a prior committed
+    run leaves earlier files untouched, so the self-review would judge an INCOMPLETE
+    picture and reject a whole deliverable as "missing files" (observed live on a
+    re-run of an escalated JWT task). Reading the worktree gives the reviewer the
+    TRUE current state, and the on-disk content is the FINAL content (after every
+    edit), not the write-time argument. VCS/framework dirs are excluded and the scan
+    is bounded; ``prefer`` (this run's written paths) are ordered FIRST so the
+    current work is always shown even when the cap truncates. Returns ``[]`` when
+    there is no worktree (analysis/design runs, tests) → the caller falls back to the
+    per-run capture and prose-only review is unchanged.
+    """
+    if not root.is_dir():
+        return []
+    try:
+        candidates = [p for p in root.rglob("*") if p.is_file()]
+    except OSError:  # pragma: no cover - defensive (permission / race)
+        return []
+    rels: list[str] = []
+    for path in candidates:
+        try:
+            rel = path.relative_to(root)
+        except ValueError:  # pragma: no cover - defensive
+            continue
+        if set(rel.parts) & _REVIEW_EXCLUDE_DIRS:
+            continue
+        if rel.name in _REVIEW_EXCLUDE_NAMES or rel.suffix in _REVIEW_EXCLUDE_SUFFIXES:
+            continue
+        rels.append(rel.as_posix())
+    preferred = [r for r in prefer if r in rels]
+    ordered = preferred + sorted(r for r in rels if r not in preferred)
+    harvested: list[dict[str, str]] = []
+    for rel in ordered[:_WORKTREE_SCAN_MAX_FILES]:
+        file_path = root / rel
+        try:
+            if file_path.stat().st_size > _WORKTREE_SKIP_FILE_BYTES:
+                continue
+            harvested.append(
+                {"path": rel, "content": file_path.read_text(encoding="utf-8", errors="replace")}
+            )
+        except OSError:  # pragma: no cover - defensive (binary / permission)
+            continue
+    return harvested
 
 
 def _provider_abort_code(exc: LLMError) -> str:
@@ -524,11 +594,17 @@ class _AgentLoop:
             )
             return {"review_passed": False, "steps": steps}
 
-        # ADR 0087 (Option 1): when the agent produced files, hand the reviewer the
-        # ACTUAL code (not just the prose summary it can't verify). Analysis/design
-        # runs have no written_files → prose-only review, unchanged.
+        # ADR 0087 (Option 1): hand the reviewer the ACTUAL code, not the prose
+        # summary it can't verify. Prefer the CUMULATIVE worktree state on disk, so
+        # an INCREMENTAL run that did not re-write every file is still reviewed whole
+        # (the "missing files" false negative observed live); fall back to this run's
+        # write capture when there is no worktree (analysis/design runs, tests) →
+        # prose-only review unchanged.
         review_state = dict(state)
-        if self.written_files:
+        worktree_files = _harvest_worktree_files(_workspace_root(), list(self.written_files))
+        if worktree_files:
+            review_state["written_files"] = worktree_files
+        elif self.written_files:
             review_state["written_files"] = [
                 {"path": path, "content": content} for path, content in self.written_files.items()
             ]

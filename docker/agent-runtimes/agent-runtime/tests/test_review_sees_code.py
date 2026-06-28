@@ -13,7 +13,10 @@ injection are pinned without filesystem side effects.
 
 from __future__ import annotations
 
-from agent_runtime.graph import AgentDeps, _AgentLoop
+from pathlib import Path
+
+import pytest
+from agent_runtime.graph import AgentDeps, _AgentLoop, _harvest_worktree_files
 from agent_runtime.loop_detection import LoopDetector
 from agent_runtime.model import ReviewResponse
 from agent_runtime.safeguards import Budgets, SafeguardTracker
@@ -84,7 +87,9 @@ def _review_state() -> dict:
     }
 
 
-def test_self_review_injects_written_files() -> None:
+def test_self_review_injects_written_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # No worktree on disk → the self-review falls back to this run's write capture.
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "absent"))
     model = _RecordingModel(ReviewResponse(passed=True))
     loop = _loop(model)
     loop.written_files = {"a.php": "<?php class A {}"}
@@ -93,9 +98,61 @@ def test_self_review_injects_written_files() -> None:
     assert model.seen_state["written_files"] == [{"path": "a.php", "content": "<?php class A {}"}]
 
 
-def test_self_review_no_files_for_analysis_run() -> None:
+def test_self_review_no_files_for_analysis_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "absent"))
     model = _RecordingModel(ReviewResponse(passed=True))
     loop = _loop(model)  # no written_files (analysis/design run)
     loop.self_review(_review_state())
     assert model.seen_state is not None
     assert "written_files" not in model.seen_state
+
+
+def test_self_review_reads_cumulative_worktree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An INCREMENTAL run: a prior run committed AuthController.php; this run only
+    # re-wrote JwtFilter.php. The review must still see BOTH (the cumulative
+    # deliverable on disk), not just this run's write — else it rejects "missing
+    # files" and the task can never converge.
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
+    controllers = tmp_path / "app" / "Controllers"
+    controllers.mkdir(parents=True)
+    (controllers / "AuthController.php").write_text("<?php class AuthController {}")
+    filters = tmp_path / "app" / "Filters"
+    filters.mkdir(parents=True)
+    (filters / "JwtFilter.php").write_text("<?php class JwtFilter {}")
+    git = tmp_path / ".git"
+    git.mkdir()
+    (git / "config").write_text("[core]")
+
+    model = _RecordingModel(ReviewResponse(passed=True))
+    loop = _loop(model)
+    loop.written_files = {"app/Filters/JwtFilter.php": "<?php class JwtFilter {}"}  # this run only
+    loop.self_review(_review_state())
+    assert model.seen_state is not None
+    paths = {entry["path"] for entry in model.seen_state["written_files"]}
+    assert "app/Controllers/AuthController.php" in paths  # prior-run file IS reviewed
+    assert "app/Filters/JwtFilter.php" in paths
+    assert not any(".git" in p for p in paths)  # VCS excluded
+
+
+def test_harvest_worktree_excludes_vcs_and_prefers_current(tmp_path: Path) -> None:
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "A.php").write_text("a")
+    (tmp_path / "app" / "B.php").write_text("b")
+    (tmp_path / "vendor").mkdir()
+    (tmp_path / "vendor" / "lib.php").write_text("framework")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref")
+
+    out = _harvest_worktree_files(tmp_path, prefer=["app/B.php"])
+    paths = [entry["path"] for entry in out]
+    assert paths[0] == "app/B.php"  # this run's file ordered first
+    assert "app/A.php" in paths
+    assert all("vendor" not in p and ".git" not in p for p in paths)  # deps/VCS excluded
+
+
+def test_harvest_missing_root_returns_empty(tmp_path: Path) -> None:
+    assert _harvest_worktree_files(tmp_path / "nope", prefer=[]) == []
