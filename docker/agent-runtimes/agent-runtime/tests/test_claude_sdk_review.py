@@ -85,8 +85,10 @@ def test_review_reads_submit_verdict_tool_call_through_provider() -> None:
 
 def test_review_prose_fallback_explicit_reject_through_provider() -> None:
     # CLI degrades to prose with an explicit rejection → fail (not inconclusive).
+    # F33: use an UNEQUIVOCAL verdict phrase ("no aprobado") — the bare "no cumple"
+    # marker was removed as ambiguous, so it would now read as inconclusive.
     client = _client(
-        _AssistantMessage(content=[_TextBlock("La salida no cumple el criterio 2.")]),
+        _AssistantMessage(content=[_TextBlock("Veredicto: no aprobado, falta el criterio 2.")]),
         _ResultMessage(total_cost_usd=0.0, usage=_UsageBlock()),
     )
     r = client.review(_STATE)

@@ -152,7 +152,13 @@ class MCPToolRunner:
         """
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
-        self._stack: AsyncExitStack | None = None
+        # One AsyncExitStack PER connected server (F23). A shared stack meant a
+        # single server's half-open session (e.g. a connect that timed out
+        # mid-`enter_async_context`) lived in the same stack as everyone else, so
+        # the global teardown blocked ~10s on it. Isolating each session lets a
+        # timeout be treated as that server's failure without penalising the
+        # teardown of the servers that did connect cleanly.
+        self._session_stacks: dict[str, AsyncExitStack] = {}
         self._sessions: dict[str, MCPSession] = {}
         self._tools: dict[str, list[MCPTool]] = {}
         self._started = False
@@ -179,13 +185,8 @@ class MCPToolRunner:
             self._thread.start()
             ready.wait(timeout=5.0)
             assert self._loop is not None, "background loop never started"
-            self._stack = AsyncExitStack()
-
-            async def _enter_stack() -> None:
-                assert self._stack is not None
-                await self._stack.__aenter__()
-
-            self._submit(_enter_stack()).result(timeout=5.0)
+            # No global stack to enter: each server gets its own stack at
+            # :meth:`connect` time (F23).
             self._started = True
 
     def close(self) -> None:
@@ -195,21 +196,44 @@ class MCPToolRunner:
             if not self._started:
                 return
             try:
-                if self._stack is not None:
-                    self._submit(self._stack.__aexit__(None, None, None)).result(timeout=10.0)
-            except Exception:
-                logger.exception("error closing MCP exit stack")
+                # Close each server's stack INDEPENDENTLY with its own timeout
+                # budget (F23): one server that hangs on teardown cannot starve
+                # the close of the others, and a server whose connect timed out
+                # is not in this dict at all, so it never penalises teardown.
+                for name, stack in list(self._session_stacks.items()):
+                    try:
+                        self._submit(stack.aclose()).result(timeout=10.0)
+                    except Exception:
+                        logger.exception("error closing MCP session stack for %r", name)
             finally:
-                self._stack = None
+                self._session_stacks.clear()
                 self._sessions.clear()
                 self._tools.clear()
+                # Drain any still-in-flight tasks (a cancelled connect coroutine,
+                # an out-of-band stack-discard from a timed-out server) so the
+                # loop stops with no pending tasks — otherwise the interpreter
+                # logs "Task was destroyed but it is pending" on teardown (F23).
                 if self._loop is not None and self._loop.is_running():
+                    try:
+                        self._submit(self._drain_pending_tasks()).result(timeout=5.0)
+                    except Exception:
+                        logger.exception("error draining MCP loop tasks")
                     self._loop.call_soon_threadsafe(self._loop.stop)
                 if self._thread is not None:
                     self._thread.join(timeout=5.0)
                 self._loop = None
                 self._thread = None
                 self._started = False
+
+    @staticmethod
+    async def _drain_pending_tasks() -> None:
+        """Cancel + await every other task on the loop (teardown hygiene, F23)."""
+        current = asyncio.current_task()
+        pending = [task for task in asyncio.all_tasks() if task is not current]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     def __enter__(self) -> MCPToolRunner:
         self.start()
@@ -231,15 +255,32 @@ class MCPToolRunner:
         if config.name in self._sessions:
             raise ValueError(f"server {config.name!r} is already connected")
 
+        # This server's own stack — the half-open session a timed-out connect
+        # leaves behind stays isolated here, never in the global teardown path.
+        stack = AsyncExitStack()
+
         async def _do() -> tuple[MCPSession, list[MCPTool]]:
-            assert self._stack is not None
-            session = await self._stack.enter_async_context(
+            session = await stack.enter_async_context(
                 MCPClient.connect(config, vault_resolver=self._vault_resolver)
             )
             tools = await session.list_tools()
             return session, tools
 
-        session, tools = self._submit(_do()).result(timeout=config.timeout_s * 2)
+        future: Future[tuple[MCPSession, list[MCPTool]]] = self._submit(_do())
+        try:
+            session, tools = future.result(timeout=config.timeout_s * 2)
+        except TimeoutError as exc:
+            # Cancel the coroutine so it stops mid-`enter_async_context` instead
+            # of leaking a subprocess/transport, then best-effort close whatever
+            # the partial entry registered — without blocking (F23). The global
+            # teardown is untouched: this server never made it into
+            # `_session_stacks`, so it cannot stall `close()`.
+            future.cancel()
+            self._discard_stack(config.name, stack)
+            raise MCPTransportError(
+                f"server {config.name!r} connect timed out after {config.timeout_s * 2}s"
+            ) from exc
+        self._session_stacks[config.name] = stack
         self._sessions[config.name] = session
         self._tools[config.name] = tools
         return tools
@@ -291,6 +332,30 @@ class MCPToolRunner:
             ) from exc
 
     # -- internal ----------------------------------------------------------
+    def _discard_stack(self, server_name: str, stack: AsyncExitStack) -> None:
+        """Fire-and-forget teardown of a failed server's stack (F23).
+
+        Scheduled on the background loop after a connect timeout; we do NOT
+        block on it (the run must proceed) but attach a callback that drains any
+        exception so it never surfaces as an "exception never retrieved"
+        warning.
+        """
+        loop = self._loop
+        if loop is None:
+            return
+        try:
+            future = asyncio.run_coroutine_threadsafe(stack.aclose(), loop)
+        except RuntimeError:  # loop already stopping — nothing to clean up
+            return
+
+        def _drain(fut: Future[Any]) -> None:
+            try:
+                fut.result()
+            except Exception:
+                logger.warning("error discarding timed-out MCP stack for %r", server_name)
+
+        future.add_done_callback(_drain)
+
     def _submit(self, coro: Any) -> Future[Any]:
         """Submit a coroutine to the background loop. Returns a
         concurrent.futures.Future the caller blocks on."""

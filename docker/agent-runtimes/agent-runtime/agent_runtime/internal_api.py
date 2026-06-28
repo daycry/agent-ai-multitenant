@@ -23,6 +23,7 @@ typed exceptions so the per-tool adapters can map them to
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,6 +32,13 @@ import httpx
 # Defaults — overridden by env in :func:`from_env`.
 _DEFAULT_TIMEOUT_S = 15.0
 _DEFAULT_API_URL = "http://api-server:8000"
+
+# Reachability probe retry policy (F22 / audit C5). A single GET that hit a
+# transient hiccup (a connect race while the api-server's network alias settles,
+# a momentary refusal) used to tear down the whole run; a short bounded retry
+# absorbs the hiccup before declaring the API down.
+_DEFAULT_REACHABLE_ATTEMPTS = 3
+_DEFAULT_REACHABLE_BACKOFF_S = 0.5
 
 
 class InternalAPIError(RuntimeError):
@@ -108,7 +116,12 @@ class InternalAgentAPI:
             self.client.close()
             self.client = None
 
-    def ensure_reachable(self) -> None:
+    def ensure_reachable(
+        self,
+        *,
+        attempts: int = _DEFAULT_REACHABLE_ATTEMPTS,
+        backoff_s: float = _DEFAULT_REACHABLE_BACKOFF_S,
+    ) -> None:
         """Fail LOUDLY at boot if the api-server's internal API is not reachable
         (Plan prod-01 task_11 / sandbox-4). A bare run with no token never gets
         here (``from_env`` raised first); when a token WAS injected we are a
@@ -116,19 +129,30 @@ class InternalAgentAPI:
         error — not a silent skip of the knowledge/memory families.
 
         Probes the unauthenticated ``/healthz`` (a route, not the proxy) so a
-        network/route misconfiguration surfaces immediately.
+        network/route misconfiguration surfaces immediately. A single GET is too
+        brittle (F22): a transient connect race tumbles the whole run, so we
+        retry ``attempts`` times with a short linear backoff and only raise
+        :class:`InternalAPIUnreachableError` once every attempt has failed.
         """
         if self.client is None:
             raise InternalAPIError("client has been closed")
-        try:
-            response = self.client.get(f"{self.base_url}/healthz")
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise InternalAPIUnreachableError(
-                f"internal API at {self.base_url} is not reachable: {exc!r}. The sandbox "
-                "needs a network route to api-server (agentic-agents) and must bypass the "
-                "egress-proxy (trust_env=False)."
-            ) from exc
+        last_exc: httpx.HTTPError | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self.client.get(f"{self.base_url}/healthz")
+                response.raise_for_status()
+                return
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                if attempt < attempts:
+                    # Transient hiccup — back off (linearly) and retry before
+                    # declaring the API down.
+                    time.sleep(backoff_s * attempt)
+        raise InternalAPIUnreachableError(
+            f"internal API at {self.base_url} is not reachable after {attempts} "
+            f"attempt(s): {last_exc!r}. The sandbox needs a network route to api-server "
+            "(agentic-agents) and must bypass the egress-proxy (trust_env=False)."
+        ) from last_exc
 
     def _post(self, path: str, json: dict[str, Any]) -> dict[str, Any]:
         if self.client is None:

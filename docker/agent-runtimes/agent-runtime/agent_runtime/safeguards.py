@@ -24,15 +24,40 @@ DEFAULT_MAX_REVIEW_RETRIES = 3
 
 
 class SafeguardCode(enum.StrEnum):
-    """Abort codes — recorded on the execution when a safeguard trips."""
+    """Abort / escalation codes — recorded on the execution as ``abort_code``.
+
+    Two families share this enum so the graph has ONE source of truth (F27):
+
+      * cumulative-budget safeguards (``MAX_*``, ``REPETITIVE_LOOP``) — a hard
+        abort when a resource envelope is breached;
+      * self-review escalation + provider-failure codes
+        (``REVIEW_INCONCLUSIVE`` … ``PROVIDER_TIMEOUT``) — the run ends
+        ``needs_human_review``/``aborted`` with a clear, persisted reason instead
+        of crashing or silently passing.
+
+    The string VALUES are part of the persisted contract (``executions.abort_code``,
+    the worker's task-blocking reasons, the UI). Do NOT change an existing value.
+    """
 
     MAX_ITERATIONS = "max_iterations_exceeded"
     MAX_TOKENS = "max_tokens_exceeded"
     MAX_COST = "max_cost_exceeded"
     MAX_WALL_CLOCK = "max_wall_clock_exceeded"
     MAX_TOOL_CALLS = "max_tool_calls_exceeded"
-    MAX_REVIEW_RETRIES = "max_review_retries_exceeded"
     REPETITIVE_LOOP = "repetitive_loop_detected"
+    # Self-review escalation codes (ADR 0087). The values are exactly the strings
+    # already persisted by the loop ('review_inconclusive' /
+    # 'max_review_retries_exhausted'); the old dead 'max_review_retries_exceeded'
+    # member was removed (F27 — it never matched what the graph wrote).
+    REVIEW_INCONCLUSIVE = "review_inconclusive"
+    MAX_REVIEW_RETRIES_EXHAUSTED = "max_review_retries_exhausted"
+    # A self-declared incompletion (finish_status failed/partial) that a review
+    # PASS must not override into 'done' (ADR 0087 addendum D1, P2.2).
+    AGENT_REPORTED_FAILURE = "agent_reported_failure"
+    # Provider-layer failure that survived Phase-1 retries (F25/P1.5): the run
+    # ends cleanly aborted instead of crashing to execution.error.
+    PROVIDER_ERROR = "provider_error"
+    PROVIDER_TIMEOUT = "provider_timeout"
 
 
 @dataclass(frozen=True)

@@ -277,6 +277,49 @@ def _wire_mcp_servers(registry: Any, spec: dict[str, Any]) -> Any | None:
     return runner
 
 
+# Audit cluster C1 (F51): a REVIEW run uses the SAME agent loop, so the reviewer
+# only produces a usable verdict if its system prompt carries the implementer's
+# output + the acceptance criteria + the test-report AND instructs it to finish
+# with the structured `<verdict>` tag the worker's `parse_reviewer_output` reads.
+# Until this landed the worker dropped `review_context` on the floor and the
+# reviewer ran blind on title+description, so every reviewed task was defensively
+# rejected (→ backlog → blocked). Provider-agnostic: the tag rides in the final
+# prose summary, which every provider can emit.
+_REVIEW_VERDICT_INSTRUCTION = (
+    "You are the REVIEWER for this task. Judge ONLY whether the implementer's output "
+    "below satisfies the acceptance criteria. Do NOT re-implement the task or write "
+    "files. Read what you need, then FINISH your run with a final summary that ENDS "
+    "with exactly one verdict tag:\n"
+    "  <verdict>approve</verdict>  — the output satisfies the acceptance criteria; OR\n"
+    "  <verdict>reject</verdict>   — it does not, followed by a rejection block:\n"
+    "    <rejection><failed_criterion>...</failed_criterion>"
+    "<testreport_evidence>...</testreport_evidence>"
+    "<what_to_fix>...</what_to_fix></rejection>\n"
+    "The verdict tag is MANDATORY — without it the review cannot be applied."
+)
+
+
+def build_review_preamble(review_context: dict[str, Any]) -> str:
+    """The reviewer's system preamble for a REVIEW run (audit C1 / F51).
+
+    Folds the worker-supplied ``review_context`` (acceptance criteria + the
+    implementer's prior output + the ``<test-report>`` block) into the mandatory
+    verdict instruction. Missing pieces are simply omitted — a review with no
+    test-report still gets the criteria + output + the format instruction.
+    """
+    parts = [_REVIEW_VERDICT_INSTRUCTION]
+    criteria = str(review_context.get("acceptance_criteria") or "").strip()
+    implementer_output = str(review_context.get("implementer_output") or "").strip()
+    test_report = str(review_context.get("test_report") or "").strip()
+    if criteria:
+        parts.append(f"Acceptance criteria to certify against:\n{criteria}")
+    if implementer_output:
+        parts.append(f"Implementer's output to review:\n{implementer_output}")
+    if test_report:
+        parts.append(f"Test report:\n{test_report}")
+    return "\n\n".join(parts)
+
+
 def run_task(spec: dict[str, Any]) -> int:
     """Run the agent loop for `spec`, streaming the steps_log as JSON lines."""
     from agent_runtime.approval import ApprovalGate
@@ -378,6 +421,17 @@ def run_task(spec: dict[str, Any]) -> int:
         fragments = spec.get("skill_prompt_fragments") or []
         system_preamble = "\n\n".join(str(f) for f in fragments if f) or None
 
+        # Audit C1 (F51): a REVIEW run carries `review_context`; prepend the
+        # reviewer's instruction (implementer output + criteria + test-report + the
+        # MANDATORY <verdict> format) so the reviewer emits a parseable verdict
+        # instead of a blind summary. Prepended so it frames the run before any
+        # skill cues; the loop's own _system_content still appends _DECIDE_SYSTEM.
+        if spec.get("review"):
+            review_preamble = build_review_preamble(spec.get("review_context") or {})
+            system_preamble = (
+                f"{review_preamble}\n\n{system_preamble}" if system_preamble else review_preamble
+            )
+
         _emit({"event": "execution.started", "task": task})
         result = run_agent(
             deps,
@@ -396,7 +450,22 @@ def run_task(spec: dict[str, Any]) -> int:
 
 
 def main() -> int:
-    spec = _load_spec()
+    # Load the spec INSIDE a try (F18 / audit C5): `_load_spec` runs
+    # `json.loads`, which raises on a malformed `AGENT_TASK_SPEC` (or an
+    # undecodable workspace file). Before, that exception escaped `main`, so the
+    # container died with a stderr traceback and exit 1 WITHOUT any structured
+    # line — the worker only saw "exited 1 with no result". Emitting an
+    # `execution.error` here lets the worker surface the real cause.
+    try:
+        spec = _load_spec()
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+        _emit(
+            {
+                "event": "execution.error",
+                "error": f"invalid AGENT_TASK_SPEC: {type(exc).__name__}: {exc}",
+            }
+        )
+        return 1
     if spec is None:
         info = selftest()
         print(json.dumps(info, sort_keys=True))

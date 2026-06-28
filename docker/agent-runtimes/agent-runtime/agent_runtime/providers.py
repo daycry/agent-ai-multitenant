@@ -30,7 +30,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator, Callable
+import logging
+import os
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -40,10 +43,14 @@ from shared_llm import (
     ClaudeAgentProvider,
     CompletionResponse,
     CopilotProvider,
+    LLMError,
     LLMProvider,
     Message,
     OllamaProvider,
+    ProviderError,
+    RateLimitError,
 )
+from shared_llm.providers._openai_compat import CompletionSignals, completion_signals
 from shared_llm.reasoning import reasoning_call_kwargs
 
 from agent_runtime.model import (
@@ -54,14 +61,25 @@ from agent_runtime.model import (
     ReviewResponse,
 )
 
+_log = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Prompts + message construction (same shape as before the refactor)
 # ---------------------------------------------------------------------------
+# F35 (2026-06-27): the FINISH instruction must NOT prescribe "plain text and NO
+# tool call". On the HTTP providers FINISH IS a `submit_result` tool call (ADR
+# 0087); telling the model to answer in prose contradicted `_SUBMIT_RESULT_TOOL`
+# ("instead of replying in plain text") and left runs finishing in prose →
+# `finish_status=None`. We now tell it to finish via `submit_result`, and to fall
+# back to plain prose ONLY when no such tool is offered — which is exactly the
+# claude_sdk path (it never receives `submit_result`), so that path is preserved.
 _DECIDE_SYSTEM = (
     "You are an autonomous agent executing ONE task to completion inside a loop, "
     "working in the current directory (a git worktree). On each turn, either call "
     "exactly ONE tool to make concrete progress, or — once the task is satisfied — "
-    "reply with a short final summary as plain text and NO tool call.\n"
+    "finish by calling the `submit_result` tool with a `status` and a `summary` of "
+    "what you did; only reply with a short final summary as plain prose if no "
+    "`submit_result` tool is available to you.\n"
     "Let the TASK drive what you do: an implementation task means writing/editing "
     "files (write_file); an analysis or review task means reading what you need and "
     "returning a written conclusion; a testing task means running the tests. The "
@@ -98,6 +116,17 @@ _SUBMIT_VERDICT_TOOL: dict[str, Any] = {
         "required": ["passed"],
         "additionalProperties": False,
     },
+}
+
+# F34/P0.3: on the OpenAI-compatible HTTP providers (azure/copilot/ollama) the
+# review FORCES the model to emit the verdict as a `submit_verdict` call via the
+# standard `tool_choice` field, so the verdict arrives structured instead of
+# degrading to prose → inconclusive → escalation. The prose net stays as the last
+# resort. claude_sdk (its own client) does NOT use this — it has no tool_choice
+# knob; the host-tool path covers it.
+_SUBMIT_VERDICT_TOOL_CHOICE: dict[str, Any] = {
+    "type": "function",
+    "function": {"name": "submit_verdict"},
 }
 
 # ADR 0087 (structured FINISH): the agent reports its outcome via this tool. It
@@ -270,15 +299,23 @@ def _extract_json(text: str) -> Any:
 # full of them ("el filtro RECHAZA tokens", "maneja el FALLO de auth", "no FALLA
 # ante expirados") and the old set read them as rejections, aborting the JWT task
 # while specs/migrations passed. Only verdict-context phrases belong here.
+#
+# F33 (2026-06-27): the bare negated-criterion markers "no cumple" / "no se
+# cumplen" / "no satisface" were ALSO ambiguous — an APPROVING review can carry
+# them mid-sentence ("...cumple los criterios; no cumple ninguna mala práctica..."),
+# so reading them as a verdict produced wrong rejections. They are removed. When
+# nothing unequivocal remains, `_parse_verdict` returns None (INCONCLUSIVE →
+# escalate), never a default fail. To stop the inverse hazard — a leftover prose
+# PASS marker matching inside a *negated* phrase ("no satisface los criterios"
+# contains "satisface los criterios") — pass-marker matching is negation-aware
+# (`_pass_marker_present`), so such a phrase stays INCONCLUSIVE rather than
+# flipping fail-open to a pass.
 # ============================================================================
 _REVIEW_FAIL_MARKERS = (
     '"passed": false',
     '"passed":false',
     "passed: false",
     "passed=false",
-    "no cumple",
-    "no se cumplen",
-    "no satisface",
     "no supera la",
     "no aprobad",
     "veredicto: no",
@@ -314,6 +351,30 @@ _REVIEW_PASS_MARKERS = (
 )
 
 
+# Words that, immediately before a PASS marker, negate it (F33). "no satisface
+# los criterios" must NOT read as the PASS marker "satisface los criterios";
+# guarding the pass check keeps such a phrase INCONCLUSIVE instead of fail-open.
+_PASS_NEGATORS = frozenset({"no", "not", "sin", "nunca", "never", "ni"})
+
+
+def _pass_marker_present(lowered: str, marker: str) -> bool:
+    """True if ``marker`` occurs in ``lowered`` NOT immediately negated.
+
+    Scans every occurrence; an occurrence counts as a PASS only when the word
+    right before it is not a negator (so "el output satisface los criterios"
+    passes, but "no satisface los criterios" does not).
+    """
+    start = 0
+    while True:
+        idx = lowered.find(marker, start)
+        if idx == -1:
+            return False
+        preceding = lowered[:idx].split()
+        if not preceding or preceding[-1] not in _PASS_NEGATORS:
+            return True
+        start = idx + 1
+
+
 def _parse_verdict(content: str) -> tuple[bool | None, str]:
     """Turn a review reply into a ``(passed, feedback)`` pair — THREE-state.
 
@@ -324,7 +385,8 @@ def _parse_verdict(content: str) -> tuple[bool | None, str]:
     (fail-open), which an authoritative gate must not do.
 
     Order: the documented JSON object first; then conservative prose markers —
-    explicit FAIL wins over explicit PASS; neither → ``None``.
+    explicit FAIL wins over explicit PASS; neither → ``None``. PASS markers are
+    negation-aware (F33) so a negated criterion never flips to a pass.
     """
     obj = _extract_json(content.strip())
     if isinstance(obj, dict) and "passed" in obj:
@@ -332,9 +394,41 @@ def _parse_verdict(content: str) -> tuple[bool | None, str]:
     lowered = content.lower()
     if any(marker in lowered for marker in _REVIEW_FAIL_MARKERS):
         return False, content.strip()
-    if any(marker in lowered for marker in _REVIEW_PASS_MARKERS):
+    if any(_pass_marker_present(lowered, marker) for marker in _REVIEW_PASS_MARKERS):
         return True, content.strip()
     return None, content.strip()
+
+
+# F32 (2026-06-27): the robustness signal Phase 1 exposed in `shared_llm`'s
+# OpenAI-compatible parse path. It distinguishes "the model gave us nothing"
+# (absent args) from "we LOST what the model gave us" (a tool-call `arguments`
+# JSON that was present but corrupt, or a body cut off at the token cap —
+# finish_reason=length). The signal travels on `CompletionResponse.raw` (the
+# verbatim `/chat/completions` payload); `providers.py` is where it must be
+# CONSUMED so a corrupt FINISH/verdict is not silently degraded to an empty one.
+#
+# Propagation note: `completion_signals` lives in the OpenAI-compat helper module
+# (it parses the openai-shaped raw). It is Phase 1's single source of truth for
+# this signal, designed to take `CompletionResponse.raw` directly — so we consume
+# it here rather than re-deriving (and risking drift). The claude_sdk path stores
+# a LIST of SDK messages in `raw` (not an openai dict), and the test fakes carry no
+# `raw` at all; both yield the all-False default, so those paths are unchanged.
+_CORRUPT_VERDICT_FEEDBACK = (
+    "verdict corrupt/truncated — the model emitted submit_verdict but its arguments "
+    "could not be decoded (malformed JSON or a response cut off at the token cap); "
+    "retry the review rather than treating this as an ambiguous prose verdict"
+)
+
+
+def _completion_signals(resp: CompletionResponse) -> CompletionSignals:
+    """The F32 robustness signal for one provider response (see module note above).
+
+    Defensive on every shape: a response with no `raw` (test fakes), a non-dict
+    `raw` (the claude_sdk path), or an unexpected payload all collapse to the
+    all-False default, so only the OpenAI-compatible HTTP providers — whose `raw`
+    is the `/chat/completions` dict — can ever flag truncation / malformed args.
+    """
+    return completion_signals(getattr(resp, "raw", None))
 
 
 def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
@@ -349,18 +443,62 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
       * any other tool    -> ACT;
       * no tool (prose)   -> FINISH wrapping the text content (``finish_status``
         None — the claude_sdk path, where we can't get a structured status).
+
+    F36: when the model emits SEVERAL tool calls in one turn (e.g. a real action
+    call AND ``submit_result``), precedence is EXPLICIT — ``submit_result`` wins
+    (the agent declared it is done), otherwise the FIRST action call is taken.
+    The discarded calls are logged instead of being dropped silently behind a
+    blind ``tool_calls[0]`` index.
+
+    F32: the ``submit_result`` FINISH is GUARDED by the robustness signal. When the
+    response is TRUNCATED (finish_reason=length) or the call's own ``arguments`` came
+    back CORRUPT (present but undecodable → its ``summary``/``status`` were LOST and
+    `_loads_args` silently dropped them to ``{}``), we do NOT degrade to a FINISH with
+    empty output that masquerades as a legitimate finish. Instead we emit a no-op ACT
+    so the loop takes another turn (bounded by the loop detector / iteration budget),
+    logging the cause. A GENUINELY ABSENT summary — the model called ``submit_result``
+    with no args at all (not corruption) — keeps the historical empty-FINISH wrap.
     """
-    first = resp.tool_calls[0] if resp.tool_calls else None
-    if first is not None and first.name == "submit_result":
-        args = dict(first.arguments)
-        status = args.get("status")
-        decision = ModelDecision(
-            kind=DecisionKind.FINISH,
-            output=str(args.get("summary", "") or "") or (resp.content or ""),
-            rationale=resp.content or "",
-            finish_status=status if status in _FINISH_STATUSES else None,
-        )
-    elif first is not None:
+    calls = list(resp.tool_calls or [])
+    submit = next((call for call in calls if call.name == "submit_result"), None)
+    if submit is not None:
+        discarded = [call.name for call in calls if call is not submit]
+        if discarded:
+            _log.info("FINISH via submit_result; discarded concurrent tool call(s): %s", discarded)
+        args = dict(submit.arguments)
+        signals = _completion_signals(resp)
+        # `not args` together with `malformed_tool_args` is what tells "corrupt"
+        # (the summary/status were present but lost) from "absent" (the model sent
+        # an empty call — args stay {} but malformed is False): the corrupt case
+        # retries, the absent case keeps the historical empty-FINISH wrap below.
+        if signals.truncated or (signals.malformed_tool_args and not args):
+            _log.warning(
+                "submit_result FINISH treated as INVALID (truncated=%s malformed_args=%s) — "
+                "retrying the decision instead of finishing on a lost result",
+                signals.truncated,
+                signals.malformed_tool_args,
+            )
+            decision = ModelDecision(
+                kind=DecisionKind.ACT,
+                tool="noop",
+                rationale=(
+                    "submit_result arrived corrupt or truncated; retrying instead of "
+                    "finishing on a lost result"
+                ),
+            )
+        else:
+            status = args.get("status")
+            decision = ModelDecision(
+                kind=DecisionKind.FINISH,
+                output=str(args.get("summary", "") or "") or (resp.content or ""),
+                rationale=resp.content or "",
+                finish_status=status if status in _FINISH_STATUSES else None,
+            )
+    elif calls:
+        first = calls[0]
+        discarded = [call.name for call in calls[1:]]
+        if discarded:
+            _log.info("ACT via %s; discarded extra tool call(s): %s", first.name, discarded)
         decision = ModelDecision(
             kind=DecisionKind.ACT,
             tool=first.name,
@@ -408,10 +546,21 @@ def _review_from(resp: CompletionResponse, *, model: str) -> ReviewResponse:
     Three-state: ``passed is None`` (inconclusive) maps to
     ``ReviewResponse(passed=False, inconclusive=True)`` so it never auto-passes;
     the loop escalates it to a human.
+
+    F32: when a ``submit_verdict`` call WAS present but its verdict came back
+    inconclusive AND the robustness signal flags corruption/truncation, the
+    feedback is relabelled to say so explicitly — distinguishing "the model
+    produced a verdict we couldn't decode (retry the review)" from "ambiguous
+    prose". A WELL-FORMED structured verdict (a real boolean ``passed``) and the
+    no-tool-call prose path are both left EXACTLY as before.
     """
     tool_verdict = _verdict_from_tool_calls(resp)
     if tool_verdict is not None:
         passed, feedback = tool_verdict
+        if passed is None:
+            signals = _completion_signals(resp)
+            if signals.malformed_tool_args or signals.truncated:
+                feedback = _CORRUPT_VERDICT_FEEDBACK
     else:
         passed, feedback = _parse_verdict(resp.content or "")
     return ReviewResponse(
@@ -425,6 +574,37 @@ def _review_from(resp: CompletionResponse, *, model: str) -> ReviewResponse:
     )
 
 
+class ProviderTimeout(LLMError):  # type: ignore[misc]  # noqa: N818 — stable typed name
+    """An LLM call exceeded its per-call wall-clock budget (F25/P1.5).
+
+    Raised when ``asyncio.wait_for`` trips the timeout around a provider call.
+    It subclasses ``shared_llm.LLMError`` so the graph node catches it with the
+    rest of the LLM-layer errors; the runtime never hangs forever on a stuck
+    claude_sdk CLI or a wedged HTTP socket.
+    """
+
+
+# Per-call budget + retry policy (F25/F30). Defaults are generous (slow reasoning
+# models can take minutes) and overridable via env for ops, without a redeploy.
+_DEFAULT_CALL_TIMEOUT_S: float = float(os.environ.get("AGENT_RUNTIME_LLM_TIMEOUT_S") or 900.0)
+_DEFAULT_CALL_ATTEMPTS: int = int(os.environ.get("AGENT_RUNTIME_LLM_ATTEMPTS") or 3)
+_DEFAULT_RETRY_BACKOFF_S: float = float(os.environ.get("AGENT_RUNTIME_LLM_BACKOFF_S") or 2.0)
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """Whether ``exc`` is worth retrying: rate-limit, timeout, or a 5xx.
+
+    AuthError and 4xx ProviderErrors are permanent — retrying re-burns the budget
+    for nothing — so they are NOT transient and propagate on the first hit.
+    """
+    if isinstance(exc, RateLimitError | ProviderTimeout):
+        return True
+    if isinstance(exc, ProviderError):
+        code = exc.status_code
+        return code is not None and 500 <= code < 600
+    return False
+
+
 def _run(coro: Any) -> Any:
     """Run an async call from a sync context.
 
@@ -434,6 +614,45 @@ def _run(coro: Any) -> Any:
     Copilot JWT cache which lives on the provider instance.
     """
     return asyncio.run(coro)
+
+
+def _run_with_retry(
+    make_coro: Callable[[], Awaitable[Any]],
+    *,
+    timeout: float = _DEFAULT_CALL_TIMEOUT_S,
+    attempts: int = _DEFAULT_CALL_ATTEMPTS,
+    backoff: float = _DEFAULT_RETRY_BACKOFF_S,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Any:
+    """Run a fresh provider coroutine per attempt, bounded by timeout + retries.
+
+    ``make_coro`` is a factory (not a coroutine): each attempt builds a NEW
+    coroutine, since a coroutine cannot be awaited twice. The call is wrapped in
+    ``asyncio.wait_for`` so a stuck provider becomes a typed :class:`ProviderTimeout`
+    instead of hanging the node forever. Transient failures (rate-limit / 5xx /
+    timeout) are retried with exponential backoff up to ``attempts`` times; once
+    the budget is spent the LAST error is RE-RAISED (typed) — never swallowed, so
+    the graph node in another unit decides how to surface the failure.
+    """
+
+    async def _attempt() -> Any:
+        return await asyncio.wait_for(make_coro(), timeout=timeout)
+
+    last: BaseException | None = None
+    for i in range(max(1, attempts)):
+        try:
+            return _run(_attempt())
+        except TimeoutError as exc:
+            last = ProviderTimeout(f"LLM call exceeded {timeout:.0f}s budget")
+            last.__cause__ = exc
+        except LLMError as exc:
+            if not _is_transient(exc):
+                raise
+            last = exc
+        if i < max(1, attempts) - 1 and backoff > 0:
+            sleep(backoff * (2**i))
+    assert last is not None  # the loop ran at least once and never returned
+    raise last
 
 
 # ---------------------------------------------------------------------------
@@ -463,8 +682,8 @@ class _ProviderModelClient:
         # this (see ClaudeSDKModelClient.decide) — a tool call there forces
         # content="" and would drop the rich prose deliverable.
         tools = [*(self._tools or []), _SUBMIT_RESULT_TOOL]
-        resp = _run(
-            self.provider.complete(
+        resp = _run_with_retry(
+            lambda: self.provider.complete(
                 _decide_messages(state),
                 model=self.model,
                 tools=tools,
@@ -474,11 +693,14 @@ class _ProviderModelClient:
         return _decision_from(resp, model=self.model)
 
     def review(self, state: dict[str, Any]) -> ReviewResponse:
-        resp = _run(
-            self.provider.complete(
+        # F34: force `submit_verdict` (tool_choice) so HTTP backends return the
+        # verdict structured; the prose net in `_review_from` is only a fallback.
+        resp = _run_with_retry(
+            lambda: self.provider.complete(
                 _review_messages(state),
                 model=self.model,
                 tools=[_SUBMIT_VERDICT_TOOL],  # ADR 0086: verdict as a tool call
+                tool_choice=_SUBMIT_VERDICT_TOOL_CHOICE,
                 **self._extra_call_kwargs,
             )
         )
@@ -615,8 +837,11 @@ class ClaudeSDKModelClient:
         )
 
     def decide(self, state: dict[str, Any]) -> ModelResponse:
-        resp = _run(
-            self.provider.complete(
+        # F25/F30: same timeout+retry guard as the HTTP path — a stuck claude_sdk
+        # CLI must trip ProviderTimeout, not hang the loop. No `submit_result` /
+        # `tool_choice` here: a tool call would force content="" and drop the prose.
+        resp = _run_with_retry(
+            lambda: self.provider.complete(
                 _decide_messages(state),
                 model=self.model,
                 tools=self._tools,
@@ -628,8 +853,8 @@ class ClaudeSDKModelClient:
         return _decision_from(resp, model=self.model)
 
     def review(self, state: dict[str, Any]) -> ReviewResponse:
-        resp = _run(
-            self.provider.complete(
+        resp = _run_with_retry(
+            lambda: self.provider.complete(
                 _review_messages(state),
                 model=self.model,
                 tools=[_SUBMIT_VERDICT_TOOL],  # ADR 0086: verdict as a tool call
@@ -812,6 +1037,7 @@ __all__ = [
     "CopilotModelClient",
     "OllamaModelClient",
     "ProviderConfigResolver",
+    "ProviderTimeout",
     "ResolvedProviderConfig",
     "build_provider_client",
 ]

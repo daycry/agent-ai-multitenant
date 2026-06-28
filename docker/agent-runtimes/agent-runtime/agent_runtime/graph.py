@@ -28,10 +28,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
+from shared_llm import LLMError
 
 from agent_runtime.approval import ApprovalGate
 from agent_runtime.loop_detection import DEFAULT_LOOP_THRESHOLD, LoopDetector
 from agent_runtime.model import DecisionKind, ModelClient
+from agent_runtime.providers import ProviderTimeout
 from agent_runtime.safeguards import Budgets, SafeguardCode, SafeguardTracker
 from agent_runtime.state import (
     STATUS_ABORTED,
@@ -70,6 +72,27 @@ _PRODUCING_TOOLS = frozenset(
 _RESEARCH_STREAK_LIMIT = 5
 
 
+def _base_tool_name(tool: str | None) -> str:
+    """The tool name without its MCP/custom namespace (``filesystem.write_file`` →
+    ``write_file``).
+
+    Audit cluster C2 (F24): production/research classification matched bare
+    builtin names only, so a file written via an MCP server (``fs.write_file``)
+    or a namespaced custom tool was invisible — ``has_produced`` never latched and
+    the self-review saw no code, escalating a run that DID produce. Stripping the
+    namespace lets the same writer verbs count whatever wires them.
+    """
+    return (tool or "").rsplit(".", 1)[-1]
+
+
+def _is_research_tool(tool: str | None) -> bool:
+    return _base_tool_name(tool) in _RESEARCH_TOOLS
+
+
+def _is_producing_tool(tool: str | None) -> bool:
+    return _base_tool_name(tool) in _PRODUCING_TOOLS
+
+
 def _research_nudge(
     *, tool: str | None, research_streak: int, repeat_count: int, has_produced: bool = False
 ) -> str | None:
@@ -88,7 +111,7 @@ def _research_nudge(
     the over-verification trap that left a run looping until ``repetitive_loop_detected``
     even though every file was already written. Returns ``None`` when no nudge applies.
     """
-    is_repeat = tool in _RESEARCH_TOOLS and repeat_count > 1
+    is_repeat = _is_research_tool(tool) and repeat_count > 1
     if not (is_repeat or research_streak >= _RESEARCH_STREAK_LIMIT):
         return None
     if has_produced:
@@ -114,6 +137,20 @@ def _research_nudge(
 def _no_recall(_task: AgentTask) -> list[dict[str, Any]]:
     """Default memory recall — empty until real memory lands in Plan 04."""
     return []
+
+
+def _provider_abort_code(exc: LLMError) -> str:
+    """The abort code for a provider-layer failure (F25/P1.5).
+
+    Phase 1 (`providers.py`) already retried transient errors and re-raised a
+    TYPED error once the budget was spent: :class:`ProviderTimeout` (a stuck
+    call) or another ``shared_llm`` :class:`LLMError` (rate-limit / 5xx / auth).
+    A timeout gets its own code so a wedged provider is distinguishable from a
+    generic failure in the persisted ``abort_code``.
+    """
+    if isinstance(exc, ProviderTimeout):
+        return str(SafeguardCode.PROVIDER_TIMEOUT)
+    return str(SafeguardCode.PROVIDER_ERROR)
 
 
 @dataclass
@@ -262,7 +299,30 @@ class _AgentLoop:
                 "steps": steps,
             }
 
-        response = self.deps.model.decide(dict(state))
+        # F25/P1.5: a provider error that survived Phase-1's retry+timeout
+        # re-raises a typed LLMError. Catch it HERE and end the run cleanly
+        # aborted (preserving the steps so far) instead of letting it bubble to
+        # __main__ → execution.error → the worker doubling it to a hard `failed`
+        # and losing all progress. Only LLM-layer errors are caught — a real bug
+        # (KeyError/TypeError/…) is NOT an LLMError and still propagates.
+        try:
+            response = self.deps.model.decide(dict(state))
+        except LLMError as exc:
+            code = _provider_abort_code(exc)
+            steps.append(
+                node_step(
+                    base + len(steps),
+                    "plan",
+                    f"Provider call failed: {code}",
+                    status="aborted",
+                )
+            )
+            return {
+                "status": STATUS_ABORTED,
+                "abort_code": code,
+                "iteration": self.tracker.usage.iterations,
+                "steps": steps,
+            }
         self.tracker.record_model_call(response.tokens_in, response.tokens_out, response.cost_usd)
         decision = response.decision
         steps.append(
@@ -369,16 +429,17 @@ class _AgentLoop:
         tool = observation.get("tool")
         # Track the research-only streak: any producing tool resets it. A producing
         # tool also latches `has_produced`, which flips the nudge to "now FINISH".
-        if tool in _RESEARCH_TOOLS:
+        # Namespace-aware (audit C2/F24): an MCP/custom writer counts too.
+        if _is_research_tool(tool):
             self.research_streak += 1
         else:
             self.research_streak = 0
-        if tool in _PRODUCING_TOOLS:
+        if _is_producing_tool(tool):
             self.has_produced = True
         decision = state["last_decision"] or {}
         # ADR 0087 (Option 1): harvest the file the agent just wrote (path+content)
         # so the self-review can judge the real code. Keeps the latest per path.
-        if tool in _PRODUCING_TOOLS:
+        if _is_producing_tool(tool):
             args = decision.get("tool_args") or {}
             path, content = args.get("path"), args.get("content")
             if isinstance(path, str) and path and isinstance(content, str):
@@ -438,8 +499,17 @@ class _AgentLoop:
         output = decision.get("output") or "(no output produced)"
         return {"output": output, "steps": [node_step(base, "finalize", "Finalized output")]}
 
-    def self_review(self, state: AgentState) -> dict[str, Any]:
-        """Review the output; pass, or bounce it back bounded by retries."""
+    def self_review(self, state: AgentState) -> dict[str, Any]:  # noqa: PLR0911
+        """Review the output; pass, or bounce it back bounded by retries.
+
+        The self-review is the AUTHORITATIVE gate (ADR 0087). A review PASS does
+        NOT blindly become ``done``: if the agent itself reported ``finish_status``
+        of ``failed``/``partial`` via ``submit_result``, it ADMITTED it did not
+        complete the task — P2.2 (ADR 0087 addendum, decision D1) escalates that to
+        a human (``agent_reported_failure``) rather than committing an admitted
+        failure as success. A provider error during the review (F25/P1.5) ends the
+        run cleanly aborted instead of crashing the container.
+        """
         base = len(state["steps"])
         steps: list[dict[str, Any]] = []
 
@@ -462,7 +532,27 @@ class _AgentLoop:
             review_state["written_files"] = [
                 {"path": path, "content": content} for path, content in self.written_files.items()
             ]
-        review = self.deps.model.review(review_state)
+        # F25/P1.5: same guard as plan()'s decide — a provider error that
+        # outlived Phase-1's retries ends the run cleanly aborted (steps so far +
+        # the deliverable from finalize preserved), not a container crash.
+        try:
+            review = self.deps.model.review(review_state)
+        except LLMError as exc:
+            code = _provider_abort_code(exc)
+            steps.append(
+                node_step(
+                    base + len(steps),
+                    "self_review",
+                    f"Provider call failed during review: {code}",
+                    status="aborted",
+                )
+            )
+            return {
+                "review_passed": False,
+                "status": STATUS_ABORTED,
+                "abort_code": code,
+                "steps": steps,
+            }
         self.tracker.record_model_call(review.tokens_in, review.tokens_out, review.cost_usd)
         steps.append(
             model_call_step(
@@ -482,6 +572,27 @@ class _AgentLoop:
         )
 
         if review.passed:
+            # P2.2 (ADR 0087 addendum D1): a review PASS must NOT override the
+            # agent's OWN admission that it didn't finish. When it reported
+            # finish_status=failed/partial via submit_result, escalate to a human
+            # instead of returning DONE (which would get committed as success).
+            finish_status = (state.get("last_decision") or {}).get("finish_status")
+            if finish_status in ("failed", "partial"):
+                steps.append(
+                    node_step(
+                        base + len(steps),
+                        "self_review",
+                        f"Agent self-reported '{finish_status}' — a review pass cannot "
+                        "turn an admitted incompletion into 'done'; escalating to human",
+                        status=STATUS_NEEDS_HUMAN_REVIEW,
+                    )
+                )
+                return {
+                    "review_passed": False,
+                    "status": STATUS_NEEDS_HUMAN_REVIEW,
+                    "abort_code": str(SafeguardCode.AGENT_REPORTED_FAILURE),
+                    "steps": steps,
+                }
             steps.append(
                 node_step(base + len(steps), "self_review", "Output approved by self-review")
             )
@@ -504,7 +615,7 @@ class _AgentLoop:
             return {
                 "review_passed": False,
                 "status": STATUS_NEEDS_HUMAN_REVIEW,
-                "abort_code": "review_inconclusive",
+                "abort_code": str(SafeguardCode.REVIEW_INCONCLUSIVE),
                 "steps": steps,
             }
 
@@ -526,7 +637,7 @@ class _AgentLoop:
             return {
                 "review_passed": False,
                 "status": STATUS_NEEDS_HUMAN_REVIEW,
-                "abort_code": "max_review_retries_exhausted",
+                "abort_code": str(SafeguardCode.MAX_REVIEW_RETRIES_EXHAUSTED),
                 "review_retries": retries,
                 "steps": steps,
             }

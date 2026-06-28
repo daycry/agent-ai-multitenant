@@ -42,11 +42,21 @@ def test_explicit_approval_prose_passes() -> None:
 
 def test_explicit_rejection_prose_fails() -> None:
     # Clear negative-VERDICT phrases → explicit fail (NOT inconclusive).
-    assert _parse_verdict("La salida no cumple el criterio 2.")[0] is False
-    assert _parse_verdict("Resultado: no satisface los criterios de aceptación.")[0] is False
+    assert _parse_verdict("Veredicto: no aprobado, falta el criterio 2.")[0] is False
+    assert _parse_verdict("Resultado: no supera la revisión.")[0] is False
     assert _parse_verdict("This output does not satisfy the task.")[0] is False
     falta = "passed: false — falta el endpoint de refresh"
     assert _parse_verdict(falta)[0] is False
+
+
+def test_bare_negated_criterion_prose_is_inconclusive() -> None:
+    # F33: the bare "no cumple" / "no satisface" markers are gone — they were
+    # ambiguous (an approving review can carry them). With no unequivocal verdict
+    # signal the parse is INCONCLUSIVE (None), never a default fail, and the
+    # negation guard stops "no satisface los criterios" flipping to a pass.
+    assert _parse_verdict("La salida no cumple el criterio 2.")[0] is None
+    assert _parse_verdict("Resultado: no satisface los criterios de aceptación.")[0] is None
+    assert _parse_verdict("El output no cumple ninguna mala práctica.")[0] is None
 
 
 def test_ambiguous_prose_is_inconclusive() -> None:
@@ -115,7 +125,7 @@ def test_review_prefers_tool_call_over_prose() -> None:
 
 def test_review_falls_back_to_prose_without_tool_call() -> None:
     assert _review_from(_resp(content="satisface los criterios"), model="m").passed is True
-    rej = _review_from(_resp(content="no cumple el criterio 2"), model="m")
+    rej = _review_from(_resp(content="Veredicto: no aprobado, falta el test."), model="m")
     assert rej.passed is False and rej.inconclusive is False
     amb = _review_from(_resp(content="he mirado el código"), model="m")
     assert amb.passed is False and amb.inconclusive is True
