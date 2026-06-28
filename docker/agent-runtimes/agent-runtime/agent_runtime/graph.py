@@ -72,6 +72,9 @@ _PRODUCING_TOOLS = frozenset(
 )
 # After this many research-only tool calls in a row, push the agent off research.
 _RESEARCH_STREAK_LIMIT = 5
+# ADR 0089: after this many writes to the SAME path (ANY content), nudge the agent to
+# stop re-writing and FINISH — a 'churn' the byte-exact detector/nudge cannot see.
+_PATH_CHURN_THRESHOLD = 4
 
 
 def _base_tool_name(tool: str | None) -> str:
@@ -163,6 +166,28 @@ def _repetition_nudge(
     return (
         f"You have already run '{name}' with these exact arguments {repeat_count} times — "
         "use the result you already have instead of repeating it."
+    )
+
+
+def _path_churn_nudge(*, path: str | None, write_count: int, threshold: int) -> str | None:
+    """Advisory nudge when the agent keeps re-writing the SAME file without finishing.
+
+    A model can churn one file with slightly DIFFERENT content each turn — never
+    byte-identical, so the loop detector (content-aware fingerprint) and the
+    identical-args repetition nudge both miss it, yet it burns the iteration budget
+    without converging (observed: a migration re-written 17 times before MAX_ITERATIONS).
+    Fires once a path has been written ``threshold`` times, pushing the agent to FINISH
+    (and let the review / a human judge) or fix the SPECIFIC cross-file problem instead
+    of rewriting the whole file again. Advisory only — it never aborts; the iteration /
+    wall-clock budgets remain the hard ceiling.
+    """
+    if not path or write_count < threshold:
+        return None
+    return (
+        f"You have re-written '{path}' {write_count} times without finishing. STOP "
+        "re-writing it: either FINISH now by calling submit_result (the review / a human "
+        "will judge it), or fix the SPECIFIC cross-file inconsistency the review pointed "
+        "out — do NOT rewrite the whole file again."
     )
 
 
@@ -382,6 +407,13 @@ class _AgentLoop:
         # producing tool-call args. Fed to the self-review so it judges the ACTUAL
         # code (not the unverifiable prose summary). Empty for analysis/design runs.
         self.written_files: dict[str, str] = {}
+        # ADR 0089 (path-churn): how many times the agent has WRITTEN each path,
+        # regardless of content. The byte-exact loop detector cannot catch a model
+        # that re-writes the SAME file with slightly DIFFERENT content each turn
+        # (different content → different fingerprint), and the identical-args nudge
+        # misses it too — yet burning the iteration budget re-writing one file is a
+        # non-convergence signal. This counter drives an advisory churn nudge.
+        self.path_write_counts: dict[str, int] = {}
 
     # -- nodes ---------------------------------------------------------------
     @staticmethod
@@ -611,8 +643,12 @@ class _AgentLoop:
         if _is_producing_tool(tool):
             args = decision.get("tool_args") or {}
             path, content = args.get("path"), args.get("content")
-            if isinstance(path, str) and path and isinstance(content, str):
-                self.written_files[path] = content
+            if isinstance(path, str) and path:
+                # ADR 0089: count EVERY write to this path (any content) for the churn
+                # nudge; harvest the content for the review only when it is a string.
+                self.path_write_counts[path] = self.path_write_counts.get(path, 0) + 1
+                if isinstance(content, str):
+                    self.written_files[path] = content
         repeat_count = self.detector.count_of(
             {"tool": decision.get("tool"), "args": decision.get("tool_args")}
         )
@@ -645,8 +681,22 @@ class _AgentLoop:
             threshold=self.detector.threshold,
             has_produced=self.has_produced,
         )
-        if rep_warning is not None:
-            updates["repetition_warning"] = rep_warning
+        # ADR 0089: a same-path CHURN (the agent re-writing one file with VARYING
+        # content, never byte-identical) is the harder case the identical-args nudge
+        # above cannot see — prefer the churn warning when it fires.
+        churn_path = (decision.get("tool_args") or {}).get("path")
+        churn_warning = (
+            _path_churn_nudge(
+                path=churn_path,
+                write_count=self.path_write_counts.get(churn_path, 0),
+                threshold=_PATH_CHURN_THRESHOLD,
+            )
+            if _is_producing_tool(tool) and isinstance(churn_path, str)
+            else None
+        )
+        warning = churn_warning or rep_warning
+        if warning is not None:
+            updates["repetition_warning"] = warning
         updates["steps"] = [node_step(len(state["steps"]), "reflect", summary)]
         return updates
 

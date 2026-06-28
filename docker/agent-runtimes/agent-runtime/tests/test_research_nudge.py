@@ -11,9 +11,11 @@ from __future__ import annotations
 from typing import Any
 
 from agent_runtime.graph import (
+    _PATH_CHURN_THRESHOLD,
     _RESEARCH_STREAK_LIMIT,
     AgentDeps,
     _AgentLoop,
+    _path_churn_nudge,
     _repetition_nudge,
     _research_nudge,
 )
@@ -140,6 +142,51 @@ def test_finish_nudge_when_already_produced_and_streak() -> None:
     # call. The guidance is provider-neutral: report the result and stop.
     assert msg is not None and "FINISH" in msg
     assert "NO tool call" not in msg and "no tool call" not in msg.lower()
+
+
+# --- ADR 0089: same-path CHURN nudge (varying content, never byte-identical) ----
+def test_path_churn_nudge_fires_at_threshold() -> None:
+    msg = _path_churn_nudge(
+        path="app/Mig.php", write_count=_PATH_CHURN_THRESHOLD, threshold=_PATH_CHURN_THRESHOLD
+    )
+    assert msg is not None
+    assert "app/Mig.php" in msg and "FINISH" in msg and "submit_result" in msg
+
+
+def test_path_churn_nudge_not_before_threshold() -> None:
+    assert (
+        _path_churn_nudge(
+            path="a.php", write_count=_PATH_CHURN_THRESHOLD - 1, threshold=_PATH_CHURN_THRESHOLD
+        )
+        is None
+    )
+
+
+def test_path_churn_nudge_none_without_path() -> None:
+    assert _path_churn_nudge(path=None, write_count=99, threshold=_PATH_CHURN_THRESHOLD) is None
+
+
+def test_reflect_churn_nudge_on_repeated_same_path_varying_content() -> None:
+    # The model re-writes the SAME path with DIFFERENT content each turn: the loop
+    # detector NEVER trips (content-aware fingerprint) and the identical-args nudge
+    # never fires (count_of stays 1) — but the path-churn nudge does, pushing it to
+    # FINISH. This is exactly the case that burned 50 iterations re-writing a migration.
+    loop = _loop()
+    out: dict[str, Any] = {}
+    for i in range(_PATH_CHURN_THRESHOLD):
+        out = loop.reflect(
+            _state("write_file", {"path": "app/Mig.php", "content": f"<?php // v{i}"})
+        )
+    assert loop.path_write_counts["app/Mig.php"] == _PATH_CHURN_THRESHOLD
+    assert out.get("repetition_warning") is not None
+    assert "app/Mig.php" in out["repetition_warning"] and "FINISH" in out["repetition_warning"]
+    # The detector did NOT count these as a loop (distinct content → distinct fingerprint).
+    assert (
+        loop.detector.count_of(
+            {"tool": "write_file", "args": {"path": "app/Mig.php", "content": "<?php // v0"}}
+        )
+        <= 1
+    )
 
 
 def test_finish_nudge_on_repeat_after_producing() -> None:
