@@ -168,8 +168,16 @@ _CONTEXT_WINDOW = 8
 # judge the ACTUAL code — not just the prose summary it cannot verify (which led the
 # JWT run to escalate even though files were written). The graph injects the written
 # files into the review state; these caps bound the review prompt size.
+#
+# `_REVIEW_MAX_FILE_CHARS` was 4000, which truncated common files (a 4.6 KB
+# controller) WITHOUT telling the reviewer — so it read the cut-off content as an
+# "incomplete/truncated file" and REJECTED a complete deliverable on a false
+# pretext (observed live: every review attempt failing on "AuthController.php is
+# truncated mid-expression" while the file on disk was whole). Raised so most
+# files fit fully; when a file STILL exceeds the cap, `_review_messages` appends an
+# explicit marker so the cap is never mistaken for an incomplete file.
 _REVIEW_MAX_FILES = 15
-_REVIEW_MAX_FILE_CHARS = 4000
+_REVIEW_MAX_FILE_CHARS = 12000
 
 
 def _system_content(state: dict[str, Any]) -> str:
@@ -257,7 +265,19 @@ def _review_messages(state: dict[str, Any]) -> list[Message]:
             path = (entry or {}).get("path") or "?"
             content = str((entry or {}).get("content") or "")
             lines.append(f"--- {path} ---")
-            lines.append(content[:_REVIEW_MAX_FILE_CHARS])
+            if len(content) > _REVIEW_MAX_FILE_CHARS:
+                # Show the head and MARK the cut explicitly: the file is truncated
+                # only to bound THIS prompt; the file on disk is complete. Without
+                # this marker the reviewer reads the cut-off content as an
+                # incomplete file and rejects a whole deliverable (false positive).
+                lines.append(content[:_REVIEW_MAX_FILE_CHARS])
+                lines.append(
+                    f"... [shown the first {_REVIEW_MAX_FILE_CHARS} of {len(content)} "
+                    "characters — TRUNCATED FOR THIS REVIEW PROMPT ONLY. The file on disk "
+                    "is COMPLETE; do NOT treat it as truncated, cut-off or incomplete.]"
+                )
+            else:
+                lines.append(content)
     lines.append(f"\nCandidate output (the agent's own summary):\n{state.get('output') or ''}")
     return [
         Message(role="system", content=_REVIEW_SYSTEM),
