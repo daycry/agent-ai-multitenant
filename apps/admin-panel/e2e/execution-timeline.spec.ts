@@ -97,7 +97,8 @@ test("timeline renders one row per step with the summary card", async ({ page })
     await expect(page.getByTestId(`timeline-step-${i}`)).toBeVisible();
   }
 
-  await expect(page.getByTestId("execution-status")).toContainText("done");
+  // The status badge renders the Spanish label for the execution status (F50).
+  await expect(page.getByTestId("execution-status")).toContainText("Completado");
   await expect(page.getByTestId("execution-iterations")).toHaveText("1");
   await expect(page.getByTestId("execution-cost")).toContainText("$0.0025");
 });

@@ -23,6 +23,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { PromoteToDataset } from "@/components/evals/promote-to-dataset";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
+import { runStatusLabel, runStatusVariant } from "@/lib/runs";
 import { useWebSocket, wsUrl } from "@/lib/ws";
 
 // --------------------------------------------------------------------------
@@ -64,18 +65,11 @@ interface Execution {
 // --------------------------------------------------------------------------
 // Visual mappings
 // --------------------------------------------------------------------------
-// Orden por workflow: running (activo) → ok/done (terminal success) →
-// aborted (cancelado por humano) → error/failed (fallo).
-const STATUS_VARIANT: Record<string, BadgeVariant> = {
-  running: "info",
-  ok: "success",
-  done: "success",
-  aborted: "warning",
-  // ADR 0087: escalated to a human for validation — an attention state, not a hard fail.
-  needs_human_review: "warning",
-  error: "danger",
-  failed: "danger",
-};
+// The execution status → badge variant/label mapping is centralized in
+// `lib/runs` (`runStatusVariant`/`runStatusLabel`) so the Runs list and this
+// detail header agree (F49/F50: includes `awaiting_human_approval`,
+// `cancelled` and `needs_human_review`). Step statuses (`ok`/`error`/…) reuse
+// the same variant mapping.
 
 // ADR 0087: the agent's self-reported finish status (success|failed|partial) — a HINT,
 // distinct from the execution status. Spanish labels for the badge.
@@ -121,6 +115,10 @@ export default function ExecutionTimelinePage() {
     queryKey: ["execution", executionId],
     queryFn: () => apiFetch<Execution>(`/executions/${executionId}`),
     refetchOnWindowFocus: false,
+    // F48: poll while the run is in progress so the header/output/metrics
+    // converge even if a live WebSocket frame is missed (mirrors runs/page).
+    // Stops once the status is terminal.
+    refetchInterval: (query) => (query.state.data?.status === "running" ? 5000 : false),
   });
 
   // prod-06 cancel_01: cooperative cancellation of a running execution. POSTs the
@@ -134,13 +132,31 @@ export default function ExecutionTimelinePage() {
     },
   });
 
-  const onWsMessage = useCallback((data: unknown) => {
-    const frame = data as { payload?: unknown };
-    const payload = frame?.payload;
-    if (payload && typeof payload === "object" && "index" in payload) {
-      setLiveSteps((prev) => [...prev, payload as Step]);
-    }
-  }, []);
+  const onWsMessage = useCallback(
+    (data: unknown) => {
+      const frame = data as { type?: string; payload?: unknown };
+      const payload = frame?.payload;
+      // F47: the worker republishes a step as `payload={"step":{…}}`, so the
+      // index lives at `payload.step.index`, not at the payload root — peel the
+      // wrapper (falling back to the bare payload for older/raw frames).
+      const rawStep =
+        payload && typeof payload === "object" && "step" in payload
+          ? (payload as { step?: unknown }).step
+          : payload;
+      if (rawStep && typeof rawStep === "object" && "index" in rawStep) {
+        setLiveSteps((prev) => [...prev, rawStep as Step]);
+        return;
+      }
+      // F48: terminal frames carry no `index`. `execution.finished`
+      // ({result:{…}}) and `execution.error` ({error}) mark the end of the run
+      // — refetch so the header, output and finish_status reflect the persisted
+      // terminal state (and the running-only polling stops).
+      if (frame?.type === "execution.finished" || frame?.type === "execution.error") {
+        void queryClient.invalidateQueries({ queryKey: ["execution", executionId] });
+      }
+    },
+    [queryClient, executionId],
+  );
 
   const streamUrl = useMemo(() => wsUrl(`/ws/executions/${executionId}`), [executionId]);
   useWebSocket(streamUrl, onWsMessage);
@@ -246,13 +262,10 @@ function ExecutionSummary({ execution, liveCount }: { execution: Execution; live
     <Card>
       <CardContent className="flex flex-wrap items-center gap-x-8 gap-y-3 py-4">
         <Metric label="Estado">
-          <Badge
-            variant={STATUS_VARIANT[execution.status] ?? "muted"}
-            data-testid="execution-status"
-          >
+          <Badge variant={runStatusVariant(execution.status)} data-testid="execution-status">
             {execution.abort_code
-              ? `${execution.status} · ${execution.abort_code}`
-              : execution.status}
+              ? `${runStatusLabel(execution.status)} · ${execution.abort_code}`
+              : runStatusLabel(execution.status)}
           </Badge>
         </Metric>
         {execution.finish_status && (
@@ -336,7 +349,7 @@ function TimelineStep({ step }: { step: Step }) {
         >
           {fmtDuration(step)}
         </span>
-        <Badge variant={STATUS_VARIANT[step.status] ?? "muted"}>{step.status}</Badge>
+        <Badge variant={runStatusVariant(step.status)}>{step.status}</Badge>
       </button>
 
       {open && (

@@ -5,6 +5,7 @@
  */
 
 import { apiFetch } from "@/lib/api";
+import type { BadgeVariant } from "@/components/ui/badge";
 
 /** One row of the runs explorer (mirrors api_server ExecutionRunRow). */
 export interface ExecutionRunRow {
@@ -67,6 +68,48 @@ export function runsQuery(filters: RunFilters = {}): string {
 /** This tenant's runs, newest first, filtered. Any tenant member. */
 export function listRuns(filters: RunFilters = {}): Promise<ExecutionRunRow[]> {
   return apiFetch<ExecutionRunRow[]>(`/runs${runsQuery(filters)}`);
+}
+
+// --- shared execution-status presentation (Runs list + run detail header) -----
+//
+// F49/F50: the persistible execution statuses (== a run's `verdict`) and their
+// badge variant + Spanish label live HERE so the list and the detail page agree.
+// `awaiting_human_approval` and `needs_human_review` (ADR 0087) are real
+// attention states — `warning`, never the silent `muted` fallback.
+
+/** Execution status → badge variant. Unknown statuses fall back to `muted`. */
+export const RUN_STATUS_VARIANT: Record<string, BadgeVariant> = {
+  running: "info",
+  ok: "success",
+  done: "success",
+  awaiting_human_approval: "warning",
+  // ADR 0087: escalated to a human for validation — an attention state, not a hard fail.
+  needs_human_review: "warning",
+  aborted: "warning",
+  cancelled: "muted",
+  error: "danger",
+  failed: "danger",
+};
+
+/** Execution status → human-readable Spanish label (falls back to the raw status). */
+export const RUN_STATUS_LABEL: Record<string, string> = {
+  running: "En curso",
+  ok: "OK",
+  done: "Completado",
+  awaiting_human_approval: "Esperando aprobación",
+  needs_human_review: "Revisión humana",
+  aborted: "Abortado",
+  cancelled: "Cancelado",
+  error: "Error",
+  failed: "Fallido",
+};
+
+export function runStatusVariant(status: string): BadgeVariant {
+  return RUN_STATUS_VARIANT[status] ?? "muted";
+}
+
+export function runStatusLabel(status: string): string {
+  return RUN_STATUS_LABEL[status] ?? status;
 }
 
 // --- shared display formatters (the list page + the Kanban history panel) -----

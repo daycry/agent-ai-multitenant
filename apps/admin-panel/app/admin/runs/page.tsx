@@ -17,22 +17,33 @@ import { useQuery } from "@tanstack/react-query";
 import { ListChecks } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
-import { Badge, type BadgeVariant } from "@/components/ui/badge";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ApiError } from "@/lib/api";
-import { fmtRunDuration, fmtRunMoney, fmtRunTokens, fmtRunWhen, listRuns } from "@/lib/runs";
+import {
+  fmtRunDuration,
+  fmtRunMoney,
+  fmtRunTokens,
+  fmtRunWhen,
+  listRuns,
+  runStatusLabel,
+  runStatusVariant,
+} from "@/lib/runs";
 
-const VERDICT_VARIANT: Record<string, BadgeVariant> = {
-  running: "info",
-  done: "success",
-  awaiting_human_approval: "warning",
-  aborted: "warning",
-  cancelled: "muted",
-  failed: "danger",
-};
-
-const VERDICTS = ["", "running", "done", "failed", "aborted", "cancelled"] as const;
+// F49: every persistible run verdict the filter can select on — including the
+// human-attention states `awaiting_human_approval` and `needs_human_review`
+// (ADR 0087) that were previously absent (so those runs were unfilterable).
+const VERDICTS = [
+  "",
+  "running",
+  "done",
+  "awaiting_human_approval",
+  "needs_human_review",
+  "failed",
+  "aborted",
+  "cancelled",
+] as const;
 const PAGE_SIZE = 50;
 
 export default function RunsPage() {
@@ -77,7 +88,7 @@ export default function RunsPage() {
         >
           {VERDICTS.map((v) => (
             <option key={v} value={v}>
-              {v === "" ? "Todos" : v}
+              {v === "" ? "Todos" : runStatusLabel(v)}
             </option>
           ))}
         </select>
@@ -145,7 +156,7 @@ export default function RunsPage() {
                   <td className="px-3 py-2">{r.agent_name ?? "—"}</td>
                   <td className="text-muted-foreground px-3 py-2">{r.model ?? "—"}</td>
                   <td className="px-3 py-2">
-                    <Badge variant={VERDICT_VARIANT[r.verdict] ?? "muted"}>{r.verdict}</Badge>
+                    <Badge variant={runStatusVariant(r.verdict)}>{runStatusLabel(r.verdict)}</Badge>
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {fmtRunDuration(r.duration_ms)}
