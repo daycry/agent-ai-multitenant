@@ -32,6 +32,35 @@ _MODEL_CALL_KIND = "model_call"
 # price), so an older steps_log shape degrades cleanly rather than crashing.
 _CACHED_TOKEN_KEYS = ("cached_input_tokens", "tokens_cached_input", "tokens_cached")
 
+# The set of execution statuses that mean "the run has finished" — these are the
+# only ones that seal `completed_at`. `running` is live; `awaiting_human_approval`
+# is parked mid-run (a human_approval_policy decision is pending) and has NOT
+# finished, so it stays uncompleted until the run resumes and reaches a terminal
+# state (task_02_33 / ADR 0087). Kept as a single source of truth so
+# `record_execution` and `finalize_execution` agree (F45).
+_TERMINAL_EXECUTION_STATUSES: frozenset[str] = frozenset(
+    {
+        ExecutionStatus.DONE,
+        ExecutionStatus.ABORTED,
+        ExecutionStatus.FAILED,
+        ExecutionStatus.CANCELLED,
+        # ADR 0087: escalated-to-human is terminal for the RUN (a human takes over).
+        ExecutionStatus.NEEDS_HUMAN_REVIEW,
+    }
+)
+
+
+def is_terminal_execution_status(status: str | None) -> bool:
+    """True when `status` is a terminal execution state (the run has finished).
+
+    Terminal = ``done`` / ``aborted`` / ``failed`` / ``cancelled`` /
+    ``needs_human_review``. NOT terminal: ``running`` (live) and
+    ``awaiting_human_approval`` (parked mid-run). Accepts the raw string or an
+    ``ExecutionStatus`` (a ``StrEnum``, so membership works for either); ``None``
+    is not terminal.
+    """
+    return status in _TERMINAL_EXECUTION_STATUSES
+
 
 class ExecutionResultLike(Protocol):
     """The shape of an `agent_runtime.ExecutionResult` — read-only."""
@@ -156,8 +185,9 @@ async def record_execution(
         tool_call_count=int(usage.get("tool_calls", 0)),
         model_call_count=int(usage.get("model_calls", 0)),
         started_at=started_at,
-        # A finished run (done/aborted/failed) gets a completion stamp.
-        completed_at=None if result.status == ExecutionStatus.RUNNING else datetime.now(UTC),
+        # Only a terminal status (the run has finished) gets a completion stamp;
+        # `awaiting_human_approval` is parked mid-run and stays uncompleted (F45).
+        completed_at=(datetime.now(UTC) if is_terminal_execution_status(result.status) else None),
     )
     _apply_price_snapshot(execution, rollup)
     session.add(execution)
@@ -364,20 +394,30 @@ async def finalize_execution(
     if execution is None:
         return None
 
-    # A row already CANCELLED by the operator wins: a late finalisation from the
-    # (revoked) worker must not revert it to done/failed. Fold in the streamed
-    # steps_log/usage for the audit trail but preserve the cancelled outcome.
-    preserve_cancel = execution.status == ExecutionStatus.CANCELLED
+    # F46 / F52: idempotency guard. A row already in a SEALED terminal state
+    # (terminal status + a non-NULL `completed_at`) has already been finalised —
+    # by a previous finalize (double delivery under task_acks_late), by an
+    # operator CANCELLED (preserve_cancel), or by a FAILED/superseded close-out
+    # from `supersede_running_executions` (F52). A late/duplicate finalize from
+    # the worker must not revert the outcome, recompute the usage roll-ups, or
+    # re-seal `completed_at`. We only fold in a richer streamed steps_log for the
+    # audit trail (a no-op when the same log is re-delivered).
+    if is_terminal_execution_status(execution.status) and execution.completed_at is not None:
+        incoming = list(result.steps)
+        if len(incoming) > len(execution.steps_log or []):
+            steps, _rollup = await snapshot_execution_prices(session, steps=incoming)
+            execution.steps_log = steps
+            await session.flush()
+        return execution
 
     usage = result.usage
     steps, rollup = await snapshot_execution_prices(session, steps=list(result.steps))
-    if not preserve_cancel:
-        execution.status = result.status
-        execution.abort_code = result.abort_code
-        execution.output = result.output
-        # ADR 0087: persist the structured finish status (None when absent / for
-        # older result shapes without the field).
-        execution.finish_status = getattr(result, "finish_status", None)
+    execution.status = result.status
+    execution.abort_code = result.abort_code
+    execution.output = result.output
+    # ADR 0087: persist the structured finish status (None when absent / for
+    # older result shapes without the field).
+    execution.finish_status = getattr(result, "finish_status", None)
     execution.steps_log = steps
     _apply_price_snapshot(execution, rollup)
     execution.iterations = result.iterations
@@ -386,19 +426,11 @@ async def finalize_execution(
     execution.tool_call_count = int(usage.get("tool_calls", 0))
     execution.model_call_count = int(usage.get("model_calls", 0))
     # Only a terminal status completes the run — a run parked in
-    # `awaiting_human_approval` has not finished (task_02_33). `cancelled` is
-    # terminal too, whether it arrives as the new result (cooperative cancel from
-    # the worker) or was already on the row (preserve_cancel, late finalisation).
-    terminal = {
-        ExecutionStatus.DONE,
-        ExecutionStatus.ABORTED,
-        ExecutionStatus.FAILED,
-        ExecutionStatus.CANCELLED,
-        # ADR 0087: escalated-to-human is terminal for the RUN (a human takes over).
-        ExecutionStatus.NEEDS_HUMAN_REVIEW,
-    }
-    is_terminal = preserve_cancel or result.status in terminal
-    execution.completed_at = datetime.now(UTC) if is_terminal else None
+    # `awaiting_human_approval` has not finished (task_02_33). A cooperative
+    # cancel arriving as the new result seals here too (`cancelled` is terminal).
+    execution.completed_at = (
+        datetime.now(UTC) if is_terminal_execution_status(result.status) else None
+    )
     await session.flush()
     return execution
 

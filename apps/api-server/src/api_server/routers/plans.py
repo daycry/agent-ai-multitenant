@@ -22,7 +22,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,7 +52,7 @@ from api_server.chat.plan_state_machine import (
 from api_server.chat.sync_to_kanban import SyncScopeError, sync_plan_to_kanban
 from api_server.dag_promotion import announce_ready_tasks, promote_ready_tasks
 from api_server.db.conversation import Conversation, Message
-from api_server.db.domain import Plan, PlanStatus, Project, Task
+from api_server.db.domain import Execution, Plan, PlanStatus, Project, Task
 from api_server.db.execution_repo import cancel_tasks_and_executions
 from api_server.db.models import Organization
 from api_server.db.plan_comment import PlanComment
@@ -875,6 +875,18 @@ async def create_free_task(
 # Plan 06.5 task_06_5_07 — escalated tasks listing
 # ---------------------------------------------------------------------------
 
+# Abort codes that mark a `blocked` task as escalated-to-human (vs. a plain
+# block). They are the self-review escalation reasons written on the latest
+# execution row (ADR 0087 / safeguards.SafeguardCode). At the TASK level the
+# canonical human-escalation state is `blocked` + one of these abort codes —
+# there is NO task-level `pending_human_validation` (that is a PLAN status,
+# CLAUDE.md ppio 7), so escalation reuses `blocked` + the inbox/panel.
+_REVIEW_ESCALATION_ABORT_CODES: tuple[str, ...] = (
+    "review_inconclusive",
+    "max_review_retries_exhausted",
+    "agent_reported_failure",
+)
+
 
 @plans_router.get("/{plan_id}/escalated-tasks")
 async def list_escalated_tasks(
@@ -884,16 +896,27 @@ async def list_escalated_tasks(
     _: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> dict[str, list[dict[str, object]]]:
-    """Tasks of the plan currently in `awaiting_human_approval`.
+    """Tasks of the plan escalated to a human.
 
-    Each entry carries its `retry_count` and the latest 20 audit
-    events so the UI can render the timeline of rejections + actions
-    without a second round-trip per task.
+    Two escalation paths converge on this panel:
+
+      * ADR 0020's approval engine parks a task in `awaiting_human_approval`.
+      * Production review-exhaustion (and self-reported failure) escalates to
+        `blocked` with a review abort code on the LATEST execution
+        (`review_inconclusive` / `max_review_retries_exhausted` /
+        `agent_reported_failure`). `blocked` + abort_code IS the task-level
+        human-escalation state (F44) — a plain `blocked` (no review abort code)
+        is a different kind of block and stays OUT of this panel.
+
+    Each entry carries its `status`, the `escalation_reason` (the abort code,
+    `None` for the approval path), its `retry_count` and the latest 20 audit
+    events so the UI can render the timeline without a round-trip per task.
 
     Shape:
 
         {"tasks": [
           {"id": "...", "title": "...", "description": "...",
+           "status": "blocked", "escalation_reason": "review_inconclusive",
            "retry_count": 3,
            "history": [
              {"id": "...", "at": 1716889200.123,
@@ -907,31 +930,50 @@ async def list_escalated_tasks(
 
     await _load_plan(session, plan_id)  # raises 404 if not visible
 
-    task_rows = (
-        (
-            await session.execute(
-                select(Task)
-                .where(
-                    Task.plan_id == plan_id,
-                    Task.status == "awaiting_human_approval",
-                )
-                .order_by(Task.created_at, Task.id)
-                .limit(limit)
-                .offset(offset)
-            )
+    # Latest execution (by created_at, id) per task — its abort_code tells a
+    # review-escalation `blocked` apart from any other block.
+    ranked = select(
+        Execution.task_id.label("task_id"),
+        Execution.abort_code.label("abort_code"),
+        func.row_number()
+        .over(
+            partition_by=Execution.task_id,
+            order_by=(Execution.created_at.desc(), Execution.id.desc()),
         )
-        .scalars()
-        .all()
-    )
+        .label("rn"),
+    ).subquery()
+    latest = select(ranked.c.task_id, ranked.c.abort_code).where(ranked.c.rn == 1).subquery()
+
+    rows = (
+        await session.execute(
+            select(Task, latest.c.abort_code)
+            .outerjoin(latest, latest.c.task_id == Task.id)
+            .where(
+                Task.plan_id == plan_id,
+                or_(
+                    Task.status == "awaiting_human_approval",
+                    and_(
+                        Task.status == "blocked",
+                        latest.c.abort_code.in_(_REVIEW_ESCALATION_ABORT_CODES),
+                    ),
+                ),
+            )
+            .order_by(Task.created_at, Task.id)
+            .limit(limit)
+            .offset(offset)
+        )
+    ).all()
 
     out: list[dict[str, object]] = []
-    for task in task_rows:
+    for task, abort_code in rows:
         events = await _list_history(session, task.id, limit=20)
         out.append(
             {
                 "id": str(task.id),
                 "title": task.title,
                 "description": task.description,
+                "status": task.status,
+                "escalation_reason": abort_code,
                 "retry_count": task.retry_count,
                 "history": [_audit_to_dict(e) for e in events],
             }

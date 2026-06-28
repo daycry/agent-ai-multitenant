@@ -59,7 +59,14 @@ class ReviewerVerdict:
     what_to_fix: str = ""
 
 
-_VERDICT_RE = re.compile(r"<verdict>\s*(approve|reject)\s*</verdict>", re.IGNORECASE)
+# Audit cluster C1 (F37): capture the `<verdict>` tag BODY and normalise it,
+# instead of demanding an EXACT `approve`/`reject` token. Models — especially
+# non-Claude (ollama/azure/copilot) — drift from the exact shape
+# ("<verdict>approve - LGTM</verdict>", "<verdict>I approve</verdict>"); the old
+# strict regex read those as `unknown`, which the worker turned into a defensive
+# reject and the task ended wrongly blocked. The tag itself is still required (a
+# bare "approved" in prose is NOT honoured — too risky for false positives).
+_VERDICT_RE = re.compile(r"<verdict>(.*?)</verdict>", re.IGNORECASE | re.DOTALL)
 _FAILED_RE = re.compile(r"<failed_criterion>(.*?)</failed_criterion>", re.IGNORECASE | re.DOTALL)
 _EVIDENCE_RE = re.compile(
     r"<testreport_evidence>(.*?)</testreport_evidence>", re.IGNORECASE | re.DOTALL
@@ -67,20 +74,36 @@ _EVIDENCE_RE = re.compile(
 _WHAT_TO_FIX_RE = re.compile(r"<what_to_fix>(.*?)</what_to_fix>", re.IGNORECASE | re.DOTALL)
 
 
+def _normalise_verdict(body: str) -> VerdictLabel:
+    """Map a ``<verdict>`` tag body to approve / reject / unknown.
+
+    Reject is checked first so an explicit "do not approve — reject" reads as a
+    reject; the stems catch approve/approved/approval and reject/rejected.
+    """
+    text = body.strip().lower()
+    if "reject" in text:
+        return "reject"
+    if "approv" in text:
+        return "approve"
+    return "unknown"
+
+
 def parse_reviewer_output(text: str) -> ReviewerVerdict:
     """Extract the verdict tags from the LLM's free-form output.
 
-    Returns ``ReviewerVerdict(label='unknown')`` if no `<verdict>` tag
-    is found. Multiple `<verdict>` tags resolve to the LAST one (the
-    agent may have changed its mind mid-output; we honour the final
-    call).
+    Returns ``ReviewerVerdict(label='unknown')`` if no decisive `<verdict>` tag
+    is found. Multiple `<verdict>` tags resolve to the LAST decisive one (the
+    agent may have changed its mind mid-output; we honour the final call). The
+    tag body is matched tolerantly (`_normalise_verdict`) so minor format drift
+    no longer flips a real verdict to `unknown`.
     """
-    matches = _VERDICT_RE.findall(text or "")
-    if not matches:
-        return ReviewerVerdict(label="unknown")
-    label = matches[-1].lower()
+    label: VerdictLabel = "unknown"
+    for body in _VERDICT_RE.findall(text or ""):
+        candidate = _normalise_verdict(body)
+        if candidate != "unknown":
+            label = candidate
     if label != "reject":
-        return ReviewerVerdict(label="approve")
+        return ReviewerVerdict(label=label)
 
     def _grab(pattern: re.Pattern[str]) -> str:
         m = pattern.search(text)

@@ -38,10 +38,22 @@ PlanStatus = Literal[
 ]
 
 # Statuses that count a task as "open" — i.e. neither ``done`` nor
-# ``cancelled``. A plan still has open tasks ⇒ it can't transition
-# to ``pending_human_validation``.
+# ``cancelled``. A plan still has open tasks ⇒ it can't transition to
+# ``pending_human_validation``. This is the canonical NON-TERMINAL TaskStatus set:
+# the human-routing states (``ready``/``assigned_to_human``) and
+# ``awaiting_human_approval`` MUST count as open, or a plan would close while a
+# task still awaits work/approval. (The orphan ``awaiting_human`` that used to sit
+# here was never a real status — F43; it is now ``blocked`` everywhere.)
 _OPEN_TASK_STATUSES = frozenset(
-    {"backlog", "in_progress", "in_review", "awaiting_human", "blocked"}
+    {
+        "backlog",
+        "ready",
+        "assigned_to_human",
+        "in_progress",
+        "awaiting_human_approval",
+        "in_review",
+        "blocked",
+    }
 )
 
 
@@ -137,7 +149,7 @@ def transition_to_pending_human_validation(
             reason=f"plan is {current_status!r}, only in_progress can transition",
         )
 
-    open_tasks = [t for t in tasks if t.status in _OPEN_TASK_STATUSES or t.status == "in_review"]
+    open_tasks = [t for t in tasks if t.status in _OPEN_TASK_STATUSES]
     if open_tasks:
         return TransitionResult(
             new_status="in_progress",

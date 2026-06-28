@@ -60,9 +60,12 @@ def test_non_in_progress_plan_doesnt_transition() -> None:
     assert result.transitioned is False
 
 
-def test_awaiting_human_blocks_transition() -> None:
+def test_awaiting_human_approval_blocks_transition() -> None:
+    # An open task (parked for human approval) keeps the plan out of
+    # pending_human_validation. F43: the canonical status is `awaiting_human_approval`
+    # (the orphan `awaiting_human` never existed in any enum / state machine).
     from api_server.plan_progress import transition_to_pending_human_validation
 
-    tasks = [_task("done", tid="t1"), _task("awaiting_human", tid="t2")]
+    tasks = [_task("done", tid="t1"), _task("awaiting_human_approval", tid="t2")]
     result = transition_to_pending_human_validation("in_progress", tasks)
     assert result.transitioned is False

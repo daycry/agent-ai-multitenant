@@ -8,7 +8,9 @@ the *task* as the unit of audit:
     comment and increments ``retry_count``.
   * :meth:`TaskLifecycle.escalate_if_exhausted` (06_34b2) — after
     ``retry_count >= max_review_retries`` the task transitions to
-    ``awaiting_human`` and a notification fires.
+    ``blocked`` (the canonical human-escalation state at TASK level,
+    consistent with ``reviewer_bridge.apply_reviewer_verdict`` and
+    CLAUDE.md ppio 7) and a notification fires.
   * The escalated-tasks panel (06_34b3) consumes
     :meth:`TaskLifecycle.list_escalated`.
   * :meth:`TaskLifecycle.create_task_from_checkbox` (06_34b4) — a
@@ -40,12 +42,16 @@ _log = structlog.get_logger("api_server.task_lifecycle")
 # lives on Settings (a follow-up task).
 DEFAULT_MAX_REVIEW_RETRIES = 3
 
+# Subset of the canonical :class:`api_server.db.domain.TaskStatus` values
+# this in-process module touches. Every member MUST exist in that enum —
+# there is no orphan ``awaiting_human`` (F43): a review-exhausted task
+# escalates to ``blocked`` (the canonical human-escalation state at TASK
+# level), NOT to a status the DB/state-machine has never heard of.
 TaskStatus = Literal[
     "backlog",
     "in_progress",
     "in_review",
     "done",
-    "awaiting_human",
     "blocked",
     "cancelled",
 ]
@@ -223,13 +229,17 @@ class TaskLifecycle:
     def escalate_if_exhausted(self, task: TaskRecord) -> TaskRecord:
         if task.status != "backlog" or task.retry_count < task.max_retries:
             return task
-        task.status = "awaiting_human"
+        # F43: escalate to the canonical `blocked` state, not the orphan
+        # `awaiting_human` (which existed in no enum / state-machine table and
+        # was persisted in silence). `blocked` is what reviewer_bridge and the
+        # worker also escalate to — the inbox/panel surfaces it (F44).
+        task.status = "blocked"
         self.store.save(task)
         self._emit(
             task.id,
             kind="transition",
             actor="system",
-            payload={"from": "backlog", "to": "awaiting_human", "reason": "max_retries"},
+            payload={"from": "backlog", "to": "blocked", "reason": "max_retries"},
         )
         history = list(self.store.list_events(task.id))
         self.notifier.notify_escalation(task, history)
@@ -239,7 +249,8 @@ class TaskLifecycle:
     # --- task_06_34b3 — list escalated -------------------------------
 
     def list_escalated(self, plan_id: str) -> list[TaskRecord]:
-        return list(self.store.list_by_status(plan_id, "awaiting_human"))
+        # F43: escalated tasks now live in `blocked` (see escalate_if_exhausted).
+        return list(self.store.list_by_status(plan_id, "blocked"))
 
     # --- task_06_34b3 — four human actions ---------------------------
 
@@ -253,8 +264,10 @@ class TaskLifecycle:
         guidance: str | None = None,
     ) -> TaskRecord:
         task = self._must_get(task_id)
-        if task.status != "awaiting_human":
-            raise TaskClosedError(f"task {task_id!r} not in awaiting_human (got {task.status!r})")
+        # F43: the human acts on an escalated (`blocked`) task, not the orphan
+        # `awaiting_human`.
+        if task.status != "blocked":
+            raise TaskClosedError(f"task {task_id!r} not escalated/blocked (got {task.status!r})")
 
         if action == "approve_manual":
             task.manual_approval = True
