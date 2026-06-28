@@ -26,10 +26,13 @@ def test_user_role_values() -> None:
     assert m.UserRole.TENANT_ADMIN.value == "tenant_admin"
     assert m.UserRole.TENANT_USER.value == "tenant_user"
     assert m.UserRole.SYSTEM_OPERATOR.value == "system_operator"
+    # plan_approver: aprobador de planes sin ser tenant_admin (ADR 0079, Opción A).
+    assert m.UserRole.PLAN_APPROVER.value == "plan_approver"
     assert {r.value for r in m.UserRole} == {
         "tenant_admin",
         "tenant_user",
         "system_operator",
+        "plan_approver",
     }
 
 
