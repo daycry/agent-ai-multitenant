@@ -192,10 +192,16 @@ class AgentContainerRunner:
         try:
             pump.start()
             timed_out = self._await_exit(container, budget)
-            # The log stream closes when the container exits; give the
-            # pump a moment to drain the tail before we capture + reap.
-            pump.join(timeout=5.0)
-            return self._capture(container, timed_out=timed_out)
+            # F17/P1.1: capture the *complete* logs + inspect snapshot BEFORE
+            # the container is removed. `.logs` is the authoritative record the
+            # worker falls back on, so it must never be truncated by teardown.
+            result = self._capture(container, timed_out=timed_out)
+            # The follow stream closes (EOF) once the container has exited or
+            # been killed, so the pump terminates on its own. Drain it fully —
+            # NOT on a short timeout — before reaping: a cut mid-read drops the
+            # live tail (e.g. the final `execution.finished` line) for the UI.
+            pump.join()
+            return result
         finally:
             with contextlib.suppress(Exception):
                 container.remove(force=True)
@@ -218,25 +224,46 @@ class AgentContainerRunner:
 
     @staticmethod
     def _pump_logs(container: Any, on_line: Callable[[str], None]) -> None:
-        """Forward the container's log stream line by line to `on_line`.
+        """Forward the container's STDOUT (the structured JSON channel) line by
+        line to ``on_line``, live.
 
-        Best-effort: a streaming hiccup is swallowed — `_capture` still
-        reads the full logs afterwards, so nothing is lost from the
-        persisted record even if the live tail drops a line.
+        F21/P1.2: the agent-runtime emits ALL its structured events
+        (``execution.started`` / ``step`` / ``execution.finished`` /
+        ``execution.error`` …) as JSON lines on STDOUT (``_emit`` →
+        ``print(..., flush=True)``); free-text library noise goes to STDERR. We
+        follow STDOUT ALONE so a newline-less stderr fragment can never splice
+        into a JSON stdout line (the corruption F21 named). We read it WITHOUT
+        ``demux``: a demultiplexed ``follow`` stream delivered NO live lines on the
+        daemon (the regression that left the per-execution Redis stream empty),
+        and the structured channel is single-stream anyway. STDERR is still
+        captured in full by ``_capture`` into ``ContainerResult.logs`` for the
+        audit record + the worker's fallback re-parse.
+
+        Best-effort: a streaming hiccup is swallowed — ``_capture`` reads the
+        complete logs afterwards, so the persisted record loses nothing even if
+        the live tail drops a line.
         """
         buffer = b""
         with contextlib.suppress(Exception):
-            for chunk in container.logs(stream=True, follow=True, stdout=True, stderr=True):
-                buffer += chunk
-                while b"\n" in buffer:
-                    raw, buffer = buffer.split(b"\n", 1)
-                    line = raw.decode("utf-8", errors="replace").strip()
-                    if line:
-                        on_line(line)
+            for chunk in container.logs(stream=True, follow=True, stdout=True, stderr=False):
+                if chunk:
+                    buffer = AgentContainerRunner._emit_lines(buffer + chunk, on_line)
+        # Flush any newline-less tail.
         tail = buffer.decode("utf-8", errors="replace").strip()
         if tail:
             with contextlib.suppress(Exception):
                 on_line(tail)
+
+    @staticmethod
+    def _emit_lines(buffer: bytes, on_line: Callable[[str], None]) -> bytes:
+        """Emit every complete `\\n`-terminated line in `buffer`, returning the
+        unterminated remainder to carry into the next chunk."""
+        while b"\n" in buffer:
+            raw, buffer = buffer.split(b"\n", 1)
+            line = raw.decode("utf-8", errors="replace").strip()
+            if line:
+                on_line(line)
+        return buffer
 
     @staticmethod
     def _await_exit(container: Any, budget: int) -> bool:

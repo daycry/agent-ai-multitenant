@@ -119,6 +119,17 @@ class Settings(BaseSettings):
         "loop's internal wall-clock safeguard (execution.py aligns them). Override "
         "with WORKERS_CONTAINER_RUN_TIMEOUT_CLAUDE_SDK_S.",
     )
+    container_grace_s: int = Field(
+        default=120,
+        description="Grace margin (seconds) the worker adds ON TOP of the "
+        "per-provider wall-clock budget to compute the container's HARD kill "
+        "timeout. The internal agent-loop wall-clock (the per-kind budget) must "
+        "fire FIRST so a budget exhaustion aborts cleanly inside the loop "
+        "(`max_wall_clock_exceeded`, keeping partials + finish_status) instead of "
+        "the container's hard kill always winning and mislabelling every "
+        "exhaustion as 'container timed out' (F19). Override with "
+        "WORKERS_CONTAINER_GRACE_S.",
+    )
     container_home_size: str = Field(
         default="64m",
         description="Size of the agent container's HOME tmpfs (/home/agent). The "
@@ -145,6 +156,15 @@ class Settings(BaseSettings):
         if kind == "claude_sdk":
             return self.container_run_timeout_claude_sdk_s
         return self.container_run_timeout_s
+
+    def container_timeout_with_grace_for_kind(self, kind: str | None) -> int:
+        """The container's HARD wall-clock kill timeout for ``kind``: the
+        per-provider budget (:meth:`container_timeout_for_kind`) PLUS
+        ``container_grace_s``. The internal agent-loop wall-clock uses the bare
+        budget, so it aborts cleanly (``max_wall_clock_exceeded``, with partials /
+        finish_status) BEFORE the container's hard kill fires — otherwise the kill
+        always wins and every exhaustion is mislabelled 'container timed out' (F19)."""
+        return self.container_timeout_for_kind(kind) + self.container_grace_s
 
     def agent_max_iterations_for_kind(self, kind: str | None) -> int | None:
         """Per-provider agent-loop iteration cap. ``claude_sdk`` gets a higher cap

@@ -8,6 +8,7 @@ that ``conduct_execution`` calls after ``finalize_execution``:
   - ``done`` + the task has a reviewer  -> ``in_review``
   - ``done``, no reviewer               -> ``done`` (+ ``completed_at``)
   - ``failed`` / ``aborted`` / other    -> ``blocked`` (motive = the execution row)
+  - ``cancelled`` (operator cancel)     -> ``cancelled`` (F11, NOT blocked)
   - ``awaiting_human_approval``         -> no-op (the approval branch owns it)
   - task already terminal (guard)       -> no-op
 
@@ -40,6 +41,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
         "t_terminal": uuid4(),
         "t_approval": uuid4(),
         "t_human": uuid4(),
+        "t_cancel": uuid4(),
     }
     conn = await asyncpg.connect(dsn)
     try:
@@ -69,6 +71,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             (ids["t_terminal"], None),
             (ids["t_approval"], None),
             (ids["t_human"], None),
+            (ids["t_cancel"], None),
         ]
         for tid, reviewer in rows:
             await conn.execute(
@@ -111,6 +114,7 @@ async def test_transition_task_after_run(
             ev_human = await transition_task_after_run(
                 session, ids["t_human"], "needs_human_review"
             )
+            ev_cancel = await transition_task_after_run(session, ids["t_cancel"], "cancelled")
 
         async with sessionmaker() as session:
             t_review = await session.get(Task, ids["t_review"])
@@ -119,6 +123,7 @@ async def test_transition_task_after_run(
             t_terminal = await session.get(Task, ids["t_terminal"])
             t_approval = await session.get(Task, ids["t_approval"])
             t_human = await session.get(Task, ids["t_human"])
+            t_cancel = await session.get(Task, ids["t_cancel"])
 
         # done + reviewer -> in_review
         assert t_review is not None and t_review.status == TaskStatus.IN_REVIEW.value
@@ -140,5 +145,8 @@ async def test_transition_task_after_run(
         # needs_human_review (ADR 0087 escalation) -> blocked (human inbox path)
         assert t_human is not None and t_human.status == TaskStatus.BLOCKED.value
         assert ev_human is not None and ev_human[2] == TaskStatus.BLOCKED.value
+        # cancelled (operator cancel) -> cancelled, NOT blocked (F11)
+        assert t_cancel is not None and t_cancel.status == TaskStatus.CANCELLED.value
+        assert ev_cancel is not None and ev_cancel[2] == TaskStatus.CANCELLED.value
     finally:
         await engine.dispose()

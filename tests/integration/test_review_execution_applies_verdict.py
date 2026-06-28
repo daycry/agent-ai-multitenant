@@ -115,12 +115,41 @@ async def test_reject_output_moves_task_to_backlog(
 async def test_unparseable_output_is_defensive_reject(
     _migrated: None, migrations_pg_dsn: str, admin_database_url: str
 ) -> None:
-    # No <verdict> tag → unknown → defensive reject → backlog (task converges).
+    # No <verdict> tag on a CLEANLY-FINISHED (done) review → unknown → defensive
+    # reject → backlog (the reviewer ran but didn't format; the task converges).
     ids = await _seed(migrations_pg_dsn, status=TaskStatus.IN_REVIEW.value)
     event = await _apply(admin_database_url, ids, "I am not sure what to do here.")
     assert event is not None
     assert event[2] == "backlog"
     assert await _status(migrations_pg_dsn, ids["task"]) == "backlog"
+
+
+@pytest.mark.asyncio
+async def test_reviewer_infra_failure_does_not_reject(
+    _migrated: None, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
+    # Audit C1 (F03/P0.2): a review RUN that failed at infra level (status != done,
+    # no verdict — crash/timeout/cancel/model_unresolved) must NOT reject the task
+    # nor burn a retry: `result.output` is an error string, not a judgement. The
+    # task stays in_review for the reconciler / a redelivered event to re-dispatch.
+    ids = await _seed(migrations_pg_dsn, status=TaskStatus.IN_REVIEW.value)
+    failed = _RuntimeResult(
+        status="failed",
+        abort_code="model_unresolved",
+        output="agent-runtime container timed out",
+        iterations=0,
+        steps=[],
+        usage={},
+    )
+    engine = create_async_engine(admin_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        async with sm() as session, session.begin():
+            event = await _apply_review_verdict(session, ids["task"], ids["tenant"], failed)
+    finally:
+        await engine.dispose()
+    assert event is None
+    assert await _status(migrations_pg_dsn, ids["task"]) == "in_review"
 
 
 @pytest.mark.asyncio

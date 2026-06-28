@@ -235,7 +235,7 @@ class _RuntimeResult:
     finish_status: str | None = None
 
 
-def _agent_spec(
+def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del spec
     request: ExecutionRequest,
     approval_policy: dict[str, Any] | None,
     *,
@@ -313,6 +313,17 @@ def _agent_spec(
     # the runtime reads as "keep the system prompt untouched" (backward-compat).
     if request.skill_prompt_fragments is not None:
         spec["skill_prompt_fragments"] = request.skill_prompt_fragments
+    # Audit cluster C1 (F51): a REVIEW run MUST carry its review context to the
+    # container. The orchestrator builds `review_context` (acceptance criteria +
+    # the implementer's prior output + the <test-report>) but until now the worker
+    # never forwarded it, so the reviewer ran blind on title+description, produced
+    # no <verdict>, and the worker defensively rejected every reviewed task
+    # (in_review→backlog→blocked). The runtime reads `review` to build the
+    # reviewer's verdict-instruction preamble (`build_review_preamble`).
+    if request.review:
+        spec["review"] = True
+        if request.review_context is not None:
+            spec["review_context"] = request.review_context
     # Agentes #2: advertise the agent's tools to the LLM so it can actually call
     # them (memory_recall/rag_search/read_file/…). Without this the model never
     # sees any tool → it can neither recall memory nor work through tools, for ANY
@@ -446,6 +457,32 @@ def _parse_line(line: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _scan_logs_for_terminal(logs: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Re-parse the COMPLETE captured container logs for a terminal event the live
+    stream dropped (F16/P1.1).
+
+    The live drain pumps lines as they arrive and a torn follow read can lose the
+    final `execution.finished`/`execution.error` line even though the container
+    emitted it (Fase 1 guarantees ``ContainerResult.logs`` holds the full capture).
+    Returns ``(finished_result, error)`` — the LAST ``execution.finished`` ``result``
+    payload found (or ``None``) and the LAST ``execution.error`` message (or ``None``).
+    """
+    finished: dict[str, Any] | None = None
+    error: str | None = None
+    for line in logs.splitlines():
+        event = _parse_line(line)
+        if event is None or not event.get("event"):
+            continue
+        kind = str(event["event"])
+        if kind == "execution.finished":
+            result = event.get("result")
+            if isinstance(result, dict):
+                finished = result
+        elif kind == "execution.error":
+            error = event.get("error")
+    return finished, error
+
+
 def _assemble_result(
     final_result: dict[str, Any] | None,
     steps: list[dict[str, Any]],
@@ -453,6 +490,7 @@ def _assemble_result(
     timed_out: bool,
     exit_code: int,
     runtime_error: str | None,
+    logs: str | None = None,
 ) -> _RuntimeResult:
     """Fold the streamed steps + final result line into a `_RuntimeResult`.
 
@@ -460,6 +498,11 @@ def _assemble_result(
     the result. Otherwise the run failed (crash, timeout, or an
     `execution.error` line) — keep whatever steps streamed and mark it
     `failed`.
+
+    F16/P1.1: before declaring a clean exit (exit 0, no timeout, no
+    `execution.error`) a failure, re-parse the COMPLETE captured ``logs`` for a
+    terminal line the live drain missed — the container DID emit
+    `execution.finished`, the worker just lost it on the wire.
     """
     if final_result is not None:
         return _RuntimeResult(
@@ -471,6 +514,24 @@ def _assemble_result(
             usage=final_result.get("usage") or dict(_EMPTY_USAGE),
             finish_status=final_result.get("finish_status"),
         )
+
+    # F16/P1.1: a clean exit with no result on the live stream — recover from the
+    # full log capture before treating it as a failure. Only for an otherwise-clean
+    # exit (exit 0, no timeout, no live error); a crash/timeout keeps the hard path.
+    if logs and exit_code == 0 and not timed_out and runtime_error is None:
+        recovered, recovered_error = _scan_logs_for_terminal(logs)
+        if recovered is not None:
+            return _RuntimeResult(
+                status=recovered.get("status", "failed"),
+                abort_code=recovered.get("abort_code"),
+                output=recovered.get("output"),
+                iterations=int(recovered.get("iterations", 0)),
+                steps=steps,
+                usage=recovered.get("usage") or dict(_EMPTY_USAGE),
+                finish_status=recovered.get("finish_status"),
+            )
+        if recovered_error is not None:
+            runtime_error = recovered_error
 
     if runtime_error is not None:
         detail = f"agent-runtime error: {runtime_error}"
@@ -533,6 +594,9 @@ async def transition_task_after_run(
         ``review_inconclusive`` / ``max_review_retries_exhausted``). At the TASK
         level there is no ``pending_human_validation`` (that is a PLAN status,
         CLAUDE.md ppio 7), so escalation REUSES the existing ``blocked`` + inbox path.
+      - ``cancelled`` (operator cancel) -> ``cancelled`` (F11): an operator cancel
+        is NOT a failure, so it must land the task in ``cancelled``, not ``blocked``.
+        ``in_progress -> cancelled`` is a legal §7.2 move.
       - any other terminal status (``failed``/``aborted``/…) -> ``blocked``; the
         motive is the linked execution row (``abort_code``/output), not a task column.
       - ``awaiting_human_approval`` is owned by the approval branch -> ``None``.
@@ -552,6 +616,10 @@ async def transition_task_after_run(
             if task.reviewer_agent_id is not None
             else TaskStatus.DONE.value
         )
+    elif result_status == "cancelled":
+        # F11: an operator cancel is not a failure — land the task in `cancelled`,
+        # not `blocked`. `in_progress -> cancelled` is a legal §7.2 move.
+        target = TaskStatus.CANCELLED.value
     else:
         # `needs_human_review` and the hard-failure codes all converge on
         # `blocked`; the execution row's status + abort_code distinguish an
@@ -592,6 +660,23 @@ async def _apply_review_verdict(
     old_status = task.status
     verdict = parse_reviewer_output(result.output or "")
     if verdict.label == "unknown":
+        # Audit C1 (F03/P0.2): a missing verdict means one of two very different
+        # things. (a) The reviewer RUN finished cleanly (`done`) but the model did
+        # not format a verdict → a defensive reject keeps the task converging
+        # (bounded by retry_count, which escalates to `blocked`). (b) The reviewer
+        # RUN failed at infra level (crash / timeout / cancel / model_unresolved →
+        # status != done): `result.output` is an error string, NOT a judgement.
+        # Treating that as a reject re-implements a possibly-correct task and burns
+        # a retry until it is wrongly blocked. So we leave the task in_review and
+        # let the reconciler / a redelivered event re-dispatch the review.
+        if result.status != "done":
+            _log.warning(
+                "workers.review_infra_error",
+                task_id=str(task_id),
+                review_status=result.status,
+                abort_code=result.abort_code,
+            )
+            return None
         verdict = ReviewerVerdict(
             label="reject",
             failed_criterion="reviewer produced no parseable verdict",
@@ -662,14 +747,22 @@ async def _commit_and_push_worktree(
     plan_slug: str,
     task_id: str,
     execution_id: str,
-) -> None:
+    escalated: bool = False,
+) -> bool:
     """Commit the agent's worktree output (with the mandatory trailers) and push it
     to the plan branch on the local bare repo (prod-18 task_prod18_commit_01 / ADR 0085).
 
-    The WORKER does this — the sandbox has no git credentials (principle 2). A clean
-    tree (the agent produced no file change) or any git error logs and is swallowed:
-    the run already succeeded. The bare→remote push stays with the existing
-    ``open_plan_pr`` path (final_only at plan close)."""
+    The WORKER does this — the sandbox has no git credentials (principle 2). When
+    ``escalated`` the run did not certify the output (``needs_human_review``); the
+    commit is labelled WIP so the human validator can tell it apart from a clean
+    ``done`` (P2.3/F26). The bare→remote push stays with the existing ``open_plan_pr``
+    path (final_only at plan close).
+
+    Returns ``True`` when a REAL git error prevented the commit/push — the caller
+    stamps a visible ``commit_failed`` marker so we never report a deliverable with
+    an empty diff (P2.3/F13). Returns ``False`` when the commit succeeded OR the tree
+    was legitimately clean (the agent produced no file change — a no-op, not an error).
+    """
     from pathlib import Path
 
     from workers.git_repos import BareRepoLayout, GitCommandError
@@ -679,6 +772,10 @@ async def _commit_and_push_worktree(
         PlanGitWorkflow,
         commit_task,
         make_plan_branch_name,
+    )
+
+    message = (
+        f"wip(escalated): task {task_id} — needs human review" if escalated else f"task {task_id}"
     )
 
     def _git() -> str | None:
@@ -691,7 +788,7 @@ async def _commit_and_push_worktree(
         try:
             sha = commit_task(
                 Path(host_path),
-                message=f"task {task_id}",
+                message=message,
                 trailers=CommitTrailers(
                     plan_id=plan_id, task_id=task_id, execution_id=execution_id
                 ),
@@ -710,9 +807,41 @@ async def _commit_and_push_worktree(
     try:
         sha = await asyncio.to_thread(_git)
         if sha is not None:
-            _log.info("workers.worktree_committed", task_id=task_id, sha=sha[:8])
-    except Exception as exc:  # pragma: no cover - never break a finished run on git
+            _log.info(
+                "workers.worktree_committed", task_id=task_id, sha=sha[:8], escalated=escalated
+            )
+        return False
+    except Exception as exc:  # pragma: no cover - requires a live git failure
+        # P2.3(b)/F13: a REAL git failure (NOT a clean tree) must be VISIBLE — the
+        # run reported a deliverable but produced no diff. Signal the caller to
+        # stamp a `commit_failed` marker instead of silently reporting success.
         _log.warning("workers.worktree_commit_failed", task_id=task_id, error=str(exc))
+        return True
+
+
+async def _mark_commit_failed(
+    sessionmaker: async_sessionmaker[AsyncSession], execution_id: UUID
+) -> None:
+    """Stamp a visible ``commit_failed`` marker on a finalised execution whose
+    worktree commit/push hit a real git error (P2.3(b)/F13).
+
+    The run already reported a deliverable, but it never reached the plan branch —
+    surface that on the execution row (``abort_code`` + an appended ``output`` note)
+    instead of silently reporting success with an empty diff. Best-effort: opens its
+    own short txn on the BYPASSRLS worker engine; a failure here never breaks the run.
+    """
+    try:
+        async with sessionmaker() as session, session.begin():
+            execution = await get_execution(session, execution_id)
+            if execution is None:
+                return
+            execution.abort_code = "commit_failed"
+            note = "worktree commit/push failed — deliverable not persisted to the plan branch"
+            execution.output = f"{execution.output}\n{note}" if execution.output else note
+    except Exception as exc:  # pragma: no cover - defensive best-effort
+        _log.warning(
+            "workers.commit_failed_marker_error", execution_id=str(execution_id), error=str(exc)
+        )
 
 
 async def _run_task_tests(
@@ -935,13 +1064,17 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
             )
         # Per-provider wall-clock budget: claude_sdk spawns the Node CLI and its
         # high-effort/xhigh model calls are slow, so it gets a much longer budget
-        # than the fast HTTP providers (ollama/azure_foundry/copilot). The SAME
-        # value caps both the container (run_streamed timeout, the hard backstop)
-        # AND the agent loop's internal wall-clock safeguard — otherwise the
-        # internal default (600s) silently aborts a long claude_sdk run with
-        # `max_wall_clock_exceeded` long before the container budget is reached.
+        # than the fast HTTP providers (ollama/azure_foundry/copilot). F19: the
+        # agent loop's INTERNAL wall-clock safeguard uses the bare per-kind budget,
+        # while the container's HARD kill gets a grace margin ON TOP — so the
+        # internal abort (`max_wall_clock_exceeded`, keeping partials + finish_status)
+        # fires FIRST and the container kill is only a last-resort backstop, instead
+        # of the kill always winning and mislabelling every exhaustion as
+        # 'container timed out'. (The internal default 600s would otherwise still
+        # abort a long claude_sdk run early — aligning them fixes that too.)
         resolved_kind = (resolved_model or {}).get("kind")
-        run_timeout = settings.container_timeout_for_kind(resolved_kind)
+        wall_clock_budget_s = settings.container_timeout_for_kind(resolved_kind)
+        container_timeout = settings.container_timeout_with_grace_for_kind(resolved_kind)
         container_spec = ContainerSpec(
             image=settings.agent_runtime_image,
             env=_build_runtime_env(
@@ -953,8 +1086,9 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 # La definición de "hecho" de la tarea → al prompt de decisión,
                 # para que el comportamiento (leer/escribir/test) lo dicte la tarea.
                 acceptance_criteria=task_acceptance_criteria,
-                # Alinea el budget interno de wall-clock del loop con el del contenedor.
-                wall_clock_budget_s=run_timeout,
+                # Budget interno del loop = el del contenedor MENOS el grace (F19):
+                # el aborto limpio del loop gana al kill duro del contenedor.
+                wall_clock_budget_s=wall_clock_budget_s,
                 # Tope de iteraciones por-provider (claude_sdk necesita más para
                 # escribir todos los ficheros Y finalizar).
                 max_iterations_budget=settings.agent_max_iterations_for_kind(resolved_kind),
@@ -981,9 +1115,10 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
 
         watcher = asyncio.create_task(_watch_for_cancel())
         try:
-            # `run_timeout` (computed above) is the container's hard backstop.
+            # `container_timeout` = the per-kind budget + grace (F19): the hard
+            # backstop, set ABOVE the loop's internal wall-clock so the clean abort wins.
             container_result = await asyncio.to_thread(
-                active_runner.run_streamed, container_spec, on_line, timeout=run_timeout
+                active_runner.run_streamed, container_spec, on_line, timeout=container_timeout
             )
         finally:
             watcher.cancel()
@@ -992,16 +1127,30 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         await queue.put(None)
         await drainer
 
+        # P3.3/F15: a cancel sealed between the watcher's last poll and the
+        # container exit is missed by the watcher. Do a final one-shot read of
+        # `cancel_requested_at` so an operator cancel is never lost to that race.
+        if not cancel_seen:
+            async with sessionmaker() as cancel_session:
+                ex = await get_execution(cancel_session, execution_id)
+            if ex is not None and ex.cancel_requested_at is not None:
+                cancel_seen = True
+
         result = _assemble_result(
             final_result,
             steps,
             timed_out=container_result.timed_out,
             exit_code=container_result.exit_code,
             runtime_error=runtime_error,
+            # F16/P1.1: the FULL captured log to recover a dropped terminal line.
+            logs=container_result.logs,
         )
-        if cancel_seen:
-            # Operator cancel: keep the partial steps/usage for the audit trail but
-            # mark the run cancelled (finalize_execution treats it as terminal).
+        if cancel_seen and final_result is None:
+            # P3.3/F20: only force `cancelled` when the run did NOT actually finish.
+            # If `final_result` is present the container reached `execution.finished`
+            # before the kill — preserve its real output/finish_status instead of
+            # masking a completed run as cancelled. (A killed container exits non-zero,
+            # so the F16 log-recovery above does not fire here.)
             result = _RuntimeResult(
                 status="cancelled",
                 abort_code="cancelled",
@@ -1009,13 +1158,36 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 iterations=result.iterations,
                 steps=result.steps,
                 usage=result.usage,
+                finish_status=result.finish_status,
             )
         approval = final_result.get("approval") if final_result else None
+
+    # F12: the runtime parked on `awaiting_human_approval` but emitted NO approval
+    # payload, so we cannot build an ApprovalRequest. Falling to the implementer path
+    # would strand the task `in_progress` with no inbox item. Treat the combination as
+    # invalid: rewrite the result to `failed` with an explicit abort_code so the run
+    # finalises failed and the task is blocked with a motive — never a silent stall.
+    if not request.review and result.status == _AWAITING_APPROVAL and not approval:
+        _log.error(
+            "workers.approval_payload_missing", execution_id=exec_id, task_id=request.task_id
+        )
+        result = _RuntimeResult(
+            status="failed",
+            abort_code="approval_payload_missing",
+            output="runtime reported awaiting_human_approval but emitted no approval payload",
+            iterations=result.iterations,
+            steps=result.steps,
+            usage=result.usage,
+            finish_status=result.finish_status,
+        )
+
     task_event: tuple[Any, str, str] | None = None
-    # The implementer-path transition (dag_01) is DEFERRED until after the worktree
-    # is committed and the tests have run (prod-18 ordering): the in_review event
-    # must fire only once the AI reviewer can find the committed diff + the
-    # <test-report>. The review + approval paths transition inside the txn (no git).
+    # P0.5: for the implementer path the task transition is persisted ATOMICALLY with
+    # finalize (same txn) so a crash here can never leave the execution terminal but
+    # the task `in_progress` forever. Only the EVENT publication is deferred until
+    # after the worktree commit exists (prod-18 ordering), so a dispatched
+    # reviewer/validator finds the committed diff + the <test-report>. The review +
+    # approval paths transition inside the txn too and publish immediately (no git).
     implementer_path = False
     async with sessionmaker() as session, session.begin():
         await finalize_execution(session, execution_id, result=result)
@@ -1044,26 +1216,32 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 if task.status != old_status:
                     task_event = (task, old_status, task.status)
         else:
-            implementer_path = True  # transition deferred (after commit + tests)
+            # P0.5: transition ATOMICALLY with finalize (crash-safe). The resulting
+            # in_review/blocked/cancelled/done event is published BELOW, after the
+            # worktree commit exists (prod-18 ordering).
+            implementer_path = True
+            task_event = await transition_task_after_run(session, task_id, result.status)
 
     # Publish the review / approval event now (these paths have no git/test follow-up).
-    if task_event is not None:
+    if task_event is not None and not implementer_path:
         task_obj, old, new = task_event
         await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
 
-    # prod-18 implementer post-processing — BEFORE the in_review transition:
+    # prod-18 implementer post-processing — commit + tests BEFORE publishing the
+    # (already-persisted) state-change event:
     if implementer_path:
-        # task_prod18_commit_01: a successful run that wrote into a worktree gets
-        # committed (with trailers) + pushed to the plan branch by the WORKER (the
-        # sandbox has no git credentials). task_prod18_test_01: then the project's
-        # tests run over that worktree and persist the TestReport. Both best-effort.
+        # task_prod18_commit_01: a run that wrote into a worktree gets committed (with
+        # trailers) + pushed to the plan branch by the WORKER (the sandbox has no git
+        # credentials). P2.3/F26: commit for a clean `done` AND for an escalation
+        # (`needs_human_review`) so the human validator gets the diff. task_prod18_
+        # test_01: tests run over the worktree only for a `done` run. All best-effort.
         if (
-            result.status == "done"
+            result.status in ("done", "needs_human_review")
             and workspace_host_path is not None
             and worktree_inputs is not None
         ):
             c_tenant_slug, c_project_slug, c_plan_id, c_plan_slug = worktree_inputs
-            await _commit_and_push_worktree(
+            commit_failed = await _commit_and_push_worktree(
                 settings,
                 host_path=workspace_host_path,
                 tenant_slug=c_tenant_slug,
@@ -1072,19 +1250,22 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 plan_slug=c_plan_slug,
                 task_id=str(task_id),
                 execution_id=exec_id,
+                escalated=result.status == "needs_human_review",
             )
-            await _run_task_tests(
-                settings,
-                tenant_id=tenant_id,
-                task_id=task_id,
-                worktree_host_path=workspace_host_path,
-                acceptance_criteria=task_acceptance_criteria,
-            )
-        # prod-06 task_prod06_dag_01: NOW move the task off in_progress (done ->
-        # in_review/done, failed -> blocked) — after the commit + report exist, so the
-        # reviewer dispatched by the in_review event finds them.
-        async with sessionmaker() as session, session.begin():
-            task_event = await transition_task_after_run(session, task_id, result.status)
+            if result.status == "done":
+                await _run_task_tests(
+                    settings,
+                    tenant_id=tenant_id,
+                    task_id=task_id,
+                    worktree_host_path=workspace_host_path,
+                    acceptance_criteria=task_acceptance_criteria,
+                )
+            if commit_failed:
+                # P2.3(b)/F13: a real git failure — surface it on the execution row
+                # instead of reporting a deliverable with an empty diff.
+                await _mark_commit_failed(sessionmaker, execution_id)
+        # Now publish the deferred state-change event (the commit, if any, exists, so
+        # a reviewer/validator dispatched by it finds the diff).
         if task_event is not None:
             task_obj, old, new = task_event
             await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
