@@ -320,6 +320,50 @@ def build_review_preamble(review_context: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+# A2 (inter-run reviewer feedback): a task the AI reviewer rejected loops back to
+# the implementer (in_review → backlog → ready) with NO memory of WHY, so it repeats
+# the same mistake. The orchestrator threads the reviewer's prior rejection payloads
+# into the spec (`prior_review_feedback`); we fold them into this corrective preamble,
+# prepended to the implementer's system prompt, so the re-dispatched run knows exactly
+# what to fix. Provider-agnostic plain prose — every provider reads a system preamble.
+_PRIOR_FEEDBACK_INSTRUCTION = (
+    "PREVIOUS ATTEMPTS AT THIS TASK WERE REJECTED by the reviewer. You MUST correct "
+    "the problems below before finishing — do NOT repeat the same mistakes:"
+)
+
+
+def build_prior_feedback_preamble(feedback: list[dict[str, Any]]) -> str:
+    """The implementer's system preamble carrying the AI reviewer's prior feedback (A2).
+
+    ``feedback`` is the orchestrator-threaded list of rejection payloads (newest
+    first), each ``{failed_criterion, what_to_fix, testreport_evidence}``. We fold
+    the usable ones into a clear corrective instruction the caller prepends to the
+    system prompt so a RE-DISPATCHED implementer knows what to fix instead of
+    repeating the rejected approach. Entries with no usable text are skipped; an
+    empty/all-blank list yields ``""`` (the caller then leaves the prompt untouched).
+    """
+    lines: list[str] = []
+    for entry in feedback:
+        if not isinstance(entry, dict):
+            continue
+        criterion = str(entry.get("failed_criterion") or "").strip()
+        what_to_fix = str(entry.get("what_to_fix") or "").strip()
+        evidence = str(entry.get("testreport_evidence") or "").strip()
+        if not (criterion or what_to_fix or evidence):
+            continue
+        parts: list[str] = []
+        if criterion:
+            parts.append(f"FAILED CRITERION: {criterion}")
+        if what_to_fix:
+            parts.append(f"FIX: {what_to_fix}")
+        if evidence:
+            parts.append(f"EVIDENCE: {evidence}")
+        lines.append("- " + " — ".join(parts))
+    if not lines:
+        return ""
+    return "\n".join([_PRIOR_FEEDBACK_INSTRUCTION, *lines])
+
+
 def run_task(spec: dict[str, Any]) -> int:
     """Run the agent loop for `spec`, streaming the steps_log as JSON lines."""
     from agent_runtime.approval import ApprovalGate
@@ -431,6 +475,21 @@ def run_task(spec: dict[str, Any]) -> int:
             system_preamble = (
                 f"{review_preamble}\n\n{system_preamble}" if system_preamble else review_preamble
             )
+
+        # A2: an IMPLEMENTER re-dispatched after the AI reviewer rejected it carries
+        # the reviewer's prior feedback (`prior_review_feedback`). Prepend a corrective
+        # preamble so the run knows what to fix instead of repeating the mistake.
+        # Absent key / all-blank entries → no change (backward-compat). This is the
+        # implementer path; it is independent of the REVIEW preamble above.
+        prior_feedback = spec.get("prior_review_feedback")
+        if prior_feedback:
+            feedback_preamble = build_prior_feedback_preamble(prior_feedback)
+            if feedback_preamble:
+                system_preamble = (
+                    f"{feedback_preamble}\n\n{system_preamble}"
+                    if system_preamble
+                    else feedback_preamble
+                )
 
         _emit({"event": "execution.started", "task": task})
         result = run_agent(

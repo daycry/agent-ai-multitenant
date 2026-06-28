@@ -151,6 +151,12 @@ def _is_in_review_trigger(event: TaskEvent) -> bool:
 # Cap on test-run outcomes folded into the reviewer's `<test-report>` block — a
 # single run emits one per runtime (usually 1-3); we keep the freshest few.
 _MAX_TEST_REPORT_RUNTIMES = 6
+# Cap on prior AI-reviewer rejections injected into a RE-DISPATCHED implementer's
+# prompt (A2). A task the reviewer rejected loops in_review → backlog → ready and
+# is re-routed here; we feed back the freshest few `review_comment` payloads so the
+# implementer knows what to fix instead of repeating the mistake. Newest first; a
+# couple is enough without bloating the spec.
+_MAX_PRIOR_REVIEW_FEEDBACK = 3
 # Per-runtime log tail kept in the reviewer block (the full logs live in the
 # audit event / `docker logs`); enough for the reviewer to see what failed.
 _TEST_REPORT_LOG_TAIL = 1500
@@ -1032,7 +1038,58 @@ class TaskDispatcher:
         project_mcp_servers = getattr(project, "mcp_servers", None) if project else None
         if project_mcp_servers:
             request["mcp_servers"] = [dict(server) for server in project_mcp_servers]
+
+        # Inter-run reviewer feedback (A2). If THIS task was rejected by the AI
+        # reviewer on a prior pass (in_review → backlog → ready → here), thread the
+        # freshest rejection payloads into the spec so the re-dispatched implementer
+        # knows what to fix. No prior rejection → no key (backward-compat: a normal
+        # first dispatch is byte-for-byte the previous behaviour).
+        prior_feedback = await self._read_prior_review_feedback(session, task)
+        if prior_feedback:
+            request["prior_review_feedback"] = prior_feedback
         return _AiDispatch(request=request)
+
+    async def _read_prior_review_feedback(
+        self, session: AsyncSession, task: Task
+    ) -> list[dict[str, str]]:
+        """The AI reviewer's most recent rejection feedback for ``task`` (A2).
+
+        A task re-dispatched to the implementer after the AI reviewer rejected it
+        (``in_review`` → ``backlog`` → ``ready``) otherwise carries no memory of WHY
+        it was rejected, so the implementer repeats the same mistake. We read the
+        freshest few ``review_comment`` audit events — the reviewer's rejection
+        payloads (``failed_criterion`` / ``what_to_fix`` / ``testreport_evidence``,
+        persisted by ``apply_reviewer_verdict``) — newest first and project them to
+        the minimal feedback shape the worker forwards to the runtime. Empty (no
+        prior rejection) → ``[]`` → no ``prior_review_feedback`` key is emitted
+        (backward-compat). BYPASSRLS, so an explicit ``tenant_id`` predicate scopes
+        it (same defence-in-depth as the ``<test-report>`` read)."""
+        rows = list(
+            (
+                await session.execute(
+                    select(TaskAuditEvent.payload)
+                    .where(
+                        TaskAuditEvent.task_id == task.id,
+                        TaskAuditEvent.tenant_id == task.tenant_id,
+                        TaskAuditEvent.kind == "review_comment",
+                    )
+                    .order_by(TaskAuditEvent.at.desc())
+                    .limit(_MAX_PRIOR_REVIEW_FEEDBACK)
+                )
+            ).scalars()
+        )
+        feedback: list[dict[str, str]] = []
+        for payload in rows:
+            if not isinstance(payload, dict):
+                continue
+            feedback.append(
+                {
+                    "failed_criterion": str(payload.get("failed_criterion") or ""),
+                    "what_to_fix": str(payload.get("what_to_fix") or ""),
+                    "testreport_evidence": str(payload.get("testreport_evidence") or ""),
+                }
+            )
+        return feedback
 
     async def _resolve_model_spec(
         self, session: AsyncSession, agent: Agent, project: Project | None

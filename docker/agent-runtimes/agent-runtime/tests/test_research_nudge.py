@@ -14,6 +14,7 @@ from agent_runtime.graph import (
     _RESEARCH_STREAK_LIMIT,
     AgentDeps,
     _AgentLoop,
+    _repetition_nudge,
     _research_nudge,
 )
 from agent_runtime.loop_detection import LoopDetector
@@ -36,6 +37,36 @@ def test_no_nudge_for_normal_research() -> None:
 
 def test_no_nudge_for_producing_tool() -> None:
     assert _research_nudge(tool="write_file", research_streak=0, repeat_count=1) is None
+
+
+# --- B1: the repetition nudge fires by tool class at the detector threshold ----
+def test_repetition_nudge_fires_at_threshold_for_mutator() -> None:
+    # threshold=3 → a write seen 3 times warns on the turn BEFORE the 4th aborts.
+    msg = _repetition_nudge(tool="write_file", repeat_count=3, threshold=3, has_produced=True)
+    assert msg is not None
+    assert "write_file" in msg and "submit_result" in msg  # producer wording → FINISH
+
+
+def test_repetition_nudge_not_before_threshold() -> None:
+    nudge = _repetition_nudge(tool="write_file", repeat_count=2, threshold=3, has_produced=True)
+    assert nudge is None
+
+
+def test_repetition_nudge_readonly_wording() -> None:
+    msg = _repetition_nudge(tool="read_file", repeat_count=3, threshold=3, has_produced=False)
+    assert msg is not None
+    assert "read_file" in msg and "result you already have" in msg
+    assert "submit_result" not in msg  # read-only → reuse, NOT finish
+
+
+def test_repetition_nudge_namespaced_mutator() -> None:
+    # An MCP/custom writer (namespaced) still classifies as a mutator → producer wording.
+    msg = _repetition_nudge(tool="fs.write_file", repeat_count=4, threshold=3, has_produced=True)
+    assert msg is not None and "write_file" in msg and "submit_result" in msg
+
+
+def test_repetition_nudge_none_for_no_tool() -> None:
+    assert _repetition_nudge(tool=None, repeat_count=9, threshold=3, has_produced=True) is None
 
 
 def _loop() -> _AgentLoop:
@@ -75,6 +106,28 @@ def test_reflect_resets_streak_on_producing_tool() -> None:
     loop.research_streak = 4
     loop.reflect(_state("write_file", {"path": "a.py", "content": "x"}))
     assert loop.research_streak == 0
+
+
+def test_reflect_sets_repetition_warning_scalar_not_context() -> None:
+    # A write_file repeated to the threshold sets the SCALAR repetition_warning —
+    # never `context` (which operator.add would reorder, burying it / breaking
+    # context[0] ordering). Record it threshold times so reflect's count_of == 3.
+    loop = _loop()
+    action = {"tool": "write_file", "args": {"path": "a.py", "content": "x"}}
+    for _ in range(loop.detector.threshold):
+        loop.detector.record(action)
+    out = loop.reflect(_state("write_file", {"path": "a.py", "content": "x"}))
+    assert out.get("repetition_warning") is not None
+    assert "submit_result" in out["repetition_warning"]
+    assert "context" not in out  # a producing tool emits no research guidance
+
+
+def test_reflect_no_repetition_warning_below_threshold() -> None:
+    loop = _loop()
+    action = {"tool": "write_file", "args": {"path": "a.py", "content": "x"}}
+    loop.detector.record(action)  # count_of == 1 in reflect, < threshold
+    out = loop.reflect(_state("write_file", {"path": "a.py", "content": "x"}))
+    assert "repetition_warning" not in out
 
 
 # --- the over-verification trap: once produced, the nudge says FINISH ----------

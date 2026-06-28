@@ -164,6 +164,13 @@ _SUBMIT_RESULT_TOOL: dict[str, Any] = {
 # grows unbounded; the tail is the relevant part.
 _CONTEXT_WINDOW = 8
 
+# A1 (sticky feedback): the authoritative review feedback and the repetition
+# warning are rendered ALWAYS and OUTSIDE the bounded context tail, truncated to
+# this many characters, so they survive the context window and stay in front of
+# the model until acted on (they were getting evicted, so the agent kept
+# re-producing the rejected output / repeating the same action).
+_STICKY_FEEDBACK_MAX_CHARS = 600
+
 # ADR 0087 (Option 1 refinement): when the agent produced files, the reviewer must
 # judge the ACTUAL code — not just the prose summary it cannot verify (which led the
 # JWT run to escalate even though files were written). The graph injects the written
@@ -223,6 +230,17 @@ def _decide_messages(state: dict[str, Any]) -> list[Message]:
     observation = state.get("last_observation")
     if observation:
         lines.append(f"Last observation: {json.dumps(observation, default=str)}")
+    # A1: the sticky channels are appended LAST (most recent, most salient) and
+    # OUTSIDE the context[-_CONTEXT_WINDOW:] slice above, so a long context tail can
+    # never evict them — the agent always sees the open review feedback / repetition
+    # warning until it acts on them. Provider-agnostic: every adapter (HTTP and
+    # claude_sdk) builds its decide() messages here.
+    feedback = state.get("last_review_feedback")
+    if feedback:
+        lines.append(f"REVIEW FEEDBACK (fix this): {str(feedback)[:_STICKY_FEEDBACK_MAX_CHARS]}")
+    warning = state.get("repetition_warning")
+    if warning:
+        lines.append(f"REPETITION WARNING: {str(warning)[:_STICKY_FEEDBACK_MAX_CHARS]}")
     return [
         Message(role="system", content=_system_content(state)),
         Message(role="user", content="\n".join(line for line in lines if line)),

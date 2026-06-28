@@ -8,11 +8,14 @@ code `repetitive_loop_detected`.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from agent_runtime.graph import AgentDeps, run_agent
 from agent_runtime.loop_detection import DEFAULT_LOOP_THRESHOLD, LoopDetector
 from agent_runtime.model import DecisionKind, ModelDecision, ModelResponse, ScriptedModelClient
-from agent_runtime.state import STATUS_ABORTED, STATUS_DONE
+from agent_runtime.safeguards import Budgets
+from agent_runtime.state import STATUS_ABORTED, STATUS_DONE, STATUS_NEEDS_HUMAN_REVIEW
 
 pytestmark = pytest.mark.unit
 
@@ -131,3 +134,105 @@ def test_distinct_actions_do_not_trigger_loop_detection() -> None:
     result = run_agent(_distinct_then_finish(), _TASK)
     assert result.status == STATUS_DONE
     assert result.abort_code is None
+
+
+# ---------------------------------------------------------------------------
+# B2/B3/C: escalate-not-abort when work was produced; read-only exemption;
+# the content-aware fingerprint invariant. These drive `run_agent` end to end
+# with a fake tool registry (no filesystem) and an absent worktree, so the
+# escalation summary falls back to this run's write capture deterministically.
+# ---------------------------------------------------------------------------
+class _OkResult:
+    """A minimal ToolResult stand-in — every call 'succeeds' with no side effect."""
+
+    ok = True
+    output = "ok"
+    error: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"ok": True, "output": "ok", "error": None}
+
+
+class _FakeTools:
+    """A ToolRegistry stand-in: any tool call succeeds, touching no disk."""
+
+    def call(self, tool: str, args: dict[str, Any]) -> _OkResult:
+        return _OkResult()
+
+
+def _write(content: str, path: str = "app/A.php") -> ModelResponse:
+    return ModelResponse(
+        decision=ModelDecision(
+            kind=DecisionKind.ACT, tool="write_file", tool_args={"path": path, "content": content}
+        )
+    )
+
+
+def _act(tool: str, **args: object) -> ModelResponse:
+    return ModelResponse(
+        decision=ModelDecision(kind=DecisionKind.ACT, tool=tool, tool_args=dict(args))
+    )
+
+
+def _deps(decisions: list[ModelResponse]) -> AgentDeps:
+    return AgentDeps(model=ScriptedModelClient(decisions=decisions), tools=_FakeTools())  # type: ignore[arg-type]
+
+
+@pytest.fixture(autouse=True)
+def _absent_worktree(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    # Point the worktree harvest at a non-existent dir so the escalation summary
+    # falls back to this run's in-memory write capture (no filesystem dependency).
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "absent"))
+
+
+def test_same_path_distinct_content_never_aborts() -> None:
+    # REGRESSION (blinds the invariant): the fingerprint includes the FULL args
+    # (content), so editing the SAME path with DIFFERENT content every turn — far
+    # more than `threshold` times — must NEVER trip the repetitive-loop guard.
+    writes = [_write(f"<?php // rev {i}") for i in range(DEFAULT_LOOP_THRESHOLD + 4)]
+    finish = ModelResponse(decision=ModelDecision(kind=DecisionKind.FINISH, output="done"))
+    result = run_agent(_deps([*writes, finish]), _TASK)
+    assert result.status == STATUS_DONE
+    assert result.abort_code is None
+
+
+def test_identical_write_with_production_escalates_with_deliverable() -> None:
+    # A model that re-writes the SAME bytes forever AND has produced: the 4th
+    # identical write trips the guard, but because work exists the run ESCALATES
+    # (needs_human_review, work preserved) instead of a hard abort. The output is a
+    # SUMMARY of the deliverable — NOT the looping action's output.
+    result = run_agent(_deps([_write("<?php class A {}")]), _TASK)
+    assert result.status == STATUS_NEEDS_HUMAN_REVIEW
+    assert result.abort_code == "repetitive_loop_detected"
+    assert "app/A.php" in (result.output or "")
+
+
+def test_sterile_repetition_still_aborts() -> None:
+    # A non-producing verb (echo) repeated identically with NOTHING produced stays a
+    # hard abort — the escalation gate only fires when work exists.
+    result = run_agent(_deps([_act("echo", text="x")]), _TASK)
+    assert result.status == STATUS_ABORTED
+    assert result.abort_code == "repetitive_loop_detected"
+
+
+def test_readonly_repetition_does_not_hard_abort() -> None:
+    # Tema C: a read-only tool repeated identically must NOT trip the repetitive-loop
+    # guard (it cannot corrupt the deliverable); termination is guaranteed by the
+    # iteration budget instead, so the run ends on max_iterations, not on the loop.
+    budgets = Budgets(max_iterations=6)
+    result = run_agent(_deps([_act("read_file", path="a.php")]), _TASK, budgets=budgets)
+    assert result.abort_code == "max_iterations_exceeded"
+    assert result.abort_code != "repetitive_loop_detected"
+    assert result.status == STATUS_ABORTED  # nothing produced → clean abort
+
+
+def test_varying_content_leaks_to_max_iterations_and_escalates() -> None:
+    # B3: a model that VARIES content every turn never trips the loop detector and
+    # would leak out via the iteration budget. Because it produced files, that leak
+    # ESCALATES (preserving the work) rather than aborting.
+    budgets = Budgets(max_iterations=4)
+    writes = [_write(f"<?php // turn {i}") for i in range(4)]
+    result = run_agent(_deps(writes), _TASK, budgets=budgets)
+    assert result.status == STATUS_NEEDS_HUMAN_REVIEW
+    assert result.abort_code == "max_iterations_exceeded"
+    assert "app/A.php" in (result.output or "")

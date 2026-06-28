@@ -95,6 +95,77 @@ def _is_producing_tool(tool: str | None) -> bool:
     return _base_tool_name(tool) in _PRODUCING_TOOLS
 
 
+# Read-only / idempotent tools EXEMPT from the hard repetitive-loop abort (Tema C):
+# repeating them wastes turns but cannot corrupt the deliverable, so they only earn
+# the repetition nudge (B1) and are bounded by max_iterations/wall_clock — never a
+# hard abort. The research/inspection tools are the read-only allowlist.
+_READONLY_TOOLS = _RESEARCH_TOOLS
+
+
+def _is_readonly_tool(tool: str | None) -> bool:
+    return _base_tool_name(tool) in _READONLY_TOOLS
+
+
+def _is_mutating_tool(tool: str | None) -> bool:
+    """Whether repeating ``tool`` could change the deliverable (Tema C).
+
+    A MUTATOR (a producing tool, OR any unknown/unclassified verb — conservative by
+    default, e.g. ``echo``) trips the hard repetitive-loop abort/escalation; a known
+    READ-ONLY tool (``_READONLY_TOOLS``) does NOT — repeating it merely wastes turns,
+    which the iteration / wall-clock budgets already bound, so it gets the B1 nudge
+    instead. Defaulting unknowns to MUTATING preserves the existing hard-abort
+    guarantee (a runaway writer — or any non-read-only verb — is always caught).
+    """
+    return not _is_readonly_tool(tool)
+
+
+def _abort_or_escalate_status(has_produced: bool) -> str:
+    """The terminal status for a budget/loop trip, gated by whether work exists.
+
+    ADR 0087 (B2/B3): a run that has ALREADY produced a deliverable must not be
+    discarded as a hard ``aborted`` failure when a safeguard trips — its work is
+    preserved and the run is ESCALATED to a human (``needs_human_review``). A
+    STERILE run (nothing produced) is a clean ``aborted`` as before. The abort_code
+    is unchanged in either case; only the lifecycle status differs.
+    """
+    return STATUS_NEEDS_HUMAN_REVIEW if has_produced else STATUS_ABORTED
+
+
+def _repetition_nudge(
+    *, tool: str | None, repeat_count: int, threshold: int, has_produced: bool
+) -> str | None:
+    """Warn the agent one turn BEFORE the loop detector aborts a repeated action.
+
+    The detector aborts on the ``(threshold + 1)``-th IDENTICAL action (same tool +
+    same args → same bytes). This fires earlier, once ``repeat_count >= threshold``,
+    so the agent gets a chance to break the rut itself. Returns ``None`` until the
+    action has repeated enough to warn. The wording branches by tool CLASS:
+
+      * a MUTATING tool (``write_file``/``edit_file``/…) — the bytes are already
+        saved; repeating writes nothing new, so the fix is to apply the review
+        feedback or FINISH via ``submit_result``, not to re-write;
+      * a READ-ONLY / verification tool — the result is already in hand; reuse it
+        instead of re-running the identical query.
+    """
+    if tool is None or repeat_count < threshold:
+        return None
+    name = _base_tool_name(tool) or "that tool"
+    if _is_mutating_tool(tool):
+        finish_hint = (
+            "apply the REVIEW FEEDBACK or FINISH now by calling submit_result"
+            if has_produced
+            else "apply the REVIEW FEEDBACK or move on to a DIFFERENT step"
+        )
+        return (
+            f"You have written the SAME bytes with '{name}' {repeat_count} times — it "
+            f"is already saved and repeating it changes nothing. Stop repeating: {finish_hint}."
+        )
+    return (
+        f"You have already run '{name}' with these exact arguments {repeat_count} times — "
+        "use the result you already have instead of repeating it."
+    )
+
+
 def _research_nudge(
     *, tool: str | None, research_streak: int, repeat_count: int, has_produced: bool = False
 ) -> str | None:
@@ -185,14 +256,14 @@ def _harvest_worktree_files(root: Path, prefer: list[str]) -> list[dict[str, str
     rels: list[str] = []
     for path in candidates:
         try:
-            rel = path.relative_to(root)
+            rel_path = path.relative_to(root)
         except ValueError:  # pragma: no cover - defensive
             continue
-        if set(rel.parts) & _REVIEW_EXCLUDE_DIRS:
+        if set(rel_path.parts) & _REVIEW_EXCLUDE_DIRS:
             continue
-        if rel.name in _REVIEW_EXCLUDE_NAMES or rel.suffix in _REVIEW_EXCLUDE_SUFFIXES:
+        if rel_path.name in _REVIEW_EXCLUDE_NAMES or rel_path.suffix in _REVIEW_EXCLUDE_SUFFIXES:
             continue
-        rels.append(rel.as_posix())
+        rels.append(rel_path.as_posix())
     preferred = [r for r in prefer if r in rels]
     ordered = preferred + sorted(r for r in rels if r not in preferred)
     harvested: list[dict[str, str]] = []
@@ -271,7 +342,11 @@ class ExecutionResult:
 # Conditional-edge routers — pure functions of the state.
 # ---------------------------------------------------------------------------
 def _route_after_plan(state: AgentState) -> str:
-    if state["status"] in (STATUS_ABORTED, STATUS_AWAITING_APPROVAL):
+    # NEEDS_HUMAN_REVIEW joins the terminal set (B2/B3): a plan trip that ESCALATED
+    # (loop/budget with work already produced) must go to finalize, NOT act — else
+    # the ACT decision still on the state would route to `act` and EXECUTE the very
+    # action the trip was meant to stop (e.g. the 4th identical write).
+    if state["status"] in (STATUS_ABORTED, STATUS_AWAITING_APPROVAL, STATUS_NEEDS_HUMAN_REVIEW):
         return "finalize"
     decision = state["last_decision"]
     if decision is not None and decision["kind"] == str(DecisionKind.FINISH):
@@ -343,16 +418,21 @@ class _AgentLoop:
         # Iteration budget — checked before this turn is counted, so the
         # reported iteration count never exceeds max_iterations.
         if self.tracker.iteration_exhausted():
+            # B3: a model that VARIES its output every turn never trips the loop
+            # detector and would leak out here via the iteration budget; gate it like
+            # the loop trip so a run that already produced work ESCALATES (preserving
+            # the deliverable) instead of being discarded as a hard abort.
+            status = _abort_or_escalate_status(self.has_produced)
             steps.append(
                 node_step(
                     base,
                     "plan",
                     f"Safeguard tripped: {SafeguardCode.MAX_ITERATIONS}",
-                    status="aborted",
+                    status="aborted" if status == STATUS_ABORTED else status,
                 )
             )
             return {
-                "status": STATUS_ABORTED,
+                "status": status,
                 "abort_code": str(SafeguardCode.MAX_ITERATIONS),
                 "iteration": self.tracker.usage.iterations,
                 "steps": steps,
@@ -361,9 +441,19 @@ class _AgentLoop:
         self.tracker.tick_iteration()
         tripped = self.tracker.check()
         if tripped is not None:
-            steps.append(node_step(base, "plan", f"Safeguard tripped: {tripped}", status="aborted"))
+            # B3: same gating for the cumulative budgets (tool calls / wall clock /
+            # tokens / cost) — preserve produced work, abort a sterile run.
+            status = _abort_or_escalate_status(self.has_produced)
+            steps.append(
+                node_step(
+                    base,
+                    "plan",
+                    f"Safeguard tripped: {tripped}",
+                    status="aborted" if status == STATUS_ABORTED else status,
+                )
+            )
             return {
-                "status": STATUS_ABORTED,
+                "status": status,
                 "abort_code": str(tripped),
                 "iteration": self.tracker.usage.iterations,
                 "steps": steps,
@@ -409,17 +499,26 @@ class _AgentLoop:
 
         if decision.kind == DecisionKind.ACT:
             action = {"tool": decision.tool, "args": decision.tool_args}
-            if self.detector.record(action):
+            # ALWAYS record (the count feeds count_of/the B1 nudge), but only a
+            # MUTATING tool trips the hard repetitive-loop guard (Tema C): a read-only
+            # tool repeated identically wastes turns but cannot corrupt the deliverable,
+            # so it gets the nudge and is bounded by max_iterations/wall_clock instead.
+            tripped_loop = self.detector.record(action)
+            if tripped_loop and _is_mutating_tool(decision.tool):
+                # B2: when work was already produced, ESCALATE (preserve it) rather
+                # than hard-abort; a sterile loop stays aborted. The abort_code is
+                # unchanged either way (the persisted contract).
+                status = _abort_or_escalate_status(self.has_produced)
                 steps.append(
                     node_step(
                         base + len(steps),
                         "plan",
                         f"Repetitive loop detected on tool '{decision.tool}'",
-                        status="aborted",
+                        status="aborted" if status == STATUS_ABORTED else status,
                     )
                 )
                 return {
-                    "status": STATUS_ABORTED,
+                    "status": status,
                     "abort_code": str(SafeguardCode.REPETITIVE_LOOP),
                     "last_decision": decision.as_dict(),
                     "iteration": self.tracker.usage.iterations,
@@ -535,12 +634,41 @@ class _AgentLoop:
             # (_decide_messages feeds the recent context tail to the model).
             updates["context"] = [{"role": "guidance", "note": nudge}]
             summary = f"Reflection: {note} — guidance: stop researching, produce output"
+        # B1: the repetition warning fires one turn before the detector would abort
+        # (count >= threshold). It rides the SCALAR `repetition_warning` field — NOT
+        # `context` (operator.add): appending to context would reorder context[0] and
+        # bury the warning in the bounded tail; `_decide_messages` renders the scalar
+        # always, outside that tail.
+        rep_warning = _repetition_nudge(
+            tool=tool,
+            repeat_count=repeat_count,
+            threshold=self.detector.threshold,
+            has_produced=self.has_produced,
+        )
+        if rep_warning is not None:
+            updates["repetition_warning"] = rep_warning
         updates["steps"] = [node_step(len(state["steps"]), "reflect", summary)]
         return updates
 
-    @staticmethod
-    def finalize(state: AgentState) -> dict[str, Any]:
-        """Produce the final output (or the abort / approval summary)."""
+    def _deliverable_summary(self) -> str:
+        """A human-readable summary of the deliverable on disk — the files the agent
+        produced — for a plan-trip escalation (B2/B3).
+
+        The looping/over-budget action's own ``output`` is the WRONG thing to show
+        (it is the repeated action, not the work). The work is the set of files
+        written: prefer the CUMULATIVE worktree state, falling back to this run's
+        write capture when there is no worktree (tests / analysis runs). Returns ``""``
+        when nothing was produced (the caller then keeps the abort_code summary).
+        """
+        files = _harvest_worktree_files(_workspace_root(), list(self.written_files))
+        paths = [entry["path"] for entry in files] if files else sorted(self.written_files)
+        if not paths:
+            return ""
+        listed = "\n".join(f"- {path}" for path in paths)
+        return f"Deliverable produced ({len(paths)} file(s)) — escalated to human review:\n{listed}"
+
+    def finalize(self, state: AgentState) -> dict[str, Any]:
+        """Produce the final output (or the abort / approval / escalation summary)."""
         base = len(state["steps"])
         if state["status"] == STATUS_ABORTED:
             output = state["output"] or f"Execution aborted ({state['abort_code']})."
@@ -549,6 +677,25 @@ class _AgentLoop:
                 "finalize",
                 f"Finalized aborted execution ({state['abort_code']})",
                 status="aborted",
+            )
+            return {"output": output, "steps": [step]}
+        if state["status"] == STATUS_NEEDS_HUMAN_REVIEW:
+            # Reached here ONLY from a plan-trip escalation (B2/B3): loop/budget with
+            # work already produced. Render a SUMMARY of the deliverable (the files on
+            # disk) — NOT decision['output'], which is the looping action. The
+            # POST-review escalations (agent_reported_failure / inconclusive / retries)
+            # set this status in self_review and go straight to END, so they never
+            # reach this branch.
+            output = (
+                state["output"]
+                or self._deliverable_summary()
+                or (f"Execution escalated to human review ({state['abort_code']}).")
+            )
+            step = node_step(
+                base,
+                "finalize",
+                f"Finalized — escalated to human review ({state['abort_code']})",
+                status=STATUS_NEEDS_HUMAN_REVIEW,
             )
             return {"output": output, "steps": [step]}
         if state["status"] == STATUS_AWAITING_APPROVAL:
@@ -583,7 +730,15 @@ class _AgentLoop:
         base = len(state["steps"])
         steps: list[dict[str, Any]] = []
 
-        if state["status"] in (STATUS_ABORTED, STATUS_AWAITING_APPROVAL):
+        # NEEDS_HUMAN_REVIEW joins the skip-set (B2): a plan-trip escalation already
+        # reached its verdict — running review() on it could turn a `passed` into a
+        # false `done` (STATUS_DONE), erasing the escalation. _route_after_review
+        # already routes NEEDS_HUMAN_REVIEW to END.
+        if state["status"] in (
+            STATUS_ABORTED,
+            STATUS_AWAITING_APPROVAL,
+            STATUS_NEEDS_HUMAN_REVIEW,
+        ):
             steps.append(
                 node_step(
                     base,
@@ -728,6 +883,12 @@ class _AgentLoop:
         return {
             "review_passed": False,
             "review_retries": retries,
+            # A1: the NEW authoritative channel — a SCALAR replayed verbatim every
+            # turn, rendered outside the bounded context tail by `_decide_messages`,
+            # so the feedback can't be evicted before the agent acts on it. The
+            # existing context item is kept (some tests/consumers read it) but the
+            # scalar is the one that survives a long context.
+            "last_review_feedback": review.feedback,
             "context": [{"role": "review_feedback", "feedback": review.feedback}],
             "steps": steps,
         }

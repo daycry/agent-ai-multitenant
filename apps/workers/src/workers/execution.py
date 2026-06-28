@@ -161,6 +161,15 @@ class ExecutionRequest:
     # injects into the reviewer's prompt. Default False/None = a normal run.
     review: bool = False
     review_context: dict[str, Any] | None = None
+    # Inter-run reviewer feedback (A2): the AI reviewer's prior rejection payloads
+    # for THIS task, threaded by the orchestrator when the task was rejected on an
+    # earlier pass and re-dispatched to the implementer (in_review → backlog →
+    # ready). Each entry is `{failed_criterion, what_to_fix, testreport_evidence}`.
+    # The runtime folds them into a corrective preamble so the IMPLEMENTER knows
+    # what to fix. `None` = no key (no prior rejection) → identical to the current
+    # behaviour for a first dispatch (backward-compat). Distinct from `review` /
+    # `review_context`, which drive the REVIEWER run, not the implementer.
+    prior_review_feedback: list[dict[str, Any]] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict — the Celery payload the orchestrator sends."""
@@ -179,6 +188,7 @@ class ExecutionRequest:
             "skill_prompt_fragments": self.skill_prompt_fragments,
             "review": self.review,
             "review_context": self.review_context,
+            "prior_review_feedback": self.prior_review_feedback,
         }
 
     @classmethod
@@ -199,6 +209,7 @@ class ExecutionRequest:
             skill_prompt_fragments=raw.get("skill_prompt_fragments"),
             review=bool(raw.get("review", False)),
             review_context=raw.get("review_context"),
+            prior_review_feedback=raw.get("prior_review_feedback"),
         )
 
 
@@ -324,6 +335,14 @@ def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del sp
         spec["review"] = True
         if request.review_context is not None:
             spec["review_context"] = request.review_context
+    # Inter-run reviewer feedback (A2): a re-dispatched IMPLEMENTER run carries the
+    # AI reviewer's prior rejection payloads so the runtime can fold them into a
+    # corrective preamble (`build_prior_feedback_preamble`). Only emit when present
+    # (`None`/absent = no prior rejection) — "no key" is the unchanged behaviour for
+    # a first dispatch (backward-compat). Independent of the REVIEW keys above: this
+    # is the implementer being told what to fix, not the reviewer judging.
+    if request.prior_review_feedback is not None:
+        spec["prior_review_feedback"] = request.prior_review_feedback
     # Agentes #2: advertise the agent's tools to the LLM so it can actually call
     # them (memory_recall/rag_search/read_file/…). Without this the model never
     # sees any tool → it can neither recall memory nor work through tools, for ANY

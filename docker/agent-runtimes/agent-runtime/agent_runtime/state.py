@@ -57,6 +57,15 @@ class AgentState(TypedDict):
     last_decision: dict[str, Any] | None
     last_observation: dict[str, Any] | None
 
+    # Sticky intra-run feedback (A1): the AUTHORITATIVE review's last rejection
+    # feedback and the latest repetition warning. SCALARS (replaced, not
+    # accumulated) — `_decide_messages` renders them ALWAYS, OUTSIDE the bounded
+    # context tail, so they stay in front of the model until acted on (the
+    # feedback was getting buried/evicted from the context window and the agent
+    # re-produced the same rejected output). `None` until first set.
+    last_review_feedback: str | None
+    repetition_warning: str | None
+
     output: str | None
     review_retries: int
     review_passed: bool | None
@@ -85,6 +94,8 @@ def initial_state(task: AgentTask, *, system_preamble: str | None = None) -> Age
         reflections=[],
         last_decision=None,
         last_observation=None,
+        last_review_feedback=None,
+        repetition_warning=None,
         output=None,
         review_retries=0,
         review_passed=None,
