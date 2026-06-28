@@ -35,6 +35,7 @@ from collections.abc import Iterable
 _CATALOG_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "apply_patch",
+        "delete_file",
         "http_get",
         "http_post",
         "list_files",
@@ -76,6 +77,7 @@ CANONICAL_TOOL_NAMES: frozenset[str] = _CATALOG_TOOL_NAMES | _ORCHESTRATION_TOOL
 _ALIAS_TO_CANONICAL: dict[str, frozenset[str]] = {
     "file_read": frozenset({"read_file"}),
     "file_write": frozenset({"write_file"}),
+    "file_delete": frozenset({"delete_file"}),
     "file_list": frozenset({"list_files"}),
     "http_request": frozenset({"http_get", "http_post"}),
     "notify_user": frozenset({"send_notification"}),
@@ -108,6 +110,7 @@ RUNTIME_WIRED_TOOL_NAMES: frozenset[str] = frozenset(
         # file family
         "read_file",
         "write_file",
+        "delete_file",
         "list_files",
         # network family
         "http_get",

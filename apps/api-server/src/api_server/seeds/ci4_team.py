@@ -68,7 +68,12 @@ def _ci4_agent_id(slug: str) -> UUID:
 # TODOS; run_* a backend/dba/qa/devops; http_* a auth-security/devops. La
 # familia git dedicada se retiró en 06.18 (ADR 0049); git se hace vía shell-exec.
 # ---------------------------------------------------------------------------
-_FILE_TOOLS = ("read-file", "write-file", "apply-patch", "list-files", "search-code")
+# R6 (ADR 0089): se concede `delete-file` (wired) para que el agente pueda
+# reconciliar el deliverable eliminando ficheros stale/duplicados de intentos
+# previos en el worktree persistente; se RETIRA `apply-patch` del grant — no
+# tiene executor en el runtime (igual que la familia git, ADR 0049), así que el
+# modelo lo invocaba y recibía "unknown tool", quemando iteraciones.
+_FILE_TOOLS = ("read-file", "write-file", "delete-file", "list-files", "search-code")
 _RUN_TOOLS = ("run-pytest", "run-lint", "run-typecheck", "run-build")
 # Base que todo agente del equipo recibe: ejecutar comandos del stack
 # (deny-by-default por allowed_commands del proyecto), leer/editar el repo,

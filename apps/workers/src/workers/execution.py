@@ -230,6 +230,26 @@ class ExecutionOutcome:
         }
 
 
+# Eligibility (R5): the task status the orchestrator sets right before enqueueing
+# a run of each kind — the ONLY status a run of that kind may launch from.
+_LAUNCHABLE_STATUS_BY_KIND: dict[bool, str] = {
+    False: TaskStatus.IN_PROGRESS.value,  # implementer run
+    True: TaskStatus.IN_REVIEW.value,  # reviewer run
+}
+
+
+def _task_is_launchable(status: str, *, is_review: bool) -> bool:
+    """Whether a task in ``status`` may start a run of this kind.
+
+    A re-delivered Celery message (``acks_late``) can re-fire ``run_execution``
+    for a task the operator moved to ``blocked``/``cancelled`` in the meantime
+    (e.g. after the worker restart that recovers an R1 hang). Only the in-flight
+    status the orchestrator set right before enqueueing is launchable; anything
+    else means the task moved on and the run must be a no-op (R5).
+    """
+    return status == _LAUNCHABLE_STATUS_BY_KIND[is_review]
+
+
 @dataclass
 class _RuntimeResult:
     """The agent run's result, in the shape `finalize_execution`
@@ -967,6 +987,23 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 "workers.superseded_stale_executions",
                 task_id=str(task_id),
                 count=superseded,
+            )
+        # Eligibility guard (R5): a re-delivered message (acks_late, e.g. after a
+        # worker restart that recovers an R1 hang) must NOT launch a runtime for a
+        # task the operator has since moved out of the launchable state (the
+        # "phantom docker" on a `blocked` task). Skip BEFORE creating the
+        # execution / provisioning the worktree / launching the container. The
+        # early return commits the (orphan-closing) supersede above and ACKs the
+        # Celery message — no re-queue.
+        if not _task_is_launchable(task.status, is_review=request.review):
+            _log.warning(
+                "workers.ineligible_task_skipped",
+                task_id=str(task_id),
+                status=task.status,
+                is_review=request.review,
+            )
+            return ExecutionOutcome(
+                execution_id="", status="skipped", abort_code="ineligible_task_status"
             )
         execution = await create_running_execution(
             session,

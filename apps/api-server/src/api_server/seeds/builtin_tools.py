@@ -1,7 +1,7 @@
 """Built-in tool catalog (task_01_11; shell_exec added task_06_16_02;
-git family retired task_06_18_06).
+git family retired task_06_18_06; delete_file added R6/ADR 0089).
 
-Fifteen tool definitions covering file ops, code runtime, HTTP,
+Sixteen tool definitions covering file ops, code runtime, HTTP,
 knowledge, notifications and one shell command. The ``git`` family was
 removed (ADR 0049): it had no runtime executor, so it could never run.
 Each row's ``is_runtime_wired`` (derived in ``ToolResponse``) tells the
@@ -62,7 +62,7 @@ def _obj(props: dict[str, Any], required: list[str] | None = None) -> dict[str, 
 
 
 # ---------------------------------------------------------------------------
-# Catalog -- 15 tools (git family retired, task_06_18_06)
+# Catalog -- 16 tools (git family retired task_06_18_06; delete_file added R6)
 # ---------------------------------------------------------------------------
 BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     # ----- File / Project -----
@@ -93,6 +93,22 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
             ["path", "content"],
         ),
         _obj({"bytes_written": {"type": "integer"}}, ["bytes_written"]),
+    ),
+    BuiltinTool(
+        "delete-file",
+        "delete_file",
+        "Borra un archivo del worktree de la tarea. Sandboxed: solo bajo el worktree. "
+        "Úsalo para eliminar ficheros stale/duplicados de intentos previos y reconciliar el "
+        "deliverable.",
+        "file",
+        "builtin",
+        "sandboxed",
+        10,
+        _obj(
+            {"path": {"type": "string", "description": "Ruta relativa al worktree."}},
+            ["path"],
+        ),
+        _obj({"deleted": {"type": "boolean"}}, ["deleted"]),
     ),
     BuiltinTool(
         "apply-patch",

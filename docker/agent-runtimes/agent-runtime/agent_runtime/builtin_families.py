@@ -142,6 +142,7 @@ def register_builtin_families(
         files = WorkspaceFiles(root=_workspace_root())
         _add("read_file", files.file_read)
         _add("write_file", files.file_write)
+        _add("delete_file", files.file_delete)
         _add("list_files", files.file_list)
 
     # --- network family: http_get / http_post (canonical) -------------------

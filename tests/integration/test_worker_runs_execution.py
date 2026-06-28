@@ -305,6 +305,46 @@ async def test_unresolvable_model_fails_fast_without_launching_a_container(
 
 
 @pytest.mark.asyncio
+async def test_blocked_task_skips_without_launching_a_container(
+    _migrated: None, admin_database_url: str, test_redis_url: str
+) -> None:
+    """R5: a re-delivered run_execution (acks_late, e.g. after the worker restart
+    that recovers an R1 hang) for a task the operator moved to `blocked` must NOT
+    create an execution or launch a container — it ACKs and returns a `skipped`
+    no-op. Closes the 'phantom docker' on a blocked task."""
+    engine = create_async_engine(admin_database_url)
+    redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed_task(sm)
+        # The operator moved the task to `blocked` while the message was in flight.
+        async with sm() as s, s.begin():
+            await s.execute(
+                text("UPDATE tasks SET status = 'blocked' WHERE id = :id"),
+                {"id": str(ids["task"])},
+            )
+
+        outcome = await conduct_execution(
+            _request(ids, model=_ACT_THEN_FINISH),
+            settings=Settings(),
+            sessionmaker=sm,
+            redis=redis,
+        )
+
+        assert outcome.status == "skipped"
+        assert outcome.abort_code == "ineligible_task_status"
+        assert outcome.execution_id == ""
+
+        # No execution row was created — the guard runs BEFORE create_running_execution.
+        async with sm() as s:
+            executions = await list_executions_for_task(s, ids["task"])
+        assert executions == []
+    finally:
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_conduct_execution_cancelled_by_operator_flag(
     _migrated: None, admin_database_url: str, test_redis_url: str
 ) -> None:

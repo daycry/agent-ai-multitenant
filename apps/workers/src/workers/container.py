@@ -268,11 +268,26 @@ class AgentContainerRunner:
     @staticmethod
     def _await_exit(container: Any, budget: int) -> bool:
         """Poll until the container exits or the wall-clock budget runs
-        out. Returns True if it had to be killed."""
+        out. Returns True if it had to be killed.
+
+        R1: a container that VANISHES mid-run is TERMINAL, not a timeout. When a
+        runtime crashes at startup its ``--rm`` removes it, so ``reload()`` 404s
+        (``docker.errors.NotFound``). Previously that 404 was suppressed and the
+        loop polled the ghost on ``GET /containers/<id>/json`` until the whole
+        per-provider budget elapsed (huge for claude_sdk) — hanging the worker
+        (its beat + reconciler froze). Treat NotFound as "exited" at once; only a
+        transient ``APIError`` is retried.
+        """
         deadline = time.monotonic() + budget
         while True:
-            with contextlib.suppress(docker.errors.APIError):
+            try:
                 container.reload()
+            except docker.errors.NotFound:
+                # Gone from the daemon — crashed + auto-removed. Terminal, and not
+                # a wall-clock kill, so the caller finalises it as a failed run.
+                return False
+            except docker.errors.APIError:
+                pass  # transient daemon hiccup — retry on the next tick
             if container.status in ("exited", "dead"):
                 return False
             if time.monotonic() >= deadline:
@@ -285,8 +300,25 @@ class AgentContainerRunner:
 
     @staticmethod
     def _capture(container: Any, *, timed_out: bool) -> ContainerResult:
-        """Read logs + a trimmed inspect snapshot before removal."""
-        raw_logs = container.logs(stdout=True, stderr=True)
+        """Read logs + a trimmed inspect snapshot before removal.
+
+        R1: a container that vanished mid-run (``--rm`` after a startup crash)
+        makes ``logs()`` 404. Fall back to a minimal result (exit_code -1, empty
+        logs) so the run finalises ``failed`` ("exited with no result") instead of
+        the NotFound propagating and crashing the worker thread.
+        """
+        try:
+            raw_logs = container.logs(stdout=True, stderr=True)
+        except docker.errors.NotFound:
+            return ContainerResult(
+                container_id=str(getattr(container, "id", "") or ""),
+                exit_code=-1,
+                logs="",
+                timed_out=timed_out,
+                host_config={},
+                config_env=(),
+                networks=(),
+            )
         logs = raw_logs.decode("utf-8", errors="replace") if isinstance(raw_logs, bytes) else ""
 
         attrs = container.attrs or {}

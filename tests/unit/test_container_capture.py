@@ -19,7 +19,7 @@ exercised with a fake docker container (no real Docker):
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from workers.config import Settings
@@ -167,6 +167,77 @@ def test_voluminous_tail_is_not_cut_short_before_removal() -> None:
     # removed after the pump had drained all of them.
     assert len(lines) == 500
     assert seen_at_remove["count"] == 500
+
+
+# ---------------------------------------------------------------------------
+# R1 — a container that VANISHES mid-run (crashed at startup, `--rm` removed it)
+# must be terminal at once, not polled until the (per-provider, huge) budget —
+# that ghost-poll loop on `GET /containers/<id>/json -> 404` hung the worker.
+# ---------------------------------------------------------------------------
+class _VanishingContainer:
+    """Fake container the daemon no longer knows: reload()/logs() 404."""
+
+    id = "ghost"
+    status = "running"  # never updates — reload() raises instead
+    attrs: ClassVar[dict[str, Any]] = {}
+
+    def reload(self) -> None:
+        import docker
+
+        raise docker.errors.NotFound("No such container: ghost")
+
+    def logs(self, **_: Any) -> Any:
+        import docker
+
+        raise docker.errors.NotFound("No such container: ghost")
+
+    def kill(self) -> None:  # pragma: no cover - not reached
+        pass
+
+    def remove(self, *, force: bool = False) -> None:
+        pass
+
+
+def test_await_exit_is_terminal_when_container_vanishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A huge budget: without the fix, a vanished container is polled for the WHOLE
+    # budget (the worker hang). Patch sleep to FAIL so any polling is caught — the
+    # NotFound path must return BEFORE the first poll.
+    import workers.container as cont
+
+    monkeypatch.setattr(
+        cont.time, "sleep", lambda *_a, **_k: pytest.fail("polled a vanished container (R1 hang)")
+    )
+    timed_out = AgentContainerRunner._await_exit(_VanishingContainer(), budget=10_000)
+    # Vanished/crashed is terminal, NOT a wall-clock timeout.
+    assert timed_out is False
+
+
+def test_capture_tolerates_a_vanished_container() -> None:
+    # `_capture` reads logs() — which 404s for a gone container. It must fall back
+    # to a minimal result so the run finalises `failed` ("exited with no result")
+    # instead of the NotFound propagating and crashing the worker thread.
+    result = AgentContainerRunner._capture(_VanishingContainer(), timed_out=False)
+    assert result.exit_code == -1
+    assert result.logs == ""
+
+
+def test_run_streamed_does_not_hang_when_container_vanishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import workers.container as cont
+
+    monkeypatch.setattr(
+        cont.time, "sleep", lambda *_a, **_k: pytest.fail("polled a vanished container (R1 hang)")
+    )
+    runner = AgentContainerRunner(Settings(), client=object())
+    container = _VanishingContainer()
+    runner._start = lambda spec: container  # type: ignore[method-assign,assignment]
+
+    result = runner.run_streamed(_spec(), lambda _line: None)
+
+    # The run returns a (failed-ish) result with no events, not a hang.
+    assert result.exit_code == -1
+    assert result.logs == ""
 
 
 def _spec() -> Any:

@@ -71,6 +71,29 @@ class WorkspaceFiles:
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         return ToolResult(ok=True, output={"path": args.get("path"), "bytes_written": len(content)})
 
+    def file_delete(self, args: dict[str, object]) -> ToolResult:
+        """Remove a single file under the workspace (R6 / ADR 0089).
+
+        The agent needs this to reconcile a deliverable when an earlier run
+        left a stale or duplicate file in the (persistent) worktree — `rm` /
+        `git rm` are gated by the shell allowlist and there was no delete tool,
+        so competing implementations could never be cleaned up. Path-jailed like
+        every file tool; refuses a directory so a stray `path` cannot wipe a
+        subtree.
+        """
+        resolved = self._safe_path(args.get("path"))
+        if isinstance(resolved, ToolResult):
+            return resolved
+        if resolved.is_dir():
+            return ToolResult(ok=False, error=f"is a directory, not a file: {args.get('path')}")
+        if not resolved.exists():
+            return ToolResult(ok=False, error=f"not a file: {args.get('path')}")
+        try:
+            resolved.unlink()
+        except OSError as exc:
+            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        return ToolResult(ok=True, output={"path": args.get("path"), "deleted": True})
+
     def file_list(self, args: dict[str, object]) -> ToolResult:
         resolved = self._safe_path(args.get("path", "."))
         if isinstance(resolved, ToolResult):
