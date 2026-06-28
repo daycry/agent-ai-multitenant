@@ -1,0 +1,207 @@
+"""Integration test — convergence reconciler (audit C3 / P0.6,
+``workers.reconcile_pipeline_state``).
+
+Exercises the three DB passes of ``_reconcile_pipeline_state_async`` end to end on
+the throwaway PG stack, with an in-memory fake Redis capturing the re-emitted events:
+
+  (a) a task stuck ``in_progress`` whose last execution is terminal (and settled past
+      the age threshold) is transitioned off ``in_progress`` (dag_01 policy) and its
+      ``task.status_changed`` re-emitted; a task whose run JUST finished is left alone.
+  (b) an ``in_review`` task with an AI reviewer, no live/recent review run, sitting
+      past the threshold, gets its ``in_review`` event re-announced.
+  (c) an ``in_progress`` plan whose tasks are ALL terminal flips to
+      ``pending_human_validation``.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from uuid import UUID, uuid4
+
+import asyncpg
+import pytest
+from alembic import command
+from api_server.db.domain import Plan, Task, TaskStatus
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+pytestmark = pytest.mark.integration
+
+
+class _FakeRedis:
+    """Captures ``xadd`` calls so the test asserts the re-emitted task events."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    async def xadd(self, stream: str, fields: dict[str, Any], **_kw: Any) -> None:
+        self.events.append({"stream": stream, **fields})
+
+    async def aclose(self) -> None:  # pragma: no cover - injected, never closed here
+        ...
+
+
+@pytest.fixture()
+def _migrated(alembic_config: object) -> None:
+    command.upgrade(alembic_config, "head")
+
+
+@pytest.fixture()
+def workers_settings(monkeypatch: pytest.MonkeyPatch, migrations_pg_dsn: str):
+    async_dsn = migrations_pg_dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
+    monkeypatch.setenv("WORKERS_DATABASE_URL", async_dsn)
+    from workers.config import get_settings, reset_settings_cache
+
+    reset_settings_cache()
+    yield get_settings()
+    reset_settings_cache()
+
+
+async def _seed(dsn: str) -> dict[str, UUID]:
+    ids = {
+        "tenant": uuid4(),
+        "project": uuid4(),
+        "reviewer": uuid4(),
+        # (a) stuck task: in_progress, last execution terminal + old.
+        "task_stuck": uuid4(),
+        "exec_stuck": uuid4(),
+        # (a) fresh task: in_progress, last execution terminal but just now → untouched.
+        "task_fresh": uuid4(),
+        "exec_fresh": uuid4(),
+        # (b) orphan review: in_review + AI reviewer + no live/recent run.
+        "task_review": uuid4(),
+        # (c) complete plan: in_progress, every task done.
+        "plan_done": uuid4(),
+        "task_plan_a": uuid4(),
+        "task_plan_b": uuid4(),
+    }
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "TRUNCATE executions, tasks, plans, agents, projects, organizations"
+            " RESTART IDENTITY CASCADE"
+        )
+        await conn.execute(
+            "INSERT INTO organizations (id, name, slug) VALUES ($1, 'T rec', 't-reconciler')",
+            ids["tenant"],
+        )
+        await conn.execute(
+            "INSERT INTO projects (id, tenant_id, name, status, is_template)"
+            " VALUES ($1, $2, 'P', 'active', false)",
+            ids["project"],
+            ids["tenant"],
+        )
+        # An AI reviewer agent for case (b). `system_prompt` is NOT NULL.
+        await conn.execute(
+            "INSERT INTO agents"
+            " (id, tenant_id, project_id, name, agent_type, scope, role, system_prompt)"
+            " VALUES ($1, $2, $3, 'Rev', 'ai', 'project_local', 'reviewer', 'You review tasks.')",
+            ids["reviewer"],
+            ids["tenant"],
+            ids["project"],
+        )
+        # (a) stuck + fresh in_progress tasks (started long ago so both pass the
+        # task-age pre-filter; the execution recency is what differs).
+        for tid in (ids["task_stuck"], ids["task_fresh"]):
+            await conn.execute(
+                "INSERT INTO tasks (id, tenant_id, project_id, title, status, priority,"
+                " started_at) VALUES ($1, $2, $3, 'task', 'in_progress', 'medium',"
+                " now() - interval '1 hour')",
+                tid,
+                ids["tenant"],
+                ids["project"],
+            )
+        await conn.execute(
+            "INSERT INTO executions (id, tenant_id, task_id, status, started_at, completed_at)"
+            " VALUES ($1, $2, $3, 'failed', now() - interval '1 hour',"
+            " now() - interval '30 minutes')",
+            ids["exec_stuck"],
+            ids["tenant"],
+            ids["task_stuck"],
+        )
+        await conn.execute(
+            "INSERT INTO executions (id, tenant_id, task_id, status, started_at, completed_at)"
+            " VALUES ($1, $2, $3, 'done', now() - interval '2 minutes', now())",
+            ids["exec_fresh"],
+            ids["tenant"],
+            ids["task_fresh"],
+        )
+        # (b) in_review task with the AI reviewer, sitting > threshold (updated_at old),
+        # no executions at all → review dispatch was lost.
+        await conn.execute(
+            "INSERT INTO tasks (id, tenant_id, project_id, title, status, priority,"
+            " reviewer_agent_id, updated_at) VALUES ($1, $2, $3, 'rev-task', 'in_review',"
+            " 'medium', $4, now() - interval '20 minutes')",
+            ids["task_review"],
+            ids["tenant"],
+            ids["project"],
+            ids["reviewer"],
+        )
+        # (c) in_progress plan with two done tasks → should close.
+        await conn.execute(
+            "INSERT INTO plans (id, tenant_id, project_id, title, status)"
+            " VALUES ($1, $2, $3, 'Done plan', 'in_progress')",
+            ids["plan_done"],
+            ids["tenant"],
+            ids["project"],
+        )
+        for tid in (ids["task_plan_a"], ids["task_plan_b"]):
+            await conn.execute(
+                "INSERT INTO tasks (id, tenant_id, project_id, plan_id, title, status, priority)"
+                " VALUES ($1, $2, $3, $4, 'plan-task', 'done', 'medium')",
+                tid,
+                ids["tenant"],
+                ids["project"],
+                ids["plan_done"],
+            )
+        return ids
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_pipeline_state(
+    _migrated: None, workers_settings: object, migrations_pg_dsn: str
+) -> None:
+    from workers.maintenance import _reconcile_pipeline_state_async
+
+    ids = await _seed(migrations_pg_dsn)
+    redis = _FakeRedis()
+
+    result = await _reconcile_pipeline_state_async(
+        workers_settings,  # type: ignore[arg-type]
+        redis=redis,
+        now=datetime.now(UTC),
+        stuck_task_min_age=timedelta(minutes=5),
+        review_min_age=timedelta(minutes=5),
+    )
+
+    assert result == {"stuck_tasks": 1, "orphan_reviews": 1, "completed_plans": 1}
+
+    engine = create_async_engine(workers_settings.database_url)  # type: ignore[attr-defined]
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessionmaker() as session:
+            task_stuck = await session.get(Task, ids["task_stuck"])
+            task_fresh = await session.get(Task, ids["task_fresh"])
+            plan_done = await session.get(Plan, ids["plan_done"])
+
+        # (a) the stuck task (terminal failed run) is moved off in_progress → blocked;
+        # the fresh task (run just finished) is left for the worker's post-processing.
+        assert task_stuck is not None and task_stuck.status == TaskStatus.BLOCKED.value
+        assert task_fresh is not None and task_fresh.status == TaskStatus.IN_PROGRESS.value
+        # (c) the plan with all-done tasks closes to pending_human_validation.
+        assert plan_done is not None and plan_done.status == "pending_human_validation"
+    finally:
+        await engine.dispose()
+
+    # The re-emitted events landed on the task event stream: the stuck task's
+    # in_progress→blocked and the orphan review's re-announce (in_review→in_review).
+    new_statuses = [
+        json.loads(e["payload"]).get("new_status")
+        for e in redis.events
+        if e.get("type") == "task.status_changed"
+    ]
+    assert TaskStatus.BLOCKED.value in new_statuses
+    assert new_statuses.count(TaskStatus.IN_REVIEW.value) == 1

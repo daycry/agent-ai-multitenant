@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -53,10 +54,20 @@ from api_server.db.platform_settings import (
 )
 from api_server.events import publish_task_status_changed
 from api_server.plan_progress import TaskSnapshot, transition_to_pending_human_validation
+from api_server.review_autostart import (
+    COMPOSE_REVIEW_RUNTIME_TASK as _COMPOSE_REVIEW_RUNTIME_TASK,
+)
+from api_server.review_autostart import (
+    REVIEW_QUEUE as _REVIEW_QUEUE,
+)
+from api_server.review_autostart import (
+    build_review_autostart_request,
+)
 from api_server.task_state_machine import transition_task_status
 from celery import Celery
 from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from orchestrator.assignment import (
@@ -69,10 +80,25 @@ from orchestrator.assignment import (
     assign_skill_match,
 )
 from orchestrator.config import Settings
-from orchestrator.consumer import EventHandler
+from orchestrator.consumer import EventHandler, TransientHandlerError
 from orchestrator.events import EVENT_TASK_CREATED, EVENT_TASK_STATUS_CHANGED, TaskEvent
 
 _log = structlog.get_logger("orchestrator.dispatch")
+
+
+def _is_transient_db_error(exc: BaseException) -> bool:
+    """True for a DB error that is a TRANSIENT connectivity blip (a dropped /
+    reset connection), not a deterministic programming/integrity fault.
+
+    A transient error on a plan-close or review trigger must be RETRIED, not
+    dead-lettered (C3 F05): the handler re-raises it as
+    :class:`TransientHandlerError` so the consumer leaves the event pending for
+    reclaim. A non-transient DB error (bad SQL, constraint violation) would only
+    fail again on retry, so it falls through to the normal dead-letter path."""
+    if isinstance(exc, OperationalError | InterfaceError):
+        return True
+    return isinstance(exc, DBAPIError) and bool(exc.connection_invalidated)
+
 
 # A task is dispatchable the moment it reaches `ready`.
 _READY = "ready"
@@ -92,6 +118,13 @@ _DISPATCH_EVENT_TASK = "notification_dispatcher.dispatch_event"
 # The notification event_type a freshly-routed human task fires (registered in
 # notification_dispatcher.event_mapping.EVENT_REGISTRY + templates).
 _HUMAN_TASK_ASSIGNED_EVENT = "human_task_assigned"
+
+# --- review-runtime autostart (C8 F39 / ADR 0063, de-deferred D2) -----------
+# The autostart constants + helpers + the async builder now live in
+# `api_server.review_autostart` — the SINGLE source of truth shared by this live
+# path AND the convergence reconciler (`workers.maintenance._reconcile_complete_
+# plans`). `_COMPOSE_REVIEW_RUNTIME_TASK` / `_REVIEW_QUEUE` are imported above
+# (aliased) for the enqueue; `build_review_autostart_request` for the payload.
 
 
 def _is_ready_trigger(event: TaskEvent) -> bool:
@@ -196,12 +229,16 @@ class TaskDispatcher:
         self._redis = redis
         self._round_robin = RoundRobin()
 
-    async def _publish_status_changed(self, event: TaskEvent, new_status: str) -> None:
-        """Best-effort emit of the post-dispatch ``ready -> new_status`` event.
+    async def _publish_status_changed(
+        self, event: TaskEvent, new_status: str, *, old_status: str = _READY
+    ) -> None:
+        """Best-effort emit of a post-dispatch ``old_status -> new_status`` event.
 
         ``publish_task_status_changed`` swallows its own Redis errors, so a blip
         never breaks dispatch. We build a transient :class:`Task` from the event
-        ids purely as the value carrier the publisher reads (id/tenant/project)."""
+        ids purely as the value carrier the publisher reads (id/tenant/project).
+        ``old_status`` defaults to ``ready`` (the dispatch trigger state); a
+        revert emits ``in_progress -> ready`` so the Kanban re-syncs (C3 F02)."""
         if self._redis is None:
             return
         task_ref = Task(
@@ -210,7 +247,7 @@ class TaskDispatcher:
             project_id=UUID(event.project_id),
         )
         await publish_task_status_changed(
-            self._redis, task_ref, old_status=_READY, new_status=new_status
+            self._redis, task_ref, old_status=old_status, new_status=new_status
         )
 
     async def handle(self, event: TaskEvent) -> None:
@@ -238,8 +275,26 @@ class TaskDispatcher:
             await self._publish_status_changed(event, _ASSIGNED_TO_HUMAN)
             await self._notify_human_assignment(event, result)
             return
-        await self._publish_status_changed(event, _IN_PROGRESS)
+        # C3 F02: the `in_progress` event is emitted by `_enqueue_ai_run` ONLY
+        # after the broker enqueue succeeds. Emitting it here (before the
+        # enqueue) left the Kanban showing `in_progress` for a task the enqueue
+        # then failed to deliver and reverted to `ready`.
         await self._enqueue_ai_run(event, task_id, result)
+
+    @contextlib.asynccontextmanager
+    async def _transient_db_guard(self, op: str) -> AsyncIterator[None]:
+        """Re-raise a TRANSIENT DB failure inside ``op`` as a
+        :class:`TransientHandlerError` so the consumer keeps the event pending
+        for reclaim instead of dead-lettering it (C3 F05). A non-transient error
+        (or any non-DB error) propagates unchanged → normal dead-letter path."""
+        try:
+            yield
+        except TransientHandlerError:
+            raise
+        except Exception as exc:
+            if _is_transient_db_error(exc):
+                raise TransientHandlerError(f"{op}: transient DB error: {exc}") from exc
+            raise
 
     async def _on_task_done(self, event: TaskEvent) -> None:
         """A task reached ``done``: if it was the plan's last open task, flip the
@@ -253,16 +308,31 @@ class TaskDispatcher:
         runs BYPASSRLS with an explicit tenant predicate, and already owns the
         Celery app for the follow-on review-runtime spawn.
 
-        On a winning transition it emits ``orchestrator.plan_ready_for_review`` —
-        the hook point where the review-runtime container is auto-started. That
-        spawn is deferred to ADR 0063 (the ``main_image`` provenance and the
-        plan-level worktree resolution are open product decisions; enqueuing a
-        ``compose_review_runtime`` without them would only persist a session that
-        can never serve the app).
+        On a winning transition it emits ``orchestrator.plan_ready_for_review`` AND
+        auto-starts the review-runtime (C8 F39 / ADR 0063, de-deferred D2): it
+        resolves the plan's ``main_image`` + worktree identifiers and enqueues
+        ``workers.compose_review_runtime`` so a ``review_sessions`` row is created
+        and the owner is notified with signed reviewer URLs. Until this wiring the
+        plan stalled in ``pending_human_validation`` forever (no session ⇒ the
+        reviewer URLs 404). IDEMPOTENT: the autostart no-ops when an active session
+        already exists for the plan, so it is safe even though the reconciler can
+        re-drive the same transition. The enqueue is best-effort — the plan
+        transition is already committed; a broker blip just leaves the autostart to
+        a later trigger / the operator (it never re-raises into the handler).
         """
         tenant_id = UUID(event.tenant_id)
         task_id = UUID(event.task_id)
-        async with self._sessionmaker() as session, session.begin():
+        # Collected INSIDE the txn, enqueued AFTER it commits (broker I/O must never
+        # hold the DB transaction open). ``None`` ⇒ nothing to autostart.
+        autostart_request: dict[str, Any] | None = None
+        # C3 F05: a transient DB error here must NOT dead-letter the `done` event
+        # (the plan would never close) — re-raise it as TransientHandlerError so
+        # the consumer keeps it pending for reclaim.
+        async with (
+            self._transient_db_guard("on_task_done"),
+            self._sessionmaker() as session,
+            session.begin(),
+        ):
             task = (
                 await session.execute(
                     select(Task).where(Task.id == task_id, Task.tenant_id == tenant_id)
@@ -311,6 +381,66 @@ class TaskDispatcher:
                     plan_id=str(plan.id),
                     tenant_id=str(tenant_id),
                 )
+                try:
+                    autostart_request = await self._build_review_autostart_request(
+                        session, plan=plan, tenant_id=tenant_id
+                    )
+                except Exception as exc:  # autostart must never block plan closure
+                    # Closing the plan is the committed outcome; resolving the
+                    # review payload is a best-effort follow-on. A bug / odd row
+                    # here must not roll back the transition (the reconciler or a
+                    # later trigger can still spawn the runtime).
+                    _log.error(
+                        "orchestrator.review_autostart_build_failed",
+                        plan_id=str(plan.id),
+                        error=str(exc),
+                    )
+                    autostart_request = None
+        # Enqueue OUTSIDE the txn (best-effort; never re-raises into the handler).
+        if autostart_request is not None:
+            await self._enqueue_review_runtime(autostart_request)
+
+    async def _build_review_autostart_request(
+        self, session: AsyncSession, *, plan: Plan, tenant_id: UUID
+    ) -> dict[str, Any] | None:
+        """Thin wrapper over :func:`api_server.review_autostart.build_review_
+        autostart_request` — the SINGLE source of truth shared with the reconciler.
+
+        Kept as a method (same signature) so the orchestrator's behaviour is
+        unchanged and the existing wiring/integration tests still drive it; the
+        idempotent decision (``None`` on an active session / deleted project) lives
+        in the shared module."""
+        return await build_review_autostart_request(session, plan=plan, tenant_id=tenant_id)
+
+    async def _enqueue_review_runtime(self, request: dict[str, Any]) -> None:
+        """Best-effort enqueue of ``workers.compose_review_runtime`` (C8 F39).
+
+        ``send_task`` does blocking broker I/O, so we run it off the loop (same
+        approach as the AI run + human-assignment enqueues). A failure is logged,
+        never raised: the plan transition is already committed and the autostart
+        retries on a later trigger / via the operator."""
+        try:
+            await asyncio.to_thread(self._send_compose_review_runtime, request)
+        except Exception as exc:
+            _log.error(
+                "orchestrator.review_autostart_enqueue_failed",
+                plan_id=request.get("plan_id"),
+                error=str(exc),
+            )
+            return
+        _log.info(
+            "orchestrator.review_runtime_autostarted",
+            plan_id=request.get("plan_id"),
+            main_image=request.get("main_image"),
+        )
+
+    def _send_compose_review_runtime(self, request: dict[str, Any]) -> None:
+        """Blocking broker enqueue of the review-runtime task (runs in a thread)."""
+        self._celery.send_task(
+            _COMPOSE_REVIEW_RUNTIME_TASK,
+            kwargs={"request": request},
+            queue=_REVIEW_QUEUE,
+        )
 
     async def _on_task_in_review(self, event: TaskEvent) -> None:
         """A task entered ``in_review``: if its reviewer is an AI agent, dispatch a
@@ -324,7 +454,10 @@ class TaskDispatcher:
         future sweep) retries; we never strand a half-state."""
         tenant_id = UUID(event.tenant_id)
         task_id = UUID(event.task_id)
-        async with self._sessionmaker() as session:
+        # C3 F05: a transient DB error reading the review context must NOT
+        # dead-letter the `in_review` event (the review would never dispatch) —
+        # re-raise as TransientHandlerError so the consumer retries via reclaim.
+        async with self._transient_db_guard("on_task_in_review"), self._sessionmaker() as session:
             task = (
                 await session.execute(
                     select(Task).where(Task.id == task_id, Task.tenant_id == tenant_id)
@@ -351,6 +484,27 @@ class TaskDispatcher:
             ).scalar_one_or_none()
             if project is None:
                 _log.info("orchestrator.review_skip_deleted_project", task_id=str(task_id))
+                return
+            # C3 F09: idempotent review dispatch. The task stays `in_review` for
+            # the whole review, so a re-delivered `in_review` event would launch a
+            # SECOND review run. Guard on an already-running execution for the task
+            # (the review the worker is conducting): a re-delivery is then a no-op.
+            # Residual race: the window between this enqueue and the worker creating
+            # the Execution row — narrowed, not eliminated; the run-level idempotency
+            # / reconciler is the final net.
+            review_in_flight = (
+                await session.execute(
+                    select(Execution.id)
+                    .where(
+                        Execution.task_id == task.id,
+                        Execution.tenant_id == tenant_id,
+                        Execution.status == "running",
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if review_in_flight is not None:
+                _log.info("orchestrator.review_already_in_flight", task_id=str(task_id))
                 return
             reviewer_agent_id_str = str(reviewer.id)
             review_request = await self._build_review_request(
@@ -484,20 +638,24 @@ class TaskDispatcher:
     async def _enqueue_ai_run(self, event: TaskEvent, task_id: UUID, result: _AiDispatch) -> None:
         """Enqueue the worker run for an AI-routed task (the existing path)."""
         request = result.request
-        # Operator-tunable backstop limits, read fresh per dispatch so a
-        # platform-settings change takes effect without restarting the
-        # workers (Plan 06.14 task_06_14_04 / workers-orchestrator-10).
-        soft_limit, hard_limit = await self._execution_time_limits()
         # send_task does blocking broker I/O — keep it off the loop.
         #
         # The task is already committed `in_progress` with an assignee at this
-        # point. If the broker enqueue fails (broker down, network blip) the
+        # point. If ANYTHING here fails (the operator-tunable time-limit read
+        # below, OR the broker enqueue itself — broker down, network blip) the
         # task would be stranded `in_progress` yet never picked up by a worker
-        # (workers-orchestrator-8). Revert it to `ready` in a fresh transaction
-        # so the next dispatch trigger re-enqueues it. A transactional outbox
-        # would be sturdier but is overkill here — revert-on-failure is the
-        # pragmatic safe fix (Plan 06.14 task_06_14_05).
+        # (workers-orchestrator-8). C3 F01: the `_execution_time_limits()` read
+        # is INSIDE the try so a DB blip on it reverts the task too, instead of
+        # raising past here and dead-lettering the event with the task left
+        # `in_progress` forever. Revert to `ready` in a fresh transaction so the
+        # next dispatch trigger (or the reconciler) re-enqueues it. A
+        # transactional outbox would be sturdier but is overkill here —
+        # revert-on-failure is the pragmatic safe fix (Plan 06.14 task_06_14_05).
         try:
+            # Operator-tunable backstop limits, read fresh per dispatch so a
+            # platform-settings change takes effect without restarting the
+            # workers (Plan 06.14 task_06_14_04 / workers-orchestrator-10).
+            soft_limit, hard_limit = await self._execution_time_limits()
             await asyncio.to_thread(
                 self._send_run_execution,
                 request,
@@ -505,7 +663,7 @@ class TaskDispatcher:
                 hard_limit,
             )
         except Exception as exc:
-            await self._revert_to_ready(task_id)
+            await self._revert_to_ready(event, task_id)
             _log.error(
                 "orchestrator.dispatch_enqueue_failed",
                 task_id=event.task_id,
@@ -513,6 +671,9 @@ class TaskDispatcher:
                 error=str(exc),
             )
             return
+        # C3 F02: emit `in_progress` only now the enqueue has SUCCEEDED, so the
+        # Kanban never shows `in_progress` for a run that failed to enqueue.
+        await self._publish_status_changed(event, _IN_PROGRESS)
         _log.info(
             "orchestrator.task_dispatched",
             task_id=event.task_id,
@@ -546,14 +707,18 @@ class TaskDispatcher:
             assigned_to_user_id=result.assigned_to_user_id,
         )
 
-    async def _revert_to_ready(self, task_id: UUID) -> None:
-        """Undo a dispatch whose broker enqueue failed: move the task back to
-        `ready` and clear the assignment so it can be re-dispatched.
+    async def _revert_to_ready(self, event: TaskEvent, task_id: UUID) -> None:
+        """Undo a dispatch whose enqueue failed: move the task back to `ready`,
+        clear the assignment, and re-emit the status event so the board re-syncs.
 
         Best-effort and idempotent — only a task still `in_progress` is
         reverted (a worker may have raced ahead, though the broker-down case
         that triggers this makes that unlikely). A revert that itself fails is
-        logged, never masking the original enqueue error."""
+        logged, never masking the original enqueue error. C3 F02: on a real
+        revert we publish the `in_progress -> ready` change so the Kanban does
+        not keep showing `in_progress` for a task that is once again `ready`
+        (the reconciler owns the automatic re-dispatch)."""
+        reverted = False
         try:
             async with self._sessionmaker() as session, session.begin():
                 task = (
@@ -564,12 +729,16 @@ class TaskDispatcher:
                 task.status = _READY
                 task.assigned_agent_id = None
                 task.started_at = None
+                reverted = True
         except Exception as revert_exc:  # pragma: no cover - defensive
             _log.error(
                 "orchestrator.dispatch_revert_failed",
                 task_id=str(task_id),
                 error=str(revert_exc),
             )
+            return
+        if reverted:
+            await self._publish_status_changed(event, _READY, old_status=_IN_PROGRESS)
 
     async def _execution_time_limits(self) -> tuple[int, int]:
         """Read the operator-tunable (soft, hard) run_execution time limits
@@ -697,12 +866,64 @@ class TaskDispatcher:
             _log.warning("orchestrator.no_agent_for_task", task_id=str(task.id))
             return None
 
+        # C3 F08: reload the picked agent SCOPED to the task's tenant (and not
+        # soft-deleted). The previous unscoped `select(Agent).where(id==...)
+        # .scalar_one()` could resolve a cross-tenant row, or raise
+        # `NoResultFound` (tumbling the whole handler) if the agent was deleted
+        # between the pick and now. `scalar_one_or_none` + an explicit predicate
+        # turns a missing / cross-tenant agent into a clean no-op instead.
         agent = (
-            await session.execute(select(Agent).where(Agent.id == UUID(agent_id)))
-        ).scalar_one()
-        task.status = _IN_PROGRESS
-        task.assigned_agent_id = agent.id
-        task.started_at = datetime.now(UTC)
+            await session.execute(
+                select(Agent).where(
+                    Agent.id == UUID(agent_id),
+                    Agent.tenant_id == task.tenant_id,
+                    Agent.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if agent is None:
+            _log.warning("orchestrator.no_agent_for_task", task_id=str(task.id))
+            return None
+
+        # C3 F07: resolve the model spec BEFORE claiming the task. If the
+        # inheritance chain still yields no provider+model (and no scripted
+        # `kind`), do NOT move the task to `in_progress` / enqueue a run the
+        # worker would only fail with `model_unresolved`. Leave it `ready` and
+        # alert; a later trigger / the reconciler retries once a default exists.
+        model_spec = await self._resolve_model_spec(session, agent, project)
+        if config_needs_default_model(model_spec):
+            _log.warning(
+                "orchestrator.no_default_model",
+                task_id=str(task.id),
+                agent_id=str(agent.id),
+            )
+            return None
+
+        # C3 F04: claim the task ATOMICALLY. The `ready -> in_progress` move was a
+        # read-then-write (status checked in `_dispatch`, set here) with no row
+        # lock, so two deliveries of the same `ready` event could both dispatch a
+        # run. A single conditional `UPDATE ... WHERE status='ready' RETURNING id`
+        # lets exactly ONE delivery win (the same guard `_on_task_done` uses for
+        # the plan transition); the loser is a no-op.
+        claimed = (
+            await session.execute(
+                update(Task)
+                .where(
+                    Task.id == task.id,
+                    Task.tenant_id == task.tenant_id,
+                    Task.status == _READY,
+                )
+                .values(
+                    status=_IN_PROGRESS,
+                    assigned_agent_id=agent.id,
+                    started_at=datetime.now(UTC),
+                )
+                .returning(Task.id)
+            )
+        ).scalar_one_or_none()
+        if claimed is None:
+            _log.info("orchestrator.dispatch_lost_race", task_id=str(task.id))
+            return None
 
         # Per-agent tool enforcement (Plan 06.15 task_06_15_02). When the
         # agent has `agent_tools` rows its resolved toolset is restricted to
@@ -735,29 +956,7 @@ class TaskDispatcher:
         # (backward-compat, mismo sentinel que `tool_specs`).
         skill_prompt_fragments = await resolve_agent_skill_prompt_fragments(session, agent.id)
 
-        # Default seguro de model_config para spec legacy ``{}`` (Plan 06.17
-        # task_06_17_10 / ADR 0055). Un agente creado antes de la validación —
-        # o saneado parcialmente — puede traer ``model_config = {}`` (o un spec
-        # sin provider/model). En vez de propagar ese spec vacío y hacer fallar
-        # el arranque del run de forma tardía y opaca, el dispatch resuelve el
-        # default seguro operator-configurable (``model.default_config`` en
-        # platform_settings, anclado al catálogo cerrado del ADR 0021). NO falla
-        # el arranque y NO hace auto-retry — solo rellena el spec. Un
-        # ``model_config`` completo se forwardea verbatim (el default no pisa).
-        model_spec = dict(agent.model_config or {})
-        if config_needs_default_model(model_spec):
-            # No model pinned (``{}`` legacy, or a SEEDED agent that carries only
-            # ``system_prompts`` and inherits — the CI4 built-in team). Resolve via
-            # la cadena de herencia plataforma → proyecto → equipo → agente (Ola A /
-            # ADR 0055): el nivel MÁS específico que pinee provider+model rellena el
-            # spec, preservando las claves no-modelo del agente (system_prompts). Un
-            # spec ``kind`` scripted no entra aquí (config_needs_default_model=False).
-            platform_default = await get_default_model_config(session)
-            team_cfg = await self._team_model_config(session, project)
-            project_cfg = dict(getattr(project, "model_config", None) or {}) if project else {}
-            model_spec = resolve_model_config_chain(
-                model_spec, team_cfg, project_cfg, platform_default
-            )
+        # `model_spec` was resolved above (C3 F07) before the atomic claim.
 
         # Per-run budget envelope (prod-06 task_prod06_budget_02 / workers-10).
         # Resolve platform-default ← project-override and clamp every key to the
@@ -834,6 +1033,29 @@ class TaskDispatcher:
         if project_mcp_servers:
             request["mcp_servers"] = [dict(server) for server in project_mcp_servers]
         return _AiDispatch(request=request)
+
+    async def _resolve_model_spec(
+        self, session: AsyncSession, agent: Agent, project: Project | None
+    ) -> dict[str, Any]:
+        """Resolve the effective ``model_config`` for ``agent`` (ADR 0055 chain).
+
+        Default seguro de model_config para spec legacy ``{}`` (Plan 06.17
+        task_06_17_10 / ADR 0055): un agente sin spec de modelo (``{}`` legacy, o
+        un agente SEMBRADO que solo trae ``system_prompts``) hereda por la cadena
+        plataforma → proyecto → equipo → agente — el nivel MÁS específico que
+        pinee provider+model rellena el spec, preservando las claves no-modelo del
+        agente. Un spec ya pineado (o ``kind`` scripted) se devuelve verbatim.
+        NUNCA levanta por un default mal puesto; el caller (C3 F07) decide qué
+        hacer si la cadena sigue sin resolver provider+model."""
+        model_spec = dict(agent.model_config or {})
+        if config_needs_default_model(model_spec):
+            platform_default = await get_default_model_config(session)
+            team_cfg = await self._team_model_config(session, project)
+            project_cfg = dict(getattr(project, "model_config", None) or {}) if project else {}
+            model_spec = resolve_model_config_chain(
+                model_spec, team_cfg, project_cfg, platform_default
+            )
+        return model_spec
 
     async def _team_model_config(
         self, session: AsyncSession, project: Project | None

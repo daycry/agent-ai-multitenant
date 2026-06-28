@@ -89,6 +89,20 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": schedule(run_every=30.0),
         "options": {"queue": "default"},
     },
+    # Audit C3 / P0.6 — convergence safety net: reconcile DERIVED pipeline state the
+    # live event path can miss (a lost task/plan event, a worker SIGKILLed between the
+    # finalize txn and the publish). Three idempotent best-effort passes: (a) a task
+    # stuck `in_progress` whose last execution is terminal -> transition it off
+    # (reusing the dag_01 policy + re-emit the event); (b) an `in_review` task with an
+    # AI reviewer but no live/recent review run -> re-announce `in_review` so the
+    # orchestrator re-dispatches; (c) an `in_progress` plan whose tasks are all
+    # terminal -> `pending_human_validation`. Every 90s; only touches rows settled
+    # past the age thresholds, so it never races a worker mid post-processing.
+    "reconcile-pipeline-state-every-90s": {
+        "task": "workers.reconcile_pipeline_state",
+        "schedule": schedule(run_every=90.0),
+        "options": {"queue": "default"},
+    },
     "purge-dep-cache-daily": {
         "task": "workers.purge_dep_cache",
         "schedule": crontab(hour="3", minute="0"),

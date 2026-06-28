@@ -22,8 +22,9 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy import text as sa_text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
@@ -33,6 +34,10 @@ _log = structlog.get_logger("workers.maintenance")
 # Idle window after which a `running` review-runtime is suspended
 # (containers paused). Mirrors the in-memory manager default.
 _SUSPEND_IDLE_AFTER = timedelta(hours=24)
+
+# Terminal review-session statuses — a session here no longer holds a runtime, so
+# the expiry sweep reaps its containers (`docker rm -f`) + soft-deletes it (C8 F41).
+_TERMINAL_REVIEW_STATUSES = ("approved", "rejected", "expired", "cancelled")
 
 # Tope duro de lotes por ejecución del back-fill — defensa contra un bucle
 # infinito si el embedder devolviese siempre vectores inválidos (las filas
@@ -77,16 +82,128 @@ def idle_sweep_pools() -> dict[str, Any]:
 
 @app.task(name="workers.expire_review_runtimes")  # type: ignore[misc]
 def expire_review_runtimes() -> dict[str, Any]:
-    """Mark overdue review-runtimes as `expired` + suspend idle ones.
+    """Expire overdue review-runtimes, suspend idle ones, reap terminal ones.
 
-    Two DB sweeps:
-      1. ``status='running' AND expires_at < now`` → ``expired``.
-      2. ``status='running' AND last_activity_at < now - 24h`` →
-         ``suspended`` (containers should be paused by the worker
-         that owns them; out of scope here).
+    Four DB sweeps (C8 F40/F41 — the in-memory ReviewRuntimeManager logic, now
+    cabled to the repo-DB + beat as the single source of truth):
+      1. ``status='running' AND expires_at < now`` → ``expired``, AND the owning
+         Plan ``pending_human_validation`` → ``blocked`` (idempotent), AND an
+         escalation notification to the owner.
+      2. ``status='running' AND last_activity_at < now - 24h`` → ``suspended``
+         (containers paused by the worker that owns them; out of scope here).
+      3. Every TERMINAL session (approved/rejected/expired/cancelled) with leftover
+         containers → ``docker rm -f`` them by id + soft-delete the row (closes the
+         container leak the verdict path left — submit_verdict only marks terminal).
     """
     settings = get_settings()
     return asyncio.run(_expire_review_runtimes(settings))
+
+
+def plan_status_after_expiry(current_status: str) -> str | None:
+    """Pure decision: what status a plan moves to when its review session expires.
+
+    A plan still awaiting human validation (``pending_human_validation``) is moved
+    to ``blocked`` so the operator sees it needs attention; any other status is left
+    untouched (``None``) — IDEMPOTENT, so re-running the sweep never re-transitions
+    an already-blocked / completed / rejected plan (C8 F40)."""
+    return "blocked" if current_status == "pending_human_validation" else None
+
+
+async def _block_plan_for_expired_session(db: AsyncSession, row: Any) -> dict[str, Any] | None:
+    """Idempotently move an expired session's plan off ``pending_human_validation``
+    and return the owner-notification payload (or ``None`` when no transition was
+    warranted). The Plan load is BYPASSRLS (worker engine); the session row already
+    carries the tenant scope."""
+    from api_server.db.domain import Plan
+
+    plan = await db.get(Plan, row.plan_id)
+    if plan is None:
+        return None
+    new_status = plan_status_after_expiry(plan.status)
+    if new_status is None:
+        return None
+    plan.status = new_status
+    await db.flush()
+    spec = row.spec or {}
+    return {
+        "tenant_id": str(row.tenant_id),
+        "plan_id": str(row.plan_id),
+        "session_id": str(row.id),
+        "plan_title": str(spec.get("plan_title") or spec.get("title") or ""),
+        "owner_user_id": spec.get("owner_user_id"),
+    }
+
+
+async def _enqueue_review_expiry_notification(payload: dict[str, Any]) -> None:
+    """Best-effort: escalate an expired review session to the owner (C8 F40).
+
+    Reuses the registered ``review_escalated`` event (priority lane). A broker /
+    import failure is swallowed — the plan is already ``blocked`` in the DB, so the
+    escalation is a notification, not a transaction to roll back."""
+    try:
+        from api_server.celery_client import enqueue_event_dispatch
+    except ImportError:  # pragma: no cover - api_server always present in workers
+        return
+    event = {
+        "event_type": "review_escalated",
+        "tenant_id": payload["tenant_id"],
+        "context": {
+            "task_title": payload.get("plan_title") or "",
+            "plan_id": payload["plan_id"],
+            "session_id": payload["session_id"],
+            "owner_user_id": payload.get("owner_user_id"),
+            "reason": "verdict_timeout",
+        },
+        "locale": None,
+    }
+    await enqueue_event_dispatch(event)
+
+
+def _reap_review_containers(container_ids: list[str]) -> int:
+    """``docker rm -f`` a terminal session's leftover containers (C8 F41).
+
+    Best-effort + idempotent: a missing daemon, an unimportable SDK, or an
+    already-gone container each no-op. Returns how many containers were removed.
+    Runs OUTSIDE any DB transaction (Docker I/O must never hold a txn open)."""
+    if not container_ids:
+        return 0
+    try:
+        import docker
+    except ImportError:
+        return 0
+    try:
+        client = docker.from_env()
+        client.ping()
+    except Exception:  # docker.errors.DockerException — daemon unavailable
+        return 0
+    removed = 0
+    for cid in container_ids:
+        try:
+            client.containers.get(str(cid)).remove(force=True)
+            removed += 1
+        except Exception:  # already gone / not found — idempotent
+            continue
+    return removed
+
+
+async def _list_terminal_sessions_with_containers(db: AsyncSession) -> list[Any]:
+    """Terminal (approved/rejected/expired/cancelled), not soft-deleted sessions
+    that still carry container ids — the reap candidates (C8 F41)."""
+    from api_server.db.models import ReviewSession
+
+    rows = (
+        (
+            await db.execute(
+                select(ReviewSession).where(
+                    ReviewSession.status.in_(_TERMINAL_REVIEW_STATUSES),
+                    ReviewSession.deleted_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [r for r in rows if r.container_ids]
 
 
 async def _expire_review_runtimes(settings: Settings) -> dict[str, Any]:
@@ -97,36 +214,70 @@ async def _expire_review_runtimes(settings: Settings) -> dict[str, Any]:
         list_running_idle,
         list_running_overdue,
         mark_terminal,
+        soft_delete_session,
         suspend_session,
     )
 
     expired = 0
     suspended = 0
+    reaped = 0
+    notify_payloads: list[dict[str, Any]] = []
     engine = create_async_engine(settings.database_url)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        # 1. Overdue → expired + plan blocked + escalation notification.
         async with sessionmaker() as db, db.begin():
             overdue = await list_running_overdue(db)
             for row in overdue:
                 await mark_terminal(db, row.id, status="expired")
                 expired += 1
+                payload = await _block_plan_for_expired_session(db, row)
+                if payload is not None:
+                    notify_payloads.append(payload)
+        # 2. Idle → suspended.
         async with sessionmaker() as db, db.begin():
             idle = await list_running_idle(db, idle_for=_SUSPEND_IDLE_AFTER)
             for row in idle:
                 await suspend_session(db, row.id)
                 suspended += 1
+        # 3. Reap terminal sessions' leftover containers, then soft-delete them.
+        #    Docker I/O runs OUTSIDE the txn; the soft-delete makes the sweep
+        #    idempotent (a reaped row is no longer re-listed).
+        async with sessionmaker() as db:
+            terminal = await _list_terminal_sessions_with_containers(db)
+            to_reap = [(r.id, [str(c) for c in r.container_ids]) for r in terminal]
+        for _session_id, container_ids in to_reap:
+            _reap_review_containers(container_ids)
+            reaped += 1
+        if to_reap:
+            async with sessionmaker() as db, db.begin():
+                for session_id, _container_ids in to_reap:
+                    deleted = await soft_delete_session(db, session_id)
+                    if deleted is not None:
+                        deleted.container_ids = []
+                        await db.flush()
     except Exception as exc:  # pragma: no cover — defensive logging
         _log.warning("maintenance.expire_review_runtimes.error", error=str(exc))
-        return {"expired": expired, "suspended": suspended, "error": str(exc)}
+        return {
+            "expired": expired,
+            "suspended": suspended,
+            "reaped": reaped,
+            "error": str(exc),
+        }
     finally:
         await engine.dispose()
+
+    # Notifications OUTSIDE the engine lifecycle — best-effort, one per expired plan.
+    for payload in notify_payloads:
+        await _enqueue_review_expiry_notification(payload)
 
     _log.info(
         "maintenance.expire_review_runtimes.done",
         expired=expired,
         suspended=suspended,
+        reaped=reaped,
     )
-    return {"expired": expired, "suspended": suspended}
+    return {"expired": expired, "suspended": suspended, "reaped": reaped}
 
 
 # ---------------------------------------------------------------------------
@@ -663,3 +814,434 @@ async def _sample_queue_metrics_async(
         written=written,
     )
     return {"queue_depths": queue_depths, "status_counts": status_counts, "written": written}
+
+
+# ---------------------------------------------------------------------------
+# reconcile_pipeline_state — every 90s (audit C3 / P0.6, convergence safety net)
+# ---------------------------------------------------------------------------
+# The live event path moves a task/plan off a transient state the instant a run
+# finishes, but an event can be lost (Redis blip, a worker SIGKILLed between the
+# finalize txn and the publish) — leaving DERIVED state stuck: a task `in_progress`
+# whose run already finished, an `in_review` task whose review was never dispatched,
+# or an `in_progress` plan whose tasks are all done. Nothing else reconciles these,
+# so the DAG silently stalls. This beat is the net: three idempotent best-effort
+# passes that re-derive the state from the DB and re-emit the events the live path
+# would have. Age thresholds keep it from racing a worker still post-processing.
+
+# A task must sit `in_progress` (and its terminal execution must be settled) this
+# long before we act, so we never compete with a worker still in its post-run
+# processing (worktree commit / tests / deferred event publish).
+_RECONCILE_STUCK_TASK_MIN_AGE = timedelta(minutes=5)
+# An `in_review` task with an AI reviewer must sit this long with no live/recent
+# review run before we re-announce it — avoids double-dispatching a review whose
+# `in_review` event the orchestrator is still processing.
+_RECONCILE_REVIEW_MIN_AGE = timedelta(minutes=5)
+
+# Execution statuses that mean the run is OVER — the owning task must no longer be
+# `in_progress`. Literal mirror of the terminal ``ExecutionStatus`` members, kept as
+# strings so importing this module costs no api_server import. ``running`` and
+# ``awaiting_human_approval`` are deliberately absent (a live run / an approval the
+# approval branch owns — not the reconciler's concern).
+_TERMINAL_EXECUTION_STATUSES = frozenset(
+    {"done", "failed", "aborted", "cancelled", "needs_human_review"}
+)
+
+
+def _stuck_task_needs_reconcile(
+    latest_exec_status: str | None,
+    latest_exec_completed_at: datetime | None,
+    *,
+    now: datetime,
+    min_age: timedelta,
+) -> bool:
+    """True when an `in_progress` task's LATEST execution is terminal and settled
+    long enough that the task should be transitioned off `in_progress` (case a).
+
+    Pure decision — no DB — so the candidate filter is unit-testable in isolation.
+    A non-terminal (still `running`/`awaiting_human_approval`) or not-yet-settled
+    latest execution is left alone (a worker may still be finishing it)."""
+    if latest_exec_status is None or latest_exec_status not in _TERMINAL_EXECUTION_STATUSES:
+        return False
+    if latest_exec_completed_at is None:
+        return False
+    return latest_exec_completed_at <= now - min_age
+
+
+def _orphan_review_needs_reannounce(
+    *,
+    reviewer_is_ai: bool,
+    has_running_execution: bool,
+    latest_completed_at: datetime | None,
+    now: datetime,
+    min_age: timedelta,
+) -> bool:
+    """True when an `in_review` task with an AI reviewer has NO live review run and
+    nothing ran recently, so its `in_review` event should be re-announced (case b).
+
+    Pure decision — no DB. A human reviewer is the peer-review path's concern; a
+    running execution means the review is already in flight; a recently-completed
+    execution means a run just finished (the implementer that moved it to review, or
+    a review whose verdict is being applied) — in both we wait rather than duplicate."""
+    if not reviewer_is_ai or has_running_execution:
+        return False
+    return latest_completed_at is None or latest_completed_at <= now - min_age
+
+
+async def _reconcile_stuck_tasks(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    redis: Any,
+    *,
+    now: datetime,
+    min_age: timedelta,
+) -> int:
+    """Case (a): transition tasks stuck `in_progress` whose last run is terminal.
+
+    Reuses ``workers.execution.transition_task_after_run`` (the SAME dag_01 policy
+    the worker applies: done→in_review/done, cancelled→cancelled, else→blocked) and
+    re-emits the resulting ``task.status_changed`` so the board + the orchestrator
+    converge. Per-task transaction + the `in_progress` guard inside
+    ``transition_task_after_run`` make it idempotent and safe against a worker that
+    wins the race. Returns how many tasks were transitioned."""
+    from api_server.db.domain import Execution, Task, TaskStatus
+    from api_server.events import publish_task_status_changed
+    from sqlalchemy import select
+
+    from workers.execution import transition_task_after_run
+
+    cutoff = now - min_age
+    async with sessionmaker() as db:
+        candidate_ids = list(
+            (
+                await db.execute(
+                    select(Task.id).where(
+                        Task.status == TaskStatus.IN_PROGRESS.value,
+                        Task.started_at < cutoff,
+                    )
+                )
+            ).scalars()
+        )
+    reconciled = 0
+    for task_id in candidate_ids:
+        event: tuple[Any, str, str] | None = None
+        async with sessionmaker() as db, db.begin():
+            latest = (
+                (
+                    await db.execute(
+                        select(Execution)
+                        .where(Execution.task_id == task_id)
+                        .order_by(Execution.created_at.desc())
+                        .limit(1)
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if latest is None or not _stuck_task_needs_reconcile(
+                latest.status, latest.completed_at, now=now, min_age=min_age
+            ):
+                continue
+            event = await transition_task_after_run(db, task_id, latest.status)
+        if event is not None:
+            task_obj, old, new = event
+            await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
+            _log.info(
+                "maintenance.reconcile_pipeline_state.stuck_task_reconciled",
+                task_id=str(task_id),
+                old_status=old,
+                new_status=new,
+            )
+            reconciled += 1
+    return reconciled
+
+
+async def _reconcile_orphan_reviews(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    redis: Any,
+    *,
+    now: datetime,
+    min_age: timedelta,
+) -> int:
+    """Case (b): re-announce `in_review` for AI-reviewed tasks whose review is lost.
+
+    An `in_review` task with an AI ``reviewer_agent_id``, no `running` execution and
+    no recently-finished run had its review dispatch lost (the `in_review` event
+    never reached the orchestrator). Re-publishing ``task.status_changed`` with
+    ``new_status=in_review`` makes ``orchestrator._on_task_in_review`` re-dispatch the
+    review. Best-effort and idempotent — the orchestrator re-checks live state and
+    no-ops on a stale re-announce. Returns how many tasks were re-announced."""
+    from api_server.db.domain import (
+        Agent,
+        AgentType,
+        Execution,
+        ExecutionStatus,
+        Task,
+        TaskStatus,
+    )
+    from api_server.events import publish_task_status_changed
+    from sqlalchemy import func, select
+
+    cutoff = now - min_age
+    async with sessionmaker() as db:
+        candidates = list(
+            (
+                await db.execute(
+                    select(
+                        Task.id,
+                        Task.tenant_id,
+                        Task.project_id,
+                        Task.reviewer_agent_id,
+                    ).where(
+                        Task.status == TaskStatus.IN_REVIEW.value,
+                        Task.reviewer_agent_id.isnot(None),
+                        Task.updated_at < cutoff,
+                    )
+                )
+            ).all()
+        )
+    reannounced = 0
+    for row in candidates:
+        async with sessionmaker() as db:
+            reviewer = await db.get(Agent, row.reviewer_agent_id)
+            reviewer_is_ai = reviewer is not None and reviewer.agent_type != AgentType.HUMAN.value
+            running = (
+                (
+                    await db.execute(
+                        select(Execution.id)
+                        .where(
+                            Execution.task_id == row.id,
+                            Execution.status == ExecutionStatus.RUNNING.value,
+                        )
+                        .limit(1)
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            latest_completed = (
+                await db.execute(
+                    select(func.max(Execution.completed_at)).where(Execution.task_id == row.id)
+                )
+            ).scalar_one_or_none()
+        if not _orphan_review_needs_reannounce(
+            reviewer_is_ai=reviewer_is_ai,
+            has_running_execution=running is not None,
+            latest_completed_at=latest_completed,
+            now=now,
+            min_age=min_age,
+        ):
+            continue
+        # A transient Task is just the value carrier the publisher reads
+        # (id/tenant/project) — same pattern the dispatcher uses.
+        task_ref = Task(id=row.id, tenant_id=row.tenant_id, project_id=row.project_id)
+        await publish_task_status_changed(
+            redis,
+            task_ref,
+            old_status=TaskStatus.IN_REVIEW.value,
+            new_status=TaskStatus.IN_REVIEW.value,
+        )
+        _log.info(
+            "maintenance.reconcile_pipeline_state.review_reannounced",
+            task_id=str(row.id),
+        )
+        reannounced += 1
+    return reannounced
+
+
+async def _reconcile_complete_plans(sessionmaker: async_sessionmaker[AsyncSession]) -> int:
+    """Case (c): flip `in_progress` plans whose tasks are ALL terminal to
+    `pending_human_validation` AND auto-start their review-runtime.
+
+    Mirrors ``orchestrator._on_task_done`` exactly — the SAME plan state machine
+    (``transition_to_pending_human_validation``) + the SAME atomic ``WHERE
+    status=in_progress`` guard — so the reconciler never diverges and can never
+    double-transition a plan the live path already moved. Returns how many plans
+    transitioned.
+
+    Convergence GAP fix: the live ``done`` path auto-starts the review-runtime
+    (``_on_task_done`` → ``compose_review_runtime``); when that event is LOST only
+    the reconciler moves the plan, and until now it stopped at the transition —
+    leaving the plan stalled in ``pending_human_validation`` with NO review_session
+    (the reviewer URLs 404, human validation never arms). On a winning transition we
+    now fire the SAME shared autostart (``_autostart_review_runtime``), idempotent
+    and best-effort, so the two paths converge."""
+    from api_server.db.domain import Plan, PlanStatus, Task
+    from api_server.plan_progress import (
+        TaskSnapshot,
+        transition_to_pending_human_validation,
+    )
+    from sqlalchemy import select, update
+
+    async with sessionmaker() as db:
+        plan_rows = list(
+            (
+                await db.execute(
+                    select(Plan.id, Plan.tenant_id).where(
+                        Plan.status == PlanStatus.IN_PROGRESS.value
+                    )
+                )
+            ).all()
+        )
+    transitioned = 0
+    for prow in plan_rows:
+        won = False
+        async with sessionmaker() as db, db.begin():
+            task_rows = list(
+                (
+                    await db.execute(
+                        select(Task.id, Task.status).where(
+                            Task.plan_id == prow.id,
+                            Task.tenant_id == prow.tenant_id,
+                        )
+                    )
+                ).all()
+            )
+            if not task_rows:
+                continue
+            plan = await db.get(Plan, prow.id)
+            if plan is None:
+                continue
+            snapshots = [TaskSnapshot(id=str(r.id), status=r.status) for r in task_rows]
+            result = transition_to_pending_human_validation(plan.status, snapshots)
+            if not result.transitioned:
+                continue
+            won_id = (
+                await db.execute(
+                    update(Plan)
+                    .where(
+                        Plan.id == prow.id,
+                        Plan.tenant_id == prow.tenant_id,
+                        Plan.status == PlanStatus.IN_PROGRESS.value,
+                    )
+                    .values(status=result.new_status)
+                    .returning(Plan.id)
+                )
+            ).scalar_one_or_none()
+            if won_id is not None:
+                _log.info(
+                    "maintenance.reconcile_pipeline_state.plan_ready_for_review",
+                    plan_id=str(prow.id),
+                )
+                transitioned += 1
+                won = True
+        # GAP fix: build + enqueue the review-runtime autostart in a SEPARATE read
+        # session AFTER the transition txn commits (broker I/O must never hold a DB
+        # txn open; a build/enqueue failure must never touch the committed move).
+        if won:
+            await _autostart_review_runtime(sessionmaker, plan_id=prow.id, tenant_id=prow.tenant_id)
+    return transitioned
+
+
+async def _autostart_review_runtime(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    *,
+    plan_id: Any,
+    tenant_id: Any,
+) -> None:
+    """Best-effort: build + enqueue the review-runtime autostart for a plan the
+    reconciler just moved to ``pending_human_validation`` (convergence GAP fix).
+
+    Delegates to ``api_server.review_autostart.build_review_autostart_request`` — the
+    SINGLE source of truth shared with ``orchestrator._on_task_done`` — so the live
+    path and the reconciler can never diverge. IDEMPOTENT: the builder returns
+    ``None`` when an active (``running``/``suspended``) review session already exists
+    for the plan, so a double pass (live + reconciler, or two reconciler passes) never
+    spawns a second runtime. Wrapped so a bad row / a broker blip NEVER breaks the
+    reconciler pass or the already-committed transition; the autostart simply retries
+    on a later pass / the operator."""
+    from api_server.db.domain import Plan
+    from api_server.review_autostart import build_review_autostart_request
+
+    try:
+        async with sessionmaker() as db:
+            plan = await db.get(Plan, plan_id)
+            if plan is None:
+                return
+            request = await build_review_autostart_request(db, plan=plan, tenant_id=tenant_id)
+        if request is None:
+            return
+        await asyncio.to_thread(_send_compose_review_runtime, request)
+        _log.info(
+            "maintenance.reconcile_pipeline_state.review_runtime_autostarted",
+            plan_id=str(plan_id),
+        )
+    except Exception as exc:  # never break the reconciler pass / the committed move
+        _log.warning(
+            "maintenance.reconcile_pipeline_state.review_autostart_failed",
+            plan_id=str(plan_id),
+            error=str(exc),
+        )
+
+
+def _send_compose_review_runtime(request: dict[str, Any]) -> None:
+    """Blocking broker enqueue of ``workers.compose_review_runtime`` (runs in a
+    thread). Uses the worker's own Celery ``app`` to PRODUCE the task by name onto
+    the ``review`` lane — the same task/queue the orchestrator autostart uses."""
+    from api_server.review_autostart import COMPOSE_REVIEW_RUNTIME_TASK, REVIEW_QUEUE
+
+    app.send_task(
+        COMPOSE_REVIEW_RUNTIME_TASK,
+        kwargs={"request": request},
+        queue=REVIEW_QUEUE,
+    )
+
+
+@app.task(name="workers.reconcile_pipeline_state")  # type: ignore[misc]
+def reconcile_pipeline_state() -> dict[str, Any]:
+    """Convergence safety net (audit C3 / P0.6): reconcile DERIVED pipeline state
+    the live event path can miss.
+
+    Three idempotent best-effort passes (a/b/c — see the module comment). A pass
+    failure is isolated and logged; it never tumbles the beat. Every 90s."""
+    return asyncio.run(_reconcile_pipeline_state_async(get_settings()))
+
+
+async def _reconcile_pipeline_state_async(
+    settings: Settings,
+    *,
+    redis: Any | None = None,
+    now: datetime | None = None,
+    stuck_task_min_age: timedelta = _RECONCILE_STUCK_TASK_MIN_AGE,
+    review_min_age: timedelta = _RECONCILE_REVIEW_MIN_AGE,
+) -> dict[str, int]:
+    """Async core — owns the engine + redis lifecycle. ``redis`` / ``now`` /
+    thresholds are injectable so the integration test drives it deterministically.
+
+    Each of the three passes is wrapped so an exception in one (a bad row, a broker
+    blip) is logged and the others still run — best-effort, never crash beat."""
+    from redis.asyncio import Redis
+
+    moment = now or datetime.now(UTC)
+    engine = create_async_engine(settings.database_url)
+    own_redis = redis is None
+    redis_client = redis if redis is not None else Redis.from_url(settings.events_redis_url)
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    result: dict[str, int] = {"stuck_tasks": 0, "orphan_reviews": 0, "completed_plans": 0}
+    try:
+        try:
+            result["stuck_tasks"] = await _reconcile_stuck_tasks(
+                sessionmaker, redis_client, now=moment, min_age=stuck_task_min_age
+            )
+        except Exception as exc:
+            _log.warning("maintenance.reconcile_pipeline_state.stuck_tasks_error", error=str(exc))
+        try:
+            result["orphan_reviews"] = await _reconcile_orphan_reviews(
+                sessionmaker, redis_client, now=moment, min_age=review_min_age
+            )
+        except Exception as exc:
+            _log.warning(
+                "maintenance.reconcile_pipeline_state.orphan_reviews_error", error=str(exc)
+            )
+        try:
+            result["completed_plans"] = await _reconcile_complete_plans(sessionmaker)
+        except Exception as exc:
+            _log.warning(
+                "maintenance.reconcile_pipeline_state.completed_plans_error", error=str(exc)
+            )
+    finally:
+        await engine.dispose()
+        if own_redis:
+            with contextlib.suppress(Exception):
+                await redis_client.aclose()
+
+    _log.info("maintenance.reconcile_pipeline_state.done", **result)
+    return result
