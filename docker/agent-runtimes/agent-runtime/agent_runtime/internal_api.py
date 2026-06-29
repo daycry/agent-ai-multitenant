@@ -154,14 +154,19 @@ class InternalAgentAPI:
             "(agentic-agents) and must bypass the egress-proxy (trust_env=False)."
         ) from last_exc
 
-    def _post(self, path: str, json: dict[str, Any]) -> dict[str, Any]:
+    def _post(
+        self, path: str, json: dict[str, Any], *, timeout: float | None = None
+    ) -> dict[str, Any]:
         if self.client is None:
             raise InternalAPIError("client has been closed")
         url = f"{self.base_url}{path}"
+        # ``timeout`` overrides the client default per request — a stack command
+        # (composer install) can take minutes, far longer than the 15s default.
         response = self.client.post(
             url,
             json=json,
             headers={"Authorization": f"Bearer {self.bearer_token}"},
+            timeout=timeout if timeout is not None else self.timeout_s,
         )
         if response.status_code >= 400:
             raise InternalAPIHTTPError(response.status_code, response.text)
@@ -212,6 +217,19 @@ class InternalAgentAPI:
         payload = self._post("/internal/agent/rag-search", body)
         hits: list[dict[str, Any]] = payload.get("hits") or []
         return hits
+
+    def run_stack(self, *, task_id: str, command: str, timeout_s: int = 600) -> dict[str, Any]:
+        """Run a stack command (``composer install`` / ``vendor/bin/phpunit`` /
+        ``php spark``) in the project's runtime template via the worker (ADR 0093).
+
+        The sandbox cannot launch containers; this asks the worker, which has
+        Docker. Returns ``{exit_code, logs, timed_out}``. Waits the command's own
+        budget + a margin (the HTTP call blocks until the worker finishes)."""
+        return self._post(
+            "/internal/agent/run-stack",
+            {"task_id": task_id, "command": command, "timeout_s": int(timeout_s)},
+            timeout=float(timeout_s) + 120.0,
+        )
 
     def document_convert(self, *, document_id: str) -> dict[str, Any]:
         """Structured chunks of an existing Document. v1 reads them

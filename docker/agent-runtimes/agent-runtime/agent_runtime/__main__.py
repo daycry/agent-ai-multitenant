@@ -144,12 +144,15 @@ def _wire_assigned_tools(
     from agent_runtime.tool_wiring import ToolSpec, WiringContext, register_tool_specs
 
     allowed_domains = frozenset(str(d) for d in (spec.get("allowed_domains") or []))
+    task_meta = spec.get("task") or {}
+    task_id = task_meta.get("id")
 
     register_builtin_families(
         registry,
         api=_build_internal_api(),
         sink=OrchestrationSink(),
         allowed_domains=allowed_domains,
+        task_id=str(task_id) if task_id else None,
     )
 
     raw_specs = spec.get("tool_specs") or []

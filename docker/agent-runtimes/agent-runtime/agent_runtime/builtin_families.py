@@ -76,6 +76,7 @@ FAMILY_NOTIFICACION = "notificacion"
 FAMILY_ORQUESTACION = "orquestacion"
 FAMILY_CONOCIMIENTO = "conocimiento"
 FAMILY_MEMORIA = "memoria"
+FAMILY_STACK = "stack"
 
 ALL_FAMILIES: tuple[str, ...] = (
     FAMILY_FILE,
@@ -84,6 +85,7 @@ ALL_FAMILIES: tuple[str, ...] = (
     FAMILY_ORQUESTACION,
     FAMILY_CONOCIMIENTO,
     FAMILY_MEMORIA,
+    FAMILY_STACK,
 )
 
 _FALSY = {"0", "false", "no", "off", ""}
@@ -115,6 +117,7 @@ def register_builtin_families(
     sink: OrchestrationSink,
     allowed_domains: frozenset[str] = frozenset(),
     flags: dict[str, bool] | None = None,
+    task_id: str | None = None,
 ) -> list[str]:
     """Register every executable builtin family on ``registry`` under its
     canonical name, honouring the per-family feature flags.
@@ -126,6 +129,9 @@ def register_builtin_families(
       orchestration + notification families record their effects there.
     * ``allowed_domains`` — the project egress allowlist the network family
       binds to.
+    * ``task_id`` — the running task's id; the ``stack`` family (``stack_exec``)
+      needs it to tell the worker which worktree to run the command over. A bare
+      run (no api or no task id) skips it.
 
     Returns the canonical names actually registered (skips disabled families
     and the api-backed families when ``api is None``) so the boot path can log
@@ -180,6 +186,16 @@ def register_builtin_families(
         memory = MemoryTools(api)
         _add("memory_recall", memory.memory_recall)
         _add("memory_store", memory.memory_store)
+
+    # --- stack family: stack_exec (ADR 0093) --------------------------------
+    # Runs a command in the project's runtime-template via the worker (the
+    # sandbox has no Docker). Needs BOTH the internal-api client (the worker
+    # round-trip) and the task id (which worktree). A bare run lacks one or the
+    # other, so the tool is skipped honestly rather than failing every call.
+    if api is not None and task_id and family_enabled(FAMILY_STACK, flags):
+        from agent_runtime.stack_exec_tool import StackExecTool
+
+        _add("stack_exec", StackExecTool(api, str(task_id)))
 
     return registered
 
@@ -251,6 +267,7 @@ def _verb_bound(http: HttpRequestTool, method: str) -> ToolFn:
 __all__ = [
     "ALL_FAMILIES",
     "FAMILY_FLAG_PREFIX",
+    "FAMILY_STACK",
     "SYSTEM_FAMILY_TOOL_NAMES",
     "family_enabled",
     "register_builtin_families",
