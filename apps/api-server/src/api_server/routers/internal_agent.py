@@ -77,6 +77,61 @@ async def health(
 
 
 # ---------------------------------------------------------------------------
+# /run-stack  (ADR 0093 — stack_exec)
+# ---------------------------------------------------------------------------
+class RunStackRequest(BaseModel):
+    model_config = _BASE_CONFIG
+
+    task_id: UUID
+    command: str = Field(min_length=1, max_length=4000)
+    timeout_s: int = Field(default=600, ge=1, le=3600)
+
+
+class RunStackResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    exit_code: int
+    logs: str
+    timed_out: bool
+
+
+@router.post("/run-stack", response_model=RunStackResponse)
+async def run_stack(
+    payload: RunStackRequest,
+    principal: AgentPrincipal = Depends(get_agent_principal),
+) -> RunStackResponse:
+    """Run a stack command (``composer install`` / ``vendor/bin/phpunit`` /
+    ``php spark``) in the project's runtime template via the worker (ADR 0093).
+
+    The agent-runtime cannot launch containers (no Docker socket — principle 2),
+    so it asks the worker, which has Docker and already knows how to launch the
+    stack runtime over the task's worktree. The worker gates the command against
+    the project's ``allowed_commands`` (deny-by-default) before running it. The
+    tenant is pinned by the minted agent token; the ``task_id`` comes from the
+    runtime's own task spec.
+    """
+    from api_server.celery_client import run_stack_command_and_wait
+
+    try:
+        result = await run_stack_command_and_wait(
+            tenant_id=principal.tenant_id,
+            task_id=payload.task_id,
+            command=payload.command,
+            timeout_s=payload.timeout_s,
+        )
+    except Exception as exc:  # broker / result-backend failure or worker timeout
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"stack command did not complete: {exc}",
+        ) from exc
+    return RunStackResponse(
+        exit_code=int(result.get("exit_code", -1)),
+        logs=str(result.get("logs", "")),
+        timed_out=bool(result.get("timed_out", False)),
+    )
+
+
+# ---------------------------------------------------------------------------
 # /memory-recall
 # ---------------------------------------------------------------------------
 class MemoryRecallRequest(BaseModel):

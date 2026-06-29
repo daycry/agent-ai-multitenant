@@ -145,6 +145,36 @@ async def enqueue_clone_project_repo(project_id: UUID) -> bool:
     return True
 
 
+async def run_stack_command_and_wait(
+    *, tenant_id: UUID, task_id: UUID, command: str, timeout_s: int
+) -> dict[str, Any]:
+    """Enqueue ``workers.run_stack_command`` and BLOCK for its result (ADR 0093).
+
+    Unlike the fire-and-forget enqueues above, ``stack_exec`` is synchronous: the
+    agent needs ``rc``+logs back before continuing, so we wait on the result
+    backend. The command runs in the project's runtime template (where the
+    toolchain exists), NOT in the agent sandbox. Routed to the ``test`` queue so
+    it never competes with the agent-run slot that is blocked waiting on this
+    (deadlock avoidance, ADR 0093). The blocking send+get runs off the event loop.
+    """
+    request = {
+        "tenant_id": str(tenant_id),
+        "task_id": str(task_id),
+        "command": command,
+        "timeout_s": int(timeout_s),
+    }
+
+    def _send_and_wait() -> dict[str, Any]:
+        async_result = get_celery_client().send_task(
+            "workers.run_stack_command", args=[request], queue="test"
+        )
+        # Wait the command's own budget + a margin for container spin-up/teardown.
+        result = async_result.get(timeout=timeout_s + 120)
+        return dict(result) if isinstance(result, dict) else {}
+
+    return await asyncio.to_thread(_send_and_wait)
+
+
 async def enqueue_open_plan_pr(project_id: UUID, plan_id: UUID, *, title: str, body: str) -> bool:
     """Encola el auto-PR de un plan (ADR 0072 fase 2): push autenticado de la rama
     + apertura del PR/MR por proveedor. La rama se deriva en el worker de
