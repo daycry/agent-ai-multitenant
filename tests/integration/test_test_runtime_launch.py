@@ -118,6 +118,24 @@ def test_launch_applies_hardening_envelope() -> None:
     assert main.kwargs["network"].startswith("test-runtime-python-pytest")
 
 
+def test_launch_keeps_container_alive_via_entrypoint_not_doubled_command() -> None:
+    # The runtime images set ENTRYPOINT ["sleep","infinity"] to stay up for
+    # exec_run. Passing command ["sleep","infinity"] too makes the daemon run
+    # `sleep infinity sleep infinity` → "invalid time interval 'sleep'" → the
+    # container exits immediately and every exec_run hits 409 "not running"
+    # (broke run_command AND the post-hoc checks for every template). The runner
+    # must drive keep-alive via `entrypoint`, with no appended `command`.
+    from workers.test_runtime import TestRuntimeRunner
+
+    client, started = _fake_client()
+    runner = TestRuntimeRunner(Settings(), client=client)
+    runner.launch(_spec_for_python_pytest())
+
+    main = started[0]
+    assert main.kwargs.get("entrypoint") == ["sleep", "infinity"]
+    assert "command" not in main.kwargs  # would append to the image ENTRYPOINT
+
+
 def test_launch_runs_default_pre_install_then_check() -> None:
     from workers.test_runtime import TestRuntimeRunner
 

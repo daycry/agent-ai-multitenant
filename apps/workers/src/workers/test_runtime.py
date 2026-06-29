@@ -773,7 +773,15 @@ class TestRuntimeRunner:
             env["TESTCONTAINERS_HOST_OVERRIDE"] = spec.testcontainers.proxy_alias()
 
         return {
-            "command": ["sleep", "infinity"],
+            # Keep the container alive for exec_run via ENTRYPOINT, NOT a
+            # `command`: the runtime images already declare
+            # ``ENTRYPOINT ["sleep","infinity"]``, so passing command
+            # ``["sleep","infinity"]`` too makes the daemon run
+            # ``sleep infinity sleep infinity`` → "invalid time interval 'sleep'"
+            # → the container exits at once and every exec_run 409s
+            # ("not running"). Overriding entrypoint (no command) runs exactly
+            # ``sleep infinity`` regardless of the image default.
+            "entrypoint": ["sleep", "infinity"],
             "detach": True,
             "network": network_name,
             "mounts": mounts,
