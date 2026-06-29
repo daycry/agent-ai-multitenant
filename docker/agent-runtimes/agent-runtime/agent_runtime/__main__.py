@@ -415,13 +415,21 @@ def run_task(spec: dict[str, Any]) -> int:
     try:
         # `shell_exec` is wired per project (task_06_16_02). The worker forwards
         # the project's `allowed_commands` allowlist here; we register a
-        # `ShellExecTool` bound to it so the agent can run STACK commands
-        # (`php`, `composer`, `vendor/bin/phpunit`, `npm`, …) — but ONLY those
-        # binaries (deny-by-default). The key is always present from the worker:
-        # an empty list registers a deny-all shell_exec (every command rejected),
-        # which is the safe default for a project that authorised nothing. When
-        # the key is absent (a bare run / older payload) shell_exec is simply
-        # not registered.
+        # `ShellExecTool` bound to it so the agent can run commands — but ONLY the
+        # allowlisted binaries (deny-by-default).
+        #
+        # IMPORTANT: shell_exec runs INSIDE this sandbox (a thin python+git
+        # image, principles 2/3), so it can only run what the sandbox actually
+        # ships: git, python, file ops. It CANNOT run the project's stack
+        # toolchain (`php`, `composer`, `vendor/bin/phpunit`, `npm`, …) — those
+        # binaries are not installed here. The agent runs the stack toolchain via
+        # `stack_exec` (ADR 0093), which asks the worker to launch the project's
+        # runtime-template over the worktree. Both share the SAME allowlist.
+        #
+        # The key is always present from the worker: an empty list registers a
+        # deny-all shell_exec (every command rejected), which is the safe default
+        # for a project that authorised nothing. When the key is absent (a bare
+        # run / older payload) shell_exec is simply not registered.
         allowed_commands = spec.get("allowed_commands")
         if allowed_commands is not None:
             registry.register(

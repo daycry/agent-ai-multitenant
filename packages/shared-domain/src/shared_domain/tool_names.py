@@ -48,6 +48,7 @@ _CATALOG_TOOL_NAMES: frozenset[str] = frozenset(
         "semantic_search",
         "send_notification",
         "shell_exec",
+        "stack_exec",
         "summarize_text",
         "write_file",
     }
@@ -135,6 +136,8 @@ RUNTIME_WIRED_TOOL_NAMES: frozenset[str] = frozenset(
         "run_build",
         # per-project shell
         "shell_exec",
+        # stack family — worker-mediated toolchain exec (ADR 0093)
+        "stack_exec",
     }
 )
 

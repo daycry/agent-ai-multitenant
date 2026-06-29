@@ -141,6 +141,7 @@ _BUILTIN_EXECUTION = ChatModeConfig(
     # sensitive categories per the project policy.
     allowed_tools=(
         "shell_exec",
+        "stack_exec",
         "file_read",
         "file_write",
         "file_list",

@@ -1,8 +1,10 @@
 """Built-in tool catalog (task_01_11; shell_exec added task_06_16_02;
-git family retired task_06_18_06; delete_file added R6/ADR 0089).
+git family retired task_06_18_06; delete_file added R6/ADR 0089;
+stack_exec added ADR 0093).
 
-Sixteen tool definitions covering file ops, code runtime, HTTP,
-knowledge, notifications and one shell command. The ``git`` family was
+Seventeen tool definitions covering file ops, code runtime, HTTP,
+knowledge, notifications and two stack commands (shell_exec +
+stack_exec). The ``git`` family was
 removed (ADR 0049): it had no runtime executor, so it could never run.
 Each row's ``is_runtime_wired`` (derived in ``ToolResponse``) tells the
 operator which of these the agent-runtime can actually execute today.
@@ -62,7 +64,8 @@ def _obj(props: dict[str, Any], required: list[str] | None = None) -> dict[str, 
 
 
 # ---------------------------------------------------------------------------
-# Catalog -- 16 tools (git family retired task_06_18_06; delete_file added R6)
+# Catalog -- 17 tools (git family retired task_06_18_06; delete_file added R6;
+# stack_exec added ADR 0093)
 # ---------------------------------------------------------------------------
 BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     # ----- File / Project -----
@@ -374,8 +377,11 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     BuiltinTool(
         "shell-exec",
         "shell_exec",
-        "Ejecuta un comando del stack del proyecto, restringido a la allowlist del proyecto "
-        "(deny-by-default). El comando se parsea como argv (shlex) y corre con timeout, sin shell.",
+        "Ejecuta un comando DENTRO del sandbox del agente (imagen fina python+git), restringido "
+        "a la allowlist del proyecto (deny-by-default). El comando se parsea como argv (shlex) y "
+        "corre con timeout, sin shell. Úsalo para git y utilidades del propio sandbox; NO ejecuta "
+        "el toolchain del stack (php/composer/phpunit/npm) — esos binarios no están en el sandbox: "
+        "para ellos usa stack_exec.",
         "command",
         "builtin",
         "privileged",
@@ -385,8 +391,9 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
                 "command": {
                     "type": "string",
                     "description": (
-                        "Comando completo a ejecutar; su primer token (basename) debe estar en "
-                        "la allowlist del proyecto. Ej.: 'composer install' o 'vendor/bin/phpunit'."
+                        "Comando completo a ejecutar en el sandbox; su primer token (basename) "
+                        "debe estar en la allowlist del proyecto. Ej.: 'git status' o 'git add "
+                        "-A'. Para composer/phpunit/php spark usa stack_exec (runtime del stack)."
                     ),
                 },
                 "cwd": {
@@ -401,6 +408,52 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
                 "exit_code": {"type": "integer"},
                 "stdout": {"type": "string"},
                 "stderr": {"type": "string"},
+            },
+            ["exit_code"],
+        ),
+    ),
+    # ----- Stack exec (ADR 0093) -----
+    # `stack_exec` runs a command in the project's RUNTIME-TEMPLATE (php-phpunit,
+    # node-jest, …) — where the toolchain (composer/php/phpunit, npm) actually
+    # exists — by asking the worker, which has Docker. The sandbox itself is a
+    # thin python+git image, so `shell_exec` (which runs IN the sandbox) cannot
+    # run `composer install`; `stack_exec` can. Same allowlist gate as
+    # `shell_exec` (deny-by-default), enforced worker-side. `privileged` like
+    # `shell_exec` (orthogonal security axis, ADR 0044).
+    BuiltinTool(
+        "stack-exec",
+        "stack_exec",
+        "Ejecuta un comando del toolchain del proyecto (composer/phpunit/php spark, npm, …) en "
+        "el runtime-template del stack, sobre el worktree de la tarea. El worker lo lanza (el "
+        "sandbox no tiene Docker ni el toolchain). Restringido a la allowlist del proyecto "
+        "(deny-by-default). Úsalo para instalar dependencias y correr tests/build del stack; "
+        "shell_exec NO puede (corre en el sandbox fino sin el toolchain).",
+        "command",
+        "builtin",
+        "privileged",
+        600,
+        _obj(
+            {
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "Comando completo a ejecutar en el runtime del stack; su primer token "
+                        "debe estar en la allowlist del proyecto. Ej.: 'composer install', "
+                        "'vendor/bin/phpunit' o 'php spark migrate'."
+                    ),
+                },
+                "timeout_s": {
+                    "type": "integer",
+                    "description": "Presupuesto en segundos (opcional, default 600).",
+                },
+            },
+            ["command"],
+        ),
+        _obj(
+            {
+                "exit_code": {"type": "integer"},
+                "logs": {"type": "string"},
+                "timed_out": {"type": "boolean"},
             },
             ["exit_code"],
         ),

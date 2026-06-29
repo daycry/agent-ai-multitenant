@@ -64,21 +64,31 @@ def _ci4_agent_id(slug: str) -> UUID:
 
 # ---------------------------------------------------------------------------
 # Conjuntos de tools reutilizables (slugs del catálogo built-in
-# `api_server.seeds.builtin_tools`). shell_exec + file + semantic-search van a
-# TODOS; run_* a backend/dba/qa/devops; http_* a auth-security/devops. La
-# familia git dedicada se retiró en 06.18 (ADR 0049); git se hace vía shell-exec.
+# `api_server.seeds.builtin_tools`). shell_exec + stack_exec + file +
+# semantic-search van a TODOS; http_* a auth-security/devops. La familia git
+# dedicada se retiró en 06.18 (ADR 0049); git se hace vía shell-exec.
 # ---------------------------------------------------------------------------
 # R6 (ADR 0089): se concede `delete-file` (wired) para que el agente pueda
 # reconciliar el deliverable eliminando ficheros stale/duplicados de intentos
 # previos en el worktree persistente; se RETIRA `apply-patch` del grant — no
 # tiene executor en el runtime (igual que la familia git, ADR 0049), así que el
 # modelo lo invocaba y recibía "unknown tool", quemando iteraciones.
+#
+# ADR 0093: se RETIRAN los `run_*` (run-pytest/lint/typecheck/build) del grant.
+# Eran `docker_command` que llamaban `docker.from_env()` DENTRO del sandbox (sin
+# socket por principio 2) → nunca lanzaban contenedor; el modelo los invocaba y
+# fallaba, quemando iteraciones (mismo patrón que apply-patch/git). El toolchain
+# del stack (composer/phpunit/php spark) se ejecuta ahora vía `stack-exec`, que
+# lo lanza en el runtime-template del proyecto a través del worker.
 _FILE_TOOLS = ("read-file", "write-file", "delete-file", "list-files", "search-code")
-_RUN_TOOLS = ("run-pytest", "run-lint", "run-typecheck", "run-build")
 # Base que todo agente del equipo recibe: ejecutar comandos del stack
 # (deny-by-default por allowed_commands del proyecto), leer/editar el repo,
 # git vía shell-exec y la búsqueda semántica en las KBs concedidas al proyecto.
-_BASE_TOOLS = ("shell-exec", *_FILE_TOOLS, "semantic-search")
+# `stack-exec` (ADR 0093) es el HERMANO de `shell-exec` para el toolchain del
+# stack: shell-exec corre en el sandbox fino (git/python), stack-exec lanza el
+# comando en el runtime-template del proyecto (php-phpunit) vía el worker, que es
+# donde existen composer/php/phpunit. Ambos comparten la misma allowlist.
+_BASE_TOOLS = ("shell-exec", "stack-exec", *_FILE_TOOLS, "semantic-search")
 
 
 @dataclass(frozen=True)
@@ -289,7 +299,7 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             "inheritance and direct code over speculative abstractions. If a "
             "design choice is non-trivial, consult the Architect before coding."
         ),
-        tool_slugs=(*_BASE_TOOLS, *_RUN_TOOLS),
+        tool_slugs=(*_BASE_TOOLS,),
         max_concurrent_tasks=4,
     ),
     CI4Agent(
@@ -337,7 +347,7 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             "where relevant. The data pattern is Config+Items: a configuration "
             "singleton + N orderable items. Every migration must be reversible."
         ),
-        tool_slugs=(*_BASE_TOOLS, *_RUN_TOOLS),
+        tool_slugs=(*_BASE_TOOLS,),
     ),
     CI4Agent(
         slug="ci4-frontend",
@@ -518,7 +528,7 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             "goal is to raise coverage steadily. Your bias is to break, not to "
             "validate: a 'green' feature you have not tried to break isn't done."
         ),
-        tool_slugs=(*_BASE_TOOLS, *_RUN_TOOLS),
+        tool_slugs=(*_BASE_TOOLS,),
         max_concurrent_tasks=3,
     ),
     CI4Agent(
@@ -616,7 +626,7 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             "not a fix. You document every toolchain gotcha as you fix it. You "
             "don't touch business logic except to add instrumentation."
         ),
-        tool_slugs=(*_BASE_TOOLS, *_RUN_TOOLS, "http-get", "http-post", "send-notification"),
+        tool_slugs=(*_BASE_TOOLS, "http-get", "http-post", "send-notification"),
     ),
 )
 

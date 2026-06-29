@@ -69,6 +69,13 @@ Los `run_*` que dependían de `docker.from_env()` dentro del sandbox **no funcio
 principio 2). Se retiran/redirigen por este puente. Se corrige también el docstring de `shell_exec`
 (`__main__.py`) que prometía `php`/`composer` (binarios inexistentes en la imagen del agente).
 
+**Alcance de la retirada (implementado):** se quitan los `run_*` del grant del equipo built-in CI4
+(`seeds/ci4_team.py`) — ahí eran ruido que el modelo invocaba y fallaba; el toolchain va por
+`stack_exec`. Las filas `run_*` permanecen en el catálogo de plataforma (`builtin_tools.py`) por
+compatibilidad con proyectos que las tuvieran asignadas; su retirada total del catálogo +
+`RUNTIME_WIRED_TOOL_NAMES` + contract tests se difiere a un cambio propio (afecta a no-CI4), para no
+hacer big-bang aquí.
+
 ## Invariantes preservadas (principios 2 y 3)
 
 - El agente sigue en su **contenedor efímero endurecido sin socket Docker**. El WORKER (que ya tiene

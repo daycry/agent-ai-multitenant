@@ -68,7 +68,7 @@ _RESEARCH_TOOLS = frozenset({"list_files", "read_file", "memory_recall", "rag_se
 # Tools that produce/modify the deliverable — calling one means real progress
 # (and that the agent HAS produced, which changes the nudge from "write" to "finish").
 _PRODUCING_TOOLS = frozenset(
-    {"write_file", "edit_file", "create_file", "shell_exec", "apply_patch"}
+    {"write_file", "edit_file", "create_file", "shell_exec", "stack_exec", "apply_patch"}
 )
 # After this many research-only tool calls in a row, push the agent off research.
 _RESEARCH_STREAK_LIMIT = 5

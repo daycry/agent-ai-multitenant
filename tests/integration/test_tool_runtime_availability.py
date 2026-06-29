@@ -249,6 +249,10 @@ def test_runtime_wired_set_matches_runtime_executor() -> None:
             registry,
             api=_FakeAPI(),
             sink=OrchestrationSink(),
+            # A task id is needed for the `stack` family (stack_exec) — the
+            # worker-mediated toolchain exec (ADR 0093) targets the task's
+            # worktree. A real run always carries one.
+            task_id="task-contract",
         )
     )
     # The run_* docker_command tools (wired from serialised specs) + the

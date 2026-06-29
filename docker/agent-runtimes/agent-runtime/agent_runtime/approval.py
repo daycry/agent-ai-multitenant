@@ -24,6 +24,7 @@ from shared_domain.tool_names import to_canonical
 # absent from this map is not sensitive and is never gated.
 DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "shell_exec": "code_execution",
+    "stack_exec": "code_execution",
     "write_file": "file_write",
     "http_get": "network_access",
     "http_post": "network_access",
