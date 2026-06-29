@@ -568,6 +568,35 @@ class TestRuntimeRunner:
         finally:
             self._cleanup(main_container, proxy_container, aux_containers, network)
 
+    def run_command(
+        self, spec: TestRuntimeSpec, command: str, *, timeout_s: int = DEFAULT_TIMEOUT_S
+    ) -> tuple[int, str]:
+        """Run ONE ad-hoc command in the stack runtime (ADR 0093 / ``stack_exec``).
+
+        The agent asks the worker (via ``/internal/agent/run-stack``) to run a
+        stack command — ``composer install`` / ``vendor/bin/phpunit`` /
+        ``php spark`` — in the project's runtime template, over the task's
+        worktree (RW). Mirrors :meth:`launch`'s envelope (private bridge, aux
+        services, hardened main container, guaranteed cleanup) but executes a
+        SINGLE caller-provided command instead of the plan's acceptance checks,
+        and does NOT run ``default_pre_install`` — the agent's own
+        ``composer install`` IS the install; running pre_install too would double
+        it. Returns ``(exit_code, logs)``; an exit_code of 124 means the command
+        was killed by the timeout wrapper. Always tears down.
+        """
+        network = self._create_bridge(spec)
+        aux_containers: list[Any] = []
+        proxy_container: Any = None
+        main_container: Any = None
+        try:
+            aux_containers = self._start_aux_services(spec, network.name)
+            if spec.testcontainers.enabled:
+                proxy_container = self._start_dind_proxy(spec, network.name)
+            main_container = self._start_main(spec, network.name)
+            return self._exec(main_container, command, timeout_s=timeout_s)
+        finally:
+            self._cleanup(main_container, proxy_container, aux_containers, network)
+
     # --- bridge ---------------------------------------------------------
 
     def _create_bridge(self, spec: TestRuntimeSpec) -> Any:

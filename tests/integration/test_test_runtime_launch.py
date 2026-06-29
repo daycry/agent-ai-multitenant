@@ -200,6 +200,40 @@ def test_cleanup_runs_even_if_main_run_raises() -> None:
     network.remove.assert_called_once()
 
 
+def test_run_command_runs_single_command_without_pre_install() -> None:
+    # ADR 0093 / stack_exec: run_command executes ONE caller command in the stack
+    # runtime — NO default_pre_install (the agent's own `composer install` would
+    # otherwise be doubled), NO acceptance checks.
+    from workers.test_runtime import TestRuntimeRunner
+
+    client, started = _fake_client()
+    runner = TestRuntimeRunner(Settings(), client=client)
+    rc, logs = runner.run_command(
+        _spec_for_python_pytest(), "composer install --no-interaction", timeout_s=120
+    )
+
+    assert len(started) == 1
+    main = started[0]
+    # Exactly one exec_run (the command) — no pre_install, no checks.
+    assert main.exec_run.call_count == 1
+    assert "composer install --no-interaction" in main.exec_run.call_args.args[0][-1]
+    assert rc == 0
+    assert "check passed" in logs  # the fake exec_run output
+
+
+def test_run_command_always_cleans_up() -> None:
+    from workers.test_runtime import TestRuntimeRunner
+
+    client, started = _fake_client()
+    network = client.networks.create.return_value
+    runner = TestRuntimeRunner(Settings(), client=client)
+    runner.run_command(_spec_for_python_pytest(), "php spark migrate", timeout_s=60)
+
+    for c in started:
+        c.remove.assert_called_once_with(force=True)
+    network.remove.assert_called_once()
+
+
 def test_open_network_policy_creates_non_internal_bridge() -> None:
     from workers.test_runtime import TestRuntimeRunner
 

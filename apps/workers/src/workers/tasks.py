@@ -326,6 +326,138 @@ async def _launch_test_runtime_plans(
     return outcomes
 
 
+# ---------------------------------------------------------------------------
+# ADR 0093 — stack_exec: the agent asks the worker (which has Docker) to run a
+# stack command (composer install / vendor/bin/phpunit / php spark) in the
+# project's runtime template, over the task's worktree. The agent-runtime cannot
+# launch containers (no socket, principle 2) — it POSTs to /internal/agent/run-stack
+# which enqueues THIS task.
+# ---------------------------------------------------------------------------
+_STACK_EXEC_DEFAULT_TIMEOUT_S = 600
+
+
+def _stack_command_allowed(command: str, allowed: list[str]) -> str | None:
+    """Deny-by-default gate (ADR 0045), identical to ``shell_exec``: the first
+    token's basename must be in ``allowed``. Returns an error string, or ``None``
+    when the command is allowed. An empty allowlist denies everything."""
+    import shlex
+    from pathlib import Path
+
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        return f"could not parse command: {exc}"
+    if not argv:
+        return "empty command"
+    allowed_set = set(allowed)
+    program = Path(argv[0]).name
+    # Accept either the basename (`php`, `composer`) or the full relative token
+    # (`vendor/bin/phpunit`) — the project commands UI offers both shapes.
+    if program not in allowed_set and argv[0] not in allowed_set:
+        return f"command not allowed: {program}"
+    return None
+
+
+@app.task(name="workers.run_stack_command")  # type: ignore[misc]
+def run_stack_command(request: dict[str, Any]) -> dict[str, Any]:
+    """Run one stack command for a task in its runtime template (ADR 0093).
+
+    ``request``: ``{tenant_id, task_id, command, timeout_s?}``. Returns
+    ``{exit_code, logs, timed_out}``. The command is gated by the project's
+    ``allowed_commands`` (deny-by-default) BEFORE it runs.
+    """
+    settings = get_settings()
+    return asyncio.run(_run_stack_command(request, settings))
+
+
+async def _run_stack_command(request: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    """Async core: resolve task→project (slug/runtime/allowlist) + the existing
+    worktree path, gate the command against the allowlist, run it in the stack
+    runtime over the worktree (RW), return rc+logs."""
+    from pathlib import Path
+
+    from api_server.db.domain import Project, Task
+    from api_server.db.models import Organization
+    from sqlalchemy import select
+
+    tenant_id = UUID(str(request["tenant_id"]))
+    task_id = UUID(str(request["task_id"]))
+    command = str(request.get("command") or "")
+    timeout_s = int(request.get("timeout_s") or _STACK_EXEC_DEFAULT_TIMEOUT_S)
+
+    engine = create_async_engine(settings.database_url)
+    try:
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessionmaker() as session:
+            task = (
+                await session.execute(
+                    select(Task).where(Task.id == task_id, Task.tenant_id == tenant_id)
+                )
+            ).scalar_one_or_none()
+            if task is None:
+                return {"exit_code": -1, "logs": "task not found", "timed_out": False}
+            project = (
+                await session.execute(select(Project).where(Project.id == task.project_id))
+            ).scalar_one_or_none()
+            org = await session.get(Organization, tenant_id)
+            if project is None or org is None or not project.slug or not org.slug:
+                return {"exit_code": -1, "logs": "project/org not resolvable", "timed_out": False}
+            allowed = [str(c) for c in (project.allowed_commands or [])]
+            runtime_id = project.default_runtime_template
+            org_slug, project_slug = org.slug, project.slug
+    finally:
+        await engine.dispose()
+
+    deny = _stack_command_allowed(command, allowed)
+    if deny is not None:
+        return {"exit_code": -1, "logs": deny, "timed_out": False, "allowed": sorted(allowed)}
+
+    try:
+        from shared_test_runtimes.dep_cache import DepCacheManager, compute_lock_hash
+
+        import docker
+        from workers.git_repos import BareRepoLayout
+        from workers.test_runtime import (
+            RuntimePlan,
+            TestRuntimeRunner,
+            TestRuntimeSpec,
+            resolve_run_runtime,
+        )
+    except ImportError:
+        return {"exit_code": -1, "logs": "docker/runtime libs unavailable", "timed_out": False}
+    try:
+        docker.from_env().ping()
+    except Exception:  # docker.errors.DockerException — daemon unavailable
+        return {"exit_code": -1, "logs": "docker daemon unavailable", "timed_out": False}
+
+    template = resolve_run_runtime(project_default_runtime=runtime_id, tool_default_runtime=None)
+    layout = BareRepoLayout(
+        data_root=Path(settings.data_root), tenant_slug=org_slug, project_slug=project_slug
+    )
+    worktree_host_path = str(layout.worktree_path(str(task_id)))
+
+    dep_cache_host_path: str | None = None
+    try:
+        lock = compute_lock_hash(Path(worktree_host_path), template.id)
+        if lock.hash:
+            entry = DepCacheManager(Path(settings.data_root) / "dep-cache").mount_for(
+                template, lock.hash
+            )
+            if entry is not None:
+                dep_cache_host_path = str(entry.host_path)
+    except Exception:  # pragma: no cover - dep-cache is a best-effort optimisation
+        dep_cache_host_path = None
+
+    spec = TestRuntimeSpec(
+        plan=RuntimePlan(template=template, checks=()),
+        worktree_host_path=worktree_host_path,
+        dep_cache_host_path=dep_cache_host_path,
+    )
+    runner = TestRuntimeRunner(settings)
+    rc, logs = await asyncio.to_thread(runner.run_command, spec, command, timeout_s=timeout_s)
+    return {"exit_code": rc, "logs": logs[-8000:], "timed_out": rc == 124}
+
+
 @app.task(name="workers.compose_review_runtime")  # type: ignore[misc]
 def compose_review_runtime(request: dict[str, Any]) -> dict[str, Any]:
     """Spawn the review-runtime + persist its session row.
