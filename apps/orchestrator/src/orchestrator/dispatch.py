@@ -1232,7 +1232,15 @@ class TaskDispatcher:
         return candidates
 
     def _pick(self, project: Project | None, task: Task, candidates: list[Candidate]) -> str | None:
-        """Apply the project's assignment policy to the candidate pool."""
+        """Apply the project's assignment policy to the candidate pool.
+
+        A preset ``assigned_agent_id`` (the plan's per-task assignment, resolved
+        from the spec ``role`` at sync time — Track 2) is AUTHORITATIVE and wins
+        regardless of policy: implementation lands on the chosen agent instead of
+        the least-loaded one. Only when no preset exists does the policy decide.
+        """
+        if task.assigned_agent_id is not None:
+            return str(task.assigned_agent_id)
         policy = AssignmentPolicy.LOAD_BALANCED
         if project is not None and isinstance(project.worker_config, dict):
             raw = project.worker_config.get("assignment_policy")

@@ -12,8 +12,12 @@ Pure-ish logic exercised without a DB or broker:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from uuid import uuid4
+
 import pytest
 from orchestrator import dispatch as dispatch_mod
+from orchestrator.assignment import Candidate
 from orchestrator.config import Settings
 from orchestrator.consumer import TransientHandlerError
 from orchestrator.dispatch import TaskDispatcher, _is_transient_db_error
@@ -146,3 +150,42 @@ async def test_publish_status_changed_noop_without_redis(monkeypatch: object) ->
     await disp._publish_status_changed(_event(), "in_progress")
 
     assert called is False
+
+
+# ---------------------------------------------------------------------------
+# _pick — the plan's per-task assignment (preset assigned_agent_id) is
+# authoritative; the load policy is only a fallback (Track 2 / R3).
+# ---------------------------------------------------------------------------
+def _task(*, assigned_agent_id: object = None) -> object:
+    return SimpleNamespace(id=uuid4(), assigned_agent_id=assigned_agent_id)
+
+
+def _project(worker_config: object = None) -> object:
+    return SimpleNamespace(worker_config=worker_config)
+
+
+def test_pick_honors_preset_assigned_agent_over_load_policy() -> None:
+    # Default policy is LOAD_BALANCED; a preset from the plan must win regardless,
+    # and the (different) candidate pool must be ignored.
+    preset = uuid4()
+    disp = _dispatcher()
+    chosen = disp._pick(
+        _project(),  # no worker_config → LOAD_BALANCED default
+        _task(assigned_agent_id=preset),
+        [Candidate(agent_id=str(uuid4()), active_task_count=0)],
+    )
+    assert chosen == str(preset)
+
+
+def test_pick_without_preset_falls_back_to_load_balanced() -> None:
+    disp = _dispatcher()
+    least_loaded = str(uuid4())
+    chosen = disp._pick(
+        _project(),
+        _task(assigned_agent_id=None),
+        [
+            Candidate(agent_id=str(uuid4()), active_task_count=3),
+            Candidate(agent_id=least_loaded, active_task_count=0),
+        ],
+    )
+    assert chosen == least_loaded

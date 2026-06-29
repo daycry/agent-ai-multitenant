@@ -32,7 +32,9 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.db.domain import Plan, Task, TaskDependency, TaskStatus
+from api_server.chat.planning_graph import PlanningRole
+from api_server.chat.responder import team_role_agents
+from api_server.db.domain import Plan, Project, Task, TaskDependency, TaskStatus
 
 # Key under which we stash the spec id on the materialised Task row.
 # Living inside the JSONB `inputs` column keeps the schema migration-free.
@@ -146,6 +148,15 @@ async def sync_plan_to_kanban(
         if isinstance(t, dict) and isinstance(t.get("id"), str)
     }
 
+    # Resolve the team's per-role agents ONCE so each task's spec `role`
+    # (planning_llm) lands on the right implementer (and reviewer). Empty
+    # when the project has no team — tasks then materialise unassigned and
+    # the orchestrator's load policy decides (Track 2 / ADR 0090-assignment).
+    project = (
+        await session.execute(select(Project).where(Project.id == plan.project_id))
+    ).scalar_one_or_none()
+    role_agents = await team_role_agents(session, project)
+
     # Look up *all* tasks already materialised for this plan — not just
     # the ones in this scope. A spec task outside the scope may already
     # exist from a previous sync and we still need its UUID to wire
@@ -158,7 +169,7 @@ async def sync_plan_to_kanban(
             result.skipped_task_ids[spec_id] = existing[spec_id]
             continue
         spec_task = spec_by_id[spec_id]
-        task = _build_task(plan, spec_id, spec_task)
+        task = _build_task(plan, spec_id, spec_task, role_agents=role_agents)
         session.add(task)
         await session.flush()  # populate task.id before its dependency rows
         existing[spec_id] = task.id
@@ -209,12 +220,47 @@ async def _load_existing_materialised(session: AsyncSession, plan: Plan) -> dict
     return out
 
 
-def _build_task(plan: Plan, spec_id: str, spec_task: dict[str, Any]) -> Task:
+def _resolve_assignment(
+    spec_task: dict[str, Any], role_agents: dict[PlanningRole, UUID] | None
+) -> tuple[UUID | None, UUID | None]:
+    """Resolve ``(assigned_agent_id, reviewer_agent_id)`` from the spec ``role``.
+
+    The implementer is the team's agent of the task's ``role``; the reviewer is
+    the team's ``reviewer`` role agent — but NEVER the implementer itself
+    (reviewer != implementer invariant). An unknown role, a role with no team
+    agent, or no team at all leaves the slot ``None`` so the dispatcher's load
+    policy decides instead of forcing an arbitrary agent.
+    """
+    if not role_agents:
+        return None, None
+    assigned: UUID | None = None
+    role_str = str(spec_task.get("role") or "").strip()
+    if role_str:
+        try:
+            assigned = role_agents.get(PlanningRole(role_str))
+        except ValueError:
+            assigned = None
+    reviewer = role_agents.get(PlanningRole.REVIEWER)
+    if reviewer is not None and reviewer == assigned:
+        reviewer = None
+    return assigned, reviewer
+
+
+def _build_task(
+    plan: Plan,
+    spec_id: str,
+    spec_task: dict[str, Any],
+    role_agents: dict[PlanningRole, UUID] | None = None,
+) -> Task:
     """Translate one spec task into a `Task` ORM row.
 
     All materialised tasks start in `backlog`. The orchestrator (Plan
-    02) is what promotes dependency-free ones to `ready`.
+    02) is what promotes dependency-free ones to `ready`. When the plan
+    spec carries a ``role`` and the project has a team, the task is
+    pre-assigned to that role's agent (Track 2) — the dispatcher honours
+    the preset instead of load-balancing the implementation onto, say, the PM.
     """
+    assigned_agent_id, reviewer_agent_id = _resolve_assignment(spec_task, role_agents)
     title = spec_task.get("title")
     if not isinstance(title, str) or not title.strip():
         title = spec_id  # fall back to the id if no title — never empty
@@ -240,6 +286,8 @@ def _build_task(plan: Plan, spec_id: str, spec_task: dict[str, Any]) -> Task:
         # We stash the spec id under `inputs` so future syncs match.
         inputs={PLAN_TASK_SPEC_ID_KEY: spec_id},
         estimated_complexity=complexity,
+        assigned_agent_id=assigned_agent_id,
+        reviewer_agent_id=reviewer_agent_id,
     )
 
 
