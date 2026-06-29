@@ -266,6 +266,34 @@ class _RuntimeResult:
     finish_status: str | None = None
 
 
+# Track 1 / ADR 0021 addendum: a base shell allowlist for the natively-agentic
+# Claude Agent SDK. UNIONed with the project's allowlist for `claude_sdk` runs ONLY,
+# so the SDK can reconcile the worktree with VCS/file ops (the `command not allowed:
+# git` / `rm` walls observed in a real run) instead of being straitjacketed by an
+# empty allowlist. Safe inside the sandbox (cap-drop ALL, read-only rootfs except
+# /workspace+/tmp, internal network/no egress, no docker socket — ADR 0012/0019/0040):
+# every command is confined to the container and the task worktree.
+_SDK_BASE_SHELL_COMMANDS: frozenset[str] = frozenset(
+    {
+        "git",
+        "rm",
+        "mv",
+        "cp",
+        "mkdir",
+        "rmdir",
+        "ls",
+        "cat",
+        "find",
+        "grep",
+        "touch",
+        "head",
+        "tail",
+        "wc",
+        "diff",
+    }
+)
+
+
 def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del spec
     request: ExecutionRequest,
     approval_policy: dict[str, Any] | None,
@@ -313,9 +341,16 @@ def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del sp
         spec["allowed_tools"] = request.allowed_tools
     # Forward the project's shell-command allowlist (task_06_16_02). Only emit
     # the key when set — `None` means "no key" (shell_exec not registered). An
-    # empty list IS emitted: it registers a deny-all shell_exec.
-    if request.allowed_commands is not None:
-        spec["allowed_commands"] = request.allowed_commands
+    # empty list IS emitted: it registers a deny-all shell_exec. For a natively-
+    # agentic `claude_sdk` run, UNION the base VCS/file allowlist so the SDK can
+    # reconcile the worktree (Track 1 / ADR 0021) — this also forces shell_exec to
+    # register even when the project pinned nothing. Thin providers are unchanged.
+    kind = (model_spec or request.model or {}).get("kind")
+    allowed_commands = request.allowed_commands
+    if kind == "claude_sdk":
+        allowed_commands = sorted(_SDK_BASE_SHELL_COMMANDS.union(allowed_commands or []))
+    if allowed_commands is not None:
+        spec["allowed_commands"] = allowed_commands
     # Forward the project's stack runtime (task_06_16_03). Only emit the key
     # when the project pinned a stack; `None` means "no key", which the runtime
     # reads as "keep each `run_*` tool's own default runtime" (python-pytest) —
