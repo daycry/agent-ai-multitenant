@@ -26,6 +26,7 @@ What this module does NOT do:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -43,6 +44,8 @@ from agent_runtime.python_function_tool import (
     build_python_function_tool,
 )
 from agent_runtime.tools import ToolFn, ToolRegistry
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -231,7 +234,25 @@ def register_tool_specs(
                 f"Tool {spec.name!r}: unknown implementation_type "
                 f"{spec.implementation_type!r}. Valid: {sorted(_BUILDERS)}"
             )
-        built = builder(spec, ctx)
+        try:
+            built = builder(spec, ctx)
+        except Exception as exc:
+            # A malformed/incomplete spec of a KNOWN type — e.g. an http_endpoint
+            # whose config lacks `url_template` (NULL implementation_ref), or a
+            # python_function with no `code`, or a docker_command with neither
+            # image nor runtime_template — must NOT crash the whole run. One bad
+            # Tool row would otherwise kill every task on the agent at boot
+            # (observed: KeyError 'url_template' → execution failed at iteration 0).
+            # Skip just that tool; the agent runs without it. The unknown-TYPE case
+            # above still raises (a contract error, not a per-row misconfig).
+            _log.warning(
+                "tool_wiring.skip_malformed_spec name=%s type=%s error=%s: %s",
+                spec.name,
+                spec.implementation_type,
+                type(exc).__name__,
+                exc,
+            )
+            continue
         if built is None:
             continue
         name, fn = built
