@@ -236,3 +236,33 @@ def test_varying_content_leaks_to_max_iterations_and_escalates() -> None:
     assert result.status == STATUS_NEEDS_HUMAN_REVIEW
     assert result.abort_code == "max_iterations_exceeded"
     assert "app/A.php" in (result.output or "")
+
+
+# ---------------------------------------------------------------------------
+# D4 (ADR 0089 addendum): the HARD research-churn backstop. Distinct reads never
+# trip the loop detector and are read-only (no hard abort), so a model that
+# read-churns after producing would otherwise burn the WHOLE iteration budget.
+# ---------------------------------------------------------------------------
+def test_research_churn_after_production_escalates_with_deliverable() -> None:
+    # Produced a file, then READ-CHURNS (distinct reads, never tripping the loop
+    # detector, ignoring the soft nudge): the hard backstop fires and ESCALATES
+    # (preserving the deliverable) far below max_iterations.
+    reads = [_act("read_file", path=f"f{i}.php") for i in range(15)]
+    result = run_agent(
+        _deps([_write("<?php class A {}"), *reads]), _TASK, budgets=Budgets(max_iterations=30)
+    )
+    assert result.status == STATUS_NEEDS_HUMAN_REVIEW
+    assert result.abort_code == "research_exhausted"
+    assert "app/A.php" in (result.output or "")
+    assert result.iterations < 20  # fail-fast (~12), not the full 30
+
+
+def test_sterile_analysis_run_is_not_cut_by_research_backstop() -> None:
+    # INVARIANT: an analysis-only run that only READS and then FINISHES in prose is
+    # NOT aborted by the backstop (no production, no prior failed review) — it stays
+    # bounded by max_iterations and completes cleanly.
+    reads = [_act("read_file", path=f"a{i}.php") for i in range(15)]
+    finish = ModelResponse(decision=ModelDecision(kind=DecisionKind.FINISH, output="análisis"))
+    result = run_agent(_deps([*reads, finish]), _TASK, budgets=Budgets(max_iterations=30))
+    assert result.status == STATUS_DONE
+    assert result.abort_code is None

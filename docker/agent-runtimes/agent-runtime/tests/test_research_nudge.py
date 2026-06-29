@@ -12,11 +12,13 @@ from typing import Any
 
 from agent_runtime.graph import (
     _PATH_CHURN_THRESHOLD,
+    _RESEARCH_HARD_LIMIT,
     _RESEARCH_STREAK_LIMIT,
     AgentDeps,
     _AgentLoop,
     _path_churn_nudge,
     _repetition_nudge,
+    _research_exhausted,
     _research_nudge,
 )
 from agent_runtime.loop_detection import LoopDetector
@@ -39,6 +41,52 @@ def test_no_nudge_for_normal_research() -> None:
 
 def test_no_nudge_for_producing_tool() -> None:
     assert _research_nudge(tool="write_file", research_streak=0, repeat_count=1) is None
+
+
+# --- D4 (ADR 0089 addendum): the HARD research backstop predicate ----------
+# The soft nudge (streak>=5) is advisory; a model can ignore it and read-churn to
+# max_iterations. `_research_exhausted` is the hard backstop the graph trips: it
+# escalates ONLY when the streak crosses the hard limit AND the run has something
+# worth preserving (produced, or a prior self-review already failed).
+def test_research_exhausted_true_after_having_produced() -> None:
+    assert _research_exhausted(
+        research_streak=_RESEARCH_HARD_LIMIT,
+        has_produced=True,
+        review_retries=0,
+        hard_limit=_RESEARCH_HARD_LIMIT,
+    )
+
+
+def test_research_exhausted_true_after_failed_review_even_without_production() -> None:
+    # Read-churn AFTER a rejected self-review (the live scenario): no new write since,
+    # but a failed review means there IS work to escalate.
+    assert _research_exhausted(
+        research_streak=_RESEARCH_HARD_LIMIT,
+        has_produced=False,
+        review_retries=1,
+        hard_limit=_RESEARCH_HARD_LIMIT,
+    )
+
+
+def test_research_exhausted_false_for_sterile_analysis_run() -> None:
+    # INVARIANT: a legitimate analysis-only run that only READS (no production, no
+    # prior failed review) must NOT be cut by the backstop — even far past the limit.
+    # Its termination stays bounded by max_iterations (ADR 0089-D3).
+    assert not _research_exhausted(
+        research_streak=_RESEARCH_HARD_LIMIT + 5,
+        has_produced=False,
+        review_retries=0,
+        hard_limit=_RESEARCH_HARD_LIMIT,
+    )
+
+
+def test_research_exhausted_false_below_the_hard_limit() -> None:
+    assert not _research_exhausted(
+        research_streak=_RESEARCH_HARD_LIMIT - 1,
+        has_produced=True,
+        review_retries=0,
+        hard_limit=_RESEARCH_HARD_LIMIT,
+    )
 
 
 # --- B1: the repetition nudge fires by tool class at the detector threshold ----

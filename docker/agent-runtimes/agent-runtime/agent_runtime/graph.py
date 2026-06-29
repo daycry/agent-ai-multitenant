@@ -72,6 +72,11 @@ _PRODUCING_TOOLS = frozenset(
 )
 # After this many research-only tool calls in a row, push the agent off research.
 _RESEARCH_STREAK_LIMIT = 5
+# ADR 0089-D4: after this many research-only calls in a row (read-churn), trip a HARD
+# backstop — the soft nudge fires at 5 but a model can ignore it and re-read to
+# max_iterations. 10 is 2x the nudge (one last chance to converge) and far below the
+# per-kind iteration cap (25/50), so it fails fast instead of burning the budget.
+_RESEARCH_HARD_LIMIT = 10
 # ADR 0089: after this many writes to the SAME path (ANY content), nudge the agent to
 # stop re-writing and FINISH — a 'churn' the byte-exact detector/nudge cannot see.
 _PATH_CHURN_THRESHOLD = 4
@@ -230,6 +235,21 @@ def _research_nudge(
         "anything. STOP researching — you have enough context. Produce the task's "
         "deliverable now (e.g. write_file) instead of more reads or searches."
     )
+
+
+def _research_exhausted(
+    *, research_streak: int, has_produced: bool, review_retries: int, hard_limit: int
+) -> bool:
+    """The HARD read-churn backstop (ADR 0089-D4).
+
+    Trips when the research-only streak (reads/searches since the last producing
+    tool) crosses ``hard_limit`` AND the run has something worth preserving — it has
+    already produced a deliverable, OR a prior self-review failed and the model keeps
+    reading without re-writing (the live read-churn scenario). A sterile analysis-only
+    run that legitimately only reads (no production, no failed review) is NOT cut here;
+    its termination stays bounded by ``max_iterations``/``wall_clock`` (D3 invariant).
+    """
+    return research_streak >= hard_limit and (has_produced or review_retries > 0)
 
 
 def _no_recall(_task: AgentTask) -> list[dict[str, Any]]:
@@ -442,7 +462,7 @@ class _AgentLoop:
         )
         return {"context": context, "steps": [step]}
 
-    def plan(self, state: AgentState) -> dict[str, Any]:
+    def plan(self, state: AgentState) -> dict[str, Any]:  # noqa: PLR0911
         """Check safeguards, ask the model for the next move, detect loops."""
         base = len(state["steps"])
         steps: list[dict[str, Any]] = []
@@ -487,6 +507,35 @@ class _AgentLoop:
             return {
                 "status": status,
                 "abort_code": str(tripped),
+                "iteration": self.tracker.usage.iterations,
+                "steps": steps,
+            }
+
+        # D4 (ADR 0089 addendum): the HARD read-churn backstop. A research-only streak
+        # that ignored the soft nudge (the model re-reads/re-lists without producing)
+        # would otherwise burn the WHOLE iteration budget — read-only tools are exempt
+        # from the loop detector's hard abort, and distinct args never fingerprint as a
+        # loop. Once the run has produced (or a prior self-review failed and it still
+        # won't re-write), escalate NOW (preserving the deliverable) instead of leaking
+        # to max_iterations. A sterile analysis-only run is NOT cut (gate fails).
+        if _research_exhausted(
+            research_streak=self.research_streak,
+            has_produced=self.has_produced,
+            review_retries=state["review_retries"],
+            hard_limit=_RESEARCH_HARD_LIMIT,
+        ):
+            status = _abort_or_escalate_status(self.has_produced)
+            steps.append(
+                node_step(
+                    base + len(steps),
+                    "plan",
+                    f"Safeguard tripped: {SafeguardCode.RESEARCH_EXHAUSTED}",
+                    status="aborted" if status == STATUS_ABORTED else status,
+                )
+            )
+            return {
+                "status": status,
+                "abort_code": str(SafeguardCode.RESEARCH_EXHAUSTED),
                 "iteration": self.tracker.usage.iterations,
                 "steps": steps,
             }

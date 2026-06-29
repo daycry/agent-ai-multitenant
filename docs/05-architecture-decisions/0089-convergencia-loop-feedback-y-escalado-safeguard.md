@@ -54,6 +54,26 @@ Solo los tools **mutadores** (productores + cualquier verbo desconocido, conserv
 TDD sano recibe el **nudge** pero no aborta — su terminación la garantizan `max_iterations`/
 `wall_clock`. Cierra un falso positivo real del contador acumulativo-total.
 
+### D4 (addendum 2026-06-29) — Backstop DURO de read-churn
+
+La monitorización en vivo (opus/claude_sdk) mostró el **reverso** de D3: tras un self-review fallido,
+el modelo entró en **read-churn** — releyó los mismos 2-3 ficheros con args distintos las iteraciones
+17→50 **sin escribir nada**, ignorando el nudge blando (`research_streak>=5`, advisory). Como los
+tools read-only están exentos del abort duro (D3) y los args distintos nunca fingerprintean como
+bucle, el `max_iterations` (techo per-kind 25/50) era demasiado laxo: dejó quemar 33 iteraciones.
+
+**Decidido:** un backstop DURO en `plan()` — `_research_exhausted(research_streak, has_produced,
+review_retries, hard_limit)` dispara cuando `research_streak >= _RESEARCH_HARD_LIMIT (=10)` Y el run
+tiene algo que preservar (`has_produced` O `review_retries > 0`). Resultado:
+`_abort_or_escalate_status(has_produced)` con `abort_code = research_exhausted` (nuevo miembro del
+enum, aditivo → contrato persistido seguro). Reutiliza la fontanería de escalado existente (resumen
+del deliverable en `finalize`, commit WIP del worker en `needs_human_review`) — sin preservación
+nueva. Umbral 10 = 2x el nudge blando y ≪ 25/50: falla rápido (~12 iter) en vez de quemar el budget.
+
+**Invariante:** un run analysis-only **estéril** (solo lee, sin producir y sin review previo fallido)
+**NO** se corta — el gate falla y su terminación sigue acotada por `max_iterations`/`wall_clock` (D3
+intacto). Test de regresión que lo blinda añadido.
+
 ## Invariantes preservadas
 
 - El **fingerprint** del `LoopDetector` sigue incluyendo los args COMPLETOS (content) → editar el

@@ -45,6 +45,10 @@ class SafeguardCode(enum.StrEnum):
     MAX_WALL_CLOCK = "max_wall_clock_exceeded"
     MAX_TOOL_CALLS = "max_tool_calls_exceeded"
     REPETITIVE_LOOP = "repetitive_loop_detected"
+    # ADR 0089-D4: a research-only streak that ignores the soft nudge (read-churn)
+    # trips this hard backstop well before max_iterations, escalating the produced
+    # work instead of burning the whole budget re-reading.
+    RESEARCH_EXHAUSTED = "research_exhausted"
     # Self-review escalation codes (ADR 0087). The values are exactly the strings
     # already persisted by the loop ('review_inconclusive' /
     # 'max_review_retries_exhausted'); the old dead 'max_review_retries_exceeded'
