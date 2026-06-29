@@ -125,7 +125,13 @@ services:
       IMAGES: "1"
       NETWORKS: "1"
       POST: "1"
-      EXEC: "0"
+      # EXEC=1: el worker corre comandos DENTRO de los runtime-templates que él
+      # mismo lanza (TestRuntimeRunner._exec → exec_run): los checks post-hoc de
+      # tests Y el puente stack_exec (ADR 0093). Con EXEC=0 todo exec_run daba
+      # 403 Forbidden. Sigue siendo mínimo-privilegio: el proxy vive en la red
+      # dedicada agentic-docker (solo workers↔proxy) y el agent-runtime NUNCA
+      # toca el socket (principio 2). ADR 0060.
+      EXEC: "1"
       VOLUMES: "0"
       SWARM: "0"
       SECRETS: "0"

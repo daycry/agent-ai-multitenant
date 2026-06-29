@@ -106,6 +106,31 @@ hacer big-bang aquí.
   `HOME`/`composer cache`) para que `composer install` cachee y `composer.lock` se persista
   controladamente (y `vendor/` quede gitignored), en vez de generarse tras el commit del test-runtime.
 
+## Hallazgos de despliegue (infra) — verificación e2e del puente
+
+Al desplegar el puente y validarlo e2e (`stack_exec` → worker → php-phpunit sobre el worktree)
+afloraron **tres bugs de infraestructura pre-existentes** que impedían que el exec en runtime-templates
+funcionara para NADIE (también los checks post-hoc de tests). Arreglados:
+
+1. **Doble `sleep infinity`** (`test_runtime.py`): las imágenes runtime declaran
+   `ENTRYPOINT ["sleep","infinity"]` y `_build_test_kwargs` además pasaba `command ["sleep","infinity"]`
+   → el daemon ejecutaba `sleep infinity sleep infinity` → _"invalid time interval 'sleep'"_ → el
+   contenedor salía al instante y cada `exec_run` daba **409 "container is not running"**. Fix: keep-alive
+   por `entrypoint` (sin `command` que se anexe al ENTRYPOINT de la imagen).
+2. **`EXEC=0` en el docker-socket-proxy** (`docker-compose.manuals.yml`): el proxy de mínimo-privilegio
+   bloqueaba `POST /exec/{id}/start` → **403 Forbidden** en todo `exec_run`. El worker necesita exec para
+   correr comandos DENTRO de los runtimes que él lanza. Fix: `EXEC: "1"`. Sigue mínimo-privilegio (proxy
+   en red dedicada solo-workers; el agent-runtime nunca toca el socket — principio 2 intacto).
+3. **`project.slug` vacío**: el proyecto demo "Api CI" se creó sin `slug` (anomalía: los demás lo tienen).
+   `execution.py` exige `project.slug` para provisionar el worktree (si falta → tmpfs efímero), y
+   `_run_stack_command` devolvía _"project/org not resolvable"_. Fix de datos: `slug='api-ci'` (coincide
+   con el bare repo ya creado en `demo/api-ci`). La causa de raíz (creación de proyecto sin slug) queda
+   como follow-up de producto.
+
+Verificado e2e directo (invocando `run_stack_command` sobre un worktree real): `php -v` → rc 0;
+`composer install` → rc 0 y `vendor/autoload.php`+`composer.lock` escritos al worktree (mount RW
+persiste); el gate deny-by-default deniega `rm`/`curl` y admite `composer`/`php`/`vendor/bin/phpunit`.
+
 ## Trazabilidad
 
 Investigación multi-agente (workflow `php-stack-execution-design`) en el scratchpad de la sesión; plan
