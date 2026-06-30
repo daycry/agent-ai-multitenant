@@ -49,6 +49,9 @@
 # --- Git hosts (deps git por HTTPS + dist/archive CDNs) ---------------
 ^github\.com$
 ^codeload\.github\.com$
+# composer/go descargan zipballs de dist vía la API: api.github.com/repos/.../zipball/<ref>
+# (redirige a codeload). Sin esto, `composer install` de deps de GitHub da CONNECT 403.
+^api\.github\.com$
 ^([a-z0-9-]+\.)*githubusercontent\.com$
 ^gitlab\.com$
 ^dev\.azure\.com$

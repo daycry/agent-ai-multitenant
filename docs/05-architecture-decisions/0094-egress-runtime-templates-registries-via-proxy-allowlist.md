@@ -92,8 +92,9 @@ allowlist por-proyecto). Hosts permitidos (regex ERE anclados al `Host`/CONNECT)
 packagist/getcomposer, PyPI (`pypi.org`, `files.pythonhosted.org`), npm
 (`registry.npmjs.org`), Go (`proxy.golang.org`, `sum.golang.org`, `storage.googleapis.com`),
 Maven Central + Gradle, RubyGems, crates.io, NuGet (`*.nuget.org`), y git
-(`github.com`, `codeload.github.com`, `*.githubusercontent.com`, `gitlab.com`, `dev.azure.com`,
-`bitbucket.org`). Los registries/git **privados** con credenciales (Packagist privado, GitLab
+(`github.com`, `codeload.github.com`, `api.github.com`, `*.githubusercontent.com`, `gitlab.com`,
+`dev.azure.com`, `bitbucket.org`; `api.github.com` lo exige composer/go para los zipballs de dist
+`api.github.com/repos/.../zipball/<ref>`). Los registries/git **privados** con credenciales (Packagist privado, GitLab
 self-host, Nexus/Artifactory, PyPI interno) quedan para una iteración posterior (solapa con la
 allowlist por-proyecto de la Ola B0.2, ADR 0067, y con la inyección de credenciales desde Vault).
 
@@ -154,6 +155,22 @@ Se preservan todas las invariantes del runtime endurecido: `cap_drop ALL`, `read
 - **Coordinación**: `apps/api-server/src/api_server/marketplace/sandbox.py` carga la misma
   semántica `open` de bridge crudo (la otra mitad de `task_prod12_net_01`); reusará el mismo
   helper de attach. Fuera del alcance de runtime-templates de este ADR, pero el ADR gobierna ambos.
+
+## Verificación e2e (despliegue dev)
+
+Desplegado en dev (`registry-proxy` nuevo + `workers:ci`/`api-server:ci` reconstruidos con
+`WITH_CLAUDE=1`) y verificado por el worker real (`TestRuntimeRunner.run_command` sobre un
+worktree con `composer.json` que requiere `guzzlehttp/guzzle`):
+
+- **Positivo (`dep_egress=True`)**: `composer install` → rc 0; resolvió guzzle + 8 deps
+  transitivas y escribió `vendor/guzzlehttp/{guzzle,promises,psr7}` + `vendor/autoload.php` +
+  `composer.lock` al worktree (mount RW persiste).
+- **Negativo (`dep_egress=False`)**: el mismo `composer install` → rc 100, _"Could not resolve
+  host: repo.packagist.org"_ — el bridge interno no tiene salida sin el proxy (no hay NAT crudo).
+- **Allowlist (deny-by-default)**: probe HTTPS por el proxy → `repo.packagist.org`/`pypi.org` 200;
+  `evil.example.com` → _"Tunnel connection failed: 403 Filtered"_.
+- **Hallazgo**: composer descarga los zipballs de dist de paquetes GitHub vía
+  `api.github.com/repos/.../zipball/<ref>` → hubo que añadir `^api\.github\.com$` al filtro.
 
 ## Trazabilidad
 

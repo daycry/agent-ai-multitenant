@@ -55,6 +55,7 @@ _ALLOWED = [
     # Git hosts + dist/archive CDNs
     "github.com",
     "codeload.github.com",
+    "api.github.com",  # composer/go dist zipballs
     "objects.githubusercontent.com",
     "raw.githubusercontent.com",
     "gitlab.com",
