@@ -457,6 +457,8 @@ def run_task(spec: dict[str, Any]) -> int:
             model=model_from_spec(spec["model"]),
             tools=registry,
             approval=ApprovalGate(policy) if policy else None,
+            # ADR 0095: make the loop's convergence safeguards reviewer-aware.
+            is_review=bool(spec.get("review")),
         )
 
         budgets = None

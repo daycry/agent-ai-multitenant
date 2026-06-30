@@ -14,7 +14,9 @@ from agent_runtime.graph import (
     _PATH_CHURN_THRESHOLD,
     _RESEARCH_HARD_LIMIT,
     _RESEARCH_STREAK_LIMIT,
+    STATUS_NEEDS_HUMAN_REVIEW,
     AgentDeps,
+    _abort_or_escalate_status,
     _AgentLoop,
     _path_churn_nudge,
     _repetition_nudge,
@@ -41,6 +43,52 @@ def test_no_nudge_for_normal_research() -> None:
 
 def test_no_nudge_for_producing_tool() -> None:
     assert _research_nudge(tool="write_file", research_streak=0, repeat_count=1) is None
+
+
+# --- ADR 0095: reviewer-aware safeguards -----------------------------------
+
+
+def test_review_nudge_says_emit_verdict_not_write_file() -> None:
+    # A reviewer is forbidden to write_file; the streak nudge must push it to
+    # FINISH with its <verdict>, not to produce a deliverable.
+    msg = _research_nudge(
+        tool="read_file", research_streak=_RESEARCH_STREAK_LIMIT, repeat_count=1, is_review=True
+    )
+    assert msg is not None
+    assert "verdict" in msg.lower()
+    assert "write_file" not in msg
+
+
+def test_review_research_exhausted_cuts_sterile_reviewer() -> None:
+    # A reviewer never "produces" — the hard backstop must still cut it (it is
+    # sterile by design), unlike a normal analysis run.
+    assert (
+        _research_exhausted(
+            research_streak=_RESEARCH_HARD_LIMIT,
+            has_produced=False,
+            review_retries=0,
+            hard_limit=_RESEARCH_HARD_LIMIT,
+            is_review=True,
+        )
+        is True
+    )
+    # Non-review sterile run is still NOT cut (D3 invariant preserved).
+    assert (
+        _research_exhausted(
+            research_streak=_RESEARCH_HARD_LIMIT,
+            has_produced=False,
+            review_retries=0,
+            hard_limit=_RESEARCH_HARD_LIMIT,
+            is_review=False,
+        )
+        is False
+    )
+
+
+def test_review_safeguard_escalates_not_aborts() -> None:
+    # A review run that trips a safeguard escalates to a human (so the worker can
+    # converge the task), instead of a silent hard abort.
+    assert _abort_or_escalate_status(False, is_review=True) == STATUS_NEEDS_HUMAN_REVIEW
 
 
 # --- D4 (ADR 0089 addendum): the HARD research backstop predicate ----------

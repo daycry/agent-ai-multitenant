@@ -127,7 +127,7 @@ def _is_mutating_tool(tool: str | None) -> bool:
     return not _is_readonly_tool(tool)
 
 
-def _abort_or_escalate_status(has_produced: bool) -> str:
+def _abort_or_escalate_status(has_produced: bool, *, is_review: bool = False) -> str:
     """The terminal status for a budget/loop trip, gated by whether work exists.
 
     ADR 0087 (B2/B3): a run that has ALREADY produced a deliverable must not be
@@ -135,8 +135,14 @@ def _abort_or_escalate_status(has_produced: bool) -> str:
     preserved and the run is ESCALATED to a human (``needs_human_review``). A
     STERILE run (nothing produced) is a clean ``aborted`` as before. The abort_code
     is unchanged in either case; only the lifecycle status differs.
+
+    ADR 0095: a REVIEW run is sterile by design (it produces a verdict, not a
+    file), so a safeguard trip there ESCALATES to a human (the worker converges
+    the task) instead of a silent hard abort that parks it in ``in_review``.
     """
-    return STATUS_NEEDS_HUMAN_REVIEW if has_produced else STATUS_ABORTED
+    if is_review or has_produced:
+        return STATUS_NEEDS_HUMAN_REVIEW
+    return STATUS_ABORTED
 
 
 def _repetition_nudge(
@@ -197,7 +203,12 @@ def _path_churn_nudge(*, path: str | None, write_count: int, threshold: int) -> 
 
 
 def _research_nudge(
-    *, tool: str | None, research_streak: int, repeat_count: int, has_produced: bool = False
+    *,
+    tool: str | None,
+    research_streak: int,
+    repeat_count: int,
+    has_produced: bool = False,
+    is_review: bool = False,
 ) -> str | None:
     """Guidance pushing the agent off a research rut toward the right next move.
 
@@ -217,6 +228,16 @@ def _research_nudge(
     is_repeat = _is_research_tool(tool) and repeat_count > 1
     if not (is_repeat or research_streak >= _RESEARCH_STREAK_LIMIT):
         return None
+    if is_review:
+        # ADR 0095: a reviewer is FORBIDDEN to write_file; push it to conclude with
+        # its verdict (claude_sdk FINISH = a no-tool-call prose turn) — never to
+        # "produce the deliverable".
+        return (
+            "You have enough context to judge this task. STOP researching and FINISH "
+            "your review now: reply with your final summary ending in exactly one "
+            "<verdict>approve</verdict> or <verdict>reject</verdict> tag — do NOT call "
+            "more tools and do NOT write files."
+        )
     if has_produced:
         # C0 (ADR 0087): provider-neutral wording — do NOT prescribe "no tool call".
         # FINISH on the HTTP providers IS a `submit_result` tool call; on claude_sdk
@@ -238,7 +259,12 @@ def _research_nudge(
 
 
 def _research_exhausted(
-    *, research_streak: int, has_produced: bool, review_retries: int, hard_limit: int
+    *,
+    research_streak: int,
+    has_produced: bool,
+    review_retries: int,
+    hard_limit: int,
+    is_review: bool = False,
 ) -> bool:
     """The HARD read-churn backstop (ADR 0089-D4).
 
@@ -248,8 +274,11 @@ def _research_exhausted(
     reading without re-writing (the live read-churn scenario). A sterile analysis-only
     run that legitimately only reads (no production, no failed review) is NOT cut here;
     its termination stays bounded by ``max_iterations``/``wall_clock`` (D3 invariant).
+
+    ADR 0095: a REVIEW run is the one sterile-by-design case that MUST be cut — it
+    never produces and would otherwise leak to ``max_iterations`` every time.
     """
-    return research_streak >= hard_limit and (has_produced or review_retries > 0)
+    return research_streak >= hard_limit and (has_produced or review_retries > 0 or is_review)
 
 
 def _no_recall(_task: AgentTask) -> list[dict[str, Any]]:
@@ -348,6 +377,11 @@ class AgentDeps:
     recall: Callable[[AgentTask], list[dict[str, Any]]] = _no_recall
     # When set, gates sensitive tool calls before they run (task_02_33).
     approval: ApprovalGate | None = None
+    # ADR 0095: this run is an AI REVIEW (judges another task's output). Makes the
+    # convergence safeguards reviewer-aware: the nudge tells it to emit its verdict
+    # (not write_file), the read-churn backstop cuts it, and a safeguard trip
+    # escalates to a human instead of a silent abort.
+    is_review: bool = False
 
 
 @dataclass(frozen=True)
@@ -417,6 +451,8 @@ class _AgentLoop:
         self.deps = deps
         self.tracker = tracker
         self.detector = detector
+        # ADR 0095: reviewer-aware safeguards (see AgentDeps.is_review).
+        self.is_review = deps.is_review
         # Consecutive research-only tool calls (reset by any producing tool) —
         # drives the "stop researching, write" nudge in `reflect`.
         self.research_streak = 0
@@ -474,7 +510,7 @@ class _AgentLoop:
             # detector and would leak out here via the iteration budget; gate it like
             # the loop trip so a run that already produced work ESCALATES (preserving
             # the deliverable) instead of being discarded as a hard abort.
-            status = _abort_or_escalate_status(self.has_produced)
+            status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
             steps.append(
                 node_step(
                     base,
@@ -495,7 +531,7 @@ class _AgentLoop:
         if tripped is not None:
             # B3: same gating for the cumulative budgets (tool calls / wall clock /
             # tokens / cost) — preserve produced work, abort a sterile run.
-            status = _abort_or_escalate_status(self.has_produced)
+            status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
             steps.append(
                 node_step(
                     base,
@@ -523,8 +559,9 @@ class _AgentLoop:
             has_produced=self.has_produced,
             review_retries=state["review_retries"],
             hard_limit=_RESEARCH_HARD_LIMIT,
+            is_review=self.is_review,
         ):
-            status = _abort_or_escalate_status(self.has_produced)
+            status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
             steps.append(
                 node_step(
                     base + len(steps),
@@ -589,7 +626,7 @@ class _AgentLoop:
                 # B2: when work was already produced, ESCALATE (preserve it) rather
                 # than hard-abort; a sterile loop stays aborted. The abort_code is
                 # unchanged either way (the persisted contract).
-                status = _abort_or_escalate_status(self.has_produced)
+                status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
                 steps.append(
                     node_step(
                         base + len(steps),
@@ -711,6 +748,7 @@ class _AgentLoop:
             research_streak=self.research_streak,
             repeat_count=repeat_count,
             has_produced=self.has_produced,
+            is_review=self.is_review,
         )
         updates: dict[str, Any] = {"reflections": [note]}
         summary = f"Reflection: {note}"
