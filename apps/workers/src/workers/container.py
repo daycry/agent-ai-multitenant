@@ -43,9 +43,12 @@ class ContainerSpec:
     image: str
     command: list[str] | None = None
     env: dict[str, str] = field(default_factory=dict)
-    # When set, /workspace is a read-write bind to this host directory;
-    # otherwise /workspace is an ephemeral tmpfs.
+    # When set, /workspace is a bind to this host directory; otherwise
+    # /workspace is an ephemeral tmpfs.
     workspace_host_path: str | None = None
+    # ADR 0095: mount /workspace read-only (a REVIEW run reads the
+    # implementer's worktree without mutating it). RW by default.
+    workspace_read_only: bool = False
     # Extra read-only mounts — e.g. staged secrets (see workers.secrets).
     extra_mounts: tuple[Any, ...] = ()
     name: str | None = None
@@ -124,7 +127,9 @@ class AgentContainerRunner:
         self.ensure_network()
 
         kwargs = build_hardened_run_kwargs(
-            self._settings, workspace_host_path=spec.workspace_host_path
+            self._settings,
+            workspace_host_path=spec.workspace_host_path,
+            workspace_read_only=spec.workspace_read_only,
         )
         mounts = list(kwargs.pop("mounts", []))
         mounts.extend(spec.extra_mounts)

@@ -811,6 +811,30 @@ async def _provision_worktree(
         return None
 
 
+def _resolve_review_worktree(
+    settings: Settings, tenant_slug: str, project_slug: str, task_id: str
+) -> str | None:
+    """Resolve the implementer's EXISTING per-task worktree for a READ-ONLY review
+    mount (ADR 0095).
+
+    No git operations — the directory reflects the post-implementation state
+    (committed + uncommitted) exactly as the implementer left it; the reviewer
+    only reads it. Returns the host path, or ``None`` when the worktree does not
+    exist (the implementer ran in an ephemeral tmpfs) so the reviewer falls back
+    to an empty ``/workspace``."""
+    from pathlib import Path
+
+    from workers.git_repos import BareRepoLayout
+
+    layout = BareRepoLayout(
+        data_root=Path(settings.data_root),
+        tenant_slug=tenant_slug,
+        project_slug=project_slug,
+    )
+    path = layout.worktree_path(task_id)
+    return str(path) if path.is_dir() else None
+
+
 async def _commit_and_push_worktree(
     settings: Settings,
     *,
@@ -1053,18 +1077,23 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         project = await session.get(Project, task.project_id)
         approval_policy = project.human_approval_policy if project is not None else None
         # prod-18 task_prod18_provision_01: gather the (stable) slugs needed to
-        # materialise the task's git worktree. Only for a real IMPLEMENTER run with a
-        # plan + slugs (NOT a review run — ADR 0085: RW worktree is the implementer's;
-        # the reviewer reads `review_context`). Missing any → no worktree (tmpfs).
+        # materialise the task's git worktree. An IMPLEMENTER run gets a fresh RW
+        # worktree; a REVIEW run mounts the implementer's existing worktree READ-ONLY
+        # so the reviewer can read the code (ADR 0095 — was blind on review_context
+        # only). Missing any → no worktree (empty tmpfs).
         worktree_inputs: tuple[str, str, str, str] | None = None
+        review_worktree: tuple[str, str] | None = None  # (tenant_slug, project_slug), read-only
         # The task's automated acceptance criteria, captured here (the session closes
         # below) to drive the test-runtime after the agent commits (prod-18 test_01).
         task_acceptance_criteria: list[Any] = list(task.acceptance_criteria or [])
-        if not request.review and task.plan_id is not None and project is not None and project.slug:
+        if task.plan_id is not None and project is not None and project.slug:
             plan = await session.get(Plan, task.plan_id)
             org = await session.get(Organization, tenant_id)
             if plan is not None and plan.slug and org is not None and org.slug:
-                worktree_inputs = (org.slug, project.slug, str(plan.id), plan.slug)
+                if request.review:
+                    review_worktree = (org.slug, project.slug)
+                else:
+                    worktree_inputs = (org.slug, project.slug, str(plan.id), plan.slug)
         # ADR 0057 F1: resolver el model_config (clave `provider` = kind, sin
         # endpoint/credencial) a un spec EJECUTABLE (kind + base_url +
         # credencial de Vault) ANTES de lanzar el contenedor — el sandbox no
@@ -1143,6 +1172,7 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         # OUTSIDE the DB transaction (git subprocess I/O) and bind-mount it RW as
         # /workspace so the agent's file writes persist (the worker commits them in
         # Fase C). `None` → ephemeral tmpfs (no plan/slugs, or provisioning failed).
+        workspace_read_only = False
         if worktree_inputs is not None:
             tenant_slug, project_slug, plan_id_str, plan_slug = worktree_inputs
             workspace_host_path = await _provision_worktree(
@@ -1153,6 +1183,14 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 plan_slug=plan_slug,
                 task_id=str(task_id),
             )
+        elif review_worktree is not None:
+            # ADR 0095: mount the implementer's existing worktree READ-ONLY for the
+            # reviewer. No git ops, no commit (worktree_inputs stays None).
+            r_tenant_slug, r_project_slug = review_worktree
+            workspace_host_path = _resolve_review_worktree(
+                settings, r_tenant_slug, r_project_slug, str(task_id)
+            )
+            workspace_read_only = workspace_host_path is not None
         # Per-provider wall-clock budget: claude_sdk spawns the Node CLI and its
         # high-effort/xhigh model calls are slow, so it gets a much longer budget
         # than the fast HTTP providers (ollama/azure_foundry/copilot). F19: the
@@ -1186,6 +1224,7 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
             ),
             labels={"com.agentic-platform.execution-id": exec_id},
             workspace_host_path=workspace_host_path,
+            workspace_read_only=workspace_read_only,
         )
         active_runner = runner or AgentContainerRunner(settings)
         cancel_seen = False

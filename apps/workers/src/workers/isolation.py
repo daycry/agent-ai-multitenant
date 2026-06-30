@@ -89,12 +89,16 @@ def build_hardened_run_kwargs(
     settings: Settings,
     *,
     workspace_host_path: str | None = None,
+    workspace_read_only: bool = False,
 ) -> dict[str, Any]:
     """Build the locked-down kwargs for `docker.containers.run`.
 
-    When `workspace_host_path` is given, /workspace is a read-write bind
-    to that host directory; otherwise it is an ephemeral tmpfs. Either
-    way the container's root filesystem stays read-only.
+    When `workspace_host_path` is given, /workspace is a bind to that host
+    directory — read-write by default, or read-only when
+    `workspace_read_only` is set (ADR 0095: a REVIEW run mounts the
+    implementer's worktree read-only so it can read the code without
+    mutating it). Otherwise /workspace is an ephemeral tmpfs. Either way
+    the container's root filesystem stays read-only.
     """
     security_opt = ["no-new-privileges:true"]
 
@@ -133,7 +137,12 @@ def build_hardened_run_kwargs(
 
     if workspace_host_path:
         kwargs["mounts"] = [
-            Mount(target="/workspace", source=workspace_host_path, type="bind", read_only=False)
+            Mount(
+                target="/workspace",
+                source=workspace_host_path,
+                type="bind",
+                read_only=workspace_read_only,
+            )
         ]
     else:
         tmpfs["/workspace"] = (

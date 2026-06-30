@@ -140,3 +140,18 @@ def test_hardened_kwargs_bind_workspace_when_a_host_path_is_given() -> None:
     kwargs = build_hardened_run_kwargs(Settings(), workspace_host_path="/data/ws")
     assert "/workspace" not in kwargs["tmpfs"]
     assert len(kwargs["mounts"]) == 1
+
+
+def test_hardened_kwargs_workspace_is_rw_by_default() -> None:
+    # An implementer run binds /workspace read-write so its file writes persist.
+    kwargs = build_hardened_run_kwargs(Settings(), workspace_host_path="/data/ws")
+    assert kwargs["mounts"][0]["ReadOnly"] is False
+
+
+def test_hardened_kwargs_workspace_read_only_when_requested() -> None:
+    # ADR 0095: a REVIEW run mounts the implementer's worktree READ-ONLY so the
+    # reviewer can read the code without mutating it.
+    kwargs = build_hardened_run_kwargs(
+        Settings(), workspace_host_path="/data/ws", workspace_read_only=True
+    )
+    assert kwargs["mounts"][0]["ReadOnly"] is True
