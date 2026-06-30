@@ -29,6 +29,7 @@ truth; the matrix tests pin the combinations.
 
 from __future__ import annotations
 
+import contextlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,23 @@ from typing import Any, Literal
 import structlog
 
 from workers.git_repos import GitCommandError, _run_git
+
+# Optimistic-concurrency retries for the worktree→bare push: sibling tasks of the
+# same plan push to the SAME plan branch, so a losing task must rebase onto the
+# branch tip and retry. A handful of retries covers any realistic contention.
+_PUSH_RECONCILE_RETRIES = 5
+
+
+def _is_non_fast_forward(exc: GitCommandError) -> bool:
+    """Whether a push failed because the branch advanced (a sibling pushed first)."""
+    msg = str(exc).lower()
+    return (
+        "non-fast-forward" in msg
+        or "fast-forwards" in msg
+        or "failed to push some refs" in msg
+        or "[rejected]" in msg
+    )
+
 
 _log = structlog.get_logger("workers.plan_git")
 
@@ -219,21 +237,57 @@ class PlanGitWorkflow:
     # ----- task_06_23 — transitions ------------------------------------
 
     def push_review_to_bare(self, worktree_path: Path) -> str:
-        """worktree → bare. Always runs after a passing review.
+        """worktree → bare, reconciling concurrent sibling commits.
 
-        Pushes the worktree's HEAD to the plan branch on the bare
-        repo. The worker calls this after the auto-review step says
-        the task is ``done``.
+        Pushes the worktree's HEAD to the plan branch on the bare repo. Several
+        sibling tasks of the same plan share ONE plan branch, so a plain push
+        fails *non-fast-forward* whenever another task pushed first — which used
+        to surface as ``commit_failed`` and blocked the task. We rebase this
+        task's commit onto the branch's current tip and retry (optimistic
+        concurrency). A genuine rebase CONFLICT (two tasks changed the same
+        lines) is NOT a transient race — it is re-raised as a
+        :class:`GitCommandError` so the caller escalates it for resolution.
 
         Returns the sha now on the bare's branch tip.
         """
-        _run_git(
-            "push",
-            str(self._bare_path),
-            f"HEAD:refs/heads/{self._plan_branch}",
-            cwd=worktree_path,
-        )
-        return _run_git("rev-parse", f"refs/heads/{self._plan_branch}", cwd=self._bare_path).strip()
+        # The rebase replays our commit; give git an identity for the new
+        # committer (the worktree carries no user.name/email config).
+        committer_env = {
+            "GIT_AUTHOR_NAME": "Agentic Platform",
+            "GIT_AUTHOR_EMAIL": "noreply@agentic.local",
+            "GIT_COMMITTER_NAME": "Agentic Platform",
+            "GIT_COMMITTER_EMAIL": "noreply@agentic.local",
+        }
+        last_exc: GitCommandError | None = None
+        for _ in range(_PUSH_RECONCILE_RETRIES):
+            try:
+                _run_git(
+                    "push",
+                    str(self._bare_path),
+                    f"HEAD:refs/heads/{self._plan_branch}",
+                    cwd=worktree_path,
+                )
+                return _run_git(
+                    "rev-parse", f"refs/heads/{self._plan_branch}", cwd=self._bare_path
+                ).strip()
+            except GitCommandError as exc:
+                if not _is_non_fast_forward(exc):
+                    raise
+                last_exc = exc
+                # Reconcile: replay our commit on top of the branch's current tip.
+                _run_git("fetch", str(self._bare_path), self._plan_branch, cwd=worktree_path)
+                try:
+                    _run_git("rebase", "FETCH_HEAD", cwd=worktree_path, env_extra=committer_env)
+                except GitCommandError as rebase_exc:
+                    with contextlib.suppress(GitCommandError):
+                        _run_git("rebase", "--abort", cwd=worktree_path)
+                    raise GitCommandError(
+                        f"push_review_to_bare: rebase onto {self._plan_branch} conflicted "
+                        f"(another task changed the same lines): {rebase_exc}"
+                    ) from rebase_exc
+        # Exhausted retries — persistent contention; surface the last push error.
+        assert last_exc is not None  # the loop only exits here via a non-ff push
+        raise last_exc
 
     def push_branch_to_remote(self, *, force: bool = False) -> bool:
         """bare → remote. Gated by ``branch_push_mode``.
