@@ -240,3 +240,56 @@ def test_normalise_plan_draft_empty_when_no_tasks() -> None:
     out = _normalise_plan_draft({"title": "x"})
     assert out["tasks"] == []
     assert out["title"] == "x"
+
+
+def test_normalise_plan_draft_extracts_acceptance_criteria() -> None:
+    # The planner emits per-task acceptance_criteria as descriptive, verifiable
+    # strings (the agent's definition of done). The parser cleans them: trims,
+    # drops empties/non-strings, flattens {description} dicts.
+    out = _normalise_plan_draft(
+        {
+            "title": "x",
+            "tasks": [
+                {
+                    "id": "t1",
+                    "title": "Auditar deps",
+                    "acceptance_criteria": [
+                        "composer audit sin vulnerabilidades",
+                        "  composer.lock fija versiones  ",
+                        "",
+                        123,
+                        {"description": "PSR-4 correcto"},
+                    ],
+                },
+                {"id": "t2", "title": "Sin criterios"},
+            ],
+        }
+    )
+    t1 = next(t for t in out["tasks"] if t["id"] == "t1")
+    assert t1["acceptance_criteria"] == [
+        "composer audit sin vulnerabilidades",
+        "composer.lock fija versiones",
+        "PSR-4 correcto",
+    ]
+    t2 = next(t for t in out["tasks"] if t["id"] == "t2")
+    assert t2["acceptance_criteria"] == []  # absent → [] (always present)
+
+
+def test_normalise_plan_draft_caps_acceptance_criteria_count() -> None:
+    out = _normalise_plan_draft(
+        {
+            "title": "x",
+            "tasks": [
+                {"id": "t1", "title": "T", "acceptance_criteria": [f"c{i}" for i in range(20)]}
+            ],
+        }
+    )
+    assert len(out["tasks"][0]["acceptance_criteria"]) <= 8
+
+
+def test_pm_plan_draft_prompt_requests_acceptance_criteria() -> None:
+    seen: list[list[Message]] = []
+    model = LLMPlanningModel(provider=_FakeProvider("{}", seen=seen))  # type: ignore[arg-type]
+    model.pm_plan_draft(_state([{"role": "user", "content": "x"}], set()), [])
+    system = " ".join(m.content for m in seen[-1] if m.role == "system")
+    assert "acceptance_criteria" in system

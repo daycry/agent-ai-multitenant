@@ -386,11 +386,16 @@ class LLMPlanningModel:
             "forma EXACTA:\n"
             '{"title": "<título corto>", "summary": "<resumen: alcance, decisiones, '
             'riesgos>", "tasks": [{"id": "t1", "title": "<acción>", "description": '
-            '"<qué hacer y criterio de aceptación>", "role": "<rol>", "depends_on": []}]}\n'
+            '"<qué hacer>", "role": "<rol>", "depends_on": [], "acceptance_criteria": '
+            '["<criterio verificable>", "<criterio verificable>"]}]}\n'
             "Reglas: ids únicos y cortos (t1, t2, …); `depends_on` referencia SOLO ids "
             "declarados; NO ciclos; ordena las tareas por dependencias; tareas accionables "
-            "y atómicas. `role` ∈ los roles del equipo cuando aplique. NO implementes ni "
-            f"escribas código: solo el plan. Roles del equipo: {roles or '(genérico)'}."
+            "y atómicas. `role` ∈ los roles del equipo cuando aplique. Cada tarea lleva 2-5 "
+            "`acceptance_criteria`: condiciones CONCRETAS y VERIFICABLES que definen cuándo la "
+            "tarea está HECHA (p.ej. 'composer audit no reporta vulnerabilidades pendientes', "
+            "'el endpoint GET /hello responde 200 con el JSON acordado'). Son criterios "
+            "comprobables redactados en lenguaje claro, NO comandos a ejecutar. NO implementes "
+            f"ni escribas código: solo el plan. Roles del equipo: {roles or '(genérico)'}."
         )
         messages = [Message(role="system", content=system)]
         note = _context_note(state)
@@ -403,6 +408,35 @@ class LLMPlanningModel:
                 Message(role="system", content="Aportaciones de los especialistas:\n" + joined)
             )
         return _normalise_plan_draft(_extract_json(self._complete(messages)))
+
+
+_MAX_ACCEPTANCE_CRITERIA = 8
+_MAX_CRITERION_LEN = 300
+
+
+def _clean_acceptance_criteria(raw: Any) -> list[str]:
+    """Coerce a task's ``acceptance_criteria`` into a clean list of descriptive,
+    verifiable strings — the agent's "definition of done" (rendered by
+    ``providers._criterion_text``). Trims; flattens a ``{description}`` dict to its
+    text; drops empties/non-strings; caps count and per-criterion length. NOT
+    executable commands (those are out of the planner's scope — too unreliable)."""
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        value = (
+            (item.get("description") or item.get("text") or item.get("criterion") or "")
+            if isinstance(item, dict)
+            else item
+        )
+        if not isinstance(value, str):
+            continue
+        text = value.strip()[:_MAX_CRITERION_LEN].strip()
+        if text:
+            out.append(text)
+        if len(out) >= _MAX_ACCEPTANCE_CRITERIA:
+            break
+    return out
 
 
 def _normalise_plan_draft(obj: dict[str, Any]) -> dict[str, Any]:
@@ -429,6 +463,7 @@ def _normalise_plan_draft(obj: dict[str, Any]) -> dict[str, Any]:
                 "description": str(t.get("description") or "").strip(),
                 "role": str(t.get("role") or "").strip(),
                 "depends_on": [str(d) for d in (t.get("depends_on") or []) if isinstance(d, str)],
+                "acceptance_criteria": _clean_acceptance_criteria(t.get("acceptance_criteria")),
             }
         )
     id_set = set(ids)
