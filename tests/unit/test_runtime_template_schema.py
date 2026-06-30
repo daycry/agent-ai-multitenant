@@ -167,6 +167,39 @@ def test_template_is_hashable() -> None:
     assert {t1, t2} == {t1}
 
 
+def test_cache_env_defaults_empty() -> None:
+    mod = _import_module()
+    t = mod.RuntimeTemplate(id="python-pytest", docker_image="img:v1")
+    assert t.cache_env == ()
+
+
+def test_cache_env_accepts_pairs_and_stays_hashable() -> None:
+    """ADR 0094: cache_env alinea $HOME-relative caches con el dep_cache_mount.
+    Es una tupla de pares (hashable) para preservar frozen/hashable."""
+    mod = _import_module()
+    t = mod.RuntimeTemplate(
+        id="php-phpunit",
+        docker_image="img:v1",
+        dep_cache_mount="/root/.composer/cache",
+        cache_env=(("COMPOSER_CACHE_DIR", "/root/.composer/cache"),),
+    )
+    assert t.cache_env == (("COMPOSER_CACHE_DIR", "/root/.composer/cache"),)
+    assert dict(t.cache_env) == {"COMPOSER_CACHE_DIR": "/root/.composer/cache"}
+    # sigue hashable (par de tuplas)
+    assert {t} == {t}
+
+
+def test_network_policy_accepts_registries() -> None:
+    """ADR 0094: nueva política proxificada para resolver registries."""
+    mod = _import_module()
+    t = mod.RuntimeTemplate(
+        id="php-phpunit",
+        docker_image="img:v1",
+        network_policy="registries",
+    )
+    assert t.network_policy == "registries"
+
+
 def test_full_template_with_all_fields() -> None:
     """End-to-end shape: every field set to a non-default value to
     catch any constructor bug that only surfaces with the full

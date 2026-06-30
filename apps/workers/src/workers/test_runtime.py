@@ -495,6 +495,13 @@ class TestRuntimeSpec:
     memory_mb: int | None = None
     # Override the template's default network policy.
     network_policy: str | None = None
+    # Per-launch opt-in for proxied registry egress (ADR 0094). When True the
+    # worker transiently attaches the allowlisted ``registry-proxy`` to this
+    # task's internal bridge and injects HTTP(S)_PROXY so dependency installs
+    # (composer/pip/npm/go/…) resolve. Independent of the stack: the call site
+    # decides (stack_exec + cold-cache pre_install set it). The bridge stays
+    # ``internal=True`` regardless — never raw NAT.
+    dep_egress: bool = False
 
 
 @dataclass(frozen=True)

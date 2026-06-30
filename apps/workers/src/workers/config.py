@@ -85,6 +85,27 @@ class Settings(BaseSettings):
         "ScriptedModelClient (ADR 0019). En producción: "
         "`http://egress-proxy:8888` (el servicio del compose, task_02_35).",
     )
+    registry_proxy_url: str = Field(
+        default="http://registry-proxy:8888",
+        description="URL del registry-proxy (allowlist de registries de "
+        "paquetes, ADR 0094) que el worker inyecta como HTTP(S)_PROXY en los "
+        "runtime-templates cuando un launch pide egress (dep_egress). Apunta al "
+        "alias con el que el worker conecta el proxy al bridge per-task. Vacío "
+        "= sin egress (los installs en frío fallan offline). El host debe "
+        "coincidir con `registry_proxy_alias`.",
+    )
+    registry_proxy_container: str = Field(
+        default="agentic-registry-proxy",
+        description="Nombre del contenedor del registry-proxy que el worker "
+        "resuelve por la API Docker (`containers.get`) para conectarlo al "
+        "bridge efímero de cada tarea (ADR 0094).",
+    )
+    registry_proxy_alias: str = Field(
+        default="registry-proxy",
+        description="Alias de red con el que el worker conecta el registry-proxy "
+        "al bridge per-task; el runtime lo resuelve por DNS embebido de docker "
+        "para alcanzar el proxy. Debe ser el host de `registry_proxy_url`.",
+    )
     container_mem_limit: str = Field(
         default="512m",
         description="Hard memory cap for an agent container (a leak or a "
