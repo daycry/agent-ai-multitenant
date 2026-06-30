@@ -87,7 +87,10 @@ _DECIDE_SYSTEM = (
     "them and stop once they are met. Use the research tools (memory_recall, "
     "rag_search, list_files, read_file) only to gather what you genuinely need, "
     "then act; never repeat a search or re-read a file you have already seen, and "
-    "ignore files unrelated to the task."
+    "ignore files unrelated to the task.\n"
+    "You do NOT run git or commit/push and you do NOT need to: the platform persists "
+    "your file changes and handles version control automatically when you finish. "
+    "Just write the files; never call git."
 )
 _REVIEW_SYSTEM = (
     "You are a reviewer. Decide whether the candidate output satisfies the task. "

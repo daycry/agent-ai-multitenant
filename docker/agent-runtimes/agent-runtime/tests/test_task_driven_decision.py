@@ -69,3 +69,11 @@ def test_system_prompt_is_task_driven_not_write_only() -> None:
     assert "acceptance criteria" in lowered
     # ...and does not impose an absolute "must write files before finishing".
     assert "do not finish before" not in lowered
+
+
+def test_system_prompt_tells_agent_not_to_use_git() -> None:
+    # Feature D: git is broken in the sandbox and the agent never commits — the
+    # prompt makes that explicit so the agent doesn't waste turns on git.
+    lowered = _DECIDE_SYSTEM.lower()
+    assert "git" in lowered
+    assert "persists" in lowered or "version control" in lowered

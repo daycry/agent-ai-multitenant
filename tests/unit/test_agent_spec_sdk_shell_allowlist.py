@@ -26,24 +26,35 @@ def _request(*, kind: str, allowed_commands: list[str] | None) -> ExecutionReque
     )
 
 
-def test_sdk_unions_base_commands_with_project_allowlist() -> None:
+def test_sdk_unions_base_file_commands_with_project_allowlist() -> None:
     spec = _agent_spec(_request(kind="claude_sdk", allowed_commands=["composer"]), None)
     cmds = set(spec["allowed_commands"])
-    assert {"git", "rm"} <= cmds  # base commands present
+    assert {"rm", "mv"} <= cmds  # base file commands present
     assert "composer" in cmds  # project's stack command preserved
+
+
+def test_sdk_base_excludes_git() -> None:
+    # ADR 0095 / Feature D: git is BROKEN in the sandbox (the worktree's .git points
+    # to the bare repo, which is not mounted → exit 128). The agent never commits
+    # (the worker owns git), so a useless `git` is removed — `git status` returns a
+    # clean "command not allowed" instead of a cryptic 128 that wastes turns.
+    spec = _agent_spec(_request(kind="claude_sdk", allowed_commands=["composer"]), None)
+    assert "git" not in set(spec["allowed_commands"])
 
 
 def test_sdk_gets_base_commands_when_project_allowlist_empty() -> None:
     spec = _agent_spec(_request(kind="claude_sdk", allowed_commands=[]), None)
-    assert {"git", "rm"} <= set(spec["allowed_commands"])
+    cmds = set(spec["allowed_commands"])
+    assert {"rm", "mv"} <= cmds
+    assert "git" not in cmds
 
 
 def test_sdk_registers_shell_with_base_even_when_project_allowlist_absent() -> None:
-    # A claude_sdk run must ALWAYS get a shell with the base commands, even when the
-    # project pinned nothing (None) — otherwise the SDK can't reconcile the worktree.
+    # A claude_sdk run must ALWAYS get a shell with the base file commands, even when
+    # the project pinned nothing (None) — otherwise the SDK can't reconcile the worktree.
     spec = _agent_spec(_request(kind="claude_sdk", allowed_commands=None), None)
     assert "allowed_commands" in spec
-    assert {"git", "rm"} <= set(spec["allowed_commands"])
+    assert {"rm", "mv"} <= set(spec["allowed_commands"])
 
 
 def test_thin_provider_allowlist_is_unchanged() -> None:

@@ -275,14 +275,18 @@ class _RuntimeResult:
 
 # Track 1 / ADR 0021 addendum: a base shell allowlist for the natively-agentic
 # Claude Agent SDK. UNIONed with the project's allowlist for `claude_sdk` runs ONLY,
-# so the SDK can reconcile the worktree with VCS/file ops (the `command not allowed:
-# git` / `rm` walls observed in a real run) instead of being straitjacketed by an
-# empty allowlist. Safe inside the sandbox (cap-drop ALL, read-only rootfs except
+# so the SDK can reconcile the worktree with file ops instead of being straitjacketed
+# by an empty allowlist. Safe inside the sandbox (cap-drop ALL, read-only rootfs except
 # /workspace+/tmp, internal network/no egress, no docker socket — ADR 0012/0019/0040):
 # every command is confined to the container and the task worktree.
+# NOTE (Feature D): `git` is deliberately NOT here. The agent never commits/pushes
+# (the worker owns git — principle 2, no credentials in the sandbox), and git is
+# BROKEN here anyway: the worktree's `.git` points to the bare repo's worktree
+# metadata, which is NOT mounted in the sandbox → every `git` exits 128. Exposing it
+# only made the agent waste turns on cryptic failures; the prompt tells it the
+# platform persists changes automatically.
 _SDK_BASE_SHELL_COMMANDS: frozenset[str] = frozenset(
     {
-        "git",
         "rm",
         "mv",
         "cp",
