@@ -170,6 +170,11 @@ class ExecutionRequest:
     # behaviour for a first dispatch (backward-compat). Distinct from `review` /
     # `review_context`, which drive the REVIEWER run, not the implementer.
     prior_review_feedback: list[dict[str, Any]] | None = None
+    # Feature C: human comments on this task/plan (added in the Kanban/plan UI),
+    # threaded by the orchestrator. Each entry `{scope, content}`. The runtime folds
+    # them into a contextual preamble so the agent takes them into account. `None` =
+    # no key (no comments) → backward-compat.
+    task_comments: list[dict[str, Any]] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict — the Celery payload the orchestrator sends."""
@@ -189,6 +194,7 @@ class ExecutionRequest:
             "review": self.review,
             "review_context": self.review_context,
             "prior_review_feedback": self.prior_review_feedback,
+            "task_comments": self.task_comments,
         }
 
     @classmethod
@@ -210,6 +216,7 @@ class ExecutionRequest:
             review=bool(raw.get("review", False)),
             review_context=raw.get("review_context"),
             prior_review_feedback=raw.get("prior_review_feedback"),
+            task_comments=raw.get("task_comments"),
         )
 
 
@@ -398,6 +405,10 @@ def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del sp
     # is the implementer being told what to fix, not the reviewer judging.
     if request.prior_review_feedback is not None:
         spec["prior_review_feedback"] = request.prior_review_feedback
+    # Feature C: human task/plan comments → the runtime folds them into a contextual
+    # preamble (`build_comments_preamble`). Only emit when present (backward-compat).
+    if request.task_comments is not None:
+        spec["task_comments"] = request.task_comments
     # Agentes #2: advertise the agent's tools to the LLM so it can actually call
     # them (memory_recall/rag_search/read_file/…). Without this the model never
     # sees any tool → it can neither recall memory nor work through tools, for ANY

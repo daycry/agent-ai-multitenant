@@ -32,6 +32,7 @@ from api_server.agent_tools_enforcement import (
     serialize_agent_tool_specs,
 )
 from api_server.budgets import budget_pause_block, resolve_execution_budgets
+from api_server.chat.sync_to_kanban import PLAN_TASK_SPEC_ID_KEY
 from api_server.db.domain import (
     Agent,
     AgentType,
@@ -46,6 +47,7 @@ from api_server.db.domain import (
     Team,
 )
 from api_server.db.models import TaskAuditEvent
+from api_server.db.plan_comment import PlanComment
 from api_server.db.platform_settings import (
     config_needs_default_model,
     get_default_execution_budgets,
@@ -157,6 +159,7 @@ _MAX_TEST_REPORT_RUNTIMES = 6
 # implementer knows what to fix instead of repeating the mistake. Newest first; a
 # couple is enough without bloating the spec.
 _MAX_PRIOR_REVIEW_FEEDBACK = 3
+_MAX_TASK_COMMENTS = 10
 # Per-runtime log tail kept in the reviewer block (the full logs live in the
 # audit event / `docker logs`); enough for the reviewer to see what failed.
 _TEST_REPORT_LOG_TAIL = 1500
@@ -1047,7 +1050,58 @@ class TaskDispatcher:
         prior_feedback = await self._read_prior_review_feedback(session, task)
         if prior_feedback:
             request["prior_review_feedback"] = prior_feedback
+        # Feature C: human comments on this task/plan → the runtime folds them into a
+        # contextual preamble so the agent takes them into account.
+        comments = await self._read_relevant_comments(session, task)
+        if comments:
+            request["task_comments"] = comments
         return _AiDispatch(request=request)
+
+    async def _read_relevant_comments(
+        self, session: AsyncSession, task: Task
+    ) -> list[dict[str, str]]:
+        """Human comments to surface to the agent run (Feature C).
+
+        Reuses ``PlanComment`` (no separate task store): the comments that apply to
+        THIS task are the task-scoped ones (``target_kind='task'`` with ``target_ref``
+        = the task's plan-spec id) plus the plan-level ones (``target_kind='plan'``,
+        which apply to every task of the plan). Phase comments are out of scope here.
+        Newest first, capped. Empty → ``[]`` → no ``task_comments`` key
+        (backward-compat). BYPASSRLS, so an explicit ``tenant_id`` predicate scopes it
+        (same defence-in-depth as the prior-feedback read)."""
+        if task.plan_id is None:
+            return []
+        spec_id = (task.inputs or {}).get(PLAN_TASK_SPEC_ID_KEY)
+        scope_cond = PlanComment.target_kind == "plan"
+        if spec_id:
+            scope_cond = or_(
+                scope_cond,
+                and_(
+                    PlanComment.target_kind == "task",
+                    PlanComment.target_ref == str(spec_id),
+                ),
+            )
+        rows = list(
+            (
+                await session.execute(
+                    select(PlanComment)
+                    .where(
+                        PlanComment.plan_id == task.plan_id,
+                        PlanComment.tenant_id == task.tenant_id,
+                        PlanComment.deleted_at.is_(None),
+                        scope_cond,
+                    )
+                    .order_by(PlanComment.created_at.desc())
+                    .limit(_MAX_TASK_COMMENTS)
+                )
+            ).scalars()
+        )
+        comments: list[dict[str, str]] = []
+        for row in rows:
+            content = str(row.content or "").strip()
+            if content:
+                comments.append({"scope": str(row.target_kind), "content": content})
+        return comments
 
     async def _read_prior_review_feedback(
         self, session: AsyncSession, task: Task

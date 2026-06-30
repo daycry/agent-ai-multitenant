@@ -367,6 +367,39 @@ def build_prior_feedback_preamble(feedback: list[dict[str, Any]]) -> str:
     return "\n".join([_PRIOR_FEEDBACK_INSTRUCTION, *lines])
 
 
+# Feature C: human comments on a task/plan (added in the Kanban/plan UI) are threaded
+# by the orchestrator into the spec (`task_comments`) and folded here into a contextual
+# preamble so the agent TAKES THEM INTO ACCOUNT. Provider-agnostic plain prose.
+_TASK_COMMENTS_INSTRUCTION = (
+    "TEAM COMMENTS from a human on this task/plan — take them into account while you work:"
+)
+
+
+def build_comments_preamble(comments: list[Any]) -> str:
+    """The agent's system preamble carrying human task/plan comments (Feature C).
+
+    ``comments`` is the orchestrator-threaded list (newest first), each a dict
+    ``{scope, content}`` (``scope`` ∈ ``task``/``plan``) or a plain string. Blank
+    entries are skipped; an empty/all-blank list yields ``""`` (the caller then
+    leaves the prompt untouched, backward-compat)."""
+    lines: list[str] = []
+    for entry in comments:
+        if isinstance(entry, dict):
+            content = str(entry.get("content") or "").strip()
+            scope = str(entry.get("scope") or "").strip()
+        elif isinstance(entry, str):
+            content, scope = entry.strip(), ""
+        else:
+            continue
+        if not content:
+            continue
+        label = f"[{scope}] " if scope else ""
+        lines.append(f"- {label}{content}")
+    if not lines:
+        return ""
+    return "\n".join([_TASK_COMMENTS_INSTRUCTION, *lines])
+
+
 def run_task(spec: dict[str, Any]) -> int:
     """Run the agent loop for `spec`, streaming the steps_log as JSON lines."""
     from agent_runtime.approval import ApprovalGate
@@ -502,6 +535,18 @@ def run_task(spec: dict[str, Any]) -> int:
                     f"{feedback_preamble}\n\n{system_preamble}"
                     if system_preamble
                     else feedback_preamble
+                )
+
+        # Feature C: human comments on this task/plan (UI) → contextual preamble so
+        # the agent takes them into account. Same rail as prior_review_feedback.
+        task_comments = spec.get("task_comments")
+        if task_comments:
+            comments_preamble = build_comments_preamble(task_comments)
+            if comments_preamble:
+                system_preamble = (
+                    f"{comments_preamble}\n\n{system_preamble}"
+                    if system_preamble
+                    else comments_preamble
                 )
 
         _emit({"event": "execution.started", "task": task})
