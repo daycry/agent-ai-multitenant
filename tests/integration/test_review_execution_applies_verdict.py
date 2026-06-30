@@ -83,6 +83,24 @@ async def _status(dsn: str, task_id: UUID) -> str:
         await conn.close()
 
 
+async def _retry_count(dsn: str, task_id: UUID) -> int:
+    conn = await asyncpg.connect(dsn)
+    try:
+        return int(await conn.fetchval("SELECT retry_count FROM tasks WHERE id = $1", task_id))
+    finally:
+        await conn.close()
+
+
+async def _apply_result(admin_url: str, ids: dict, result: object):  # type: ignore[no-untyped-def]
+    engine = create_async_engine(admin_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        async with sm() as session, session.begin():
+            return await _apply_review_verdict(session, ids["task"], ids["tenant"], result)
+    finally:
+        await engine.dispose()
+
+
 @pytest.mark.asyncio
 async def test_approve_output_moves_task_to_done(
     _migrated: None, migrations_pg_dsn: str, admin_database_url: str
@@ -124,32 +142,46 @@ async def test_unparseable_output_is_defensive_reject(
     assert await _status(migrations_pg_dsn, ids["task"]) == "backlog"
 
 
-@pytest.mark.asyncio
-async def test_reviewer_infra_failure_does_not_reject(
-    _migrated: None, migrations_pg_dsn: str, admin_database_url: str
-) -> None:
-    # Audit C1 (F03/P0.2): a review RUN that failed at infra level (status != done,
-    # no verdict — crash/timeout/cancel/model_unresolved) must NOT reject the task
-    # nor burn a retry: `result.output` is an error string, not a judgement. The
-    # task stays in_review for the reconciler / a redelivered event to re-dispatch.
-    ids = await _seed(migrations_pg_dsn, status=TaskStatus.IN_REVIEW.value)
-    failed = _RuntimeResult(
-        status="failed",
-        abort_code="model_unresolved",
-        output="agent-runtime container timed out",
-        iterations=0,
+def _infra_fail() -> _RuntimeResult:
+    return _RuntimeResult(
+        status="aborted",
+        abort_code="max_iterations_exceeded",
+        output="Execution aborted (max_iterations_exceeded).",
+        iterations=50,
         steps=[],
         usage={},
     )
-    engine = create_async_engine(admin_database_url)
-    try:
-        sm = async_sessionmaker(engine, expire_on_commit=False)
-        async with sm() as session, session.begin():
-            event = await _apply_review_verdict(session, ids["task"], ids["tenant"], failed)
-    finally:
-        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reviewer_infra_failure_below_cap_stays_in_review(
+    _migrated: None, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
+    # Audit C1 (F03/P0.2): an infra-level review failure (status != done, no verdict)
+    # must NOT reject the task (output is an error string, not a judgement). BELOW the
+    # cap it stays in_review for the reconciler to re-dispatch — but ADR 0095 D3 now
+    # bumps retry_count so the loop is bounded (no infinite in_review ↔ re-dispatch).
+    ids = await _seed(migrations_pg_dsn, status=TaskStatus.IN_REVIEW.value, max_retries=3)
+    event = await _apply_result(admin_database_url, ids, _infra_fail())
     assert event is None
     assert await _status(migrations_pg_dsn, ids["task"]) == "in_review"
+    assert await _retry_count(migrations_pg_dsn, ids["task"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_reviewer_infra_failure_at_cap_escalates_to_blocked(
+    _migrated: None, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
+    # ADR 0095 D3: after max_retries non-convergent reviews, escalate to a human
+    # (blocked) instead of looping forever. NOT a defensive reject (no re-implement).
+    ids = await _seed(
+        migrations_pg_dsn, status=TaskStatus.IN_REVIEW.value, retry_count=2, max_retries=3
+    )
+    event = await _apply_result(admin_database_url, ids, _infra_fail())
+    assert event is not None
+    assert event[2] == "blocked"
+    assert await _status(migrations_pg_dsn, ids["task"]) == "blocked"
+    assert await _retry_count(migrations_pg_dsn, ids["task"]) == 3
 
 
 @pytest.mark.asyncio

@@ -722,6 +722,7 @@ async def _apply_review_verdict(
     in ``in_review`` (a bounded re-prompt is a future refinement — ADR 0084 / plan
     decision 6). Returns ``(task, old, new)`` for event publication, or ``None``
     when no transition applies (task already moved / guarded by apply)."""
+    from api_server.db.task_audit_repo import append_audit_event
     from api_server.reviewer_bridge import (
         ReviewerVerdict,
         apply_reviewer_verdict,
@@ -740,16 +741,37 @@ async def _apply_review_verdict(
         # (bounded by retry_count, which escalates to `blocked`). (b) The reviewer
         # RUN failed at infra level (crash / timeout / cancel / model_unresolved →
         # status != done): `result.output` is an error string, NOT a judgement.
-        # Treating that as a reject re-implements a possibly-correct task and burns
-        # a retry until it is wrongly blocked. So we leave the task in_review and
-        # let the reconciler / a redelivered event re-dispatch the review.
+        # Treating that as a reject re-implements a possibly-correct task. So we
+        # re-dispatch (now the reviewer SEES the code — ADR 0095 — so it should
+        # converge), but CAP it: ADR 0095 D3 bumps retry_count and, at max_retries,
+        # escalates the task to a human (`blocked`) instead of an infinite
+        # in_review ↔ re-dispatch loop. Below the cap, stay in_review.
         if result.status != "done":
+            task.retry_count += 1
             _log.warning(
                 "workers.review_infra_error",
                 task_id=str(task_id),
                 review_status=result.status,
                 abort_code=result.abort_code,
+                retry_count=task.retry_count,
             )
+            if task.retry_count >= task.max_retries:
+                transition_task_status(task, TaskStatus.BLOCKED.value)
+                await append_audit_event(
+                    session,
+                    tenant_id=tenant_id,
+                    task_id=task_id,
+                    kind="review_comment",
+                    actor="ai-reviewer",
+                    payload={
+                        "escalated": True,
+                        "reason": "review_inconclusive",
+                        "abort_code": result.abort_code,
+                        "retry_count": task.retry_count,
+                    },
+                )
+                await session.flush()
+                return (task, old_status, task.status)
             return None
         verdict = ReviewerVerdict(
             label="reject",
