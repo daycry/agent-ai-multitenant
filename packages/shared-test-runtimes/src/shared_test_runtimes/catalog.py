@@ -52,6 +52,7 @@ PYTHON_PYTEST = RuntimeTemplate(
         "pip install -r requirements.txt",
     ),
     output_parsers=("junit_xml", "raw_text"),
+    cache_env=(("PIP_CACHE_DIR", "/root/.cache/pip"),),
 )
 
 # --- Node -----------------------------------------------------------
@@ -62,6 +63,7 @@ NODE_JEST = RuntimeTemplate(
     dep_cache_mount="/root/.npm",
     default_pre_install=("npm ci",),
     output_parsers=("jest_json", "junit_xml", "raw_text"),
+    cache_env=(("npm_config_cache", "/root/.npm"),),
 )
 
 NODE_VITEST = RuntimeTemplate(
@@ -70,6 +72,7 @@ NODE_VITEST = RuntimeTemplate(
     dep_cache_mount="/root/.npm",
     default_pre_install=("npm ci",),
     output_parsers=("junit_xml", "raw_text"),
+    cache_env=(("npm_config_cache", "/root/.npm"),),
 )
 
 NODE_PLAYWRIGHT = RuntimeTemplate(
@@ -80,6 +83,7 @@ NODE_PLAYWRIGHT = RuntimeTemplate(
     # Playwright is browser-heavy — give it more headroom.
     default_resources=Resources(cpu=2.0, memory_mb=2048),
     output_parsers=("playwright_json", "junit_xml", "raw_text"),
+    cache_env=(("npm_config_cache", "/root/.npm"),),
 )
 
 # --- PHP ------------------------------------------------------------
@@ -90,6 +94,7 @@ PHP_PHPUNIT = RuntimeTemplate(
     dep_cache_mount="/root/.composer/cache",
     default_pre_install=("composer install --no-interaction --no-progress",),
     output_parsers=("junit_xml", "raw_text"),
+    cache_env=(("COMPOSER_CACHE_DIR", "/root/.composer/cache"),),
 )
 
 PHP_PEST = RuntimeTemplate(
@@ -98,6 +103,7 @@ PHP_PEST = RuntimeTemplate(
     dep_cache_mount="/root/.composer/cache",
     default_pre_install=("composer install --no-interaction --no-progress",),
     output_parsers=("junit_xml", "raw_text"),
+    cache_env=(("COMPOSER_CACHE_DIR", "/root/.composer/cache"),),
 )
 
 # --- Go -------------------------------------------------------------
@@ -108,6 +114,12 @@ GO_TEST = RuntimeTemplate(
     dep_cache_mount="/root/go/pkg/mod",
     default_pre_install=("go mod download",),
     output_parsers=("go_test_json", "raw_text"),
+    # The golang image defaults GOPATH=/go, so the mount at /root/go/pkg/mod is
+    # ignored unless we point the module cache at it explicitly.
+    cache_env=(
+        ("GOPATH", "/root/go"),
+        ("GOMODCACHE", "/root/go/pkg/mod"),
+    ),
 )
 
 # --- Java -----------------------------------------------------------
@@ -119,6 +131,7 @@ JAVA_MAVEN = RuntimeTemplate(
     default_pre_install=("mvn -B dependency:go-offline",),
     default_resources=Resources(cpu=2.0, memory_mb=2048),
     output_parsers=("surefire_xml", "junit_xml", "raw_text"),
+    cache_env=(("MAVEN_OPTS", "-Dmaven.repo.local=/root/.m2/repository"),),
 )
 
 JAVA_GRADLE = RuntimeTemplate(
@@ -128,6 +141,8 @@ JAVA_GRADLE = RuntimeTemplate(
     default_pre_install=("gradle --no-daemon dependencies",),
     default_resources=Resources(cpu=2.0, memory_mb=2048),
     output_parsers=("junit_xml", "raw_text"),
+    # caches/ live under $GRADLE_USER_HOME → /root/.gradle/caches.
+    cache_env=(("GRADLE_USER_HOME", "/root/.gradle"),),
 )
 
 # --- Ruby -----------------------------------------------------------
@@ -138,6 +153,7 @@ RUBY_RSPEC = RuntimeTemplate(
     dep_cache_mount="/usr/local/bundle",
     default_pre_install=("bundle install --jobs=4",),
     output_parsers=("junit_xml", "raw_text"),
+    cache_env=(("BUNDLE_PATH", "/usr/local/bundle"),),
 )
 
 # --- Rust -----------------------------------------------------------
@@ -149,6 +165,8 @@ RUST_CARGO = RuntimeTemplate(
     default_pre_install=("cargo fetch",),
     default_resources=Resources(cpu=2.0, memory_mb=2048),
     output_parsers=("rust_test_json", "raw_text"),
+    # registry/ lives under $CARGO_HOME → /usr/local/cargo/registry.
+    cache_env=(("CARGO_HOME", "/usr/local/cargo"),),
 )
 
 # --- .NET -----------------------------------------------------------
@@ -160,6 +178,7 @@ DOTNET_TEST = RuntimeTemplate(
     default_pre_install=("dotnet restore",),
     default_resources=Resources(cpu=2.0, memory_mb=2048),
     output_parsers=("trx", "junit_xml", "raw_text"),
+    cache_env=(("NUGET_PACKAGES", "/root/.nuget/packages"),),
 )
 
 # --- Generic --------------------------------------------------------
