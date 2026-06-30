@@ -402,6 +402,34 @@ services:
     cap_add: *infra-caps
 
   # ---------------------------------------------------------------------------
+  # registry-proxy — tinyproxy con allowlist de registries de paquetes (ADR 0094).
+  # SEGUNDA instancia, disjunta del egress-proxy LLM: el worker la conecta a los
+  # bridges efímeros per-task de los runtime-templates para que resuelvan sus
+  # registries (composer/pip/npm/go/nuget/maven/gradle/ruby/cargo + git hosts).
+  # Vive SOLO en `agentic-net` (NUNCA en `agentic-agents`): el agent-runtime no
+  # debe alcanzar github/pypi/etc. El runtime-template sigue en un bridge interno
+  # (sin NAT crudo); este proxy es su única vía de salida, allowlisted.
+  # ---------------------------------------------------------------------------
+  registry-proxy:
+    build: ./registry-proxy
+    container_name: agentic-registry-proxy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - agentic-net
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+    # tinyproxy drops to the tinyproxy user/group on start (setgid/setuid),
+    # so it needs the privilege-drop caps back (see x-infra-caps).
+    cap_add: *infra-caps
+
+  # ---------------------------------------------------------------------------
   # searxng — meta-buscador self-host para la web del córtex (ADR 0067). El
   # api-server lo alcanza en `searxng:8080` (API_SERVER_CORTEX_SEARXNG_URL) y le
   # pide `/search?q=&format=json`. Es el proveedor de búsqueda POR DEFECTO

@@ -114,6 +114,7 @@ CORE_SERVICES: tuple[str, ...] = (
     "clamav",
     "docling-serve",
     "egress-proxy",
+    "registry-proxy",
     "docker-socket-proxy",
     "migrations",
     "api-server",
@@ -460,6 +461,30 @@ def _egress_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
             "retries": 3,
         },
         "networks": ["agentic-net", "agentic-agents"],
+    }
+    svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
+    svc["cap_add"] = list(_INFRA_CAPS)  # tinyproxy setgid/setuid drop on start
+    return svc
+
+
+def _registry_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    # ADR 0094: egress allowlisted de los runtime-templates a los registries de
+    # paquetes públicos. SOLO en agentic-net (egress a internet); NUNCA en
+    # agentic-agents — el agent-runtime no debe alcanzar github/pypi/etc. El
+    # worker lo conecta a los bridges efímeros per-task de los runtimes.
+    svc: dict[str, Any] = {
+        "build": "./registry-proxy",
+        "container_name": "agentic-registry-proxy",
+        "healthcheck": {
+            "test": [
+                "CMD-SHELL",
+                "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true",
+            ],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 3,
+        },
+        "networks": ["agentic-net"],
     }
     svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
     svc["cap_add"] = list(_INFRA_CAPS)  # tinyproxy setgid/setuid drop on start
@@ -1151,6 +1176,7 @@ _BUILDERS = {
     "clamav": _clamav_service,
     "docling-serve": _docling_service,
     "egress-proxy": _egress_proxy_service,
+    "registry-proxy": _registry_proxy_service,
     "docker-socket-proxy": _docker_socket_proxy_service,
     "migrations": _migrations_service,
     "api-server": _api_server_service,
