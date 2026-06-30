@@ -24,7 +24,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LayoutGrid, Lock, LockOpen } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
-import { RunHistorySheet } from "@/components/runs/run-history-sheet";
+import { TaskDetailSheet } from "@/components/tasks/task-detail-sheet";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -542,9 +542,8 @@ function TaskCard({ task, statusById }: { task: Task; statusById: ReadonlyMap<st
           )}
         </div>
       </div>
-      <RunHistorySheet
-        taskId={runsOpen ? task.id : null}
-        taskTitle={task.title}
+      <TaskDetailSheet
+        task={runsOpen ? { id: task.id, project_id: task.project_id, title: task.title } : null}
         open={runsOpen}
         onOpenChange={setRunsOpen}
       />
