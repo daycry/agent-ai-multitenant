@@ -64,6 +64,21 @@ _TEST_LABELS: dict[str, str] = {
     "com.agentic-platform.managed": "true",
 }
 
+# Force git-based deps to HTTPS so they traverse the HTTP registry-proxy —
+# tinyproxy can't tunnel git-over-SSH (ADR 0094). Injected ONLY when a launch
+# has proxied egress; git reads GIT_CONFIG_KEY_<n>/VALUE_<n> for n in
+# 0..GIT_CONFIG_COUNT-1. `composer`/`go`/`pip` VCS deps that default to
+# ``git@host:owner/repo`` get rewritten to ``https://host/owner/repo``.
+_GIT_HTTPS_ENV: dict[str, str] = {
+    "GIT_CONFIG_COUNT": "3",
+    "GIT_CONFIG_KEY_0": "url.https://github.com/.insteadOf",
+    "GIT_CONFIG_VALUE_0": "git@github.com:",
+    "GIT_CONFIG_KEY_1": "url.https://gitlab.com/.insteadOf",
+    "GIT_CONFIG_VALUE_1": "git@gitlab.com:",
+    "GIT_CONFIG_KEY_2": "url.https://bitbucket.org/.insteadOf",
+    "GIT_CONFIG_VALUE_2": "git@bitbucket.org:",
+}
+
 # Default test-runtime wall-clock cap. Tests longer than this almost
 # always indicate a hung process, not legitimate work; the project can
 # override per task via ``acceptance_criteria[*].timeout_s``.
@@ -557,23 +572,46 @@ class TestRuntimeRunner:
         network = self._create_bridge(spec)
         aux_containers: list[Any] = []
         proxy_container: Any = None
+        registry_proxy: Any = None
         main_container: Any = None
         try:
             aux_containers = self._start_aux_services(spec, network.name)
             if spec.testcontainers.enabled:
                 proxy_container = self._start_dind_proxy(spec, network.name)
-            main_container = self._start_main(spec, network.name)
-            exit_codes, combined_logs, timed_out = self._run_checks(spec, main_container)
+            if self._egress_enabled(spec):
+                registry_proxy = self._attach_registry_proxy(network)
+            main_container = self._start_main(spec, network.name, egress=registry_proxy is not None)
+            # ADR 0094 D2: pre_install needs egress; the check phase must NOT.
+            failed_codes, pre_logs = self._run_pre_install(spec, main_container)
+            if registry_proxy is not None:
+                self._detach_proxy(network, registry_proxy)
+                registry_proxy = None
+            if failed_codes is not None:
+                return TestRuntimeResult(
+                    runtime=spec.plan.template.id,
+                    exit_codes=tuple(failed_codes),
+                    logs=pre_logs,
+                    container_id=getattr(main_container, "id", "") or "",
+                    timed_out=False,
+                    network_name=network.name,
+                )
+            exit_codes, check_logs, timed_out = self._run_test_checks(spec, main_container)
             return TestRuntimeResult(
                 runtime=spec.plan.template.id,
                 exit_codes=tuple(exit_codes),
-                logs=combined_logs,
+                logs=pre_logs + check_logs,
                 container_id=getattr(main_container, "id", "") or "",
                 timed_out=timed_out,
                 network_name=network.name,
             )
         finally:
-            self._cleanup(main_container, proxy_container, aux_containers, network)
+            self._cleanup(
+                main_container,
+                proxy_container,
+                aux_containers,
+                network,
+                registry_proxy=registry_proxy,
+            )
 
     def run_command(
         self, spec: TestRuntimeSpec, command: str, *, timeout_s: int = DEFAULT_TIMEOUT_S
@@ -594,35 +632,92 @@ class TestRuntimeRunner:
         network = self._create_bridge(spec)
         aux_containers: list[Any] = []
         proxy_container: Any = None
+        registry_proxy: Any = None
         main_container: Any = None
         try:
             aux_containers = self._start_aux_services(spec, network.name)
             if spec.testcontainers.enabled:
                 proxy_container = self._start_dind_proxy(spec, network.name)
-            main_container = self._start_main(spec, network.name)
+            if self._egress_enabled(spec):
+                registry_proxy = self._attach_registry_proxy(network)
+            main_container = self._start_main(spec, network.name, egress=registry_proxy is not None)
+            # stack_exec: egress stays attached for the whole command — the
+            # command IS the install (ADR 0094 D2).
             return self._exec(main_container, command, timeout_s=timeout_s)
         finally:
-            self._cleanup(main_container, proxy_container, aux_containers, network)
+            self._cleanup(
+                main_container,
+                proxy_container,
+                aux_containers,
+                network,
+                registry_proxy=registry_proxy,
+            )
 
     # --- bridge ---------------------------------------------------------
 
     def _create_bridge(self, spec: TestRuntimeSpec) -> Any:
         """Create a one-shot internal bridge for this task.
 
-        ``internal=True`` removes egress to the host's default gateway;
-        the only connectivity the test container has is to the
-        sidecars sharing the bridge. When the template asks for
-        ``network_policy='open'`` the caller is expected to override
-        through Settings — we don't honor it silently here."""
-        policy = spec.network_policy or spec.plan.template.network_policy
+        ``internal=True`` ALWAYS (ADR 0094 D1) — the per-task bridge never
+        gets raw NAT. The only connectivity the container has is to the
+        sidecars sharing the bridge, plus the allowlisted ``registry-proxy``
+        when a launch asks for egress (see :meth:`_attach_registry_proxy`).
+        The legacy ``network_policy='open'`` raw-NAT path is gone; ``open``
+        is now an alias of ``registries`` (proxied egress)."""
         suffix = secrets.token_hex(4)
         name = f"test-runtime-{spec.plan.template.id}-{suffix}"
         return self.client.networks.create(
             name,
             driver="bridge",
-            internal=policy != "open",
+            internal=True,
             labels=dict(_TEST_LABELS),
         )
+
+    # --- registry egress (ADR 0094) -------------------------------------
+
+    def _egress_enabled(self, spec: TestRuntimeSpec) -> bool:
+        """Whether this launch should get proxied egress to the registries.
+
+        Per-launch ``dep_egress`` is the primary control; a template/spec
+        ``network_policy`` of ``registries``/``open`` also opts in."""
+        if spec.dep_egress:
+            return True
+        policy = spec.network_policy or spec.plan.template.network_policy
+        return policy in ("registries", "open")
+
+    def _attach_registry_proxy(self, network: Any) -> Any:
+        """Connect the allowlisted ``registry-proxy`` onto this task's internal
+        bridge so the runtime resolves package registries through it (ADR 0094).
+
+        Returns the proxy container, or ``None`` when no proxy is configured /
+        reachable — in which case the runtime stays offline (cold installs fail,
+        same posture as before). The proxy is a long-lived shared service: we
+        only CONNECT it here and DISCONNECT at teardown; we never remove it."""
+        name = self._settings.registry_proxy_container
+        if not self._settings.registry_proxy_url or not name:
+            _log.warning(
+                "registry_egress_requested_but_unconfigured",
+                detail="registry_proxy_url/container unset; runtime stays offline",
+            )
+            return None
+        try:
+            proxy = self.client.containers.get(name)
+        except Exception as exc:  # NotFound / APIError — proxy not running
+            _log.warning("registry_proxy_unavailable", container=name, error=str(exc))
+            return None
+        network.connect(proxy, aliases=[self._settings.registry_proxy_alias])
+        return proxy
+
+    def _detach_proxy(self, network: Any, proxy: Any) -> None:
+        """Disconnect (NEVER remove) the shared registry-proxy from ``network``.
+
+        Idempotent + best-effort: a double-detach or a torn-down network is
+        swallowed. ``network.remove()`` would fail while the proxy endpoint is
+        still attached, so this also gates a clean teardown."""
+        if proxy is None:
+            return
+        with contextlib.suppress(Exception):
+            network.disconnect(proxy, force=True)
 
     # --- aux services ---------------------------------------------------
 
@@ -684,43 +779,52 @@ class TestRuntimeRunner:
 
     # --- main container -------------------------------------------------
 
-    def _start_main(self, spec: TestRuntimeSpec, network_name: str) -> Any:
+    def _start_main(self, spec: TestRuntimeSpec, network_name: str, *, egress: bool = False) -> Any:
         """Launch the test-runtime container (no checks yet).
 
         Splitting *start* from *run* is what lets ``launch`` register
         the container for cleanup BEFORE we ``exec_run`` anything; an
         ``exec_run`` that raises mid-sequence still leaves the
-        container in our finally block.
+        container in our finally block. ``egress`` injects the proxy +
+        git-https env when this launch has proxied registry egress.
         """
         template = spec.plan.template
-        run_kwargs = self._build_test_kwargs(spec, network_name)
+        run_kwargs = self._build_test_kwargs(spec, network_name, egress=egress)
         assert_no_docker_socket(run_kwargs)
         return self.client.containers.run(template.docker_image, **run_kwargs)
 
-    def _run_checks(
+    def _run_pre_install(
         self,
         spec: TestRuntimeSpec,
         container: Any,
-    ) -> tuple[list[int], str, bool]:
-        """Run pre_install + each check, return ``(exit_codes, logs, timed_out)``."""
+    ) -> tuple[list[int] | None, str]:
+        """Run ``default_pre_install`` in order.
+
+        Returns ``(None, logs)`` on success, or ``([rc]*n_checks, logs)`` if a
+        command fails — so the caller marks every check failed (couldn't even
+        run them) and the reporter shows the failed install, not fake test
+        failures. Pre_install runs while egress is attached (ADR 0094 D2)."""
         template = spec.plan.template
         all_logs: list[str] = []
-        exit_codes: list[int] = []
-        timed_out = False
-
-        # Pre-install (cold cache only — the caller checks the dep-cache
-        # hash and skips this when warm; we always run it here, the
-        # caching machinery in Fase C is what decides whether to call us).
         for cmd in template.default_pre_install:
             exec_rc, exec_logs = self._exec(container, cmd, timeout_s=DEFAULT_TIMEOUT_S)
             all_logs.append(f"--- pre_install: {cmd}\n{exec_logs}\n")
             if exec_rc != 0:
-                # If a pre_install fails we mark every check as failed
-                # (couldn't even run them). Test reporter shows the
-                # failed install in the report instead of fake test
-                # failures.
-                exit_codes.extend([exec_rc] * len(spec.plan.checks))
-                return exit_codes, "".join(all_logs), False
+                return [exec_rc] * len(spec.plan.checks), "".join(all_logs)
+        return None, "".join(all_logs)
+
+    def _run_test_checks(
+        self,
+        spec: TestRuntimeSpec,
+        container: Any,
+    ) -> tuple[list[int], str, bool]:
+        """Run each acceptance check, return ``(exit_codes, logs, timed_out)``.
+
+        Runs AFTER pre_install and AFTER egress is dropped (ADR 0094 D2), so the
+        test phase has no network path off its internal bridge."""
+        all_logs: list[str] = []
+        exit_codes: list[int] = []
+        timed_out = False
 
         for check in spec.plan.checks:
             budget = check.timeout_s or DEFAULT_TIMEOUT_S
@@ -742,6 +846,8 @@ class TestRuntimeRunner:
         self,
         spec: TestRuntimeSpec,
         network_name: str,
+        *,
+        egress: bool = False,
     ) -> dict[str, Any]:
         """Build ``docker.containers.run`` kwargs for the main test
         container.
@@ -774,10 +880,23 @@ class TestRuntimeRunner:
             )
 
         env: dict[str, str] = {"HOME": template.workspace_mount_path}
+        # Align the tool's $HOME-relative cache with the bind-mounted
+        # dep_cache_mount (ADR 0094) — injected always; a warm cache helps even
+        # offline acceptance runs. Won't override HOME (templates never set it).
+        env.update(dict(template.cache_env))
         if spec.testcontainers.enabled:
             env["DOCKER_HOST"] = spec.testcontainers.docker_host_url()
             # testcontainers java/node libs respect TESTCONTAINERS_HOST_OVERRIDE
             env["TESTCONTAINERS_HOST_OVERRIDE"] = spec.testcontainers.proxy_alias()
+        if egress:
+            # Route the runtime's HTTP(S) through the allowlisted registry-proxy
+            # the worker attached to this bridge, and force git deps to HTTPS so
+            # they traverse it (ADR 0094). The bridge stays internal — this env
+            # is just how the client finds the proxy, not the security boundary.
+            proxy_url = self._settings.registry_proxy_url
+            for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+                env[key] = proxy_url
+            env.update(_GIT_HTTPS_ENV)
 
         return {
             # Keep the container alive for exec_run via ENTRYPOINT, NOT a
@@ -827,7 +946,13 @@ class TestRuntimeRunner:
         proxy_container: Any,
         aux_containers: list[Any],
         network: Any,
+        *,
+        registry_proxy: Any = None,
     ) -> None:
+        # Disconnect (NEVER remove) the shared registry-proxy first — a left-over
+        # endpoint makes network.remove() fail (ADR 0094). No-op if already
+        # detached before the check phase, or if egress was never attached.
+        self._detach_proxy(network, registry_proxy)
         for container in [main_container, proxy_container, *aux_containers]:
             if container is None:
                 continue
