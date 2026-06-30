@@ -9,7 +9,7 @@
  * Comments added here are threaded into the agent's prompt (Feature C).
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -23,7 +23,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
+import { cleanCriteria, criterionText, type CriterionDraft } from "@/lib/acceptance-criteria";
 import { ApiError, apiFetch } from "@/lib/api";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { fmtRunDuration, fmtRunMoney, fmtRunTokens, fmtRunWhen, listRuns } from "@/lib/runs";
@@ -60,15 +62,6 @@ interface PlanCommentResponse {
   author_user_id: string | null;
   content: string;
   created_at: string;
-}
-
-function criterionText(c: unknown): string {
-  if (typeof c === "string") return c;
-  if (c && typeof c === "object") {
-    const o = c as Record<string, unknown>;
-    return String(o.description ?? o.text ?? o.criterion ?? JSON.stringify(c));
-  }
-  return String(c);
 }
 
 export function TaskDetailSheet({
@@ -133,18 +126,9 @@ export function TaskDetailSheet({
             </div>
           ) : null}
 
-          {/* Criterios de aceptación */}
-          {criteria.length > 0 ? (
-            <section className="mb-4" data-testid="task-detail-criteria">
-              <h4 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
-                Criterios de aceptación
-              </h4>
-              <ul className="list-disc space-y-1 pl-5 text-sm">
-                {criteria.map((c, i) => (
-                  <li key={i}>{criterionText(c)}</li>
-                ))}
-              </ul>
-            </section>
+          {/* Criterios de aceptación (editables) */}
+          {detail && projectId && taskId ? (
+            <CriteriaSection projectId={projectId} taskId={taskId} criteria={criteria} />
           ) : null}
 
           {/* Dependencias */}
@@ -216,6 +200,142 @@ export function TaskDetailSheet({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Editable rows carry a stable key so removing a middle row never steals focus
+ * from the inputs React would otherwise reuse by index. */
+type CriterionRow = CriterionDraft & { key: number };
+
+function CriteriaSection({
+  projectId,
+  taskId,
+  criteria,
+}: {
+  projectId: string;
+  taskId: string;
+  criteria: unknown[];
+}) {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [rows, setRows] = useState<CriterionRow[]>([]);
+  const keyer = useRef(0);
+
+  function startEdit() {
+    keyer.current = 0;
+    setRows(criteria.map((c) => ({ key: keyer.current++, text: criterionText(c), original: c })));
+    setEditing(true);
+  }
+
+  const mutation = useMutation({
+    mutationFn: (next: unknown[]) =>
+      apiFetch<TaskDetail>(`/projects/${projectId}/tasks/${taskId}`, {
+        method: "PUT",
+        body: { acceptance_criteria: next },
+      }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["task-detail", taskId], updated);
+      setEditing(false);
+    },
+  });
+
+  if (!editing) {
+    return (
+      <section className="mb-4" data-testid="task-detail-criteria">
+        <div className="mb-1 flex items-center justify-between">
+          <h4 className="text-muted-foreground text-xs font-semibold uppercase tracking-wide">
+            Criterios de aceptación
+          </h4>
+          <Button variant="outline" size="sm" onClick={startEdit} data-testid="task-criteria-edit">
+            Editar
+          </Button>
+        </div>
+        {criteria.length > 0 ? (
+          <ul className="list-disc space-y-1 pl-5 text-sm">
+            {criteria.map((c, i) => (
+              <li key={i}>{criterionText(c)}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-muted-foreground text-xs italic" data-testid="task-criteria-empty">
+            Sin criterios de aceptación.
+          </p>
+        )}
+      </section>
+    );
+  }
+
+  return (
+    <section className="mb-4" data-testid="task-detail-criteria">
+      <h4 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
+        Criterios de aceptación
+      </h4>
+      <div className="space-y-2">
+        {rows.map((row, i) => (
+          <div
+            key={row.key}
+            className="flex items-center gap-2"
+            data-testid={`task-criterion-row-${i}`}
+          >
+            <Input
+              value={row.text}
+              onChange={(e) =>
+                setRows((prev) =>
+                  prev.map((r) => (r.key === row.key ? { ...r, text: e.target.value } : r)),
+                )
+              }
+              placeholder="Condición concreta y verificable…"
+              data-testid="task-criterion-input"
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setRows((prev) => prev.filter((r) => r.key !== row.key))}
+              data-testid={`task-criterion-remove-${i}`}
+              aria-label="Quitar criterio"
+            >
+              ×
+            </Button>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex items-center justify-between">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            setRows((prev) => [...prev, { key: keyer.current++, text: "", original: null }])
+          }
+          data-testid="task-criterion-add"
+        >
+          + Añadir criterio
+        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setEditing(false)}
+            data-testid="task-criteria-cancel"
+          >
+            Cancelar
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => mutation.mutate(cleanCriteria(rows))}
+            disabled={mutation.isPending}
+            data-testid="task-criteria-save"
+          >
+            Guardar
+          </Button>
+        </div>
+      </div>
+      {mutation.isError ? (
+        <p className="text-destructive mt-1 text-sm">
+          No se pudieron guardar los criterios:{" "}
+          {mutation.error instanceof ApiError ? mutation.error.body : String(mutation.error)}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
