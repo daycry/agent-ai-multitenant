@@ -227,6 +227,14 @@ de ingestión es fail-open si ClamAV está caído (api-1).
       con allowlist por proyecto (opción a) o queda restringida a runtimes confiables
       con auditoría (opción b). En ambos casos: registrar cada uso de 'open' en el audit
       log y reflejar el riesgo en el texto de la consola de consentimiento.
+- **Estado (2026-06-30)**: ADR redactado y aprobado → **ADR 0094** (opción a). La mitad de
+  **`TestRuntimeRunner`** está IMPLEMENTADA + DESPLEGADA + verificada e2e: `_create_bridge` es
+  siempre `internal=True` (fin del NAT crudo de 'open'); el egress va por el nuevo `registry-proxy`
+  (allowlist de registries públicos) que el worker conecta al bridge per-task; audit-log
+  `stack_exec_egress`. **Pendiente de esta tarea**: la mitad de
+  `marketplace/sandbox.py` (mismo helper de attach, sin NAT crudo) + la allowlist por-proyecto +
+  el texto de consentimiento → ver `docs/roadmap/registry-egress-followups.md` (F1, F2). NO marcar
+  `[x]` hasta cerrar también el marketplace.
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Tests automáticos**:
   ```yaml
@@ -245,6 +253,10 @@ de ingestión es fail-open si ClamAV está caído (api-1).
       (`/root/.cache/pip`, `/root/.nuget/packages`…) con rutas bajo `/home/agent`
       escribibles por el uid 1000 que el worker fuerza (test_runtime.py:756) — hoy el
       cacheo de dependencias falla en silencio y reinstala en cada run.
+- **Nota (2026-06-30, ADR 0094)**: la alineación `cache_env` por plantilla ya se añadió (apunta cada
+  tool a su `dep_cache_mount` montado). composer/npm/go cachean por el bind-mount uid-1000;
+  pip/gem/nuget-global que escriben en rutas root SIGUEN necesitando esta tarea (imágenes
+  `USER 1000` + home escribible). Ver `docs/roadmap/registry-egress-followups.md` (F4).
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml

@@ -155,6 +155,9 @@ Se preservan todas las invariantes del runtime endurecido: `cap_drop ALL`, `read
 - **Coordinación**: `apps/api-server/src/api_server/marketplace/sandbox.py` carga la misma
   semántica `open` de bridge crudo (la otra mitad de `task_prod12_net_01`); reusará el mismo
   helper de attach. Fuera del alcance de runtime-templates de este ADR, pero el ADR gobierna ambos.
+- **Pendientes** (registries privados con credenciales, marketplace sandbox, tmpfs `/tmp`, caché
+  no-root, retirada total de `run_*`, slug de proyecto): anotados en
+  `docs/roadmap/registry-egress-followups.md`.
 
 ## Verificación e2e (despliegue dev)
 
