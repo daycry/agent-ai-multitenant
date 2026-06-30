@@ -307,6 +307,10 @@ async def _launch_test_runtime_plans(
             plan=plan,
             worktree_host_path=str(request["worktree_host_path"]),
             dep_cache_host_path=request.get("dep_cache_host_path"),
+            # ADR 0094: cold-cache default_pre_install needs to resolve its
+            # registries; the runner drops the proxy before the check phase so
+            # the tests themselves still run offline.
+            dep_egress=True,
         )
         result = runner.launch(spec)
         outcomes.append(
@@ -356,6 +360,26 @@ def _stack_command_allowed(command: str, allowed: list[str]) -> str | None:
     if program not in allowed_set and argv[0] not in allowed_set:
         return f"command not allowed: {program}"
     return None
+
+
+def _resolve_stack_dep_cache(template: Any, worktree_host_path: str, data_root: str) -> str | None:
+    """Resolve the warm dep-cache host path for a stack command, or None.
+
+    Best-effort (ADR 0045/0093): a missing/cold lock file or cache layout must
+    never block the command — the install just runs cold (and resolves its
+    registries via the proxy, ADR 0094)."""
+    from pathlib import Path
+
+    from shared_test_runtimes.dep_cache import DepCacheManager, compute_lock_hash
+
+    try:
+        lock = compute_lock_hash(Path(worktree_host_path), template.id)
+        if not lock.hash:
+            return None
+        entry = DepCacheManager(Path(data_root) / "dep-cache").mount_for(template, lock.hash)
+        return str(entry.host_path) if entry is not None else None
+    except Exception:  # pragma: no cover - dep-cache is a best-effort optimisation
+        return None
 
 
 @app.task(name="workers.run_stack_command")  # type: ignore[misc]
@@ -413,8 +437,6 @@ async def _run_stack_command(request: dict[str, Any], settings: Settings) -> dic
         return {"exit_code": -1, "logs": deny, "timed_out": False, "allowed": sorted(allowed)}
 
     try:
-        from shared_test_runtimes.dep_cache import DepCacheManager, compute_lock_hash
-
         import docker
         from workers.git_repos import BareRepoLayout
         from workers.test_runtime import (
@@ -435,23 +457,23 @@ async def _run_stack_command(request: dict[str, Any], settings: Settings) -> dic
         data_root=Path(settings.data_root), tenant_slug=org_slug, project_slug=project_slug
     )
     worktree_host_path = str(layout.worktree_path(str(task_id)))
-
-    dep_cache_host_path: str | None = None
-    try:
-        lock = compute_lock_hash(Path(worktree_host_path), template.id)
-        if lock.hash:
-            entry = DepCacheManager(Path(settings.data_root) / "dep-cache").mount_for(
-                template, lock.hash
-            )
-            if entry is not None:
-                dep_cache_host_path = str(entry.host_path)
-    except Exception:  # pragma: no cover - dep-cache is a best-effort optimisation
-        dep_cache_host_path = None
+    dep_cache_host_path = _resolve_stack_dep_cache(template, worktree_host_path, settings.data_root)
 
     spec = TestRuntimeSpec(
         plan=RuntimePlan(template=template, checks=()),
         worktree_host_path=worktree_host_path,
         dep_cache_host_path=dep_cache_host_path,
+        # ADR 0094: stack_exec IS the install (composer install / npm ci / …) —
+        # it needs proxied egress to the registries for the whole command.
+        dep_egress=True,
+    )
+    # Audit: a stack_exec launch with registry egress (prod-12 requirement).
+    _log.info(
+        "stack_exec_egress",
+        tenant_id=str(tenant_id),
+        task_id=str(task_id),
+        runtime=template.id,
+        command=command[:120],
     )
     runner = TestRuntimeRunner(settings)
     rc, logs = await asyncio.to_thread(runner.run_command, spec, command, timeout_s=timeout_s)

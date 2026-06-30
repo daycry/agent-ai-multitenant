@@ -7,9 +7,37 @@ allowlisted para resolver sus dependencias.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+from uuid import uuid4
+
 import pytest
 
 pytestmark = pytest.mark.unit
+
+
+def _result_capture(captured: dict) -> type:
+    from workers.test_runtime import TestRuntimeResult
+
+    class _FakeRunner:
+        def __init__(self, settings: object) -> None: ...
+
+        def launch(self, spec: object) -> object:
+            captured["spec"] = spec
+            return TestRuntimeResult(
+                runtime=spec.plan.template.id,  # type: ignore[attr-defined]
+                exit_codes=(0,),
+                logs="",
+                container_id="c",
+                timed_out=False,
+                network_name="n",
+            )
+
+        def run_command(self, spec: object, command: str, *, timeout_s: int) -> tuple[int, str]:
+            captured["spec"] = spec
+            return 0, "ok"
+
+    return _FakeRunner
 
 
 # --- settings + spec defaults (cableado) -----------------------------------
@@ -66,3 +94,100 @@ def test_cache_env_values_target_the_dep_cache_mount() -> None:
         assert any(
             mount == v or mount.startswith(v) or mount in v for v in values
         ), f"{t.id}: ningún cache_env apunta a dep_cache_mount {mount!r}: {values}"
+
+
+# --- call sites: dep_egress=True en aceptación + stack_exec (ADR 0094) ------
+
+
+@pytest.mark.asyncio
+async def test_acceptance_launch_requests_dep_egress(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workers import tasks
+    from workers.config import Settings
+
+    captured: dict = {}
+    monkeypatch.setattr("workers.test_runtime.TestRuntimeRunner", _result_capture(captured))
+    monkeypatch.setattr("docker.from_env", lambda: MagicMock())
+
+    request = {
+        "worktree_host_path": "/wt",
+        "acceptance_criteria": [
+            {
+                "check_type": "automated",
+                "runtime": "python-pytest",
+                "command": "pytest",
+                "id": "a",
+                "description": "x",
+            }
+        ],
+    }
+    out = await tasks._launch_test_runtime_plans(request, Settings())
+    assert out, "expected at least one plan outcome"
+    assert captured["spec"].dep_egress is True
+
+
+@pytest.mark.asyncio
+async def test_stack_exec_requests_dep_egress(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workers import tasks
+    from workers.config import Settings
+
+    tenant_id, task_id = uuid4(), uuid4()
+    project = SimpleNamespace(
+        id=uuid4(),
+        slug="api-ci",
+        allowed_commands=["composer"],
+        default_runtime_template="php-phpunit",
+    )
+    task = SimpleNamespace(id=task_id, project_id=project.id)
+    org = SimpleNamespace(slug="demo")
+
+    class _Res:
+        def __init__(self, obj: object) -> None:
+            self._obj = obj
+
+        def scalar_one_or_none(self) -> object:
+            return self._obj
+
+    class _Session:
+        def __init__(self) -> None:
+            self._seq = [task, project]
+            self._i = 0
+
+        async def __aenter__(self) -> _Session:
+            return self
+
+        async def __aexit__(self, *a: object) -> bool:
+            return False
+
+        async def execute(self, _stmt: object) -> _Res:
+            obj = self._seq[self._i]
+            self._i += 1
+            return _Res(obj)
+
+        async def get(self, _model: object, _pk: object) -> object:
+            return org
+
+    class _Engine:
+        async def dispose(self) -> None: ...
+
+    monkeypatch.setattr(tasks, "create_async_engine", lambda _url: _Engine())
+    monkeypatch.setattr(tasks, "async_sessionmaker", lambda _engine, **_k: (lambda: _Session()))
+    monkeypatch.setattr("docker.from_env", lambda: MagicMock())
+    monkeypatch.setattr(
+        "workers.test_runtime.resolve_run_runtime",
+        lambda **_k: __import__("shared_test_runtimes.catalog", fromlist=["get"]).get(
+            "php-phpunit"
+        ),
+    )
+    monkeypatch.setattr(
+        "workers.git_repos.BareRepoLayout",
+        lambda **_k: SimpleNamespace(worktree_path=lambda _t: "/data/wt/task"),
+    )
+    captured: dict = {}
+    monkeypatch.setattr("workers.test_runtime.TestRuntimeRunner", _result_capture(captured))
+
+    result = await tasks._run_stack_command(
+        {"tenant_id": str(tenant_id), "task_id": str(task_id), "command": "composer install"},
+        Settings(),
+    )
+    assert result["exit_code"] == 0
+    assert captured["spec"].dep_egress is True
