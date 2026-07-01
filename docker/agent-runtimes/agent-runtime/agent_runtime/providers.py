@@ -88,9 +88,11 @@ _DECIDE_SYSTEM = (
     "rag_search, list_files, read_file) only to gather what you genuinely need, "
     "then act; never repeat a search or re-read a file you have already seen, and "
     "ignore files unrelated to the task.\n"
-    "You do NOT run git or commit/push and you do NOT need to: the platform persists "
-    "your file changes and handles version control automatically when you finish. "
-    "Just write the files; never call git."
+    "You do NOT run git in ANY form — not commit/push, and not even read-only checks "
+    "like `git status`/`git diff`, and NOT via `stack_exec` or a shell: the platform "
+    "persists your file changes and handles version control automatically when you "
+    "finish (git is not on your command allowlist, so invoking it just wastes a turn "
+    "on an error). Just write the files; never invoke git."
 )
 _REVIEW_SYSTEM = (
     "You are a reviewer. Decide whether the candidate output satisfies the task. "

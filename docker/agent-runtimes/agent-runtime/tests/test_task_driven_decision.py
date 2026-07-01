@@ -77,3 +77,6 @@ def test_system_prompt_tells_agent_not_to_use_git() -> None:
     lowered = _DECIDE_SYSTEM.lower()
     assert "git" in lowered
     assert "persists" in lowered or "version control" in lowered
+    # 2026-07-01: the agent tried `git status` via stack_exec (denied → exit -1);
+    # the note must explicitly cover the stack_exec/shell path, not just commit/push.
+    assert "stack_exec" in lowered

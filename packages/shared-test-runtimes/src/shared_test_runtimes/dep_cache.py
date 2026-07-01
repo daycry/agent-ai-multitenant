@@ -30,7 +30,9 @@ The five tasks of Fase C all live here:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import os
 import shutil
 import time
 from collections.abc import Mapping
@@ -193,14 +195,21 @@ class DepCacheManager:
         """
         host_path = self.cache_path_for(template, lock_hash)
         host_path.mkdir(parents=True, exist_ok=True)
+        # The worker creates this dir as root, but the runtime container that
+        # writes into the bind-mounted cache runs as a NON-root user
+        # (workers.isolation.AGENT_UID_GID = 1000:1000). Without a world-writable
+        # mode the tool (composer/npm/pip) can't populate the cache and warns
+        # "cache directory ... not writable" on EVERY command — noise that can
+        # send the agent into a retry loop (repetitive_loop_detected). Re-chmod
+        # on every ensure so a dir created cold (0755) before this fix is healed.
+        with contextlib.suppress(OSError):
+            os.chmod(host_path, 0o777)
         # Touch BOTH atime and mtime — different filesystems honor
         # one or the other.
         now = time.time()
         host_path.touch(exist_ok=True)
         # touch() only updates the file itself, not the directory's
         # mtime when noatime is mounted; do it explicitly.
-        import os
-
         os.utime(host_path, (now, now))
         return CacheEntry(
             template_id=template.id,
