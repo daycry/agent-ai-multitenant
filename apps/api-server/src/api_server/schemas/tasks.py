@@ -101,6 +101,19 @@ class TaskResponse(BaseModel):
     depends_on: list[UUID]
 
 
+# ---------------------------------------------------------------------------
+# Acceptance-criteria generation (LLM proposal — NOT persisted by this endpoint)
+# ---------------------------------------------------------------------------
+class GeneratedAcceptanceCriteria(BaseModel):
+    """The LLM's proposed acceptance criteria for one task. The operator reviews
+    (and, when the task already had criteria, confirms against a comparison)
+    before saving them via the normal PUT — so generation never overwrites."""
+
+    model_config = _BASE_CONFIG
+
+    acceptance_criteria: list[str]
+
+
 def to_task_response(t: Task, depends_on: list[UUID]) -> TaskResponse:
     return TaskResponse(
         id=t.id,

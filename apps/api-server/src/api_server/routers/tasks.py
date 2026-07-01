@@ -10,6 +10,7 @@ a task move it to status='cancelled' or 'done' via PUT instead.
 
 from __future__ import annotations
 
+import contextlib
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -27,13 +28,20 @@ from api_server.auth.deps import (
     schedule_after_commit,
 )
 from api_server.celery_client import revoke_job_callback
+from api_server.chat.criteria_llm import (
+    format_sibling_context,
+    generate_task_acceptance_criteria,
+)
 from api_server.chat.dag_enforcement import (
     DependenciesNotDoneError,
     assert_dependencies_done,
 )
+from api_server.chat.planning_llm import _clean_acceptance_criteria
+from api_server.chat.responder import _resolve_chat_provider, resolve_chat_model_config
 from api_server.db.domain import Project, Task, TaskDependency, TaskStatus
 from api_server.db.execution_repo import cancel_running_executions_for_task
 from api_server.events import publish_task_created, publish_task_status_changed
+from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -44,7 +52,9 @@ from api_server.routers._pagination import (
     limit_query,
     offset_query,
 )
+from api_server.routers.llm_providers import get_provider_vault_store
 from api_server.schemas.tasks import (
+    GeneratedAcceptanceCriteria,
     TaskCreateRequest,
     TaskResponse,
     TaskUpdateRequest,
@@ -67,6 +77,27 @@ async def _verify_project_visible(session: AsyncSession, project_id: UUID) -> Pr
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
     return project
+
+
+async def _plan_sibling_context(session: AsyncSession, task: Task) -> str:
+    """Digest of the OTHER tasks in this task's plan (title + criteria) so criteria
+    generation stays coherent with a sibling's decisions (a shared response
+    contract, an error format, …). Empty when the task belongs to no plan.
+
+    This is the fix for the CI4 "Implementar controladores" block: without it the
+    generator emitted a "ResponseTrait" criterion that contradicted a sibling
+    contract task's ``{message, meta}`` shape, making the self-review unsatisfiable."""
+    if task.plan_id is None:
+        return ""
+    rows = (
+        await session.execute(
+            select(Task.title, Task.acceptance_criteria).where(
+                Task.plan_id == task.plan_id, Task.id != task.id
+            )
+        )
+    ).all()
+    siblings = [(str(title), _clean_acceptance_criteria(criteria)) for title, criteria in rows]
+    return format_sibling_context(siblings)
 
 
 async def _load_dependencies(session: AsyncSession, task_id: UUID) -> list[UUID]:
@@ -177,6 +208,58 @@ async def get_task(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     deps = await _load_dependencies(session, task.id)
     return to_task_response(task, deps)
+
+
+# ---------------------------------------------------------------------------
+# POST /projects/{project_id}/tasks/{task_id}/generate-acceptance-criteria
+# ---------------------------------------------------------------------------
+@router.post(
+    "/{task_id}/generate-acceptance-criteria",
+    response_model=GeneratedAcceptanceCriteria,
+)
+async def generate_acceptance_criteria(
+    project_id: UUID,
+    task_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+    vault: LLMProviderVaultStore | None = Depends(get_provider_vault_store),
+) -> GeneratedAcceptanceCriteria:
+    """Propose acceptance criteria for one task via the project's chat LLM
+    (ADR 0021), taking any EXISTING criteria into account so a regenerate
+    refines rather than ignores them. Does NOT persist: the operator reviews
+    (and confirms against a comparison when the task already had criteria)
+    before saving via PUT."""
+    project = await _verify_project_visible(session, project_id)
+    result = await session.execute(
+        select(Task).where(Task.id == task_id, Task.project_id == project_id)
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+
+    sibling_context = await _plan_sibling_context(session, task)
+
+    effective = await resolve_chat_model_config(session, project)
+    provider, _kind, api_model = await _resolve_chat_provider(session, effective, vault)
+    if provider is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No hay proveedor LLM configurado para el chat de este proyecto.",
+        )
+    try:
+        proposal = await generate_task_acceptance_criteria(
+            provider,
+            title=task.title,
+            description=task.description,
+            existing=_clean_acceptance_criteria(task.acceptance_criteria),
+            project_context={"name": project.name, "description": project.description or ""},
+            model=api_model,
+            sibling_context=sibling_context,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            await provider.aclose()
+    return GeneratedAcceptanceCriteria(acceptance_criteria=proposal)
 
 
 # ---------------------------------------------------------------------------
