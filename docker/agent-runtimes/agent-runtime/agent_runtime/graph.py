@@ -77,6 +77,15 @@ _RESEARCH_STREAK_LIMIT = 5
 # max_iterations. 10 is 2x the nudge (one last chance to converge) and far below the
 # per-kind iteration cap (25/50), so it fails fast instead of burning the budget.
 _RESEARCH_HARD_LIMIT = 10
+# Absolute ceiling on DISTINCT read targets per eligible run. The re-read churn
+# streak cuts a "same 2 files x10" loop fast; this closes the complementary evasion
+# of touching a NEW path/query every turn (which keeps the churn streak at 0
+# forever). Generous: a legitimate 10-15 file explorer converges by producing/
+# finishing long before this; "invent a new trivial path each turn" is bounded here.
+_DISTINCT_READ_LIMIT = 22
+# After this many CONSECUTIVE re-reads of an already-seen target, nudge the agent to
+# stop re-reading and produce/finish (fires before the hard read-churn backstop).
+_REREAD_CHURN_NUDGE_LIMIT = 3
 # ADR 0089: after this many writes to the SAME path (ANY content), nudge the agent to
 # stop re-writing and FINISH — a 'churn' the byte-exact detector/nudge cannot see.
 _PATH_CHURN_THRESHOLD = 4
@@ -97,6 +106,22 @@ def _base_tool_name(tool: str | None) -> str:
 
 def _is_research_tool(tool: str | None) -> bool:
     return _base_tool_name(tool) in _RESEARCH_TOOLS
+
+
+def _read_target(tool: str | None, args: dict[str, Any]) -> str | None:
+    """The normalized target a research call reads, or ``None``.
+
+    A NEW target is exploration (progress toward understanding); a REPEATED target
+    is read-churn. Cosmetic ``offset``/``limit`` are ignored so paging the same file
+    does not masquerade as a new target. Namespace-stripped so an MCP/custom reader
+    counts the same as the builtin."""
+    base = _base_tool_name(tool)
+    if base in {"read_file", "list_files"}:
+        return f"{base}:{args.get('path') or '.'}"
+    if base in {"rag_search", "memory_recall"}:
+        query = str(args.get("query") or "").strip()
+        return f"{base}:{query}" if query else None
+    return None
 
 
 def _is_producing_tool(tool: str | None) -> bool:
@@ -143,6 +168,42 @@ def _abort_or_escalate_status(has_produced: bool, *, is_review: bool = False) ->
     if is_review or has_produced:
         return STATUS_NEEDS_HUMAN_REVIEW
     return STATUS_ABORTED
+
+
+def _loop_trip_outcome(
+    *, review_retries: int, last_review_feedback: str, tool: str
+) -> tuple[str, str, str | None]:
+    """Decide ``(abort_code, step_summary, output_override)`` for a mutating-tool
+    repetitive-loop trip.
+
+    When the loop trips INSIDE a self-review retry cycle (``review_retries > 0``)
+    the identical re-writes are the SYMPTOM; the CAUSE is a self-review that keeps
+    rejecting the same output — usually a contradictory/unsatisfiable acceptance
+    spec. In that case we return the legible ``SELF_REVIEW_STALEMATE`` code and put
+    the reviewer's persistent feedback in the escalation ``output`` so the operator
+    sees WHY, instead of the opaque ``repetitive_loop_detected``. Outside a review
+    cycle it stays the historical repetitive-loop abort (unchanged contract)."""
+    feedback = (last_review_feedback or "").strip()
+    if review_retries > 0:
+        plural = "y" if review_retries == 1 else "ies"
+        summary = (
+            f"Self-review stalemate: the reviewer keeps rejecting the output after "
+            f"{review_retries} retr{plural}" + (f" — {feedback[:200]}" if feedback else "")
+        )
+        output = (
+            "Escalado a validación humana: el self-review rechazó repetidamente la "
+            "implementación por el mismo motivo, así que los criterios de aceptación de "
+            "la tarea pueden ser contradictorios o insatisfacibles. "
+            f"Feedback del revisor: {feedback}"
+            if feedback
+            else None
+        )
+        return str(SafeguardCode.SELF_REVIEW_STALEMATE), summary, output
+    return (
+        str(SafeguardCode.REPETITIVE_LOOP),
+        f"Repetitive loop detected on tool '{tool}'",
+        None,
+    )
 
 
 def _repetition_nudge(
@@ -254,31 +315,74 @@ def _research_nudge(
     return (
         f"You have made {research_streak} research calls in a row without producing "
         "anything. STOP researching — you have enough context. Produce the task's "
-        "deliverable now (e.g. write_file) instead of more reads or searches."
+        "deliverable now (e.g. write_file); OR, if this task is analysis-only, FINISH by "
+        "reporting your findings/conclusion as your final answer. Do not keep reading."
+    )
+
+
+def _reread_churn_nudge(
+    *, churn_streak: int, limit: int, has_produced: bool, is_review: bool = False
+) -> str | None:
+    """Sharp nudge when the agent RE-reads the SAME targets in a row (read-churn).
+
+    Preferred over the generic ``research_streak`` nudge so a research-heavy run gets
+    an ACTIONABLE next move (produce, finish, or — for an analysis-only task — report
+    a conclusion) instead of a mis-aimed "write a file". Returns ``None`` below the
+    limit."""
+    if churn_streak < limit:
+        return None
+    if is_review:
+        return (
+            f"You have re-read the same files {churn_streak} times in a row. You have "
+            "enough to judge — FINISH your review now: reply with your final summary "
+            "ending in exactly one <verdict>approve</verdict> or <verdict>reject</verdict> "
+            "tag. Do NOT keep reading."
+        )
+    if has_produced:
+        return (
+            f"You have re-read the same files {churn_streak} times in a row and ALREADY "
+            "produced the deliverable. Stop re-reading and FINISH now: report the result."
+        )
+    return (
+        f"You have re-read the same files {churn_streak} times in a row without producing "
+        "anything. Produce the task's deliverable now; OR, if this task is analysis-only, "
+        "FINISH by reporting your findings/conclusion. Do not keep re-reading."
     )
 
 
 def _research_exhausted(
     *,
+    churn_streak: int,
+    distinct_reads: int,
     research_streak: int,
     has_produced: bool,
     review_retries: int,
     hard_limit: int,
+    distinct_limit: int,
     is_review: bool = False,
 ) -> bool:
-    """The HARD read-churn backstop (ADR 0089-D4).
+    """The HARD read-churn backstop (ADR 0089-D4), keyed on RE-reads not raw reads.
 
-    Trips when the research-only streak (reads/searches since the last producing
-    tool) crosses ``hard_limit`` AND the run has something worth preserving — it has
-    already produced a deliverable, OR a prior self-review failed and the model keeps
-    reading without re-writing (the live read-churn scenario). A sterile analysis-only
-    run that legitimately only reads (no production, no failed review) is NOT cut here;
-    its termination stays bounded by ``max_iterations``/``wall_clock`` (D3 invariant).
+    Eligible only when the run has something worth preserving (produced a deliverable,
+    OR a prior self-review failed, OR it is a review). A sterile analysis-only run
+    that legitimately only reads is NOT cut here — its termination stays bounded by
+    ``max_iterations``/``wall_clock`` (D3 invariant). When eligible, it trips on ANY of:
 
-    ADR 0095: a REVIEW run is the one sterile-by-design case that MUST be cut — it
-    never produces and would otherwise leak to ``max_iterations`` every time.
+      1. ``churn_streak >= hard_limit`` — a genuine re-read loop (same targets over and
+         over); the fast cut that closes the read-churn hole.
+      2. ``distinct_reads >= distinct_limit`` — the absolute exploration ceiling; closes
+         the "invent a NEW path/query every turn" evasion the churn streak alone misses.
+      3. ``is_review and research_streak >= hard_limit`` — ADR 0095: a reviewer that
+         reads many DISTINCT files (churn_streak stays 0) must still be cut, never leak
+         to ``max_iterations``. This is the carve-out the distinct-path split needs.
     """
-    return research_streak >= hard_limit and (has_produced or review_retries > 0 or is_review)
+    if not (has_produced or review_retries > 0 or is_review):
+        return False
+    return (
+        churn_streak >= hard_limit
+        or distinct_reads >= distinct_limit
+        or (is_review and research_streak >= hard_limit)
+    )
 
 
 def _no_recall(_task: AgentTask) -> list[dict[str, Any]]:
@@ -454,8 +558,15 @@ class _AgentLoop:
         # ADR 0095: reviewer-aware safeguards (see AgentDeps.is_review).
         self.is_review = deps.is_review
         # Consecutive research-only tool calls (reset by any producing tool) —
-        # drives the "stop researching, write" nudge in `reflect`.
+        # drives the "stop researching, write" SOFT nudge in `reflect`.
         self.research_streak = 0
+        # Distinct read targets seen this run + the consecutive RE-read churn streak.
+        # The HARD backstop keys on these (not raw research_streak): a NEW target is
+        # exploration (resets the churn streak); a RE-read is churn. read_targets is
+        # never cleared (persistent for the distinct ceiling); the churn STREAK resets
+        # on any producing tool so post-write verification gets a full budget.
+        self.read_targets: set[str] = set()
+        self.read_churn_streak = 0
         # Whether a producing tool (write_file/…) has run — flips the nudge from
         # "write the deliverable" to "you're done, FINISH" (avoids over-verification).
         self.has_produced = False
@@ -555,10 +666,13 @@ class _AgentLoop:
         # won't re-write), escalate NOW (preserving the deliverable) instead of leaking
         # to max_iterations. A sterile analysis-only run is NOT cut (gate fails).
         if _research_exhausted(
+            churn_streak=self.read_churn_streak,
+            distinct_reads=len(self.read_targets),
             research_streak=self.research_streak,
             has_produced=self.has_produced,
             review_retries=state["review_retries"],
             hard_limit=_RESEARCH_HARD_LIMIT,
+            distinct_limit=_DISTINCT_READ_LIMIT,
             is_review=self.is_review,
         ):
             status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
@@ -624,24 +738,34 @@ class _AgentLoop:
             tripped_loop = self.detector.record(action)
             if tripped_loop and _is_mutating_tool(decision.tool):
                 # B2: when work was already produced, ESCALATE (preserve it) rather
-                # than hard-abort; a sterile loop stays aborted. The abort_code is
-                # unchanged either way (the persisted contract).
+                # than hard-abort; a sterile loop stays aborted. When the loop trips
+                # DURING a self-review retry cycle, report the legible
+                # SELF_REVIEW_STALEMATE + reviewer feedback instead of the opaque
+                # repetitive-loop code (systemic fix 2026-07-01).
                 status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
+                abort_code, summary, output_override = _loop_trip_outcome(
+                    review_retries=state["review_retries"],
+                    last_review_feedback=str(state.get("last_review_feedback") or ""),
+                    tool=decision.tool or "",
+                )
                 steps.append(
                     node_step(
                         base + len(steps),
                         "plan",
-                        f"Repetitive loop detected on tool '{decision.tool}'",
+                        summary,
                         status="aborted" if status == STATUS_ABORTED else status,
                     )
                 )
-                return {
+                result: dict[str, Any] = {
                     "status": status,
-                    "abort_code": str(SafeguardCode.REPETITIVE_LOOP),
+                    "abort_code": abort_code,
                     "last_decision": decision.as_dict(),
                     "iteration": self.tracker.usage.iterations,
                     "steps": steps,
                 }
+                if output_override:
+                    result["output"] = output_override
+                return result
 
             # Approval gate: a sensitive tool is parked *before* it runs.
             category = (
@@ -717,13 +841,21 @@ class _AgentLoop:
         # Track the research-only streak: any producing tool resets it. A producing
         # tool also latches `has_produced`, which flips the nudge to "now FINISH".
         # Namespace-aware (audit C2/F24): an MCP/custom writer counts too.
+        decision = state["last_decision"] or {}
         if _is_research_tool(tool):
             self.research_streak += 1
+            # New target = exploration (breaks churn); repeated/untargetable = churn.
+            target = _read_target(tool, decision.get("tool_args") or {})
+            if target is not None and target not in self.read_targets:
+                self.read_targets.add(target)
+                self.read_churn_streak = 0
+            else:
+                self.read_churn_streak += 1
         else:
             self.research_streak = 0
+            self.read_churn_streak = 0
         if _is_producing_tool(tool):
             self.has_produced = True
-        decision = state["last_decision"] or {}
         # ADR 0087 (Option 1): harvest the file the agent just wrote (path+content)
         # so the self-review can judge the real code. Keeps the latest per path.
         if _is_producing_tool(tool):
@@ -743,7 +875,12 @@ class _AgentLoop:
             if observation.get("ok")
             else "tool failed — will reconsider"
         )
-        nudge = _research_nudge(
+        nudge = _reread_churn_nudge(
+            churn_streak=self.read_churn_streak,
+            limit=_REREAD_CHURN_NUDGE_LIMIT,
+            has_produced=self.has_produced,
+            is_review=self.is_review,
+        ) or _research_nudge(
             tool=tool,
             research_streak=self.research_streak,
             repeat_count=repeat_count,

@@ -55,6 +55,13 @@ class SafeguardCode(enum.StrEnum):
     # member was removed (F27 — it never matched what the graph wrote).
     REVIEW_INCONCLUSIVE = "review_inconclusive"
     MAX_REVIEW_RETRIES_EXHAUSTED = "max_review_retries_exhausted"
+    # A repetitive-loop trip that happens DURING a self-review retry cycle: the
+    # churn is the SYMPTOM, a self-review that keeps rejecting the same output
+    # (often a contradictory / unsatisfiable acceptance spec) is the CAUSE. The
+    # graph reports this legible code + the persistent reviewer feedback instead
+    # of the opaque 'repetitive_loop_detected', so the operator can act on it
+    # (systemic fix 2026-07-01).
+    SELF_REVIEW_STALEMATE = "self_review_stalemate"
     # A self-declared incompletion (finish_status failed/partial) that a review
     # PASS must not override into 'done' (ADR 0087 addendum D1, P2.2).
     AGENT_REPORTED_FAILURE = "agent_reported_failure"

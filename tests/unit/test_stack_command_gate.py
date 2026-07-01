@@ -27,12 +27,39 @@ def test_basename_of_a_path_command_passes_when_basename_allowed() -> None:
 
 
 def test_disallowed_command_is_denied_by_basename() -> None:
-    assert _stack_command_allowed("rm -rf /", ["composer"]) == "command not allowed: rm"
+    # The deny STARTS with the stable prefix (log asserts rely on it) and now also
+    # lists the allowlist so the model can self-correct.
+    msg = _stack_command_allowed("rm -rf /", ["composer"])
+    assert msg is not None and msg.startswith("command not allowed: rm")
+    assert "Allowed: ['composer']" in msg
 
 
 def test_empty_allowlist_denies_everything() -> None:
-    assert _stack_command_allowed("php spark migrate", []) == "command not allowed: php"
+    msg = _stack_command_allowed("php spark migrate", [])
+    assert msg is not None and msg.startswith("command not allowed: php")
+    assert "none configured" in msg
 
 
 def test_empty_command_is_rejected() -> None:
     assert _stack_command_allowed("   ", ["php"]) == "empty command"
+
+
+# --- actionable deny for shell chaining (2026-07-01) ---------------------------
+# The agent kept trying `bash -lc "a && b"` to chain, got an opaque "not allowed:
+# bash", then churned on reads. The deny now tells it to issue one command per call.
+def test_bash_chaining_deny_is_actionable() -> None:
+    msg = _stack_command_allowed('bash -lc "composer validate && composer audit"', ["composer"])
+    assert msg is not None and msg.startswith("command not allowed: bash")
+    assert "shell chaining" in msg and "separate call" in msg
+
+
+def test_chaining_operators_get_the_hint_even_for_allowed_program() -> None:
+    # `composer x && composer y` — composer IS allowed, but shlex parses the first
+    # token as `composer`; the '&&' still surfaces the chaining guidance.
+    msg = _stack_command_allowed("composer x && composer y", ["php"])
+    assert msg is not None and "shell chaining" in msg
+
+
+def test_single_allowed_command_still_passes_clean() -> None:
+    # No false positive: an allowed single command is untouched (returns None).
+    assert _stack_command_allowed("composer audit --locked", ["composer"]) is None

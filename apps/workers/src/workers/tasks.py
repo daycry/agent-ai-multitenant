@@ -358,7 +358,20 @@ def _stack_command_allowed(command: str, allowed: list[str]) -> str | None:
     # Accept either the basename (`php`, `composer`) or the full relative token
     # (`vendor/bin/phpunit`) — the project commands UI offers both shapes.
     if program not in allowed_set and argv[0] not in allowed_set:
-        return f"command not allowed: {program}"
+        # Make the denial ACTIONABLE so the model self-corrects to a single allowed
+        # command instead of falling back to re-reading files (the read-churn that
+        # blocked "Auditar dependencias"). Keep the "command not allowed:" prefix so
+        # existing log asserts still match (use .startswith).
+        allowed_display = sorted(allowed_set) or ["(none configured)"]
+        hint = ""
+        if program in {"bash", "sh", "zsh", "dash"} or any(
+            op in command for op in ("&&", "||", ";", "|")
+        ):
+            hint = (
+                " stack_exec runs ONE allowed program per call; shell chaining "
+                "(&&, ||, ;, |) is NOT supported — issue each command in a separate call."
+            )
+        return f"command not allowed: {program}.{hint} Allowed: {allowed_display}."
     return None
 
 
