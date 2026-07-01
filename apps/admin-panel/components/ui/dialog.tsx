@@ -31,15 +31,34 @@ const SIZE_CLASS: Record<DialogSize, string> = {
   "2xl": "max-w-4xl",
 };
 
+// Only the TOPMOST open dialog reacts to a global Escape. Every open Dialog
+// registers a document-level keydown listener; without this stack a single
+// Escape would close a nested confirmation AND its parent sheet at once.
+const openDialogStack: symbol[] = [];
+
 export function Dialog({ open, onOpenChange, size = "lg", children }: DialogProps) {
+  // Read the latest onOpenChange from a ref so the effect depends only on `open`
+  // (inline handlers change identity each render — re-running the effect would
+  // re-push this dialog to the top of the stack and steal Escape from a child).
+  const onOpenChangeRef = React.useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+
   React.useEffect(() => {
     if (!open) return;
+    const token = Symbol("dialog");
+    openDialogStack.push(token);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onOpenChange(false);
+      if (e.key === "Escape" && openDialogStack[openDialogStack.length - 1] === token) {
+        onOpenChangeRef.current(false);
+      }
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onOpenChange]);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      const idx = openDialogStack.indexOf(token);
+      if (idx !== -1) openDialogStack.splice(idx, 1);
+    };
+  }, [open]);
 
   if (!open) return null;
   return (

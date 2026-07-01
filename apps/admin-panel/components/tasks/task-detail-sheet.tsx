@@ -131,14 +131,9 @@ export function TaskDetailSheet({
             <CriteriaSection projectId={projectId} taskId={taskId} criteria={criteria} />
           ) : null}
 
-          {/* Dependencias */}
-          {detail?.depends_on?.length ? (
-            <section className="mb-4" data-testid="task-detail-deps">
-              <h4 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
-                Depende de
-              </h4>
-              <p className="font-mono text-xs">{detail.depends_on.join(", ")}</p>
-            </section>
+          {/* Dependencias (resueltas a título, no UUID) */}
+          {detail?.depends_on?.length && projectId ? (
+            <DependsOnSection projectId={projectId} dependsOn={detail.depends_on} />
           ) : null}
 
           {/* Runs */}
@@ -203,6 +198,43 @@ export function TaskDetailSheet({
   );
 }
 
+interface TaskLite {
+  id: string;
+  title: string;
+}
+
+/** "Depende de" resolved to task TITLES — the raw dependency UUID is internal and
+ * conveys nothing to the operator. Looks the titles up in the project's task list
+ * (cheap, cached; only fetched when the task actually has dependencies); falls
+ * back to a short id if a title can't be resolved. */
+function DependsOnSection({ projectId, dependsOn }: { projectId: string; dependsOn: string[] }) {
+  const tasksQuery = useQuery({
+    queryKey: ["project-task-titles", projectId],
+    queryFn: () => apiFetch<TaskLite[]>(`/projects/${projectId}/tasks`),
+    enabled: dependsOn.length > 0,
+    refetchOnWindowFocus: false,
+  });
+  const titleById = new Map((tasksQuery.data ?? []).map((t) => [t.id, t.title]));
+
+  return (
+    <section className="mb-4" data-testid="task-detail-deps">
+      <h4 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
+        Depende de
+      </h4>
+      <ul className="list-disc space-y-1 pl-5 text-sm" data-testid="task-detail-deps-list">
+        {dependsOn.map((id) => {
+          const title = titleById.get(id);
+          return (
+            <li key={id}>
+              {title ?? <span className="font-mono text-xs">{id.slice(0, 8)}…</span>}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 /** Editable rows carry a stable key so removing a middle row never steals focus
  * from the inputs React would otherwise reuse by index. */
 type CriterionRow = CriterionDraft & { key: number };
@@ -219,12 +251,20 @@ function CriteriaSection({
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [rows, setRows] = useState<CriterionRow[]>([]);
+  // A pending AI proposal to confirm against the CURRENT criteria before it can
+  // replace them (null = no comparison open). Only used when the task already
+  // had criteria — an empty task goes straight to the editor.
+  const [proposal, setProposal] = useState<string[] | null>(null);
   const keyer = useRef(0);
 
-  function startEdit() {
+  function enterEditWith(drafts: CriterionDraft[]) {
     keyer.current = 0;
-    setRows(criteria.map((c) => ({ key: keyer.current++, text: criterionText(c), original: c })));
+    setRows(drafts.map((d) => ({ key: keyer.current++, text: d.text, original: d.original })));
     setEditing(true);
+  }
+
+  function startEdit() {
+    enterEditWith(criteria.map((c) => ({ text: criterionText(c), original: c })));
   }
 
   const mutation = useMutation({
@@ -239,6 +279,31 @@ function CriteriaSection({
     },
   });
 
+  // AI generation proposes criteria WITHOUT persisting (the endpoint takes the
+  // existing ones into account). Empty task → preload the editor to review;
+  // otherwise → open the comparison so a regenerate never overwrites silently.
+  const generateMutation = useMutation({
+    mutationFn: () =>
+      apiFetch<{ acceptance_criteria: string[] }>(
+        `/projects/${projectId}/tasks/${taskId}/generate-acceptance-criteria`,
+        { method: "POST" },
+      ),
+    onSuccess: ({ acceptance_criteria }) => {
+      const proposed = acceptance_criteria ?? [];
+      if (criteria.length === 0) {
+        enterEditWith(proposed.map((t) => ({ text: t, original: null })));
+      } else {
+        setProposal(proposed);
+      }
+    },
+  });
+
+  function acceptProposal() {
+    const proposed = proposal ?? [];
+    setProposal(null);
+    enterEditWith(proposed.map((t) => ({ text: t, original: null })));
+  }
+
   if (!editing) {
     return (
       <section className="mb-4" data-testid="task-detail-criteria">
@@ -246,9 +311,29 @@ function CriteriaSection({
           <h4 className="text-muted-foreground text-xs font-semibold uppercase tracking-wide">
             Criterios de aceptación
           </h4>
-          <Button variant="outline" size="sm" onClick={startEdit} data-testid="task-criteria-edit">
-            Editar
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => generateMutation.mutate()}
+              disabled={generateMutation.isPending}
+              data-testid="task-criteria-generate"
+            >
+              {generateMutation.isPending
+                ? "Generando…"
+                : criteria.length > 0
+                  ? "Regenerar con IA"
+                  : "Generar con IA"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={startEdit}
+              data-testid="task-criteria-edit"
+            >
+              Editar
+            </Button>
+          </div>
         </div>
         {criteria.length > 0 ? (
           <ul className="list-disc space-y-1 pl-5 text-sm">
@@ -261,6 +346,21 @@ function CriteriaSection({
             Sin criterios de aceptación.
           </p>
         )}
+        {generateMutation.isError ? (
+          <p className="text-destructive mt-1 text-sm" data-testid="task-criteria-generate-error">
+            No se pudieron generar los criterios:{" "}
+            {generateMutation.error instanceof ApiError
+              ? generateMutation.error.body
+              : String(generateMutation.error)}
+          </p>
+        ) : null}
+        <CriteriaCompareDialog
+          open={proposal !== null}
+          current={criteria}
+          proposed={proposal ?? []}
+          onAccept={acceptProposal}
+          onCancel={() => setProposal(null)}
+        />
       </section>
     );
   }
@@ -336,6 +436,77 @@ function CriteriaSection({
         </p>
       ) : null}
     </section>
+  );
+}
+
+/** Side-by-side "current vs proposed" confirmation shown before an AI
+ * regeneration can replace criteria the task already had. Accepting funnels the
+ * proposal into the editor (an explicit Save persists); cancelling keeps the
+ * current criteria untouched. */
+function CriteriaCompareDialog({
+  open,
+  current,
+  proposed,
+  onAccept,
+  onCancel,
+}: {
+  open: boolean;
+  current: unknown[];
+  proposed: string[];
+  onAccept: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onCancel();
+      }}
+      size="lg"
+    >
+      <DialogContent data-testid="task-criteria-compare">
+        <DialogHeader>
+          <DialogTitle>Comparar criterios de aceptación</DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          <div className="grid grid-cols-2 gap-4">
+            <div data-testid="task-criteria-compare-current">
+              <h5 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
+                Actuales
+              </h5>
+              <ul className="list-disc space-y-1 pl-5 text-sm">
+                {current.map((c, i) => (
+                  <li key={i}>{criterionText(c)}</li>
+                ))}
+              </ul>
+            </div>
+            <div data-testid="task-criteria-compare-proposed">
+              <h5 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
+                Propuestos
+              </h5>
+              <ul className="list-disc space-y-1 pl-5 text-sm">
+                {proposed.map((c, i) => (
+                  <li key={i}>{c}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </DialogBody>
+        <DialogFooter>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onCancel}
+            data-testid="task-criteria-compare-cancel"
+          >
+            Cancelar
+          </Button>
+          <Button size="sm" onClick={onAccept} data-testid="task-criteria-compare-accept">
+            Aceptar cambios
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
