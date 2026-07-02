@@ -126,7 +126,9 @@ async def test_acceptance_launch_requests_dep_egress(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_stack_exec_requests_dep_egress(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stack_exec_requests_dep_egress(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
     from workers import tasks
     from workers.config import Settings
 
@@ -178,9 +180,11 @@ async def test_stack_exec_requests_dep_egress(monkeypatch: pytest.MonkeyPatch) -
             "php-phpunit"
         ),
     )
+    # F0.3: _run_stack_command ahora exige que el worktree exista en el host
+    # antes de containers/create — un tmp real en vez de una ruta ficticia.
     monkeypatch.setattr(
         "workers.git_repos.BareRepoLayout",
-        lambda **_k: SimpleNamespace(worktree_path=lambda _t: "/data/wt/task"),
+        lambda **_k: SimpleNamespace(worktree_path=lambda _t: str(tmp_path)),
     )
     captured: dict = {}
     monkeypatch.setattr("workers.test_runtime.TestRuntimeRunner", _result_capture(captured))

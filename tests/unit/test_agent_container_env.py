@@ -51,3 +51,34 @@ def test_fast_providers_use_the_base_timeout() -> None:
 def test_claude_sdk_uses_the_sdk_specific_timeout() -> None:
     s = Settings()
     assert s.container_timeout_for_kind("claude_sdk") == s.container_run_timeout_claude_sdk_s
+
+
+# --- F2b.5 (auditoría 2026-07-02): presupuesto propio para review runs ----------
+# El reviewer corría con presupuesto de implementador (50 iter / 2h) cuando la
+# evidencia post-ADR-0095 muestra reviews convergiendo en 13-22 steps.
+
+
+def test_review_runs_get_a_tighter_iteration_cap() -> None:
+    s = Settings()
+    review_cap = s.agent_max_iterations_for_kind("claude_sdk", is_review=True)
+    implementer_cap = s.agent_max_iterations_for_kind("claude_sdk")
+    assert review_cap is not None and implementer_cap is not None
+    assert review_cap < implementer_cap
+    assert review_cap == s.agent_max_iterations_review
+
+
+def test_review_runs_get_a_shorter_wall_clock() -> None:
+    s = Settings()
+    assert s.container_timeout_for_kind(
+        "claude_sdk", is_review=True
+    ) < s.container_timeout_for_kind("claude_sdk")
+    # Los providers HTTP rápidos no cambian: su budget base ya es corto.
+    assert s.container_timeout_for_kind("ollama", is_review=True) == s.container_run_timeout_s
+
+
+def test_review_grace_composes_with_review_budget() -> None:
+    s = Settings()
+    assert (
+        s.container_timeout_with_grace_for_kind("claude_sdk", is_review=True)
+        == s.container_timeout_for_kind("claude_sdk", is_review=True) + s.container_grace_s
+    )

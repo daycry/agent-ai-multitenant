@@ -63,6 +63,33 @@ async def test_two_tasks_share_plan_branch_distinct_worktrees(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_provision_survives_concurrent_branch_creation_race(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auditoría 2026-07-02: dos tasks hermanas promovidas A LA VEZ provisionan
+    el MISMO plan branch; la perdedora del `git branch` moría con rc=128
+    «a branch named ... already exists» (TOCTOU tras `_branch_exists`) y, con el
+    fail-fast F0.2, su run abortaba `workspace_unavailable`. La creación de la
+    branch es ahora idempotente: "already exists" es éxito, no error."""
+    from workers.git_repos import WorktreeManager
+
+    settings = Settings(data_root=str(tmp_path))
+    plan_id = str(uuid4())
+    kwargs = {"tenant_slug": "acme", "project_slug": "api-ci", "plan_id": plan_id, "plan_slug": "p"}
+
+    a = await _provision_worktree(settings, task_id="task-a", **kwargs)  # crea el branch
+    assert a is not None
+    # Simula al PERDEDOR de la carrera: su check dijo "no existe" justo antes
+    # de que el ganador la creara.
+    monkeypatch.setattr(WorktreeManager, "_branch_exists", lambda self, branch: False)
+
+    b = await _provision_worktree(settings, task_id="task-b", **kwargs)
+
+    assert b is not None
+    assert Path(b).is_dir()
+
+
+@pytest.mark.asyncio
 async def test_commit_and_push_persists_agent_output_to_bare(tmp_path: Path) -> None:
     settings = Settings(data_root=str(tmp_path))
     plan_id = str(uuid4())

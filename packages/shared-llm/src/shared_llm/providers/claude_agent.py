@@ -70,6 +70,23 @@ _SDK_NATIVE_TOOLS: tuple[str, ...] = (
 )
 
 
+def _model_usage_tokens(mu: Any) -> tuple[int, int]:
+    """Suma (input, output) del mapa ``model_usage`` del ResultMessage (F1.4).
+
+    El CLI lo emite por modelo y en camelCase (``inputTokens``); se aceptan
+    ambas formas. ``(0, 0)`` cuando no hay mapa."""
+    total_in = total_out = 0
+    if isinstance(mu, dict):
+        for per_model in mu.values():
+            total_in += _usage_get(per_model, "inputTokens") or _usage_get(
+                per_model, "input_tokens"
+            )
+            total_out += _usage_get(per_model, "outputTokens") or _usage_get(
+                per_model, "output_tokens"
+            )
+    return total_in, total_out
+
+
 def _usage_get(u: Any, name: str, default: int = 0) -> int:
     """Read a usage field whether the SDK exposes ``usage`` as an OBJECT (attribute)
     or a DICT (key). The Claude Agent SDK's ResultMessage carries ``total_cost_usd``
@@ -254,9 +271,24 @@ class ClaudeAgentProvider:
 
     @staticmethod
     def _harvest(messages: list[Any]) -> tuple[list[str], Usage]:
-        """Walk SDK messages: collect text blocks + the final usage."""
+        """Walk SDK messages: collect text blocks + the turn's usage.
+
+        Auditoría 2026-07-02 (F1.4): en un turno con tool call interrumpido
+        (``can_use_tool`` deny+interrupt) el ``ResultMessage`` llega sin
+        ``usage`` — o no llega — así que los runs cuyo cada turno acababa en
+        tool call persistían ``total_tokens=0`` con ``cost>0``. La cosecha usa
+        tres canales por orden de autoridad:
+
+          1. el ``usage`` agregado del ResultMessage (si trae tokens);
+          2. la SUMA de los ``usage`` por-AssistantMessage del turno;
+          3. el ``model_usage`` del ResultMessage (mapa por modelo; el CLI lo
+             emite en camelCase ``inputTokens``/``outputTokens``).
+        """
         text_parts: list[str] = []
         usage = Usage()
+        assistant_in = assistant_out = 0
+        result_in = result_out = 0
+        model_usage_in = model_usage_out = 0
         for msg in messages:
             content = getattr(msg, "content", None)
             if isinstance(content, list):
@@ -264,15 +296,31 @@ class ClaudeAgentProvider:
                     text = getattr(block, "text", None)
                     if text:
                         text_parts.append(text)
+            is_result = getattr(msg, "total_cost_usd", None) is not None or (
+                getattr(msg, "model_usage", None) is not None
+            )
             u = getattr(msg, "usage", None)
             if u:
-                usage.input_tokens = _usage_get(u, "input_tokens", usage.input_tokens)
-                usage.output_tokens = _usage_get(u, "output_tokens", usage.output_tokens)
+                if is_result:
+                    result_in = _usage_get(u, "input_tokens")
+                    result_out = _usage_get(u, "output_tokens")
+                else:
+                    assistant_in += _usage_get(u, "input_tokens")
+                    assistant_out += _usage_get(u, "output_tokens")
                 usage.cache_read_tokens = _usage_get(u, "cache_read_input_tokens")
                 usage.cache_write_tokens = _usage_get(u, "cache_creation_input_tokens")
+            mu_in, mu_out = _model_usage_tokens(getattr(msg, "model_usage", None))
+            model_usage_in += mu_in
+            model_usage_out += mu_out
             cost = getattr(msg, "total_cost_usd", None)
             if cost is not None:
                 usage.cost_usd = float(cost)
+        if result_in or result_out:
+            usage.input_tokens, usage.output_tokens = result_in, result_out
+        elif assistant_in or assistant_out:
+            usage.input_tokens, usage.output_tokens = assistant_in, assistant_out
+        else:
+            usage.input_tokens, usage.output_tokens = model_usage_in, model_usage_out
         return text_parts, usage
 
     # ------------------------------------------------------------------

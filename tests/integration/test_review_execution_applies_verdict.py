@@ -197,6 +197,95 @@ async def test_reject_at_max_retries_escalates_to_blocked(
     assert await _status(migrations_pg_dsn, ids["task"]) == "blocked"
 
 
+# ---------------------------------------------------------------------------
+# ADR 0096 (auditoría 2026-07-02, F1.2): precedencia verdict vs escalación.
+# Un run de review que NO terminó `done` no puede CERRAR la task con su approve
+# ("escalar a humano" y "aprobar automáticamente" son contradictorios — 2 tasks
+# pasaron a done sin el humano que el propio run pedía). Su reject SÍ se aplica
+# (dirección conservadora, caso beneficioso observado en 019f1828).
+# ---------------------------------------------------------------------------
+
+
+def _escalated(output: str, *, status: str = "needs_human_review") -> _RuntimeResult:
+    return _RuntimeResult(
+        status=status,
+        abort_code=(
+            "self_review_stalemate" if status == "needs_human_review" else "research_exhausted"
+        ),
+        output=output,
+        iterations=20,
+        steps=[],
+        usage={},
+    )
+
+
+async def _audit_payloads(dsn: str, task_id: UUID) -> list[dict]:
+    import json
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        rows = await conn.fetch(
+            "SELECT payload FROM task_audit_events WHERE task_id = $1",
+            task_id,
+        )
+        return [
+            json.loads(r["payload"]) if isinstance(r["payload"], str) else r["payload"]
+            for r in rows
+        ]
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_escalated_review_approve_does_not_close_task(
+    _migrated: None, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
+    ids = await _seed(migrations_pg_dsn, status=TaskStatus.IN_REVIEW.value)
+    event = await _apply_result(
+        admin_database_url, ids, _escalated("All good.\n<verdict>approve</verdict>")
+    )
+    # La task NO se cierra: va a blocked (panel de escaladas) con el approve
+    # anotado para que el humano lo confirme.
+    assert event is not None
+    assert event[2] == "blocked"
+    assert await _status(migrations_pg_dsn, ids["task"]) == "blocked"
+    payloads = await _audit_payloads(migrations_pg_dsn, ids["task"])
+    assert any(
+        p.get("reason") == "escalated_review_approve" and p.get("verdict") == "approve"
+        for p in payloads
+    )
+
+
+@pytest.mark.asyncio
+async def test_aborted_review_approve_does_not_close_task(
+    _migrated: None, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
+    ids = await _seed(migrations_pg_dsn, status=TaskStatus.IN_REVIEW.value)
+    event = await _apply_result(
+        admin_database_url, ids, _escalated("<verdict>approve</verdict>", status="aborted")
+    )
+    assert event is not None
+    assert event[2] == "blocked"
+    assert await _status(migrations_pg_dsn, ids["task"]) == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_escalated_review_reject_still_applies(
+    _migrated: None, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
+    # El reject de un run escalado/abortado SIGUE fluyendo al implementador
+    # (backlog + retry): es la dirección segura y la que hizo converger 019f1828.
+    ids = await _seed(migrations_pg_dsn, status=TaskStatus.IN_REVIEW.value)
+    out = (
+        "<verdict>reject</verdict>\n<rejection><failed_criterion>x</failed_criterion>"
+        "<what_to_fix>y</what_to_fix></rejection>"
+    )
+    event = await _apply_result(admin_database_url, ids, _escalated(out))
+    assert event is not None
+    assert event[2] == "backlog"
+    assert await _status(migrations_pg_dsn, ids["task"]) == "backlog"
+
+
 @pytest.mark.asyncio
 async def test_task_not_in_review_is_noop(
     _migrated: None, migrations_pg_dsn: str, admin_database_url: str

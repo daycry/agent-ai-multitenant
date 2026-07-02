@@ -37,7 +37,11 @@ def _migrated(alembic_config: object) -> None:
 
 
 async def _seed(
-    sm: async_sessionmaker, *, reviewer_type: str | None, prior_output: str = "did the work"
+    sm: async_sessionmaker,
+    *,
+    reviewer_type: str | None,
+    prior_output: str = "did the work",
+    acceptance_criteria: list | None = None,
 ) -> dict[str, UUID]:
     """A task in ``in_review``; ``reviewer_type`` = 'ai' | 'human' | None decides
     whether a reviewer agent is attached and of which kind."""
@@ -89,6 +93,7 @@ async def _seed(
                 status="in_review",
                 priority="medium",
                 reviewer_agent_id=reviewer_agent_id,
+                acceptance_criteria=acceptance_criteria or [],
             )
         )
         await s.flush()
@@ -167,6 +172,51 @@ async def test_ai_reviewer_dispatches_review_execution(
         assert request["task_id"] == str(ids["task"])
         assert request["review_context"]["implementer_output"] == "implemented the parser"
         assert "acceptance: X must work" in request["review_context"]["acceptance_criteria"]
+    finally:
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_review_request_uses_real_acceptance_criteria(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """Auditoría 2026-07-02 (F1.6a): el reviewer certificaba contra
+    `task.description` mientras el implementador trabajaba contra los
+    `task.acceptance_criteria` reales — dos definiciones de "done" distintas en
+    el mismo ciclo (rechazos por cosas no pedidas, approves con criterios sin
+    cubrir). El review_context debe llevar los criteria reales; la description
+    queda solo como fallback cuando no hay criteria."""
+    engine = create_async_engine(admin_database_url)
+    redis = Redis.from_url(TEST_REDIS_URL)
+    await redis.delete("default")
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(
+            sm,
+            reviewer_type="ai",
+            prior_output="done it",
+            acceptance_criteria=[
+                {
+                    "id": "a",
+                    "description": "el endpoint /hello devuelve 200",
+                    "runtime": "php-phpunit",
+                    "command": "vendor/bin/phpunit",
+                },
+                "los tests de la suite pasan",
+            ],
+        )
+
+        await _dispatcher(sm).handle(_in_review_event(ids))
+
+        messages = await _drain(redis, "default")
+        request = _run_request(messages)
+        criteria = request["review_context"]["acceptance_criteria"]
+        assert "el endpoint /hello devuelve 200" in criteria
+        assert "los tests de la suite pasan" in criteria
+        # La description ya NO sustituye a los criteria reales.
+        assert "acceptance: X must work" not in criteria
     finally:
         await redis.delete("default")
         await redis.aclose()

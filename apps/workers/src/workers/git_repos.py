@@ -301,7 +301,16 @@ class WorktreeManager:
 
         if not self._branch_exists(branch):
             base_ref = base or "HEAD"
-            _run_git("branch", branch, base_ref, cwd=self._repo_path)
+            try:
+                _run_git("branch", branch, base_ref, cwd=self._repo_path)
+            except GitCommandError as exc:
+                # TOCTOU (auditoría 2026-07-02): dos tasks hermanas promovidas a
+                # la vez provisionan el MISMO plan branch; la perdedora del
+                # `git branch` recibía rc=128 «already exists» y su run moría
+                # `workspace_unavailable` (con el fail-fast F0.2). Que el branch
+                # ya exista ES el estado deseado — éxito idempotente.
+                if "already exists" not in str(exc):
+                    raise
 
         _run_git(
             "worktree",

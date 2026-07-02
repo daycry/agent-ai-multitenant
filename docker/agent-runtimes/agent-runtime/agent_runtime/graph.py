@@ -890,10 +890,17 @@ class _AgentLoop:
         updates: dict[str, Any] = {"reflections": [note]}
         summary = f"Reflection: {note}"
         if nudge is not None:
-            # Surface the nudge in the working context so the model SEES it next turn
-            # (_decide_messages feeds the recent context tail to the model).
-            updates["context"] = [{"role": "guidance", "note": nudge}]
+            # F2b.3 (auditoría 2026-07-02): el nudge viaja en el escalar STICKY
+            # `guidance_nudge` (renderizado SIEMPRE, fuera del tail acotado) —
+            # antes iba como item de `context` y la ventana de 8 items podía
+            # evictarlo antes de que el modelo actuara sobre él.
+            updates["guidance_nudge"] = nudge
             summary = f"Reflection: {note} — guidance: stop researching, produce output"
+        # F2b.1/2: resumen de progreso siempre-visible (iteración N/límite +
+        # ficheros ya escritos + aviso de cierre al 80% del presupuesto). Ataca
+        # la causa raíz del read-churn: el modelo no podía recordar qué escribió
+        # hace >8 pasos y re-leía para reconstruirlo.
+        updates["progress_summary"] = self._progress_summary()
         # B1: the repetition warning fires one turn before the detector would abort
         # (count >= threshold). It rides the SCALAR `repetition_warning` field — NOT
         # `context` (operator.add): appending to context would reorder context[0] and
@@ -923,6 +930,31 @@ class _AgentLoop:
             updates["repetition_warning"] = warning
         updates["steps"] = [node_step(len(state["steps"]), "reflect", summary)]
         return updates
+
+    # Fracción del presupuesto de iteraciones a partir de la cual el resumen de
+    # progreso avisa de cerrar (F2b.2) — antes el modelo nunca sabía cuánto le
+    # quedaba: los límites solo abortaban.
+    _BUDGET_WARN_FRACTION = 0.8
+
+    def _progress_summary(self) -> str:
+        """El bloque PROGRESS siempre-visible del prompt (F2b.1/2)."""
+        used = self.tracker.usage.iterations
+        cap = self.tracker.budgets.max_iterations
+        parts = [f"iteration {used}/{cap}"]
+        if self.written_files:
+            names = sorted(self.written_files)
+            shown = ", ".join(names[:12])
+            if len(names) > 12:
+                shown += f" (+{len(names) - 12} more)"
+            parts.append(f"files you have ALREADY written (do not re-read them): {shown}")
+        elif not self.is_review:
+            parts.append("no deliverable produced yet")
+        if cap and used >= max(1, int(cap * self._BUDGET_WARN_FRACTION)):
+            remaining = max(0, cap - used)
+            parts.append(
+                f"only {remaining} iterations left — wrap up and FINISH now with what you have"
+            )
+        return " · ".join(parts)
 
     def _deliverable_summary(self) -> str:
         """A human-readable summary of the deliverable on disk — the files the agent
@@ -1245,7 +1277,11 @@ def run_agent(
 
     # Stream the full state after every super-step: the last one is the
     # final state, and the growing `steps` list feeds `on_step` live.
-    final: AgentState = initial_state(task, system_preamble=system_preamble)
+    # F1.6c: el flag is_review viaja en el estado para que `_system_content`
+    # seleccione el contrato del reviewer.
+    final: AgentState = initial_state(
+        task, system_preamble=system_preamble, is_review=deps.is_review
+    )
     emitted = 0
     for state in graph.stream(final, stream_mode="values", config=config):
         final = state

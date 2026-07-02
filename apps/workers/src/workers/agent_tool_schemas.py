@@ -30,16 +30,16 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
     "memory_recall": {
         "name": "memory_recall",
         "description": (
-            "Recupera memorias previas relevantes (aprendizajes de proyectos y de "
-            "errores) por búsqueda semántica. Úsala al empezar una tarea para "
-            "aprovechar experiencia pasada."
+            "Retrieve relevant past memories (learnings from projects and from "
+            "mistakes) via semantic search. Use it when starting a task to "
+            "leverage past experience."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Consulta en lenguaje natural de lo que buscas recordar.",
+                    "description": "Natural-language query for what you want to recall.",
                 },
                 "scopes": {
                     "type": "array",
@@ -48,15 +48,15 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
                         "enum": ["private", "team_shared", "project_shared", "global"],
                     },
                     "description": (
-                        "Scopes a consultar. Valores válidos EXACTOS: 'private', "
-                        "'team_shared', 'project_shared', 'global'. Opcional; por "
-                        "defecto los disponibles."
+                        "Scopes to query. EXACT valid values: 'private', "
+                        "'team_shared', 'project_shared', 'global'. Optional; "
+                        "defaults to the available ones."
                     ),
                 },
                 "limit": {
                     "type": "integer",
                     "default": 5,
-                    "description": "Máximo de memorias a devolver.",
+                    "description": "Maximum number of memories to return.",
                 },
             },
             "required": ["query"],
@@ -66,19 +66,19 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
     "memory_store": {
         "name": "memory_store",
         "description": (
-            "Guarda un aprendizaje duradero (semántico o episódico) para futuras "
-            "tareas. Úsala al cerrar para registrar lo aprendido, incluidos errores."
+            "Store a durable learning (semantic or episodic) for future tasks. "
+            "Use it when wrapping up to record what you learned, including mistakes."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "content": {"type": "string", "description": "El hecho/aprendizaje a recordar."},
+                "content": {"type": "string", "description": "The fact/learning to remember."},
                 "type": {
                     "type": "string",
                     "enum": ["episodic", "semantic"],
                     "default": "semantic",
                 },
-                "scope": {"type": "string", "description": "Scope de memoria. Opcional."},
+                "scope": {"type": "string", "description": "Memory scope. Optional."},
                 "tags": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["content"],
@@ -90,13 +90,13 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
     "kanban_update": {
         "name": "kanban_update",
         "description": (
-            "Mueve la tarea en el Kanban a un nuevo estado (backlog/ready/"
+            "Move the task on the Kanban to a new status (backlog/ready/"
             "in_progress/in_review/blocked/done/cancelled)."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "task_id": {"type": "string", "description": "ID de la tarea a mover."},
+                "task_id": {"type": "string", "description": "ID of the task to move."},
                 "status": {
                     "type": "string",
                     "enum": [
@@ -116,12 +116,12 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "task_comment": {
         "name": "task_comment",
-        "description": "Añade un comentario a una tarea (progreso, decisiones, bloqueos).",
+        "description": "Add a comment to a task (progress, decisions, blockers).",
         "parameters": {
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
-                "body": {"type": "string", "description": "El texto del comentario."},
+                "body": {"type": "string", "description": "The comment text."},
             },
             "required": ["task_id", "body"],
             "additionalProperties": False,
@@ -130,8 +130,8 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
     "agent_invoke": {
         "name": "agent_invoke",
         "description": (
-            "Solicita la ejecución de otro agente con un prompt (subtarea). Registra "
-            "la intención; el worker la aplica con su propia autorización."
+            "Request the execution of another agent with a prompt (subtask). Records "
+            "the intent; the worker applies it under its own authorization."
         ),
         "parameters": {
             "type": "object",

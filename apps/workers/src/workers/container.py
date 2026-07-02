@@ -227,6 +227,30 @@ class AgentContainerRunner:
                 killed += 1
         return killed
 
+    def list_exited_managed(self) -> list[tuple[str, str]]:
+        """(container_id, execution_id) de los contenedores gestionados en estado
+        ``exited``. F0.6 (auditoría 2026-07-02): ``run_streamed`` solo limpia su
+        contenedor si el proceso worker sigue vivo, y ``kill_by_label`` solo mata
+        running — los exited de runs superseded/crasheados se acumulaban en un
+        host que duerme a diario. Best-effort: lista vacía si Docker no responde."""
+        exited: list[tuple[str, str]] = []
+        with contextlib.suppress(Exception):
+            containers = self.client.containers.list(
+                all=True,
+                filters={"label": "com.agentic-platform.managed=true", "status": "exited"},
+            )
+            for container in containers:
+                execution_id = (container.labels or {}).get("com.agentic-platform.execution-id", "")
+                exited.append((container.id, execution_id))
+        return exited
+
+    def remove_container(self, container_id: str) -> bool:
+        """Elimina un contenedor por id (force). Best-effort e idempotente."""
+        with contextlib.suppress(Exception):
+            self.client.containers.get(container_id).remove(force=True)
+            return True
+        return False
+
     @staticmethod
     def _pump_logs(container: Any, on_line: Callable[[str], None]) -> None:
         """Forward the container's STDOUT (the structured JSON channel) line by

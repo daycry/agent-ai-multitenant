@@ -54,3 +54,31 @@ def test_both_budgets_injected_together() -> None:
     spec = _agent_spec(_request(), None, wall_clock_budget_s=7200, max_iterations_budget=50)
     assert spec["budgets"]["max_wall_clock_s"] == 7200.0
     assert spec["budgets"]["max_iterations"] == 50
+
+
+# --- auditoría 2026-07-02: max_tokens por-kind ---------------------------------
+# Con la contabilidad de tokens ARREGLADA (F1.4), el default de 100k del runtime
+# — calibrado cuando los tokens medían 0 — cortaba runs sanos de claude_sdk a
+# ~23 iteraciones (max_tokens_exceeded, observado en vivo en el e2e). El worker
+# inyecta ahora un budget por-kind realista, como ya hacía con max_iterations.
+
+
+def test_max_tokens_injected_when_absent() -> None:
+    spec = _agent_spec(_request(), None, max_tokens_budget=500_000)
+    assert spec["budgets"]["max_tokens"] == 500_000
+
+
+def test_operator_max_tokens_wins_over_injected() -> None:
+    spec = _agent_spec(_request({"max_tokens": 80_000}), None, max_tokens_budget=500_000)
+    assert spec["budgets"]["max_tokens"] == 80_000
+
+
+def test_settings_expose_per_kind_token_budgets() -> None:
+    from workers.config import Settings
+
+    s = Settings()
+    implementer = s.agent_max_tokens_for_kind("claude_sdk")
+    review = s.agent_max_tokens_for_kind("claude_sdk", is_review=True)
+    assert implementer is not None and implementer > 100_000  # > el default roto
+    assert review is not None and review < implementer
+    assert s.agent_max_tokens_for_kind("ollama") is None  # HTTP: default del runtime

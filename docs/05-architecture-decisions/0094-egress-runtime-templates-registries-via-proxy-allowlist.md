@@ -1,7 +1,7 @@
 ---
 adr: "0094"
 title: Egress de runtime-templates a registries de paquetes vía proxy con allowlist
-status: proposed
+status: accepted
 date: 2026-06-30
 deciders: operador, System Architect (claude-opus)
 phase: prod-12-hardening

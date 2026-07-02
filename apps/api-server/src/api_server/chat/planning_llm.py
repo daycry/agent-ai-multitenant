@@ -22,7 +22,7 @@ import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, cast
 
 from shared_llm.base import LLMProvider
 from shared_llm.types import Message
@@ -122,7 +122,13 @@ def _history_messages(state: PlanningState) -> list[Message]:
     out: list[Message] = []
     for entry in state.chat_history:
         raw_role = str(entry.get("role", "user"))
-        role = raw_role if raw_role in ("user", "assistant", "system") else "user"
+        # mypy: el narrowing por `in` sobre una tupla no estrecha a Literal —
+        # el mapeo explícito sí (error preexistente, destapado 2026-07-03).
+        role: Literal["user", "assistant", "system"] = (
+            "user"
+            if raw_role not in ("user", "assistant", "system")
+            else cast(Literal["user", "assistant", "system"], raw_role)
+        )
         out.append(Message(role=role, content=str(entry.get("content", ""))))
     return out
 

@@ -881,11 +881,20 @@ async def create_free_task(
 # canonical human-escalation state is `blocked` + one of these abort codes —
 # there is NO task-level `pending_human_validation` (that is a PLAN status,
 # CLAUDE.md ppio 7), so escalation reuses `blocked` + the inbox/panel.
+#
+# Auditoría 2026-07-02 (F1.1): esta lista se quedó desactualizada — el runtime
+# también escala con max_iterations_exceeded / repetitive_loop_detected /
+# research_exhausted / self_review_stalemate, y esas tasks quedaban blocked e
+# INVISIBLES en el panel (sin acciones humanas). El criterio autoritativo es
+# ahora el ESTADO del último run (`needs_human_review` = el runtime pidió
+# humano, sea cual sea el abort_code presente o futuro); la lista se conserva
+# para filas históricas cuyo run escalado no llevaba ese estado.
 _REVIEW_ESCALATION_ABORT_CODES: tuple[str, ...] = (
     "review_inconclusive",
     "max_review_retries_exhausted",
     "agent_reported_failure",
 )
+_ESCALATED_EXECUTION_STATUS = "needs_human_review"
 
 
 @plans_router.get("/{plan_id}/escalated-tasks")
@@ -901,12 +910,12 @@ async def list_escalated_tasks(
     Two escalation paths converge on this panel:
 
       * ADR 0020's approval engine parks a task in `awaiting_human_approval`.
-      * Production review-exhaustion (and self-reported failure) escalates to
-        `blocked` with a review abort code on the LATEST execution
-        (`review_inconclusive` / `max_review_retries_exhausted` /
-        `agent_reported_failure`). `blocked` + abort_code IS the task-level
-        human-escalation state (F44) — a plain `blocked` (no review abort code)
-        is a different kind of block and stays OUT of this panel.
+      * A runtime escalation: the LATEST execution ended `needs_human_review`
+        (self-review exhausted/inconclusive, agent-reported failure,
+        max_iterations, repetitive loop, research exhausted, stalemate — any
+        current or future abort_code) and the task moved to `blocked`. A plain
+        `blocked` (latest run not escalated) is a different kind of block and
+        stays OUT of this panel.
 
     Each entry carries its `status`, the `escalation_reason` (the abort code,
     `None` for the approval path), its `retry_count` and the latest 20 audit
@@ -930,11 +939,12 @@ async def list_escalated_tasks(
 
     await _load_plan(session, plan_id)  # raises 404 if not visible
 
-    # Latest execution (by created_at, id) per task — its abort_code tells a
-    # review-escalation `blocked` apart from any other block.
+    # Latest execution (by created_at, id) per task — its status/abort_code tell
+    # a human-escalation `blocked` apart from any other block.
     ranked = select(
         Execution.task_id.label("task_id"),
         Execution.abort_code.label("abort_code"),
+        Execution.status.label("status"),
         func.row_number()
         .over(
             partition_by=Execution.task_id,
@@ -942,7 +952,11 @@ async def list_escalated_tasks(
         )
         .label("rn"),
     ).subquery()
-    latest = select(ranked.c.task_id, ranked.c.abort_code).where(ranked.c.rn == 1).subquery()
+    latest = (
+        select(ranked.c.task_id, ranked.c.abort_code, ranked.c.status)
+        .where(ranked.c.rn == 1)
+        .subquery()
+    )
 
     rows = (
         await session.execute(
@@ -954,7 +968,12 @@ async def list_escalated_tasks(
                     Task.status == "awaiting_human_approval",
                     and_(
                         Task.status == "blocked",
-                        latest.c.abort_code.in_(_REVIEW_ESCALATION_ABORT_CODES),
+                        or_(
+                            # F1.1: el runtime pidió humano — criterio por ESTADO
+                            # del último run, robusto a abort_codes nuevos.
+                            latest.c.status == _ESCALATED_EXECUTION_STATUS,
+                            latest.c.abort_code.in_(_REVIEW_ESCALATION_ABORT_CODES),
+                        ),
                     ),
                 ),
             )

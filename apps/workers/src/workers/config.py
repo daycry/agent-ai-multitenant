@@ -169,30 +169,84 @@ class Settings(BaseSettings):
         "more headroom; the nudge + loop-detector keep the extra iterations "
         "productive. Override with WORKERS_AGENT_MAX_ITERATIONS_CLAUDE_SDK.",
     )
+    agent_max_iterations_review: int = Field(
+        default=25,
+        description="Agent-loop iteration cap para runs de REVIEW (F2b.5, "
+        "auditoría 2026-07-02). El reviewer corría con el presupuesto del "
+        "implementador (50 iter) cuando la evidencia post-ADR-0095 muestra "
+        "reviews convergiendo en 13-22 steps — la mitad basta y acota el coste "
+        "de un reviewer atascado. Override con "
+        "WORKERS_AGENT_MAX_ITERATIONS_REVIEW.",
+    )
+    agent_max_tokens_claude_sdk: int = Field(
+        default=500_000,
+        description="Presupuesto de tokens (in+out acumulados) para un run "
+        "implementador claude_sdk. El default del runtime (100k) se calibró "
+        "cuando la contabilidad de usage medía 0 (bug F1.4); con tokens REALES "
+        "un run sano de ~23 iteraciones ya cruza 100k (observado en el e2e del "
+        "2026-07-02: 102.957 tok) — 500k da margen a las 50 iteraciones; el "
+        "guardarraíl de coste (max_cost_usd) sigue acotando el gasto. Override "
+        "con WORKERS_AGENT_MAX_TOKENS_CLAUDE_SDK.",
+    )
+    agent_max_tokens_review: int = Field(
+        default=250_000,
+        description="Presupuesto de tokens para un run de REVIEW claude_sdk "
+        "(la mitad del de implementador; las reviews convergen en 13-22 "
+        "steps). Override con WORKERS_AGENT_MAX_TOKENS_REVIEW.",
+    )
+    container_run_timeout_review_claude_sdk_s: int = Field(
+        default=3600,
+        description="Wall-clock budget para un run de REVIEW claude_sdk (1h, "
+        "F2b.5): la mitad del budget de implementador (2h) — un review lee y "
+        "juzga, no escribe N ficheros. Override con "
+        "WORKERS_CONTAINER_RUN_TIMEOUT_REVIEW_CLAUDE_SDK_S.",
+    )
 
-    def container_timeout_for_kind(self, kind: str | None) -> int:
+    def container_timeout_for_kind(self, kind: str | None, *, is_review: bool = False) -> int:
         """Per-provider container wall-clock budget. ``claude_sdk`` gets the
         longer SDK timeout (Node CLI + slow high-effort/xhigh calls); every other
-        kind uses the base ``container_run_timeout_s``."""
+        kind uses the base ``container_run_timeout_s``. Un run de REVIEW
+        claude_sdk usa su budget propio, más corto (F2b.5)."""
         if kind == "claude_sdk":
+            if is_review:
+                return self.container_run_timeout_review_claude_sdk_s
             return self.container_run_timeout_claude_sdk_s
         return self.container_run_timeout_s
 
-    def container_timeout_with_grace_for_kind(self, kind: str | None) -> int:
+    def container_timeout_with_grace_for_kind(
+        self, kind: str | None, *, is_review: bool = False
+    ) -> int:
         """The container's HARD wall-clock kill timeout for ``kind``: the
         per-provider budget (:meth:`container_timeout_for_kind`) PLUS
         ``container_grace_s``. The internal agent-loop wall-clock uses the bare
         budget, so it aborts cleanly (``max_wall_clock_exceeded``, with partials /
         finish_status) BEFORE the container's hard kill fires — otherwise the kill
         always wins and every exhaustion is mislabelled 'container timed out' (F19)."""
-        return self.container_timeout_for_kind(kind) + self.container_grace_s
+        return self.container_timeout_for_kind(kind, is_review=is_review) + self.container_grace_s
 
-    def agent_max_iterations_for_kind(self, kind: str | None) -> int | None:
+    def agent_max_iterations_for_kind(
+        self, kind: str | None, *, is_review: bool = False
+    ) -> int | None:
         """Per-provider agent-loop iteration cap. ``claude_sdk`` gets a higher cap
         so multi-file tasks write every deliverable AND reach the final FINISH
-        turn; other kinds return ``None`` (the runtime keeps its built-in default)."""
+        turn; other kinds return ``None`` (the runtime keeps its built-in default).
+        Un run de REVIEW usa el cap de review, más bajo (F2b.5)."""
         if kind == "claude_sdk":
+            if is_review:
+                return self.agent_max_iterations_review
             return self.agent_max_iterations_claude_sdk
+        return None
+
+    def agent_max_tokens_for_kind(self, kind: str | None, *, is_review: bool = False) -> int | None:
+        """Presupuesto de tokens por-provider (auditoría 2026-07-02). Solo
+        ``claude_sdk`` necesita un override: con la contabilidad de usage
+        arreglada (F1.4), su volumen real de tokens por iteración desborda el
+        default de 100k del runtime a mitad de un run sano. Otros kinds →
+        ``None`` (default del runtime)."""
+        if kind == "claude_sdk":
+            if is_review:
+                return self.agent_max_tokens_review
+            return self.agent_max_tokens_claude_sdk
         return None
 
     seccomp_profile_path: str = Field(
@@ -251,8 +305,19 @@ class Settings(BaseSettings):
     )
     memorizer_llm_model: str = Field(
         default="llama3.1",
-        description="Model id the Memorizer asks for. Distillation is cheap; "
-        "a small local model is the right trade-off (no quota, no egress).",
+        description="Model id the Memorizer's FALLBACK distiller asks for. "
+        "Auditoría 2026-07-02 (F2.1): el camino primario es el provider del "
+        "AGENTE de la execution (memorizer_use_agent_provider); este modelo "
+        "local solo se usa cuando aquel no está disponible.",
+    )
+    memorizer_use_agent_provider: bool = Field(
+        default=True,
+        description="F2.1 (auditoría 2026-07-02): destilar memorias con el LLM "
+        "del AGENTE de la execution (resolución por provider_id, ADR 0082) en "
+        "vez del modelo local fijo — el 1b local producía ~50% ruido "
+        "(tautologías, URLs fabricadas) que contaminaba el recall. Desactívalo "
+        "para volver al modelo local (sin cuota, sin egress). Override con "
+        "WORKERS_MEMORIZER_USE_AGENT_PROVIDER.",
     )
 
     # ----- Córtex F2: distilador afectivo (ADR 0075) -----
@@ -428,6 +493,14 @@ class Settings(BaseSettings):
         "materialised (`<root>/<volume>/_data`). The backup tars each volume's "
         "_data tree from here. Override when volumes live elsewhere (e.g. a "
         "bind-mounted /data root).",
+    )
+    backup_bind_paths: list[str] = Field(
+        default_factory=lambda: ["/data/agent-platform"],
+        description="Bind mounts (rutas absolutas, NO named volumes) que también "
+        "entran en el bundle de backup. Por defecto los bare repos + worktrees "
+        "de los agentes (/data/agent-platform), que quedaban fuera de todo "
+        "backup y se perdieron en el wipe del bind del 2026-07-02 (auditoría "
+        "F0.4). Vacíala para excluirlos.",
     )
     backup_cron: str = Field(
         default="0 3 * * *",

@@ -55,7 +55,11 @@ class MemorizeSkipReason(enum.StrEnum):
     SKIP_PRIVATE = "skip_private"  # agente IA con scope private (sin owner user)
     NO_TEAM = "no_team"  # scope team_shared pero el proyecto no tiene equipo
     NO_SCOPE = "no_scope"  # memory_scope NULL / no canónico (opt-out)
-    LLM_EMPTY = "llm_empty"  # el LLM no destiló ningún candidato
+    # F2.3 (auditoría 2026-07-02): llm_empty conflataba tres causas distintas y
+    # hacía indiagnosticables casos como el run done 019f1dcd. Ahora se separan:
+    LLM_EMPTY = "llm_empty"  # el LLM decidió que no hay nada que recordar (legítimo)
+    LLM_ERROR = "llm_error"  # la llamada al LLM falló (provider caído/timeout)
+    LLM_UNPARSEABLE = "llm_unparseable"  # el LLM respondió pero sin JSON parseable
 
 
 @dataclass(frozen=True)

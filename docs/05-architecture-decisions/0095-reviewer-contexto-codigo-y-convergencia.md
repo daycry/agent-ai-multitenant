@@ -1,7 +1,7 @@
 ---
 adr: "0095"
 title: Reviewer con contexto de código (worktree read-only) y convergencia/escalado del review
-status: proposed
+status: accepted
 date: 2026-06-30
 deciders: operador, System Architect (claude-opus)
 phase: runs-convergencia

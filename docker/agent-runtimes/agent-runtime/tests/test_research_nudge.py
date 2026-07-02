@@ -179,13 +179,16 @@ def _state(tool: str, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def test_reflect_injects_guidance_after_research_streak() -> None:
+    # F2b.3 (auditoría 2026-07-02): el nudge viaja en el escalar STICKY
+    # `guidance_nudge` — antes iba como item de `context`, evictable por la
+    # ventana de 8 items antes de que el modelo actuara sobre él.
     loop = _loop()
     out: dict[str, Any] = {}
     for i in range(_RESEARCH_STREAK_LIMIT):
         out = loop.reflect(_state("rag_search", {"query": f"q{i}"}))  # vary args → not a repeat
     assert loop.research_streak == _RESEARCH_STREAK_LIMIT
-    assert "context" in out and out["context"][0]["role"] == "guidance"
-    assert "STOP researching" in out["context"][0]["note"]
+    assert "STOP researching" in (out.get("guidance_nudge") or "")
+    assert "context" not in out  # ya no compite con la ventana de contexto
 
 
 def test_reflect_injects_guidance_on_repeat() -> None:
@@ -194,7 +197,41 @@ def test_reflect_injects_guidance_on_repeat() -> None:
     loop.detector.record(action)  # seen twice → count_of == 2 in reflect
     loop.detector.record(action)
     out = loop.reflect(_state("list_files", {"path": "."}))
-    assert "context" in out and "Do not repeat" in out["context"][0]["note"]
+    assert "Do not repeat" in (out.get("guidance_nudge") or "")
+
+
+# --- F2b.1/2 (auditoría 2026-07-02): resumen de progreso siempre-visible -------
+def test_reflect_sets_progress_summary_each_turn() -> None:
+    loop = _loop()
+    out = loop.reflect(_state("write_file", {"path": "app/Hello.php", "content": "<?php"}))
+    progress = out.get("progress_summary") or ""
+    assert "iteration" in progress
+    assert "app/Hello.php" in progress  # el modelo VE lo que ya escribió
+
+
+def test_progress_summary_reports_no_deliverable_yet() -> None:
+    loop = _loop()
+    out = loop.reflect(_state("read_file", {"path": "README.md"}))
+    assert "no deliverable" in (out.get("progress_summary") or "")
+
+
+def test_progress_summary_warns_near_iteration_budget() -> None:
+    loop = _loop()
+    # 80% del presupuesto consumido → aviso de cierre (antes el modelo nunca
+    # sabía cuánto le quedaba: los límites solo abortaban).
+    cap = loop.tracker.budgets.max_iterations
+    loop.tracker.usage.iterations = int(cap * 0.8)
+    out = loop.reflect(_state("read_file", {"path": "a.md"}))
+    progress = out.get("progress_summary") or ""
+    assert "FINISH" in progress or "wrap up" in progress
+
+
+def test_progress_summary_no_warning_far_from_budget() -> None:
+    loop = _loop()
+    loop.tracker.usage.iterations = 2
+    out = loop.reflect(_state("read_file", {"path": "a.md"}))
+    progress = out.get("progress_summary") or ""
+    assert "wrap up" not in progress
 
 
 def test_reflect_resets_streak_on_producing_tool() -> None:
@@ -293,11 +330,12 @@ def test_reflect_latches_has_produced_and_nudges_to_finish() -> None:
     # Produce once → latches has_produced (and resets the streak).
     loop.reflect(_state("write_file", {"path": "a.php", "content": "x"}))
     assert loop.has_produced is True and loop.research_streak == 0
-    # Then it slips back into verifying; after the streak the nudge pushes FINISH.
+    # Then it slips back into verifying; after the streak the nudge pushes FINISH
+    # (F2b.3: por el canal sticky guidance_nudge, no por context).
     out: dict[str, Any] = {}
     for i in range(_RESEARCH_STREAK_LIMIT):
         out = loop.reflect(_state("list_files", {"path": f"dir{i}"}))
-    assert "context" in out and "FINISH" in out["context"][0]["note"]
+    assert "FINISH" in (out.get("guidance_nudge") or "")
 
 
 # --- distinct-path exploration vs re-read churn (2026-07-01 hardening) ----------

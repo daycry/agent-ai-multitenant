@@ -313,6 +313,7 @@ def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del sp
     acceptance_criteria: list[Any] | None = None,
     wall_clock_budget_s: float | None = None,
     max_iterations_budget: int | None = None,
+    max_tokens_budget: int | None = None,
 ) -> dict[str, Any]:
     """The `AGENT_TASK_SPEC` payload for the container.
 
@@ -340,6 +341,11 @@ def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del sp
         budgets.setdefault("max_wall_clock_s", float(wall_clock_budget_s))
     if max_iterations_budget is not None:
         budgets.setdefault("max_iterations", int(max_iterations_budget))
+    if max_tokens_budget is not None:
+        # Auditoría 2026-07-02: con la contabilidad de usage arreglada (F1.4),
+        # el default de 100k del runtime corta runs sanos de claude_sdk a ~23
+        # iteraciones — presupuesto por-kind realista, como max_iterations.
+        budgets.setdefault("max_tokens", int(max_tokens_budget))
     if budgets:
         spec["budgets"] = budgets
     # With a policy the loop gates sensitive tool calls (task_02_33).
@@ -441,6 +447,7 @@ def _build_runtime_env(
     acceptance_criteria: list[Any] | None = None,
     wall_clock_budget_s: float | None = None,
     max_iterations_budget: int | None = None,
+    max_tokens_budget: int | None = None,
 ) -> dict[str, str]:
     """El env del contenedor `agent-runtime` para una ejecución (función PURA).
 
@@ -474,6 +481,7 @@ def _build_runtime_env(
                 acceptance_criteria=acceptance_criteria,
                 wall_clock_budget_s=wall_clock_budget_s,
                 max_iterations_budget=max_iterations_budget,
+                max_tokens_budget=max_tokens_budget,
             )
         ),
     }
@@ -793,6 +801,32 @@ async def _apply_review_verdict(
             failed_criterion="reviewer produced no parseable verdict",
             what_to_fix="re-run the review and end with a <verdict>approve|reject</verdict> tag",
         )
+    if verdict.label == "approve" and result.status != "done":
+        # ADR 0096 (auditoría 2026-07-02, F1.2): un run de review que NO terminó
+        # `done` (escalado needs_human_review o abortado) no puede CERRAR la
+        # task con su approve — "escalar a humano" y "aprobar automáticamente"
+        # son contradictorios (2 tasks pasaron a done sin el humano que el
+        # propio run pedía). El approve se degrada a recomendación: la task va
+        # a `blocked` (panel de escaladas) con el verdict anotado para que el
+        # humano lo confirme con `approve_manual`. El REJECT de un run no-done
+        # SÍ se aplica (dirección conservadora; caso beneficioso 019f1828).
+        transition_task_status(task, TaskStatus.BLOCKED.value)
+        await append_audit_event(
+            session,
+            tenant_id=tenant_id,
+            task_id=task_id,
+            kind="review_comment",
+            actor="ai-reviewer",
+            payload={
+                "escalated": True,
+                "reason": "escalated_review_approve",
+                "verdict": "approve",
+                "review_status": result.status,
+                "abort_code": result.abort_code,
+            },
+        )
+        await session.flush()
+        return (task, old_status, task.status)
     await apply_reviewer_verdict(session, task_id=task_id, tenant_id=tenant_id, verdict=verdict)
     # apply_* loaded the SAME identity-mapped Task in this session → status updated.
     if task.status == old_status:
@@ -816,8 +850,9 @@ async def _provision_worktree(
     branch (``plan/{id8}-{slug}``, HEAD detached so sibling tasks share it), and
     syncs it to the branch HEAD — reusing the Plan 06 libraries. The returned path
     is the absolute HOST path the daemon resolves for the ``/workspace`` bind (DooD).
-    Best-effort: any failure logs and returns ``None`` so the agent falls back to an
-    ephemeral ``/workspace`` tmpfs (no worktree) instead of failing the run."""
+    Any failure logs and returns ``None``; el CALLER decide la política — para un
+    run implementador que esperaba worktree eso es fail-fast `workspace_unavailable`
+    (auditoría 2026-07-02 F0.2), no un fallback silencioso a tmpfs."""
     from pathlib import Path
 
     from workers.git_repos import BareRepoLayout, BareRepoManager, WorktreeManager
@@ -1156,18 +1191,69 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         )
 
     approval: dict[str, Any] | None = None
+    # prod-18 task_prod18_provision_01: materialise the task's git worktree
+    # OUTSIDE the DB transaction (git subprocess I/O) and bind-mount it RW as
+    # /workspace so the agent's file writes persist (the worker commits them in
+    # Fase C). Auditoría 2026-07-02 (F0.2): para un run IMPLEMENTADOR que
+    # esperaba worktree, un fallo de provisión ya NO degrada a tmpfs "a ciegas"
+    # (el agente quemaba 50 iteraciones alucinando entregables sobre un
+    # workspace vacío) — se aborta ANTES de lanzar el contenedor. El fallback a
+    # tmpfs se conserva para reviews (ADR 0095) y tasks sin plan/slugs.
+    workspace_read_only = False
+    workspace_error: str | None = None
+    if resolution_error is None:
+        if worktree_inputs is not None:
+            tenant_slug, project_slug, plan_id_str, plan_slug = worktree_inputs
+            workspace_host_path = await _provision_worktree(
+                settings,
+                tenant_slug=tenant_slug,
+                project_slug=project_slug,
+                plan_id=plan_id_str,
+                plan_slug=plan_slug,
+                task_id=str(task_id),
+            )
+            if workspace_host_path is None:
+                workspace_error = (
+                    "No se pudo provisionar el worktree git de la tarea (data_root "
+                    f"'{settings.data_root}' inaccesible o fallo git). Ejecución abortada "
+                    "antes de lanzar el contenedor para no correr sin workspace. Revisa "
+                    "la propiedad de /data/agent-platform (uid 1000) y relanza la tarea."
+                )
+        elif review_worktree is not None:
+            # ADR 0095: mount the implementer's existing worktree READ-ONLY for the
+            # reviewer. No git ops, no commit (worktree_inputs stays None). Missing
+            # worktree → empty /workspace (the reviewer still has review_context).
+            r_tenant_slug, r_project_slug = review_worktree
+            workspace_host_path = _resolve_review_worktree(
+                settings, r_tenant_slug, r_project_slug, str(task_id)
+            )
+            workspace_read_only = workspace_host_path is not None
+
+    failfast: tuple[str, str] | None = None
     if resolution_error is not None:
         # Fail-fast (ADR 0057 F1): sin proveedor resoluble NO se lanza el
         # contenedor — la ejecución termina `failed` con motivo explícito en
         # vez de correr en silencio con el cliente scripted.
         _log.error("workers.model_resolution_failed", execution_id=exec_id, error=resolution_error)
+        failfast = ("model_unresolved", resolution_error)
+    elif workspace_error is not None:
+        # Fail-fast (F0.2): sin workspace NO se lanza el contenedor.
+        _log.error(
+            "workers.workspace_unavailable",
+            execution_id=exec_id,
+            task_id=request.task_id,
+            data_root=settings.data_root,
+        )
+        failfast = ("workspace_unavailable", workspace_error)
+    if failfast is not None:
+        failfast_code, failfast_msg = failfast
         await publish_execution_event(
-            redis, exec_id, event_type="execution.error", payload={"error": resolution_error}
+            redis, exec_id, event_type="execution.error", payload={"error": failfast_msg}
         )
         result = _RuntimeResult(
             status="failed",
-            abort_code="model_unresolved",
-            output=resolution_error,
+            abort_code=failfast_code,
+            output=failfast_msg,
             iterations=0,
             steps=[],
             usage=dict(_EMPTY_USAGE),
@@ -1205,29 +1291,6 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 await publish_execution_event(redis, exec_id, event_type=kind, payload=payload)
 
         drainer = asyncio.create_task(drain())
-        # prod-18 task_prod18_provision_01: materialise the task's git worktree
-        # OUTSIDE the DB transaction (git subprocess I/O) and bind-mount it RW as
-        # /workspace so the agent's file writes persist (the worker commits them in
-        # Fase C). `None` → ephemeral tmpfs (no plan/slugs, or provisioning failed).
-        workspace_read_only = False
-        if worktree_inputs is not None:
-            tenant_slug, project_slug, plan_id_str, plan_slug = worktree_inputs
-            workspace_host_path = await _provision_worktree(
-                settings,
-                tenant_slug=tenant_slug,
-                project_slug=project_slug,
-                plan_id=plan_id_str,
-                plan_slug=plan_slug,
-                task_id=str(task_id),
-            )
-        elif review_worktree is not None:
-            # ADR 0095: mount the implementer's existing worktree READ-ONLY for the
-            # reviewer. No git ops, no commit (worktree_inputs stays None).
-            r_tenant_slug, r_project_slug = review_worktree
-            workspace_host_path = _resolve_review_worktree(
-                settings, r_tenant_slug, r_project_slug, str(task_id)
-            )
-            workspace_read_only = workspace_host_path is not None
         # Per-provider wall-clock budget: claude_sdk spawns the Node CLI and its
         # high-effort/xhigh model calls are slow, so it gets a much longer budget
         # than the fast HTTP providers (ollama/azure_foundry/copilot). F19: the
@@ -1239,8 +1302,15 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         # 'container timed out'. (The internal default 600s would otherwise still
         # abort a long claude_sdk run early — aligning them fixes that too.)
         resolved_kind = (resolved_model or {}).get("kind")
-        wall_clock_budget_s = settings.container_timeout_for_kind(resolved_kind)
-        container_timeout = settings.container_timeout_with_grace_for_kind(resolved_kind)
+        # F2b.5: los runs de REVIEW usan su presupuesto propio, más corto
+        # (25 iter / 1h) — la evidencia post-ADR-0095 muestra reviews
+        # convergiendo en 13-22 steps; el de implementador es 50 iter / 2h.
+        wall_clock_budget_s = settings.container_timeout_for_kind(
+            resolved_kind, is_review=request.review
+        )
+        container_timeout = settings.container_timeout_with_grace_for_kind(
+            resolved_kind, is_review=request.review
+        )
         container_spec = ContainerSpec(
             image=settings.agent_runtime_image,
             env=_build_runtime_env(
@@ -1256,8 +1326,16 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 # el aborto limpio del loop gana al kill duro del contenedor.
                 wall_clock_budget_s=wall_clock_budget_s,
                 # Tope de iteraciones por-provider (claude_sdk necesita más para
-                # escribir todos los ficheros Y finalizar).
-                max_iterations_budget=settings.agent_max_iterations_for_kind(resolved_kind),
+                # escribir todos los ficheros Y finalizar); un run de REVIEW usa
+                # su cap propio, más bajo (F2b.5).
+                max_iterations_budget=settings.agent_max_iterations_for_kind(
+                    resolved_kind, is_review=request.review
+                ),
+                # Presupuesto de tokens por-provider: con usage real (F1.4) el
+                # default de 100k cortaba runs sanos de claude_sdk a ~23 iter.
+                max_tokens_budget=settings.agent_max_tokens_for_kind(
+                    resolved_kind, is_review=request.review
+                ),
             ),
             labels={"com.agentic-platform.execution-id": exec_id},
             workspace_host_path=workspace_host_path,

@@ -83,6 +83,43 @@ def test_submit_result_tool_schema_shape() -> None:
     assert set(params["required"]) == {"status", "summary"}
 
 
+# --- F1.5 (auditoría 2026-07-02): finish estructurado para claude_sdk ----------
+# claude_sdk no recibe `submit_result` (un tool call forzaría content="" y
+# perdería la prosa), así que finish_status era SIEMPRE None en el 100% de los
+# runs de producción y la escalación agent_reported_failure (D19) era código
+# muerto. El canal equivalente: un tag `<finish status="..."/>` al final de la
+# prosa, parseado y despojado del output.
+
+
+def test_prose_finish_tag_parses_status_and_strips_tag() -> None:
+    content = 'Terminé la tarea: creé X e Y.\n<finish status="success"/>'
+    decision = _decision_from(_resp(content=content), model="m").decision
+    assert decision.kind == DecisionKind.FINISH
+    assert decision.finish_status == "success"
+    assert "<finish" not in decision.output
+    assert "Terminé la tarea" in decision.output
+
+
+def test_prose_finish_tag_failed_is_carried() -> None:
+    content = "No pude completar Z por el error W.\n<finish status=failed>"
+    decision = _decision_from(_resp(content=content), model="m").decision
+    assert decision.finish_status == "failed"
+    assert "<finish" not in decision.output
+
+
+def test_prose_finish_tag_partial_closing_form() -> None:
+    content = "Hice A pero falta B.\n<finish status='partial'></finish>"
+    decision = _decision_from(_resp(content=content), model="m").decision
+    assert decision.finish_status == "partial"
+
+
+def test_prose_finish_tag_invalid_status_is_dropped_not_crash() -> None:
+    content = 'Listo.\n<finish status="banana"/>'
+    decision = _decision_from(_resp(content=content), model="m").decision
+    assert decision.finish_status is None
+    assert "<finish" not in decision.output  # el ruido del tag no llega al output
+
+
 # --- C3: the authoritative reviewer sees the criteria + the status hint --------
 def test_review_prompt_includes_criteria_and_status_hint() -> None:
     state = {

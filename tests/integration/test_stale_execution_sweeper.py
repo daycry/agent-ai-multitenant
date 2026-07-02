@@ -22,14 +22,23 @@ pytestmark = pytest.mark.integration
 
 
 class _FakeRunner:
-    """Records ``kill_by_label`` calls instead of touching Docker."""
+    """Records ``kill_by_label`` / reaper calls instead of touching Docker."""
 
-    def __init__(self) -> None:
+    def __init__(self, exited: list[tuple[str, str]] | None = None) -> None:
         self.killed: list[str] = []
+        self.removed: list[str] = []
+        self._exited = list(exited or [])
 
     def kill_by_label(self, execution_id: str) -> int:
         self.killed.append(execution_id)
         return 1
+
+    def list_exited_managed(self) -> list[tuple[str, str]]:
+        return list(self._exited)
+
+    def remove_container(self, container_id: str) -> bool:
+        self.removed.append(container_id)
+        return True
 
 
 @pytest.fixture()
@@ -139,3 +148,46 @@ async def test_sweep_stale_executions(
         assert result["reaped"] == 1
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_sweep_removes_exited_containers_of_terminal_executions(
+    _migrated: None, workers_settings: object, migrations_pg_dsn: str
+) -> None:
+    """F0.6 (auditoría 2026-07-02): los contenedores agent-runtime `exited` de
+    runs superseded/crasheados no los limpiaba nadie (run_streamed solo limpia
+    si el proceso worker sigue vivo; kill_by_label solo mata running) — en un
+    host que duerme a diario se acumulan. El sweep los elimina cuando su
+    execution ya es terminal (o su fila no existe); NUNCA los de un run vivo."""
+    from workers.maintenance import _sweep_stale_executions_async
+
+    ids = await _seed(migrations_pg_dsn)
+    # Cierra la execution "stale" como terminal ANTES del sweep para simular un
+    # run superseded con contenedor exited abandonado.
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "UPDATE executions SET status='failed', abort_code='superseded',"
+            " completed_at=now() WHERE id=$1",
+            ids["exec_stale"],
+        )
+    finally:
+        await conn.close()
+
+    runner = _FakeRunner(
+        exited=[
+            ("c-terminal", str(ids["exec_stale"])),  # row terminal → remove
+            ("c-live", str(ids["exec_fresh"])),  # row running → conservar
+            ("c-orphan", str(uuid4())),  # fila inexistente → remove (basura)
+        ]
+    )
+
+    result = await _sweep_stale_executions_async(
+        workers_settings,  # type: ignore[arg-type]
+        runner=runner,
+        stale_after=timedelta(hours=7),
+        now=datetime.now(UTC),
+    )
+
+    assert sorted(runner.removed) == ["c-orphan", "c-terminal"]
+    assert result["containers_removed"] == 2

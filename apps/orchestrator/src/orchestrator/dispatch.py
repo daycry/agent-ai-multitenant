@@ -197,6 +197,30 @@ def _format_test_report_block(outcomes: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _render_acceptance_criteria(task: Any) -> str:
+    """Los acceptance_criteria REALES de la task como bloque de texto para el
+    review run (F1.6a, auditoría 2026-07-02). Acepta criterios dict (usa su
+    description/text/criterion) o string; fallback a la description de la task
+    cuando no hay criteria (tasks antiguas / free tasks)."""
+    lines: list[str] = []
+    for criterion in list(getattr(task, "acceptance_criteria", None) or []):
+        if isinstance(criterion, dict):
+            text = str(
+                criterion.get("description")
+                or criterion.get("text")
+                or criterion.get("criterion")
+                or criterion.get("title")
+                or ""
+            ).strip()
+        else:
+            text = str(criterion).strip()
+        if text:
+            lines.append(f"- {text}")
+    if lines:
+        return "\n".join(lines)
+    return str(task.description or "")
+
+
 @dataclass(frozen=True)
 class _AiDispatch:
     """A ready task routed to the AI runtime pool — the worker run payload."""
@@ -620,7 +644,12 @@ class TaskDispatcher:
                 "description": task.description or "",
             },
             "review_context": {
-                "acceptance_criteria": task.description or "",
+                # F1.6a (auditoría 2026-07-02): el reviewer certifica contra los
+                # acceptance_criteria REALES de la task — antes recibía la
+                # description, mientras el implementador trabajaba contra los
+                # criteria: dos definiciones de "done" distintas en el mismo
+                # ciclo. La description queda solo como fallback sin criteria.
+                "acceptance_criteria": _render_acceptance_criteria(task),
                 "implementer_output": prior_output or "",
                 # `<test-report>` block (prod-17 test_02); "" when no tests ran yet.
                 "test_report": test_report,

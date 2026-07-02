@@ -113,6 +113,7 @@ async def _insert_execution(
     task_id: UUID,
     abort_code: str | None,
     created_at: datetime,
+    status: str | None = None,
 ) -> None:
     conn = await asyncpg.connect(dsn)
     try:
@@ -122,7 +123,7 @@ async def _insert_execution(
             uuid4(),
             tenant_id,
             task_id,
-            "aborted" if abort_code else "completed",
+            status or ("aborted" if abort_code else "completed"),
             abort_code,
             created_at,
         )
@@ -298,14 +299,51 @@ async def test_escalated_panel_includes_blocked_with_review_abort_code(
             title="done",
         )
 
+        # 7. Auditoría 2026-07-02 (F1.1): el runtime escala con execution.status
+        #    = needs_human_review y abort_codes que el panel NO enumeraba
+        #    (max_iterations_exceeded / repetitive_loop_detected /
+        #    research_exhausted / self_review_stalemate) → la task quedaba
+        #    blocked e INVISIBLE, sin acciones. El criterio nuevo es el ESTADO
+        #    del último run, no la lista de códigos.
+        t_runtime_esc: dict[str, UUID] = {}
+        for code in (
+            "max_iterations_exceeded",
+            "repetitive_loop_detected",
+            "research_exhausted",
+            "self_review_stalemate",
+        ):
+            tid = await _insert_task(
+                migrations_pg_dsn,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                plan_id=plan_id,
+                status="blocked",
+                title=f"runtime-esc-{code}",
+            )
+            await _insert_execution(
+                migrations_pg_dsn,
+                tenant_id=tenant_id,
+                task_id=tid,
+                abort_code=code,
+                created_at=now,
+                status="needs_human_review",
+            )
+            t_runtime_esc[code] = tid
+
         resp = await client.get(f"/plans/{plan_id}/escalated-tasks", headers=headers)
         assert resp.status_code == 200, resp.text
         tasks = resp.json()["tasks"]
         by_id = {t["id"]: t for t in tasks}
 
-        assert set(by_id) == {str(t_review), str(t_failed), str(t_approval)}
+        expected = {str(t_review), str(t_failed), str(t_approval)} | {
+            str(tid) for tid in t_runtime_esc.values()
+        }
+        assert set(by_id) == expected
         assert by_id[str(t_review)]["escalation_reason"] == "review_inconclusive"
         assert by_id[str(t_review)]["status"] == "blocked"
         assert by_id[str(t_failed)]["escalation_reason"] == "agent_reported_failure"
         assert by_id[str(t_approval)]["escalation_reason"] is None
         assert by_id[str(t_approval)]["status"] == "awaiting_human_approval"
+        for code, tid in t_runtime_esc.items():
+            assert by_id[str(tid)]["escalation_reason"] == code
+            assert by_id[str(tid)]["status"] == "blocked"

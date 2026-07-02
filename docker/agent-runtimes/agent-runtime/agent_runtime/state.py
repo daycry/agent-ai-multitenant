@@ -50,6 +50,10 @@ class AgentState(TypedDict):
     # (backward-compat). Escalar, replicado tal cual a cada turno.
     system_preamble: str | None
 
+    # F1.6c (auditoría 2026-07-02): run de REVIEW → `_system_content` usa el
+    # contrato del reviewer (_REVIEW_RUN_SYSTEM) en vez del del implementador.
+    is_review: bool
+
     # Working memory — every node may append context fragments.
     context: Annotated[list[dict[str, Any]], operator.add]
     reflections: Annotated[list[str], operator.add]
@@ -66,6 +70,16 @@ class AgentState(TypedDict):
     last_review_feedback: str | None
     repetition_warning: str | None
 
+    # F2b (auditoría 2026-07-02): dos escalares sticky más.
+    # `progress_summary`: resumen SIEMPRE-visible de lo ya hecho (iteración
+    # N/límite + ficheros ya escritos) — el modelo solo veía los últimos 8 items
+    # de contexto y re-leía/re-escribía para reconstruir lo perdido (la causa
+    # raíz del read-churn que los backstops cortan a posteriori).
+    # `guidance_nudge`: los nudges de research/churn, que antes viajaban como
+    # items de `context` evictables por esa misma ventana.
+    progress_summary: str | None
+    guidance_nudge: str | None
+
     output: str | None
     review_retries: int
     review_passed: bool | None
@@ -77,12 +91,15 @@ class AgentState(TypedDict):
     steps: Annotated[list[dict[str, Any]], operator.add]
 
 
-def initial_state(task: AgentTask, *, system_preamble: str | None = None) -> AgentState:
+def initial_state(
+    task: AgentTask, *, system_preamble: str | None = None, is_review: bool = False
+) -> AgentState:
     """A fresh state for a task at the start of an execution.
 
     `system_preamble` (Plan 06.18 task_06_18_13) carries the assigned skills'
     prompt fragments to prepend to the model's system prompt; `None` keeps the
-    historical prompt untouched.
+    historical prompt untouched. `is_review` (F1.6c) selects the reviewer's own
+    system contract instead of the implementer's.
     """
     return AgentState(
         task=task,
@@ -90,12 +107,15 @@ def initial_state(task: AgentTask, *, system_preamble: str | None = None) -> Age
         status=STATUS_RUNNING,
         abort_code=None,
         system_preamble=system_preamble,
+        is_review=is_review,
         context=[],
         reflections=[],
         last_decision=None,
         last_observation=None,
         last_review_feedback=None,
         repetition_warning=None,
+        progress_summary=None,
+        guidance_nudge=None,
         output=None,
         review_retries=0,
         review_passed=None,

@@ -407,7 +407,11 @@ def run_stack_command(request: dict[str, Any]) -> dict[str, Any]:
     return asyncio.run(_run_stack_command(request, settings))
 
 
-async def _run_stack_command(request: dict[str, Any], settings: Settings) -> dict[str, Any]:
+# justified: guard-clause style — each early return is a distinct, named
+# failure mode with an actionable message for the agent (F0.3).
+async def _run_stack_command(  # noqa: PLR0911
+    request: dict[str, Any], settings: Settings
+) -> dict[str, Any]:
     """Async core: resolve task→project (slug/runtime/allowlist) + the existing
     worktree path, gate the command against the allowlist, run it in the stack
     runtime over the worktree (RW), return rc+logs."""
@@ -470,6 +474,20 @@ async def _run_stack_command(request: dict[str, Any], settings: Settings) -> dic
         data_root=Path(settings.data_root), tenant_slug=org_slug, project_slug=project_slug
     )
     worktree_host_path = str(layout.worktree_path(str(task_id)))
+    # F0.3 (auditoría 2026-07-02): el bind-source debe existir ANTES de
+    # containers/create. Sin esta guarda, el daemon devolvía 400 «bind source
+    # path does not exist», la task Celery moría y el agente recibía un 502
+    # genérico y engañoso que alimentaba reintentos inútiles.
+    if not Path(worktree_host_path).is_dir():
+        return {
+            "exit_code": -1,
+            "logs": (
+                "workspace no provisionado: el worktree de la tarea no existe en el host "
+                f"({worktree_host_path}). No reintentes stack_exec — la tarea no tiene "
+                "workspace; hay que re-provisionarla (revisa /data/agent-platform)."
+            ),
+            "timed_out": False,
+        }
     dep_cache_host_path = _resolve_stack_dep_cache(template, worktree_host_path, settings.data_root)
 
     spec = TestRuntimeSpec(
@@ -489,7 +507,24 @@ async def _run_stack_command(request: dict[str, Any], settings: Settings) -> dic
         command=command[:120],
     )
     runner = TestRuntimeRunner(settings)
-    rc, logs = await asyncio.to_thread(runner.run_command, spec, command, timeout_s=timeout_s)
+    try:
+        rc, logs = await asyncio.to_thread(runner.run_command, spec, command, timeout_s=timeout_s)
+    except docker.errors.APIError as exc:
+        # F0.3: un fallo del daemon al crear/lanzar el runtime NO debe matar la
+        # task Celery (el agente veía un 502 «failed to reach the worker» cuando
+        # el worker SÍ respondió). Se devuelve estructurado y accionable.
+        detail = exc.explanation or str(exc)
+        _log.warning(
+            "stack_exec_docker_error",
+            tenant_id=str(tenant_id),
+            task_id=str(task_id),
+            error=str(detail)[:300],
+        )
+        return {
+            "exit_code": -1,
+            "logs": f"docker API error al lanzar el runtime del stack: {detail}",
+            "timed_out": False,
+        }
     return {"exit_code": rc, "logs": logs[-8000:], "timed_out": rc == 124}
 
 

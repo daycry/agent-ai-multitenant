@@ -71,6 +71,37 @@ def test_system_prompt_is_task_driven_not_write_only() -> None:
     assert "do not finish before" not in lowered
 
 
+# --- F1.6c (auditoría 2026-07-02): system prompt específico para reviews -------
+# El run REVIEWER corría con el system prompt del IMPLEMENTADOR ("an
+# implementation task means writing files… finish by calling submit_result")
+# más un preámbulo que decía lo contrario ("Do NOT write files… END with
+# <verdict>") — dos contratos en competencia dentro del mismo prompt.
+
+
+def test_review_run_gets_review_system_prompt() -> None:
+    state = {"task": {"title": "T"}, "is_review": True}
+    system = next(m for m in _decide_messages(state) if m.role == "system")
+    lowered = system.content.lower()
+    assert "reviewer" in lowered
+    assert "<verdict>" in system.content
+    # Sin el contrato del implementador: ni write_file ni submit_result.
+    assert "write_file" not in lowered
+    assert "submit_result" not in lowered
+
+
+def test_review_system_prompt_keeps_skill_preamble_first() -> None:
+    state = {"task": {"title": "T"}, "is_review": True, "system_preamble": "SKILL-X primero"}
+    system = next(m for m in _decide_messages(state) if m.role == "system")
+    assert system.content.startswith("SKILL-X primero")
+    assert "reviewer" in system.content.lower()
+
+
+def test_implementer_system_prompt_unchanged_without_flag() -> None:
+    state = {"task": {"title": "T"}}
+    system = next(m for m in _decide_messages(state) if m.role == "system")
+    assert "submit_result" in system.content  # el contrato del implementador sigue
+
+
 def test_system_prompt_tells_agent_not_to_use_git() -> None:
     # Feature D: git is broken in the sandbox and the agent never commits — the
     # prompt makes that explicit so the agent doesn't waste turns on git.

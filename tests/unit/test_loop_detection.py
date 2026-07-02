@@ -246,7 +246,13 @@ def test_varying_content_leaks_to_max_iterations_and_escalates() -> None:
 def test_research_churn_after_production_escalates_with_deliverable() -> None:
     # Produced a file, then READ-CHURNS (distinct reads, never tripping the loop
     # detector, ignoring the soft nudge): the hard backstop fires and ESCALATES
-    # (preserving the deliverable) far below max_iterations.
+    # (preserving the deliverable) BEFORE the iteration budget runs out.
+    # 5b1cbab refinó los umbrales (los 15 reads DISTINTOS son exploración
+    # legítima, ya no falso positivo): el trip llega al repetirse la lectura
+    # _RESEARCH_HARD_LIMIT veces → 1 write + 15 reads + churn + 1 (desajuste
+    # preexistente detectado en la auditoría 2026-07-02: esperaba ~12).
+    from agent_runtime.graph import _RESEARCH_HARD_LIMIT
+
     reads = [_act("read_file", path=f"f{i}.php") for i in range(15)]
     result = run_agent(
         _deps([_write("<?php class A {}"), *reads]), _TASK, budgets=Budgets(max_iterations=30)
@@ -254,7 +260,7 @@ def test_research_churn_after_production_escalates_with_deliverable() -> None:
     assert result.status == STATUS_NEEDS_HUMAN_REVIEW
     assert result.abort_code == "research_exhausted"
     assert "app/A.php" in (result.output or "")
-    assert result.iterations < 20  # fail-fast (~12), not the full 30
+    assert result.iterations <= 16 + _RESEARCH_HARD_LIMIT + 1  # backstop < presupuesto (30)
 
 
 def test_sterile_analysis_run_is_not_cut_by_research_backstop() -> None:

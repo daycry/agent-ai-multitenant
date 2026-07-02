@@ -17,6 +17,7 @@ from api_server.memorizer.distillation import (
     MAX_CONTENT_CHARS,
     MemoryCandidate,
     distil_execution,
+    distil_execution_result,
 )
 from shared_llm.types import CompletionResponse, Message, StreamChunk, Usage
 
@@ -122,6 +123,45 @@ async def test_markdown_fenced_json_is_parsed() -> None:
 async def test_empty_array_yields_empty_list() -> None:
     cands = await distil_execution(execution=_EXECUTION, agent=_AGENT, llm=FakeLLM(content="[]"))
     assert cands == []
+
+
+# ---------------------------------------------------------------------------
+# F2.3 (auditoría 2026-07-02): distil_execution_result separa las 3 causas que
+# `llm_empty` conflataba — fallo de la llamada LLM, respuesta no parseable y
+# "el LLM decidió que no hay nada que recordar" (la única legítima). El caso
+# 019f1dcd (run done con skip llm_empty) era indiagnosticable sin esto.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_result_reports_llm_error_cause() -> None:
+    llm = FakeLLM(raises=RuntimeError("connection refused"))
+    result = await distil_execution_result(execution=_EXECUTION, agent=_AGENT, llm=llm)
+    assert result.candidates == []
+    assert result.cause == "llm_error"
+
+
+@pytest.mark.asyncio
+async def test_result_reports_unparseable_cause() -> None:
+    llm = FakeLLM(content="I could not produce JSON, sorry.")
+    result = await distil_execution_result(execution=_EXECUTION, agent=_AGENT, llm=llm)
+    assert result.candidates == []
+    assert result.cause == "llm_unparseable"
+
+
+@pytest.mark.asyncio
+async def test_result_reports_legit_empty_cause() -> None:
+    result = await distil_execution_result(
+        execution=_EXECUTION, agent=_AGENT, llm=FakeLLM(content="[]")
+    )
+    assert result.candidates == []
+    assert result.cause == "llm_empty"
+
+
+@pytest.mark.asyncio
+async def test_result_ok_cause_with_candidates() -> None:
+    llm = FakeLLM(content='[{"content": "Foo", "type": "semantic", "tags": []}]')
+    result = await distil_execution_result(execution=_EXECUTION, agent=_AGENT, llm=llm)
+    assert result.cause == "ok"
+    assert len(result.candidates) == 1
 
 
 @pytest.mark.asyncio

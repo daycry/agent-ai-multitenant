@@ -173,6 +173,33 @@ def test_manifest_and_checksums_written(tmp_path: Path) -> None:
     assert manifest["total_size_bytes"] == sum(a["size_bytes"] for a in manifest["artifacts"])
 
 
+def test_configured_bind_paths_are_tarred_and_manifested(tmp_path: Path) -> None:
+    """Auditoría 2026-07-02 (F0.4): /data/agent-platform (bind, NO named volume)
+    entra en el bundle — los bare repos + worktrees no los cubría ningún backup
+    y el wipe del bind en un engine-restart perdió el trabajo de 8 tareas."""
+    runner = FakeRunner()
+    bind = tmp_path / "data" / "agent-platform"
+    cfg = BackupConfig(
+        backup_root=tmp_path / "backups",
+        database_url="postgresql://migrations_user:s3cr3t@db:5432/agentic_platform",
+        volumes=("minio_data",),
+        volumes_mount_root=tmp_path / "volumes",
+        retention_days=7,
+        bind_paths=(str(bind),),
+    )
+    engine = BackupEngine(cfg, runner=runner, now=_NOW)
+
+    result = engine.run_full_backup()
+
+    tar_sources = [_arg_value(c, "--directory=") for c in runner.calls if c[0] == "tar"]
+    assert str(bind) in tar_sources
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    bind_artifacts = [a for a in manifest["artifacts"] if a["kind"] == "bind_tar"]
+    assert len(bind_artifacts) == 1
+    assert bind_artifacts[0]["source"] == str(bind)
+    assert bind_artifacts[0]["name"].endswith(".tar.gz")
+
+
 def test_manifest_does_not_leak_db_password(tmp_path: Path) -> None:
     runner = FakeRunner()
     engine = BackupEngine(_config(tmp_path), runner=runner, now=_NOW)
@@ -263,6 +290,7 @@ def test_run_full_backup_entrypoint_builds_engine_from_settings(tmp_path: Path) 
         backup_database_url="postgresql://migrations_user:pw@db:5432/agentic_platform",
         backup_volumes=["minio_data"],
         backup_volumes_mount_root=str(tmp_path / "volumes"),
+        backup_bind_paths=[str(tmp_path / "data" / "agent-platform")],
         backup_retention_days=7,
     )
     runner = FakeRunner()
@@ -271,6 +299,6 @@ def test_run_full_backup_entrypoint_builds_engine_from_settings(tmp_path: Path) 
 
     assert result.bundle_dir.exists()
     assert (result.bundle_dir / "manifest.json").exists()
-    # Honoured the single configured volume.
+    # Honoured the single configured volume + the configured bind path (F0.4).
     tar_calls = [c for c in runner.calls if c[0] == "tar"]
-    assert len(tar_calls) == 1
+    assert len(tar_calls) == 2

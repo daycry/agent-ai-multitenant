@@ -20,6 +20,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import structlog
 from sqlalchemy import select
@@ -627,6 +628,7 @@ async def _sweep_stale_executions_async(
     engine = create_async_engine(settings.database_url)
     swept = 0
     reaped = 0
+    containers_removed = 0
     try:
         if runner is None:
             runner = AgentContainerRunner(settings)
@@ -655,14 +657,50 @@ async def _sweep_stale_executions_async(
         for execution_id in stale_ids:
             with contextlib.suppress(Exception):
                 reaped += runner.kill_by_label(execution_id)
+        # F0.6 (auditoría 2026-07-02): reap de contenedores `exited` cuya
+        # execution ya es terminal (o cuya fila no existe). run_streamed solo
+        # limpia su contenedor si el proceso worker sigue vivo; el path de
+        # supersede no limpia el contenedor del run viejo — en un host que
+        # duerme a diario se acumulan exited(255). Un run VIVO (fila running)
+        # nunca se toca: su contenedor exited puede ser forense en curso.
+        exited = list(runner.list_exited_managed())
+        if exited:
+            exec_uuids: list[UUID] = []
+            for _cid, eid in exited:
+                with contextlib.suppress(ValueError):
+                    exec_uuids.append(UUID(eid))
+            statuses: dict[str, str] = {}
+            if exec_uuids:
+                sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+                async with sessionmaker() as db:
+                    rows = await db.execute(
+                        select(Execution.id, Execution.status).where(Execution.id.in_(exec_uuids))
+                    )
+                    statuses = {str(row[0]): str(row[1]) for row in rows}
+            for container_id, eid in exited:
+                if statuses.get(eid) == ExecutionStatus.RUNNING.value:
+                    continue
+                with contextlib.suppress(Exception):
+                    if runner.remove_container(container_id):
+                        containers_removed += 1
     except Exception as exc:  # pragma: no cover — defensive logging
         _log.warning("maintenance.sweep_stale_executions.error", error=str(exc))
-        return {"swept": swept, "reaped": reaped, "error": str(exc)}
+        return {
+            "swept": swept,
+            "reaped": reaped,
+            "containers_removed": containers_removed,
+            "error": str(exc),
+        }
     finally:
         await engine.dispose()
 
-    _log.info("maintenance.sweep_stale_executions.done", swept=swept, reaped=reaped)
-    return {"swept": swept, "reaped": reaped}
+    _log.info(
+        "maintenance.sweep_stale_executions.done",
+        swept=swept,
+        reaped=reaped,
+        containers_removed=containers_removed,
+    )
+    return {"swept": swept, "reaped": reaped, "containers_removed": containers_removed}
 
 
 # ---------------------------------------------------------------------------

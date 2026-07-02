@@ -64,10 +64,34 @@ def test_absent_channels_render_nothing() -> None:
     text = _user_text(_state_with_long_context())
     assert "REVIEW FEEDBACK" not in text
     assert "REPETITION WARNING" not in text
+    assert "PROGRESS:" not in text
+    assert "GUIDANCE:" not in text
 
 
 def test_long_feedback_is_truncated() -> None:
     text = _user_text(_state_with_long_context(last_review_feedback="x" * 5000))
     # Bounded so a runaway feedback string cannot blow the prompt budget.
-    assert "x" * 600 in text
-    assert "x" * 700 not in text
+    # F2b.4 (auditoría 2026-07-02): 600 → 2000 — un rejection estructurado
+    # (criterio+fix+evidencia) se cortaba a 600 y perdía lo accionable.
+    assert "x" * 2000 in text
+    assert "x" * 2100 not in text
+
+
+# --- F2b.1/2b.3 (auditoría 2026-07-02): PROGRESS + GUIDANCE sticky -------------
+
+
+def test_progress_summary_survives_full_context_window() -> None:
+    text = _user_text(
+        _state_with_long_context(
+            progress_summary="iteration 10/50 · files you have ALREADY written: a.php"
+        )
+    )
+    assert "PROGRESS: iteration 10/50" in text
+    assert "a.php" in text
+
+
+def test_guidance_nudge_survives_full_context_window() -> None:
+    text = _user_text(
+        _state_with_long_context(guidance_nudge="STOP researching — produce the deliverable now")
+    )
+    assert "GUIDANCE: STOP researching" in text

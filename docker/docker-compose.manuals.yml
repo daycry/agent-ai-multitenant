@@ -179,6 +179,10 @@ services:
   # but the worker runs as UID 1000 and must create bare repos + worktrees under
   # /data/agent-platform (prod-18). chown the mount once so it survives
   # `docker compose down -v` (which drops the volume and recreates it root-owned).
+  # NOTA (auditoría 2026-07-02): este one-shot NO se re-ejecuta en un
+  # engine-restart, y el daemon recrea el bind-source root:root si desapareció.
+  # El fix primario es el entrypoint del worker (workers-entrypoint.sh), que
+  # se auto-repara en cada arranque; este one-shot queda como red de seguridad.
   # ---------------------------------------------------------------------------
   worktrees-init:
     image: busybox:1.36

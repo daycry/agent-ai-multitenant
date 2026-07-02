@@ -46,12 +46,12 @@ from api_server.db.models import User
 from api_server.db.platform_settings import get_default_memory_scope, get_memorizable_statuses
 from api_server.memorizer import (
     count_memories_for_source,
-    distil_execution,
     distil_human_work_session,
     persist_memory_candidates,
     should_memorize,
     should_memorize_human_session,
 )
+from api_server.memorizer.distillation import distil_execution_result
 from api_server.memorizer.policy import (
     MemorizeSkipReason,
     resolve_effective_memory_scope,
@@ -90,16 +90,73 @@ def _default_embedder_factory(settings: Settings) -> Embedder:
 
 
 def _default_llm_factory(settings: Settings) -> LLMProvider:
-    """Default provider: Ollama on the URL the workers Settings carries.
+    """FALLBACK provider: Ollama on the URL the workers Settings carries.
 
-    The Memorizer doesn't need a powerful model — a small local one
-    is the right trade-off (cheap, no quota, no egress). Override via
-    ``WORKERS_MEMORIZER_LLM_BASE_URL`` / ``WORKERS_MEMORIZER_LLM_MODEL``.
+    Auditoría 2026-07-02 (F2.1): la premisa "the Memorizer doesn't need a
+    powerful model" resultó falsa — el modelo pequeño local (llama3.2:1b)
+    producía ~50% ruido (tautologías, contradicciones, URLs fabricadas) que
+    contaminaba el recall. El camino PRIMARIO es ahora el provider del AGENTE
+    de la execution (:func:`_build_agent_llm`, resolución por provider_id, ADR
+    0082); este factory queda como fallback cuando aquel no está disponible.
+    Override via ``WORKERS_MEMORIZER_LLM_BASE_URL`` / ``WORKERS_MEMORIZER_LLM_MODEL``.
     """
     return OllamaProvider(
         base_url=settings.memorizer_llm_base_url,
         default_model=settings.memorizer_llm_model,
     )
+
+
+async def _build_agent_llm(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    agent: Mapping[str, Any],
+) -> tuple[LLMProvider, str] | None:
+    """El LLM del AGENTE de la execution para destilar (F2.1, ADR 0082/0065).
+
+    Lee ``agent.model_config`` (provider_id + model — la resolución por
+    herencia plataforma→proyecto→agente ya ocurrió al configurar el agente) y
+    construye el provider con su credencial de Vault. Devuelve ``(provider,
+    model_id)`` o ``None`` (sin model_config, provider inactivo, Vault caído,
+    SDK ausente…) para que el caller caiga al Ollama local. Best-effort: nunca
+    propaga — un fallo aquí no puede impedir la memorización."""
+    model_config = dict(agent.get("model_config") or {})
+    provider_id = model_config.get("provider_id")
+    model = model_config.get("model")
+    if not provider_id or not model:
+        return None
+    try:
+        from api_server.llm_providers.factory import build_llm_provider
+
+        from workers.execution import _default_vault_store
+
+        async with sessionmaker() as session:
+            provider = await build_llm_provider(
+                session,
+                provider_id=UUID(str(provider_id)),
+                model=str(model),
+                vault=_default_vault_store(),
+            )
+    except Exception as exc:
+        _log.warning("memorizer.agent_provider_unavailable", error=str(exc))
+        return None
+    if provider is None:
+        return None
+    return provider, str(model)
+
+
+async def _select_distiller(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    agent: Mapping[str, Any],
+    *,
+    settings: Settings,
+    llm_factory: LLMFactory,
+) -> tuple[LLMProvider, str]:
+    """El (provider, etiqueta-de-modelo) con el que destilar (F2.1): el del
+    agente si está habilitado y disponible; si no, el fallback local."""
+    if settings.memorizer_use_agent_provider:
+        built = await _build_agent_llm(sessionmaker, agent)
+        if built is not None:
+            return built
+    return llm_factory(settings), settings.memorizer_llm_model
 
 
 @app.task(name="workers.memorize_execution")  # type: ignore[misc]
@@ -200,17 +257,30 @@ async def _memorize_execution_async(  # noqa: PLR0911
             )
             return _result(execution_id, 0, f"skipped:{last_skip.value}")
 
-        llm = llm_factory(settings)
+        # F2.1 (auditoría 2026-07-02): destilar con el LLM del AGENTE de la
+        # execution (provider_id, ADR 0082) — el modelo local pequeño producía
+        # ~50% ruido que contaminaba el recall. Fallback al Ollama local si el
+        # provider del agente no está disponible (best-effort, nunca bloquea).
+        llm, distill_model_label = await _select_distiller(
+            sessionmaker, ctx["agent"], settings=settings, llm_factory=llm_factory
+        )
         try:
-            candidates = await distil_execution(
+            distillation = await distil_execution_result(
                 execution=ctx["execution"], agent=ctx["agent"], llm=llm
             )
         finally:
             await llm.aclose()
+        candidates = distillation.candidates
 
         if not candidates:
-            await _record_skip_reason(sessionmaker, execution_id, MemorizeSkipReason.LLM_EMPTY)
-            return _result(execution_id, 0, "ok:no_candidates")
+            # F2.3: persistir la CAUSA real (llm_error / llm_unparseable /
+            # llm_empty) — antes las tres se conflataban en llm_empty.
+            skip = {
+                "llm_error": MemorizeSkipReason.LLM_ERROR,
+                "llm_unparseable": MemorizeSkipReason.LLM_UNPARSEABLE,
+            }.get(distillation.cause, MemorizeSkipReason.LLM_EMPTY)
+            await _record_skip_reason(sessionmaker, execution_id, skip)
+            return _result(execution_id, 0, f"ok:no_candidates:{skip.value}")
 
         embedder = embedder_factory(settings) if embedder_factory is not None else None
         try:
@@ -221,7 +291,11 @@ async def _memorize_execution_async(  # noqa: PLR0911
                 owners=owners,
                 tenant_id=ctx["tenant_id"],
                 agent_id=ctx["agent"]["id"],
-                extra_metadata={"distill_model": getattr(llm, "name", "unknown")},
+                # F2.3: provider Y modelo real (antes solo el nombre del
+                # provider — 'ollama' — que no permitía atribuir la calidad).
+                extra_metadata={
+                    "distill_model": f"{getattr(llm, 'name', 'unknown')}:{distill_model_label}"
+                },
                 embedder=embedder,
                 source_execution_id=execution_id,
             )
@@ -280,6 +354,8 @@ async def _load_context(session: AsyncSession, execution_id: UUID) -> dict[str, 
             "id": agent.id,
             "role": agent.role,
             "memory_scope": agent.memory_scope,
+            # F2.1: el destilador usa el provider del agente (ADR 0082).
+            "model_config": dict(agent.model_config or {}),
         },
         "task": {
             "id": task.id,
@@ -715,7 +791,10 @@ def trigger_memorize_human_work_session(work_session_id: UUID, task_status: str)
 # aborted/failed runs (06.17 added the setting but the trigger shadowed it).
 # Gating on terminal-ness (not the policy) fixes that and keeps this
 # fire-and-forget path free of DB reads.
-_TERMINAL_STATUSES = frozenset({"done", "failed", "aborted", "cancelled"})
+# Auditoría 2026-07-02 (F1.3): needs_human_review también es terminal (la
+# escalación ADR 0087) — su ausencia repetía el mismo bug: 12 runs escalados
+# sin intento de memorizar ni skip_reason, y el setting inalcanzable.
+_TERMINAL_STATUSES = frozenset({"done", "failed", "aborted", "cancelled", "needs_human_review"})
 
 
 def trigger_memorize(execution_id: UUID, status: str) -> bool:

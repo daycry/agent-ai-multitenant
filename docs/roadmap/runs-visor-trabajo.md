@@ -16,6 +16,14 @@ docs_language: es
 
 # Plan runs-visor-trabajo — Visor de Runs en el menú Trabajo
 
+> **Estado 2026-07-02 (auditoría de runs):** la rama `plan/runs-visor-trabajo` lleva DESPLEGADAS en dev
+> las features de este plan (la auditoría observó en vivo `/admin/runs` con badge de revisión humana y la
+> página de detalle de execution) además de todos los fixes de convergencia (ADR 0087–0096). Los
+> checkboxes siguen sin marcar deliberadamente: el protocolo exige el test automático de cada tarea en
+> verde y la verificación E2 no se ha corrido como suite; A3 (tokens=0) se re-implementó de raíz en la
+> remediación de la auditoría (`_harvest` multi-canal en shared-llm, pendiente de rebuild de la imagen).
+> Ver `docs/roadmap/auditoria-runs-2026-07-02.md`.
+
 > **Origen:** petición del operador (2026-06-26): «en el menú trabajo, poder visualizar todos los runs en
 > forma de lista, las más recientes primero, y ver tokens consumidos, tiempo, dinero… al acceder ver el
 > detalle del run con los outputs y cosas que ha ido haciendo, llamadas a tools… las que estén en running ver

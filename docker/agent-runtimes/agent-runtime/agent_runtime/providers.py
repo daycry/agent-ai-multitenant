@@ -32,6 +32,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -79,7 +80,10 @@ _DECIDE_SYSTEM = (
     "exactly ONE tool to make concrete progress, or — once the task is satisfied — "
     "finish by calling the `submit_result` tool with a `status` and a `summary` of "
     "what you did; only reply with a short final summary as plain prose if no "
-    "`submit_result` tool is available to you.\n"
+    "`submit_result` tool is available to you, ending that summary with a final "
+    'line `<finish status="success"/>` (or `failed`/`partial`) that reports '
+    "HONESTLY whether the task succeeded, could not be completed, or is only "
+    "partly done.\n"
     "Let the TASK drive what you do: an implementation task means writing/editing "
     "files (write_file); an analysis or review task means reading what you need and "
     "returning a written conclusion; a testing task means running the tests. The "
@@ -98,6 +102,29 @@ _REVIEW_SYSTEM = (
     "You are a reviewer. Decide whether the candidate output satisfies the task. "
     "Call the `submit_verdict` tool with `passed` (true/false) and a short "
     "`feedback`. Do not reply with prose."
+)
+
+# F1.6c (auditoría 2026-07-02): el system prompt del run REVIEWER (is_review).
+# Antes el reviewer corría con _DECIDE_SYSTEM ("an implementation task means
+# writing files… finish by calling submit_result") más un preámbulo que decía lo
+# contrario ("Do NOT write files… END with <verdict>") — dos contratos en
+# competencia. Esta variante es el contrato único del reviewer: leer, juzgar
+# contra los criteria y cerrar con el tag de verdict.
+_REVIEW_RUN_SYSTEM = (
+    "You are an autonomous REVIEWER judging ONE completed task inside a loop, "
+    "working in the current directory (a READ-ONLY mount of the implementer's "
+    "worktree). On each turn, either call exactly ONE tool to inspect what you "
+    "genuinely need (read_file, list_files, search_code — never re-read a file "
+    "you have already seen), or — once you can judge — FINISH with your review "
+    "conclusion as prose that ENDS with exactly one verdict tag: "
+    "<verdict>approve</verdict> or <verdict>reject</verdict> (a reject is "
+    "followed by a <rejection><failed_criterion>…</failed_criterion>"
+    "<what_to_fix>…</what_to_fix></rejection> block).\n"
+    "Judge ONLY whether the implementer's output satisfies the task's acceptance "
+    "criteria. Do NOT re-implement the task, do NOT write or modify files, and "
+    "do NOT run git in any form. You may run the project's test suite via "
+    "stack_exec when the provided test report is missing or inconclusive. Be "
+    "efficient: read only what the criteria require, then deliver the verdict."
 )
 
 # ADR 0086: the verdict travels as a TOOL CALL, not formatted text — the contract
@@ -165,6 +192,32 @@ _SUBMIT_RESULT_TOOL: dict[str, Any] = {
     },
 }
 
+# F1.5 (auditoría 2026-07-02): el canal estructurado de FINISH para claude_sdk.
+# Ese provider no recibe `submit_result` (un tool call forzaría content="" y
+# perdería la prosa), así que finish_status era SIEMPRE None en el 100% de los
+# runs de producción y la escalación agent_reported_failure (graph D19) era
+# código muerto. El equivalente: un tag `<finish status="..."/>` al final de la
+# prosa (instruido en _DECIDE_SYSTEM), parseado con tolerancia de formato y
+# DESPOJADO del output.
+_FINISH_TAG_RE = re.compile(
+    r"<finish\s+status\s*=\s*[\"']?(\w+)[\"']?\s*/?>(?:\s*</finish>)?",
+    re.IGNORECASE,
+)
+
+
+def _parse_finish_tag(content: str) -> tuple[str, str | None]:
+    """Extrae (output_sin_tag, finish_status|None) de una prosa de FINISH.
+
+    Un status fuera del enum es un hint que no se puede confiar → None (el tag
+    se despoja igualmente para que el ruido no llegue al entregable)."""
+    match = _FINISH_TAG_RE.search(content)
+    if match is None:
+        return content, None
+    status = match.group(1).lower()
+    stripped = (content[: match.start()] + content[match.end() :]).strip()
+    return stripped, (status if status in _FINISH_STATUSES else None)
+
+
 # How many context fragments to feed the model — the loop's context list
 # grows unbounded; the tail is the relevant part.
 _CONTEXT_WINDOW = 8
@@ -174,7 +227,10 @@ _CONTEXT_WINDOW = 8
 # this many characters, so they survive the context window and stay in front of
 # the model until acted on (they were getting evicted, so the agent kept
 # re-producing the rejected output / repeating the same action).
-_STICKY_FEEDBACK_MAX_CHARS = 600
+# F2b.4 (auditoría 2026-07-02): 600 → 2000 — un rejection estructurado
+# (failed_criterion + what_to_fix + evidencia) se cortaba a 600 chars y perdía
+# justo la parte accionable que el implementador debía corregir.
+_STICKY_FEEDBACK_MAX_CHARS = 2000
 
 # ADR 0087 (Option 1 refinement): when the agent produced files, the reviewer must
 # judge the ACTUAL code — not just the prose summary it cannot verify (which led the
@@ -196,14 +252,17 @@ def _system_content(state: dict[str, Any]) -> str:
     """The EFFECTIVE system prompt for this run (Plan 06.18 task_06_18_13).
 
     Prepends the assigned skills' prompt fragments (``state['system_preamble']``,
-    ADR 0050) to the base agent instruction. Absent/empty preamble → the
-    historical ``_DECIDE_SYSTEM`` verbatim (backward-compat). The preamble goes
-    first so the skill cues frame the agent's behaviour before the loop rules.
+    ADR 0050) to the base agent instruction. Absent/empty preamble → the base
+    verbatim (backward-compat). The preamble goes first so the skill cues frame
+    the agent's behaviour before the loop rules. F1.6c: un run REVIEWER
+    (``state['is_review']``) recibe su propio contrato (`_REVIEW_RUN_SYSTEM`) en
+    vez del contrato del implementador.
     """
+    base = _REVIEW_RUN_SYSTEM if state.get("is_review") else _DECIDE_SYSTEM
     preamble = state.get("system_preamble")
     if preamble and str(preamble).strip():
-        return f"{str(preamble).strip()}\n\n{_DECIDE_SYSTEM}"
-    return _DECIDE_SYSTEM
+        return f"{str(preamble).strip()}\n\n{base}"
+    return base
 
 
 def _criterion_text(criterion: Any) -> str:
@@ -228,6 +287,12 @@ def _decide_messages(state: dict[str, Any]) -> list[Message]:
     if criteria:
         lines.append("Acceptance criteria (the definition of done — work toward these):")
         lines += [f"- {_criterion_text(c)}" for c in criteria]
+    # F2b.1 (auditoría 2026-07-02): el resumen de progreso SIEMPRE-visible —
+    # iteración N/límite + ficheros ya escritos — para que el modelo no re-lea
+    # el workspace para reconstruir lo que hizo hace >_CONTEXT_WINDOW pasos.
+    progress = state.get("progress_summary")
+    if progress:
+        lines.append(f"PROGRESS: {progress}")
     context = state.get("context") or []
     if context:
         lines.append("Context so far:")
@@ -243,6 +308,11 @@ def _decide_messages(state: dict[str, Any]) -> list[Message]:
     feedback = state.get("last_review_feedback")
     if feedback:
         lines.append(f"REVIEW FEEDBACK (fix this): {str(feedback)[:_STICKY_FEEDBACK_MAX_CHARS]}")
+    # F2b.3: los nudges de research/churn también son sticky (antes viajaban en
+    # `context` y la ventana de 8 items podía evictarlos antes de ser atendidos).
+    nudge = state.get("guidance_nudge")
+    if nudge:
+        lines.append(f"GUIDANCE: {str(nudge)[:_STICKY_FEEDBACK_MAX_CHARS]}")
     warning = state.get("repetition_warning")
     if warning:
         lines.append(f"REPETITION WARNING: {str(warning)[:_STICKY_FEEDBACK_MAX_CHARS]}")
@@ -549,7 +619,12 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
             rationale=resp.content or "",
         )
     else:
-        decision = ModelDecision(kind=DecisionKind.FINISH, output=resp.content)
+        # Prosa sin tool call (el FINISH de claude_sdk): F1.5 — parsear el tag
+        # `<finish status="..."/>` para recuperar el finish_status estructurado.
+        output, finish_status = _parse_finish_tag(resp.content or "")
+        decision = ModelDecision(
+            kind=DecisionKind.FINISH, output=output, finish_status=finish_status
+        )
     return ModelResponse(
         decision=decision,
         model=resp.model or model,
