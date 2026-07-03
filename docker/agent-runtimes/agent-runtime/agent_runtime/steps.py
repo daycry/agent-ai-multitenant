@@ -96,8 +96,15 @@ def memory_read_step(
     hits: int,
     summary: str,
     status: str = "ok",
+    placeholder: bool = False,
 ) -> dict[str, Any]:
-    """A memory recall step (placeholder — real memory arrives Plan 04)."""
+    """A memory recall step.
+
+    ``placeholder=True`` marca honestamente un recall SIN cablear (bare run sin
+    API interno) — desde 2026-07-03 el boot cablea el recall real contra
+    ``/internal/agent/memory-recall`` y el default pasa a ``False``."""
     step = _base(index, StepKind.MEMORY_READ, node, summary, status)
-    step.update(query=query, hits=hits, placeholder=True)
+    step.update(query=query, hits=hits)
+    if placeholder:
+        step["placeholder"] = True
     return step

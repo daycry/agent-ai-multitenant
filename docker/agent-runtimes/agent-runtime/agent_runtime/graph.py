@@ -412,7 +412,8 @@ def _research_exhausted(
 
 
 def _no_recall(_task: AgentTask) -> list[dict[str, Any]]:
-    """Default memory recall — empty until real memory lands in Plan 04."""
+    """Recall stub para bare runs sin API interno — el boot de producción
+    cablea el recall real (``__main__._build_auto_recall``, D1 2026-07-03)."""
     return []
 
 
@@ -626,16 +627,24 @@ class _AgentLoop:
         return {"context": [context], "steps": [step]}
 
     def recall(self, state: AgentState) -> dict[str, Any]:
-        """Pull relevant memory (placeholder until Plan 04)."""
+        """Pull relevant memories for the task into the model's context.
+
+        El boot (``__main__``) cablea ``deps.recall`` contra el endpoint
+        scope-safe ``/internal/agent/memory-recall`` (D1, 2026-07-03); en un
+        bare run sin API interno queda el stub ``_no_recall`` y el step se
+        declara ``placeholder`` honestamente."""
         task = state["task"]
         hits = list(self.deps.recall(task))
+        is_stub = self.deps.recall is _no_recall
         context = [{"role": "memory", **hit} for hit in hits]
         step = memory_read_step(
             len(state["steps"]),
             "recall",
             query=task["title"],
             hits=len(hits),
-            summary=f"Recalled {len(hits)} memory item(s) — placeholder until Plan 04",
+            summary=f"Recalled {len(hits)} memory item(s)"
+            + (" — no recall wired" if is_stub else ""),
+            placeholder=is_stub,
         )
         return {"context": context, "steps": [step]}
 
@@ -733,17 +742,23 @@ class _AgentLoop:
             response = self.deps.model.decide(dict(state))
         except LLMError as exc:
             code = _provider_abort_code(exc)
+            # Observabilidad (2026-07-03): el mensaje del LLMError viaja en el
+            # step Y en el output — antes solo sobrevivía el código y diagnosticar
+            # exigía cazar los logs del contenedor efímero antes de su reap.
+            detail = " ".join(str(exc).split())[:300]
+            summary = f"Provider call failed: {code}" + (f" — {detail}" if detail else "")
             steps.append(
                 node_step(
                     base + len(steps),
                     "plan",
-                    f"Provider call failed: {code}",
+                    summary,
                     status="aborted",
                 )
             )
             return {
                 "status": STATUS_ABORTED,
                 "abort_code": code,
+                "output": summary,
                 "iteration": self.tracker.usage.iterations,
                 "steps": steps,
             }
@@ -1223,11 +1238,13 @@ class _AgentLoop:
             review = self.deps.model.review(review_state)
         except LLMError as exc:
             code = _provider_abort_code(exc)
+            detail = " ".join(str(exc).split())[:300]
             steps.append(
                 node_step(
                     base + len(steps),
                     "self_review",
-                    f"Provider call failed during review: {code}",
+                    f"Provider call failed during review: {code}"
+                    + (f" — {detail}" if detail else ""),
                     status="aborted",
                 )
             )

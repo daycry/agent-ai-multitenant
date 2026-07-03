@@ -198,7 +198,8 @@ async def _vector_candidates(
     limit: int,
 ) -> list[UUID]:
     """Top-`limit` ids by cosine similarity. Empty list if no query
-    embedding (the embedder hasn't been wired yet, task_04_14)."""
+    embedding (el embedder de query está cableado — Plan 06.17 task_06_17_03 —
+    pero es best-effort: con Ollama caído el recall cae a BM25 sin romper)."""
     if query_embedding is None:
         return []
     # pgvector's <=> is cosine distance. We don't need the score for

@@ -115,6 +115,51 @@ def _build_internal_api() -> Any | None:
     return api
 
 
+# Recall automático (revisión memorias 2026-07-03, D1): caps para no inflar el
+# prompt — máx 5 memorias, contenido truncado.
+_AUTO_RECALL_LIMIT = 5
+_AUTO_RECALL_CONTENT_CAP = 700
+
+
+def _build_auto_recall(api: Any | None) -> Any | None:
+    """Recall automático de memorias para el nodo ``recall`` del grafo (D1).
+
+    Devuelve el callable que ``AgentDeps.recall`` invoca al arrancar el run:
+    consulta ``/internal/agent/memory-recall`` (scope-safe: el servidor deriva
+    owners del agente autenticado) con la task como query. Best-effort — un
+    fallo del API devuelve ``[]`` y JAMÁS rompe el run. ``None`` cuando no hay
+    API interno (bare run): el grafo conserva el stub y lo declara honesto."""
+    if api is None:
+        return None
+
+    def _recall(task: dict[str, Any]) -> list[dict[str, Any]]:
+        parts = [str(task.get("title") or "").strip(), str(task.get("description") or "").strip()]
+        query = " — ".join(p for p in parts if p)[:2000]
+        if not query:
+            return []
+        try:
+            hits = api.memory_recall(query=query, limit=_AUTO_RECALL_LIMIT)
+        except Exception:  # best-effort: la memoria nunca rompe el run
+            return []
+        out: list[dict[str, Any]] = []
+        for hit in hits[:_AUTO_RECALL_LIMIT]:
+            if not isinstance(hit, dict):
+                continue
+            content = str(hit.get("content") or "")[:_AUTO_RECALL_CONTENT_CAP]
+            if not content:
+                continue
+            out.append(
+                {
+                    "content": content,
+                    "scope": hit.get("scope"),
+                    "type": hit.get("type"),
+                }
+            )
+        return out
+
+    return _recall
+
+
 def _wire_assigned_tools(
     registry: Any,
     spec: dict[str, Any],
@@ -486,12 +531,17 @@ def run_task(spec: dict[str, Any]) -> int:
             # allowlist (discussion mode) stays block-all. See _effective_allowlist.
             registry.set_allowed_tools(_effective_allowlist(allowed_tools))
 
+        # D1 (2026-07-03): recall automático de memorias — el nodo `recall` del
+        # grafo deja de ser un stub; consulta el endpoint scope-safe con la task
+        # como query (best-effort). Sin API interno (bare run) queda el stub.
+        auto_recall = _build_auto_recall(_build_internal_api())
         deps = AgentDeps(
             model=model_from_spec(spec["model"]),
             tools=registry,
             approval=ApprovalGate(policy) if policy else None,
             # ADR 0095: make the loop's convergence safeguards reviewer-aware.
             is_review=bool(spec.get("review")),
+            **({"recall": auto_recall} if auto_recall is not None else {}),
         )
 
         budgets = None

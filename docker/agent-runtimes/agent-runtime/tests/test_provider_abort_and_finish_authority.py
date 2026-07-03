@@ -108,6 +108,21 @@ def test_decide_5xx_provider_error_aborts_cleanly() -> None:
     assert result.abort_code == "provider_error"
 
 
+def test_provider_abort_step_carries_the_error_detail() -> None:
+    """Observabilidad (2026-07-03): el step de aborto lleva el mensaje del
+    LLMError (truncado) — antes solo sobrevivía el código y el diagnóstico
+    exigía capturar los logs del contenedor efímero antes de su reap."""
+    result = _run(_FakeModel(decide_exc=RateLimitError("429 usage limit reached until 14:00")))
+    aborted = [s for s in result.steps if s.get("status") == "aborted" and s.get("node") == "plan"]
+    assert aborted and "429 usage limit reached" in aborted[0]["summary"]
+
+
+def test_provider_abort_output_carries_the_error_detail() -> None:
+    """El output de la execution (lo que ve el panel) también lleva el motivo."""
+    result = _run(_FakeModel(decide_exc=ProviderError("upstream 503", status_code=503)))
+    assert result.output is not None and "upstream 503" in result.output
+
+
 # --- F25/P1.5: review() raises a provider error → clean abort ------------------
 def test_review_provider_error_aborts_cleanly() -> None:
     model = _FakeModel(review_exc=ProviderTimeout("review hung"))

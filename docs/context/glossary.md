@@ -67,7 +67,7 @@ para modelos y endpoints, [`../04-reference/`](../04-reference/).
 
 **KnowledgeBase (KB)**: agrupación nombrada de documentos indexados para RAG. Múltiples por proyecto.
 
-**MemoryEntry**: entrada en la memoria de un agente o equipo. Scopes: private, team_shared, project_shared, global.
+**MemoryEntry**: entrada en la memoria de un agente o equipo. Scopes: private, team_shared, project_shared, global. OJO (revisión 2026-07-03): `private` está atada a un **usuario humano** (`user_id`; CHECK `ck_memory_entries_scope_pointer`) — un agente IA ni escribe ni lee private (el Memorizer hace skip y el recall IA fuerza `user_id=NULL`). Además, con los defaults de fábrica (`memory.default_scope='private'` y `Agent.memory_scope='private'`) la auto-memorización de agentes IA queda APAGADA: para activarla, fija el `memory_scope` del equipo (manda sobre el del agente, ADR 0071) o del agente a team_shared/project_shared/global.
 
 ## Términos de Capacitación
 

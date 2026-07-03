@@ -219,7 +219,7 @@ tengan `status: completed`.
 - ❌ Comitear secretos. Vault es la única vía de credenciales.
 - ❌ Crear features nuevas no documentadas en el .docx sin pasar antes por ADR.
 - ❌ Asumir Kubernetes / multi-máquina. El alcance actual es Docker Compose en una sola máquina.
-- ❌ Confundir scopes de memoria: privada (agente), team_shared (equipo), project_shared (proyecto), global (organización).
+- ❌ Confundir scopes de memoria: private (usuario humano — un agente IA ni la escribe ni la lee), team_shared (equipo), project_shared (proyecto), global (organización).
 
 ## Contexto Adicional
 

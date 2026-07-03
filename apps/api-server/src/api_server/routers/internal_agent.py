@@ -277,7 +277,12 @@ async def memory_recall(
     # proyecto efectivo, de modo que read = write = ``task.project_id`` para el
     # agente global — sin la asimetría histórica.
     project = await _resolve_effective_project(session, agent=agent, principal=principal)
-    scopes = payload.scopes or _default_readable_scopes(agent.memory_scope)
+    # D2 (revisión memorias 2026-07-03): unos scopes explícitos se RECORTAN a la
+    # escalera del agente — antes la saltaban (un agente project_shared podía
+    # leer team_shared/global de su equipo/tenant). Intersección vacía → la
+    # escalera completa, para que una petición mal formada no esterilice el run.
+    ladder = _default_readable_scopes(agent.memory_scope)
+    scopes = [s for s in payload.scopes if s in ladder] or ladder
     team_id = project.team_id if project is not None else None
     project_id = project.id if project is not None else None
 
