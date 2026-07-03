@@ -475,7 +475,7 @@ services:
   # bootstrap can pull from the registry (ollama.com is egress-allowlisted).
   # ---------------------------------------------------------------------------
   ollama:
-    image: ${IMAGE_OLLAMA:-ollama/ollama:0.5.7}
+    image: ${IMAGE_OLLAMA:-ollama/ollama:0.31.1}
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
     volumes:
@@ -504,7 +504,7 @@ services:
   # nomic-embed-text), kept in lockstep with the api-server's embedding_model.
   # ---------------------------------------------------------------------------
   ollama-bootstrap:
-    image: ${IMAGE_OLLAMA:-ollama/ollama:0.5.7}
+    image: ${IMAGE_OLLAMA:-ollama/ollama:0.31.1}
     depends_on:
       ollama:
         condition: service_healthy
