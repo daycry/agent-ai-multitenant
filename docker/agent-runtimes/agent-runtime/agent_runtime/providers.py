@@ -345,14 +345,24 @@ def _review_messages(state: dict[str, Any]) -> list[Message]:
             "yourself against the criteria."
         )
     # Option 1 (ADR 0087): for an implementation run the agent's prose summary is
-    # NOT verifiable — show the reviewer the ACTUAL files it wrote so the verdict is
+    # NOT verifiable — show the reviewer the ACTUAL workspace so the verdict is
     # grounded in the code, not a description. Empty for analysis/design runs (the
     # output IS the deliverable) → prose-only review, unchanged.
+    # Caso 019f27cc (2026-07-03): el harvest es ACUMULADO (incluye trabajo de runs
+    # anteriores) y el veredicto juzga el ESTADO, no la autoría — una task cuyo
+    # entregable ya existía y cumple los criterios está HECHA (pasa, p. ej., al
+    # re-ejecutar una task tras un reset o cuando un run previo escalado ya
+    # produjo el trabajo). Antes la etiqueta «Files the agent wrote» invitaba a
+    # rechazar en bucle trabajo correcto por no haberse escrito en ESTE run.
     written = state.get("written_files") or []
     if written:
         lines.append(
-            "Files the agent wrote — base your verdict on this ACTUAL code, not on "
-            "the prose summary:"
+            "Current workspace state — the CUMULATIVE deliverable on disk (it may "
+            "include files produced by a previous run of this task or plan). Base "
+            "your verdict on this ACTUAL code, not on the prose summary. Judge "
+            "whether the acceptance criteria are satisfied by this CURRENT state: "
+            "pre-existing work that satisfies them counts as done — do NOT fail the "
+            "run just because this run did not (re)write the files:"
         )
         for entry in written[:_REVIEW_MAX_FILES]:
             path = (entry or {}).get("path") or "?"

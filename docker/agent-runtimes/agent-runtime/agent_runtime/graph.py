@@ -23,8 +23,9 @@ so the loop is exercised offline and deterministically by the tests.
 from __future__ import annotations
 
 import os
+import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -483,6 +484,40 @@ def _harvest_worktree_files(root: Path, prefer: list[str]) -> list[dict[str, str
         except OSError:  # pragma: no cover - defensive (binary / permission)
             continue
     return harvested
+
+
+# Paths referenciados por la task/output — máx. entradas que se añaden a
+# `prefer` del harvest (caso 019f27cc: el entregable pre-existente quedaba
+# fuera del cap de 40 y el self-review no podía verlo).
+_REFERENCED_PATHS_MAX = 10
+_PATH_TOKEN_RE = re.compile(r"[\w][\w./\\-]*/[\w.-]+\.\w{1,8}")
+
+
+def _referenced_paths(state: Mapping[str, Any]) -> list[str]:
+    """Paths tipo-fichero mencionados en la task (descripción + criterios) y en
+    el output final del agente, en orden de aparición y sin duplicados.
+
+    Alimenta el ``prefer`` del harvest del self-review: el entregable que los
+    criterios NOMBRAN debe estar siempre en el prompt del reviewer, aunque este
+    run no lo haya escrito (trabajo pre-existente de un run anterior — caso
+    019f27cc) y aunque el worktree tenga más ficheros que el cap del harvest."""
+    task = state.get("task") or {}
+    chunks: list[str] = [str(task.get("description") or "")]
+    for criterion in task.get("acceptance_criteria") or []:
+        if isinstance(criterion, dict):
+            chunks.append(" ".join(str(v) for v in criterion.values()))
+        else:
+            chunks.append(str(criterion))
+    chunks.append(str(state.get("output") or ""))
+    seen: list[str] = []
+    for chunk in chunks:
+        for match in _PATH_TOKEN_RE.findall(chunk):
+            normalized = match.replace("\\", "/").strip("/")
+            if normalized not in seen:
+                seen.append(normalized)
+            if len(seen) >= _REFERENCED_PATHS_MAX:
+                return seen
+    return seen
 
 
 def _provider_abort_code(exc: LLMError) -> str:
@@ -1224,7 +1259,14 @@ class _AgentLoop:
         # write capture when there is no worktree (analysis/design runs, tests) →
         # prose-only review unchanged.
         review_state = dict(state)
-        worktree_files = _harvest_worktree_files(_workspace_root(), list(self.written_files))
+        # Caso 019f27cc (2026-07-03): los paths que la task/output NOMBRAN entran
+        # primero en el harvest — un entregable pre-existente (run anterior) debe
+        # ser visible para el reviewer aunque este run no escribiera nada y el
+        # worktree tenga más ficheros que el cap.
+        prefer = list(self.written_files) + [
+            p for p in _referenced_paths(state) if p not in self.written_files
+        ]
+        worktree_files = _harvest_worktree_files(_workspace_root(), prefer)
         if worktree_files:
             review_state["written_files"] = worktree_files
         elif self.written_files:
