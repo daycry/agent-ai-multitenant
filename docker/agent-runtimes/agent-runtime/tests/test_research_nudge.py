@@ -11,11 +11,10 @@ from __future__ import annotations
 from typing import Any
 
 from agent_runtime.graph import (
-    _DISTINCT_READ_LIMIT,
     _PATH_CHURN_THRESHOLD,
     _REREAD_CHURN_NUDGE_LIMIT,
     _RESEARCH_HARD_LIMIT,
-    _RESEARCH_STREAK_LIMIT,
+    _SAME_TARGET_HARD_LIMIT,
     STATUS_NEEDS_HUMAN_REVIEW,
     AgentDeps,
     _abort_or_escalate_status,
@@ -26,6 +25,7 @@ from agent_runtime.graph import (
     _reread_churn_nudge,
     _research_exhausted,
     _research_nudge,
+    _sterile_hard_limit,
 )
 from agent_runtime.loop_detection import LoopDetector
 from agent_runtime.safeguards import Budgets, SafeguardTracker
@@ -33,12 +33,11 @@ from agent_runtime.safeguards import Budgets, SafeguardTracker
 
 def _exhausted(**kw: Any) -> bool:
     """Call ``_research_exhausted`` with sensible defaults so each test varies only
-    the axis it cares about (new distinct-path signature has 8 kwargs)."""
-    kw.setdefault("churn_streak", 0)
-    kw.setdefault("distinct_reads", 0)
-    kw.setdefault("distinct_limit", _DISTINCT_READ_LIMIT)
-    kw.setdefault("research_streak", 0)
-    kw.setdefault("hard_limit", _RESEARCH_HARD_LIMIT)
+    the axis it cares about (semántica por-novedad, plan guardas-research)."""
+    kw.setdefault("sterile_streak", 0)
+    kw.setdefault("max_same_target_reads", 0)
+    kw.setdefault("sterile_limit", _RESEARCH_HARD_LIMIT)
+    kw.setdefault("same_target_limit", _SAME_TARGET_HARD_LIMIT)
     kw.setdefault("has_produced", False)
     kw.setdefault("review_retries", 0)
     kw.setdefault("is_review", False)
@@ -46,31 +45,29 @@ def _exhausted(**kw: Any) -> bool:
 
 
 def test_nudge_on_repeated_research_tool() -> None:
-    msg = _research_nudge(tool="list_files", research_streak=1, repeat_count=3)
+    msg = _research_nudge(tool="list_files", repeat_count=3)
     assert msg is not None and "list_files" in msg and "Do not repeat" in msg
 
 
-def test_nudge_on_long_research_streak() -> None:
-    msg = _research_nudge(tool="rag_search", research_streak=_RESEARCH_STREAK_LIMIT, repeat_count=1)
-    assert msg is not None and "STOP researching" in msg
-
-
 def test_no_nudge_for_normal_research() -> None:
-    assert _research_nudge(tool="list_files", research_streak=2, repeat_count=1) is None
+    assert _research_nudge(tool="list_files", repeat_count=1) is None
 
 
 def test_no_nudge_for_producing_tool() -> None:
-    assert _research_nudge(tool="write_file", research_streak=0, repeat_count=1) is None
+    assert _research_nudge(tool="write_file", repeat_count=1) is None
 
 
 # --- ADR 0095: reviewer-aware safeguards -----------------------------------
 
 
 def test_review_nudge_says_emit_verdict_not_write_file() -> None:
-    # A reviewer is forbidden to write_file; the streak nudge must push it to
+    # A reviewer is forbidden to write_file; the sterility nudge must push it to
     # FINISH with its <verdict>, not to produce a deliverable.
-    msg = _research_nudge(
-        tool="read_file", research_streak=_RESEARCH_STREAK_LIMIT, repeat_count=1, is_review=True
+    msg = _reread_churn_nudge(
+        churn_streak=_REREAD_CHURN_NUDGE_LIMIT,
+        limit=_REREAD_CHURN_NUDGE_LIMIT,
+        has_produced=False,
+        is_review=True,
     )
     assert msg is not None
     assert "verdict" in msg.lower()
@@ -78,12 +75,11 @@ def test_review_nudge_says_emit_verdict_not_write_file() -> None:
 
 
 def test_review_research_exhausted_cuts_sterile_reviewer() -> None:
-    # ADR 0095 carve-out: a reviewer never "produces" and its reads are DISTINCT
-    # (churn_streak stays 0), so the distinct-path split would let it leak — the
-    # `is_review and research_streak >= hard_limit` trigger MUST still cut it.
-    assert _exhausted(research_streak=_RESEARCH_HARD_LIMIT, churn_streak=0, is_review=True) is True
+    # Un reviewer que re-lee sin novedad se corta por esterilidad (el carve-out
+    # antiguo por research_streak bruto castigaba lecturas DISTINTAS legítimas).
+    assert _exhausted(sterile_streak=_RESEARCH_HARD_LIMIT, is_review=True) is True
     # Non-review sterile run is still NOT cut (D3 invariant preserved).
-    assert _exhausted(research_streak=_RESEARCH_HARD_LIMIT, is_review=False) is False
+    assert _exhausted(sterile_streak=_RESEARCH_HARD_LIMIT, is_review=False) is False
 
 
 def test_review_safeguard_escalates_not_aborts() -> None:
@@ -92,45 +88,53 @@ def test_review_safeguard_escalates_not_aborts() -> None:
     assert _abort_or_escalate_status(False, is_review=True) == STATUS_NEEDS_HUMAN_REVIEW
 
 
-# --- D4 (ADR 0089 addendum): the HARD backstop, now keyed on RE-reads ----------
-# Trips (when eligible) on ANY of: a re-read churn streak, an absolute distinct-read
-# ceiling, or a reviewer with a long raw research streak.
-def test_research_exhausted_true_on_reread_churn_after_produced() -> None:
-    # A genuine re-read loop (same targets over and over) after producing → fast cut.
-    assert _exhausted(churn_streak=_RESEARCH_HARD_LIMIT, distinct_reads=2, has_produced=True)
+# --- Backstop por novedad (plan guardas-research-por-novedad A3) ---------------
+# Trips (when eligible) on ANY of: racha ESTÉRIL (research sin target nuevo) o
+# CUALQUIER target leído same_target_limit veces. La amplitud (muchos ficheros
+# DISTINTOS) ya no corta nunca: la acota el presupuesto de iteraciones.
+def test_research_exhausted_true_on_sterile_streak_after_produced() -> None:
+    assert _exhausted(sterile_streak=_RESEARCH_HARD_LIMIT, has_produced=True)
 
 
 def test_research_exhausted_true_after_failed_review_reread() -> None:
     # Re-read churn AFTER a rejected self-review: no new write, but there IS work.
-    assert _exhausted(churn_streak=_RESEARCH_HARD_LIMIT, review_retries=1)
+    assert _exhausted(sterile_streak=_RESEARCH_HARD_LIMIT, review_retries=1)
 
 
-def test_research_exhausted_true_on_distinct_ceiling() -> None:
-    # Verdict fix: "produced, then read a NEW path every turn" keeps churn_streak at 0
-    # forever — the absolute distinct ceiling closes that evasion.
-    assert _exhausted(churn_streak=0, distinct_reads=_DISTINCT_READ_LIMIT, has_produced=True)
+def test_research_exhausted_true_on_same_target_hammering() -> None:
+    # El mismo fichero leído same_target_limit veces (aunque intercalado con
+    # lecturas nuevas que resetean la racha estéril) → trip.
+    assert _exhausted(
+        sterile_streak=0, max_same_target_reads=_SAME_TARGET_HARD_LIMIT, has_produced=True
+    )
 
 
-def test_research_exhausted_false_for_distinct_exploration_after_produce() -> None:
-    # THE FALSE POSITIVE WE FIX: a task that produced then legitimately reads ~15 NEW
-    # files (churn_streak=0, distinct below the ceiling) must NOT be cut.
-    assert not _exhausted(churn_streak=0, distinct_reads=15, has_produced=True)
+def test_research_exhausted_false_for_wide_distinct_exploration() -> None:
+    # EL FALSO POSITIVO RETIRADO: leer muchos ficheros NUEVOS tras producir era
+    # cortado por el techo de 22 distintos; ya no — la amplitud es legítima.
+    assert not _exhausted(sterile_streak=0, max_same_target_reads=1, has_produced=True)
 
 
 def test_research_exhausted_false_for_sterile_analysis_run() -> None:
     # INVARIANT (D3): a sterile analysis-only run (no production, no failed review,
-    # not a review) is NOT cut even with huge churn/distinct — bounded by max_iterations.
+    # not a review) is NOT cut even with huge churn — bounded by max_iterations.
     assert not _exhausted(
-        churn_streak=_RESEARCH_HARD_LIMIT + 5,
-        distinct_reads=_DISTINCT_READ_LIMIT + 5,
-        research_streak=_RESEARCH_HARD_LIMIT + 5,
+        sterile_streak=_RESEARCH_HARD_LIMIT + 5,
+        max_same_target_reads=_SAME_TARGET_HARD_LIMIT + 5,
     )
+
+
+def test_sterile_hard_limit_scales_with_budget() -> None:
+    # Relativo al presupuesto: 25 % de max_iterations con suelo en el límite fijo.
+    assert _sterile_hard_limit(50) == 12
+    assert _sterile_hard_limit(25) == _RESEARCH_HARD_LIMIT
+    assert _sterile_hard_limit(8) == _RESEARCH_HARD_LIMIT
 
 
 def test_research_exhausted_false_below_both_limits() -> None:
     assert not _exhausted(
-        churn_streak=_RESEARCH_HARD_LIMIT - 1,
-        distinct_reads=_DISTINCT_READ_LIMIT - 1,
+        sterile_streak=_RESEARCH_HARD_LIMIT - 1,
+        max_same_target_reads=_SAME_TARGET_HARD_LIMIT - 1,
         has_produced=True,
     )
 
@@ -170,25 +174,63 @@ def _loop() -> _AgentLoop:
     return _AgentLoop(AgentDeps(model=object()), SafeguardTracker(Budgets()), LoopDetector())  # type: ignore[arg-type]
 
 
-def _state(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+def _state(
+    tool: str,
+    args: dict[str, Any],
+    *,
+    ok: bool = True,
+    output: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
-        "last_observation": {"tool": tool, "ok": True},
+        "last_observation": {"tool": tool, "ok": ok, "output": output or {}},
         "last_decision": {"tool": tool, "tool_args": args},
         "steps": [],
     }
 
 
-def test_reflect_injects_guidance_after_research_streak() -> None:
-    # F2b.3 (auditoría 2026-07-02): el nudge viaja en el escalar STICKY
-    # `guidance_nudge` — antes iba como item de `context`, evictable por la
-    # ventana de 8 items antes de que el modelo actuara sobre él.
+# --- A2 (plan guardas-research): exploración legítima = CERO fricción ----------
+def test_exploring_new_files_never_nudges() -> None:
+    # 8 lecturas seguidas de ficheros NUEVOS (el caso del operador): ni nudge ni
+    # racha estéril — antes el streak ciego de 5 disparaba «STOP researching…
+    # produce (e.g. write_file)» sobre exploración normal.
     loop = _loop()
     out: dict[str, Any] = {}
-    for i in range(_RESEARCH_STREAK_LIMIT):
-        out = loop.reflect(_state("rag_search", {"query": f"q{i}"}))  # vary args → not a repeat
-    assert loop.research_streak == _RESEARCH_STREAK_LIMIT
-    assert "STOP researching" in (out.get("guidance_nudge") or "")
-    assert "context" not in out  # ya no compite con la ventana de contexto
+    for i in range(8):
+        out = loop.reflect(_state("read_file", {"path": f"src/f{i}.php"}))
+    assert out.get("guidance_nudge") in (None, "")
+    assert loop.read_churn_streak == 0
+
+
+def test_new_rag_queries_are_exploration_not_churn() -> None:
+    loop = _loop()
+    out: dict[str, Any] = {}
+    for i in range(6):
+        out = loop.reflect(_state("rag_search", {"query": f"tema {i}"}))
+    assert out.get("guidance_nudge") in (None, "")
+
+
+def test_errored_reads_count_as_sterile_not_novel() -> None:
+    # Anti-gaming: paths inexistentes "nuevos" cada turno no son exploración.
+    loop = _loop()
+    out: dict[str, Any] = {}
+    for i in range(_REREAD_CHURN_NUDGE_LIMIT):
+        out = loop.reflect(_state("read_file", {"path": f"nope{i}.php"}, ok=False))
+    assert loop.read_churn_streak == _REREAD_CHURN_NUDGE_LIMIT
+    assert (out.get("guidance_nudge") or "") != ""
+    assert len(loop.read_targets) == 0  # los fallos no acumulan "novedad"
+
+
+# --- A1: nudge específico por-target -------------------------------------------
+def test_same_target_third_read_nudges_naming_the_file() -> None:
+    loop = _loop()
+    out: dict[str, Any] = {}
+    reads = ["app/Config/Routes.php", "app/Config/Routes.php", "other.php", "app/Config/Routes.php"]
+    for path in reads:
+        out = loop.reflect(_state("read_file", {"path": path}))
+    # 3.ª lectura de Routes.php (intercalada — el churn consecutivo no la ve).
+    nudge = out.get("guidance_nudge") or ""
+    assert "app/Config/Routes.php" in nudge
+    assert loop.read_counts["read_file:app/Config/Routes.php"] == 3
 
 
 def test_reflect_injects_guidance_on_repeat() -> None:
@@ -198,6 +240,47 @@ def test_reflect_injects_guidance_on_repeat() -> None:
     loop.detector.record(action)
     out = loop.reflect(_state("list_files", {"path": "."}))
     assert "Do not repeat" in (out.get("guidance_nudge") or "")
+
+
+# --- A4: el sticky se limpia con progreso ---------------------------------------
+def test_guidance_clears_on_novel_read_after_nudge() -> None:
+    loop = _loop()
+    for path in ("a.php", "a.php", "a.php"):  # 3ª lectura → nudge per-target
+        out = loop.reflect(_state("read_file", {"path": path}))
+    assert (out.get("guidance_nudge") or "") != ""
+    out = loop.reflect(_state("read_file", {"path": "b.php"}))  # target NUEVO
+    assert "guidance_nudge" in out and out["guidance_nudge"] is None
+
+
+# --- C1: digests de lecturas en PROGRESS ----------------------------------------
+def test_progress_includes_read_digests() -> None:
+    loop = _loop()
+    loop.reflect(
+        _state(
+            "read_file",
+            {"path": "app/A.php"},
+            output={"content": "<?php // controlador A\nclass A {}", "size_bytes": 34},
+        )
+    )
+    out = loop.reflect(
+        _state(
+            "read_file",
+            {"path": "app/B.php"},
+            output={"content": "<?php class B {}", "size_bytes": 16},
+        )
+    )
+    progress = out.get("progress_summary") or ""
+    assert "app/A.php" in progress and "app/B.php" in progress
+    assert "controlador A" in progress  # 1.ª línea significativa como digest
+
+
+def test_read_digests_are_lru_capped() -> None:
+    loop = _loop()
+    for i in range(25):
+        loop.reflect(_state("read_file", {"path": f"f{i}.php"}, output={"content": f"// {i}"}))
+    assert len(loop.read_digests) == 20
+    assert "read_file:f24.php" in loop.read_digests  # las últimas sobreviven
+    assert "read_file:f0.php" not in loop.read_digests  # las primeras se evictan
 
 
 # --- F2b.1/2 (auditoría 2026-07-02): resumen de progreso siempre-visible -------
@@ -234,11 +317,11 @@ def test_progress_summary_no_warning_far_from_budget() -> None:
     assert "wrap up" not in progress
 
 
-def test_reflect_resets_streak_on_producing_tool() -> None:
+def test_reflect_resets_sterile_streak_on_producing_tool() -> None:
     loop = _loop()
-    loop.research_streak = 4
+    loop.read_churn_streak = 4
     loop.reflect(_state("write_file", {"path": "a.py", "content": "x"}))
-    assert loop.research_streak == 0
+    assert loop.read_churn_streak == 0
 
 
 def test_reflect_sets_repetition_warning_scalar_not_context() -> None:
@@ -263,10 +346,12 @@ def test_reflect_no_repetition_warning_below_threshold() -> None:
     assert "repetition_warning" not in out
 
 
-# --- the over-verification trap: once produced, the nudge says FINISH ----------
-def test_finish_nudge_when_already_produced_and_streak() -> None:
-    msg = _research_nudge(
-        tool="list_files", research_streak=_RESEARCH_STREAK_LIMIT, repeat_count=1, has_produced=True
+# --- the over-verification trap: once produced, the sterility nudge says FINISH -
+def test_finish_nudge_when_already_produced_and_sterile() -> None:
+    msg = _reread_churn_nudge(
+        churn_streak=_REREAD_CHURN_NUDGE_LIMIT,
+        limit=_REREAD_CHURN_NUDGE_LIMIT,
+        has_produced=True,
     )
     # C0 (ADR 0087): the nudge must NOT prescribe "NO tool call" — under the
     # structured-finish contract, FINISH on HTTP providers IS a submit_result tool
@@ -321,20 +406,19 @@ def test_reflect_churn_nudge_on_repeated_same_path_varying_content() -> None:
 
 
 def test_finish_nudge_on_repeat_after_producing() -> None:
-    msg = _research_nudge(tool="read_file", research_streak=1, repeat_count=3, has_produced=True)
+    msg = _research_nudge(tool="read_file", repeat_count=3, has_produced=True)
     assert msg is not None and "FINISH" in msg
 
 
 def test_reflect_latches_has_produced_and_nudges_to_finish() -> None:
     loop = _loop()
-    # Produce once → latches has_produced (and resets the streak).
+    # Produce once → latches has_produced (and resets the sterile streak).
     loop.reflect(_state("write_file", {"path": "a.php", "content": "x"}))
-    assert loop.has_produced is True and loop.research_streak == 0
-    # Then it slips back into verifying; after the streak the nudge pushes FINISH
-    # (F2b.3: por el canal sticky guidance_nudge, no por context).
+    assert loop.has_produced is True and loop.read_churn_streak == 0
+    # Then it slips into RE-verifying the SAME dir (sterile); the nudge says FINISH.
     out: dict[str, Any] = {}
-    for i in range(_RESEARCH_STREAK_LIMIT):
-        out = loop.reflect(_state("list_files", {"path": f"dir{i}"}))
+    for _ in range(_REREAD_CHURN_NUDGE_LIMIT + 1):
+        out = loop.reflect(_state("list_files", {"path": "app"}))
     assert "FINISH" in (out.get("guidance_nudge") or "")
 
 

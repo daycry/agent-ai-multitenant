@@ -287,6 +287,72 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
+  # workers-aux — pool AUXILIAR de Celery (auditoría 2026-07-03, plan
+  # guardas-research-por-novedad D1): consume test/review/privileged con pool
+  # PROPIA. Sin él, el worker principal (default,ingestion,test,review,
+  # concurrency=2) se auto-inanea: un agent-run bloqueado esperando el resultado
+  # de stack_exec (cola test) ocupa el mismo slot que ese comando necesita — con
+  # 2 runs en vuelo, la cola test no tiene consumidor y el agente muere por
+  # ReadTimeout a los 300 s (run 019f252e). La cola `privileged` (backup diario,
+  # Plan 12) tampoco tenía consumidor en dev (hallazgo F0.4). Mismo image/env
+  # que workers.
+  # ---------------------------------------------------------------------------
+  workers-aux:
+    image: agentic-platform/workers:ci
+    command:
+      [
+        "celery",
+        "-A",
+        "workers.celery_app",
+        "worker",
+        "--queues=test,review,privileged",
+        "--concurrency=2",
+        "--loglevel=info",
+      ]
+    environment:
+      WORKERS_ENVIRONMENT: dev
+      WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      WORKERS_BROKER_URL: redis://redis:6379/1
+      WORKERS_RESULT_BACKEND: redis://redis:6379/2
+      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/0
+      WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
+      WORKERS_AGENT_INTERNAL_API_URL: http://api-server:8000
+      WORKERS_AGENT_RUNTIME_IMAGE: agent-runtime:v1
+      WORKERS_DATA_ROOT: /data/agent-platform
+      WORKERS_EGRESS_PROXY_URL: http://egress-proxy:8888
+      WORKERS_VAULT_URL: http://vault:8200
+      WORKERS_VAULT_TOKEN: ${API_SERVER_VAULT_TOKEN:-dev-root-token}
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      API_SERVER_MINIO_URL: http://minio:9000
+      API_SERVER_MINIO_ACCESS_KEY: minioadmin
+      API_SERVER_MINIO_SECRET_KEY: changeme-dev-only
+      API_SERVER_DOCLING_SERVE_URL: http://docling-serve:5001
+      API_SERVER_OLLAMA_URL: http://ollama:11434
+      API_SERVER_CLAMAV_HOST: clamav
+      API_SERVER_CLAMAV_PORT: "3310"
+      WORKERS_MEMORY_EMBEDDER_BASE_URL: http://ollama:11434
+      WORKERS_MEMORIZER_LLM_BASE_URL: http://ollama:11434/v1
+      WORKERS_MEMORIZER_LLM_MODEL: llama3.2:1b
+      WORKERS_CORTEX_AFFECT_LLM_BASE_URL: http://ollama:11434/v1
+      WORKERS_CORTEX_AFFECT_LLM_MODEL: llama3.2:1b
+    volumes:
+      - /data/agent-platform:/data/agent-platform
+      - ./seccomp:/etc/agentic/seccomp:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      docker-socket-proxy: { condition: service_started }
+      worktrees-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -t 5 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks: [agentic-net, agentic-agents, agentic-docker]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # cortex-beat — Celery beat: agenda los bucles de fondo del córtex (F4):
   # reflexión / curiosidad / mantenimiento (beat_schedule en workers.celery_app).
   # SOLO encola por horario; el trabajo lo hace el pool `workers`. Tickea siempre,

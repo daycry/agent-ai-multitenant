@@ -224,11 +224,17 @@ class InternalAgentAPI:
 
         The sandbox cannot launch containers; this asks the worker, which has
         Docker. Returns ``{exit_code, logs, timed_out}``. Waits the command's own
-        budget + a margin (the HTTP call blocks until the worker finishes)."""
+        budget + a margin (the HTTP call blocks until the worker finishes).
+
+        El margen es MAYOR que el del server (``run_stack_command_and_wait``,
+        ``timeout_s + 120``): si empatan, la carrera la gana httpx y el agente ve
+        un ``ReadTimeout`` opaco en vez del 502 estructurado con causa que emite
+        el api-server cuando es ÉL quien agota la espera (plan
+        guardas-research-por-novedad D2, run 019f252e)."""
         return self._post(
             "/internal/agent/run-stack",
             {"task_id": task_id, "command": command, "timeout_s": int(timeout_s)},
-            timeout=float(timeout_s) + 120.0,
+            timeout=float(timeout_s) + 180.0,
         )
 
     def document_convert(self, *, document_id: str) -> dict[str, Any]:

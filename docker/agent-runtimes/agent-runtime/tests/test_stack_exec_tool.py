@@ -67,6 +67,38 @@ def test_stack_exec_honours_explicit_timeout() -> None:
     assert api.calls[0]["timeout_s"] == 120
 
 
+def test_run_stack_http_margin_exceeds_server_wait() -> None:
+    """Plan guardas-research-por-novedad D2 (run 019f252e): el margen httpx del
+    runtime debe ser MAYOR que la espera del server (`timeout_s + 120` en
+    `run_stack_command_and_wait`) — si empatan, la carrera la gana httpx y el
+    agente recibe un `ReadTimeout` opaco en vez del 502 estructurado con causa."""
+    from agent_runtime.internal_api import InternalAgentAPI
+
+    captured: dict[str, Any] = {}
+
+    class _FakeHttpClient:
+        def post(self, url: str, *, json: Any, headers: Any, timeout: Any) -> Any:
+            del url, json, headers  # firma keyword de httpx.Client.post; solo importa timeout
+            captured["timeout"] = timeout
+
+            class _Resp:
+                status_code = 200
+
+                @staticmethod
+                def json() -> dict[str, Any]:
+                    return {"exit_code": 0, "logs": "", "timed_out": False}
+
+            return _Resp()
+
+    api = InternalAgentAPI(
+        base_url="http://api-server:8000",
+        bearer_token="t",
+        client=_FakeHttpClient(),  # type: ignore[arg-type]
+    )
+    api.run_stack(task_id="t", command="vendor/bin/phpunit", timeout_s=240)
+    assert captured["timeout"] > 240 + 120  # margen del server + holgura real
+
+
 def test_stack_exec_rejects_empty_command() -> None:
     api = _FakeApi()
     tool = StackExecTool(api, task_id="t")  # type: ignore[arg-type]
