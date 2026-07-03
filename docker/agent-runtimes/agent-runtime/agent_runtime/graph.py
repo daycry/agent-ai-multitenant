@@ -1067,7 +1067,13 @@ class _AgentLoop:
                 shown += f" (+{len(names) - 12} more)"
             parts.append(f"files you have ALREADY written (do not re-read them): {shown}")
         elif not self.is_review:
-            parts.append("no deliverable produced yet")
+            # Sin sesgo a escribir (casuística del operador 2026-07-03): una
+            # tarea puede ser SOLO de análisis — su respuesta final ES el
+            # entregable, no tiene por qué tocar ficheros.
+            parts.append(
+                "no files written yet (fine if this task only requires analysis — "
+                "your final written answer is the deliverable)"
+            )
         if self.read_digests:
             # C1 (plan guardas-research): memoria de lecturas — el modelo relee
             # porque la ventana de contexto descarta lo leído; estos digests le

@@ -292,10 +292,16 @@ def test_reflect_sets_progress_summary_each_turn() -> None:
     assert "app/Hello.php" in progress  # el modelo VE lo que ya escribió
 
 
-def test_progress_summary_reports_no_deliverable_yet() -> None:
+def test_progress_summary_reports_no_files_without_write_bias() -> None:
+    # Casuística del operador (2026-07-03): una tarea puede ser SOLO de análisis
+    # (p. ej. revisar versiones de vendors) — el PROGRESS no debe presionar a
+    # escribir; debe recordar que la respuesta final también es entregable.
     loop = _loop()
     out = loop.reflect(_state("read_file", {"path": "README.md"}))
-    assert "no deliverable" in (out.get("progress_summary") or "")
+    progress = out.get("progress_summary") or ""
+    assert "no files written yet" in progress
+    assert "analysis" in progress  # la salida de análisis es explícita
+    assert "no deliverable" not in progress  # el texto sesgado desaparece
 
 
 def test_progress_summary_warns_near_iteration_budget() -> None:
