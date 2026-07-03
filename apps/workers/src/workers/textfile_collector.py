@@ -114,6 +114,11 @@ def write_textfile_metric(
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(body)
+            # mkstemp crea el temp 0600 y os.replace CONSERVA ese modo: un .prom
+            # publicado por root (workers-backup) quedaba ilegible para
+            # node-exporter (uid nobody) y la métrica nunca llegaba a Prometheus
+            # (2026-07-03). El collector debe poder leerlo: 0644.
+            os.chmod(tmp_name, 0o644)
             os.replace(tmp_name, target)
         except BaseException:
             # Clean up the temp file on any failure mid-write.
