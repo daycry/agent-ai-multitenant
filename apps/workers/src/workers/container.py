@@ -251,6 +251,30 @@ class AgentContainerRunner:
             return True
         return False
 
+    def list_managed_execution_ids(self) -> set[str] | None:
+        """Execution-ids con contenedor gestionado EXISTENTE (cualquier estado).
+
+        Sweep de huérfanos (2026-07-03): una fila ``running`` cuyo contenedor ya
+        NO EXISTE (engine-restart, `docker rm` externo) no puede terminar jamás —
+        el umbral de 7 h del sweep la dejaba horas de zombi vetando el
+        re-despacho de su task. Este listado (una sola llamada al daemon) permite
+        detectarlas al momento. Devuelve ``None`` si Docker no responde — el
+        caller debe distinguir «daemon caído» (no barrer nada) de «sin
+        contenedores» (set vacío legítimo)."""
+        try:
+            containers = self.client.containers.list(
+                all=True,
+                filters={"label": "com.agentic-platform.managed=true"},
+            )
+        except Exception:
+            return None
+        ids: set[str] = set()
+        for container in containers:
+            execution_id = (container.labels or {}).get("com.agentic-platform.execution-id", "")
+            if execution_id:
+                ids.add(execution_id)
+        return ids
+
     @staticmethod
     def _pump_logs(container: Any, on_line: Callable[[str], None]) -> None:
         """Forward the container's STDOUT (the structured JSON channel) line by

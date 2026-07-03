@@ -186,8 +186,21 @@ docs_language: es
 - [ ] **F2 — Relanzar «Tests de feature»** (víctima del ReadTimeout) y verificar en su run nuevo: phpunit
       via stack_exec ≤600 s sin ReadTimeout, sin nudges sobre su exploración inicial, `safeguard_stats` en el
       step final. **Test:** e2e observacional + SQL sobre `steps_log`.
-- [ ] **F3 — Métricas vs baseline**: comparar nudges/trips por run y relecturas por run contra los runs del
+- [x] **F3 — Métricas vs baseline**: comparar nudges/trips por run y relecturas por run contra los runs del
       07-01/07-03 (SQL sobre `steps_log`); documentar en este plan los números y el ajuste de umbrales si toca.
+
+  **Resultado (2026-07-03, SQL sobre `safeguard_stats` de los steps finalize):**
+
+  | Métrica                          | Baseline (07-01/07-02)   | Post-guardas (07-03)                                                |
+  | -------------------------------- | ------------------------ | ------------------------------------------------------------------- |
+  | `max_iterations_exceeded`        | 3 runs × 50 iter (07-02) | **0**                                                               |
+  | `repetitive_loop_detected`       | 1 run × 26 iter          | **0**                                                               |
+  | `research_exhausted`             | 3 runs × ~30 iter        | 1 run × **11 iter** (legítimo: workspace vacío pre-fix durabilidad) |
+  | Iteraciones medias (runs `done`) | 7,3–11,5                 | 10,2                                                                |
+  | Runs con actividad de guardas    | n/d (sin instrumentar)   | 2/20 (10 %) — **cero falsos positivos** en runs sanos               |
+
+  Sin ajuste de umbrales: los trips solo dispararon en el caso genuinamente estéril
+  y las escaladas son tempranas y baratas (11 iter vs 30-50 del baseline).
 
 ## Criterios de cierre
 

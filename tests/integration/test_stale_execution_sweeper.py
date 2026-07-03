@@ -24,10 +24,16 @@ pytestmark = pytest.mark.integration
 class _FakeRunner:
     """Records ``kill_by_label`` / reaper calls instead of touching Docker."""
 
-    def __init__(self, exited: list[tuple[str, str]] | None = None) -> None:
+    def __init__(
+        self,
+        exited: list[tuple[str, str]] | None = None,
+        managed_ids: set[str] | None = None,
+    ) -> None:
         self.killed: list[str] = []
         self.removed: list[str] = []
         self._exited = list(exited or [])
+        # None = daemon sin respuesta (el sweep de huérfanos no debe barrer).
+        self._managed_ids = managed_ids
 
     def kill_by_label(self, execution_id: str) -> int:
         self.killed.append(execution_id)
@@ -35,6 +41,9 @@ class _FakeRunner:
 
     def list_exited_managed(self) -> list[tuple[str, str]]:
         return list(self._exited)
+
+    def list_managed_execution_ids(self) -> set[str] | None:
+        return None if self._managed_ids is None else set(self._managed_ids)
 
     def remove_container(self, container_id: str) -> bool:
         self.removed.append(container_id)
@@ -148,6 +157,111 @@ async def test_sweep_stale_executions(
         assert result["reaped"] == 1
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_sweep_closes_orphaned_running_rows_whose_container_is_gone(
+    _migrated: None, workers_settings: object, migrations_pg_dsn: str
+) -> None:
+    """Sweep de huérfanos (2026-07-03, gotcha engine-restart): una fila `running`
+    cuyo contenedor YA NO EXISTE (engine-restart, rm externo) no puede terminar
+    jamás — con solo el umbral de 7 h quedaba horas de zombi vetando el
+    re-despacho de su task. Si el daemon responde y el contenedor no está, se
+    cierra al pasar la gracia; una fila con contenedor VIVO no se toca aunque
+    lleve horas; y si el daemon no responde (None) no se barre nada."""
+    from workers.maintenance import _sweep_stale_executions_async
+
+    ids = await _seed(migrations_pg_dsn)
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        # El "stale" pasa a: 30 min de antigüedad (muy por debajo de 7h), SIN
+        # contenedor → huérfano. El "fresh" pasa a: 2h de antigüedad CON
+        # contenedor vivo → run legítimo largo, intocable.
+        await conn.execute(
+            "UPDATE executions SET started_at = now() - interval '30 minutes' WHERE id=$1",
+            ids["exec_stale"],
+        )
+        await conn.execute(
+            "UPDATE executions SET started_at = now() - interval '2 hours' WHERE id=$1",
+            ids["exec_fresh"],
+        )
+    finally:
+        await conn.close()
+
+    runner = _FakeRunner(managed_ids={str(ids["exec_fresh"])})
+    result = await _sweep_stale_executions_async(
+        workers_settings,  # type: ignore[arg-type]
+        runner=runner,
+        stale_after=timedelta(hours=7),
+        now=datetime.now(UTC),
+    )
+
+    engine = create_async_engine(workers_settings.database_url)  # type: ignore[attr-defined]
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessionmaker() as session:
+            orphan = await session.get(Execution, ids["exec_stale"])
+            alive = await session.get(Execution, ids["exec_fresh"])
+            orphan_task = await session.get(Task, ids["task_stale"])
+        assert orphan is not None and orphan.status == "failed"
+        assert orphan.abort_code == "stale_after_worker_loss"
+        assert orphan_task is not None and orphan_task.status == TaskStatus.BLOCKED.value
+        assert alive is not None and alive.status == "running"
+        assert result["swept"] == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_orphan_sweep_respects_grace_and_daemon_silence(
+    _migrated: None, workers_settings: object, migrations_pg_dsn: str
+) -> None:
+    """Ni una fila DENTRO de la gracia (contenedor aún arrancando) ni ninguna
+    fila cuando el daemon no responde (list → None) se barren."""
+    from workers.maintenance import _sweep_stale_executions_async
+
+    ids = await _seed(migrations_pg_dsn)
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        # 2 min de antigüedad: dentro de la gracia aunque no tenga contenedor.
+        await conn.execute(
+            "UPDATE executions SET started_at = now() - interval '2 minutes' WHERE id=$1",
+            ids["exec_stale"],
+        )
+        # 30 min sin contenedor, pero el daemon NO responde en este test.
+        await conn.execute(
+            "UPDATE executions SET started_at = now() - interval '30 minutes' WHERE id=$1",
+            ids["exec_fresh"],
+        )
+    finally:
+        await conn.close()
+
+    in_grace = await _sweep_stale_executions_async(
+        workers_settings,  # type: ignore[arg-type]
+        runner=_FakeRunner(managed_ids=set()),
+        stale_after=timedelta(hours=7),
+        now=datetime.now(UTC),
+    )
+    # Solo el de 30 min sin contenedor cae; el de 2 min sobrevive a la gracia.
+    assert in_grace["swept"] == 1
+
+    ids2 = await _seed(migrations_pg_dsn)
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "UPDATE executions SET started_at = now() - interval '30 minutes' WHERE id=$1",
+            ids2["exec_stale"],
+        )
+    finally:
+        await conn.close()
+
+    daemon_down = await _sweep_stale_executions_async(
+        workers_settings,  # type: ignore[arg-type]
+        runner=_FakeRunner(managed_ids=None),
+        stale_after=timedelta(hours=7),
+        now=datetime.now(UTC),
+    )
+    assert daemon_down["swept"] == 0
 
 
 @pytest.mark.asyncio

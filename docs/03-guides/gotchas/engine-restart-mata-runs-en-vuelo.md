@@ -45,8 +45,12 @@ Tras un reinicio de Docker Desktop / del engine (crash, update, `wsl --shutdown`
    (antes solo el código, y el detalle moría con el contenedor reapeado) — mira ahí
    antes de asumir credencial caducada.
 
-## Mejora pendiente
+## Sweep de huérfanos (implementado 2026-07-03)
 
-Boot-reaper en el arranque del worker: cerrar `running` sin contenedor vivo
-(etiqueta `com.agentic-platform.execution-id`) en vez de esperar 7 h. Valorado en la
-revisión 2026-07-03; no implementado aún.
+`workers.sweep_stale_executions` (beat, cada 5 min) detecta ahora las filas
+`running` **sin contenedor** en el daemon (etiqueta
+`com.agentic-platform.execution-id`, cualquier estado) y las cierra tras una
+gracia de 5 min — sin esperar las 7 h del umbral por edad, que queda como
+backstop para cuando el daemon no responde. Un run legítimo largo (contenedor
+vivo) no se toca nunca. Con esto, los puntos 1-2 de la remediación manual de
+arriba se auto-curan en ~10 min tras cualquier engine-restart.
