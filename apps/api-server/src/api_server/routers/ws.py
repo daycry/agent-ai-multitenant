@@ -20,8 +20,13 @@ whether the resource exists in another tenant. This closes the
 cross-tenant real-time leak where any valid JWT could tail any tenant's
 streams by guessing a UUID.
 
-Each socket reads its stream from the beginning (`0`), so a client that
-connects mid-run still gets the backlog and then the live tail.
+Los streams POR-RECURSO (execution/conversation/document) se leen desde el
+principio (`0`): su backlog ES el estado que el cliente necesita (p. ej. los
+steps ya emitidos de un run en curso). El stream del KANBAN es distinto: el
+estado inicial lo da el fetch HTTP y el socket solo debe aportar lo NUEVO —
+re-reproducir el histórico del stream GLOBAL resucitaba estados viejos por
+encima de datos frescos de BD (reset del plan CI4, 2026-07-03) y crecía sin
+límite con la vida de la plataforma. Por eso arranca en `now - ventana`.
 """
 
 from __future__ import annotations
@@ -62,6 +67,11 @@ router = APIRouter(tags=["ws"])
 # that a closing socket is noticed reasonably soon.
 _BLOCK_MS = 10_000
 _READ_COUNT = 64
+
+# Solapamiento de re-reproducción del socket de kanban: cubre el hueco entre el
+# fetch HTTP del tablero y la conexión del WS (un evento en esa ventana no se
+# pierde) sin re-reproducir el histórico completo del stream global.
+_KANBAN_REPLAY_WINDOW_MS = 15_000
 
 # Close codes (RFC 6455 1008 = policy violation).
 _CLOSE_POLICY = 1008
@@ -133,6 +143,23 @@ async def _owns_resource(principal: AuthPrincipal, model: type[Any], resource_id
         return row is not None
 
 
+async def _initial_stream_id(redis: Redis, replay_window_ms: int | None) -> str:
+    """Resolve where the pump starts reading the stream.
+
+    ``None`` → ``"0"``: re-reproduce todo el backlog (streams por-recurso cuyo
+    histórico ES el estado, p. ej. los steps de una execution). ``N`` → un id
+    ``now-N`` según el RELOJ DE REDIS (los ids de stream los genera Redis; usar
+    su TIME evita desfases con el del api-server): solo se re-reproduce la
+    ventana reciente — el estado inicial viene del fetch HTTP, y el histórico
+    antiguo puede contradecir datos más frescos de BD (2026-07-03: el tablero
+    resucitaba tareas a «Hecho» tras el reset del plan CI4)."""
+    if replay_window_ms is None:
+        return "0"
+    seconds, microseconds = await redis.time()
+    start_ms = max(0, int(seconds) * 1000 + int(microseconds) // 1000 - replay_window_ms)
+    return f"{start_ms}-0"
+
+
 async def _pump(
     ws: WebSocket,
     redis: Redis,
@@ -140,17 +167,20 @@ async def _pump(
     *,
     project_filter: str | None,
     tenant_filter: str | None = None,
+    replay_window_ms: int | None = None,
 ) -> None:
-    """Tail `stream` from the start and forward entries until the client
-    disconnects. `project_filter`/`tenant_filter`, when set, drop entries
-    whose `project_id`/`tenant_id` field does not match — the kanban
-    stream is global, so it is scoped to one project AND one tenant.
+    """Tail `stream` and forward entries until the client disconnects.
+    `project_filter`/`tenant_filter`, when set, drop entries whose
+    `project_id`/`tenant_id` field does not match — the kanban stream is
+    global, so it is scoped to one project AND one tenant.
+    `replay_window_ms` decides how much backlog re-plays on connect (see
+    :func:`_initial_stream_id`).
 
     A single `ws.receive()` runs alongside the Redis read so a client
     that closes while the stream is idle is noticed at once — no leaked
     task blocked on `xread`.
     """
-    last_id = "0"
+    last_id = await _initial_stream_id(redis, replay_window_ms)
     reader = asyncio.ensure_future(ws.receive())
     try:
         while True:
@@ -231,7 +261,16 @@ async def kanban_stream(
         await _reject(ws, "forbidden")
         return
     tenant_filter = str(principal.tenant_id) if principal.tenant_id is not None else None
-    await _pump(ws, redis, EVENTS_STREAM, project_filter=project_id, tenant_filter=tenant_filter)
+    await _pump(
+        ws,
+        redis,
+        EVENTS_STREAM,
+        project_filter=project_id,
+        tenant_filter=tenant_filter,
+        # El estado inicial del tablero es el fetch HTTP; el socket solo aporta
+        # lo nuevo (+ una ventana corta de solape). Ver _initial_stream_id.
+        replay_window_ms=_KANBAN_REPLAY_WINDOW_MS,
+    )
 
 
 @router.websocket("/ws/conversation/{conversation_id}")

@@ -51,3 +51,43 @@ def test_ws_rejects_an_invalid_token(client: TestClient) -> None:
     ):
         ws.receive_json()
     assert exc_info.value.code == 1008
+
+
+class _FakeTimeRedis:
+    """Solo implementa TIME — lo único que _initial_stream_id necesita."""
+
+    def __init__(self, seconds: int, microseconds: int) -> None:
+        self._now = (seconds, microseconds)
+
+    async def time(self) -> tuple[int, int]:
+        return self._now
+
+
+@pytest.mark.asyncio
+async def test_initial_stream_id_without_window_replays_from_zero() -> None:
+    """Streams por-recurso (execution/conversation/document): el backlog ES el
+    estado — se sigue leyendo desde «0»."""
+    from api_server.routers.ws import _initial_stream_id
+
+    assert await _initial_stream_id(_FakeTimeRedis(1, 0), None) == "0"  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_initial_stream_id_with_window_skips_stale_history() -> None:
+    """Kanban (2026-07-03): re-reproducir el histórico completo del stream
+    global resucitaba estados viejos («Hecho») por encima del fetch fresco tras
+    el reset del plan CI4. Con ventana, el pump arranca en now-N según el reloj
+    DE REDIS (quien genera los ids del stream)."""
+    from api_server.routers.ws import _initial_stream_id
+
+    redis = _FakeTimeRedis(1_783_065_000, 500_000)
+    start = await _initial_stream_id(redis, 15_000)  # type: ignore[arg-type]
+    assert start == f"{1_783_065_000 * 1000 + 500 - 15_000}-0"
+
+
+def test_kanban_stream_uses_a_bounded_replay_window() -> None:
+    """Pin del cableado: el socket del kanban NO re-reproduce desde «0»."""
+    from api_server.routers import ws as ws_module
+
+    assert ws_module._KANBAN_REPLAY_WINDOW_MS is not None
+    assert 0 < ws_module._KANBAN_REPLAY_WINDOW_MS <= 60_000
