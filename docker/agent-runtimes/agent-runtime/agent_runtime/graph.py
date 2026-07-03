@@ -490,7 +490,12 @@ def _harvest_worktree_files(root: Path, prefer: list[str]) -> list[dict[str, str
 # `prefer` del harvest (caso 019f27cc: el entregable pre-existente quedaba
 # fuera del cap de 40 y el self-review no podía verlo).
 _REFERENCED_PATHS_MAX = 10
-_PATH_TOKEN_RE = re.compile(r"[\w][\w./\\-]*/[\w.-]+\.\w{1,8}")
+# Path con directorio (docs/x.md) O nombre de fichero suelto en la raíz
+# (phpunit.xml — caso 019f27ed). La extensión debe EMPEZAR por letra para no
+# capturar números de versión («1.0.0»); las entradas que no existan en el
+# worktree las descarta el harvest (prefer ∩ rels), así que el regex puede ser
+# generoso sin riesgo.
+_PATH_TOKEN_RE = re.compile(r"[\w][\w./\\-]*\.[A-Za-z]\w{0,7}")
 
 
 def _referenced_paths(state: Mapping[str, Any]) -> list[str]:

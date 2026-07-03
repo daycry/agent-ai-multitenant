@@ -46,6 +46,26 @@ def test_referenced_paths_extracts_from_task_and_output() -> None:
     assert refs.count("docs/contrato-respuesta-json.md") == 1
 
 
+def test_referenced_paths_catches_root_level_filenames() -> None:
+    """Caso 019f27ed (matriz de pruebas): `phpunit.xml` vive en la RAÍZ del
+    worktree — sin barra. La primera versión del regex exigía un «/», así que
+    el criterio «phpunit.xml válido» no entraba en prefer y el crowding lo
+    dejaba fuera del harvest → fail en bucle otra vez. Un nombre de fichero
+    suelto con extensión debe capturarse; un número de versión (1.0.0) no."""
+    state: dict[str, Any] = {
+        "task": {
+            "title": "Matriz de pruebas",
+            "description": "Configurar phpunit.xml con los testsuites.",
+            "acceptance_criteria": ["phpunit.xml declara testsuites y coverage"],
+        },
+        "output": "meta.version==1.0.0 verificado; escribí tests/_support/CITestCase.php",
+    }
+    refs = _referenced_paths(state)
+    assert "phpunit.xml" in refs
+    assert "tests/_support/CITestCase.php" in refs
+    assert "1.0.0" not in refs  # un número de versión no es un fichero
+
+
 def test_harvest_prefers_referenced_paths_over_alphabetical_crowding(tmp_path: Path) -> None:
     """Con 45 ficheros de scaffold alfabéticamente ANTERIORES, el entregable
     referenciado sobrevive al cap de 40 gracias a `prefer`."""
