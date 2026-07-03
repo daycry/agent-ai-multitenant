@@ -53,6 +53,12 @@ DEFAULT_WORKTREE_TTL_S = 30 * 24 * 60 * 60
 # Git's well-known empty-tree object id — used to seed an empty ROOT commit in a
 # fresh local bare repo (prod-18) so worktrees can branch off a valid HEAD.
 _EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+# Espera acotada del PERDEDOR de la carrera de `git init --bare` (TOCTOU
+# 2026-07-03): dos tasks raíz del mismo plan provisionan el MISMO bare a la vez;
+# el perdedor espera a que el ganador termine de inicializarlo (ventana de ms).
+_INIT_RACE_WAIT_ATTEMPTS = 20
+_INIT_RACE_WAIT_DELAY_S = 0.25
 # Identity for platform-authored git ops with no human author (the seed commit).
 _PLATFORM_GIT_NAME = "Agentic Platform"
 _PLATFORM_GIT_EMAIL = "platform@agentic.local"
@@ -171,11 +177,45 @@ class BareRepoManager:
         path = self._layout.bare_repo_path(repo_name)
         if not path.exists():
             self._layout.repos_root.mkdir(parents=True, exist_ok=True)
-            _run_git("init", "--bare", str(path))
-            _log.info("bare_repo.init", tenant=self._layout.tenant_slug, repo=repo_name)
+            try:
+                _run_git("init", "--bare", str(path))
+                _log.info("bare_repo.init", tenant=self._layout.tenant_slug, repo=repo_name)
+            except GitCommandError as exc:
+                # TOCTOU (2026-07-03): dos tasks RAÍZ del mismo plan provisionan
+                # el MISMO bare a la vez; la perdedora del `git init` recibe
+                # rc=128 «cannot mkdir …: File exists» y su run moría
+                # `workspace_unavailable` (reset del plan CI4). Que el repo
+                # exista ES el estado deseado — esperar a que el ganador termine
+                # de inicializarlo en vez de fallar.
+                if "exists" not in str(exc).lower():
+                    raise
+                self._wait_repo_valid(path)
+                _log.info(
+                    "bare_repo.init_race_recovered",
+                    tenant=self._layout.tenant_slug,
+                    repo=repo_name,
+                )
         if remote_url is not None:
             self._set_remote(path, remote_url)
         return path
+
+    @staticmethod
+    def _wait_repo_valid(path: Path) -> None:
+        """Espera acotada a que ``path`` sea un repo git válido (el ganador de la
+        carrera de init puede seguir inicializándolo). Si nunca lo es (basura
+        previa, init abortada), re-lanza — mejor fallar alto que devolver un
+        path corrupto."""
+        last_exc: GitCommandError | None = None
+        for _ in range(_INIT_RACE_WAIT_ATTEMPTS):
+            try:
+                _run_git("-C", str(path), "rev-parse", "--is-bare-repository")
+                return
+            except GitCommandError as exc:
+                last_exc = exc
+                time.sleep(_INIT_RACE_WAIT_DELAY_S)
+        raise GitCommandError(
+            f"bare repo at {path} exists but never became valid (init race?): {last_exc}"
+        )
 
     def seed_initial_commit_if_empty(self, repo_name: str) -> bool:
         """Ensure the bare repo has a commit so worktrees can branch off it (prod-18).
