@@ -21,6 +21,15 @@ if [ "$(id -u)" = "0" ]; then
             chown -R 1000:1000 "$DATA_ROOT" || true
         fi
     fi
+    # Pool de backup/restore (durabilidad 2026-07-03): el paso volume-tar lee
+    # los _data de redis (uid 999) y vault (uid 100), ambos 0700 — ilegibles
+    # para uid 1000 — y un restore además ESCRIBE en ellos. El servicio
+    # dedicado `workers-backup` (cola privileged, sin runs de agentes) se queda
+    # como root DENTRO de su contenedor confinado; el resto de pools siguen
+    # cayendo a uid 1000.
+    if [ "${WORKERS_RUN_AS_ROOT:-0}" = "1" ]; then
+        exec "$@"
+    fi
     # HOME heredado de root sería /root: ilegible para uid 1000, y asyncpg
     # revienta con EACCES al buscar ~/.postgresql/postgresql.key en CADA
     # conexión a BD (regresión detectada 2026-07-02). Un HOME escribible

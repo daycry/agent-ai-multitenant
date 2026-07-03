@@ -408,8 +408,12 @@ class BackupEngine:
         archive_name = f"{volume}.tar.gz"
         archive_path = bundle_dir / archive_name
         source_dir = self._config.volumes_mount_root / volume / "_data"
+        # `--create` es OBLIGATORIO en GNU tar («You must specify one of the
+        # '-Acdtrux' options»); faltaba desde Plan 12 y el runner fake de los
+        # tests nunca lo detectó — el primer backup real (2026-07-03) reventó aquí.
         args = [
             "tar",
+            "--create",
             "--gzip",
             f"--directory={source_dir}",
             f"--file={archive_path}",
@@ -447,6 +451,7 @@ class BackupEngine:
         archive_path = bundle_dir / archive_name
         args = [
             "tar",
+            "--create",
             "--gzip",
             f"--directory={bind_path}",
             f"--file={archive_path}",
@@ -497,6 +502,7 @@ class BackupEngine:
         member_names = [a.path for a in artifacts]
         args = [
             "tar",
+            "--create",
             f"--directory={bundle_dir}",
             f"--file={archive_path}",
             *member_names,

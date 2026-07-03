@@ -131,8 +131,11 @@ def test_configured_volumes_are_tarred_from_their_data_trees(tmp_path: Path) -> 
         str(cfg.volumes_mount_root / "redis_data" / "_data"),
         str(cfg.volumes_mount_root / "vault_data" / "_data"),
     ]
-    # Each tar is gzip + writes a <volume>.tar.gz into the bundle.
+    # Each tar is CREATE (GNU tar exige el modo — «You must specify one of the
+    # '-Acdtrux' options»; faltó desde Plan 12 hasta el primer backup real
+    # 2026-07-03) + gzip + writes a <volume>.tar.gz into the bundle.
     for call in tar_calls:
+        assert "--create" in call
         assert "--gzip" in call
         archive = _arg_value(call, "--file=")
         assert archive is not None and archive.endswith(".tar.gz")

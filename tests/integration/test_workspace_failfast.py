@@ -65,7 +65,11 @@ def _migrated(alembic_config: object) -> None:
 
 
 async def _seed(
-    sm: async_sessionmaker, *, with_plan: bool, task_status: str = TaskStatus.IN_PROGRESS.value
+    sm: async_sessionmaker,
+    *,
+    with_plan: bool,
+    task_status: str = TaskStatus.IN_PROGRESS.value,
+    done_sibling: bool = False,
 ) -> dict[str, UUID]:
     ids = {"tenant": uuid4(), "project": uuid4(), "plan": uuid4(), "task": uuid4()}
     async with sm() as s, s.begin():
@@ -111,6 +115,20 @@ async def _seed(
                 priority="medium",
             )
         )
+        if done_sibling:
+            # Una tarea hermana COMPLETADA del mismo plan: su trabajo debería
+            # vivir en la rama del plan del bare repo (guarda repo_history_lost).
+            s.add(
+                Task(
+                    id=uuid4(),
+                    tenant_id=ids["tenant"],
+                    project_id=ids["project"],
+                    plan_id=ids["plan"],
+                    title="sibling done",
+                    status=TaskStatus.DONE.value,
+                    priority="medium",
+                )
+            )
     return ids
 
 
@@ -197,6 +215,127 @@ async def test_review_run_still_launches_without_worktree(
 
         assert len(runner.specs) == 1  # el contenedor SÍ se lanza
         assert outcome.abort_code != "workspace_unavailable"
+    finally:
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_implementer_fails_fast_when_plan_history_lost(
+    _migrated: None,
+    admin_database_url: str,
+    test_redis_url: str,
+    tmp_path: object,
+) -> None:
+    """Guarda repo_history_lost (2026-07-03): el plan tiene una tarea DONE pero
+    el data_root está vacío (wipe del bind / volumen borrado) → la provisión
+    re-seedearía un bare VACÍO fabricando un estado roto en silencio. En su
+    lugar: fail-fast con abort_code=repo_history_lost, sin lanzar contenedor."""
+    engine = create_async_engine(admin_database_url)
+    redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm, with_plan=True, done_sibling=True)
+        runner = _RecordingRunner()
+
+        outcome = await conduct_execution(
+            _request(ids),
+            settings=Settings(data_root=str(tmp_path)),
+            sessionmaker=sm,
+            redis=redis,
+            runner=runner,
+        )
+
+        assert runner.specs == []
+        assert outcome.status == "failed"
+        assert outcome.abort_code == "repo_history_lost"
+
+        async with sm() as s:
+            executions = await list_executions_for_task(s, ids["task"])
+            task = await s.get(Task, ids["task"])
+        assert len(executions) == 1
+        assert executions[0].abort_code == "repo_history_lost"
+        assert task is not None and task.status == TaskStatus.BLOCKED.value
+    finally:
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_implementer_fails_fast_when_plan_branch_is_empty(
+    _migrated: None,
+    admin_database_url: str,
+    test_redis_url: str,
+    tmp_path: object,
+) -> None:
+    """Variante ya-re-seedeado: el bare existe y la rama del plan también, pero
+    su árbol está VACÍO (solo el seed commit) pese a que el plan tiene tareas
+    DONE — el historial se perdió igualmente → repo_history_lost."""
+    from pathlib import Path
+
+    from workers.git_repos import BareRepoLayout, BareRepoManager, WorktreeManager
+    from workers.plan_git import make_plan_branch_name
+
+    engine = create_async_engine(admin_database_url)
+    redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm, with_plan=True, done_sibling=True)
+
+        # Simula el re-seed post-wipe: bare nuevo con seed commit vacío y la
+        # rama del plan creada encima (sin ningún fichero de las tareas done).
+        layout = BareRepoLayout(
+            data_root=Path(str(tmp_path)), tenant_slug="ws-tenant", project_slug="ws-project"
+        )
+        mgr = BareRepoManager(layout)
+        mgr.ensure_repo("ws-project")
+        mgr.seed_initial_commit_if_empty("ws-project")
+        branch = make_plan_branch_name(str(ids["plan"]), "ws-plan")
+        WorktreeManager(layout, "ws-project").add("sibling-wt", branch=branch)
+
+        runner = _RecordingRunner()
+        outcome = await conduct_execution(
+            _request(ids),
+            settings=Settings(data_root=str(tmp_path)),
+            sessionmaker=sm,
+            redis=redis,
+            runner=runner,
+        )
+
+        assert runner.specs == []
+        assert outcome.status == "failed"
+        assert outcome.abort_code == "repo_history_lost"
+    finally:
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_first_task_of_fresh_plan_still_bootstraps_empty_repo(
+    _migrated: None,
+    admin_database_url: str,
+    test_redis_url: str,
+    tmp_path: object,
+) -> None:
+    """La guarda NO dispara para la primera tarea de un plan sin hermanas
+    completadas: arrancar un proyecto desde un repo vacío es legítimo."""
+    engine = create_async_engine(admin_database_url)
+    redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm, with_plan=True, done_sibling=False)
+        runner = _RecordingRunner()
+
+        outcome = await conduct_execution(
+            _request(ids),
+            settings=Settings(data_root=str(tmp_path)),
+            sessionmaker=sm,
+            redis=redis,
+            runner=runner,
+        )
+
+        assert len(runner.specs) == 1  # el contenedor SÍ se lanza
+        assert outcome.abort_code not in ("repo_history_lost", "workspace_unavailable")
     finally:
         await redis.aclose()
         await engine.dispose()

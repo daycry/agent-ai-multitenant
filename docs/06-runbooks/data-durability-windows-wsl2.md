@@ -2,7 +2,7 @@
 title: Durabilidad de los datos en Windows/Docker Desktop (WSL2)
 docs_language: es
 audience: operador, system admin
-updated: 2026-07-02
+updated: 2026-07-03
 related: ["restart-services.md", "backups.md", "dr-manual-backup.md"]
 ---
 
@@ -10,58 +10,73 @@ related: ["restart-services.md", "backups.md", "dr-manual-backup.md"]
 
 ## TL;DR
 
-**Reiniciar el stack con compose NO pierde los named volumes.** `docker compose restart`,
-`stop`+`start` y `down` (SIN `-v`) + `up` preservan la base de datos, MinIO y Vault. **PERO el bind
-`/data/agent-platform` (bare repos + worktrees de los agentes) NO es fiable frente a reinicios del
-ENGINE en este backend**: el incidente del 2026-07-02 lo demostró — al despertar el host y arrancar
-Docker Desktop (07:32), el bind reapareció **vacío y root:root**, se perdieron los repos con el
-trabajo de 8 tareas done, y los runs del día corrieron "a ciegas". Es la segunda recreación
-observada (2026-07-01 y 2026-07-02). Trata `/data/agent-platform` como **efímero** salvo backup.
+Desde el 2026-07-03 **TODO el estado del stack dev vive en named volumes durables**,
+incluido el data-root de agentes (bare repos + worktrees + dep-cache), que antes era un
+bind al rootfs **efímero** de la VM de Docker Desktop y se perdía en cada reinicio del
+engine (incidente 2026-07-02: repos de 8 tareas done arrasados). El data-root es ahora el
+volumen **externo** `agentic-platform-agent-data`, montado en su ruta daemon-side
+(`/var/lib/docker/volumes/agentic-platform-agent-data/_data`) para conservar la identidad
+de rutas que exige el bind DooD hacia los `agent-runtime` (ver
+[gotcha worktree-bind-dood](../03-guides/gotchas/worktree-bind-dood-empty-vs-named-volume.md)).
 
-Qué destruye datos:
+Bootstrap en una máquina nueva (una única vez, ANTES de `compose up`):
 
-- **`docker compose down -v`** — la `-v` borra los **named volumes** (Postgres, Redis, MinIO, Vault).
-- **Reinicio del engine / arranque del host** (evidencia 2026-07-02): puede recrear el bind
-  `/data/agent-platform` vacío (y root:root, porque el daemon lo auto-crea al montar). Los named
-  volumes sobrevivieron a ese mismo reinicio.
-- **Reset de la VM**: `wsl --shutdown` con FS volátil, o Docker Desktop → _Troubleshoot → Clean /
-  Purge data_ → **se pierde TODO**.
+```powershell
+docker volume create agentic-platform-agent-data
+```
 
-Si en los logs del worker ves `bare_repo.init` + `bare_repo.seed_initial_commit` para un proyecto que
-ya tenía código, **hubo pérdida de datos**, no un redeploy normal.
+Al ser `external: true`, **ni siquiera `docker compose down -v` lo elimina**.
 
-## Mitigaciones activas (auditoría 2026-07-02)
+Qué destruye datos todavía:
 
-1. **Self-heal de permisos**: el entrypoint del worker (`apps/workers/docker-entrypoint.sh`) repara
-   la propiedad de `/data/agent-platform` (uid 1000) en CADA arranque del contenedor — el one-shot
-   `worktrees-init` del compose queda como red de seguridad.
-2. **Fail-fast**: si la provisión del worktree falla, el run implementador aborta en segundos con
-   `abort_code=workspace_unavailable` en vez de quemar 50 iteraciones sobre un tmpfs vacío; y
-   `stack_exec` valida el bind-source antes de `containers/create`.
-3. **Backup**: el bundle programado (Plan 12) ahora incluye `/data/agent-platform`
-   (`WORKERS_BACKUP_BIND_PATHS`, default activado). OJO: en el stack dev el backup diario corre en la
-   cola `privileged`, que los workers dev NO consumen — usa `scripts/backup-data.ps1` (programable
-   con el Task Scheduler de Windows) o levanta un worker de esa cola.
+- **`docker compose down -v`** — borra los named volumes DECLARADOS (Postgres, Redis,
+  MinIO, Vault…). El agent-data sobrevive (external), pero la BD no: sin BD las tareas
+  "done" y el resto del estado se pierden igualmente. No lo uses sin backup.
+- **`docker volume rm agentic-platform-agent-data`** — borrado explícito del volumen.
+- **Docker Desktop → _Troubleshoot → Clean / Purge data_** — se pierde TODO el VHDX
+  (volúmenes incluidos).
 
-## Por qué `/data/agent-platform` es frágil en Windows
+Qué ya NO destruye datos:
 
-El worker monta `/data/agent-platform` como **bind mount** (no named volume) porque el daemon del host
-debe resolver esa ruta para bindarla al contenedor `agent-runtime` efímero (DooD — ver
-[gotcha worktree-bind-dood](../03-guides/gotchas/worktree-bind-dood-empty-vs-named-volume.md)). En
-Windows + Docker Desktop con backend WSL2, esa ruta (un path Linux absoluto, no `C:\...`) vive **dentro
-de la VM WSL2**, no en el FS de Windows. Por eso es resiliente a `down -v` pero vulnerable a un reset de
-la VM.
+- **Reinicio del engine / arranque del host / `wsl --shutdown`** — los volúmenes viven en
+  el VHDX persistente de docker-desktop-data (igual que `postgres_data`, que sobrevivió a
+  los incidentes de 2026-07-01/02).
+
+Si en los logs del worker ves `bare_repo.init` + `bare_repo.seed_initial_commit` para un
+proyecto que ya tenía código, **hubo pérdida de datos**, no un redeploy normal — y desde
+2026-07-03 el run NO seguirá a ciegas: aborta con `abort_code=repo_history_lost` (guarda
+en `_provision_worktree`) si el plan tenía tareas completadas.
+
+## Defensas activas
+
+1. **Volumen durable** (arriba): la causa raíz del incidente 2026-07-02 está eliminada.
+2. **Self-heal de permisos**: el entrypoint del worker (`apps/workers/docker-entrypoint.sh`)
+   repara la propiedad del data-root (uid 1000) en CADA arranque; el one-shot
+   `worktrees-init` queda como red de seguridad.
+3. **Fail-fast**: provisión de worktree fallida → `workspace_unavailable` en segundos;
+   historial del plan desaparecido (repo re-seedeado vacío o rama sin ficheros con tareas
+   done) → `repo_history_lost`; `stack_exec` valida el bind-source antes de
+   `containers/create`.
+4. **Backup diario** (Plan 12 + F0.4): corre en la cola `privileged`, consumida por el
+   servicio dedicado `workers-backup` (root dentro de su contenedor — los `_data` de
+   redis/vault son 0700 de otros uids y un restore además escribe en ellos; este pool no
+   ejecuta runs de agentes). Captura pg_dump + los volúmenes `agentic-platform_minio_data`,
+   `agentic-platform_redis_data`, `agentic-platform_vault_data` y
+   `agentic-platform-agent-data` (`WORKERS_BACKUP_VOLUMES`). Los bundles se escriben en
+   `repo/.backups/agent-platform/` — **FS de Windows**, fuera del VHDX: sobreviven incluso
+   a un Clean/Purge de Docker Desktop.
 
 ## Matriz de pérdida por acción
 
-| Acción                                      | Postgres / Redis / MinIO / Vault | Bare repos & worktrees (`/data`)        |
-| ------------------------------------------- | -------------------------------- | --------------------------------------- |
-| `docker compose restart`                    | ✅ persiste                      | ✅ persiste                             |
-| `stop` + `start`                            | ✅ persiste                      | ✅ persiste                             |
-| `down` (sin `-v`) + `up`                    | ✅ persiste                      | ✅ persiste                             |
-| `down -v` + `up`                            | ❌ **se pierde** (volúmenes)     | ✅ persiste (bind)                      |
-| Reinicio de Docker Desktop / arranque host  | ✅ persiste                      | ⚠️ **NO fiable** (evidencia 2026-07-02) |
-| `wsl --shutdown` (FS volátil) / Clean-Purge | ❌ **se pierde**                 | ❌ **se pierde**                        |
+| Acción                                     | Postgres / Redis / MinIO / Vault | Bare repos & worktrees (agent-data)    |
+| ------------------------------------------ | -------------------------------- | -------------------------------------- |
+| `docker compose restart`                   | ✅ persiste                      | ✅ persiste                            |
+| `stop` + `start`                           | ✅ persiste                      | ✅ persiste                            |
+| `down` (sin `-v`) + `up`                   | ✅ persiste                      | ✅ persiste                            |
+| `down -v` + `up`                           | ❌ **se pierde** (volúmenes)     | ✅ persiste (external)                 |
+| Reinicio de Docker Desktop / arranque host | ✅ persiste                      | ✅ persiste (volumen, fix 2026-07-03)  |
+| `wsl --shutdown` + reinicio                | ✅ persiste                      | ✅ persiste                            |
+| `docker volume rm` explícito / Clean-Purge | ❌ **se pierde**                 | ❌ **se pierde** (restaura del backup) |
 
 `scripts/dev/down.ps1 -Docker` y `down.sh --docker` usan `docker compose down --remove-orphans`
 (**sin `-v`**) → seguros. NUNCA añadas `-v` ni hagas Clean/Purge sin un backup previo.
@@ -77,11 +92,9 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml `
 Para recrear el stack completo, omite `<servicio>`. `--force-recreate` reaplica imágenes/env sin borrar
 volúmenes. Verifica luego con [health-check.md](./health-check.md).
 
-## Backup / restore de `/data/agent-platform`
+## Backup / restore manual del data-root
 
-Los bare repos + worktrees NO los cubre el backup lógico de tenant (pg_dump, ADR 0036 /
-[backups.md](./backups.md)). Respáldalos aparte a un path **durable de Windows** antes de cualquier
-operación destructiva o reset de la VM:
+Además del backup diario, puedes volcar el volumen a mano a un path durable de Windows:
 
 ```powershell
 # Backup → C:\AgentData\backups\agent-platform-<fecha>.tar.gz
@@ -93,12 +106,11 @@ operación destructiva o reset de la VM:
 ./scripts/backup-data.sh /mnt/c/AgentData/backups
 ```
 
-Ambos usan un contenedor `alpine` efímero que monta `/data/agent-platform:ro` y el directorio destino,
-y produce un `.tar.gz`. Para restaurar, desempaqueta el tar dentro de `/data/agent-platform` (con el
-stack parado) y vuelve a levantar.
+Ambos usan un contenedor `alpine` efímero que monta el volumen
+`agentic-platform-agent-data:ro` y el directorio destino, y producen un `.tar.gz`. Para
+restaurar (con el stack parado):
 
-## Mejora a medio plazo (no aplicada)
-
-Migrar el bind a un path **respaldado por Windows** (p.ej. `C:\AgentData\data\agent-platform` montado en
-la VM) lo haría resiliente a resets de la VM, a costa de algo de I/O. Requiere config de Docker Desktop;
-documentado aquí como follow-up, no implementado.
+```powershell
+docker run --rm -v agentic-platform-agent-data:/data -v C:\AgentData\backups:/backup:ro `
+  alpine sh -c "cd /data && tar xzf /backup/<archivo>.tar.gz && chown -R 1000:1000 /data"
+```

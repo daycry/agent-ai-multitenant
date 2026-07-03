@@ -40,6 +40,7 @@ from api_server.db.models import Organization
 from api_server.events import publish_execution_event, publish_task_status_changed
 from api_server.task_state_machine import transition_task_status
 from redis.asyncio import Redis
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from workers.agent_tool_schemas import build_model_tool_schemas
@@ -834,6 +835,15 @@ async def _apply_review_verdict(
     return (task, old_status, task.status)
 
 
+class RepoHistoryLostError(RuntimeError):
+    """El bare repo del proyecto ya no contiene el historial del plan aunque el
+    plan tiene tareas completadas — el data_root fue arrasado/sustituido (p. ej.
+    el engine-restart de Docker Desktop del 2026-07-02 recreó el bind vacío).
+    Re-seedear un repo VACÍO y dejar correr al agente fabricaría un estado roto
+    en silencio (churn estéril + escalada confusa); el run debe abortar en
+    segundos con ``abort_code=repo_history_lost`` y un motivo accionable."""
+
+
 async def _provision_worktree(
     settings: Settings,
     *,
@@ -842,6 +852,7 @@ async def _provision_worktree(
     plan_id: str,
     plan_slug: str,
     task_id: str,
+    expect_plan_history: bool = False,
 ) -> str | None:
     """Materialise the per-task git worktree and return its host path (prod-18
     task_prod18_provision_01 / ADR 0085).
@@ -852,7 +863,12 @@ async def _provision_worktree(
     is the absolute HOST path the daemon resolves for the ``/workspace`` bind (DooD).
     Any failure logs and returns ``None``; el CALLER decide la política — para un
     run implementador que esperaba worktree eso es fail-fast `workspace_unavailable`
-    (auditoría 2026-07-02 F0.2), no un fallback silencioso a tmpfs."""
+    (auditoría 2026-07-02 F0.2), no un fallback silencioso a tmpfs.
+
+    ``expect_plan_history=True`` (guarda 2026-07-03): el plan ya tiene tareas
+    completadas, así que el bare DEBE contener la rama del plan con contenido.
+    Si la rama no existe (repo recién re-seedeado) o su checkout está vacío,
+    lanza :class:`RepoHistoryLostError` en vez de fabricar un workspace vacío."""
     from pathlib import Path
 
     from workers.git_repos import BareRepoLayout, BareRepoManager, WorktreeManager
@@ -870,14 +886,30 @@ async def _provision_worktree(
         mgr.ensure_repo(repo_name)
         # A fresh local bare (no remote/clone) is empty → seed a root commit so the
         # worktree can branch off a valid HEAD.
-        mgr.seed_initial_commit_if_empty(repo_name)
+        seeded = mgr.seed_initial_commit_if_empty(repo_name)
         wt = WorktreeManager(layout, repo_name)
+        if expect_plan_history and not wt.branch_exists(branch):
+            raise RepoHistoryLostError(
+                f"La rama del plan '{branch}' no existe en el bare repo "
+                f"{layout.bare_repo_path(repo_name)} pese a que el plan tiene tareas "
+                "completadas"
+                + (" (el repo se acaba de re-seedear vacío)" if seeded else "")
+                + " — el historial del proyecto se perdió (¿wipe/pérdida de data_root?)."
+            )
         path = wt.add(task_id, branch=branch)
         wt.sync_to_head(task_id, branch=branch)
+        if expect_plan_history and not any(entry.name != ".git" for entry in Path(path).iterdir()):
+            raise RepoHistoryLostError(
+                f"El checkout de la rama '{branch}' está VACÍO pese a que el plan tiene "
+                "tareas completadas — los commits previos ya no están en el bare repo "
+                "(historial perdido). No se lanza al agente sobre un workspace vacío."
+            )
         return str(path)
 
     try:
         return await asyncio.to_thread(_git)
+    except RepoHistoryLostError:
+        raise
     except Exception as exc:  # pragma: no cover - defensive: never fail the run on git
         _log.warning("workers.worktree_provision_failed", task_id=task_id, error=str(exc))
         return None
@@ -1166,6 +1198,22 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                     review_worktree = (org.slug, project.slug)
                 else:
                     worktree_inputs = (org.slug, project.slug, str(plan.id), plan.slug)
+        # Guarda repo_history_lost (2026-07-03): si el plan ya tiene tareas
+        # completadas, el bare repo DEBE contener la rama del plan con su
+        # historial — un data_root recién arrasado (incidente 2026-07-02) no
+        # debe re-seedearse en silencio como repo vacío para este plan.
+        plan_has_prior_work = False
+        if worktree_inputs is not None:
+            prior = await session.scalar(
+                select(func.count())
+                .select_from(Task)
+                .where(
+                    Task.plan_id == task.plan_id,
+                    Task.id != task_id,
+                    Task.status.in_((TaskStatus.DONE.value, TaskStatus.IN_REVIEW.value)),
+                )
+            )
+            plan_has_prior_work = bool(prior)
         # ADR 0057 F1: resolver el model_config (clave `provider` = kind, sin
         # endpoint/credencial) a un spec EJECUTABLE (kind + base_url +
         # credencial de Vault) ANTES de lanzar el contenedor — el sandbox no
@@ -1201,23 +1249,35 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
     # tmpfs se conserva para reviews (ADR 0095) y tasks sin plan/slugs.
     workspace_read_only = False
     workspace_error: str | None = None
+    workspace_error_code = "workspace_unavailable"
     if resolution_error is None:
         if worktree_inputs is not None:
             tenant_slug, project_slug, plan_id_str, plan_slug = worktree_inputs
-            workspace_host_path = await _provision_worktree(
-                settings,
-                tenant_slug=tenant_slug,
-                project_slug=project_slug,
-                plan_id=plan_id_str,
-                plan_slug=plan_slug,
-                task_id=str(task_id),
-            )
-            if workspace_host_path is None:
+            try:
+                workspace_host_path = await _provision_worktree(
+                    settings,
+                    tenant_slug=tenant_slug,
+                    project_slug=project_slug,
+                    plan_id=plan_id_str,
+                    plan_slug=plan_slug,
+                    task_id=str(task_id),
+                    expect_plan_history=plan_has_prior_work,
+                )
+            except RepoHistoryLostError as exc:
+                # Guarda 2026-07-03: NO fabricar un workspace vacío para un plan
+                # con trabajo previo — abortar con motivo accionable.
+                workspace_host_path = None
+                workspace_error_code = "repo_history_lost"
+                workspace_error = (
+                    f"{exc} Restaura el backup de data_root (o re-ejecuta el plan "
+                    "desde cero) y relanza la tarea."
+                )
+            if workspace_host_path is None and workspace_error is None:
                 workspace_error = (
                     "No se pudo provisionar el worktree git de la tarea (data_root "
                     f"'{settings.data_root}' inaccesible o fallo git). Ejecución abortada "
                     "antes de lanzar el contenedor para no correr sin workspace. Revisa "
-                    "la propiedad de /data/agent-platform (uid 1000) y relanza la tarea."
+                    f"la propiedad de {settings.data_root} (uid 1000) y relanza la tarea."
                 )
         elif review_worktree is not None:
             # ADR 0095: mount the implementer's existing worktree READ-ONLY for the
@@ -1237,14 +1297,17 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         _log.error("workers.model_resolution_failed", execution_id=exec_id, error=resolution_error)
         failfast = ("model_unresolved", resolution_error)
     elif workspace_error is not None:
-        # Fail-fast (F0.2): sin workspace NO se lanza el contenedor.
+        # Fail-fast (F0.2): sin workspace NO se lanza el contenedor. El código
+        # distingue el data_root inaccesible (`workspace_unavailable`) del
+        # historial perdido (`repo_history_lost`, guarda 2026-07-03).
         _log.error(
             "workers.workspace_unavailable",
             execution_id=exec_id,
             task_id=request.task_id,
             data_root=settings.data_root,
+            abort_code=workspace_error_code,
         )
-        failfast = ("workspace_unavailable", workspace_error)
+        failfast = (workspace_error_code, workspace_error)
     if failfast is not None:
         failfast_code, failfast_msg = failfast
         await publish_execution_event(

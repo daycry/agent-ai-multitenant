@@ -35,12 +35,21 @@ Tres trampas distintas alrededor del worktree de ejecución (prod-18):
    **path absoluto real del host** bajo `data_root`, y el stack debe montar
    `{data_root}:{data_root}` (mismo path en worker y host).
 
-2. **Volumen nombrado en vez de bind por-path.** Si un override usa un _volumen
-   nombrado_ Docker para `/data` (como tenía el overlay de manuales antes de su fix)
-   en vez del bind `{data_root}:{data_root}`, el daemon monta otro volumen y el
-   worktree (que el worker escribió en su propio FS) **no se ve** → `/workspace`
-   vacío. Ver también [docker-compose-volumes-merge.md] (`volumes:` se mergea, no se
-   reemplaza; usar `!reset` para no arrastrar/perder binds).
+2. **Volumen nombrado montado en una ruta arbitraria.** Si un override monta un
+   _volumen nombrado_ Docker en `/data` (como tenía el overlay de manuales antes
+   de su fix), el path que el worker ve NO existe en el FS del host: el daemon
+   crea un directorio vacío al resolver el bind → `/workspace` vacío. Ver también
+   [docker-compose-volumes-merge.md] (`volumes:` se mergea, no se reemplaza; usar
+   `!reset` para no arrastrar/perder binds).
+
+   **Matiz (durabilidad 2026-07-03):** un volumen nombrado SÍ es utilizable — y es
+   la solución en Docker Desktop/WSL2, donde el bind por-path vive en el rootfs
+   EFÍMERO de la VM (cada engine-restart lo recreaba vacío; incidente 2026-07-02) —
+   siempre que se monte **en su propia ruta daemon-side**
+   (`/var/lib/docker/volumes/<vol>/_data`), que es un path real y persistente del
+   host. Así la identidad de rutas worker↔daemon se conserva y el bind DooD
+   resuelve dentro del volumen. Es lo que hace `docker-compose.manuals.yml` con
+   el volumen externo `agentic-platform-agent-data`.
 
 3. **`safe.bareRepository=explicit`.** git moderno puede rechazar operar sobre un bare
    repo (`git -C <repo>.git branch …`) salvo que se permita explícitamente. La
@@ -55,8 +64,11 @@ remoto/clone) está **vacío** — HEAD es unborn — y `git worktree add … HE
 
 - **Path host idéntico (DooD):** `workspace_host_path` = ruta absoluta bajo `data_root`
   (`BareRepoLayout` → `{data_root}/projects/{tenant}/{project}/worktrees/{task_id}`), y
-  el compose monta `{data_root}:{data_root}` en `workers` y `agent-runtime` (nunca un
-  volumen nombrado para `/data`). El instalador ya lo genera así.
+  el compose monta el data-root **en el mismo path que el daemon resuelve**: en Linux
+  prod, el bind `{data_root}:{data_root}` (el instalador lo genera así); en Docker
+  Desktop/WSL2 dev, el volumen nombrado montado en su ruta daemon-side
+  `/var/lib/docker/volumes/agentic-platform-agent-data/_data` (ver matiz arriba) para
+  que además SOBREVIVA a engine-restarts.
 - **safe.bareRepository:** `workers.git_repos._run_git` inyecta
   `GIT_CONFIG_PARAMETERS='safe.bareRepository=all'` (prod-18), así las operaciones
   sobre los bare de la plataforma funcionan sea cual sea el default del host.

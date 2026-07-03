@@ -2,21 +2,23 @@
 # -----------------------------------------------------------------------------
 # scripts/backup-data.ps1
 #
-# Back up /data/agent-platform (bare repos + per-task worktrees) — the bind mount
-# that lives INSIDE the WSL2 VM and is NOT covered by the tenant pg_dump backup
-# (ADR 0036 / docs/06-runbooks/backups.md). Vulnerable to `wsl --shutdown` and
-# Docker Desktop "Clean / Purge data" (see data-durability-windows-wsl2.md), so
-# snapshot it to a DURABLE Windows path before any destructive op or VM reset.
+# Back up the agents' data-root (bare repos + per-task worktrees + dep-cache).
+# Desde 2026-07-03 vive en el named volume EXTERNO `agentic-platform-agent-data`
+# (durable frente a engine-restarts y `down -v`; ver
+# docs/06-runbooks/data-durability-windows-wsl2.md) — este script lo vuelca a un
+# path DURABLE de Windows antes de operaciones destructivas (docker volume rm,
+# Docker Desktop Clean/Purge) o como snapshot manual extra al backup diario.
 #
-# Produces a .tar.gz via a throwaway alpine container that mounts the data dir
-# read-only; nothing is written back to /data.
+# Produces a .tar.gz via a throwaway alpine container that mounts the volume
+# read-only; nothing is written back.
 #
 # Usage:
 #   .\scripts\backup-data.ps1 -Destination C:\AgentData\backups
 # -----------------------------------------------------------------------------
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$Destination
+    [Parameter(Mandatory)][string]$Destination,
+    [string]$Volume = "agentic-platform-agent-data"
 )
 $ErrorActionPreference = "Stop"
 
@@ -27,9 +29,9 @@ $Destination = (Resolve-Path $Destination).Path
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $archive = "agent-platform-$stamp.tar.gz"
 
-Write-Host "==> Backing up /data/agent-platform -> $Destination\$archive" -ForegroundColor Cyan
+Write-Host "==> Backing up volume $Volume -> $Destination\$archive" -ForegroundColor Cyan
 docker run --rm `
-    -v /data/agent-platform:/data:ro `
+    -v "${Volume}:/data:ro" `
     -v "${Destination}:/backup" `
     alpine `
     tar czf "/backup/$archive" -C /data .

@@ -36,6 +36,7 @@ always on PATH in the test-runtime images).
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 import time
 from dataclasses import dataclass
@@ -298,8 +299,14 @@ class WorktreeManager:
         if wt_path.exists():
             return wt_path
         wt_path.parent.mkdir(parents=True, exist_ok=True)
+        # Recuperación (2026-07-03): si el directorio del worktree desapareció
+        # SIN pasar por git (wipe parcial, borrado manual), el bare conserva una
+        # registración huérfana y `git worktree add` rechaza re-crearlo («missing
+        # but already registered worktree»). Podar antes es barato e idempotente.
+        with contextlib.suppress(GitCommandError):
+            _run_git("worktree", "prune", cwd=self._repo_path)
 
-        if not self._branch_exists(branch):
+        if not self.branch_exists(branch):
             base_ref = base or "HEAD"
             try:
                 _run_git("branch", branch, base_ref, cwd=self._repo_path)
@@ -330,7 +337,10 @@ class WorktreeManager:
         )
         return wt_path
 
-    def _branch_exists(self, branch: str) -> bool:
+    def branch_exists(self, branch: str) -> bool:
+        """¿Existe ``refs/heads/<branch>`` en el bare? Público porque la guarda
+        ``repo_history_lost`` (execution.py) lo consulta antes de materializar
+        el worktree de un plan con tareas ya completadas."""
         try:
             _run_git(
                 "show-ref",
@@ -459,8 +469,6 @@ class WorktreeManager:
         except GitCommandError:
             shutil.rmtree(path, ignore_errors=True)
             # Ask git to forget the now-missing entry.
-            import contextlib
-
             with contextlib.suppress(GitCommandError):
                 _run_git("worktree", "prune", cwd=self._repo_path)
 

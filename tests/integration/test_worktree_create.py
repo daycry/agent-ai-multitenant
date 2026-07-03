@@ -75,6 +75,25 @@ def test_add_reuses_existing_branch(tmp_path: Path) -> None:
     assert (path / "from_sibling.txt").is_file()
 
 
+def test_add_recovers_after_worktree_dir_deleted_out_of_band(tmp_path: Path) -> None:
+    """Recuperación (2026-07-03): si el directorio del worktree desaparece SIN
+    pasar por git (wipe parcial, borrado manual), el bare conserva una
+    registración huérfana y `git worktree add` rechazaba re-crearlo («missing
+    but already registered worktree»). add() debe podar y re-materializar."""
+    import shutil
+
+    from workers.git_repos import WorktreeManager
+
+    layout = _layout_with_seed(tmp_path)
+    wt_mgr = WorktreeManager(layout, "backend")  # type: ignore[arg-type]
+    p1 = wt_mgr.add("task-1", branch="plan/06-foo")
+    shutil.rmtree(p1)  # bypassea git — deja la registración huérfana en el bare
+
+    p2 = wt_mgr.add("task-1", branch="plan/06-foo")
+    assert p2 == p1
+    assert (p2 / "README.md").is_file()
+
+
 def test_add_missing_bare_repo_raises(tmp_path: Path) -> None:
     from workers.git_repos import BareRepoLayout, GitCommandError, WorktreeManager
 

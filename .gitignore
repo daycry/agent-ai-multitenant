@@ -152,3 +152,6 @@ scripts/.demo_state_06_9.json
 
 # Claude Code internal lockfile (per-session / per-machine).
 .claude/scheduled_tasks.lock
+
+# Bundles de backup locales (bind de workers-aux; durabilidad 2026-07-03)
+.backups/

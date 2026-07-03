@@ -68,7 +68,7 @@ async def test_provision_survives_concurrent_branch_creation_race(
 ) -> None:
     """Auditoría 2026-07-02: dos tasks hermanas promovidas A LA VEZ provisionan
     el MISMO plan branch; la perdedora del `git branch` moría con rc=128
-    «a branch named ... already exists» (TOCTOU tras `_branch_exists`) y, con el
+    «a branch named ... already exists» (TOCTOU tras `branch_exists`) y, con el
     fail-fast F0.2, su run abortaba `workspace_unavailable`. La creación de la
     branch es ahora idempotente: "already exists" es éxito, no error."""
     from workers.git_repos import WorktreeManager
@@ -81,7 +81,7 @@ async def test_provision_survives_concurrent_branch_creation_race(
     assert a is not None
     # Simula al PERDEDOR de la carrera: su check dijo "no existe" justo antes
     # de que el ganador la creara.
-    monkeypatch.setattr(WorktreeManager, "_branch_exists", lambda self, branch: False)
+    monkeypatch.setattr(WorktreeManager, "branch_exists", lambda self, branch: False)
 
     b = await _provision_worktree(settings, task_id="task-b", **kwargs)
 
