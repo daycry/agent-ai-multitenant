@@ -19,16 +19,24 @@ from typing import Any
 
 from shared_domain.tool_names import to_canonical
 
-# Builtin tool → sensitive-action category (spec §7.7). Keyed on CANONICAL
-# tool names (ADR 0048) so it matches what the runtime registers; a tool
-# absent from this map is not sensitive and is never gated.
+# Builtin tool → sensitive-action category. Keyed on CANONICAL tool names
+# (ADR 0048); a tool absent from this map is not sensitive and is never gated.
+#
+# The VALUES are the canonical categories of shared_domain.approval_categories
+# (the same vocabulary the policy presets are seeded with). They used to be
+# code_execution/file_write/network_access/agent_delegation, which intersected
+# NONE of the 13 preset categories, so requires_human always returned auto and
+# nothing was ever gated (audit 2026-07-03, g6, fail-open). test_approval_gate_
+# categories pins every value here to APPROVAL_CATEGORIES. NOTE: agent_invoke is
+# gated as code_changes for now; a dedicated `agent_delegation` canonical
+# category (with its UI/preset support) is deferred to prod-03.
 DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
-    "shell_exec": "code_execution",
-    "stack_exec": "code_execution",
-    "write_file": "file_write",
-    "http_get": "network_access",
-    "http_post": "network_access",
-    "agent_invoke": "agent_delegation",
+    "shell_exec": "code_changes",
+    "stack_exec": "code_changes",
+    "write_file": "code_changes",
+    "http_get": "external_http_get",
+    "http_post": "external_http_post",
+    "agent_invoke": "code_changes",
 }
 
 

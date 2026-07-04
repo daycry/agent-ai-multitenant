@@ -19,6 +19,7 @@ import json
 from dataclasses import dataclass
 from uuid import UUID, uuid5
 
+from shared_domain.approval_categories import APPROVAL_CATEGORIES
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,23 +27,10 @@ from api_server.seeds import PLATFORM_TENANT_ID
 
 POLICY_SEED_NAMESPACE: UUID = UUID("00000000-0000-0000-0000-000000000015")
 
-# Categories of sensitive actions (spec §7.7-7.8). Order matters for
-# stability when serialized to JSON.
-CATEGORIES: tuple[str, ...] = (
-    "code_changes",
-    "git_commit",
-    "git_push",
-    "external_http_get",
-    "external_http_post",
-    "secrets_access",
-    "data_migration",
-    "production_deploy",
-    "infra_provision",
-    "secret_rotation",
-    "external_communication",
-    "data_export_pii",
-    "user_management",
-)
+# Categories of sensitive actions (spec §7.7-7.8). Single source in
+# shared-domain (APPROVAL_CATEGORIES) so the sandboxed runtime approval gate
+# uses the SAME vocabulary — they had diverged, opening a fail-open hole (g6).
+CATEGORIES: tuple[str, ...] = APPROVAL_CATEGORIES
 
 
 def _policy_id(slug: str) -> UUID:
