@@ -167,6 +167,42 @@ def transition_to_pending_human_validation(
     )
 
 
+def transition_to_blocked(
+    current_status: PlanStatus,
+    tasks: Iterable[TaskSnapshot],
+) -> TransitionResult:
+    """Escalate a STUCK plan from ``in_progress`` to ``blocked``.
+
+    A plan whose only remaining OPEN tasks are ``blocked`` — every other task is
+    ``done``/``cancelled`` and nothing can advance on its own — would otherwise
+    sit ``in_progress`` forever: ``blocked`` counts as open, so
+    :func:`transition_to_pending_human_validation` never fires, and no automatic
+    route moves the plan out (audit 2026-07-03, c3). This transition surfaces the
+    stall so the operator is signalled and can unblock/retry a task. A no-op when
+    there is nothing blocked, or when a non-blocked task can still advance.
+    """
+    if current_status != "in_progress":
+        return TransitionResult(
+            new_status=current_status,
+            transitioned=False,
+            reason=f"plan is {current_status!r}, only in_progress can transition",
+        )
+    open_tasks = [t for t in tasks if t.status in _OPEN_TASK_STATUSES]
+    blocked = [t for t in open_tasks if t.status == "blocked"]
+    if not blocked:
+        return TransitionResult(
+            new_status="in_progress", transitioned=False, reason="no blocked tasks"
+        )
+    advanceable = [t for t in open_tasks if t.status != "blocked"]
+    if advanceable:
+        return TransitionResult(
+            new_status="in_progress",
+            transitioned=False,
+            reason=f"{len(advanceable)} task(s) can still advance",
+        )
+    return TransitionResult(new_status="blocked", transitioned=True)
+
+
 # ---------------------------------------------------------------------------
 # task_06_37 — transition to completed
 # ---------------------------------------------------------------------------
@@ -210,6 +246,7 @@ __all__ = [
     "TaskSnapshot",
     "TransitionResult",
     "compute_plan_progress",
+    "transition_to_blocked",
     "transition_to_completed",
     "transition_to_pending_human_validation",
 ]

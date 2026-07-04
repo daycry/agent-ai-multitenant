@@ -55,7 +55,11 @@ from api_server.db.platform_settings import (
     resolve_model_config_chain,
 )
 from api_server.events import publish_task_status_changed
-from api_server.plan_progress import TaskSnapshot, transition_to_pending_human_validation
+from api_server.plan_progress import (
+    TaskSnapshot,
+    transition_to_blocked,
+    transition_to_pending_human_validation,
+)
 from api_server.review_autostart import (
     COMPOSE_REVIEW_RUNTIME_TASK as _COMPOSE_REVIEW_RUNTIME_TASK,
 )
@@ -390,6 +394,33 @@ class TaskDispatcher:
             snapshots = [TaskSnapshot(id=str(r.id), status=r.status) for r in rows]
             result = transition_to_pending_human_validation(plan.status, snapshots)
             if not result.transitioned:
+                # c3 (audit 2026-07-03): a plan whose only remaining open tasks
+                # are `blocked` can never reach pending_human_validation (blocked
+                # counts as open), so it would sit `in_progress` forever with no
+                # automatic route out. Escalate it to `blocked` (same atomic,
+                # idempotent status=in_progress guard) so the operator sees the
+                # stall and can unblock/retry a task.
+                blocked = transition_to_blocked(plan.status, snapshots)
+                if blocked.transitioned:
+                    won_blocked = (
+                        await session.execute(
+                            update(Plan)
+                            .where(
+                                Plan.id == plan.id,
+                                Plan.tenant_id == tenant_id,
+                                Plan.status == _IN_PROGRESS,
+                            )
+                            .values(status=blocked.new_status)
+                            .returning(Plan.id)
+                        )
+                    ).scalar_one_or_none()
+                    if won_blocked is not None:
+                        _log.warning(
+                            "orchestrator.plan_blocked",
+                            plan_id=str(plan.id),
+                            tenant_id=str(tenant_id),
+                            reason="all remaining tasks are blocked",
+                        )
                 return
             # Atomic, idempotent guard: only the transaction that still observes
             # the plan `in_progress` wins. The event stream is at-least-once
