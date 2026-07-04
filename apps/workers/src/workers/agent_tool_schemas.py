@@ -181,7 +181,16 @@ def _catalog_by_canonical() -> dict[str, dict[str, Any]]:
     except Exception:  # pragma: no cover - defensive: catalog/domain optional
         return out
     to_canonical = tool_names.to_canonical
+    is_runtime_wired = tool_names.is_runtime_wired
     for tool in builtin_tools.BUILTIN_TOOLS:
+        # g4 (audit 2026-07-03): a catalog builtin WITHOUT a runtime executor
+        # (apply_patch / search_code / summarize_text) must never be advertised
+        # to the model — even if a role/team seed assigned it — or the call dies
+        # as "unknown tool" (run 019f27ff, agente QA CI4). Custom/MCP tools arrive
+        # via tool_specs, not this builtin loop, so this only drops not-wired
+        # builtins, never a legitimately-wired MCP `<server>.<tool>`.
+        if not is_runtime_wired(tool.name):
+            continue
         entry = {
             "name": tool.name,
             "description": tool.description,

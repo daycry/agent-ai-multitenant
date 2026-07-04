@@ -124,3 +124,30 @@ def test_orchestration_tools_have_schemas_mirroring_executors() -> None:
     assert by["kanban_update"]["required"] == ["task_id", "status"]
     assert by["task_comment"]["required"] == ["task_id", "body"]
     assert by["agent_invoke"]["required"] == ["agent_id", "prompt"]
+
+
+def test_non_wired_builtins_are_never_advertised() -> None:
+    # g4: apply_patch / search_code / summarize_text are in the assignable catalog
+    # but have NO runtime executor. Even if a seed assigned them (51 CI4 agents had
+    # search_code), the model must never be offered them — the call would die as
+    # "unknown tool" (run 019f27ff). A wired sibling in the same allowlist survives.
+    out = build_model_tool_schemas(
+        ["read_file", "search_code", "apply_patch", "summarize_text"], None
+    )
+    names = set(_names(out))
+    assert "read_file" in names
+    assert names.isdisjoint({"search_code", "apply_patch", "summarize_text"})
+
+
+def test_no_advertised_builtin_lacks_a_runtime_executor() -> None:
+    # Parity guard (g4): whatever builtin the model can be offered MUST be
+    # runtime-executable. Offer the WHOLE catalog and assert none of the
+    # advertised builtins is un-wired.
+    from api_server.seeds.builtin_tools import BUILTIN_TOOLS
+    from shared_domain.tool_names import is_runtime_wired, to_canonical
+
+    catalog_canonical = sorted({c for t in BUILTIN_TOOLS for c in to_canonical(t.name)})
+    out = build_model_tool_schemas(catalog_canonical, None)
+    advertised = set(_names(out))
+    unwired = {n for n in advertised if not is_runtime_wired(n)}
+    assert not unwired, f"advertised builtins without a runtime executor: {sorted(unwired)}"
