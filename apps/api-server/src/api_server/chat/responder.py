@@ -597,6 +597,7 @@ async def _stream_planning(
                         "title": draft.get("title") or "Plan del proyecto",
                         "specification": {
                             "summary": draft.get("summary") or "",
+                            "phases": draft.get("phases") or [],
                             "tasks": draft["tasks"],
                         },
                     }

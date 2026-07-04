@@ -319,3 +319,40 @@ def test_pm_plan_draft_prompt_requests_complexity() -> None:
     model.pm_plan_draft(_state([{"role": "user", "content": "x"}], set()), [])
     system = " ".join(m.content for m in seen[-1] if m.role == "system")
     assert "complexity" in system
+
+
+def test_normalise_plan_draft_extracts_phases() -> None:
+    # c6: chat plans now carry phases[] so the `phase` sync scope works. Unknown
+    # task ids and empty phases are dropped so sync_to_kanban never rejects them.
+    out = _normalise_plan_draft(
+        {
+            "title": "x",
+            "phases": [
+                {"title": "Diseño", "tasks": ["t1", "ghost", "t1"]},  # unknown + dup dropped
+                {"name": "Build", "tasks": ["t2"]},  # `name` → title
+                {"title": "Vacía", "tasks": ["ghost"]},  # only unknown → dropped
+                "garbage",  # non-dict → dropped
+            ],
+            "tasks": [
+                {"id": "t1", "title": "A"},
+                {"id": "t2", "title": "B"},
+            ],
+        }
+    )
+    assert out["phases"] == [
+        {"title": "Diseño", "tasks": ["t1"]},
+        {"title": "Build", "tasks": ["t2"]},
+    ]
+
+
+def test_normalise_plan_draft_phases_default_empty() -> None:
+    out = _normalise_plan_draft({"title": "x", "tasks": [{"id": "t1", "title": "A"}]})
+    assert out["phases"] == []  # absent → [] (phase scope simply unavailable)
+
+
+def test_pm_plan_draft_prompt_requests_phases() -> None:
+    seen: list[list[Message]] = []
+    model = LLMPlanningModel(provider=_FakeProvider("{}", seen=seen))  # type: ignore[arg-type]
+    model.pm_plan_draft(_state([{"role": "user", "content": "x"}], set()), [])
+    system = " ".join(m.content for m in seen[-1] if m.role == "system")
+    assert "phases" in system

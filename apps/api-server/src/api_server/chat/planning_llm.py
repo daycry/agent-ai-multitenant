@@ -391,7 +391,8 @@ class LLMPlanningModel:
             "Formaliza el PLAN acordado como un objeto JSON, SIN texto alrededor, con esta "
             "forma EXACTA:\n"
             '{"title": "<título corto>", "summary": "<resumen: alcance, decisiones, '
-            'riesgos>", "tasks": [{"id": "t1", "title": "<acción>", "description": '
+            'riesgos>", "phases": [{"title": "<fase>", "tasks": ["t1", "t2"]}], '
+            '"tasks": [{"id": "t1", "title": "<acción>", "description": '
             '"<qué hacer>", "role": "<rol>", "complexity": "<xs|s|m|l|xl>", '
             '"depends_on": [], "acceptance_criteria": '
             '["<criterio verificable>", "<criterio verificable>"]}]}\n'
@@ -399,6 +400,8 @@ class LLMPlanningModel:
             "declarados; NO ciclos; ordena las tareas por dependencias; tareas accionables "
             "y atómicas. `role` ∈ los roles del equipo cuando aplique. `complexity` ∈ "
             "{xs, s, m, l, xl} estimando el esfuerzo de la tarea (usa `m` si dudas). "
+            "Agrupa las tareas en `phases` ordenadas por dependencias; cada fase lista los "
+            "ids de sus tareas y CADA tarea aparece en exactamente una fase. "
             "Cada tarea lleva 2-5 "
             "`acceptance_criteria`: condiciones CONCRETAS y VERIFICABLES que definen cuándo la "
             "tarea está HECHA (p.ej. 'composer audit no reporta vulnerabilidades pendientes', "
@@ -490,8 +493,36 @@ def _normalise_plan_draft(obj: dict[str, Any]) -> dict[str, Any]:
     return {
         "title": str(obj.get("title") or "Plan del proyecto").strip()[:255],
         "summary": str(obj.get("summary") or "").strip(),
+        "phases": _normalise_phases(obj.get("phases"), id_set),
         "tasks": tasks,
     }
+
+
+def _normalise_phases(raw: Any, valid_ids: set[str]) -> list[dict[str, Any]]:
+    """Coerce the LLM ``phases`` into ``[{title, tasks: [known ids]}]`` (c6).
+
+    Enables the ``phase`` sync scope for chat-planned plans, which previously
+    lacked ``phases`` entirely. Drops task ids that don't exist (so
+    ``sync_to_kanban`` never rejects a phase that references an unknown id) and
+    empty phases. Returns ``[]`` when nothing usable was produced — the phase
+    scope is then simply unavailable and ``total``/``selection`` still work.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for i, ph in enumerate(raw):
+        if not isinstance(ph, dict):
+            continue
+        title = str(ph.get("title") or ph.get("name") or f"Fase {i + 1}").strip()[:255]
+        phase_tasks: list[str] = []
+        seen: set[str] = set()
+        for t in ph.get("tasks") or []:
+            if isinstance(t, str) and t in valid_ids and t not in seen:
+                seen.add(t)
+                phase_tasks.append(t)
+        if phase_tasks:
+            out.append({"title": title or f"Fase {i + 1}", "tasks": phase_tasks})
+    return out
 
 
 __all__ = ["LLMPlanningModel"]
