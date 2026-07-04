@@ -301,7 +301,7 @@ class TaskDispatcher:
         if not _is_ready_trigger(event):
             return
         task_id = UUID(event.task_id)
-        result = await self._dispatch(task_id)
+        result = await self._dispatch(task_id, tenant_id=UUID(event.tenant_id))
         if result is None:
             return
         if isinstance(result, _HumanDispatch):
@@ -760,7 +760,11 @@ class TaskDispatcher:
         try:
             async with self._sessionmaker() as session, session.begin():
                 task = (
-                    await session.execute(select(Task).where(Task.id == task_id))
+                    await session.execute(
+                        select(Task).where(
+                            Task.id == task_id, Task.tenant_id == UUID(event.tenant_id)
+                        )
+                    )
                 ).scalar_one_or_none()
                 if task is None or task.status != _IN_PROGRESS:
                     return
@@ -813,14 +817,19 @@ class TaskDispatcher:
             queue=self._settings.notifications_event_queue,
         )
 
-    async def _dispatch(self, task_id: UUID) -> _AiDispatch | _HumanDispatch | None:
+    async def _dispatch(
+        self, task_id: UUID, *, tenant_id: UUID
+    ) -> _AiDispatch | _HumanDispatch | None:
         """Route a ready task: AI (pick agent → worker payload) or human
         (create the assignment, transition to ``assigned_to_human``). Returns
         None if the task is no longer ready, is budget-paused, or no AI agent
-        is available."""
+        is available. The orchestrator runs BYPASSRLS, so the initial task load
+        carries an explicit ``tenant_id`` predicate (regla dura #1, audit c5)."""
         async with self._sessionmaker() as session, session.begin():
             task = (
-                await session.execute(select(Task).where(Task.id == task_id))
+                await session.execute(
+                    select(Task).where(Task.id == task_id, Task.tenant_id == tenant_id)
+                )
             ).scalar_one_or_none()
             # Re-check the live state: a stale `ready` event for a task
             # already dispatched (or cancelled) must be a no-op.
