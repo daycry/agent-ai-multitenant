@@ -29,12 +29,15 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.chat.planning_graph import PlanningRole
 from api_server.chat.responder import team_role_agents
 from api_server.db.domain import Plan, Project, Task, TaskDependency, TaskStatus
+
+_log = structlog.get_logger("chat.sync_to_kanban")
 
 # Key under which we stash the spec id on the materialised Task row.
 # Living inside the JSONB `inputs` column keeps the schema migration-free.
@@ -236,10 +239,21 @@ def _resolve_assignment(
     assigned: UUID | None = None
     role_str = str(spec_task.get("role") or "").strip()
     if role_str:
+        # NULL slot on an unresolved role is intentional (ADR 0091 D1 — the
+        # dispatcher's load policy decides), but a typo shouldn't silently lose
+        # its preset: leave an observable trace (c7).
         try:
-            assigned = role_agents.get(PlanningRole(role_str))
+            role = PlanningRole(role_str)
         except ValueError:
-            assigned = None
+            _log.warning("sync_to_kanban.role_unknown", role=role_str, task=spec_task.get("id"))
+        else:
+            assigned = role_agents.get(role)
+            if assigned is None:
+                _log.warning(
+                    "sync_to_kanban.role_without_team_agent",
+                    role=role_str,
+                    task=spec_task.get("id"),
+                )
     reviewer = role_agents.get(PlanningRole.REVIEWER)
     if reviewer is not None and reviewer == assigned:
         reviewer = None
