@@ -23,10 +23,15 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
-# Closed set of plan statuses — mirrors docs/roadmap/README.md's
-# documented states.
+# Closed set of plan statuses. The SINGLE authoritative list lives in
+# ``api_server.db.domain.PlanStatus`` (StrEnum); this Literal mirrors it EXACTLY
+# so the pure, DB-agnostic transitions here need not import the SQLAlchemy-laden
+# domain module. ``tests/unit/test_plan_status_consistency.py`` pins the two sets
+# equal so they cannot drift again (audit 2026-07-03, c10).
 PlanStatus = Literal[
+    "draft",
     "pending_approval",
+    "pending_second_approval",
     "approved",
     "in_progress",
     "blocked",
