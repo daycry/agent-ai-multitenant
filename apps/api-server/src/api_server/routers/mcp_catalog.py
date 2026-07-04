@@ -69,12 +69,23 @@ def _to_dto(template: McpServerTemplate) -> McpTemplateDto:
     )
 
 
+# Templates the platform KNOWS about but must NOT offer as assignable MCP
+# servers because they cannot start out-of-the-box (g5, audit 2026-07-03).
+# `docling-mcp` is stdio `command="docling-mcp"`, a binary upstream does not
+# publish an image for (docs/03-guides/gotchas/docling-mcp-no-public-image.md);
+# the service is commented out in docker-compose. The operative Docling path is
+# `docling-serve` HTTP used by KB ingestion — a different code path — so the
+# template stays in CATALOG (referenced there) but is filtered from the picker.
+_UNAVAILABLE_TEMPLATE_IDS: frozenset[str] = frozenset({"docling-mcp"})
+
+
 @router.get("", response_model=list[McpTemplateDto])
 async def list_mcp_catalog(
     _principal: AuthPrincipal = Depends(require_tenant_member),
 ) -> list[McpTemplateDto]:
-    """Return every MCP template the platform knows about, in stable
-    insertion order so the admin-panel can group by category without
-    a second sort step.
+    """Return every ASSIGNABLE MCP template the platform knows about, in stable
+    insertion order so the admin-panel can group by category without a second
+    sort step. Templates with no runnable image (``_UNAVAILABLE_TEMPLATE_IDS``)
+    are withheld so the picker never offers a server that cannot start.
     """
-    return [_to_dto(t) for t in CATALOG.values()]
+    return [_to_dto(t) for t in CATALOG.values() if t.id not in _UNAVAILABLE_TEMPLATE_IDS]
