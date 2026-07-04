@@ -392,11 +392,14 @@ class LLMPlanningModel:
             "forma EXACTA:\n"
             '{"title": "<título corto>", "summary": "<resumen: alcance, decisiones, '
             'riesgos>", "tasks": [{"id": "t1", "title": "<acción>", "description": '
-            '"<qué hacer>", "role": "<rol>", "depends_on": [], "acceptance_criteria": '
+            '"<qué hacer>", "role": "<rol>", "complexity": "<xs|s|m|l|xl>", '
+            '"depends_on": [], "acceptance_criteria": '
             '["<criterio verificable>", "<criterio verificable>"]}]}\n'
             "Reglas: ids únicos y cortos (t1, t2, …); `depends_on` referencia SOLO ids "
             "declarados; NO ciclos; ordena las tareas por dependencias; tareas accionables "
-            "y atómicas. `role` ∈ los roles del equipo cuando aplique. Cada tarea lleva 2-5 "
+            "y atómicas. `role` ∈ los roles del equipo cuando aplique. `complexity` ∈ "
+            "{xs, s, m, l, xl} estimando el esfuerzo de la tarea (usa `m` si dudas). "
+            "Cada tarea lleva 2-5 "
             "`acceptance_criteria`: condiciones CONCRETAS y VERIFICABLES que definen cuándo la "
             "tarea está HECHA (p.ej. 'composer audit no reporta vulnerabilidades pendientes', "
             "'el endpoint GET /hello responde 200 con el JSON acordado'). Son criterios "
@@ -418,6 +421,11 @@ class LLMPlanningModel:
 
 _MAX_ACCEPTANCE_CRITERIA = 8
 _MAX_CRITERION_LEN = 300
+#: Valid task-complexity buckets (mirror sync_to_kanban / the cost model). A
+#: chat-planned task now carries its own estimate instead of defaulting to `m`
+#: for everything, so the cost breakdown weights tasks differently (c11).
+_VALID_COMPLEXITY = frozenset({"xs", "s", "m", "l", "xl"})
+_DEFAULT_COMPLEXITY = "m"
 
 
 def _clean_acceptance_criteria(raw: Any) -> list[str]:
@@ -461,6 +469,9 @@ def _normalise_plan_draft(obj: dict[str, Any]) -> dict[str, Any]:
         title = str(t.get("title") or t.get("name") or "").strip()
         if not title:
             continue
+        complexity = str(t.get("complexity") or "").strip().lower()
+        if complexity not in _VALID_COMPLEXITY:
+            complexity = _DEFAULT_COMPLEXITY
         ids.append(tid)
         tasks.append(
             {
@@ -468,6 +479,7 @@ def _normalise_plan_draft(obj: dict[str, Any]) -> dict[str, Any]:
                 "title": title[:255],
                 "description": str(t.get("description") or "").strip(),
                 "role": str(t.get("role") or "").strip(),
+                "complexity": complexity,
                 "depends_on": [str(d) for d in (t.get("depends_on") or []) if isinstance(d, str)],
                 "acceptance_criteria": _clean_acceptance_criteria(t.get("acceptance_criteria")),
             }

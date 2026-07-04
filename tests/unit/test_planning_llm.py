@@ -293,3 +293,29 @@ def test_pm_plan_draft_prompt_requests_acceptance_criteria() -> None:
     model.pm_plan_draft(_state([{"role": "user", "content": "x"}], set()), [])
     system = " ".join(m.content for m in seen[-1] if m.role == "system")
     assert "acceptance_criteria" in system
+
+
+def test_normalise_plan_draft_coerces_complexity() -> None:
+    # c11: a chat-planned task carries its own complexity estimate instead of
+    # everything defaulting to `m`. Valid values are lowercased; invalid/absent
+    # fall back to `m`.
+    out = _normalise_plan_draft(
+        {
+            "title": "x",
+            "tasks": [
+                {"id": "t1", "title": "Grande", "complexity": "XL"},  # valid → lowercased
+                {"id": "t2", "title": "Rara", "complexity": "enorme"},  # invalid → m
+                {"id": "t3", "title": "Sin campo"},  # absent → m
+            ],
+        }
+    )
+    by_id = {t["id"]: t["complexity"] for t in out["tasks"]}
+    assert by_id == {"t1": "xl", "t2": "m", "t3": "m"}
+
+
+def test_pm_plan_draft_prompt_requests_complexity() -> None:
+    seen: list[list[Message]] = []
+    model = LLMPlanningModel(provider=_FakeProvider("{}", seen=seen))  # type: ignore[arg-type]
+    model.pm_plan_draft(_state([{"role": "user", "content": "x"}], set()), [])
+    system = " ".join(m.content for m in seen[-1] if m.role == "system")
+    assert "complexity" in system
