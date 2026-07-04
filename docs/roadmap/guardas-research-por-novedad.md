@@ -209,3 +209,91 @@ docs_language: es
 3. Un run real con relectura patológica cortado por per-target o esterilidad, con `safeguard_stats` visible.
 4. `stack_exec` con comando lento (>15 s) completando sin ReadTimeout.
 5. ADR 0097 en `proposed` esperando decisión del operador.
+
+---
+
+## Ampliación 2026-07-03 — Recalibración de restricciones del runtime (auditoría de plataforma)
+
+> **Origen:** auditoría de plataforma 2026-07-03 (`auditoria-plataforma-2026-07-03.md`), **causa raíz F**
+> (las guardas castigan exploración legítima) + síntoma en vivo reportado por el operador («sigue apareciendo
+> el tema de producir output; la exploración legítima no funciona», ejemplo: tarea «Tests de feature»).
+> Verificación adversarial en Opus 4.8 de los hallazgos r1-r7. Esta ampliación NO reemplaza las Fases A-F;
+> añade la **Fase G** (recalibración) con IDs propios para no colisionar con la Fase F (deploy, F1-F3).
+>
+> **Estado:** `pending_approval` (ningún fix implementado aquí; solo el plan). El resto del plan A-F sigue como
+> estaba.
+
+### Inventario de restricciones del runtime (con veredicto y propuesta)
+
+| #   | Restricción hoy                                                                                              | Hallazgo · veredicto | Problema                                                                                                                                                                                                                                                                                                 | Tarea  |
+| --- | ------------------------------------------------------------------------------------------------------------ | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| 1   | Allowlist `shell_exec` (base SDK `_SDK_BASE_SHELL_COMMANDS` ∪ `allowed_commands`)                            | r1 · E1 (en vivo)    | Faltan utilidades de LECTURA naturales (`sed -n`, `awk`, `sort`, `uniq`, `cut`, `tr`, `echo`). `sed` denegado 2× en vivo. La lista ya incluye `rm`/`mv` (destructivos), así que vetar `sed` no aporta seguridad, solo fricción.                                                                          | G6     |
+| 2   | `_read_target` ignora offset/limit (`graph.py:128-141`)                                                      | r2 · matizado        | Paginar = releer el mismo target; contadores per-target acumulativos sin decay. _Matiz:_ el lector real no pagina (erra >1 MB), pero la acumulación sin reset tras producir sí muerde.                                                                                                                   | G1/G2  |
+| 3   | `has_produced` se latchea con producing tools FALLIDAS (`graph.py:950`)                                      | r4 · confirmado      | Un `shell_exec` denegado latchea `has_produced` → desvía trips a `needs_human_review` y cambia el nudge a «FINISH».                                                                                                                                                                                      | G3     |
+| 4   | Lecturas erradas / fallos de plataforma suman esterilidad                                                    | r2/r4 · —            | Un fallo de PLATAFORMA (tool sin executor, `command not allowed`, worktree EACCES) castiga al agente como churn propio.                                                                                                                                                                                  | G3b    |
+| 5   | `_RESEARCH_TOOLS` solo 4 nombres base; `search_code` fuera + sin executor                                    | r5a · matizado       | `search_code` no gana novedad y cuenta como MUTADOR; _matiz:_ sí resetea la racha estéril (sub-claim invertido) y no tiene executor (toda llamada `ok=False`).                                                                                                                                           | G4     |
+| 6   | `LoopDetector` fingerprintea `(tool,args)` sin reset (threshold=3)                                           | r7 · matizado        | **Defecto de fondo real:** un ciclo edit→build→edit→build con un comando de test/build IDÉNTICO acumula y tripa a la 4.ª invocación aunque haya progreso intercalado (falso positivo de convergencia). 4/5 casos reales fueron comandos idempotentes EXITOSOS re-ejecutados. Siempre escala (no aborta). | G8     |
+| 7   | Visor hardcodea «stop researching, produce output» para toda variante (`graph.py:1030`)                      | r3 · E1              | El visor amplifica el síntoma incluso cuando el nudge real es «ya has producido, FINISH».                                                                                                                                                                                                                | G5     |
+| 8   | Memoria de lecturas (`_READ_DIGESTS_MAX=20`, `_READ_DIGEST_CHARS=100`)                                       | (mejora)             | Digests de 100 chars no sustituyen una relectura; una relectura de fichero no modificado debería ser gratis.                                                                                                                                                                                             | G9/G10 |
+| 9   | Presupuestos por-kind (50/500k claude_sdk, 25/250k review)                                                   | (correcto)           | Recalibrados en la baseline 07-02; sin cambio. Solo mostrar el restante en el visor.                                                                                                                                                                                                                     | G11    |
+| —   | git ausente del sandbox; red interna sin egress salvo registry-proxy; deny-by-default del allowlist de tools | (por diseño)         | Se mantienen (principios 2, ADR 0094, ADR 0092). No se tocan.                                                                                                                                                                                                                                            | —      |
+
+### Fase G — Recalibración (tareas)
+
+- [ ] **G1 — offset/limit en la clave del target**: `_read_target` incluye offset/limit → paginar deja de
+      contar como releer. **Test:** leer `A[0:100]` y `A[100:200]` cuenta como 2 targets, no 2 lecturas del mismo.
+- [ ] **G2 — decay/reset per-target tras turno productivo**: `read_counts[target]` decae/resetea cuando un
+      turno productivo toca ese target (write al fichero o `stack_exec` OK); umbrales proporcionales al
+      presupuesto (como `_sterile_hard_limit`), no fijos 3/5. **Test:** releer `Routes.php` tras un `phpunit`
+      fallido en un bucle TDD NO dispara el nudge same-target.
+- [ ] **G3 — `has_produced` exige `result.ok` (r4)**: la rama de producing tools comprueba `observation.ok`
+      antes de latchear `has_produced`/`turn_productive`. **Test:** un `shell_exec` denegado NO pone
+      `has_produced=True`; un `write_file` OK sí.
+- [ ] **G3b — fallos de plataforma no suman esterilidad**: errores identificables de plataforma (tool sin
+      executor, `command not allowed`, worktree vacío/EACCES) no incrementan la racha estéril ni el contador
+      per-target. **Test:** 3 `command not allowed` seguidos no disparan el trip de esterilidad.
+- [ ] **G4 — clasificar research por metadata (r5a)**: añadir `search_code` a `_RESEARCH_TOOLS` y clasificar por
+      metadata del catálogo (`security_level=safe`/read-only ⇒ research) en vez de lista fija; cablear el
+      executor de `search_code` (o retirarlo — coord. `tools-y-cierre-plan-fixes.md` g4). **Test:** una tool MCP
+      read-only cuenta como research; `search_code` gana novedad y no cuenta como mutador.
+- [ ] **G5 — resumen del visor por variante (r3) + `safeguard_stats` en el visor**: cada variante de nudge
+      (same-target / esterilidad / repetición / ya-produjo-FINISH) rinde su propio resumen; exponer
+      `safeguard_stats` (instrumentación B1) en el visor de runs. **Test:** el step de un nudge «FINISH» no
+      muestra «stop researching»; el visor lista los contadores por tipo.
+- [ ] **G6 — allowlist de lectura + error accionable + presets (r1)**: **G6a** ampliar la base con
+      `sed, awk, sort, uniq, cut, tr, echo` (escribir en el worktree ya está permitido, así que estas de lectura
+      no añaden superficie); **G6b** al denegar, el mensaje sugiere la alternativa concreta (`head -n N | tail`,
+      o `read_file` con offset/limit) además de la lista; **G6c** presets de `allowed_commands` por
+      runtime-template en la UI de comandos. **Test:** `sed -n '1,50p'` se ejecuta; un comando fuera del
+      allowlist devuelve un error con alternativa; el preset `php-phpunit` trae composer/php/phpunit.
+- [ ] **G8 — `LoopDetector` con reset por progreso (r7)**: el detector deja de tripar comandos idempotentes
+      re-ejecutados en un ciclo con progreso intercalado — resetear/decaer el fingerprint `(tool,args)` cuando
+      hubo un turno productivo intermedio (write o target nuevo), de modo que edit→build→edit→build no acumule.
+      Un comando FALLIDO repetido no se trata como mutador (no mutó nada): al 2.º fallo idéntico, inyectar el
+      error + alternativa en el canal sticky GUIDANCE en vez de contar hacia el hard-trip. El corte duro queda
+      para repeticiones idénticas EXITOSAS de mutadores SIN progreso intermedio. **Test:** `composer audit`
+      ejecutado con éxito 4× intercalado con writes NO tripa; 4× idéntico sin ningún progreso sí; un
+      `command not allowed` repetido inyecta guidance y no cuenta como mutador.
+- [ ] **G9 — cache de contenido por target leído**: si el agente relee un fichero NO modificado desde la última
+      lectura, servir del cache del propio runtime (respuesta gratis, sin container round-trip) y NO contar
+      esterilidad; invalidar al escribir el path. Convierte la relectura de pecado en no-op. **Test:** releer un
+      fichero no modificado no incrementa `read_counts` ni hace round-trip; tras escribirlo, la siguiente lectura
+      sí va al disco.
+- [ ] **G10 — subir `_READ_DIGEST_CHARS`**: a un presupuesto útil (~400) con firma de símbolos para código.
+      **Test:** el digest de un `.py` incluye la 1.ª def/clase; el bloque PROGRESS no supera su cap.
+- [ ] **G11 — presupuesto restante en el visor**: mostrar iteraciones/tokens restantes también en el visor, no
+      solo en el PROGRESS del prompt. **Test:** el visor de un run en curso muestra el presupuesto restante.
+- [ ] **G12 — docs + ADR**: actualizar este plan y los ADR 0089/0092 afectados con la nueva semántica.
+      **Test:** n/a (documental); los ADR reflejan el reset del loop-detector y la clasificación por metadata.
+- [ ] **G13 — e2e de validación**: re-lanzar «Tests de feature» con la imagen nueva y verificar **0**
+      `command not allowed: sed`, **0** nudges por paginación/TDD legítimo, ciclo edit-build con comando
+      idéntico sin trip, y los `needs_human_review` de r6 resueltos. **Test:** e2e observacional + SQL sobre
+      `steps_log`/`safeguard_stats`.
+
+### Criterios de cierre de la Fase G
+
+1. Checkboxes G1-G13 en `[x]` con test automático en verde.
+2. Un run explorador (10+ ficheros nuevos, con paginación) SIN ningún nudge de research.
+3. Un ciclo edit→build→edit→build con un comando de test IDÉNTICO NO dispara `repetitive_loop`.
+4. `sed`/`awk` disponibles; error de allowlist accionable.
+5. Un fallo de plataforma (tool sin executor) no contamina las guardas ni escala a `needs_human_review`.
