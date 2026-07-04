@@ -68,7 +68,12 @@ async def _clone_project_repo_async(project_id: UUID, *, settings: Settings) -> 
             org = await session.get(Organization, project.tenant_id)
             cfg = dict(project.git_config)
             tenant_slug = (org.slug if org is not None else None) or str(project.tenant_id)
-            project_slug = _slugify(project.name)
+            # Persisted projects.slug (ADR 0085), NOT slugify(name): the clone must
+            # land in the SAME bare that execution branches off — one bare per
+            # project, named by project.slug (audit 2026-07-03, P2). Fetching the
+            # remote here populates that bare, so worktrees branch off real remote
+            # content instead of an empty seed.
+            project_slug = project.slug
 
         remote_url = cfg.get("remote_url")
         if not remote_url:
@@ -100,7 +105,9 @@ async def _clone_project_repo_async(project_id: UUID, *, settings: Settings) -> 
                 project_slug=project_slug,
             )
             mgr = BareRepoManager(layout)
-            repo_name = _repo_name_from_url(remote_url)
+            # One bare per project, named by project.slug — the SAME name execution
+            # and the auto-PR resolve via plan_git_identity (audit P2).
+            repo_name = project_slug
             mgr.ensure_repo(repo_name, remote_url=remote_url)
             mgr.fetch_remote(repo_name, auth_env=auth.env or None)
         finally:

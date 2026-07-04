@@ -20,10 +20,10 @@ import structlog
 from workers.celery_app import app
 from workers.config import Settings, get_settings
 from workers.git_auth import build_git_auth_env
-from workers.git_repos import BareRepoLayout
-from workers.plan_git import PlanGitPolicies, PlanGitWorkflow, make_plan_branch_name
+from workers.git_repos import BareRepoLayout, BareRepoManager
+from workers.plan_git import PlanGitPolicies, PlanGitWorkflow, plan_git_identity
 from workers.pr_openers import build_pr_opener
-from workers.repo_clone import _repo_name_from_url, _slugify, _vault_store
+from workers.repo_clone import _vault_store
 
 _log = structlog.get_logger("workers.plan_pr")
 
@@ -43,7 +43,7 @@ def _policies_from_worker_config(worker_config: dict[str, Any] | None) -> PlanGi
 async def _open_plan_pr_async(
     project_id: UUID, plan_id: str, *, title: str, body: str, settings: Settings
 ) -> dict[str, Any]:
-    from api_server.db.domain import Project
+    from api_server.db.domain import Plan, Project
     from api_server.db.models import Organization
     from api_server.git_integration import project_git_secret_path
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -55,14 +55,21 @@ async def _open_plan_pr_async(
             project = await session.get(Project, project_id)
             if project is None or not project.git_config:
                 return {"project_id": str(project_id), "status": "skipped:no_git_config"}
+            plan = await session.get(Plan, UUID(plan_id))
+            if plan is None or not plan.slug:
+                return {"project_id": str(project_id), "status": "skipped:no_plan_slug"}
             org = await session.get(Organization, project.tenant_id)
             cfg = dict(project.git_config)
             tenant_slug = (org.slug if org is not None else None) or str(project.tenant_id)
-            project_slug = _slugify(project.name)
+            project_slug = project.slug
+            plan_slug = plan.slug
             policies = _policies_from_worker_config(project.worker_config)
 
-        # Misma convención que el worker que pushea la rama (consistente).
-        plan_branch = make_plan_branch_name(plan_id, _slugify(title))
+        # SINGLE-SOURCE identity (audit 2026-07-03, P1/P2): the auto-PR resolves the
+        # SAME bare repo + branch as execution/clone — derived from the persisted
+        # plans.slug / projects.slug, never re-slugified from the (prefixed) title.
+        identity = plan_git_identity(plan_id, plan_slug, project_slug)
+        plan_branch = identity.plan_branch
         remote_url = cfg.get("remote_url")
         provider = cfg.get("provider", "generic")
         base = cfg.get("default_branch", "main")
@@ -94,9 +101,13 @@ async def _open_plan_pr_async(
             layout = BareRepoLayout(
                 data_root=Path(settings.data_root),
                 tenant_slug=tenant_slug,
-                project_slug=project_slug,
+                project_slug=identity.project_slug,
             )
-            bare_path = layout.bare_repo_path(_repo_name_from_url(remote_url))
+            # Guarantee `origin` on the bare that HOLDS the commits: execution may
+            # have created it without a remote (ensure_repo is idempotent — it only
+            # (re)points origin), so the PR-time push has a remote to push to.
+            BareRepoManager(layout).ensure_repo(identity.project_slug, remote_url=remote_url)
+            bare_path = layout.bare_repo_path(identity.project_slug)
             wf = PlanGitWorkflow(
                 bare_repo_path=bare_path,
                 plan_branch=plan_branch,

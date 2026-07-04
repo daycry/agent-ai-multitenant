@@ -95,11 +95,11 @@ automático del remoto. Todo con test automático; e2e de cierre contra un remot
 
 ### Fase A — Fuente única de identidad git (P1 + P2)
 
-- [ ] **T1 — Función canónica de identidad git**: `plan_git_identity(plan, project) → (bare_repo_name,
-  plan_branch)` en un módulo compartido (p.ej. `shared-domain` o `workers/git_identity.py`), derivando
-      SIEMPRE de `project.slug` (bare) y `plan.slug` (rama, vía `make_plan_branch_name(plan.id, plan.slug)`).
-      **Test:** para un proyecto con `name`/`remote_url`/`slug` divergentes, ejecución y auto-PR resuelven el
-      **mismo** `bare_repo_name` y la **misma** `plan_branch`; property-test con títulos no-ASCII y >60 chars.
+- [x] **T1 — Función canónica de identidad git** (implementado en `workers/plan_git.py`; test
+      `tests/unit/test_plan_git_identity.py`, 4 casos verde): `plan_git_identity(plan_id, plan_slug,
+project_slug) → PlanGitIdentity(project_slug, plan_branch)`, derivando SIEMPRE de `project.slug` (bare) y
+      `plan.slug` (rama, vía `make_plan_branch_name`). El test pinea que coincide con la derivación de ejecución
+      y diverge de la antigua del auto-PR (`_slugify("Plan: "+title)` / `basename(url)`), incl. no-ASCII/>60.
 - [ ] **T2 — Cablear los tres call-sites a T1**: `execution.py` (provision/commit), `plan_pr.py` (auto-PR) y
       `repo_clone.py` (clone) llaman a `plan_git_identity`; se elimina `_slugify(title)` de `plan_pr.py:65` y la
       derivación por `basename(url)` del bare. El bare de ejecución se crea **con `remote_url`** (hoy `ensure_repo`
@@ -114,7 +114,7 @@ automático del remoto. Todo con test automático; e2e de cierre contra un remot
       fake + `incremental`, tras aceptar una tarea la rama existe en `origin`; con `final_only` no, hasta el
       cierre.
 - [ ] **T4 — Persistir el PR**: migración Alembic reversible `Plan.pr_url TEXT NULL` + `Plan.pr_branch VARCHAR
-  NULL`; `_open_plan_pr_async` escribe ambos (y `pr_error` si falla, dejando de tragarse el fallo silencioso
+NULL`; `_open_plan_pr_async` escribe ambos (y `pr_error` si falla, dejando de tragarse el fallo silencioso
       de `plan_pr.py:138-140`). Exponer en el schema de `GET /plans/{id}` y en la ficha de plan del admin-panel.
       **Test:** cierre de plan con remoto fake → `plan.pr_url` poblado y visible por API; con opener que
       erroriza → `plan.pr_error` poblado, `pr_url` NULL.

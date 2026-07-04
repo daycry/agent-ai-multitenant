@@ -97,6 +97,35 @@ def make_plan_branch_name(plan_id: str, slug: str) -> str:
     return f"plan/{short}-{norm}"
 
 
+@dataclass(frozen=True)
+class PlanGitIdentity:
+    """A plan's git coordinates: which bare repo holds its commits + its branch.
+
+    ``project_slug`` is BOTH the ``BareRepoLayout`` directory and the bare repo
+    name (one bare per project, ADR 0085 decision 2), so the on-disk bare is
+    ``.../{tenant_slug}/{project_slug}/repos/{project_slug}.git``.
+    """
+
+    project_slug: str
+    plan_branch: str
+
+
+def plan_git_identity(plan_id: str, plan_slug: str, project_slug: str) -> PlanGitIdentity:
+    """Single source of truth for a plan's git identity (bare repo + branch).
+
+    Execution, clone and the auto-PR MUST resolve IDENTICAL coordinates, so this
+    is the only place that derives them. Callers pass the PERSISTED slugs
+    (``projects.slug`` / ``plans.slug``, generated once at creation, ADR 0085) —
+    never re-slugify a name/title. Re-slugifying the (prefixed) title in the
+    auto-PR while execution used ``plan.slug`` is exactly what made the PR branch
+    diverge from the branch that held the commits (audit 2026-07-03, P1/P2).
+    """
+    return PlanGitIdentity(
+        project_slug=project_slug,
+        plan_branch=make_plan_branch_name(plan_id, plan_slug),
+    )
+
+
 # ---------------------------------------------------------------------------
 # task_06_22 — Commit with trailers
 # ---------------------------------------------------------------------------

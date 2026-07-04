@@ -262,6 +262,13 @@ module = [
     "api_server.llm_providers.factory_resolver",
     "api_server.llm_providers.vault",
     "api_server.routers.llm_providers",
+    # workers.repo_clone / plan_pr (ADR 0072 auto-PR) + the git-identity fix
+    # (audit 2026-07-03) lazily import the Project/Plan ORM and the git secret
+    # path helper from api_server; the pre-commit mypy venv lacks the api_server
+    # package. Same cross-app lazy-import story as the rest.
+    "api_server.db.domain",
+    "api_server.db.models",
+    "api_server.git_integration",
 ]
 ignore_missing_imports = true
 
