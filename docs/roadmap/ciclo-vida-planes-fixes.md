@@ -66,6 +66,16 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
 
 ## Tareas
 
+> **Estado (2026-07-05, rama `plan/runs-visor-trabajo`):** HECHAS y verificadas
+> **T1** (c10 PlanStatus), **T3** (c2 submit_verdict por state machine), **T5** (c5
+> tenant_id dispatch), **T8** (c6 phases), **T9** (c7 warning de rol), **T10** (c11
+> complexity) — en la remediación fase 1/2 (ver changelogs). PENDIENTES: **T2** (c1
+> PUT→state machine — transversal + decisión de producto sobre estrictez del Kanban),
+> **T4** (guard-test estático — requiere T2 primero), **T6** (c9 durabilidad del turno
+> — feature moderada: task Celery + idempotencia + sweep de arranque), **T7** (c3 —
+> el escalado plan→blocked YA está en dispatch; falta notificación + acción humana de
+> desbloqueo), **T11** (c8 board gerencial por plan_id — frontend).
+
 ### Fase A — Fundación de tipos y máquina de estados
 
 - [ ] **T1 — Unificar `PlanStatus` (c10)**: una sola definición canónica (StrEnum de dominio) importada por
