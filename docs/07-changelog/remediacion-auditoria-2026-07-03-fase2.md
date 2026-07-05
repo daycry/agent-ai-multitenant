@@ -62,9 +62,16 @@ ejecución de agentes y sus eventos son consultables. Una página HTTP/MCP/RAG c
   —property, no método— se cazó por test).
 - **Revisión adversarial** del slice de g1 (workflow multi-lente: correctitud /
   seguridad-bypass / integración) — 2026-07-05.
-- **Deploy**: PENDIENTE — requiere rebuild de `agent-runtime:v1` (activa g1 + G3 +
-  G6a + el fix g6 del runtime) y `workers:ci` (persistencia), y recreate. El código
-  está en la rama; no se ha desplegado aún.
+- **Deploy realizado y verificado** (2026-07-05, ventana idle, 0 runs en vuelo):
+  reconstruidos `agent-runtime:v1` (`WITH_CLAUDE=1`) y `workers:ci` (FROM
+  `api-server:manuals`); recreados workers/workers-aux/workers-backup/cortex-beat.
+  Sin migración (g1 usa la tabla `guardrail_events` de la 0052 ya existente).
+  Verificación en vivo: workers healthy con G6a (`sed`/`awk` permitidos) y el helper
+  de persistencia; `agent-runtime:v1` con `shared_guardrails` importable, el seam
+  detecta inyección real (`prompt_injection`, action `warn` = modo LOG), G3, el
+  screening de `recall` (memory_recall) y el cableado de `act` presentes.
+- **Revisión adversarial** del slice de g1 (3 hallazgos P2, todos arreglados:
+  SAVEPOINT del `_load_project`, observabilidad del fail-open, screening de `recall`).
 
 ## Trazabilidad
 
