@@ -376,6 +376,39 @@ async def set_project_git(
 
 
 # ---------------------------------------------------------------------------
+# POST /projects/{id}/git/sync — re-sync manual del remoto (P5/T6, ADR 0072)
+# ---------------------------------------------------------------------------
+@router.post("/{project_id}/git/sync", status_code=status.HTTP_202_ACCEPTED)
+async def sync_project_git(
+    project_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, str]:
+    """Re-sincroniza el bare del proyecto con su remoto (el botón «Sincronizar»).
+
+    Encola ``workers.clone_project_repo`` (idempotente: ``ensure_repo`` + ``git fetch
+    --prune origin``). P5/T6 (audit 2026-07-03): antes el bare solo se re-sincronizaba
+    al RE-guardar la config git; no hay beat periódico ni webhook (el docstring de
+    ``fetch_remote`` lo prometía en falso). El re-sync periódico + el webhook con
+    verificación de firma quedan para el ADR 0098 (gated).
+    """
+    require_tenant_id(principal)
+    project = await get_writable_or_404(
+        session, Project, project_id, principal, not_found_detail="project not found"
+    )
+    if not project.git_config:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="el proyecto no tiene configuración git (remoto) que sincronizar",
+        )
+    enqueued = await enqueue_clone_project_repo(project_id)
+    return {
+        "project_id": str(project_id),
+        "status": "enqueued" if enqueued else "enqueue_failed",
+    }
+
+
+# ---------------------------------------------------------------------------
 # DELETE /projects/{id}
 # ---------------------------------------------------------------------------
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)

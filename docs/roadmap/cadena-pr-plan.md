@@ -127,11 +127,12 @@ NULL`; `_open_plan_pr_async` escribe ambos (y `pr_error` si falla, dejando de tr
       existe. Recomendación: retirar en este plan y remitir el merge-directo real al **ADR 0098** (decisión de
       producto). **Test:** seleccionar la política elegida produce el comportamiento anunciado (o la opción no
       se ofrece); test de que `apply_push_policy` no es código muerto (tiene caller o no existe).
-- [ ] **T6 — Re-sync del remoto (P5)**: como mínimo un endpoint/botón **«Sincronizar»** dedicado
-      (`POST /projects/{id}/git/sync` → `enqueue fetch_remote`) y **corregir el docstring** de `fetch_remote`
-      (hoy promete beat+webhook inexistentes). El beat periódico y el webhook receiver con verificación de firma
-      → **ADR 0098** (gated). **Test:** el endpoint encola el fetch y actualiza el bare; el docstring ya no
-      miente.
+- [x] **T6 — Re-sync del remoto (P5)** (backend): `POST /projects/{id}/git/sync` (`sync_project_git` en
+      `routers/projects.py`) encola `clone_project_repo` (idempotente: `ensure_repo` + `git fetch --prune`);
+      400 si el proyecto no tiene `git_config`. Docstring de `fetch_remote` corregido (ya no promete beat+webhook
+      inexistentes; remite el periódico/webhook-firmado al ADR 0098 gated). **Test**
+      (`tests/integration/test_project_git_sync.py`, 2 casos verde): sync encola para proyecto con git → 202;
+      sin git*config → 400. \_Pendiente menor: el botón «Sincronizar» en la ficha del admin-panel (UI).*
 - [ ] **T7 — P8 higiene (opcional, bajo)**: `_commit_and_push_worktree` recibe las políticas reales del
       proyecto por consistencia con `plan_pr.py`. Sin cambio de comportamiento (documentado). **Test:** el valor
       pasado es el de `worker_config.git_policies`; `push_review_to_bare` sigue siendo policy-agnóstico.

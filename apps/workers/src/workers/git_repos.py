@@ -270,12 +270,14 @@ class BareRepoManager:
     # --- task_06_17 — periodic fetch + webhook hook --------------------
 
     def fetch_remote(self, repo_name: str, *, auth_env: dict[str, str] | None = None) -> None:
-        """Run ``git fetch origin`` against the bare repo.
+        """Run ``git fetch --prune origin`` against the bare repo.
 
-        Called both periodically (scheduled celery beat task) and from
-        the webhook receiver when a push lands at the remote (e.g.
-        GitHub / Azure DevOps webhook). Idempotent — fetching twice in
-        a row is cheap.
+        Invoked from ``clone_project_repo`` — on the manual "Sincronizar" action
+        (``POST /projects/{id}/git/sync``) and when the git config is (re)saved
+        (``PUT /projects/{id}/git``). A periodic beat task and a webhook receiver
+        with signature verification are NOT wired yet (audit 2026-07-03 P5/T6:
+        this docstring used to claim they were — gated → ADR 0098). Idempotent —
+        fetching twice in a row is cheap.
 
         ``auth_env`` (ADR 0072): variables de entorno de autenticación
         (GIT_ASKPASS/GIT_SSH_COMMAND) construidas por ``git_auth`` para
