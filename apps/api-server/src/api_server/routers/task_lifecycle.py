@@ -23,12 +23,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import (
     AuthPrincipal,
+    get_redis,
     get_tenant_session,
     require_tenant_admin,
     require_tenant_member,
+    schedule_after_commit,
 )
-from api_server.db.domain import Task
+from api_server.chat.dag_enforcement import DependenciesNotDoneError, assert_dependencies_done
+from api_server.chat.plan_state_machine import transition_plan_status
+from api_server.db.domain import Plan, Task
 from api_server.db.task_audit_repo import append_audit_event, list_history, to_dict
+from api_server.events import publish_task_status_changed
 from api_server.routers._helpers import require_tenant_id
 
 router = APIRouter(prefix="/tasks", tags=["task-lifecycle"])
@@ -84,6 +89,7 @@ HumanAction = Literal[
     "reassign_with_guidance",  # task → backlog, retry_count++
     "block_with_reason",  # task → blocked
     "cancel",  # task → cancelled
+    "retry",  # T7c: blocked task → ready (backlog if deps pending) + reset retry + reactivate plan
 ]
 
 
@@ -105,6 +111,7 @@ _ACTION_TABLE: dict[HumanAction, tuple[str, str, bool]] = {
     "reassign_with_guidance": ("backlog", "human_action", True),
     "block_with_reason": ("blocked", "human_action", False),
     "cancel": ("cancelled", "human_action", False),
+    "retry": ("ready", "human_action", False),  # reset + plan reactivation handled specially
 }
 
 
@@ -147,11 +154,40 @@ async def apply_human_action(
             ),
         )
 
+    original_status = task_row.status
     new_status, kind, bump_retry = _ACTION_TABLE[payload.action]
-    task_row.status = new_status
-    if bump_retry:
-        task_row.retry_count += 1
+    if payload.action == "retry":
+        # T7c (c3, ratified A+D): un-stick a blocked task. Reset the retry budget so the
+        # re-run is not immediately re-blocked (the exhaustion path that blocked it),
+        # degrade ready→backlog when a dependency is still pending (the DAG would reject
+        # `ready`), and reactivate the plan (blocked→in_progress) so the promoter picks
+        # the task up again.
+        try:
+            await assert_dependencies_done(session, task_row.id, "ready")
+        except DependenciesNotDoneError:
+            new_status = "backlog"
+        task_row.status = new_status
+        task_row.retry_count = 0
+        if task_row.plan_id is not None:
+            plan = await session.get(Plan, task_row.plan_id)
+            if plan is not None and plan.status == "blocked":
+                transition_plan_status(plan, "in_progress")
+    else:
+        task_row.status = new_status
+        if bump_retry:
+            task_row.retry_count += 1
     await session.flush()
+
+    # T7c: a retried task that reached `ready` must reach the orchestrator so it is
+    # re-dispatched (its plan is in_progress again). Deferred to after commit so the
+    # consumer reads the committed status (same pattern as PUT /tasks).
+    if payload.action == "retry" and task_row.status == "ready":
+        schedule_after_commit(
+            session,
+            lambda: publish_task_status_changed(
+                get_redis(), task_row, old_status=original_status, new_status="ready"
+            ),
+        )
 
     event_payload: dict[str, object] = {
         "action": payload.action,
