@@ -947,7 +947,12 @@ class _AgentLoop:
                 self._harvest_read_digest(tool, target, observation)
         else:
             self.read_churn_streak = 0
-        if _is_producing_tool(tool):
+        if _is_producing_tool(tool) and bool(observation.get("ok")):
+            # G3/r4 (audit 2026-07-03): only a SUCCESSFUL producing tool latches
+            # has_produced. A denied/failed shell_exec ("command not allowed") or
+            # a write that errored produced nothing — latching it wrongly flipped
+            # every safeguard trip from ABORTED to needs_human_review (contaminating
+            # the human queue with sterile runs) and switched the nudge to "FINISH".
             self.has_produced = True
             turn_productive = True
         return target, turn_productive
