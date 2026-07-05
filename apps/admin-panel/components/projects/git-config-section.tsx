@@ -251,7 +251,11 @@ export function GitConfigSection({
             >
               <option value="forbidden">No hacer nada</option>
               <option value="branch_only_pr_required">Abrir PR (revisión humana)</option>
-              <option value="direct_to_default_allowed">Merge directo a la rama base</option>
+              {/* "Merge directo a la rama base" (direct_to_default_allowed) retirado
+                  (cadena-pr T5 / P4, auditoría 2026-07-03): apply_push_policy no tiene
+                  caller de producción, así que la opción se comportaba IDÉNTICA a "Abrir
+                  PR". El merge directo real (fast-forward del default branch) es una
+                  decisión de producto → ADR 0098 (gated). */}
             </Select>
           </div>
         </div>

@@ -121,30 +121,28 @@ NULL`; `_open_plan_pr_async` escribe ambos (y `pr_error` si falla, dejando de tr
 
 ### Fase C — Políticas y re-sync (P4 + P5 + P8)
 
-- [ ] **T5 — Decidir el «merge directo» (P4)**: o bien **cablear** `apply_push_policy` en `open_plan_pr` cuando
-      `push_policy=='direct_to_default_allowed'` (fast-forward del default branch tras abrir/mergear), o bien
-      **retirar** la opción de la UI (`git-config-section.tsx:254`) para no ofrecer un comportamiento que no
-      existe. Recomendación: retirar en este plan y remitir el merge-directo real al **ADR 0098** (decisión de
-      producto). **Test:** seleccionar la política elegida produce el comportamiento anunciado (o la opción no
-      se ofrece); test de que `apply_push_policy` no es código muerto (tiene caller o no existe).
+- [x] **T5 — Decidir el «merge directo» (P4)**: **retirada** la opción «Merge directo a la rama base»
+      (`direct_to_default_allowed`) del selector de la UI (`git-config-section.tsx:254`) — `apply_push_policy`
+      no tiene caller de producción, así que se comportaba idéntica a «Abrir PR». El enum backend `GitPushPolicy`
+      la conserva (compat: proyectos con el valor persistido siguen válidos, se comportan como PR). El merge
+      directo real → **ADR 0098** (decisión de producto). Sin test de frontend que la referencie.
 - [x] **T6 — Re-sync del remoto (P5)** (backend): `POST /projects/{id}/git/sync` (`sync_project_git` en
       `routers/projects.py`) encola `clone_project_repo` (idempotente: `ensure_repo` + `git fetch --prune`);
       400 si el proyecto no tiene `git_config`. Docstring de `fetch_remote` corregido (ya no promete beat+webhook
       inexistentes; remite el periódico/webhook-firmado al ADR 0098 gated). **Test**
       (`tests/integration/test_project_git_sync.py`, 2 casos verde): sync encola para proyecto con git → 202;
       sin git*config → 400. \_Pendiente menor: el botón «Sincronizar» en la ficha del admin-panel (UI).*
-- [ ] **T7 — P8 higiene (opcional, bajo)**: `_commit_and_push_worktree` recibe las políticas reales del
-      proyecto por consistencia con `plan_pr.py`. Sin cambio de comportamiento (documentado). **Test:** el valor
-      pasado es el de `worker_config.git_policies`; `push_review_to_bare` sigue siendo policy-agnóstico.
+- [x] **T7 — P8 higiene** — **moot tras T3**: el único paso que LEE políticas (bare→remoto) ya usa las reales,
+      cargadas fresco en `push_plan_branch_to_remote` (`_policies_from_worker_config`). El `PlanGitPolicies()`
+      hardcoded que queda en `_commit_and_push_worktree` solo alimenta `push_review_to_bare` (worktree→bare
+      local), que es policy-agnóstico (matiz «inerte» del propio P8) — no hay comportamiento que corregir.
 
 ### Fase D — Conflictos (P7, mínimo)
 
-- [ ] **T8 — `abort_code` de conflicto distinto + escalado**: `_commit_and_push_worktree` distingue el
-      `GitCommandError` de conflicto de rebase (`plan_git.py:284-287`) de otros fallos git y sella un
-      `abort_code='rebase_conflict'` que SÍ entra en `_REVIEW_ESCALATION_ABORT_CODES` (`plans.py:892`) → aparece
-      en el panel de escaladas con contexto. El visor de diffs + resolución en UI → **ADR 0099**. **Test:** un
-      push conflictivo produce `abort_code='rebase_conflict'` y la tarea aparece escalada (no como `commit_failed`
-      genérico silenciado).
+- [x] **T8 — `abort_code` de conflicto distinto + escalado** (hecho en fase 1): `_commit_abort_code`
+      (`execution.py:960`) clasifica el `GitCommandError` de conflicto de rebase → `abort_code='rebase_conflict'`,
+      incluido en `_REVIEW_ESCALATION_ABORT_CODES` (`plans.py:899`) → aparece en el panel de escaladas. Test
+      `tests/unit/test_commit_abort_code.py`. El visor de diffs + resolución en UI → **ADR 0099** (gated).
 
 ### Fase E — Verificación e2e
 
