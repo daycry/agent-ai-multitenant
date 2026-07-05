@@ -12,7 +12,14 @@ triggered events accumulate in the result envelope; the worker persists them
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+# A guardrail is a SECURITY control: when it silently fails open (engine missing,
+# check raises) a 100%-broken screen looks identical to a clean run. Log the
+# fail-open so operators can see it (stdlib lastResort → stderr, captured by the
+# worker) instead of discovering it only when prod-03 flips LOG → enforce.
+_log = logging.getLogger("agent_runtime.guardrails")
 
 # Platform baseline used when the task spec carries no resolved guardrail config
 # (bare run / minimal slice): scan tool OUTPUTS for prompt injection in LOG mode
@@ -45,6 +52,7 @@ def build_pipeline(spec: dict[str, Any] | None) -> Any | None:
         source = (spec or {}).get("guardrails") or _BASELINE_CONFIG
         return GuardrailPipeline.from_dict(source)
     except Exception:
+        _log.warning("guardrail pipeline unavailable; run proceeds UNSCREENED", exc_info=True)
         return None
 
 
@@ -104,4 +112,5 @@ def run_hook(
             )
         return events
     except Exception:
+        _log.warning("guardrail hook %s failed; tool output NOT screened", hook, exc_info=True)
         return []

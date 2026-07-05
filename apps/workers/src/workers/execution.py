@@ -1171,12 +1171,18 @@ async def _persist_guardrail_events(
     events = result.guardrail_events or []
     if not events:
         return
-    from api_server.guardrails.events import record_guardrail_event
-
-    project = await _load_project(session, task_id)
-    project_id = project.id if project is not None else None
     try:
+        from api_server.guardrails.events import record_guardrail_event
+
         async with session.begin_nested():
+            # Everything DB-touching lives INSIDE the SAVEPOINT: a failing SELECT
+            # here (statement timeout / serialization failure) rolls back to the
+            # savepoint and is caught below, so it can never poison the outer
+            # finalize transaction (P0.5 atomic finalize). _load_project outside
+            # the savepoint would leave the txn in a failed state and roll finalize
+            # back on commit.
+            project = await _load_project(session, task_id)
+            project_id = project.id if project is not None else None
             for event in events:
                 await record_guardrail_event(
                     session,

@@ -136,3 +136,33 @@ def test_persist_is_best_effort_on_failure(monkeypatch) -> None:
             agent_id=None,
         )
     )
+
+
+def test_persist_best_effort_on_load_project_failure(monkeypatch) -> None:
+    # Review finding P2: a failing project SELECT must be caught (it runs inside
+    # the SAVEPOINT), never propagate — else it would roll back the finalize txn.
+    async def boom_load(session: object, task_id: object) -> object:
+        raise RuntimeError("select timeout")
+
+    monkeypatch.setattr(execution, "_load_project", boom_load)
+    _run(
+        _persist_guardrail_events(
+            _FakeSession(),
+            _result(
+                [
+                    {
+                        "guardrail_type": "prompt_injection",
+                        "hook_point": "post_tool",
+                        "severity": "high",
+                        "action": "warn",
+                        "detail": "d",
+                        "detail_payload": {},
+                    }
+                ]
+            ),
+            tenant_id=uuid4(),
+            task_id=uuid4(),
+            execution_id=uuid4(),
+            agent_id=None,
+        )
+    )
