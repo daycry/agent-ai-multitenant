@@ -899,6 +899,14 @@ class Plan(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     # (`make_plan_branch_name` → plan/{id8}-{slug}). Generated once at creation, never
     # changes when `title` does. Nullable: backfilled by migration 0099.
     slug: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Auto-PR result (ADR 0072 fase 2 / cadena-pr-plan). Populated by the
+    # `open_plan_pr` worker task at plan close so the URL/branch of the opened PR
+    # are visible in the API/UI instead of living only in worker logs (audit
+    # 2026-07-03, P6). `pr_error` records why a best-effort auto-PR failed.
+    # Migration 0102.
+    pr_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pr_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    pr_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 32 chars so the wide ten-state machine (pending_approval,
     # pending_human_validation, ...) introduced in task_03_16 fits.

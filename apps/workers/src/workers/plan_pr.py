@@ -40,12 +40,55 @@ def _policies_from_worker_config(worker_config: dict[str, Any] | None) -> PlanGi
     )
 
 
+def _resolve_git_secret(
+    settings: Settings, project_id: UUID, auth_mode: str
+) -> tuple[str | None, str | None, str | None]:
+    """Read ``(username, token, ssh_key)`` from Vault for a ``pat``/``ssh`` project,
+    or all-None when the mode needs no secret / Vault is unavailable."""
+    if auth_mode not in ("pat", "ssh"):
+        return None, None, None
+    from api_server.git_integration import project_git_secret_path
+
+    store = _vault_store(settings)
+    if store is None:
+        return None, None, None
+    secret = store.read_secret(project_git_secret_path(project_id))
+    return (
+        secret.get("username") or None,
+        secret.get("token") or None,
+        secret.get("ssh_key") or None,
+    )
+
+
+async def _persist_pr_result(
+    sessionmaker: Any,
+    plan_id: str,
+    *,
+    pr_url: str | None,
+    pr_branch: str,
+    pr_error: str | None,
+) -> None:
+    """Write the auto-PR outcome back onto the plan (P6) so the URL/branch (or the
+    failure reason) is visible in the API/UI instead of living only in worker logs.
+    Best-effort: a failure here never breaks the already-committed plan closure."""
+    from api_server.db.domain import Plan
+
+    try:
+        async with sessionmaker() as session, session.begin():
+            plan = await session.get(Plan, UUID(plan_id))
+            if plan is not None:
+                plan.pr_url = pr_url
+                plan.pr_branch = pr_branch
+                plan.pr_error = pr_error
+    except Exception as exc:  # pragma: no cover - defensive best-effort
+        _log.warning("plan_pr.persist_failed", plan_id=plan_id, error=str(exc))
+
+
 async def _open_plan_pr_async(
     project_id: UUID, plan_id: str, *, title: str, body: str, settings: Settings
 ) -> dict[str, Any]:
     from api_server.db.domain import Plan, Project
     from api_server.db.models import Organization
-    from api_server.git_integration import project_git_secret_path
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     engine = create_async_engine(settings.database_url)
@@ -55,6 +98,8 @@ async def _open_plan_pr_async(
             project = await session.get(Project, project_id)
             if project is None or not project.git_config:
                 return {"project_id": str(project_id), "status": "skipped:no_git_config"}
+            if not project.slug:
+                return {"project_id": str(project_id), "status": "skipped:no_project_slug"}
             plan = await session.get(Plan, UUID(plan_id))
             if plan is None or not plan.slug:
                 return {"project_id": str(project_id), "status": "skipped:no_plan_slug"}
@@ -77,26 +122,23 @@ async def _open_plan_pr_async(
         if not remote_url:
             return {"project_id": str(project_id), "status": "skipped:no_remote"}
 
-        username = token = ssh_key = None
-        if auth_mode in ("pat", "ssh"):
-            store = _vault_store(settings)
-            if store is not None:
-                secret = store.read_secret(project_git_secret_path(project_id))
-                username = secret.get("username") or None
-                token = secret.get("token") or None
-                ssh_key = secret.get("ssh_key") or None
+        username, token, ssh_key = _resolve_git_secret(settings, project_id, auth_mode)
 
         # El opener (API REST de PR/MR) necesita un PAT; sin token no se puede abrir
         # el PR (SSH solo sirve para el git transport, no para la API).
-        pr_opener = None
-        if token:
-            pr_opener = build_pr_opener(
+        pr_opener = (
+            build_pr_opener(
                 provider=provider, remote_url=remote_url, token=token, head=plan_branch, base=base
             )
+            if token
+            else None
+        )
 
         auth = build_git_auth_env(
             auth_mode, provider=provider, username=username, token=token, ssh_key=ssh_key
         )
+        pr_url: str | None = None
+        pr_error: str | None = None
         try:
             layout = BareRepoLayout(
                 data_root=Path(settings.data_root),
@@ -116,20 +158,30 @@ async def _open_plan_pr_async(
                 auth_env=auth.env or None,
             )
             info = wf.open_plan_pr(title=title, body=body)
+            pr_url = info.url
+            pr_error = None if info.url else (info.skipped_reason or "no PR opened")
+        except Exception as exc:  # PR opening is best-effort — record WHY it failed (P6).
+            pr_error = str(exc)
+            _log.exception("plan_pr.open_failed", project_id=str(project_id), error=str(exc))
         finally:
             auth.cleanup()
+        # Persist the auto-PR outcome on the plan (P6) so it is visible in API/UI,
+        # not just worker logs. Stops the failure from being swallowed silently.
+        await _persist_pr_result(
+            sessionmaker, plan_id, pr_url=pr_url, pr_branch=plan_branch, pr_error=pr_error
+        )
         _log.info(
             "plan_pr.done",
             project_id=str(project_id),
             branch=plan_branch,
-            url=info.url,
-            skipped=info.skipped_reason,
+            url=pr_url,
+            error=pr_error,
         )
         return {
             "project_id": str(project_id),
             "branch": plan_branch,
-            "url": info.url,
-            "status": "ok" if info.url else f"skipped:{info.skipped_reason}",
+            "url": pr_url,
+            "status": "ok" if pr_url else (f"error:{pr_error}" if pr_error else "skipped"),
         }
     finally:
         await engine.dispose()

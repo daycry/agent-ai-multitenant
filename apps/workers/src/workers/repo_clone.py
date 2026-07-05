@@ -65,6 +65,8 @@ async def _clone_project_repo_async(project_id: UUID, *, settings: Settings) -> 
             project = await session.get(Project, project_id)
             if project is None or not project.git_config:
                 return {"project_id": str(project_id), "status": "skipped:no_git_config"}
+            if not project.slug:
+                return {"project_id": str(project_id), "status": "skipped:no_project_slug"}
             org = await session.get(Organization, project.tenant_id)
             cfg = dict(project.git_config)
             tenant_slug = (org.slug if org is not None else None) or str(project.tenant_id)

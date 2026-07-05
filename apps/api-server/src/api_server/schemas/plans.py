@@ -122,6 +122,11 @@ class PlanResponse(BaseModel):
     title: str
     description: str | None
     status: str
+    # Auto-PR result at plan close (P6): URL + branch of the opened PR, or the
+    # failure reason. NULL until the plan closes / when the project has no remote.
+    pr_url: str | None = None
+    pr_branch: str | None = None
+    pr_error: str | None = None
     conversation_id: UUID | None
     specification: dict[str, Any]
     created_by: UUID | None
@@ -143,6 +148,9 @@ def to_plan_response(p: Plan) -> PlanResponse:
         title=p.title,
         description=p.description,
         status=p.status,
+        pr_url=p.pr_url,
+        pr_branch=p.pr_branch,
+        pr_error=p.pr_error,
         conversation_id=p.conversation_id,
         specification=p.specification,
         created_by=p.created_by,
