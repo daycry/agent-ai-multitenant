@@ -69,12 +69,14 @@ fail-open) queda cerrado.** Quedan pendientes las piezas mayores (ver «Pendient
 - Suite **unit completa: 1954 tests en verde**. Integración: los ficheros de las
   áreas tocadas (planes, tasks, dispatch, approval, tools, execution, worktree) en
   verde. Todos los commits pasan el pre-commit completo (ruff/black/mypy/prettier).
-- **Deploy**: migración 0102 lista para aplicar; reconstrucción de las imágenes
-  `api-server`/`workers`/`orchestrator`/`agent-runtime` y recreación de contenedores
-  en la ventana idle (0 runs en vuelo). Recetas: `api-server` context=raíz
-  `WITH_CLAUDE=1` → `workers`/`orchestrator` FROM esa base → `agent-runtime:v1`
-  `WITH_CLAUDE=1` → `alembic upgrade head` (paso explícito) → `up -d` de los
-  servicios de app.
+- **Deploy realizado y verificado** (2026-07-05, ventana idle, 0 runs en vuelo):
+  reconstruidas `api-server:manuals`, `workers:ci`, `orchestrator:manuals`
+  (context=raíz, `WITH_CLAUDE=1`) y `agent-runtime:v1` (`WITH_CLAUDE=1`); migración
+  0102 aplicada (`plans.pr_url/pr_branch/pr_error`, `alembic_version=0102_plan_pr_url`);
+  recreados api-server/orchestrator/workers/workers-aux/workers-backup/cortex-beat.
+  Post-deploy en vivo: los 6 contenedores healthy, `/healthz` → 200, el gate del
+  runtime emite categorías **canónicas** (g6 cerrado), el seed usa la fuente única,
+  y los workers ya no anuncian `search_code` al LLM (g4).
 
 ## Pendiente (fase 2)
 
