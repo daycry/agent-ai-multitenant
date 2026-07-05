@@ -63,6 +63,13 @@ RUN pip install --no-cache-dir /src/shared-mcp
 COPY packages/shared-domain/ /src/shared-domain/
 RUN pip install --no-cache-dir /src/shared-domain
 
+# shared-guardrails is a path dependency of agent-runtime since ADR 0102 (g1):
+# the runtime runs the guardrail pipeline (post_tool prompt-injection defense)
+# over tool outputs before they re-enter the model context. Same local-wheel
+# trick so its name resolves locally rather than failing on PyPI.
+COPY packages/shared-guardrails/ /src/shared-guardrails/
+RUN pip install --no-cache-dir /src/shared-guardrails
+
 # pyproject.toml is the single source of truth for the dependency set.
 WORKDIR /build
 COPY docker/agent-runtimes/agent-runtime/pyproject.toml ./
