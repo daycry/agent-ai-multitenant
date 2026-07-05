@@ -695,6 +695,9 @@ class _AgentLoop:
         # misses it too — yet burning the iteration budget re-writing one file is a
         # non-convergence signal. This counter drives an advisory churn nudge.
         self.path_write_counts: dict[str, int] = {}
+        # G8-B (ADR 0103): the last PRODUCTIVE action's (tool, args); a productive turn
+        # whose action DIFFERS is intermediate progress that resets the loop-detector.
+        self._last_productive_action: dict[str, Any] | None = None
 
     # -- nodes ---------------------------------------------------------------
     @staticmethod
@@ -1080,6 +1083,20 @@ class _AgentLoop:
         tool = observation.get("tool")
         decision = state["last_decision"] or {}
         target, turn_productive = self._track_research(tool, decision, observation)
+        # G8-B (ADR 0103, ratificado opción B): un turno productivo cuya acción DIFIERE
+        # de la última productiva es PROGRESO INTERMEDIO → resetea los contadores de
+        # repetición para que un build idempotente en un ciclo edit→build→edit→build no
+        # tripe. Un producing tool repetido SIN acción distinta entre medias (misma
+        # fingerprint) NO dispara esto, así que sigue acumulando y tripando (pin del
+        # identical-write); los repetidos no-productivos (echo) quedan intactos.
+        if turn_productive:
+            current_action = {"tool": decision.get("tool"), "args": decision.get("tool_args")}
+            if (
+                self._last_productive_action is not None
+                and current_action != self._last_productive_action
+            ):
+                self.detector.note_progress()
+            self._last_productive_action = current_action
         # ADR 0087 (Option 1): harvest the file the agent just wrote (path+content)
         # so the self-review can judge the real code. Keeps the latest per path.
         if _is_producing_tool(tool):
