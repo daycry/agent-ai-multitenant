@@ -188,8 +188,9 @@ async def test_task_crud_with_status_moves(configured_app, migrations_pg_dsn: st
         listed = await client.get(base, headers=headers)
         assert {t["id"] for t in listed.json()} == {task_id}
 
-        # Status move: backlog -> in_progress -> done
-        for new_status in ("in_progress", "done"):
+        # Status move through the LEGAL pipeline (c1/T2: PUT enforces the state
+        # machine — backlog→in_progress is now a 409, must go via ready/in_review).
+        for new_status in ("ready", "in_progress", "in_review", "done"):
             upd = await client.put(
                 f"{base}/{task_id}",
                 json={"status": new_status},

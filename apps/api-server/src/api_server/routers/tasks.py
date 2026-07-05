@@ -23,6 +23,7 @@ from api_server.auth.deps import (
     AuthPrincipal,
     get_redis,
     get_tenant_session,
+    principal_is_tenant_admin,
     require_tenant_admin,
     require_tenant_member,
     schedule_after_commit,
@@ -60,6 +61,7 @@ from api_server.schemas.tasks import (
     TaskUpdateRequest,
     to_task_response,
 )
+from api_server.task_state_machine import allowed_transitions
 
 router = APIRouter(prefix="/projects/{project_id}/tasks", tags=["tasks"])
 
@@ -318,6 +320,11 @@ async def update_task(
     project_id: UUID,
     task_id: UUID,
     payload: TaskUpdateRequest,
+    force: bool = Query(
+        default=False,
+        description="tenant_admin override: apply an otherwise-illegal status "
+        "transition (c1/T2). Ignored toward `done`.",
+    ),
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TaskResponse:
@@ -356,6 +363,30 @@ async def update_task(
                     ],
                 },
             ) from exc
+
+        # c1/T2 (audit 2026-07-03, ratified opt B): the state machine is the SINGLE
+        # gate — an illegal transition is a 409 Conflict (distinct from the DAG 422),
+        # so a drag&drop backlog→done can no longer fake a `done` that the
+        # trg_compute_task_ready trigger amplifies into promoting dependents. Runs AFTER
+        # the DAG check (a pending dependency stays a 422). A tenant_admin may FORCE an
+        # otherwise-illegal move (force=true) EXCEPT toward `done` — a forced false-done
+        # would re-open exactly the amplification this closes. The board uses the AI
+        # table (assignee_agent_type=None); human-task moves go via the human inbox.
+        if payload.status.value not in allowed_transitions(old_status):
+            forced = (
+                force
+                and payload.status.value != TaskStatus.DONE.value
+                and await principal_is_tenant_admin(session, principal)
+            )
+            if not forced:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "illegal_transition",
+                        "from": old_status,
+                        "to": payload.status.value,
+                    },
+                )
 
     # Dependencies are handled out-of-band; remove them from the scalar
     # update so apply_partial_update doesn't try to setattr a list of

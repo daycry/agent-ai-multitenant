@@ -191,13 +191,15 @@ async def test_starting_a_task_succeeds_once_dependency_is_done(
         task_a = ids["a"]
         task_b = ids["b"]
 
-        # Mark a done (no dependencies so it's free to move).
-        done = await client.put(
-            f"/projects/{seeded['project_id']}/tasks/{task_a}",
-            json={"status": "done"},
-            headers=headers,
-        )
-        assert done.status_code == 200, done.text
+        # Mark a done via the LEGAL pipeline (c1/T2: PUT enforces the state machine;
+        # task_a has no dependencies so each move also passes the DAG check).
+        for st in ("ready", "in_progress", "done"):
+            done = await client.put(
+                f"/projects/{seeded['project_id']}/tasks/{task_a}",
+                json={"status": st},
+                headers=headers,
+            )
+            assert done.status_code == 200, done.text
 
         # Now b can move to in_progress.
         ok = await client.put(
@@ -309,3 +311,43 @@ async def test_awaiting_human_approval_is_gated_too(configured_app, migrations_p
         assert resp.status_code == 422, resp.text
         assert resp.json()["detail"]["error"] == "dependencies_not_done"
         assert resp.json()["detail"]["target_status"] == "awaiting_human_approval"
+
+
+@pytest.mark.asyncio
+async def test_illegal_transition_is_409_and_tenant_admin_can_force(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """c1/T2: PUT routes the status change through the state machine.
+
+    An illegal transition is a 409 (distinct from the DAG 422) — task_a has no deps
+    so the DAG would pass, isolating the state-machine gate. A tenant_admin may
+    force an otherwise-illegal move (force=true) EXCEPT toward `done`.
+    """
+    seeded = await _seed(migrations_pg_dsn)  # seeds a tenant_admin user
+    token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        ids = await _bootstrap(client, seeded["project_id"], headers)
+        base = f"/projects/{seeded['project_id']}/tasks/{ids['a']}"  # backlog, no deps
+
+        # backlog→done is illegal (state machine) → 409, NOT the DAG 422.
+        illegal = await client.put(base, json={"status": "done"}, headers=headers)
+        assert illegal.status_code == 409, illegal.text
+        assert illegal.json()["detail"]["error"] == "illegal_transition"
+
+        # force is IGNORED toward `done` (a forced false-done re-opens the trigger
+        # amplification this closes) → still 409.
+        forced_done = await client.put(
+            f"{base}?force=true", json={"status": "done"}, headers=headers
+        )
+        assert forced_done.status_code == 409, forced_done.text
+
+        # A tenant_admin CAN force an otherwise-illegal move that is not toward `done`.
+        forced = await client.put(
+            f"{base}?force=true", json={"status": "in_progress"}, headers=headers
+        )
+        assert forced.status_code == 200, forced.text
+        assert forced.json()["status"] == "in_progress"
