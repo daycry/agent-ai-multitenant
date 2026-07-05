@@ -16,6 +16,7 @@ Creation paths:
 from __future__ import annotations
 
 from decimal import Decimal
+from functools import partial
 from typing import Any
 from uuid import UUID
 
@@ -58,6 +59,7 @@ from api_server.db.models import Organization
 from api_server.db.plan_comment import PlanComment
 from api_server.db.platform_settings import get_double_signature_threshold
 from api_server.db.review_session_repo import list_review_sessions_for_plan
+from api_server.events import publish_task_status_changed
 from api_server.routers._helpers import (
     get_writable_or_404,
     require_tenant_id,
@@ -69,6 +71,7 @@ from api_server.routers._pagination import (
     offset_query,
 )
 from api_server.routers.review import build_review_urls
+from api_server.routers.task_lifecycle import apply_task_retry
 from api_server.schemas.plans import (
     AICostBreakdownResponse,
     CostBreakdownResponse,
@@ -295,6 +298,53 @@ async def get_plan(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanResponse:
     return to_plan_response(await _load_plan(session, plan_id))
+
+
+@plans_router.post("/{plan_id}/unblock")
+async def unblock_plan(
+    plan_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, object]:
+    """Un-stick a blocked plan in one gesture (T7c/c3 part D): reactivate it
+    (blocked→in_progress) and re-enqueue ALL its `blocked` tasks (each → ready/backlog +
+    reset retry budget, the same as the per-task ``retry`` action). The natural
+    counterpart of the plan-level ``plan_blocked`` notification. 409 if not blocked."""
+    plan = await _load_plan(session, plan_id)
+    if plan.status != PlanStatus.BLOCKED.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"plan is '{plan.status}', not 'blocked'",
+        )
+    transition_plan_status(plan, PlanStatus.IN_PROGRESS.value)
+    blocked_tasks = (
+        (
+            await session.execute(
+                select(Task).where(Task.plan_id == plan_id, Task.status == "blocked")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for task in blocked_tasks:
+        await apply_task_retry(session, task)
+        if task.status == "ready":
+            schedule_after_commit(
+                session,
+                partial(
+                    publish_task_status_changed,
+                    get_redis(),
+                    task,
+                    old_status="blocked",
+                    new_status="ready",
+                ),
+            )
+    await session.flush()
+    return {
+        "plan_id": str(plan_id),
+        "status": plan.status,
+        "tasks_retried": len(blocked_tasks),
+    }
 
 
 @plans_router.get("/{plan_id}/review-session")

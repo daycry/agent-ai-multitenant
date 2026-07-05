@@ -161,3 +161,36 @@ async def test_retry_unsticks_blocked_task_and_reactivates_plan(
         await conn.close()
     assert plan_status == "in_progress"
     assert task_status == "ready"
+
+
+@pytest.mark.asyncio
+async def test_plan_unblock_reactivates_and_reenqueues_blocked_tasks(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """T7c part D: POST /plans/{id}/unblock reactivates the plan and re-enqueues ALL
+    its blocked tasks in one gesture."""
+    ids = await _seed(migrations_pg_dsn)  # plan blocked + 1 blocked task (retry_count=2)
+    token = await _mint_token(ids["user"], ids["tenant"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(f"/plans/{ids['plan']}/unblock", headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "in_progress"
+    assert body["tasks_retried"] == 1
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        plan_status = await conn.fetchval("SELECT status FROM plans WHERE id = $1", ids["plan"])
+        row = await conn.fetchrow(
+            "SELECT status, retry_count FROM tasks WHERE id = $1", ids["task"]
+        )
+    finally:
+        await conn.close()
+    assert plan_status == "in_progress"
+    assert row["status"] == "ready"
+    assert row["retry_count"] == 0

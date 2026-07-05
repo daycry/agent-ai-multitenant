@@ -115,6 +115,22 @@ _ACTION_TABLE: dict[HumanAction, tuple[str, str, bool]] = {
 }
 
 
+async def apply_task_retry(session: AsyncSession, task: Task) -> str:
+    """Un-stick a blocked task (T7c/c3): move it to ``ready`` (or ``backlog`` when a
+    dependency is still pending — the DAG would reject ``ready``) and RESET the retry
+    budget so the re-run is not immediately re-blocked. Returns the new status.
+
+    The caller owns plan reactivation + the re-dispatch event (they differ per entry
+    point: a single-task ``retry`` action vs. a whole-plan unblock)."""
+    try:
+        await assert_dependencies_done(session, task.id, "ready")
+        task.status = "ready"
+    except DependenciesNotDoneError:
+        task.status = "backlog"
+    task.retry_count = 0
+    return task.status
+
+
 @router.post("/{task_id}/human-action")
 async def apply_human_action(
     task_id: UUID,
@@ -157,17 +173,10 @@ async def apply_human_action(
     original_status = task_row.status
     new_status, kind, bump_retry = _ACTION_TABLE[payload.action]
     if payload.action == "retry":
-        # T7c (c3, ratified A+D): un-stick a blocked task. Reset the retry budget so the
-        # re-run is not immediately re-blocked (the exhaustion path that blocked it),
-        # degrade ready→backlog when a dependency is still pending (the DAG would reject
-        # `ready`), and reactivate the plan (blocked→in_progress) so the promoter picks
-        # the task up again.
-        try:
-            await assert_dependencies_done(session, task_row.id, "ready")
-        except DependenciesNotDoneError:
-            new_status = "backlog"
-        task_row.status = new_status
-        task_row.retry_count = 0
+        # T7c (c3, ratified A+D): un-stick a blocked task (→ready/backlog + reset the
+        # retry budget) and reactivate its plan (blocked→in_progress) so the promoter
+        # picks it up again.
+        await apply_task_retry(session, task_row)
         if task_row.plan_id is not None:
             plan = await session.get(Plan, task_row.plan_id)
             if plan is not None and plan.status == "blocked":
