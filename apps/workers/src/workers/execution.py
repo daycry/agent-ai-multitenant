@@ -302,6 +302,19 @@ _SDK_BASE_SHELL_COMMANDS: frozenset[str] = frozenset(
         "tail",
         "wc",
         "diff",
+        # Read/text utilities the models reach for naturally to page/inspect
+        # files (G6a, audit 2026-07-03: `sed -n` was denied live twice, forcing
+        # sterile retries). No fine-grained arg validation: writing to the
+        # worktree is ALREADY allowed (rm/mv/cp are here), so these read-oriented
+        # tools add no attack surface — the sandbox (internal net, no docker
+        # socket, cap-drop ALL, seccomp) is the real boundary, not the allowlist.
+        "sed",
+        "awk",
+        "sort",
+        "uniq",
+        "cut",
+        "tr",
+        "echo",
     }
 )
 
