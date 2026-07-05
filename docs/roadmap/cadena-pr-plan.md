@@ -146,10 +146,11 @@ NULL`; `_open_plan_pr_async` escribe ambos (y `pr_error` si falla, dejando de tr
 
 ### Fase E — Verificación e2e
 
-- [ ] **T9 — e2e de cierre**: cerrar un plan de un proyecto con **remoto fake** (git daemon local o bare
-      `file://`) y verificar: (a) la rama del PR **contiene** los commits de las tareas (`PR.head` == rama con
-      commits), (b) `plan.pr_url` poblado, (c) con `incremental` la rama existe en el remoto antes del cierre.
-      **Test:** integración e2e reproducible en CI sin red externa.
+- [x] **T9 — e2e de cierre** (`tests/integration/test_plan_close_e2e.py`, verde, remoto `file://` sin red):
+      proyecto con git_config + plan sembrados → (c) el push incremental por-tarea (T3) pone la rama en el
+      remoto ANTES del cierre; (a) `_open_plan_pr_async` abre el PR contra la rama de **fuente única**
+      (`plan_git_identity`, la que lleva los commits — no la re-slugificada del título, P1); (b) `plan.pr_url` + `plan.pr_branch` quedan **persistidos** en BD (P6/T4), `pr_error` NULL. Ata identidad + push + PR +
+      persistencia end-to-end.
 
 ## Criterios de cierre
 
