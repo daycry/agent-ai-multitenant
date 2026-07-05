@@ -280,6 +280,25 @@ def create_app() -> FastAPI:
 
     instrument_fastapi(app)
 
+    @app.on_event("startup")
+    async def _resume_chat_replies() -> None:
+        # c9 (audit 2026-07-03): the team chat reply runs as an in-process detached
+        # task, so a restart mid-turn drops it while the user's message stays durable.
+        # Resume those unanswered turns on boot. Best-effort — a chat-durability sweep
+        # must never stop the api-server from starting.
+        try:
+            from api_server.auth.deps import get_redis
+            from api_server.chat.responder import resume_pending_replies
+            from api_server.routers.llm_providers import get_provider_vault_store
+
+            resumed = await resume_pending_replies(
+                vault=get_provider_vault_store(), redis=get_redis()
+            )
+            if resumed:
+                _logger.info("chat.resumed_on_startup", count=resumed)
+        except Exception:
+            _logger.warning("chat.resume_on_startup_failed", exc_info=True)
+
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}

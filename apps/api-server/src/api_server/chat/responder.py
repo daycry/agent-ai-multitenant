@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable, Iterable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -40,8 +41,9 @@ from redis.asyncio import Redis
 from shared_llm.base import LLMProvider
 from shared_llm.reasoning import reasoning_call_kwargs
 from shared_llm.types import Message as LLMMessage
-from sqlalchemy import select
+from sqlalchemy import and_, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from api_server.assistant.model_config import to_provider_model_name
 from api_server.chat.planning_graph import (
@@ -723,6 +725,25 @@ async def respond_to_conversation(
                 _log.warning("chat.responder_cross_tenant_project", id=str(project.id))
                 return
 
+            # c9 (audit 2026-07-03): idempotency guard. If the conversation's LATEST
+            # message is already a reply (agent/system), this user turn was answered —
+            # by the original detached task or a prior resume() — so skip. This makes
+            # respond_to_conversation safe to call repeatedly, which the durability
+            # sweep (resume_pending_replies) relies on to never double-reply.
+            latest_kind = (
+                await session.execute(
+                    select(Message.author_kind)
+                    .where(
+                        Message.conversation_id == conversation_id,
+                        Message.tenant_id == tenant_id,
+                    )
+                    .order_by(Message.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if latest_kind is not None and latest_kind != "user":
+                return
+
             effective = await resolve_chat_model_config(session, project)
             temperature = float(effective.get("temperature", _DEFAULT_TEMPERATURE))
             provider, kind, api_model = await _resolve_chat_provider(session, effective, vault)
@@ -868,12 +889,85 @@ def schedule_reply(
     return _factory
 
 
+# c9 (audit 2026-07-03): durability of the chat turn. The team reply runs as a
+# DETACHED in-process task (schedule_reply), so a restart mid-turn drops it. A
+# startup sweep resumes turns left unanswered. Only STALE turns (older than this)
+# are resumed — a fresh turn is still being handled in-process.
+_RESUME_STALE_SECONDS = 30
+_RESUME_SWEEP_LOCK = "chat:resume:pending"
+_RESUME_MAX = 200
+
+
+async def resume_pending_replies(*, vault: LLMProviderVaultStore | None, redis: Redis) -> int:
+    """Resume chat turns left unanswered when a previous api-server process died (c9).
+
+    The user's message is durable; the team reply is not (it runs detached in-process).
+    At startup this finds every conversation whose LATEST message is a user message
+    older than ``_RESUME_STALE_SECONDS`` and re-schedules the reply.
+    ``respond_to_conversation`` is idempotent (it skips an already-answered
+    conversation), so a redundant resume is a no-op. A redis single-flight lock keeps
+    multiple uvicorn workers from all sweeping. Best-effort — never raises. Returns the
+    number of conversations resumed.
+    """
+    try:
+        got_lock = await redis.set(_RESUME_SWEEP_LOCK, b"1", nx=True, ex=300)
+    except Exception:  # redis down — skip rather than risk an unbounded resume storm
+        _log.warning("chat.resume_sweep_no_redis")
+        return 0
+    if not got_lock:
+        return 0
+
+    older_than = datetime.now(tz=UTC) - timedelta(seconds=_RESUME_STALE_SECONDS)
+    later = aliased(Message)
+    sm = get_admin_sessionmaker()
+    try:
+        async with sm() as session:
+            rows = (
+                await session.execute(
+                    select(Message.conversation_id, Message.tenant_id, Message.mode)
+                    .where(
+                        Message.author_kind == "user",
+                        Message.created_at < older_than,
+                        ~exists().where(
+                            and_(
+                                later.conversation_id == Message.conversation_id,
+                                later.created_at > Message.created_at,
+                            )
+                        ),
+                    )
+                    .limit(_RESUME_MAX)
+                )
+            ).all()
+    except Exception as exc:  # a query failure must not stop api-server startup
+        _log.warning("chat.resume_sweep_query_failed", error=str(exc))
+        return 0
+
+    resumed = 0
+    for conversation_id, tenant_id, mode in rows:
+        task = asyncio.create_task(
+            respond_to_conversation(
+                conversation_id=conversation_id,
+                tenant_id=tenant_id,
+                mode=mode,
+                vault=vault,
+                redis=redis,
+            )
+        )
+        _PENDING_REPLIES.add(task)
+        task.add_done_callback(_PENDING_REPLIES.discard)
+        resumed += 1
+    if resumed:
+        _log.info("chat.resumed_pending_replies", count=resumed)
+    return resumed
+
+
 __all__ = [
     "build_chat_provider",
     "history_from_messages",
     "planning_roles_from_strings",
     "resolve_chat_model_config",
     "respond_to_conversation",
+    "resume_pending_replies",
     "schedule_reply",
     "team_planning_roles",
 ]

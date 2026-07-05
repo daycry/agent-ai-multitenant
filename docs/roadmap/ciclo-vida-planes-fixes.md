@@ -69,12 +69,12 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
 > **Estado (2026-07-05, rama `plan/runs-visor-trabajo`):** HECHAS y verificadas
 > **T1** (c10 PlanStatus), **T3** (c2 submit_verdict por state machine), **T5** (c5
 > tenant_id dispatch), **T8** (c6 phases), **T9** (c7 warning de rol), **T10** (c11
-> complexity) — en la remediación fase 1/2 (ver changelogs). PENDIENTES: **T2** (c1
-> PUT→state machine — transversal + decisión de producto sobre estrictez del Kanban),
-> **T4** (guard-test estático — requiere T2 primero), **T6** (c9 durabilidad del turno
-> — feature moderada: task Celery + idempotencia + sweep de arranque), **T7** (c3 —
-> el escalado plan→blocked YA está en dispatch; falta notificación + acción humana de
-> desbloqueo), **T11** (c8 board gerencial por plan_id — frontend).
+> complexity), **T6** (c9 durabilidad del turno — idempotencia + sweep de arranque)
+> — en la remediación fase 1/2 (ver changelogs). PENDIENTES: **T2** (c1 PUT→state
+> machine — transversal + decisión de producto sobre estrictez del Kanban), **T4**
+> (guard-test estático — requiere T2 primero), **T7** (c3 — el escalado plan→blocked
+> YA está en dispatch; falta notificación + acción humana de desbloqueo), **T11** (c8
+> board gerencial por plan_id — frontend).
 
 ### Fase A — Fundación de tipos y máquina de estados
 
@@ -104,10 +104,15 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
       la regla dura #1; documentar en el código que es defense-in-depth (no fuga explotable, lookup por PK).
       **Test:** guard-test estático que exige `tenant_id` en todo `select(Task/Plan).where(...id...)` del
       orquestador; regresión de que el revert sigue funcionando.
-- [ ] **T6 — Turno de planning durable (c9)**: mover la respuesta del equipo de `asyncio.create_task` detached
-      a una task Celery con reintento e idempotencia, más un sweep de arranque que reanude turnos a medias.
-      **Test:** matar el api-server a mitad de turno y verificar que la respuesta se regenera (o se marca
-      pendiente y se reanuda), sin duplicar el mensaje del usuario.
+- [x] **T6 — Turno de planning durable (c9)**: en vez de migrar el responder a Celery (cambio arquitectónico
+      grande: el responder vive en api-server con los proveedores LLM), se resuelve la durabilidad con
+      **idempotencia + sweep de recuperación al arranque** en api-server: (1) `respond_to_conversation` tiene una
+      guarda que hace SKIP si el último mensaje ya es respuesta (agent/system) → seguro llamarlo repetido;
+      (2) `resume_pending_replies` (nuevo) reanuda al arranque las conversaciones cuyo último mensaje es de
+      usuario y está estancado (> 30s, ni frescas ni respondidas), con lock redis single-flight entre workers;
+      (3) hook `@app.on_event("startup")` en `create_app`, best-effort. Aplica a los 3 modos de chat. **Test**
+      (`tests/integration/test_chat_resume_pending.py`, 2 casos): solo la conversación estancada-sin-responder se
+      reanuda (no las frescas ni las respondidas); el lock concede una sola vez. 19 tests de chat sin regresión.
 
 ### Fase C — Propagación de `blocked` (c3)
 
