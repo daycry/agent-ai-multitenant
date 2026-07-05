@@ -86,9 +86,12 @@ fail-open) queda cerrado.** Quedan pendientes las piezas mayores (ver «Pendient
   tests + 409 en el Kanban del frontend; decisión de estrictez).
 - **c9** (turno de planning durable vía Celery), **c8** (board gerencial por
   `plan_id`).
-- **guardas Fase G** (G1-G13, recalibración del runtime — síntoma «produce output»).
-- **g1 / prod-03** (cablear el motor de guardrails `pre_tool`/`post_tool` — la otra
-  mitad del P0; requiere su ADR de política de fallo).
+- **guardas Fase G**: G3/r4 (has_produced exige `ok`) y G6a/r1 (allowlist con
+  `sed`/`awk`/…) **HECHOS** (ver changelog fase 2); resto (G1/G2/G5/G8-G13)
+  requiere revisar ADR 0089/0092 (la detección loop/research es intencional).
+- **g1 / prod-03**: **slice mínimo HECHO** (ADR 0102 + seam `post_tool` + infra +
+  cableado runtime + persistencia en el worker — ver changelog fase 2). El alcance
+  total (4 hooks + enforce + config por proyecto) sigue en prod-03.
 
 ## Trazabilidad
 
