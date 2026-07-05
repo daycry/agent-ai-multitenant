@@ -74,7 +74,7 @@ requiere acción (deuda ADR 0081 ya planificada); se documenta como consciente.
 
 ### Fase A — Gate humano y guardrails de runtime (g6 + g1) — coordinar con prod-03
 
-- [ ] **T1 — Re-mapeo de categorías del gate (g6, P0)**: `DEFAULT_TOOL_CATEGORIES` del runtime
+- [x] **T1 — Re-mapeo de categorías del gate (g6, P0)**: `DEFAULT_TOOL_CATEGORIES` del runtime
       (`approval.py:25-32`) emite las **13 categorías canónicas** de las plantillas de política
       (`builtin_approval_policies.py`), no las 4 actuales. Mapear cada tool builtin a su categoría canónica
       (p.ej. `shell_exec→code_changes`, `http_post→external_http_post`, `write_file→code_changes`). **Coordinar
@@ -85,7 +85,7 @@ requiere acción (deuda ADR 0081 ya planificada); se documenta como consciente.
       para que `<server>.<tool>` sea gateable (hoy solo 6 builtins están en el mapa). **Coordinar con prod-03
       task_prod03_02.** **Test:** una tool MCP marcada sensible se aparca para validación humana bajo el preset
       adecuado.
-- [ ] **T3 — Slice mínimo de guardrails en el loop (g1, P0)**: cablear `pre_tool`/`post_tool` del motor
+- [x] **T3 — Slice mínimo de guardrails en el loop (g1, P0)**: cablear `pre_tool`/`post_tool` del motor
       `shared-guardrails` en el loop del agent-runtime (o worker) en modo `log` (no bloqueante), de modo que las
       salidas MCP/HTTP/RAG pasen por al menos un check de inyección (`prompt_injection`, `secret_leakage`)
       registrado — hoy el motor existe y está testeado pero **nunca corre** en ejecución de agentes. Enforcar
@@ -123,9 +123,14 @@ requiere acción (deuda ADR 0081 ya planificada); se documenta como consciente.
 
 ### Fase D — g3 (documentar, no tocar)
 
-- [ ] **T9 — Registrar g3 como deuda consciente**: dejar constancia (en este plan y en el informe) de que la no
+- [x] **T9 — Registrar g3 como deuda consciente**: dejar constancia (en este plan y en el informe) de que la no
       materialización del marketplace es diferimiento aceptado (ADR 0081 Fase B/C), no un defecto oculto; no se
       implementa aquí. Si se quiere adelantar → **ADR 0100**. **Test:** n/a (documental).
+      **REGISTRADO (2026-07-06):** g3 (el marketplace de tools/MCP no materializa installs frescos ni los gatea) es
+      **diferimiento consciente** heredado de ADR 0081 (Fase B/C del marketplace sin implementar), NO un fallo oculto:
+      el catálogo builtin y la asignación por proyecto sí funcionan; lo que falta es el flujo de instalación desde un
+      marketplace externo. Adelantarlo requiere ADR 0100 (materialización del marketplace). Sin impacto en runs
+      actuales (todos usan el catálogo builtin).
 
 ## Criterios de cierre
 
