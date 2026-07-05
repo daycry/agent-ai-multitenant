@@ -685,6 +685,20 @@ class _AgentLoop:
         hits = list(self.deps.recall(task))
         is_stub = self.deps.recall is _no_recall
         context = [{"role": "memory", **hit} for hit in hits]
+        # g1 (ADR 0102): recalled memory is an attacker-influenceable input path —
+        # a prior run may have distilled a malicious tool output into team/global
+        # memory ("ignore previous instructions…"). Screen it for prompt injection
+        # before it reaches the model, exactly like a tool output. LOG mode: records,
+        # never blocks. Scans every string field of the hit (content/title/…).
+        guardrail_events: list[dict[str, Any]] = []
+        for hit in hits:
+            text = " ".join(str(v) for v in hit.values() if isinstance(v, str))
+            guardrail_events += run_hook(
+                self.deps.guardrails,
+                hook="post_tool",
+                tool_name="memory_recall",
+                tool_result=text,
+            )
         step = memory_read_step(
             len(state["steps"]),
             "recall",
@@ -694,7 +708,7 @@ class _AgentLoop:
             + (" — no recall wired" if is_stub else ""),
             placeholder=is_stub,
         )
-        return {"context": context, "steps": [step]}
+        return {"context": context, "steps": [step], "guardrail_events": guardrail_events}
 
     def plan(self, state: AgentState) -> dict[str, Any]:  # noqa: PLR0911
         """Check safeguards, ask the model for the next move, detect loops."""
