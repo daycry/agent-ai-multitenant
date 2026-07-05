@@ -67,6 +67,7 @@ interface PlanBreadcrumb {
   id: string;
   project_id: string;
   title: string;
+  status: string;
 }
 
 type HumanAction =
@@ -166,7 +167,7 @@ export default function EscalatedPage() {
           <div className="flex items-center gap-2">
             {plan?.status === "blocked" && (
               <Button
-                variant="secondary"
+                variant="outline"
                 size="sm"
                 onClick={() => unblockMutation.mutate()}
                 disabled={unblockMutation.isPending}
@@ -329,7 +330,7 @@ function EscalatedTaskRow({
           </Button>
           <Button
             size="sm"
-            variant="secondary"
+            variant="outline"
             onClick={onRetry}
             disabled={disabled}
             data-testid={`retry-${task.id}`}
