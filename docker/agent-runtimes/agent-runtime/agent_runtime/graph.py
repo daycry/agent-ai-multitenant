@@ -34,6 +34,7 @@ from langgraph.graph import END, START, StateGraph
 from shared_llm import LLMError
 
 from agent_runtime.approval import ApprovalGate
+from agent_runtime.guardrails import run_hook
 from agent_runtime.loop_detection import DEFAULT_LOOP_THRESHOLD, LoopDetector
 from agent_runtime.model import DecisionKind, ModelClient
 from agent_runtime.providers import ProviderTimeout
@@ -553,6 +554,9 @@ class AgentDeps:
     # (not write_file), the read-churn backstop cuts it, and a safeguard trip
     # escalates to a human instead of a silent abort.
     is_review: bool = False
+    # ADR 0102 / g1: the resolved guardrail pipeline (or None). run_hook scans
+    # tool OUTPUTS for prompt injection (post_tool) before they re-enter context.
+    guardrails: Any = None
 
 
 @dataclass(frozen=True)
@@ -571,6 +575,9 @@ class ExecutionResult:
     # "partial" when it finished via `submit_result`, else None. A HINT for the UI
     # + reviewer, distinct from `status` (the execution lifecycle outcome).
     finish_status: str | None = None
+    # Guardrail events triggered during the run (ADR 0102 / g1); the worker
+    # persists them tenant-scoped from the result envelope.
+    guardrail_events: list[dict[str, Any]] = field(default_factory=list)
 
     def succeeded(self) -> bool:
         return self.status == STATUS_DONE
@@ -585,6 +592,7 @@ class ExecutionResult:
             "usage": self.usage,
             "approval": self.approval,
             "finish_status": self.finish_status,
+            "guardrail_events": self.guardrail_events,
         }
 
 
@@ -891,6 +899,12 @@ class _AgentLoop:
         args = decision.get("tool_args") or {}
         result = self.deps.tools.call(tool, args)
         self.tracker.record_tool_call()
+        # g1 (ADR 0102): scan the tool OUTPUT for prompt injection BEFORE it folds
+        # into the model context (observe) — closes indirect injection. LOG mode:
+        # records events, never blocks. Best-effort (run_hook returns [] on error).
+        guardrail_events = run_hook(
+            self.deps.guardrails, hook="post_tool", tool_name=tool, tool_result=result.output
+        )
         step = tool_call_step(
             len(state["steps"]),
             "act",
@@ -906,7 +920,11 @@ class _AgentLoop:
             "output": result.output,
             "error": result.error,
         }
-        return {"last_observation": observation, "steps": [step]}
+        return {
+            "last_observation": observation,
+            "steps": [step],
+            "guardrail_events": guardrail_events,
+        }
 
     @staticmethod
     def observe(state: AgentState) -> dict[str, Any]:
@@ -1518,4 +1536,5 @@ def run_agent(
         # The structured finish status (ADR 0087) rides on the last decision; it
         # is set only when the agent finished via `submit_result`.
         finish_status=last_decision.get("finish_status"),
+        guardrail_events=final.get("guardrail_events") or [],
     )

@@ -90,6 +90,10 @@ class AgentState(TypedDict):
     # The steps_log: an append-only record of everything the agent did.
     steps: Annotated[list[dict[str, Any]], operator.add]
 
+    # Guardrail events (ADR 0102 / g1): triggered post_tool guardrails accumulated
+    # across the run; the worker persists them (RLS) from the result envelope.
+    guardrail_events: Annotated[list[dict[str, Any]], operator.add]
+
 
 def initial_state(
     task: AgentTask, *, system_preamble: str | None = None, is_review: bool = False
@@ -121,4 +125,5 @@ def initial_state(
         review_passed=None,
         approval=None,
         steps=[],
+        guardrail_events=[],
     )

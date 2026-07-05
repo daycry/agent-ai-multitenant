@@ -445,10 +445,11 @@ def build_comments_preamble(comments: list[Any]) -> str:
     return "\n".join([_TASK_COMMENTS_INSTRUCTION, *lines])
 
 
-def run_task(spec: dict[str, Any]) -> int:
+def run_task(spec: dict[str, Any]) -> int:  # noqa: PLR0915 - linear boot orchestration
     """Run the agent loop for `spec`, streaming the steps_log as JSON lines."""
     from agent_runtime.approval import ApprovalGate
     from agent_runtime.graph import AgentDeps, run_agent
+    from agent_runtime.guardrails import build_pipeline
     from agent_runtime.model import model_from_spec
     from agent_runtime.safeguards import Budgets
     from agent_runtime.shell_exec import ShellExecTool
@@ -539,6 +540,9 @@ def run_task(spec: dict[str, Any]) -> int:
             model=model_from_spec(spec["model"]),
             tools=registry,
             approval=ApprovalGate(policy) if policy else None,
+            # ADR 0102 / g1: the guardrail pipeline (resolved config from the spec,
+            # or the platform baseline) — scans tool outputs for prompt injection.
+            guardrails=build_pipeline(spec),
             # ADR 0095: make the loop's convergence safeguards reviewer-aware.
             is_review=bool(spec.get("review")),
             **({"recall": auto_recall} if auto_recall is not None else {}),
