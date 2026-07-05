@@ -264,6 +264,30 @@ async def _load_plan(session: AsyncSession, plan_id: UUID) -> Plan:
     return plan
 
 
+@plans_router.get("", response_model=list[PlanResponse])
+async def list_all_plans(
+    project_id: UUID | None = Query(default=None),
+    status_: str | None = Query(default=None, alias="status"),
+    limit: int = limit_query(),
+    offset: int = offset_query(),
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[PlanResponse]:
+    """Tenant-wide plan list (c8/T11, ADR 0008): every plan across the tenant's
+    projects, for the management board (a Kanban of PLANS). RLS scopes the query to the
+    caller's tenant; optional ``?project_id`` / ``?status`` filters + pagination. This
+    replaces the board's obsolete project-as-plan placeholder without an N+1 fan-out."""
+    stmt = select(Plan).where(Plan.deleted_at.is_(None))
+    if project_id is not None:
+        stmt = stmt.where(Plan.project_id == project_id)
+    if status_ is not None:
+        stmt = stmt.where(Plan.status == status_)
+    stmt = stmt.order_by(Plan.created_at.desc(), Plan.id)
+    stmt = apply_pagination(stmt, limit=limit, offset=offset)
+    result = await session.execute(stmt)
+    return [to_plan_response(p) for p in result.scalars().all()]
+
+
 @plans_router.get("/{plan_id}", response_model=PlanResponse)
 async def get_plan(
     plan_id: UUID,
