@@ -362,6 +362,9 @@ class TaskDispatcher:
         # Collected INSIDE the txn, enqueued AFTER it commits (broker I/O must never
         # hold the DB transaction open). ``None`` ⇒ nothing to autostart.
         autostart_request: dict[str, Any] | None = None
+        # c3/T7: set when the plan is escalated to `blocked`; the operator is notified
+        # after commit (same broker-I/O-outside-txn rule).
+        blocked_notify: dict[str, Any] | None = None
         # C3 F05: a transient DB error here must NOT dead-letter the `done` event
         # (the plan would never close) — re-raise it as TransientHandlerError so
         # the consumer keeps it pending for reclaim.
@@ -421,46 +424,58 @@ class TaskDispatcher:
                             tenant_id=str(tenant_id),
                             reason="all remaining tasks are blocked",
                         )
-                return
-            # Atomic, idempotent guard: only the transaction that still observes
-            # the plan `in_progress` wins. The event stream is at-least-once
-            # (XREADGROUP), and several tasks can finish almost together — the
-            # `WHERE status = in_progress` predicate makes the transition fire
-            # exactly once, never a double review-runtime down the line.
-            won = (
-                await session.execute(
-                    update(Plan)
-                    .where(
-                        Plan.id == plan.id,
-                        Plan.tenant_id == tenant_id,
-                        Plan.status == _IN_PROGRESS,
+                        # c3/T7: notify the operator so the stall is visible and they
+                        # can unblock/retry a task. Enqueued AFTER the txn commits.
+                        blocked_notify = {
+                            "event_type": "plan_blocked",
+                            "tenant_id": str(tenant_id),
+                            "context": {
+                                "plan_name": plan.title or "",
+                                "plan_id": str(plan.id),
+                            },
+                        }
+            else:
+                # Atomic, idempotent guard: only the transaction that still observes
+                # the plan `in_progress` wins. The event stream is at-least-once
+                # (XREADGROUP), and several tasks can finish almost together — the
+                # `WHERE status = in_progress` predicate makes the transition fire
+                # exactly once, never a double review-runtime down the line.
+                won = (
+                    await session.execute(
+                        update(Plan)
+                        .where(
+                            Plan.id == plan.id,
+                            Plan.tenant_id == tenant_id,
+                            Plan.status == _IN_PROGRESS,
+                        )
+                        .values(status=result.new_status)
+                        .returning(Plan.id)
                     )
-                    .values(status=result.new_status)
-                    .returning(Plan.id)
-                )
-            ).scalar_one_or_none()
-            if won is not None:
-                _log.info(
-                    "orchestrator.plan_ready_for_review",
-                    plan_id=str(plan.id),
-                    tenant_id=str(tenant_id),
-                )
-                try:
-                    autostart_request = await self._build_review_autostart_request(
-                        session, plan=plan, tenant_id=tenant_id
-                    )
-                except Exception as exc:  # autostart must never block plan closure
-                    # Closing the plan is the committed outcome; resolving the
-                    # review payload is a best-effort follow-on. A bug / odd row
-                    # here must not roll back the transition (the reconciler or a
-                    # later trigger can still spawn the runtime).
-                    _log.error(
-                        "orchestrator.review_autostart_build_failed",
+                ).scalar_one_or_none()
+                if won is not None:
+                    _log.info(
+                        "orchestrator.plan_ready_for_review",
                         plan_id=str(plan.id),
-                        error=str(exc),
+                        tenant_id=str(tenant_id),
                     )
-                    autostart_request = None
+                    try:
+                        autostart_request = await self._build_review_autostart_request(
+                            session, plan=plan, tenant_id=tenant_id
+                        )
+                    except Exception as exc:  # autostart must never block plan closure
+                        # Closing the plan is the committed outcome; resolving the
+                        # review payload is a best-effort follow-on. A bug / odd row
+                        # here must not roll back the transition (the reconciler or a
+                        # later trigger can still spawn the runtime).
+                        _log.error(
+                            "orchestrator.review_autostart_build_failed",
+                            plan_id=str(plan.id),
+                            error=str(exc),
+                        )
+                        autostart_request = None
         # Enqueue OUTSIDE the txn (best-effort; never re-raises into the handler).
+        if blocked_notify is not None:
+            await self._send_plan_blocked_notification(blocked_notify)
         if autostart_request is not None:
             await self._enqueue_review_runtime(autostart_request)
 
@@ -847,6 +862,31 @@ class TaskDispatcher:
             args=[event],
             queue=self._settings.notifications_event_queue,
         )
+
+    def _send_dispatch_event(self, event: dict[str, Any]) -> None:
+        """Blocking broker enqueue of a domain notification event (runs in a thread).
+
+        Same clean app boundary as the human-assignment fan-out: the orchestrator only
+        PRODUCES the event by name; the dispatcher owns recipients + template + retry."""
+        self._celery.send_task(
+            _DISPATCH_EVENT_TASK,
+            args=[event],
+            queue=self._settings.notifications_event_queue,
+        )
+
+    async def _send_plan_blocked_notification(self, event: dict[str, Any]) -> None:
+        """Best-effort notify the operator that a plan was escalated to `blocked`
+        (c3/T7). The plan status is already committed and visible in the UI, so a
+        broker hiccup here is logged, never raised. ``send_task`` does blocking socket
+        I/O, so we run it off the loop."""
+        try:
+            await asyncio.to_thread(self._send_dispatch_event, event)
+        except Exception as exc:
+            _log.warning(
+                "orchestrator.plan_blocked_notify_failed",
+                plan_id=(event.get("context") or {}).get("plan_id"),
+                error=str(exc),
+            )
 
     async def _dispatch(
         self, task_id: UUID, *, tenant_id: UUID

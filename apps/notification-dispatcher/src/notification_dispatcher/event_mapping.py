@@ -127,6 +127,14 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.DEFAULT,
         default_channel_types=("in_app",),
     ),
+    # c3/T7 (audit 2026-07-03): a plan whose only remaining open tasks are `blocked`
+    # is escalated `in_progress -> blocked` by the orchestrator; the operator is
+    # notified so the stall is visible and they can unblock/retry a task.
+    "plan_blocked": EventSpec(
+        "plan_blocked",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app", "telegram"),
+    ),
     "task_failed": EventSpec(
         "task_failed",
         lane=NotificationLane.DEFAULT,

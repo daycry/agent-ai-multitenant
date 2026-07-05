@@ -119,6 +119,26 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "was approved by {{ approver | default('an administrator') }}."
         ),
     ),
+    # --- plan_blocked (c3/T7) ---------------------------------------------
+    ("plan_blocked", "es"): TemplateSource(
+        subject="Plan bloqueado: {{ plan_name | default('(sin nombre)') }}",
+        body=(
+            "El plan «{{ plan_name | default('(sin nombre)') }}» "
+            "del proyecto «{{ project_name | default('(sin proyecto)') }}» "
+            "quedó bloqueado: todas las tareas restantes están bloqueadas y "
+            "ninguna puede avanzar sola. Revísalo y desbloquea o reintenta una "
+            "tarea para continuar."
+        ),
+    ),
+    ("plan_blocked", "en"): TemplateSource(
+        subject="Plan blocked: {{ plan_name | default('(unnamed)') }}",
+        body=(
+            "Plan \"{{ plan_name | default('(unnamed)') }}\" "
+            "in project \"{{ project_name | default('(no project)') }}\" "
+            "is blocked: every remaining task is blocked and none can advance "
+            "on its own. Review it and unblock or retry a task to continue."
+        ),
+    ),
     # --- task_failed -------------------------------------------------------
     ("task_failed", "es"): TemplateSource(
         subject="Tarea fallida: {{ task_title | default('(sin título)') }}",

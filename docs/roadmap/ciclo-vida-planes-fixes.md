@@ -116,13 +116,13 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
 
 ### Fase C — Propagación de `blocked` (c3)
 
-- [ ] **T7 — Ruta de salida de tarea `blocked` + propagación al plan (c3, confirmado)**: cuando el plan queda
-      sin tareas avanzables (todas `done`/`blocked`, ninguna despachable), transicionar el plan a `blocked` con
-      notificación al operador, y ofrecer una acción humana de reintento/desbloqueo de la tarea. Hoy
-      `_OPEN_TASK_STATUSES` cuenta `blocked` como abierta (`plan_progress.py:55`), así que
-      `transition_to_pending_human_validation` nunca dispara y no hay ruta automática plan→blocked. **Test:** un
-      plan con la última tarea `blocked` NO queda `in_progress` indefinidamente; el operador recibe notificación
-      y puede desbloquear/reintentar.
+- [~] **T7 — Ruta de salida de tarea `blocked` + propagación al plan (c3, confirmado)** — **2 de 3 partes
+  hechas**: (a) el escalado plan `in_progress→blocked` cuando las únicas tareas abiertas son `blocked` ya está
+  (fase 1, `dispatch.py:_on_task_done`); (b) **notificación al operador HECHA** — evento `plan_blocked` en el
+  registro del notification-dispatcher + plantillas es/en + el orquestador lo encola tras el escalado
+  (`_send_plan_blocked_notification`, fuera de la txn, best-effort; restructure `if/else` behavior-preserving).
+  **Test** (`tests/unit/test_plan_blocked_notification.py`, 2 casos + 28 de registro/plantilla + 5 de dispatch
+  sin regresión). PENDIENTE (c): la **acción humana de desbloqueo/reintento** de una tarea `blocked` (endpoint + máquina de estados de tarea + UI) — el operador ya ve el plan `blocked` y recibe la notificación.
 
 ### Fase D — Fidelidad del planner y board (c6, c7, c8, c11)
 
