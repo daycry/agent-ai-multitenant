@@ -90,6 +90,29 @@ const PRIORITY_VARIANT: Record<string, BadgeVariant> = {
 const PLAN_FILTER_ALL = "all";
 const PLAN_FILTER_NULL = "null";
 
+// Turn a failed Kanban move into a human message: the server replies 422
+// `dependencies_not_done` (DAG) or 409 `illegal_transition` (state machine, c1/T2).
+function describeTaskMoveError(err: unknown): string {
+  if (err instanceof ApiError) {
+    try {
+      const parsed = JSON.parse(err.body) as {
+        detail?: { error?: string; pending?: unknown[] };
+      };
+      if (parsed.detail?.error === "dependencies_not_done") {
+        const n = parsed.detail.pending?.length ?? 0;
+        return `No se puede mover: ${n} dependencia${n === 1 ? "" : "s"} sin completar.`;
+      }
+      if (parsed.detail?.error === "illegal_transition") {
+        return "Movimiento no permitido: no es una transición válida desde el estado actual.";
+      }
+    } catch {
+      // body wasn't the structured error — fall through to the raw text.
+    }
+    return err.body;
+  }
+  return String(err);
+}
+
 export default function ProjectTasksPage() {
   const params = useParams<{ id: string }>();
   const projectId = params?.id ?? "";
@@ -159,7 +182,7 @@ export default function ProjectTasksPage() {
       if (context?.prev) {
         queryClient.setQueryData(["project-tasks", projectId], context.prev);
       }
-      setDragError(err instanceof ApiError ? err.body : String(err));
+      setDragError(describeTaskMoveError(err));
     },
     onSuccess: () => setDragError(null),
   });

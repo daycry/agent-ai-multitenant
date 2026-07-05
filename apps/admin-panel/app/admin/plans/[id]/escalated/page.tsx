@@ -21,7 +21,16 @@
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Ban, Check, FolderKanban, Home, Plus, Workflow } from "lucide-react";
+import {
+  AlertTriangle,
+  Ban,
+  Check,
+  FolderKanban,
+  Home,
+  Plus,
+  RotateCcw,
+  Workflow,
+} from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
@@ -60,7 +69,12 @@ interface PlanBreadcrumb {
   title: string;
 }
 
-type HumanAction = "approve_manual" | "reassign_with_guidance" | "block_with_reason" | "cancel";
+type HumanAction =
+  | "approve_manual"
+  | "reassign_with_guidance"
+  | "block_with_reason"
+  | "cancel"
+  | "retry";
 
 interface HumanActionPayload {
   action: HumanAction;
@@ -106,6 +120,16 @@ export default function EscalatedPage() {
     actionMutation.mutate({ taskId, payload });
   }
 
+  // T7c part D: un-stick the whole plan in one gesture (reactivate + re-enqueue all
+  // its blocked tasks). Only offered when the plan is actually blocked.
+  const unblockMutation = useMutation({
+    mutationFn: async () => apiFetch(`/plans/${planId}/unblock`, { method: "POST" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["escalated-tasks", planId] });
+      void queryClient.invalidateQueries({ queryKey: ["plan", planId] });
+    },
+  });
+
   const tasks = tasksQuery.data?.tasks ?? [];
 
   return (
@@ -139,15 +163,29 @@ export default function EscalatedPage() {
         title="Tareas escaladas"
         description="Tareas del plan que llegaron al límite de reintentos del revisor automático y esperan decisión humana."
         actions={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setCreateOpen(true)}
-            data-testid="free-task-open"
-          >
-            <Plus className="mr-1 h-4 w-4" />
-            Añadir tarea libre
-          </Button>
+          <div className="flex items-center gap-2">
+            {plan?.status === "blocked" && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => unblockMutation.mutate()}
+                disabled={unblockMutation.isPending}
+                data-testid="plan-unblock"
+              >
+                <RotateCcw className="mr-1 h-4 w-4" />
+                Desbloquear plan
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCreateOpen(true)}
+              data-testid="free-task-open"
+            >
+              <Plus className="mr-1 h-4 w-4" />
+              Añadir tarea libre
+            </Button>
+          </div>
         }
       />
 
@@ -202,6 +240,7 @@ export default function EscalatedPage() {
             task={task}
             disabled={actionMutation.isPending}
             onApprove={() => runAction(task.id, { action: "approve_manual" })}
+            onRetry={() => runAction(task.id, { action: "retry" })}
             onCancel={() => runAction(task.id, { action: "cancel" })}
             onReassign={() => setReassignTask(task)}
             onBlock={() => setBlockTask(task)}
@@ -250,6 +289,7 @@ function EscalatedTaskRow({
   task,
   disabled,
   onApprove,
+  onRetry,
   onReassign,
   onBlock,
   onCancel,
@@ -257,6 +297,7 @@ function EscalatedTaskRow({
   task: EscalatedTask;
   disabled: boolean;
   onApprove: () => void;
+  onRetry: () => void;
   onReassign: () => void;
   onBlock: () => void;
   onCancel: () => void;
@@ -285,6 +326,16 @@ function EscalatedTaskRow({
           >
             <Check className="mr-1 h-3.5 w-3.5" />
             Aprobar manualmente
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={onRetry}
+            disabled={disabled}
+            data-testid={`retry-${task.id}`}
+          >
+            <RotateCcw className="mr-1 h-3.5 w-3.5" />
+            Reintentar
           </Button>
           <Button
             size="sm"

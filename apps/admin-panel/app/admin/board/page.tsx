@@ -58,10 +58,26 @@ interface Task {
   depends_on: string[];
 }
 
-interface Team {
+// c8/T11 (ADR 0008): the top row shows real PLANS (GET /plans), not projects.
+interface Plan {
   id: string;
-  name: string;
+  project_id: string;
+  title: string;
+  status: string;
 }
+
+// Plan lifecycle → badge colour for the plan cards.
+const PLAN_STATUS_VARIANT: Record<string, BadgeVariant> = {
+  pending_approval: "muted",
+  approved: "info",
+  in_progress: "primary",
+  blocked: "danger",
+  pending_human_validation: "warning",
+  completed: "success",
+  cancelled: "muted",
+  rejected: "danger",
+  archived: "muted",
+};
 
 // --------------------------------------------------------------------------
 // Status columns. Keep cancelled at the end — it's terminal-but-rare.
@@ -99,12 +115,17 @@ function describeMoveError(err: unknown, target: Task["status"]): string {
   if (err instanceof ApiError) {
     try {
       const parsed = JSON.parse(err.body) as {
-        detail?: { error?: string; pending?: unknown[] };
+        detail?: { error?: string; pending?: unknown[]; from?: string; to?: string };
       };
       if (parsed.detail?.error === "dependencies_not_done") {
         const n = parsed.detail.pending?.length ?? 0;
         const label = COLUMNS.find((c) => c.id === target)?.label ?? target;
         return `No se puede mover a «${label}»: ${n} dependencia${n === 1 ? "" : "s"} sin completar.`;
+      }
+      // c1/T2: the state machine rejected this move (409 illegal_transition).
+      if (parsed.detail?.error === "illegal_transition") {
+        const label = COLUMNS.find((c) => c.id === target)?.label ?? target;
+        return `Movimiento no permitido a «${label}»: no es una transición válida desde el estado actual de la tarea.`;
       }
     } catch {
       // body wasn't the structured DAG error — fall back to the raw text.
@@ -128,30 +149,31 @@ export default function BoardPage() {
     refetchOnWindowFocus: false,
   });
 
-  const teamsQuery = useQuery({
-    queryKey: ["teams", "list"],
-    queryFn: () => apiFetch<Team[]>("/teams"),
+  // c8/T11: the top row is a Kanban of real PLANS across the tenant's projects
+  // (GET /plans). projectsQuery stays only to label each plan with its project name.
+  const plansQuery = useQuery({
+    queryKey: ["plans", "tenant"],
+    queryFn: () => apiFetch<Plan[]>("/plans"),
     refetchOnWindowFocus: false,
   });
-
-  const plans = useMemo(
-    () => (projectsQuery.data ?? []).filter((p) => !p.is_template),
+  const plans = useMemo(() => plansQuery.data ?? [], [plansQuery.data]);
+  const projectsById = useMemo(
+    () => new Map((projectsQuery.data ?? []).map((p) => [p.id, p] as const)),
     [projectsQuery.data],
   );
 
   // Auto-select the first plan once data lands.
   const effectiveSelected =
     selectedId && plans.some((p) => p.id === selectedId) ? selectedId : (plans[0]?.id ?? null);
+  const selectedPlan = plans.find((p) => p.id === effectiveSelected) ?? null;
 
-  const teamsById = useMemo(
-    () => new Map((teamsQuery.data ?? []).map((t) => [t.id, t] as const)),
-    [teamsQuery.data],
-  );
-
+  // §6: the bottom board shows ONLY the selected plan's tasks (never a flat board
+  // mixing tasks from several plans). Filter by plan_id within the plan's project.
   const tasksQuery = useQuery({
-    queryKey: ["tasks", "by-project", effectiveSelected],
-    queryFn: () => apiFetch<Task[]>(`/projects/${effectiveSelected}/tasks`),
-    enabled: !!effectiveSelected,
+    queryKey: ["tasks", "by-plan", effectiveSelected],
+    queryFn: () =>
+      apiFetch<Task[]>(`/projects/${selectedPlan?.project_id}/tasks?plan_id=${effectiveSelected}`),
+    enabled: !!selectedPlan,
     refetchOnWindowFocus: false,
   });
 
@@ -171,7 +193,7 @@ export default function BoardPage() {
     },
     onMutate: async ({ task, newStatus }) => {
       // Optimistic cache update so the card jumps columns instantly.
-      const key = ["tasks", "by-project", effectiveSelected];
+      const key = ["tasks", "by-plan", effectiveSelected];
       await queryClient.cancelQueries({ queryKey: key });
       const prev = queryClient.getQueryData<Task[]>(key);
       queryClient.setQueryData<Task[]>(
@@ -182,7 +204,7 @@ export default function BoardPage() {
     },
     onError: (err, vars, context) => {
       if (context?.prev) {
-        queryClient.setQueryData(["tasks", "by-project", effectiveSelected], context.prev);
+        queryClient.setQueryData(["tasks", "by-plan", effectiveSelected], context.prev);
       }
       setDragError(describeMoveError(err, vars.newStatus));
     },
@@ -213,8 +235,8 @@ export default function BoardPage() {
   // task_02_21 / task_02_23 — a task.status_changed event (from any
   // source: another user, an agent) moves the card live, no refresh.
   const kanbanUrl = useMemo(
-    () => (effectiveSelected ? wsUrl(`/ws/kanban/${effectiveSelected}`) : null),
-    [effectiveSelected],
+    () => (selectedPlan ? wsUrl(`/ws/kanban/${selectedPlan.project_id}`) : null),
+    [selectedPlan],
   );
 
   const onKanbanEvent = useCallback(
@@ -225,7 +247,7 @@ export default function BoardPage() {
         task_id?: string;
         payload?: { new_status?: string };
       };
-      const key = ["tasks", "by-project", effectiveSelected];
+      const key = ["tasks", "by-plan", effectiveSelected];
       const newStatus = event.payload?.new_status;
       if (event.type === "task.status_changed" && event.task_id && newStatus) {
         queryClient.setQueryData<Task[]>(key, (prev) =>
@@ -259,26 +281,24 @@ export default function BoardPage() {
           )}
         </div>
 
-        {projectsQuery.isLoading && (
-          <p className="text-muted-foreground text-sm">Cargando planes…</p>
-        )}
+        {plansQuery.isLoading && <p className="text-muted-foreground text-sm">Cargando planes…</p>}
 
-        {projectsQuery.isError && (
+        {plansQuery.isError && (
           <Card className="border-destructive p-4">
             <p className="text-destructive text-sm">
-              Could not load plans:{" "}
-              {projectsQuery.error instanceof ApiError
-                ? projectsQuery.error.body
-                : String(projectsQuery.error)}
+              No se pudieron cargar los planes:{" "}
+              {plansQuery.error instanceof ApiError
+                ? plansQuery.error.body
+                : String(plansQuery.error)}
             </p>
           </Card>
         )}
 
-        {projectsQuery.data && plans.length === 0 && (
+        {plansQuery.data && plans.length === 0 && (
           <Card className="p-8 text-center" data-testid="plans-empty">
             <p className="text-muted-foreground text-sm">
-              Este tenant aún no tiene planes activos. Crea un proyecto desde una plantilla para
-              empezar.
+              Este tenant aún no tiene planes. Crea un plan desde el chat de planning de un proyecto
+              para empezar.
             </p>
           </Card>
         )}
@@ -289,7 +309,7 @@ export default function BoardPage() {
             data-testid="plans-grid"
           >
             {plans.map((p) => {
-              const team = p.team_id ? teamsById.get(p.team_id) : null;
+              const project = projectsById.get(p.project_id);
               const active = effectiveSelected === p.id;
               return (
                 <Card
@@ -301,18 +321,15 @@ export default function BoardPage() {
                   className={cn(active && "border-primary shadow-md ring-1 ring-primary/30")}
                 >
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-base">{p.name}</CardTitle>
-                    {team && (
+                    <CardTitle className="text-base">{p.title}</CardTitle>
+                    {project && (
                       <Badge variant="info" className="w-fit">
-                        {team.name}
+                        {project.name}
                       </Badge>
                     )}
                   </CardHeader>
-                  <CardContent className="flex items-center justify-between gap-2">
-                    <p className="text-muted-foreground line-clamp-2 text-xs">
-                      {p.description ?? "Sin descripción."}
-                    </p>
-                    <Badge variant={p.status === "active" ? "success" : "muted"}>{p.status}</Badge>
+                  <CardContent className="flex items-center justify-end gap-2">
+                    <Badge variant={PLAN_STATUS_VARIANT[p.status] ?? "muted"}>{p.status}</Badge>
                   </CardContent>
                 </Card>
               );
@@ -331,7 +348,7 @@ export default function BoardPage() {
                 className="text-muted-foreground text-sm font-normal"
                 data-testid="board-selected-name"
               >
-                — {plans.find((p) => p.id === effectiveSelected)?.name ?? ""}
+                — {selectedPlan?.title ?? ""}
               </span>
             )}
           </h2>
