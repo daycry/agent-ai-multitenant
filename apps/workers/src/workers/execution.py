@@ -939,6 +939,16 @@ def _resolve_review_worktree(
     return str(path) if path.is_dir() else None
 
 
+def _commit_abort_code(exc: Exception) -> str:
+    """Classify a worktree commit/push failure into its ``abort_code`` (P7).
+
+    A rebase CONFLICT (a sibling task changed the same lines — ``push_review_to_bare``
+    raises a ``... conflicted ...`` error) needs a human to resolve it and is
+    escalatable; any other git error is a generic ``commit_failed``.
+    """
+    return "rebase_conflict" if "conflict" in str(exc).lower() else "commit_failed"
+
+
 async def _commit_and_push_worktree(
     settings: Settings,
     *,
@@ -950,7 +960,7 @@ async def _commit_and_push_worktree(
     task_id: str,
     execution_id: str,
     escalated: bool = False,
-) -> bool:
+) -> str | None:
     """Commit the agent's worktree output (with the mandatory trailers) and push it
     to the plan branch on the local bare repo (prod-18 task_prod18_commit_01 / ADR 0085).
 
@@ -960,10 +970,12 @@ async def _commit_and_push_worktree(
     ``done`` (P2.3/F26). The bare→remote push stays with the existing ``open_plan_pr``
     path (final_only at plan close).
 
-    Returns ``True`` when a REAL git error prevented the commit/push — the caller
-    stamps a visible ``commit_failed`` marker so we never report a deliverable with
-    an empty diff (P2.3/F13). Returns ``False`` when the commit succeeded OR the tree
-    was legitimately clean (the agent produced no file change — a no-op, not an error).
+    Returns the ``abort_code`` when a REAL git error prevented the commit/push —
+    ``"rebase_conflict"`` when a sibling task changed the same lines (needs human
+    resolution, P7) or ``"commit_failed"`` for any other git error — so the caller
+    stamps a visible, escalatable marker instead of reporting a deliverable with an
+    empty diff (P2.3/F13). Returns ``None`` when the commit succeeded OR the tree was
+    legitimately clean (the agent produced no file change — a no-op, not an error).
     """
     from pathlib import Path
 
@@ -1012,33 +1024,49 @@ async def _commit_and_push_worktree(
             _log.info(
                 "workers.worktree_committed", task_id=task_id, sha=sha[:8], escalated=escalated
             )
-        return False
+        return None
     except Exception as exc:  # pragma: no cover - requires a live git failure
-        # P2.3(b)/F13: a REAL git failure (NOT a clean tree) must be VISIBLE — the
-        # run reported a deliverable but produced no diff. Signal the caller to
-        # stamp a `commit_failed` marker instead of silently reporting success.
-        _log.warning("workers.worktree_commit_failed", task_id=task_id, error=str(exc))
-        return True
+        # P2.3(b)/F13 + P7: a REAL git failure (NOT a clean tree) must be VISIBLE — the
+        # run reported a deliverable but produced no diff. A rebase CONFLICT (a sibling
+        # task changed the same lines) gets its own escalatable abort_code so it lands
+        # on the escalation panel; any other git error stays `commit_failed`.
+        abort_code = _commit_abort_code(exc)
+        _log.warning(
+            "workers.worktree_commit_failed",
+            task_id=task_id,
+            abort_code=abort_code,
+            error=str(exc),
+        )
+        return abort_code
 
 
 async def _mark_commit_failed(
-    sessionmaker: async_sessionmaker[AsyncSession], execution_id: UUID
+    sessionmaker: async_sessionmaker[AsyncSession],
+    execution_id: UUID,
+    abort_code: str = "commit_failed",
 ) -> None:
-    """Stamp a visible ``commit_failed`` marker on a finalised execution whose
-    worktree commit/push hit a real git error (P2.3(b)/F13).
+    """Stamp a visible ``abort_code`` marker on a finalised execution whose
+    worktree commit/push hit a real git error (P2.3(b)/F13, P7).
 
     The run already reported a deliverable, but it never reached the plan branch —
     surface that on the execution row (``abort_code`` + an appended ``output`` note)
-    instead of silently reporting success with an empty diff. Best-effort: opens its
-    own short txn on the BYPASSRLS worker engine; a failure here never breaks the run.
+    instead of silently reporting success with an empty diff. ``rebase_conflict``
+    (P7) is escalatable — it lands on the escalation panel with a resolution note.
+    Best-effort: opens its own short txn on the BYPASSRLS worker engine; a failure
+    here never breaks the run.
     """
     try:
         async with sessionmaker() as session, session.begin():
             execution = await get_execution(session, execution_id)
             if execution is None:
                 return
-            execution.abort_code = "commit_failed"
-            note = "worktree commit/push failed — deliverable not persisted to the plan branch"
+            execution.abort_code = abort_code
+            note = (
+                "worktree rebase conflicted with a sibling task — deliverable not "
+                "persisted to the plan branch; needs human resolution"
+                if abort_code == "rebase_conflict"
+                else "worktree commit/push failed — deliverable not persisted to the plan branch"
+            )
             execution.output = f"{execution.output}\n{note}" if execution.output else note
     except Exception as exc:  # pragma: no cover - defensive best-effort
         _log.warning(
@@ -1549,7 +1577,7 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
             and worktree_inputs is not None
         ):
             c_tenant_slug, c_project_slug, c_plan_id, c_plan_slug = worktree_inputs
-            commit_failed = await _commit_and_push_worktree(
+            commit_abort_code = await _commit_and_push_worktree(
                 settings,
                 host_path=workspace_host_path,
                 tenant_slug=c_tenant_slug,
@@ -1568,10 +1596,11 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                     worktree_host_path=workspace_host_path,
                     acceptance_criteria=task_acceptance_criteria,
                 )
-            if commit_failed:
-                # P2.3(b)/F13: a real git failure — surface it on the execution row
-                # instead of reporting a deliverable with an empty diff.
-                await _mark_commit_failed(sessionmaker, execution_id)
+            if commit_abort_code:
+                # P2.3(b)/F13 + P7: a real git failure — surface it (with its
+                # specific abort_code) on the execution row instead of reporting a
+                # deliverable with an empty diff.
+                await _mark_commit_failed(sessionmaker, execution_id, commit_abort_code)
         # Now publish the deferred state-change event (the commit, if any, exists, so
         # a reviewer/validator dispatched by it finds the diff).
         if task_event is not None:

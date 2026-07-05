@@ -893,6 +893,10 @@ _REVIEW_ESCALATION_ABORT_CODES: tuple[str, ...] = (
     "review_inconclusive",
     "max_review_retries_exhausted",
     "agent_reported_failure",
+    # A worktree rebase conflict (a sibling task changed the same lines) needs a
+    # human to resolve it — surface it on the panel even when the run's status is
+    # not needs_human_review (P7, audit 2026-07-03).
+    "rebase_conflict",
 )
 _ESCALATED_EXECUTION_STATUS = "needs_human_review"
 
