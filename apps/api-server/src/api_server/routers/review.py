@@ -44,6 +44,7 @@ from workers.review_runtime import sign_review_url, verify_review_url
 
 from api_server.auth.deps import get_redis
 from api_server.celery_client import enqueue_open_plan_pr
+from api_server.chat.plan_state_machine import transition_plan_status
 from api_server.config import get_settings
 from api_server.db.domain import Plan
 from api_server.db.models import ReviewSession as ReviewSessionRow
@@ -467,7 +468,14 @@ async def submit_verdict(
         pr_ctx: tuple[UUID, UUID, str] | None = None
         if plan is not None:
             if plan.status == "pending_human_validation":
-                plan.status = "completed" if body.verdict == "approved" else "rejected"
+                # c2/T3 (audit 2026-07-03): encaminar el cierre por la máquina de
+                # estados (la ÚNICA puerta), no una asignación cruda de .status. La
+                # transición pending_human_validation→completed|rejected es legal (la
+                # misma de hoy); se PRESERVA el orden completar→encolar-PR (ADR 0072
+                # fase 2), sin cambio de comportamiento.
+                transition_plan_status(
+                    plan, "completed" if body.verdict == "approved" else "rejected"
+                )
                 if plan.status == "completed" and plan.project_id is not None:
                     pr_ctx = (plan.project_id, plan.id, plan.title or "")
             plan_status = plan.status

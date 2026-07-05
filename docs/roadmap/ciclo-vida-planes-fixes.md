@@ -76,10 +76,12 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
       `transition_task_status` (mantiene la validación DAG existente); transición ilegal → 409/422 con mensaje.
       **Test:** `backlog→done` y `done→in_progress` por PUT devuelven error; `backlog→ready` pasa; el
       drag&drop del Kanban respeta las columnas legales.
-- [ ] **T3 — `submit_verdict` vía `transition_plan_status` (c2, higiene)**: encaminar la transición
-      `pending_human_validation→completed|rejected` por la máquina de estados **sin cambiar el orden**
-      (completar → encolar PR se mantiene, ADR 0072). **Test:** el veredicto produce la misma transición y el
-      mismo encolado de auto-PR que hoy; ninguna asignación cruda de `plan.status` sobrevive al guard-test.
+- [x] **T3 — `submit_verdict` vía `transition_plan_status` (c2, higiene)**: `submit_verdict` (`review.py:469`)
+      encamina el cierre `pending_human_validation→completed|rejected` por `transition_plan_status` (la única
+      puerta) en vez de asignar `.status` en crudo. La transición es legal (línea 17 del state machine) → mismo
+      comportamiento; se preserva el orden completar→encolar-PR (ADR 0072). **Test:** regresión verde
+      (`test_plan_completion` + `test_review_execution_applies_verdict`, 15 casos) — misma transición y mismo
+      encolado del auto-PR. _(El guard-test estático anti-asignación-cruda es T4, aparte.)_
 - [ ] **T4 — Guard-test estático de mutación de estado**: CI falla si aparece asignación directa de
       `.status`/`setattr(..., 'status', ...)` sobre `Task`/`Plan` fuera de las funciones de transición
       (incluye `maintenance.py:126`, señalado en la verificación como el mismo patrón). **Test:** el linter/test
