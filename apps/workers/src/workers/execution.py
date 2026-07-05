@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -272,6 +272,9 @@ class _RuntimeResult:
     # ADR 0087: the agent's structured finish status (success|failed|partial) or
     # None — carried from the runtime's execution.finished result.
     finish_status: str | None = None
+    # Guardrail events (ADR 0102 / g1): triggered post_tool guardrails from the
+    # runtime's execution.finished result; persisted tenant-scoped after finalize.
+    guardrail_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 # Track 1 / ADR 0021 addendum: a base shell allowlist for the natively-agentic
@@ -624,6 +627,7 @@ def _assemble_result(
             steps=steps,
             usage=final_result.get("usage") or dict(_EMPTY_USAGE),
             finish_status=final_result.get("finish_status"),
+            guardrail_events=final_result.get("guardrail_events") or [],
         )
 
     # F16/P1.1: a clean exit with no result on the live stream — recover from the
@@ -640,6 +644,7 @@ def _assemble_result(
                 steps=steps,
                 usage=recovered.get("usage") or dict(_EMPTY_USAGE),
                 finish_status=recovered.get("finish_status"),
+                guardrail_events=recovered.get("guardrail_events") or [],
             )
         if recovered_error is not None:
             runtime_error = recovered_error
@@ -1148,6 +1153,52 @@ async def refresh_budgets_after_run(
         _log.warning("workers.budget_refresh_failed", tenant_id=str(tenant_id), error=str(exc))
 
 
+async def _persist_guardrail_events(
+    session: AsyncSession,
+    result: _RuntimeResult,
+    *,
+    tenant_id: UUID,
+    task_id: UUID,
+    execution_id: UUID,
+    agent_id: UUID | None,
+) -> None:
+    """Persist the runtime's post_tool guardrail events (ADR 0102 / g1) tenant-scoped.
+
+    Runs inside the finalize transaction (same RLS session) but inside a SAVEPOINT,
+    so a persistence failure can never roll back the already-finished execution —
+    these events are LOG-mode observability, never a reason to fail a run.
+    """
+    events = result.guardrail_events or []
+    if not events:
+        return
+    from api_server.guardrails.events import record_guardrail_event
+
+    project = await _load_project(session, task_id)
+    project_id = project.id if project is not None else None
+    try:
+        async with session.begin_nested():
+            for event in events:
+                await record_guardrail_event(
+                    session,
+                    tenant_id=tenant_id,
+                    guardrail_type=str(event.get("guardrail_type") or "unknown"),
+                    hook_point=str(event.get("hook_point") or "post_tool"),
+                    severity=str(event.get("severity") or "info"),
+                    action=event.get("action"),
+                    detail=str(event.get("detail") or ""),
+                    detail_payload=event.get("detail_payload") or {},
+                    project_id=project_id,
+                    agent_id=agent_id,
+                    execution_id=execution_id,
+                )
+    except Exception:
+        _log.warning(
+            "workers.guardrail_events_persist_failed",
+            execution_id=str(execution_id),
+            count=len(events),
+        )
+
+
 async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll de cancelación
     request: ExecutionRequest,
     *,
@@ -1508,6 +1559,7 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 steps=result.steps,
                 usage=result.usage,
                 finish_status=result.finish_status,
+                guardrail_events=result.guardrail_events,
             )
         approval = final_result.get("approval") if final_result else None
 
@@ -1528,6 +1580,7 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
             steps=result.steps,
             usage=result.usage,
             finish_status=result.finish_status,
+            guardrail_events=result.guardrail_events,
         )
 
     task_event: tuple[Any, str, str] | None = None
@@ -1540,6 +1593,16 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
     implementer_path = False
     async with sessionmaker() as session, session.begin():
         await finalize_execution(session, execution_id, result=result)
+        # g1 (ADR 0102 D4): persist the runtime's post_tool guardrail events under
+        # the same tenant-scoped RLS txn (SAVEPOINT-isolated, best-effort).
+        await _persist_guardrail_events(
+            session,
+            result,
+            tenant_id=tenant_id,
+            task_id=task_id,
+            execution_id=execution_id,
+            agent_id=UUID(request.agent_id) if request.agent_id else None,
+        )
         # A run parked on a sensitive action becomes a real
         # ApprovalRequest — the approval engine on the live run (task_02_33).
         # request_approval_if_needed also moves the TASK to
