@@ -66,7 +66,11 @@ NODE_NAMES: tuple[str, ...] = (
 
 # Read/search tools that gather context but produce no deliverable. A run that
 # only calls these is researching, not making progress.
-_RESEARCH_TOOLS = frozenset({"list_files", "read_file", "memory_recall", "rag_search"})
+# G4a (ADR 0103): search_code is a READ-ONLY inspection tool — it earns novelty like
+# any research call and is NOT a mutator (so repeating it can't hard-abort the run).
+_RESEARCH_TOOLS = frozenset(
+    {"list_files", "read_file", "memory_recall", "rag_search", "search_code"}
+)
 # Tools that produce/modify the deliverable — calling one means real progress
 # (and that the agent HAS produced, which changes the nudge from "write" to "finish").
 _PRODUCING_TOOLS = frozenset(
@@ -92,7 +96,10 @@ _REREAD_CHURN_NUDGE_LIMIT = 3
 # renderizados en el bloque PROGRESS para que el modelo no relea para recordar.
 # LRU acotado — presupuesto de prompt, no de memoria.
 _READ_DIGESTS_MAX = 20
-_READ_DIGEST_CHARS = 100
+# G10 (ADR 0103): 100 chars barely held one line — too little for the model to reuse
+# a digest instead of re-reading. 300 gives a few useful lines; the LRU cap (20) still
+# bounds the PROGRESS block. (Symbol-signature extraction for code = deferred follow-up.)
+_READ_DIGEST_CHARS = 300
 
 
 def _sterile_hard_limit(max_iterations: int) -> int:
@@ -139,6 +146,9 @@ def _read_target(tool: str | None, args: dict[str, Any]) -> str | None:
     if base in {"rag_search", "memory_recall"}:
         query = str(args.get("query") or "").strip()
         return f"{base}:{query}" if query else None
+    if base == "search_code":  # G4a (ADR 0103)
+        needle = str(args.get("query") or args.get("pattern") or "").strip()
+        return f"{base}:{needle}" if needle else None
     return None
 
 
@@ -168,6 +178,31 @@ def _is_mutating_tool(tool: str | None) -> bool:
     guarantee (a runaway writer — or any non-read-only verb — is always caught).
     """
     return not _is_readonly_tool(tool)
+
+
+# G3b (ADR 0103): substrings that mark a tool failure as the PLATFORM's fault (the
+# tool was denied / absent / has no executor, or the filesystem refused) rather than
+# the agent's own bad input (a guessed non-existent path). A platform failure must not
+# accumulate sterility — the agent did nothing wrong. A file-not-found on a path the
+# agent GUESSED still counts as sterile churn (anti-gaming, r5a).
+_PLATFORM_ERROR_MARKERS: tuple[str, ...] = (
+    "not allowed",
+    "unknown tool",
+    "no executor",
+    "not registered",
+    "permission denied",
+    "eacces",
+    "read-only file system",
+    "worktree is empty",
+)
+
+
+def _is_platform_error(observation: Any) -> bool:
+    err = observation.get("error") if isinstance(observation, dict) else None
+    if not err:
+        return False
+    low = str(err).lower()
+    return any(marker in low for marker in _PLATFORM_ERROR_MARKERS)
 
 
 def _abort_or_escalate_status(has_produced: bool, *, is_review: bool = False) -> str:
@@ -967,13 +1002,17 @@ class _AgentLoop:
         if _is_research_tool(tool):
             target = _read_target(tool, decision.get("tool_args") or {})
             read_ok = bool(observation.get("ok"))
-            if target is not None:
+            # G3b (ADR 0103): a PLATFORM failure (tool denied / no executor / EACCES /
+            # empty worktree) is not the agent's churn — it neither counts as a re-read
+            # nor accumulates sterility. A file-not-found on a GUESSED path still does.
+            platform_error = (not read_ok) and _is_platform_error(observation)
+            if target is not None and not platform_error:
                 self.read_counts[target] = self.read_counts.get(target, 0) + 1
             if read_ok and target is not None and target not in self.read_targets:
                 self.read_targets.add(target)
                 self.read_churn_streak = 0
                 turn_productive = True
-            else:
+            elif not platform_error:
                 self.read_churn_streak += 1
             if read_ok:
                 self._harvest_read_digest(tool, target, observation)
@@ -987,6 +1026,11 @@ class _AgentLoop:
             # the human queue with sterile runs) and switched the nudge to "FINISH".
             self.has_produced = True
             turn_productive = True
+            # G2 (ADR 0103): a productive turn DECAYS the per-target read counters — a
+            # legit TDD loop (re-read the central file after a failed test) must not
+            # accumulate toward the same-target nudge/trip. The CONSECUTIVE sterile
+            # streak + budgets remain the convergence ceiling (ADR 0089 D4).
+            self.read_counts.clear()
         return target, turn_productive
 
     def _select_nudge(
@@ -1064,7 +1108,12 @@ class _AgentLoop:
             # antes iba como item de `context` y la ventana de 8 items podía
             # evictarlo antes de que el modelo actuara sobre él.
             updates["guidance_nudge"] = nudge
-            summary = f"Reflection: {note} — guidance: stop researching, produce output"
+            # G5 (ADR 0103): the step summary shows the ACTUAL nudge variant
+            # (same-target / sterile / already-produced-FINISH / repetition) instead
+            # of a hardcoded "stop researching, produce output" that misreported an
+            # "you're done, FINISH" nudge as "keep producing" in the run viewer (r3).
+            guidance = " ".join(nudge.split())
+            summary = f"Reflection: {note} — guidance: {guidance[:120]}"
         elif turn_productive:
             # A4: el sticky se LIMPIA con progreso real — sin esto, un nudge
             # antiguo seguía presionando a escribir tras retomar la exploración.
