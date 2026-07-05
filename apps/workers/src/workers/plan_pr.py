@@ -84,6 +84,110 @@ async def _persist_pr_result(
         _log.warning("plan_pr.persist_failed", plan_id=plan_id, error=str(exc))
 
 
+async def push_plan_branch_to_remote(
+    settings: Settings,
+    *,
+    project_id: UUID,
+    plan_id: str,
+    plan_slug: str,
+    tenant_slug: str,
+    project_slug: str,
+) -> str:
+    """Push the plan branch bare→remote after a task commit, gated by
+    ``branch_push_mode`` (P3/T3, ADR 0085 dec.5).
+
+    ``incremental`` (the default) pushes every time a task is accepted so the remote
+    always has the latest; ``final_only`` defers to plan close (``open_plan_pr``).
+    Reuses the SAME single-source identity + git-config/Vault resolution as the auto-PR.
+
+    BEST-EFFORT and NEVER raises: the task's commit is already durable in the local
+    bare, so a local-only project (no ``remote_url`` / no ``origin``) or a transient
+    push failure returns a status string instead of failing the task. Returns one of
+    ``pushed`` / ``skipped:<reason>`` / ``error:<msg>``.
+    """
+    from api_server.db.domain import Project
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(settings.database_url)
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessionmaker() as session:
+            project = await session.get(Project, project_id)
+            if project is None or not project.git_config:
+                return "skipped:no_git_config"
+            cfg = dict(project.git_config)
+            policies = _policies_from_worker_config(project.worker_config)
+        remote_url = cfg.get("remote_url")
+        if not remote_url:
+            return "skipped:no_remote"
+        return await _push_branch_to_remote_gated(
+            settings,
+            tenant_slug=tenant_slug,
+            project_slug=project_slug,
+            plan_id=plan_id,
+            plan_slug=plan_slug,
+            remote_url=remote_url,
+            provider=cfg.get("provider", "generic"),
+            auth_mode=cfg.get("auth_mode", "none"),
+            project_id=project_id,
+            policies=policies,
+        )
+    except Exception as exc:  # best-effort — a push failure never fails the task
+        _log.warning("plan_pr.incremental_push_failed", plan_id=plan_id, error=str(exc))
+        return f"error:{exc}"
+    finally:
+        await engine.dispose()
+
+
+async def _push_branch_to_remote_gated(
+    settings: Settings,
+    *,
+    tenant_slug: str,
+    project_slug: str,
+    plan_id: str,
+    plan_slug: str,
+    remote_url: str,
+    provider: str,
+    auth_mode: str,
+    project_id: UUID,
+    policies: PlanGitPolicies,
+) -> str:
+    """bare → remote push given ALREADY-RESOLVED config (no DB access).
+
+    Gated by ``branch_push_mode`` (``final_only`` defers to plan close); ensures
+    ``origin`` on the single-source bare; resolves auth from Vault for pat/ssh.
+    Returns ``pushed`` / ``skipped:final_only`` / ``skipped:no_origin``. Split out of
+    :func:`push_plan_branch_to_remote` so the push mechanics are testable against a
+    ``file://`` remote without seeding a project row."""
+    if policies.branch_push_mode == "final_only":
+        return "skipped:final_only"
+    # SINGLE-SOURCE identity (P1/P2): SAME bare + branch as execution/clone/auto-PR.
+    identity = plan_git_identity(plan_id, plan_slug, project_slug)
+    username, token, ssh_key = _resolve_git_secret(settings, project_id, auth_mode)
+    auth = build_git_auth_env(
+        auth_mode, provider=provider, username=username, token=token, ssh_key=ssh_key
+    )
+    try:
+        layout = BareRepoLayout(
+            data_root=Path(settings.data_root),
+            tenant_slug=tenant_slug,
+            project_slug=identity.project_slug,
+        )
+        # ensure_repo is idempotent — it only (re)points origin at remote_url, so a
+        # bare execution created without a remote gets one for the incremental push.
+        BareRepoManager(layout).ensure_repo(identity.project_slug, remote_url=remote_url)
+        wf = PlanGitWorkflow(
+            bare_repo_path=layout.bare_repo_path(identity.project_slug),
+            plan_branch=identity.plan_branch,
+            policies=policies,
+            auth_env=auth.env or None,
+        )
+        pushed = await asyncio.to_thread(wf.push_branch_to_remote)
+        return "pushed" if pushed else "skipped:no_origin"
+    finally:
+        auth.cleanup()
+
+
 async def _open_plan_pr_async(
     project_id: UUID, plan_id: str, *, title: str, body: str, settings: Settings
 ) -> dict[str, Any]:

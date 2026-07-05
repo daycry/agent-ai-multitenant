@@ -101,7 +101,12 @@ async def test_commit_and_push_persists_agent_output_to_bare(tmp_path: Path) -> 
     (Path(wt) / "out.txt").write_text("hello from the agent\n", encoding="utf-8")
 
     await _commit_and_push_worktree(
-        settings, host_path=wt, task_id="task-1", execution_id="exec-1", **kwargs
+        settings,
+        host_path=wt,
+        task_id="task-1",
+        execution_id="exec-1",
+        project_id=str(uuid4()),
+        **kwargs,
     )
 
     bare = str(tmp_path / "projects" / "acme" / "api-ci" / "repos" / "api-ci.git")
@@ -126,7 +131,12 @@ async def test_commit_and_push_noop_on_clean_worktree(tmp_path: Path) -> None:
 
     # Must not raise even though there is nothing to commit.
     await _commit_and_push_worktree(
-        settings, host_path=wt, task_id="task-1", execution_id="exec-1", **kwargs
+        settings,
+        host_path=wt,
+        task_id="task-1",
+        execution_id="exec-1",
+        project_id=str(uuid4()),
+        **kwargs,
     )
 
     bare = str(tmp_path / "projects" / "acme" / "api-ci" / "repos" / "api-ci.git")

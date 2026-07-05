@@ -108,11 +108,11 @@ project_slug) → PlanGitIdentity(project_slug, plan_branch)`, derivando SIEMPRE
 
 ### Fase B — Push al remoto y persistencia del PR (P3 + P6)
 
-- [ ] **T3 — Push incremental cableado**: `_commit_and_push_worktree` invoca `push_branch_to_remote` según
-      `branch_push_mode` (incremental → push por tarea aceptada; final_only → difiere). Best-effort con log
-      estructurado; sin romper proyectos locales (sin `remote_url` → no-op silencioso). **Test:** con remoto
-      fake + `incremental`, tras aceptar una tarea la rama existe en `origin`; con `final_only` no, hasta el
-      cierre.
+- [x] **T3 — Push incremental cableado** (`push_plan_branch_to_remote` en `plan_pr.py`; `_commit_and_push_worktree`
+      lo invoca tras el commit al bare, best-effort, nunca lanza — un fallo de push o proyecto local no rompe la
+      tarea). Reusa la identidad de fuente única (P1/P2) + config/Vault del auto-PR; `ensure_repo` (re)apunta
+      `origin`. Gated por `branch_push_mode`. **Test** (`tests/integration/test_incremental_remote_push.py`, 2
+      casos verde con remoto `file://`): `incremental` → la rama existe en el remoto; `final_only` → difiere.
 - [ ] **T4 — Persistir el PR**: migración Alembic reversible `Plan.pr_url TEXT NULL` + `Plan.pr_branch VARCHAR
 NULL`; `_open_plan_pr_async` escribe ambos (y `pr_error` si falla, dejando de tragarse el fallo silencioso
       de `plan_pr.py:138-140`). Exponer en el schema de `GET /plans/{id}` y en la ficha de plan del admin-panel.

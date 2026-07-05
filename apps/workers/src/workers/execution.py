@@ -973,6 +973,7 @@ async def _commit_and_push_worktree(
     host_path: str,
     tenant_slug: str,
     project_slug: str,
+    project_id: str,
     plan_id: str,
     plan_slug: str,
     task_id: str,
@@ -1042,6 +1043,21 @@ async def _commit_and_push_worktree(
             _log.info(
                 "workers.worktree_committed", task_id=task_id, sha=sha[:8], escalated=escalated
             )
+            # P3/T3 (ADR 0085 dec.5): push the plan branch bare→remote per
+            # branch_push_mode. The helper is best-effort and NEVER raises (the commit
+            # is already durable in the bare), so a remote push failure or a local-only
+            # project can't fail the task — it only affects the remote mirror.
+            from workers.plan_pr import push_plan_branch_to_remote
+
+            push_status = await push_plan_branch_to_remote(
+                settings,
+                project_id=UUID(project_id),
+                plan_id=plan_id,
+                plan_slug=plan_slug,
+                tenant_slug=tenant_slug,
+                project_slug=project_slug,
+            )
+            _log.info("workers.incremental_remote_push", task_id=task_id, status=push_status)
         return None
     except Exception as exc:  # pragma: no cover - requires a live git failure
         # P2.3(b)/F13 + P7: a REAL git failure (NOT a clean tree) must be VISIBLE — the
@@ -1283,7 +1299,7 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         # worktree; a REVIEW run mounts the implementer's existing worktree READ-ONLY
         # so the reviewer can read the code (ADR 0095 — was blind on review_context
         # only). Missing any → no worktree (empty tmpfs).
-        worktree_inputs: tuple[str, str, str, str] | None = None
+        worktree_inputs: tuple[str, str, str, str, str] | None = None
         review_worktree: tuple[str, str] | None = None  # (tenant_slug, project_slug), read-only
         # The task's automated acceptance criteria, captured here (the session closes
         # below) to drive the test-runtime after the agent commits (prod-18 test_01).
@@ -1295,7 +1311,13 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
                 if request.review:
                     review_worktree = (org.slug, project.slug)
                 else:
-                    worktree_inputs = (org.slug, project.slug, str(plan.id), plan.slug)
+                    worktree_inputs = (
+                        org.slug,
+                        project.slug,
+                        str(project.id),
+                        str(plan.id),
+                        plan.slug,
+                    )
         # Guarda repo_history_lost (2026-07-03): si el plan ya tiene tareas
         # completadas, el bare repo DEBE contener la rama del plan con su
         # historial — un data_root recién arrasado (incidente 2026-07-02) no
@@ -1350,7 +1372,7 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
     workspace_error_code = "workspace_unavailable"
     if resolution_error is None:
         if worktree_inputs is not None:
-            tenant_slug, project_slug, plan_id_str, plan_slug = worktree_inputs
+            tenant_slug, project_slug, _wt_project_id, plan_id_str, plan_slug = worktree_inputs
             try:
                 workspace_host_path = await _provision_worktree(
                     settings,
@@ -1658,12 +1680,13 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
             and workspace_host_path is not None
             and worktree_inputs is not None
         ):
-            c_tenant_slug, c_project_slug, c_plan_id, c_plan_slug = worktree_inputs
+            c_tenant_slug, c_project_slug, c_project_id, c_plan_id, c_plan_slug = worktree_inputs
             commit_abort_code = await _commit_and_push_worktree(
                 settings,
                 host_path=workspace_host_path,
                 tenant_slug=c_tenant_slug,
                 project_slug=c_project_slug,
+                project_id=c_project_id,
                 plan_id=c_plan_id,
                 plan_slug=c_plan_slug,
                 task_id=str(task_id),
