@@ -415,3 +415,109 @@ def test_trigger_swallows_broker_errors(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(mod.cortex_reflect, "apply_async", _boom)
     assert mod.trigger_cortex_reflection(uuid4()) is False
+
+
+# ---------------------------------------------------------------------------
+# Owner model — "aprender DE MÍ": relationship_model acotado + memorias
+# ---------------------------------------------------------------------------
+_OWNER_MODEL_JSON = (
+    '{"narrative": "He aprendido más sobre mi owner.",'
+    ' "owner_model": {"prefiere": "evidencia primero", "obsoleto": ""},'
+    ' "owner_facts": ["El owner construye una plataforma multi-tenant."],'
+    ' "summary": "Aprendí del owner."}'
+)
+
+
+@pytest.mark.asyncio
+async def test_reflection_actualiza_owner_model_y_persiste_memorias(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seed = await _seed_owner_with_turns(migrations_pg_dsn, n_turns=2, second_owner=True)
+    owner_id = seed["owner_id"]
+    other_id = seed["other_id"]
+
+    # Identidad previa del owner con relationship_model que se actualiza y
+    # des-aprende ("obsoleto": "" en la propuesta lo borra).
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO cortex_identity (id, owner_user_id, identity_state, version,"
+            " updated_by, created_at, updated_at) VALUES ($1, $2, $3::jsonb, 1,"
+            " 'onboarding', now(), now())",
+            uuid4(),
+            owner_id,
+            '{"name": "Lumen", "relationship_model":'
+            ' {"prefiere": "brevedad", "obsoleto": "dato viejo"}}',
+        )
+    finally:
+        await conn.close()
+
+    fake = _FakeLLM(content=_OWNER_MODEL_JSON)
+    from workers.cortex_reflection import _reflect_async
+
+    result = await _reflect_async(owner_id, settings=workers_settings, llm_factory=lambda _s: fake)
+    assert result["reason"] == "ok", result
+
+    import json
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        row = await conn.fetchrow(
+            "SELECT identity_state FROM cortex_identity WHERE owner_user_id = $1",
+            owner_id,
+        )
+        hist = await conn.fetchrow(
+            "SELECT diff FROM cortex_identity_history WHERE owner_user_id = $1"
+            " ORDER BY version DESC LIMIT 1",
+            owner_id,
+        )
+        mems = await conn.fetch(
+            "SELECT content, metadata FROM memory_entries WHERE user_id = $1"
+            " AND metadata->>'kind' = 'owner_model'",
+            owner_id,
+        )
+        other_row = await conn.fetchrow(
+            "SELECT identity_state, version FROM cortex_identity WHERE owner_user_id = $1",
+            other_id,
+        )
+    finally:
+        await conn.close()
+
+    state = (
+        json.loads(row["identity_state"])
+        if isinstance(row["identity_state"], str)
+        else row["identity_state"]
+    )
+    # Actualizado + des-aprendido, sin tocar el resto del estado.
+    assert state["relationship_model"] == {"prefiere": "evidencia primero"}
+    assert state["name"] == "Lumen"
+
+    # El cambio queda auditado en el diff de la history.
+    diff = json.loads(hist["diff"]) if isinstance(hist["diff"], str) else hist["diff"]
+    assert "relationship_model" in diff
+
+    # La memoria kind='owner_model' se escribió y está PROTEGIDA del olvido.
+    assert len(mems) == 1
+    assert "plataforma multi-tenant" in mems[0]["content"]
+    meta = (
+        json.loads(mems[0]["metadata"])
+        if isinstance(mems[0]["metadata"], str)
+        else mems[0]["metadata"]
+    )
+    assert meta["cortex"] is True
+    from api_server.cortex.forgetting import PROTECTED_KINDS
+
+    assert meta["kind"] in PROTECTED_KINDS
+
+    # Cross-owner: la identidad del otro usuario queda EXACTAMENTE igual.
+    other_state = (
+        json.loads(other_row["identity_state"])
+        if isinstance(other_row["identity_state"], str)
+        else other_row["identity_state"]
+    )
+    assert other_row["version"] == 3
+    assert other_state["narrative"] == "no tuya"
+    assert "relationship_model" not in other_state or not other_state.get("relationship_model")

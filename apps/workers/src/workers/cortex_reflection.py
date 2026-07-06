@@ -33,11 +33,17 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
 import structlog
-from api_server.cortex.identity import apply_reflection_delta, ensure_identity, update_identity
+from api_server.cortex.identity import (
+    apply_owner_model_delta,
+    apply_reflection_delta,
+    ensure_identity,
+    update_identity,
+)
 from api_server.db.cortex import CortexConversation, CortexTurn
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
 from shared_llm.base import LLMProvider
@@ -57,24 +63,51 @@ LLMFactory = Callable[[Settings], LLMProvider]
 #: Cuántos turnos recientes del owner alimentan la síntesis (acotado: barato).
 _RECENT_TURNS_LIMIT = 20
 
+#: Tope de hechos duraderos sobre el owner por ciclo de reflexión (barato).
+_OWNER_FACTS_PER_CYCLE = 3
+
 #: System prompt de la reflexión. Pide SÓLO el JSON (sin prosa). El ajuste es
 #: PEQUEÑO (la cota dura la impone el motor, no el LLM). Bilingüe.
 _REFLECT_SYSTEM_PROMPT = (
     "Eres el proceso de REFLEXIÓN de un córtex con identidad evolutiva (modelo "
     "COMPUTACIONAL, NO consciencia). Lees los turnos recientes del owner y la "
     "identidad actual del córtex, y sintetizas: (1) una NARRATIVA autobiográfica "
-    "reescrita en PRIMERA persona (1-3 frases, en el idioma del owner) y (2) un "
-    "AJUSTE PEQUEÑO de los rasgos Big-Five y del baseline de ánimo. Responde "
-    "EXCLUSIVAMENTE con un objeto JSON, sin texto alrededor, con esta forma:\n"
+    "reescrita en PRIMERA persona (1-3 frases, en el idioma del owner), (2) un "
+    "AJUSTE PEQUEÑO de los rasgos Big-Five y del baseline de ánimo, y (3) lo que "
+    "aprendiste SOBRE EL OWNER (su modelo). Responde EXCLUSIVAMENTE con un objeto "
+    "JSON, sin texto alrededor, con esta forma:\n"
     '{"narrative": "<narrativa en 1ª persona>", '
     '"traits": {"openness": <0..1>, "conscientiousness": <0..1>, '
     '"extraversion": <0..1>, "agreeableness": <0..1>, "neuroticism": <0..1>}, '
     '"mood_baseline": {"valence": <-1..1>, "arousal": <0..1>, "dominance": <-1..1>}, '
-    '"summary": "<una frase de QUÉ aprendiste de ti en este ciclo>"}\n'
+    '"owner_model": {"<clave-corta>": "<valor breve sobre el OWNER: preferencias, '
+    'estilo, metas, contexto>", "<clave-a-retirar>": ""}, '
+    '"owner_facts": ["<hecho DURADERO sobre el owner>", "..."], '
+    '"summary": "<una frase de QUÉ aprendiste en este ciclo>"}\n'
     "Los ajustes de traits/baseline son SUTILES (la plataforma los recorta a un "
     "delta pequeño por ciclo de todos modos): describe la TENDENCIA, no un salto. "
-    "No afirmes sentimientos reales: es un modelo de identidad que evoluciona."
+    "En owner_model ACTUALIZA el modelo actual que se te muestra (una clave con "
+    'valor "" la retira si quedó obsoleta); máximo 0-3 owner_facts, solo hechos '
+    "duraderos (no anécdotas del turno). owner_model y owner_facts son OPCIONALES: "
+    "omítelos si no aprendiste nada nuevo del owner. No afirmes sentimientos "
+    "reales: es un modelo de identidad que evoluciona."
 )
+
+
+@dataclass(frozen=True)
+class ReflectionProposal:
+    """La propuesta parseada de un ciclo de reflexión (todo opcional, granular).
+
+    ``owner_model`` es el delta de "lo que sé de mi owner" (``relationship_model``)
+    y ``owner_facts`` los hechos duraderos a persistir como memorias
+    ``kind='owner_model'`` (ya protegidas del olvido, ADR 0077)."""
+
+    narrative: str | None
+    traits: dict[str, Any] | None
+    mood_baseline: dict[str, Any] | None
+    summary: str | None
+    owner_model: dict[str, Any] | None
+    owner_facts: tuple[str, ...]
 
 
 def _default_llm_factory(settings: Settings) -> LLMProvider:
@@ -186,12 +219,16 @@ async def _reflect_async(
             _log.warning("cortex_reflection.fail_open", owner_user_id=str(owner_user_id))
             return _result(owner_user_id, "ok:fail_open")
 
-        narrative, traits, baseline, summary = proposal
-
-        # (4) Aplicación DETERMINISTA + ACOTADA (clamp + bounded por ciclo).
+        # (4) Aplicación DETERMINISTA + ACOTADA (clamp + bounded por ciclo) +
+        # merge acotado del owner-model ("aprender DE MÍ", ADR 0074).
         new_state = apply_reflection_delta(
-            current_state, narrative=narrative, traits=traits, mood_baseline=baseline
+            current_state,
+            narrative=proposal.narrative,
+            traits=proposal.traits,
+            mood_baseline=proposal.mood_baseline,
         )
+        if proposal.owner_model is not None:
+            new_state = apply_owner_model_delta(new_state, proposal.owner_model)
 
         # (5) Versionado (updated_by='reflection'); la identidad NUNCA se borra.
         async with sessionmaker() as session, session.begin():
@@ -199,7 +236,7 @@ async def _reflect_async(
                 session,
                 owner_user_id,
                 new_state=new_state,
-                reason=summary or "reflexión periódica",
+                reason=proposal.summary or "reflexión periódica",
                 updated_by="reflection",
             )
 
@@ -209,7 +246,16 @@ async def _reflect_async(
             owner_user_id=owner_user_id,
             tenant_id=tenant_id,
             narrative=new_state.get("narrative", ""),
-            summary=summary,
+            summary=proposal.summary,
+        )
+
+        # (7) Hechos duraderos sobre el owner → memorias kind='owner_model'
+        # (protegidas del olvido; el self-context las recalla). Best-effort.
+        await _persist_owner_model_memories(
+            sessionmaker,
+            owner_user_id=owner_user_id,
+            tenant_id=tenant_id,
+            facts=proposal.owner_facts,
         )
 
         _log.info("cortex_reflection.done", owner_user_id=str(owner_user_id))
@@ -232,8 +278,8 @@ async def _synthesize(
     llm_factory: LLMFactory,
     turns: list[tuple[str, str]],
     current_state: dict[str, Any],
-) -> tuple[str | None, dict[str, Any] | None, dict[str, Any] | None, str | None] | None:
-    """Llama al LLM y parsea el JSON → ``(narrative, traits, baseline, summary)``.
+) -> ReflectionProposal | None:
+    """Llama al LLM y parsea el JSON → :class:`ReflectionProposal`.
 
     **Fail-open**: cualquier excepción (Ollama caído/timeout) o JSON inválido ⇒
     ``None`` (el caller lo trata como no-op: la identidad queda intacta)."""
@@ -245,7 +291,7 @@ async def _synthesize(
                 Message(role="system", content=_REFLECT_SYSTEM_PROMPT),
                 Message(role="user", content=user_prompt),
             ],
-            max_tokens=512,
+            max_tokens=768,
             temperature=0.2,
         )
     except Exception as exc:
@@ -263,27 +309,30 @@ def _build_user_prompt(turns: list[tuple[str, str]], current_state: dict[str, An
     name = current_state.get("name") or "(sin nombre)"
     narrative = current_state.get("narrative") or "(sin narrativa todavía)"
     values = ", ".join(str(v) for v in (current_state.get("core_values") or [])) or "(sin valores)"
+    relationship = current_state.get("relationship_model") or {}
     return (
         "Identidad actual del córtex:\n"
         f"  Nombre: {name}\n"
         f"  Valores: {values}\n"
         f"  Narrativa: {narrative}\n"
         f"  Traits: {json.dumps(current_state.get('traits', {}))}\n"
-        f"  Baseline de ánimo: {json.dumps(current_state.get('mood_baseline', {}))}\n\n"
+        f"  Baseline de ánimo: {json.dumps(current_state.get('mood_baseline', {}))}\n"
+        f"  Lo que ya sé de mi owner (owner_model actual): {json.dumps(relationship)}\n\n"
         "Turnos recientes (más antiguos primero):\n"
         f"{convo}\n\n"
-        "Devuelve SÓLO el JSON de la narrativa reescrita + el ajuste de traits/baseline."
+        "Devuelve SÓLO el JSON de la narrativa reescrita + el ajuste de "
+        "traits/baseline + (si aprendiste algo del owner) owner_model/owner_facts."
     )
 
 
-def _parse_proposal(
-    content: str,
-) -> tuple[str | None, dict[str, Any] | None, dict[str, Any] | None, str | None] | None:
+def _parse_proposal(content: str) -> ReflectionProposal | None:
     """Parsea el JSON de la reflexión. ``None`` si no es JSON válido.
 
-    Tolerante: extrae el primer objeto ``{...}`` balanceado del texto (algunos
-    modelos locales envuelven el JSON en prosa). Un objeto sin NINGUNO de los
-    campos útiles (narrative/traits/mood_baseline) se trata como no-op (``None``)."""
+    Tolerante y GRANULAR (fail-open por campo): extrae el primer objeto ``{...}``
+    balanceado del texto (algunos modelos locales envuelven el JSON en prosa);
+    un ``owner_model``/``owner_facts`` malformado se ignora SIN invalidar
+    narrative/traits. Un objeto sin NINGÚN campo útil (narrative/traits/
+    mood_baseline/owner_model/owner_facts) se trata como no-op (``None``)."""
     raw = _extract_json_object(content)
     if raw is None:
         return None
@@ -303,10 +352,31 @@ def _parse_proposal(
     summary = data.get("summary")
     summary_str = str(summary).strip() if isinstance(summary, str) and summary.strip() else None
 
+    owner_model = data.get("owner_model") if isinstance(data.get("owner_model"), dict) else None
+    raw_facts = data.get("owner_facts")
+    owner_facts: tuple[str, ...] = ()
+    if isinstance(raw_facts, list):
+        owner_facts = tuple(
+            str(fact).strip() for fact in raw_facts if isinstance(fact, str) and fact.strip()
+        )[:_OWNER_FACTS_PER_CYCLE]
+
     # Nada útil que aplicar ⇒ no-op (no versionamos por un objeto vacío).
-    if narrative_str is None and traits is None and baseline is None:
+    if (
+        narrative_str is None
+        and traits is None
+        and baseline is None
+        and owner_model is None
+        and not owner_facts
+    ):
         return None
-    return narrative_str, traits, baseline, summary_str
+    return ReflectionProposal(
+        narrative=narrative_str,
+        traits=traits,
+        mood_baseline=baseline,
+        summary=summary_str,
+        owner_model=owner_model,
+        owner_facts=owner_facts,
+    )
 
 
 def _extract_json_object(content: str) -> str | None:
@@ -396,6 +466,66 @@ async def _persist_reflection_memory(
     except Exception as exc:  # memoria best-effort, nunca rompe la reflexión.
         _log.warning(
             "cortex_reflection.memory_persist_failed",
+            owner_user_id=str(owner_user_id),
+            error=str(exc),
+        )
+
+
+async def _persist_owner_model_memories(
+    sessionmaker: async_sessionmaker[Any],
+    *,
+    owner_user_id: UUID,
+    tenant_id: UUID | None,
+    facts: tuple[str, ...],
+) -> None:
+    """Persiste los hechos duraderos sobre el owner como memorias ``owner_model``.
+
+    DIRECTO vía :func:`persist_memory_candidates` (scope=private, ``user_id=owner``,
+    ``metadata_.kind='owner_model'`` — protegida del olvido, ADR 0077;
+    ``metadata_.cortex=true`` — recallable por el self-context). Dedup por
+    contenido normalizado (patrón de ``cortex_remember``): re-aprender el mismo
+    hecho es no-op. Best-effort: un fallo aquí no tumba la versión ya escrita."""
+    if not facts or tenant_id is None:
+        return
+    from api_server.db.memory import MemoryEntry
+    from sqlalchemy import func
+
+    try:
+        async with sessionmaker() as session, session.begin():
+            for fact in facts:
+                normalised = " ".join(fact.split())
+                if not normalised:
+                    continue
+                existing = await session.execute(
+                    select(MemoryEntry.id)
+                    .where(
+                        MemoryEntry.user_id == owner_user_id,
+                        MemoryEntry.scope == "private",
+                        MemoryEntry.deleted_at.is_(None),
+                        MemoryEntry.metadata_["cortex"].astext == "true",
+                        func.lower(func.btrim(MemoryEntry.content)) == normalised.lower(),
+                    )
+                    .limit(1)
+                )
+                if existing.scalar_one_or_none() is not None:
+                    continue
+                await persist_memory_candidates(
+                    session,
+                    [
+                        MemoryCandidate(
+                            content=normalised,
+                            type="semantic",
+                            tags=("cortex", "owner_model"),
+                        )
+                    ],
+                    tenant_id=tenant_id,
+                    scope="private",
+                    user_id=owner_user_id,
+                    extra_metadata={"cortex": True, "kind": "owner_model"},
+                )
+    except Exception as exc:  # memoria best-effort, nunca rompe la reflexión.
+        _log.warning(
+            "cortex_reflection.owner_model_persist_failed",
             owner_user_id=str(owner_user_id),
             error=str(exc),
         )
