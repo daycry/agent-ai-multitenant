@@ -285,6 +285,23 @@ def _dir_size(root: Path) -> int:
     return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
 
 
+def _bind_tar_excludes(bind_path: str, backup_root: Path) -> list[str]:
+    """``--exclude`` args para el tar de un bind (prod-04 A7).
+
+    Si ``backup_root`` está DENTRO de ``bind_path``, devuelve un exclude anclado
+    a la raíz archivada (``./<rel>``) para que el bundle no se auto-incluya
+    recursivamente. Fuera del bind → lista vacía (sin exclusión espuria).
+    Determinista y puro; tolerante a rutas no relativas."""
+    try:
+        rel = Path(backup_root).resolve().relative_to(Path(bind_path).resolve())
+    except (ValueError, OSError):
+        return []
+    rel_posix = rel.as_posix()
+    if not rel_posix or rel_posix == ".":
+        return []
+    return [f"--exclude=./{rel_posix}"]
+
+
 class BackupEngine:
     """Orchestrates one full-backup run behind an injectable command runner."""
 
@@ -455,6 +472,14 @@ class BackupEngine:
             "--gzip",
             f"--directory={bind_path}",
             f"--file={archive_path}",
+            # prod-04 A7: excluye el backup_root cuando vive DENTRO del bind_path
+            # (config por defecto: bind /data/agent-platform ⊇ backups). Sin esto
+            # cada backup se auto-incluía recursivamente (todos los bundles previos
+            # + los artefactos del run) → crecimiento cuadrático y/o rc≠0 de tar
+            # ("file changed as we read it"). Anclado con '.' relativo al directorio
+            # archivado. GNU tar ya excluye su propio --file por inode, pero NO el
+            # resto del árbol de backups.
+            *_bind_tar_excludes(bind_path, self._config.backup_root),
             ".",
         ]
         result = self._runner.run(args, timeout=self._config.tar_timeout_s)

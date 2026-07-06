@@ -203,6 +203,63 @@ def test_configured_bind_paths_are_tarred_and_manifested(tmp_path: Path) -> None
     assert bind_artifacts[0]["name"].endswith(".tar.gz")
 
 
+def test_bind_tar_excludes_nested_backup_root(tmp_path: Path) -> None:
+    """prod-04 A7 (auditoría 2026-07-06): el bind tar NO debe auto-incluir el
+    backup_root cuando este vive DENTRO del bind_path.
+
+    Config por defecto: bind_paths=[/data/agent-platform], backup_root=
+    /data/agent-platform/backups → sin --exclude, cada backup diario embebía
+    todos los bundles previos + los artefactos del run en curso (crecimiento
+    cuadrático; y tar puede devolver rc≠0 por 'file changed as we read it')."""
+    runner = FakeRunner()
+    bind = tmp_path / "data" / "agent-platform"
+    backups = bind / "backups"  # backup_root ANIDADO dentro del bind
+    cfg = BackupConfig(
+        backup_root=backups,
+        database_url="postgresql://migrations_user:s3cr3t@db:5432/agentic_platform",
+        volumes=(),
+        volumes_mount_root=tmp_path / "volumes",
+        retention_days=7,
+        bind_paths=(str(bind),),
+    )
+    engine = BackupEngine(cfg, runner=runner, now=_NOW)
+
+    engine.run_full_backup()
+
+    bind_tar = next(
+        c for c in runner.calls if c[0] == "tar" and _arg_value(c, "--directory=") == str(bind)
+    )
+    # El argv debe llevar un --exclude que cubra el backup_root anidado (rel al
+    # directorio archivado, p.ej. './backups' o 'backups').
+    excludes = [t.split("=", 1)[1] for t in bind_tar if t.startswith("--exclude=")]
+    assert any(
+        "backups" in e for e in excludes
+    ), f"el bind tar no excluye el backup_root anidado; argv={bind_tar}"
+
+
+def test_bind_tar_no_exclude_when_backup_root_outside(tmp_path: Path) -> None:
+    """Si el backup_root NO está bajo el bind_path, no se añade exclusión espuria."""
+    runner = FakeRunner()
+    bind = tmp_path / "data" / "agent-platform"
+    cfg = BackupConfig(
+        backup_root=tmp_path / "backups",  # FUERA del bind
+        database_url="postgresql://migrations_user:s3cr3t@db:5432/agentic_platform",
+        volumes=(),
+        volumes_mount_root=tmp_path / "volumes",
+        retention_days=7,
+        bind_paths=(str(bind),),
+    )
+    engine = BackupEngine(cfg, runner=runner, now=_NOW)
+
+    engine.run_full_backup()
+
+    bind_tar = next(
+        c for c in runner.calls if c[0] == "tar" and _arg_value(c, "--directory=") == str(bind)
+    )
+    excludes = [t for t in bind_tar if t.startswith("--exclude=")]
+    assert excludes == []
+
+
 def test_manifest_does_not_leak_db_password(tmp_path: Path) -> None:
     runner = FakeRunner()
     engine = BackupEngine(_config(tmp_path), runner=runner, now=_NOW)
