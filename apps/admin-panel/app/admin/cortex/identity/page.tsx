@@ -84,6 +84,9 @@ function CortexIdentityBody() {
     queryFn: getCortexIdentity,
     refetchOnWindowFocus: false,
     retry: false,
+    // Poll suave: la reflexión es asíncrona (Celery) — así "lo que sabe de ti"
+    // y los rasgos crecen ante tus ojos tras pulsar "Reflexionar ahora".
+    refetchInterval: 10_000,
   });
 
   // Estado editable local — se siembra desde la respuesta del backend.
@@ -335,6 +338,41 @@ function CortexIdentityBody() {
                 </span>
               ) : null}
             </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {/* Lo que sabe de ti — el owner-model que deriva la reflexión (solo-lectura). */}
+      {identity ? (
+        <Card className="mt-6" data-testid="cortex-identity-relationship">
+          <CardContent className="flex flex-col gap-3 pt-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Lo que sabe de ti</h2>
+              <span className="text-muted-foreground text-xs">
+                Modelo computacional del owner — lo deriva la reflexión, no se edita a mano
+              </span>
+            </div>
+            {Object.keys(identity.relationship_model ?? {}).length === 0 ? (
+              <p
+                className="text-muted-foreground text-sm"
+                data-testid="cortex-identity-relationship-empty"
+              >
+                Aún no ha aprendido nada duradero sobre ti. Conversa con el córtex y pulsa
+                «Reflexionar ahora»: lo que destile aparecerá aquí (y lo usará en cada turno).
+              </p>
+            ) : (
+              <ul
+                className="divide-border divide-y"
+                data-testid="cortex-identity-relationship-list"
+              >
+                {Object.entries(identity.relationship_model).map(([key, value]) => (
+                  <li key={key} className="flex items-start gap-3 py-2 text-sm">
+                    <span className="text-muted-foreground w-40 shrink-0 break-words">{key}</span>
+                    <span className="min-w-0 break-words">{value}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </CardContent>
         </Card>
       ) : null}

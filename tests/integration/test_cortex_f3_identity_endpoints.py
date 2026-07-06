@@ -344,3 +344,56 @@ async def test_reflect_now_non_owner_gets_403(configured_app, migrations_pg_dsn:
     async with _client(configured_app) as client:
         resp = await client.post("/owner/cortex/reflect", headers=headers)
         assert resp.status_code == 403, resp.text
+
+
+# ===========================================================================
+# relationship_model — "lo que sé de ti" visible para el owner (identidad real)
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_get_identity_expone_relationship_model(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    import json as _json
+    from uuid import uuid4 as _uuid4
+
+    import asyncpg as _asyncpg
+
+    seed = await _seed_two_owners(migrations_pg_dsn)
+    owner_id = seed["owner_id"]
+
+    conn = await _asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO cortex_identity (id, owner_user_id, identity_state, version,"
+            " updated_by, created_at, updated_at) VALUES ($1, $2, $3::jsonb, 2,"
+            " 'reflection', now(), now())",
+            _uuid4(),
+            owner_id,
+            _json.dumps({"name": "Lumen", "relationship_model": {"prefiere": "evidencia primero"}}),
+        )
+    finally:
+        await conn.close()
+
+    token = await _mint(owner_id, seed["tenant_id"])
+    async with _client(configured_app) as client:
+        resp = await client.get(
+            "/owner/cortex/identity", headers={"Authorization": f"Bearer {token}"}
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # El owner VE lo que el córtex cree saber de él (deriva de la reflexión).
+    assert body["relationship_model"] == {"prefiere": "evidencia primero"}
+
+
+@pytest.mark.asyncio
+async def test_get_identity_default_relationship_model_vacio(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    seed = await _seed_two_owners(migrations_pg_dsn)
+    token = await _mint(seed["owner_id"], seed["tenant_id"])
+    async with _client(configured_app) as client:
+        resp = await client.get(
+            "/owner/cortex/identity", headers={"Authorization": f"Bearer {token}"}
+        )
+    assert resp.status_code == 200
+    assert resp.json()["relationship_model"] == {}

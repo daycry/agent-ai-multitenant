@@ -44,6 +44,8 @@ export interface CortexIdentity {
   /** Derivados por la reflexión (no editables por el owner). */
   traits: CortexTraits;
   mood_baseline: CortexBaseline;
+  /** "Lo que sabe de ti": el owner-model que deriva la reflexión (solo-lectura). */
+  relationship_model: Record<string, string>;
   version: number;
   updated_by: string;
   /** NULL ⇒ onboarding pendiente (la UI lo destaca). */

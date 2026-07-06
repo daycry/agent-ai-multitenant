@@ -291,6 +291,34 @@ export function getCortexPursuits(
   return cortexFetch<CortexPursuit[]>(`/curiosity/pursuits${qs ? `?${qs}` : ""}`);
 }
 
+/** Estado de la autonomía del córtex (kill-switch + gates + budget de hoy). */
+export interface CortexAutonomy {
+  autonomy_enabled: boolean;
+  web_enabled: boolean;
+  curiosity_drive_threshold: number;
+  circuit_breaker_open: boolean;
+  budget: { searches_today: number; searches_cap: number };
+  note_es: string;
+  note_en: string;
+}
+
+/** GET /owner/cortex/autonomy — snapshot de autonomía (System Owner). */
+export function getCortexAutonomy(): Promise<CortexAutonomy> {
+  return cortexFetch<CortexAutonomy>("/autonomy");
+}
+
+/**
+ * PUT /owner/cortex/autonomy — update PARCIAL de los gates del córtex:
+ * `autonomy_enabled` (kill-switch de bucles autónomos) y/o `web_enabled`
+ * (web del córtex, deny-by-default).
+ */
+export function setCortexAutonomy(update: {
+  autonomy_enabled?: boolean;
+  web_enabled?: boolean;
+}): Promise<CortexAutonomy> {
+  return cortexFetch<CortexAutonomy>("/autonomy", { method: "PUT", body: update });
+}
+
 // ---------------------------------------------------------------------------
 // Helpers puros del Panel de Mente — testeables sin React ni red.
 // ---------------------------------------------------------------------------

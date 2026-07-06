@@ -265,6 +265,12 @@ def _identity_response(
     traits = clamp_traits(state.get("traits"))
     baseline = clamp_baseline(state.get("mood_baseline"))
     name = state.get("name")
+    raw_relationship = state.get("relationship_model")
+    relationship = (
+        {str(k): str(v) for k, v in raw_relationship.items()}
+        if isinstance(raw_relationship, dict)
+        else {}
+    )
     return CortexIdentityResponse(
         name=(name if isinstance(name, str) and name.strip() else None),
         core_values=[str(v) for v in (state.get("core_values") or [])],
@@ -273,6 +279,7 @@ def _identity_response(
         learning_goals=[str(v) for v in (state.get("learning_goals") or [])],
         traits=CortexTraits(**traits),
         mood_baseline=CortexBaseline(**baseline),
+        relationship_model=relationship,
         version=version,
         updated_by=updated_by,
         onboarded_at=onboarded_at,
@@ -426,15 +433,17 @@ async def put_autonomy(
     payload: CortexAutonomyUpdateRequest,
     principal: AuthPrincipal = Depends(require_system_owner),
 ) -> CortexAutonomyResponse:
-    """Activa/desactiva el KILL-SWITCH global de los bucles autónomos (System Owner).
+    """Update PARCIAL de los gates del córtex (System Owner, desde la UI).
 
-    Escribe el platform setting ``cortex.autonomy_enabled`` con el owner como actor.
-    ``set_platform_setting`` re-verifica que el actor es System Admin (el owner del
-    despliegue lo es, ADR 0074); un owner que NO fuese admin recibiría un 403 honesto
-    en vez de una escritura silenciosa. Con OFF, la siguiente pasada de CADA bucle
-    sale no-op."""
+    ``autonomy_enabled`` flipa el kill-switch global (``cortex.autonomy_enabled``);
+    ``web_enabled`` el gate de la web del córtex (``cortex.web_enabled``, ADR
+    0067). ``set_platform_setting`` re-verifica que el actor es System Admin (el
+    owner del despliegue lo es, ADR 0074); un owner que NO fuese admin recibiría
+    un 403 honesto en vez de una escritura silenciosa. Con el kill-switch OFF,
+    la siguiente pasada de CADA bucle sale no-op."""
     from api_server.db.platform_settings import (
         CORTEX_AUTONOMY_ENABLED_KEY,
+        CORTEX_WEB_ENABLED_KEY,
         set_platform_setting,
     )
 
@@ -446,9 +455,14 @@ async def put_autonomy(
                 status_code=status.HTTP_403_FORBIDDEN, detail="actor user not found"
             )
         try:
-            await set_platform_setting(
-                session, CORTEX_AUTONOMY_ENABLED_KEY, payload.autonomy_enabled, actor=actor
-            )
+            if payload.autonomy_enabled is not None:
+                await set_platform_setting(
+                    session, CORTEX_AUTONOMY_ENABLED_KEY, payload.autonomy_enabled, actor=actor
+                )
+            if payload.web_enabled is not None:
+                await set_platform_setting(
+                    session, CORTEX_WEB_ENABLED_KEY, payload.web_enabled, actor=actor
+                )
         except PlatformSettingForbiddenError as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return await _autonomy_snapshot(principal.user_id)

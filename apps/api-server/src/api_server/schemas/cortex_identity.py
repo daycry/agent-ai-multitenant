@@ -61,6 +61,9 @@ class CortexIdentityResponse(BaseModel):
     # Derivados por la reflexión (solo-lectura para el owner).
     traits: CortexTraits
     mood_baseline: CortexBaseline
+    # "Lo que sé de mi owner" (relationship_model) — lo deriva la reflexión y lo
+    # consume el self-context; el owner lo VE aquí (solo-lectura, como traits).
+    relationship_model: dict[str, str] = Field(default_factory=dict)
     # Metadatos de versionado / estado de onboarding.
     version: int
     updated_by: str
