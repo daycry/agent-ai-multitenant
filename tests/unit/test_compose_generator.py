@@ -916,3 +916,48 @@ def test_workers_reach_docker_via_proxy_and_join_agents_network(service_name: st
     nets = svc["networks"]
     assert "agentic-agents" in nets, f"{service_name} must join agentic-agents (launch runtimes)"
     assert "agentic-docker" in nets, f"{service_name} must join the socket-proxy network"
+
+
+# --- prod-01 A9/A10 (auditoría 2026-07-06): el compose GENERADO por el
+# instalador divergía del stack real (manuals.yml). Estos tests fijan la
+# reconciliación.
+def test_workers_events_redis_url_matches_consumers() -> None:
+    """A10: el worker publica los streams exec:{id} en WORKERS_EVENTS_REDIS_URL,
+    pero el WS del api-server (y el orchestrator) los LEEN en la DB 0 del Redis.
+    Con /3 (sin consumidor) el streaming en vivo queda roto — manuals.yml ya lo
+    corrigió a /0 con un comentario explícito; el generador debía seguirlo."""
+    services = generate_compose(_config())["services"]
+    workers_events = services["workers"]["environment"]["WORKERS_EVENTS_REDIS_URL"]
+    api_redis = services["api-server"]["environment"]["API_SERVER_REDIS_URL"]
+    # Ambos deben apuntar a la MISMA base de datos Redis (el stream de eventos).
+    assert workers_events.rsplit("/", 1)[-1] == api_redis.rsplit("/", 1)[-1] == "0"
+
+
+def test_cortex_beat_service_is_present_and_schedules() -> None:
+    """A9: sin un servicio Celery beat, en una instalación por el instalador
+    NADA se agenda (backups, rotación, mantenimiento, sync de precios, córtex).
+    Solo existía en manuals.yml."""
+    services = generate_compose(_config())["services"]
+    assert "cortex-beat" in services, "falta el servicio Celery beat en el compose generado"
+    beat = services["cortex-beat"]
+    cmd = beat["command"]
+    joined = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+    assert "beat" in joined, "el servicio cortex-beat debe lanzar `celery ... beat`"
+    # Comparte el broker/DB de los workers (agenda las mismas colas).
+    assert beat["environment"]["WORKERS_BROKER_URL"].startswith("redis://")
+
+
+def test_privileged_lane_can_run_backups() -> None:
+    """A9: la lane privileged drena la cola de backups, pero corría sin
+    WORKERS_RUN_AS_ROOT ni el mount de /var/lib/docker/volumes → el volume-tar
+    daba EACCES leyendo los _data a 0700 (redis uid 999, vault uid 100)."""
+    svc = generate_compose(_config())["services"]["workers-privileged"]
+    env = svc["environment"]
+    assert (
+        env.get("WORKERS_RUN_AS_ROOT") == "1"
+    ), "la lane de backups necesita root para leer los volume _data a 0700"
+    assert "WORKERS_BACKUP_VOLUMES" in env, "faltan los volúmenes a taréar (WORKERS_BACKUP_VOLUMES)"
+    vols = " ".join(svc.get("volumes", []))
+    assert (
+        "/var/lib/docker/volumes" in vols
+    ), "falta el mount de los volúmenes Docker para el backup"

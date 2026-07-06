@@ -113,6 +113,15 @@ RUN groupadd --gid 1000 app \
 
 COPY --from=builder /opt/venv /opt/venv
 
+# prod-01 C1 (auditoría 2026-07-06): the one-shot `migrations` compose service
+# runs `alembic upgrade head` from this image, so the image MUST ship alembic.ini
+# + migrations/ (they are SIBLINGS of src/, never included by `pip install .`).
+# Without them a fresh install fails with "No config file 'alembic.ini' found"
+# and the schema is never created. WORKDIR is /app, and alembic.ini has
+# `script_location = migrations` (relative), so both must live at /app.
+COPY --chown=1000:1000 apps/api-server/alembic.ini /app/alembic.ini
+COPY --chown=1000:1000 apps/api-server/migrations/ /app/migrations/
+
 WORKDIR /app
 USER 1000:1000
 

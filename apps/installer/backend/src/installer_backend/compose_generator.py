@@ -51,6 +51,7 @@ references. Nothing here is logged.
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any
 
 import yaml
@@ -121,6 +122,7 @@ CORE_SERVICES: tuple[str, ...] = (
     "orchestrator",
     "workers",
     "workers-privileged",
+    "cortex-beat",
     "notification-dispatcher",
     "admin-panel",
     "caddy",
@@ -693,7 +695,11 @@ def _workers_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
         {
             "WORKERS_BROKER_URL": "redis://redis:6379/1",
             "WORKERS_RESULT_BACKEND": "redis://redis:6379/2",
-            "WORKERS_EVENTS_REDIS_URL": "redis://redis:6379/3",
+            # prod-01 A10 (auditoría 2026-07-06): DB 0, la MISMA que lee el WS del
+            # api-server (API_SERVER_REDIS_URL) y el orchestrator — los streams
+            # exec:{id} del worker se publican aquí. Con /3 (sin consumidor) el
+            # streaming en vivo de logs quedaba roto (manuals.yml ya lo corrigió).
+            "WORKERS_EVENTS_REDIS_URL": "redis://redis:6379/0",
             "WORKERS_DATA_ROOT": cfg.storage.data_root,
             # Docker API via the least-privilege proxy, never the raw socket
             # (task_09, ADR 0060). DOCKER_HOST is read by the docker SDK itself,
@@ -759,19 +765,46 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     return svc
 
 
+#: Los named volumes que el backup taréa (prod-01 A9 / prod-04). El worker corre
+#: `tar` sobre sus _data (owned uid 999/100, modo 0700) → necesita root + el mount
+#: de /var/lib/docker/volumes. Los nombres llevan el prefijo del proyecto compose.
+_BACKUP_VOLUME_NAMES = (
+    "agentic-platform_minio_data",
+    "agentic-platform_redis_data",
+    "agentic-platform_vault_data",
+    "agentic-platform-agent-data",
+)
+
+
 def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     """Separate lane that drains ONLY the ``privileged`` queue (backups, key
-    rotation). Singleton (replicas=1) — its periodic jobs must not double-run —
-    and meant to carry the strictest sandbox profile (set in task_prod01_10).
-    Same image + WORKERS_* env as the generic pool; different queue + scale."""
+    rotation). Singleton (replicas=1) — its periodic jobs must not double-run.
+    Same image + WORKERS_* env as the generic pool; different queue + scale.
+
+    prod-01 A9 (auditoría 2026-07-06): esta lane ejecuta el volume-tar del
+    backup, que lee los ``_data`` de los named volumes (redis uid 999, vault uid
+    100) a 0700 → necesita correr como ROOT (``WORKERS_RUN_AS_ROOT=1``; el
+    entrypoint self-heal baja a 1000 salvo esta bandera) y bind-montear
+    ``/var/lib/docker/volumes``. Sin esto el volume-tar daba EACCES y el backup
+    fallaba en una instalación por el instalador (solo funcionaba en manuals.yml).
+    """
+    env = _workers_env(cfg, prod=prod)
+    env.update(
+        {
+            # Backup como root: leer los volume _data a 0700 (prod-01 A9 / prod-04).
+            "WORKERS_RUN_AS_ROOT": "1",
+            "WORKERS_BACKUP_VOLUMES": json.dumps(list(_BACKUP_VOLUME_NAMES)),
+        }
+    )
+    volumes = [*_workers_volumes(cfg), "/var/lib/docker/volumes:/var/lib/docker/volumes"]
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
         "command": (
             f"celery -A workers.celery_app worker "
             f"--queues={_WORKER_PRIVILEGED_QUEUE} --concurrency=1"
         ),
-        "environment": _workers_env(cfg, prod=prod),
-        "volumes": _workers_volumes(cfg),
+        "environment": env,
+        "volumes": volumes,
         "healthcheck": _healthcheck(
             "celery -A workers.celery_app inspect ping -t 5 || exit 1", start_period="40s"
         ),
@@ -781,7 +814,47 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
         },
         "networks": _WORKER_NETWORKS,
     }
+    # Corre como root (el volume-tar del backup lo exige); NO fijamos user 1000.
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    svc["deploy"]["replicas"] = 1
+    return svc
+
+
+def _cortex_beat_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    """El Celery beat (scheduler) — prod-01 A9 (auditoría 2026-07-06).
+
+    Sin este servicio, en una instalación por el instalador NADA se agenda:
+    backup diario, rotación de credenciales, sweepers de mantenimiento (zombis,
+    promoción DAG de red, reconciliación de pipeline, poda de worktrees/dep-cache),
+    sync de precios/FX, escalado humano y los bucles de fondo del córtex — todos
+    definidos en ``workers/beat_schedule.py``. Solo existía en ``manuals.yml``.
+    Singleton (un solo beat, o los jobs se duplican). Healthcheck propio: beat no
+    es un worker (``inspect ping`` no aplica) ni tiene HTTP — se comprueba que el
+    proceso beat es el PID 1 vivo del contenedor."""
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
+        "command": "celery -A workers.celery_app beat --loglevel=info",
+        "environment": _workers_env(cfg, prod=prod),
+        "healthcheck": {
+            "test": [
+                "CMD",
+                "python",
+                "-c",
+                "import sys; sys.exit(0 if b'beat' in "
+                "open('/proc/1/cmdline','rb').read() else 1)",
+            ],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 3,
+            "start_period": "20s",
+        },
+        "depends_on": {
+            "postgres": {"condition": "service_healthy"},
+            "redis": {"condition": "service_healthy"},
+        },
+        "networks": _WORKER_NETWORKS,
+    }
+    svc.update(_hardening(limits_cpus="0.5", limits_memory="512m"))
     svc["deploy"]["replicas"] = 1
     return svc
 
@@ -1183,6 +1256,7 @@ _BUILDERS = {
     "orchestrator": _orchestrator_service,
     "workers": _workers_service,
     "workers-privileged": _workers_privileged_service,
+    "cortex-beat": _cortex_beat_service,
     "notification-dispatcher": _notification_dispatcher_service,
     "admin-panel": _admin_panel_service,
     "caddy": _reverse_proxy_service,
@@ -1341,6 +1415,7 @@ def generate_compose(
         "orchestrator",
         "workers",
         "workers-privileged",
+        "cortex-beat",
         "notification-dispatcher",
     )
 
