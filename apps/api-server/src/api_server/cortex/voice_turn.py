@@ -29,7 +29,7 @@ cerebro y el frame afectivo:
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -39,11 +39,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api_server.assistant.graph import AssistantModelClient, AssistantTurnResult
 from api_server.cortex.affect_cache import read_affect_state
+from api_server.cortex.affect_policy import modulate_reasoning_effort
 from api_server.cortex.affect_store import load_affect_state
 from api_server.cortex.affective import AffectState, Language, neutral_affect_state
 from api_server.cortex.graph import run_cortex_turn
-from api_server.cortex.identity import ensure_identity, identity_preamble
-from api_server.cortex.memory import CORTEX_RECALL_LIMIT, augment_cortex_prompt, cortex_recall
+from api_server.cortex.model_config import apply_effort_decision
+from api_server.cortex.self_context import (
+    compose_self_context_prompt,
+    load_self_context,
+    self_context_meta,
+)
 from api_server.cortex.threads import (
     CortexNoTenantError,
     append_turn,
@@ -81,6 +86,8 @@ async def run_cortex_voice_turn(
     owner_user_id: UUID,
     user_text: str,
     conversation_id: UUID | None,
+    affect: AffectState | None = None,
+    now: datetime | None = None,
 ) -> tuple[AssistantTurnResult, UUID, UUID]:
     """Corre UN turno del córtex para ``user_text`` y persiste ambos turnos.
 
@@ -116,22 +123,26 @@ async def run_cortex_voice_turn(
     web_enabled = await get_cortex_web_enabled(session)
     enabled_tools = cortex_enabled_tool_names(web_enabled=web_enabled)
 
-    identity = await ensure_identity(session, owner_user_id)
-    preamble = identity_preamble(identity.identity_state)
-    base_prompt = _cortex_voice_base_prompt()
-    if preamble:
-        base_prompt = f"{preamble}\n\n{base_prompt}"
-
-    known_facts = await cortex_recall(
+    # Self-context unificado (mismo composer que el chat): el WS ya cargó el
+    # afecto para la prosodia y lo pasa aquí — cero lecturas duplicadas.
+    ctx = await load_self_context(
         session,
+        None,
         owner_user_id=owner_user_id,
         tenant_id=tenant_id,
         query=user_text,
-        limit=CORTEX_RECALL_LIMIT,
+        now=now or datetime.now(UTC),
+        affect=affect,
     )
-    system_prompt = augment_cortex_prompt(
-        base_prompt,
-        known_facts=known_facts,
+    decision = modulate_reasoning_effort(
+        getattr(model, "reasoning_effort", None),
+        getattr(model, "provider_kind", None),
+        ctx.affect,
+    )
+    model = apply_effort_decision(model, decision)
+    system_prompt = compose_self_context_prompt(
+        _cortex_voice_base_prompt(),
+        ctx,
         remember_enabled="cortex_remember" in enabled_tools,
     )
 
@@ -153,7 +164,11 @@ async def run_cortex_voice_turn(
         chat_history=chat_history,
     )
 
-    reasoning_effort = getattr(model, "reasoning_effort", None)
+    reasoning_effort = (
+        decision.effective
+        if decision.effective is not None
+        else getattr(model, "reasoning_effort", None)
+    )
     degraded = bool(getattr(model, "degraded", False))
     cortex_turn = await append_turn(
         session,
@@ -165,7 +180,12 @@ async def run_cortex_voice_turn(
         tools_called=result.tools_called,
         rounds=result.rounds,
         reasoning_effort=reasoning_effort,
-        metadata={"degraded": degraded, "recall_hits": len(known_facts), "channel": "voice"},
+        metadata={
+            "degraded": degraded,
+            "recall_hits": len(ctx.known_facts),
+            "channel": "voice",
+            "self_context": self_context_meta(ctx, decision),
+        },
     )
     return result, conversation_id, cortex_turn.id
 

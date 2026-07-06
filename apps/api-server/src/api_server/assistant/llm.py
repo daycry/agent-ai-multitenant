@@ -46,6 +46,11 @@ class LLMAssistantModel:
     # ADR 0070: kwargs de razonamiento ya traducidos al proveedor (effort /
     # reasoning_effort); se vuelcan al `complete()` del provider.
     extra_call_kwargs: dict[str, Any] = field(default_factory=dict)
+    # Metadatos de la resolución (ADR 0070/0074), opcionales: el asistente no los
+    # estampa (None); el córtex sí — permiten auditar el effort del turno (antes
+    # se persistía NULL) y que la política afectiva lo module por-request.
+    reasoning_effort: str | None = None
+    provider_kind: str | None = None
 
     async def decide(self, state: AssistantState) -> ModelTurn:
         messages = self._build_messages(state)

@@ -120,3 +120,84 @@ async def test_resolve_cortex_model_none_when_unconfigured() -> None:
 
     resolved = await resolve_cortex_model(_FakeSession())  # type: ignore[arg-type]
     assert resolved is None
+
+
+# ---------------------------------------------------------------------------
+# apply_effort_decision — reconstrucción acotada del modelo (afecto→effort)
+# ---------------------------------------------------------------------------
+def test_apply_effort_decision_reconstruye_kwargs_preservando_el_resto() -> None:
+    from api_server.assistant.llm import LLMAssistantModel
+    from api_server.cortex.affect_policy import EffortDecision
+    from api_server.cortex.model_config import apply_effort_decision
+
+    model = LLMAssistantModel(
+        provider=object(),  # type: ignore[arg-type]
+        model="claude-sonnet-4-5",
+        extra_call_kwargs={"effort": "high", "allowed_tools": ["WebSearch", "WebFetch"]},
+        reasoning_effort="high",
+        provider_kind="claude_sdk",
+    )
+    decision = EffortDecision(base="high", effective="xhigh", reasons=("arousal_high:0.9",))
+    out = apply_effort_decision(model, decision)
+
+    assert out is not model  # copia por-request, sin estado compartido
+    assert out.extra_call_kwargs["effort"] == "xhigh"
+    assert out.extra_call_kwargs["allowed_tools"] == ["WebSearch", "WebFetch"]
+    assert out.reasoning_effort == "xhigh"
+    # El original queda intacto.
+    assert model.extra_call_kwargs["effort"] == "high"
+    assert model.reasoning_effort == "high"
+
+
+def test_apply_effort_decision_sin_cambio_devuelve_el_mismo_modelo() -> None:
+    from api_server.assistant.llm import LLMAssistantModel
+    from api_server.cortex.affect_policy import EffortDecision
+    from api_server.cortex.model_config import apply_effort_decision
+
+    model = LLMAssistantModel(
+        provider=object(),  # type: ignore[arg-type]
+        extra_call_kwargs={"effort": "high"},
+        reasoning_effort="high",
+        provider_kind="claude_sdk",
+    )
+    same = apply_effort_decision(model, EffortDecision(base="high", effective="high", reasons=()))
+    assert same is model
+
+
+def test_apply_effort_decision_doble_de_test_es_noop() -> None:
+    from api_server.cortex.affect_policy import EffortDecision
+    from api_server.cortex.model_config import apply_effort_decision
+
+    class _Double:
+        provider_kind = "claude_sdk"
+        reasoning_effort = "high"
+
+    double = _Double()
+    out = apply_effort_decision(
+        double, EffortDecision(base="high", effective="xhigh", reasons=("arousal_high:0.9",))
+    )
+    # Un doble no-dataclass no se reconstruye: la decisión queda en la metadata.
+    assert out is double
+
+
+def test_build_cortex_model_estampa_metadatos_de_resolucion() -> None:
+    from api_server.assistant.model_config import ResolvedAssistantModel
+    from api_server.cortex.model_config import build_cortex_model
+
+    resolved = ResolvedAssistantModel(
+        provider_id=__import__("uuid").uuid4(),
+        model_id="claude-sonnet-4-5",
+        source="platform_default",
+        provider_kind="claude_sdk",
+        provider_display_name="Claude",
+        reasoning_effort="high",
+    )
+    model = build_cortex_model(
+        resolved,
+        provider=object(),  # type: ignore[arg-type]
+        claude_sdk_available=True,
+    )
+    # Los metadatos de la resolución viajan en el modelo: el turno puede
+    # auditar reasoning_effort (antes NULL) y la política afectiva puede modular.
+    assert model.reasoning_effort == "high"
+    assert model.provider_kind == "claude_sdk"

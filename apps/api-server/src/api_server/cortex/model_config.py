@@ -27,11 +27,18 @@ NO busca en Internet (no hay web propia en F1).
 
 from __future__ import annotations
 
+import dataclasses
+from typing import TYPE_CHECKING
+
 from shared_llm.base import LLMProvider
 from shared_llm.reasoning import reasoning_call_kwargs
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.assistant.graph import AssistantModelClient
 from api_server.assistant.llm import LLMAssistantModel
+
+if TYPE_CHECKING:
+    from api_server.cortex.affect_policy import EffortDecision
 from api_server.assistant.model_config import (
     AssistantModelSelection,
     ResolvedAssistantModel,
@@ -185,7 +192,35 @@ def build_cortex_model(
         resolved.reasoning_effort,
         web_enabled=web_enabled,
     )
-    return LLMAssistantModel(provider=provider, model=api_model, extra_call_kwargs=extra)
+    return LLMAssistantModel(
+        provider=provider,
+        model=api_model,
+        extra_call_kwargs=extra,
+        reasoning_effort=resolved.reasoning_effort,
+        provider_kind=resolved.provider_kind,
+    )
+
+
+def apply_effort_decision(
+    model: AssistantModelClient, decision: EffortDecision
+) -> AssistantModelClient:
+    """Reconstruye el modelo con el effort EFECTIVO de la política afectiva.
+
+    Solo reconstruye cuando hay un cambio real y el modelo es el
+    :class:`LLMAssistantModel` de producción (copia por-request vía
+    ``dataclasses.replace`` — sin estado compartido): regenera el kwarg de
+    razonamiento del kind preservando el resto (``allowed_tools`` incluido).
+    Un doble de test (no-dataclass) queda intacto — la decisión se audita
+    igualmente en la metadata del turno."""
+    if decision.effective is None or decision.effective == decision.base:
+        return model
+    if not isinstance(model, LLMAssistantModel):
+        return model
+    kwargs = {
+        k: v for k, v in model.extra_call_kwargs.items() if k not in ("effort", "reasoning_effort")
+    }
+    kwargs.update(reasoning_call_kwargs(model.provider_kind, decision.effective))
+    return dataclasses.replace(model, extra_call_kwargs=kwargs, reasoning_effort=decision.effective)
 
 
 __all__ = [
@@ -193,6 +228,7 @@ __all__ = [
     "CORTEX_DEFAULT_REASONING_EFFORT",
     "CORTEX_WEB_TOOLS",
     "CortexModelUnavailableError",
+    "apply_effort_decision",
     "build_cortex_model",
     "clear_cortex_default_model",
     "cortex_call_kwargs",

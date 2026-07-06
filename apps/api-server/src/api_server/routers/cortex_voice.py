@@ -180,6 +180,8 @@ async def _run_turn(
 
     async def _respond(user_text: str) -> str:
         # ONE admin transaction (owner-scoped, no RLS) — mirrors POST /turns.
+        # The affect read for prosody above is passed down so the self-context
+        # does not re-read it (single load per turn).
         async with admin_sessionmaker() as session, session.begin():
             result, conv_id, turn_id = await run_cortex_voice_turn(
                 session,
@@ -187,6 +189,8 @@ async def _run_turn(
                 owner_user_id=owner_id,
                 user_text=user_text,
                 conversation_id=state.conversation_id,
+                affect=affect,
+                now=now,
             )
         state.conversation_id = conv_id
         cortex_turn_id_holder["id"] = turn_id

@@ -30,25 +30,34 @@ con ``chat_history=recent_history_for_prompt`` → persistir turno ``cortex``.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from redis.asyncio import Redis
 from shared_llm.exceptions import AuthError, LLMError, RateLimitError
 
 from api_server.assistant.graph import AssistantModelClient
 from api_server.assistant.model_config import to_provider_model_name
-from api_server.auth.deps import AuthPrincipal, require_system_owner
+from api_server.auth.deps import AuthPrincipal, get_redis, require_system_owner
 from api_server.celery_client import enqueue_cortex_distill_affect
+from api_server.cortex.affect_policy import modulate_reasoning_effort
 from api_server.cortex.graph import run_cortex_turn
-from api_server.cortex.identity import ensure_identity, identity_preamble
-from api_server.cortex.memory import CORTEX_RECALL_LIMIT, augment_cortex_prompt, cortex_recall
 from api_server.cortex.model_config import (
     CortexModelUnavailableError,
+    apply_effort_decision,
     build_cortex_model,
     clear_cortex_default_model,
     get_cortex_default_model,
     resolve_cortex_model,
     set_cortex_default_model,
+)
+from api_server.cortex.self_context import (
+    compose_self_context_prompt,
+    load_self_context,
+)
+from api_server.cortex.self_context import (
+    self_context_meta as _self_context_meta,
 )
 from api_server.cortex.threads import (
     CortexNoTenantError,
@@ -97,6 +106,17 @@ router = APIRouter(prefix="/owner/cortex", tags=["cortex"])
 
 # Longitud del recorte del último turno en el listado de hilos.
 _PREVIEW_LEN = 160
+
+
+def _redis_or_none() -> Redis | None:
+    """El cliente Redis del api-server, o ``None`` si no es construible.
+
+    El self-context lo usa solo para leer el afecto vivo (fail-open): sin Redis
+    cae a la BD y, sin snapshot, al estado neutro — nunca rompe el turno."""
+    try:
+        return get_redis()
+    except Exception:  # fail-open: el afecto es un matiz del turno
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -229,26 +249,30 @@ async def post_turn(
         web_enabled = await get_cortex_web_enabled(session)
         enabled_tools = cortex_enabled_tool_names(web_enabled=web_enabled)
 
-        # Identidad del córtex (F3): carga (o crea la default) y la inyecta AL INICIO
-        # del system prompt, con el MISMO blindaje anti-inyección de los marcadores de
-        # datos. La identidad NUNCA se borra (ADR 0077), solo se versiona.
-        identity = await ensure_identity(session, owner_id)
-        preamble = identity_preamble(identity.identity_state)
-        base_prompt = _cortex_base_prompt()
-        if preamble:
-            base_prompt = f"{preamble}\n\n{base_prompt}"
-
-        # Recall híbrido del owner (Tarea 4) + augment del system prompt (Tarea 10).
-        known_facts = await cortex_recall(
+        # Self-context unificado: identidad + afecto vivo + recall + temas
+        # pendientes, cargados UNA vez y compuestos en UN solo prompt blindado.
+        now = datetime.now(UTC)
+        ctx = await load_self_context(
             session,
+            _redis_or_none(),
             owner_user_id=owner_id,
             tenant_id=tenant_id,
             query=payload.message,
-            limit=CORTEX_RECALL_LIMIT,
+            now=now,
         )
-        system_prompt = augment_cortex_prompt(
-            base_prompt,
-            known_facts=known_facts,
+
+        # El afecto modula el effort (acotado ±1 paso, auditable; ADR 0075: modula,
+        # nunca bloquea). Un doble de test sin provider_kind es no-op limpio.
+        decision = modulate_reasoning_effort(
+            getattr(model, "reasoning_effort", None),
+            getattr(model, "provider_kind", None),
+            ctx.affect,
+        )
+        model = apply_effort_decision(model, decision)
+
+        system_prompt = compose_self_context_prompt(
+            _cortex_base_prompt(),
+            ctx,
             remember_enabled="cortex_remember" in enabled_tools,
         )
 
@@ -291,10 +315,13 @@ async def post_turn(
                 detail=f"el proveedor LLM del córtex falló: {exc}",
             ) from exc
 
-        # The effort/degraded the resolved model carried (None on a scripted test
-        # double). Honest: F1 has no auto-fallback, so degraded is False unless the
-        # model object explicitly says otherwise.
-        reasoning_effort = getattr(model, "reasoning_effort", None)
+        # El effort EFECTIVO del turno (modulado por afecto cuando aplica; para un
+        # doble sin metadatos la decisión es no-op y esto queda en None, como antes).
+        reasoning_effort = (
+            decision.effective
+            if decision.effective is not None
+            else getattr(model, "reasoning_effort", None)
+        )
         degraded = bool(getattr(model, "degraded", False))
 
         cortex_turn = await append_turn(
@@ -307,7 +334,11 @@ async def post_turn(
             tools_called=result.tools_called,
             rounds=result.rounds,
             reasoning_effort=reasoning_effort,
-            metadata={"degraded": degraded, "recall_hits": len(known_facts)},
+            metadata={
+                "degraded": degraded,
+                "recall_hits": len(ctx.known_facts),
+                "self_context": _self_context_meta(ctx, decision),
+            },
         )
         cortex_turn_id = cortex_turn.id
 

@@ -28,13 +28,22 @@ y de estilo), que no es inyectable.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+import structlog
+from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from api_server.cortex.affect_cache import read_affect_state
 from api_server.cortex.affect_policy import tone_guidance
-from api_server.cortex.affective import AffectState, Language
-from api_server.cortex.identity import identity_preamble
-from api_server.cortex.memory import augment_cortex_prompt
+from api_server.cortex.affect_store import load_affect_state
+from api_server.cortex.affective import AffectState, Language, neutral_affect_state
+from api_server.cortex.identity import ensure_identity, identity_preamble
+from api_server.cortex.memory import CORTEX_RECALL_LIMIT, augment_cortex_prompt, cortex_recall
+
+_log = structlog.get_logger("api_server.cortex.self_context")
 
 # =============================================================================
 # Constantes de composición (calibrables)
@@ -233,6 +242,107 @@ def compose_self_context_prompt(
     )
 
 
+def self_context_meta(ctx: SelfContext, decision: Any) -> dict[str, Any]:
+    """La metadata auditable del turno (puro): mood + decisión de effort + temas.
+
+    ``decision`` es la :class:`~api_server.cortex.affect_policy.EffortDecision`
+    del turno. Se persiste en ``cortex_turns.metadata_.self_context`` — la
+    evidencia de que el self-model gobernó el turno (antes no quedaba rastro)."""
+    language = _language_of(ctx.identity_state or {})
+    return {
+        "mood_label": ctx.affect.mood_label(language=language),
+        "valence": ctx.affect.emotion.valence,
+        "arousal": ctx.affect.emotion.arousal,
+        "effort_base": decision.base,
+        "effort_effective": decision.effective,
+        "effort_reasons": list(decision.reasons),
+        "surfaced_pursuits": [str(p.pursuit_id) for p in ctx.pending_learnings],
+    }
+
+
+# =============================================================================
+# Carga del self-context (la ÚNICA costura de I/O; la composición es pura)
+# =============================================================================
+async def _load_live_affect(
+    session: AsyncSession,
+    redis: Redis | None,
+    owner_user_id: UUID,
+    *,
+    now: datetime,
+) -> AffectState:
+    """El afecto VIGENTE del owner: caché Redis (decay lazy) → BD → neutro.
+
+    Mismo orden que ``GET /owner/cortex/mind`` y la voz. **Fail-open**: cualquier
+    fallo cae al estado neutro — el afecto matiza el turno, nunca lo rompe."""
+    if redis is not None:
+        try:
+            cached = await read_affect_state(redis, str(owner_user_id), now=now)
+        except Exception as exc:  # caché best-effort
+            _log.warning("cortex.self_context_affect_cache_failed", error=str(exc))
+            cached = None
+        if cached is not None:
+            return cached
+    try:
+        return await load_affect_state(session, owner_user_id, now=now)
+    except Exception as exc:  # fail-open
+        _log.warning("cortex.self_context_affect_db_failed", error=str(exc))
+        return neutral_affect_state()
+
+
+async def _load_pending_learnings(
+    session: AsyncSession,  # noqa: ARG001 — la fase de surfacing los usa
+    *,
+    owner_user_id: UUID,  # noqa: ARG001
+) -> tuple[PendingLearning, ...]:
+    """Aprendizajes de curiosidad pendientes de contar (surfacing, ADR 0078).
+
+    Se activa con la fase de surfacing (pursuits ``digested`` sin ``surfaced_at``);
+    hasta entonces no hay nada que abrir."""
+    return ()
+
+
+async def load_self_context(
+    session: AsyncSession,
+    redis: Redis | None,
+    *,
+    owner_user_id: UUID,
+    tenant_id: UUID,
+    query: str,
+    now: datetime,
+    affect: AffectState | None = None,
+    recall_limit: int = CORTEX_RECALL_LIMIT,
+) -> SelfContext:
+    """Carga el self-model completo del turno (identidad + afecto + recall + temas).
+
+    - Identidad: ``ensure_identity`` (crea la default si no existe).
+    - Afecto: el ``affect`` ya cargado si el caller lo tiene (la voz lo lee antes
+      para la prosodia); si no, caché Redis → BD → neutro (fail-open).
+    - Recall: el híbrido de F1 corre AQUÍ y solo aquí (el caller ya no lo llama).
+    - Learnings pendientes: pursuits ``digested`` sin surfacear (fase surfacing).
+
+    Aislamiento (ADR 0074): todo acceso filtra ``owner_user_id`` explícito — la
+    identidad por su UNIQUE, el afecto por clave/filtro, el recall por
+    ``user_id=owner`` + ``scope='private'``.
+    """
+    identity = await ensure_identity(session, owner_user_id)
+    if affect is None:
+        affect = await _load_live_affect(session, redis, owner_user_id, now=now)
+    known_facts = await cortex_recall(
+        session,
+        owner_user_id=owner_user_id,
+        tenant_id=tenant_id,
+        query=query,
+        limit=recall_limit,
+    )
+    learnings = await _load_pending_learnings(session, owner_user_id=owner_user_id)
+    return SelfContext(
+        identity_state=dict(identity.identity_state or {}),
+        affect=affect,
+        known_facts=known_facts,
+        pending_learnings=learnings,
+    )
+
+
 __all__ = [
     "FACT_TRUNCATE_LEN",
     "TRAIT_HIGH",
@@ -240,5 +350,7 @@ __all__ = [
     "PendingLearning",
     "SelfContext",
     "compose_self_context_prompt",
+    "load_self_context",
+    "self_context_meta",
     "trait_style_guidance",
 ]
