@@ -1133,9 +1133,10 @@ async def _reconcile_complete_plans(sessionmaker: async_sessionmaker[AsyncSessio
     (the reviewer URLs 404, human validation never arms). On a winning transition we
     now fire the SAME shared autostart (``_autostart_review_runtime``), idempotent
     and best-effort, so the two paths converge."""
-    from api_server.db.domain import Plan, PlanStatus, Task
+    from api_server.db.domain import Plan, PlanStatus, Task, TaskDependency
     from api_server.plan_progress import (
         TaskSnapshot,
+        transition_to_blocked,
         transition_to_pending_human_validation,
     )
     from sqlalchemy import select, update
@@ -1169,8 +1170,35 @@ async def _reconcile_complete_plans(sessionmaker: async_sessionmaker[AsyncSessio
             plan = await db.get(Plan, prow.id)
             if plan is None:
                 continue
-            snapshots = [TaskSnapshot(id=str(r.id), status=r.status) for r in task_rows]
+            # prod-06 A1: cargar dependencias para el cierre transitivo del
+            # escalado a blocked (un backlog atascado tras un blocked/cancelled).
+            dep_rows = list(
+                (
+                    await db.execute(
+                        select(TaskDependency.task_id, TaskDependency.depends_on_task_id).where(
+                            TaskDependency.task_id.in_([r.id for r in task_rows])
+                        )
+                    )
+                ).all()
+            )
+            deps_by_task: dict[str, list[str]] = {}
+            for dr in dep_rows:
+                deps_by_task.setdefault(str(dr.task_id), []).append(str(dr.depends_on_task_id))
+            snapshots = [
+                TaskSnapshot(
+                    id=str(r.id),
+                    status=r.status,
+                    depends_on=tuple(deps_by_task.get(str(r.id), ())),
+                )
+                for r in task_rows
+            ]
             result = transition_to_pending_human_validation(plan.status, snapshots)
+            # prod-06 A1: safety-net del escalado a blocked cuando el evento
+            # `_on_task_done` del orchestrator se perdió — el mismo camino que el
+            # dispatch, aquí como red del beat (un plan atascado NO se queda
+            # in_progress para siempre sin señal al operador).
+            if not result.transitioned:
+                result = transition_to_blocked(plan.status, snapshots)
             if not result.transitioned:
                 continue
             won_id = (
@@ -1187,11 +1215,14 @@ async def _reconcile_complete_plans(sessionmaker: async_sessionmaker[AsyncSessio
             ).scalar_one_or_none()
             if won_id is not None:
                 _log.info(
-                    "maintenance.reconcile_pipeline_state.plan_ready_for_review",
+                    "maintenance.reconcile_pipeline_state.plan_transitioned",
                     plan_id=str(prow.id),
+                    new_status=result.new_status,
                 )
                 transitioned += 1
-                won = True
+                # El autostart del review-runtime solo aplica al camino
+                # pending_human_validation, NO a blocked.
+                won = result.new_status == "pending_human_validation"
         # GAP fix: build + enqueue the review-runtime autostart in a SEPARATE read
         # session AFTER the transition txn commits (broker I/O must never hold a DB
         # txn open; a build/enqueue failure must never touch the committed move).

@@ -83,11 +83,14 @@ class TaskSnapshot:
     """Minimal shape ``compute_plan_progress`` needs.
 
     Production wires this from ``Task`` rows; tests use dataclass
-    literals."""
+    literals. ``depends_on`` (task ids this task waits on) lets
+    :func:`transition_to_blocked` tell a truly-advanceable task from one that is
+    transitively stuck behind a blocked/cancelled dependency (prod-06 A1)."""
 
     id: str
     status: str
     cost_eur: float = 0.0
+    depends_on: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -173,13 +176,21 @@ def transition_to_blocked(
 ) -> TransitionResult:
     """Escalate a STUCK plan from ``in_progress`` to ``blocked``.
 
-    A plan whose only remaining OPEN tasks are ``blocked`` — every other task is
-    ``done``/``cancelled`` and nothing can advance on its own — would otherwise
-    sit ``in_progress`` forever: ``blocked`` counts as open, so
+    A plan whose only remaining OPEN tasks are ``blocked`` — or ``backlog`` tasks
+    transitively STUCK behind a blocked/cancelled dependency — would otherwise sit
+    ``in_progress`` forever: ``blocked`` counts as open, so
     :func:`transition_to_pending_human_validation` never fires, and no automatic
-    route moves the plan out (audit 2026-07-03, c3). This transition surfaces the
-    stall so the operator is signalled and can unblock/retry a task. A no-op when
-    there is nothing blocked, or when a non-blocked task can still advance.
+    route moves the plan out (audit 2026-07-03 c3; prod-06 A1 auditoría
+    2026-07-06). This transition surfaces the stall so the operator is signalled
+    and can unblock/retry a task. A no-op when there is nothing blocked, or when a
+    task can still advance ON ITS OWN.
+
+    "Can advance on its own" is NOT simply "not blocked": the DAG promotion only
+    moves a ``backlog`` task to ``ready`` when ALL its dependencies are ``done``
+    (``dag_promotion``), so a ``backlog`` task whose dependency is ``blocked`` /
+    ``cancelled`` — or itself transitively stuck — will never advance. We compute
+    the set of tasks that CAN eventually complete via fixpoint and only count
+    those as advanceable.
     """
     if current_status != "in_progress":
         return TransitionResult(
@@ -187,13 +198,18 @@ def transition_to_blocked(
             transitioned=False,
             reason=f"plan is {current_status!r}, only in_progress can transition",
         )
-    open_tasks = [t for t in tasks if t.status in _OPEN_TASK_STATUSES]
+    materialised = list(tasks)
+    open_tasks = [t for t in materialised if t.status in _OPEN_TASK_STATUSES]
     blocked = [t for t in open_tasks if t.status == "blocked"]
     if not blocked:
         return TransitionResult(
             new_status="in_progress", transitioned=False, reason="no blocked tasks"
         )
-    advanceable = [t for t in open_tasks if t.status != "blocked"]
+
+    completable = _completable_task_ids(materialised)
+    # A task is advanceable if it can still reach `done` on its own AND is not
+    # itself blocked (a blocked task needs human action, it does not "advance").
+    advanceable = [t for t in open_tasks if t.status != "blocked" and t.id in completable]
     if advanceable:
         return TransitionResult(
             new_status="in_progress",
@@ -201,6 +217,41 @@ def transition_to_blocked(
             reason=f"{len(advanceable)} task(s) can still advance",
         )
     return TransitionResult(new_status="blocked", transitioned=True)
+
+
+#: Task statuses that are actively progressing (work queued/running/awaiting) and
+#: will reach a terminal state without being gated behind an unmet dependency.
+_ADVANCING_TASK_STATUSES = frozenset(
+    {"ready", "assigned_to_human", "in_progress", "awaiting_human_approval", "in_review"}
+)
+
+
+def _completable_task_ids(tasks: list[TaskSnapshot]) -> set[str]:
+    """The set of task ids that CAN still reach ``done`` (prod-06 A1, fixpoint).
+
+    A task can complete if it is ``done``, actively advancing, or ``backlog``
+    with EVERY dependency completable. It CANNOT if it is ``blocked``/``cancelled``
+    or ``backlog`` with any dependency that cannot complete. Iterated to a
+    fixpoint so a chain of ``backlog`` tasks behind a blocked one is all stuck.
+    A dependency id not present in the plan is treated as satisfied (defensive:
+    a hard-deleted dep must not wedge the whole plan)."""
+    by_id = {t.id: t for t in tasks}
+    completable: set[str] = {
+        t.id for t in tasks if t.status == "done" or t.status in _ADVANCING_TASK_STATUSES
+    }
+    # Fixpoint over backlog tasks: add a backlog task once all its deps are known
+    # completable; repeat until no change.
+    changed = True
+    while changed:
+        changed = False
+        for t in tasks:
+            if t.id in completable or t.status != "backlog":
+                continue
+            deps_ok = all(dep not in by_id or dep in completable for dep in t.depends_on)
+            if deps_ok:
+                completable.add(t.id)
+                changed = True
+    return completable
 
 
 # ---------------------------------------------------------------------------

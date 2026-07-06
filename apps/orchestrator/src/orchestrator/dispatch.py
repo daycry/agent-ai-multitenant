@@ -43,6 +43,7 @@ from api_server.db.domain import (
     Plan,
     Project,
     Task,
+    TaskDependency,
     TaskStatus,
     Team,
 )
@@ -394,7 +395,26 @@ class TaskDispatcher:
                     )
                 )
             ).all()
-            snapshots = [TaskSnapshot(id=str(r.id), status=r.status) for r in rows]
+            # prod-06 A1: cargar dependencias para distinguir un backlog que puede
+            # avanzar de uno transitivamente atascado tras un blocked/cancelled.
+            dep_rows = (
+                await session.execute(
+                    select(TaskDependency.task_id, TaskDependency.depends_on_task_id).where(
+                        TaskDependency.task_id.in_([r.id for r in rows])
+                    )
+                )
+            ).all()
+            deps_by_task: dict[str, list[str]] = {}
+            for dr in dep_rows:
+                deps_by_task.setdefault(str(dr.task_id), []).append(str(dr.depends_on_task_id))
+            snapshots = [
+                TaskSnapshot(
+                    id=str(r.id),
+                    status=r.status,
+                    depends_on=tuple(deps_by_task.get(str(r.id), ())),
+                )
+                for r in rows
+            ]
             result = transition_to_pending_human_validation(plan.status, snapshots)
             if not result.transitioned:
                 # c3 (audit 2026-07-03): a plan whose only remaining open tasks

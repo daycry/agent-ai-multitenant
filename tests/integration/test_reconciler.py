@@ -205,3 +205,90 @@ async def test_reconcile_pipeline_state(
     ]
     assert TaskStatus.BLOCKED.value in new_statuses
     assert new_statuses.count(TaskStatus.IN_REVIEW.value) == 1
+
+
+async def _seed_stuck_dag_plan(dsn: str) -> dict[str, UUID]:
+    """A→B: A blocked (falló), B backlog dep de A. B nunca puede avanzar (la
+    promoción DAG exige deps `done`) → el plan debe escalar a `blocked` (prod-06 A1)."""
+    ids = {
+        "tenant": uuid4(),
+        "project": uuid4(),
+        "plan": uuid4(),
+        "task_a": uuid4(),
+        "task_b": uuid4(),
+    }
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "TRUNCATE task_dependencies, executions, tasks, plans, agents, projects,"
+            " organizations RESTART IDENTITY CASCADE"
+        )
+        await conn.execute(
+            "INSERT INTO organizations (id, name, slug) VALUES ($1, 'T a1', 't-a1')",
+            ids["tenant"],
+        )
+        await conn.execute(
+            "INSERT INTO projects (id, tenant_id, name, status, is_template)"
+            " VALUES ($1, $2, 'P', 'active', false)",
+            ids["project"],
+            ids["tenant"],
+        )
+        await conn.execute(
+            "INSERT INTO plans (id, tenant_id, project_id, title, status)"
+            " VALUES ($1, $2, $3, 'Stuck DAG', 'in_progress')",
+            ids["plan"],
+            ids["tenant"],
+            ids["project"],
+        )
+        await conn.execute(
+            "INSERT INTO tasks (id, tenant_id, project_id, plan_id, title, status, priority)"
+            " VALUES ($1, $2, $3, $4, 'A', 'blocked', 'medium')",
+            ids["task_a"],
+            ids["tenant"],
+            ids["project"],
+            ids["plan"],
+        )
+        await conn.execute(
+            "INSERT INTO tasks (id, tenant_id, project_id, plan_id, title, status, priority)"
+            " VALUES ($1, $2, $3, $4, 'B', 'backlog', 'medium')",
+            ids["task_b"],
+            ids["tenant"],
+            ids["project"],
+            ids["plan"],
+        )
+        await conn.execute(
+            "INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES ($1, $2)",
+            ids["task_b"],
+            ids["task_a"],
+        )
+        return ids
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_reconciler_escalates_plan_stuck_behind_blocked_dependency(
+    _migrated: None, workers_settings: object, migrations_pg_dsn: str
+) -> None:
+    """prod-06 A1: un plan A→B con A blocked y B backlog(dep A) NO se queda
+    in_progress para siempre — el reconciler lo escala a blocked."""
+    from workers.maintenance import _reconcile_pipeline_state_async
+
+    ids = await _seed_stuck_dag_plan(migrations_pg_dsn)
+
+    await _reconcile_pipeline_state_async(
+        workers_settings,  # type: ignore[arg-type]
+        redis=_FakeRedis(),
+        now=datetime.now(UTC),
+        stuck_task_min_age=timedelta(minutes=5),
+        review_min_age=timedelta(minutes=5),
+    )
+
+    engine = create_async_engine(workers_settings.database_url)  # type: ignore[attr-defined]
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessionmaker() as session:
+            plan = await session.get(Plan, ids["plan"])
+        assert plan is not None and plan.status == "blocked"
+    finally:
+        await engine.dispose()

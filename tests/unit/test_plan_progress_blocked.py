@@ -57,3 +57,60 @@ def test_non_in_progress_plan_is_noop() -> None:
         res = transition_to_blocked(status, [_t("blocked")])
         assert not res.transitioned
         assert res.new_status == status
+
+
+# --- prod-06 A1 (auditoría 2026-07-06): un `backlog` cuya dependencia está
+# blocked/cancelled NO puede avanzar (la promoción DAG exige deps `done`), así
+# que NO debe contar como advanceable — si no, el plan queda in_progress para
+# siempre. Antes cualquier no-blocked contaba como advanceable.
+def _dep(id_: str, status: str, depends_on: tuple[str, ...] = ()) -> TaskSnapshot:
+    return TaskSnapshot(id=id_, status=status, depends_on=depends_on)
+
+
+def test_backlog_dependent_on_blocked_is_not_advanceable() -> None:
+    # A→B, A blocked (falló), B backlog dep de A → B nunca avanza → escalar.
+    tasks = [_dep("A", "blocked"), _dep("B", "backlog", depends_on=("A",))]
+    res = transition_to_blocked("in_progress", tasks)
+    assert res.transitioned
+    assert res.new_status == "blocked"
+
+
+def test_backlog_dependent_on_cancelled_is_not_advanceable() -> None:
+    # A cancelled, B backlog dep de A → B nunca reúne deps `done` → escalar.
+    # (necesita al menos un `blocked` para que este transición aplique; usamos C.)
+    tasks = [
+        _dep("A", "cancelled"),
+        _dep("B", "backlog", depends_on=("A",)),
+        _dep("C", "blocked"),
+    ]
+    res = transition_to_blocked("in_progress", tasks)
+    assert res.transitioned
+
+
+def test_backlog_with_advancing_dep_is_still_advanceable() -> None:
+    # A in_progress (avanzando), B backlog dep de A → B PODRÁ avanzar → no escalar.
+    tasks = [
+        _dep("A", "in_progress"),
+        _dep("B", "backlog", depends_on=("A",)),
+        _dep("C", "blocked"),
+    ]
+    res = transition_to_blocked("in_progress", tasks)
+    assert not res.transitioned
+
+
+def test_transitively_stuck_backlog_chain_escalates() -> None:
+    # A blocked, B backlog(dep A), C backlog(dep B) → toda la cadena atascada.
+    tasks = [
+        _dep("A", "blocked"),
+        _dep("B", "backlog", depends_on=("A",)),
+        _dep("C", "backlog", depends_on=("B",)),
+    ]
+    res = transition_to_blocked("in_progress", tasks)
+    assert res.transitioned
+
+
+def test_independent_backlog_keeps_plan_alive() -> None:
+    # A blocked, B backlog SIN deps → B puede avanzar (independiente) → no escalar.
+    tasks = [_dep("A", "blocked"), _dep("B", "backlog")]
+    res = transition_to_blocked("in_progress", tasks)
+    assert not res.transitioned
