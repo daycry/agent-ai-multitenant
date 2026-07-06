@@ -30,3 +30,14 @@ La memoria del córtex (`memory_entries`, scope private del owner) crece de form
 - ✅ Mantiene la memoria acotada sin perder el núcleo valioso; todo recuperable.
 - ⚠️ La fórmula puede enterrar long-tail útil → empezar conservador, medir, ajustar; el owner puede inspeccionar lo olvidado (soft-delete) y restaurarlo.
 - ➡️ Sienta el patrón que la memoria multi-tenant de agentes podría adoptar después (con su propio ADR).
+
+## Estado de implementación (2026-07-06 — plan "identidad real")
+
+`recall_frequency` dejó de ser el placeholder 1.0: `cortex_recall` incrementa
+`metadata_.recall_count`/`last_recalled_at` de las memorias devueltas (solo
+owner) y el mantenimiento aplica
+`recall_frequency_factor(count) = 0.5 + 0.5·min(1, count/5)` — el suelo 0.5
+protege el long-tail nuevo (calibración conservadora de este ADR; ver
+[cortex-identidad-real](../roadmap/cortex-identidad-real.md)). La protección de
+`kind='owner_model'` tiene por fin PRODUCTOR: la reflexión escribe esas
+memorias (antes era protección sin datos).

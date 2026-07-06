@@ -199,6 +199,12 @@ max_keys=12, max_value_len=280)` — merge acotado sobre `relationship_model`;
 
 ## 3. Fases de implementación (TDD estricto)
 
+> **Estado 2026-07-06**: fases 1-6 IMPLEMENTADAS con TDD (commits `c2205db`,
+> `d7b055a`, `2ce368b`, `cba1f78`, `110407c`, `d189a1f` en
+> `plan/runs-visor-trabajo`); fase 7 (docs: este doc + ADR 0075/0077/0078
+> anotados + changelog) en el commit de cierre. Verificación final + deploy a
+> dev al cierre del plan.
+
 | Fase | Contenido                                                                                                                                                 | Tests                                                                                                                                |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | 1    | Núcleo puro: `affect_policy.py`, `self_context.py`, `effective_mood_baseline` + `apply_owner_model_delta` en `identity.py`                                | `tests/unit/test_cortex_affect_policy.py`, `tests/unit/test_cortex_self_context.py`, extensión de `test_cortex_identity_dynamics.py` |

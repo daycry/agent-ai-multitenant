@@ -33,3 +33,14 @@ La visión pide un córtex que **gestione emociones y estados anímicos** con **
 - ✅ Scores 100% graficables; coste/latencia del scoring fuera del hot-path; tolerante a fallos.
 - ⚠️ El dial PAD se actualiza ~1-2s tras la respuesta (asíncrono). Aceptable.
 - ⚠️ Requiere un modelo Ollama local barato siempre disponible para el distilador.
+
+## Estado de implementación (2026-07-06 — plan "identidad real")
+
+El punto 5 ("el afecto MODULA tono/`reasoning_effort`") estaba prometido pero
+sin implementar (el PAD no se leía en el turno de texto). Implementado en el
+plan [cortex-identidad-real](../roadmap/cortex-identidad-real.md):
+`cortex/affect_policy.py` (guía de tono por bandas + modulación de effort ±1
+paso acotada, suelo `low`, nunca `off`) cableado al self-context de chat y voz;
+la decisión queda auditada en `cortex_turns.metadata_.self_context`. Además, el
+decay del motor converge ahora al `mood_baseline` EVOLUTIVO de la identidad
+(antes un PAD hardcodeado), con fallback de arousal "sin calibrar" → 0.3.
