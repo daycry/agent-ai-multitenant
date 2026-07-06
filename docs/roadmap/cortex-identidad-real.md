@@ -1,9 +1,10 @@
 ---
 title: "Córtex: identidad real (self-model unificado)"
 type: plan
-status: in_progress
+status: pending_human_validation
 date: 2026-07-06
 started_at: 2026-07-06
+completed_at: null
 author: claude (auditoría multi-agente + panel de diseño + plan aprobado por el operador)
 blocking_plan: null
 related_adrs: ["0074", "0075", "0076", "0077", "0078", "0021", "0070"]
