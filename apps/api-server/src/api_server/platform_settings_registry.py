@@ -94,7 +94,7 @@ PLATFORM_KNOWN_SETTINGS: dict[str, PlatformCategoryDef] = {
             ),
             "execution_soft_time_limit_s": PlatformSettingDef(
                 type="int",
-                default=1800,
+                default=7500,
                 label_es="Límite de tiempo soft (s)",
                 description_es="SoftTimeLimit por ejecución; el agente puede capturarlo.",
                 min_value=60,
@@ -104,7 +104,7 @@ PLATFORM_KNOWN_SETTINGS: dict[str, PlatformCategoryDef] = {
             ),
             "execution_hard_time_limit_s": PlatformSettingDef(
                 type="int",
-                default=2100,
+                default=7800,
                 label_es="Límite de tiempo hard (s)",
                 description_es="HardTimeLimit por ejecución (SIGKILL). Debe ser > soft.",
                 min_value=60,

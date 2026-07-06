@@ -206,6 +206,8 @@ async def test_execution_time_limits_default_override_and_clamp(
 ) -> None:
     from api_server.db.models import PlatformSetting
     from api_server.db.platform_settings import (
+        DEFAULT_EXECUTION_HARD_TIME_LIMIT_S,
+        DEFAULT_EXECUTION_SOFT_TIME_LIMIT_S,
         EXECUTION_HARD_TIME_LIMIT_KEY,
         EXECUTION_SOFT_TIME_LIMIT_KEY,
         get_execution_time_limits,
@@ -218,7 +220,11 @@ async def test_execution_time_limits_default_override_and_clamp(
         async with sm() as s, s.begin():
             await s.execute(text("TRUNCATE platform_settings"))
         async with sm() as s:
-            assert await get_execution_time_limits(s) == (1800, 2100)  # defaults
+            # Defaults (prod-06 A3: > mayor budget de contenedor, < visibility).
+            assert await get_execution_time_limits(s) == (
+                DEFAULT_EXECUTION_SOFT_TIME_LIMIT_S,
+                DEFAULT_EXECUTION_HARD_TIME_LIMIT_S,
+            )
 
         async with sm() as s, s.begin():
             s.add(PlatformSetting(key=EXECUTION_SOFT_TIME_LIMIT_KEY, value=600))

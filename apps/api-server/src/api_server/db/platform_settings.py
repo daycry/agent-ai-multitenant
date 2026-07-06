@@ -829,14 +829,20 @@ DEFAULT_DOUBLE_SIGNATURE_THRESHOLD = "0"
 # Execution time-limit backstop (Plan 06.14 task_06_14_04 / workers-orchestrator-10)
 # ---------------------------------------------------------------------------
 # Operator-tunable backstop applied per `run_execution` at enqueue time, so a
-# change takes effect for new runs without restarting the workers. Generous on
-# purpose — the agent-runtime enforces its own, tighter container_run_timeout_s;
-# these only catch a truly wedged task. Soft → SoftTimeLimitExceeded the task
-# can catch and finalise; hard → SIGKILL of the worker child.
+# change takes effect for new runs without restarting the workers. This is the
+# LAST resort — the agent-runtime enforces its own, tighter per-kind
+# container_run_timeout (600s thin, 7200s claude_sdk implementer + 120s grace),
+# which must fire FIRST. So these defaults sit ABOVE the largest container budget
+# (7320s) and BELOW the broker visibility timeout (25200s): otherwise Celery
+# SIGKILLs a legitimate 2h claude_sdk run at 35 min and, with
+# task_reject_on_worker_lost, the message is redelivered → a SECOND container +
+# double LLM cost while the first is still alive (prod-06 A3, auditoría
+# 2026-07-06). Soft → SoftTimeLimitExceeded the task can catch and finalise;
+# hard → SIGKILL of the worker child.
 EXECUTION_SOFT_TIME_LIMIT_KEY = "execution_soft_time_limit_s"
 EXECUTION_HARD_TIME_LIMIT_KEY = "execution_hard_time_limit_s"
-DEFAULT_EXECUTION_SOFT_TIME_LIMIT_S = 1800
-DEFAULT_EXECUTION_HARD_TIME_LIMIT_S = 2100
+DEFAULT_EXECUTION_SOFT_TIME_LIMIT_S = 7500
+DEFAULT_EXECUTION_HARD_TIME_LIMIT_S = 7800
 
 
 async def get_execution_time_limits(session: AsyncSession) -> tuple[int, int]:
