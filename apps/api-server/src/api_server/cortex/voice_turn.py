@@ -47,6 +47,7 @@ from api_server.cortex.model_config import apply_effort_decision
 from api_server.cortex.self_context import (
     compose_self_context_prompt,
     load_self_context,
+    mark_pursuits_surfaced,
     self_context_meta,
 )
 from api_server.cortex.threads import (
@@ -125,13 +126,14 @@ async def run_cortex_voice_turn(
 
     # Self-context unificado (mismo composer que el chat): el WS ya cargó el
     # afecto para la prosodia y lo pasa aquí — cero lecturas duplicadas.
+    turn_now = now or datetime.now(UTC)
     ctx = await load_self_context(
         session,
         None,
         owner_user_id=owner_user_id,
         tenant_id=tenant_id,
         query=user_text,
-        now=now or datetime.now(UTC),
+        now=turn_now,
         affect=affect,
     )
     decision = modulate_reasoning_effort(
@@ -186,6 +188,14 @@ async def run_cortex_voice_turn(
             "channel": "voice",
             "self_context": self_context_meta(ctx, decision),
         },
+    )
+    # Surfacing (ADR 0078): mismo contrato que el chat — se marca en ESTA
+    # transacción; un fallo previo del turno los deja pendientes (rollback).
+    await mark_pursuits_surfaced(
+        session,
+        owner_user_id=owner_user_id,
+        pursuit_ids=[p.pursuit_id for p in ctx.pending_learnings],
+        now=turn_now,
     )
     return result, conversation_id, cortex_turn.id
 

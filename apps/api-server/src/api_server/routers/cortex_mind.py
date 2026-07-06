@@ -37,6 +37,7 @@ from api_server.cortex.identity import (
     update_identity,
 )
 from api_server.db.cortex_affect import CortexAffectSnapshot
+from api_server.db.cortex_curiosity import CortexCuriosityPursuit
 from api_server.db.memory import MemoryEntry
 from api_server.db.models import User
 from api_server.db.platform_settings import PlatformSettingForbiddenError
@@ -46,6 +47,7 @@ from api_server.schemas.cortex_autonomy import (
     CortexAutonomyResponse,
     CortexAutonomyUpdateRequest,
 )
+from api_server.schemas.cortex_curiosity import CortexPursuitItem
 from api_server.schemas.cortex_identity import (
     CortexBaseline,
     CortexIdentityResponse,
@@ -216,6 +218,43 @@ async def get_episodes(
 # DERIVA la reflexión periódica (clampeada + versionada) — el owner NO los pisa a
 # mano (guardrail de auto-modificación, ADR 0074). La identidad NUNCA se borra
 # (ADR 0077): cada cambio se versiona en ``cortex_identity_history``.
+@router.get("/curiosity/pursuits", response_model=list[CortexPursuitItem])
+async def list_curiosity_pursuits(
+    principal: AuthPrincipal = Depends(require_system_owner),
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[CortexPursuitItem]:
+    """El historial de curiosidad del owner ("lo que está aprendiendo", ADR 0078).
+
+    Filtro ``owner_user_id`` explícito (tenant-less, BYPASSRLS — ADR 0074), orden
+    ``created_at DESC``, filtro opcional por ``status``. Copy honesto en la UI:
+    es el bucle de curiosidad programado, no curiosidad consciente."""
+    owner_id = principal.user_id
+    stmt = (
+        select(CortexCuriosityPursuit)
+        .where(CortexCuriosityPursuit.owner_user_id == owner_id)
+        .order_by(CortexCuriosityPursuit.created_at.desc())
+        .limit(limit)
+    )
+    if status_filter:
+        stmt = stmt.where(CortexCuriosityPursuit.status == status_filter)
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        pursuits = (await session.execute(stmt)).scalars().all()
+    return [
+        CortexPursuitItem(
+            id=p.id,
+            topic=p.topic,
+            status=p.status,
+            created_at=p.created_at,
+            surfaced_at=p.surfaced_at,
+            learning_memory_id=p.learning_memory_id,
+            search_count=int(p.search_count),
+        )
+        for p in pursuits
+    ]
+
+
 def _identity_response(
     state: dict[str, Any], *, version: int, updated_by: str, onboarded_at: datetime | None
 ) -> CortexIdentityResponse:

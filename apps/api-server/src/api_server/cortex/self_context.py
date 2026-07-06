@@ -289,16 +289,93 @@ async def _load_live_affect(
         return neutral_affect_state()
 
 
+#: Máximo de temas de curiosidad inyectados por turno (no engordar el prompt).
+SURFACING_PER_TURN: int = 1
+
+
 async def _load_pending_learnings(
-    session: AsyncSession,  # noqa: ARG001 — la fase de surfacing los usa
-    *,
-    owner_user_id: UUID,  # noqa: ARG001
+    session: AsyncSession, *, owner_user_id: UUID
 ) -> tuple[PendingLearning, ...]:
     """Aprendizajes de curiosidad pendientes de contar (surfacing, ADR 0078).
 
-    Se activa con la fase de surfacing (pursuits ``digested`` sin ``surfaced_at``);
-    hasta entonces no hay nada que abrir."""
-    return ()
+    Pursuits ``digested`` sin ``surfaced_at`` del owner (los más antiguos
+    primero, máx. :data:`SURFACING_PER_TURN` por turno). El digest sale de su
+    memoria ``learning``, RE-filtrada por ``user_id=owner`` + ``scope='private'``
+    (defensa en profundidad: un ``learning_memory_id`` ajeno no filtra nada).
+    **Fail-open**: cualquier fallo devuelve ``()`` — el surfacing es un matiz
+    del turno, nunca lo rompe."""
+    from sqlalchemy import select
+
+    from api_server.db.cortex_curiosity import CortexCuriosityPursuit
+    from api_server.db.memory import MemoryEntry
+
+    try:
+        stmt = (
+            select(CortexCuriosityPursuit)
+            .where(
+                CortexCuriosityPursuit.owner_user_id == owner_user_id,
+                CortexCuriosityPursuit.status == "digested",
+                CortexCuriosityPursuit.surfaced_at.is_(None),
+            )
+            .order_by(CortexCuriosityPursuit.created_at.asc())
+            .limit(SURFACING_PER_TURN)
+        )
+        pursuits = (await session.execute(stmt)).scalars().all()
+        learnings: list[PendingLearning] = []
+        for pursuit in pursuits:
+            digest = ""
+            if pursuit.learning_memory_id is not None:
+                digest = (
+                    await session.execute(
+                        select(MemoryEntry.content)
+                        .where(
+                            MemoryEntry.id == pursuit.learning_memory_id,
+                            MemoryEntry.user_id == owner_user_id,
+                            MemoryEntry.scope == "private",
+                            MemoryEntry.deleted_at.is_(None),
+                        )
+                        .limit(1)
+                    )
+                ).scalar_one_or_none() or ""
+            learnings.append(
+                PendingLearning(pursuit_id=pursuit.id, topic=pursuit.topic, digest=digest)
+            )
+        return tuple(learnings)
+    except Exception as exc:  # fail-open: el surfacing nunca rompe el turno
+        _log.warning("cortex.self_context_learnings_failed", error=str(exc))
+        return ()
+
+
+async def mark_pursuits_surfaced(
+    session: AsyncSession,
+    *,
+    owner_user_id: UUID,
+    pursuit_ids: tuple[UUID, ...] | list[UUID],
+    now: datetime,
+) -> int:
+    """Marca los pursuits inyectados como ``surfaced`` (misma transacción del turno).
+
+    Determinista: surfaced = OFRECIDO al prompt. El caller lo llama dentro de la
+    transacción del turno — si el LLM falla, el rollback deja el pursuit
+    pendiente (comportamiento correcto gratis). Filtro ``owner_user_id``
+    explícito (ADR 0074): un id ajeno jamás se marca. Devuelve filas tocadas."""
+    if not pursuit_ids:
+        return 0
+    from sqlalchemy import update
+
+    from api_server.db.cortex_curiosity import CortexCuriosityPursuit
+
+    result = await session.execute(
+        update(CortexCuriosityPursuit)
+        .where(
+            CortexCuriosityPursuit.id.in_(list(pursuit_ids)),
+            CortexCuriosityPursuit.owner_user_id == owner_user_id,
+            CortexCuriosityPursuit.surfaced_at.is_(None),
+        )
+        .values(surfaced_at=now, status="surfaced")
+    )
+    # Un UPDATE devuelve CursorResult en runtime; Result[Any] no tipa rowcount.
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 async def load_self_context(
@@ -351,6 +428,7 @@ __all__ = [
     "SelfContext",
     "compose_self_context_prompt",
     "load_self_context",
+    "mark_pursuits_surfaced",
     "self_context_meta",
     "trait_style_guidance",
 ]

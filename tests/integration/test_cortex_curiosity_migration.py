@@ -117,3 +117,53 @@ async def test_pursuits_table_indexes_check_and_reversible(
         assert not await _table_exists(conn, "cortex_curiosity_pursuits")
     finally:
         await conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Migración 0103: el CHECK admite 'surfaced' y el downgrade reconvierte
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_status_surfaced_reversible(
+    configured_app, migrations_pg_dsn: str, alembic_config
+) -> None:
+    owner_id = uuid4()
+    pursuit_id = uuid4()
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute("TRUNCATE cortex_curiosity_pursuits, users RESTART IDENTITY CASCADE")
+        await conn.execute(
+            "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, 'h')",
+            owner_id,
+            "owner@surfaced-mig.test",
+        )
+        # En head, 'surfaced' es un estado válido del ciclo de vida.
+        await conn.execute(
+            "INSERT INTO cortex_curiosity_pursuits (id, owner_user_id, topic, status,"
+            " surfaced_at) VALUES ($1, $2, 'tema', 'surfaced', now())",
+            pursuit_id,
+            owner_id,
+        )
+    finally:
+        await conn.close()
+
+    # downgrade a 0102: la fila 'surfaced' se reconvierte a 'digested' ANTES de
+    # reponer el CHECK antiguo (reversible de verdad, sin filas inválidas).
+    await asyncio.to_thread(command.downgrade, alembic_config, "0102_plan_pr_url")
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        status = await conn.fetchval(
+            "SELECT status FROM cortex_curiosity_pursuits WHERE id = $1", pursuit_id
+        )
+        assert status == "digested"
+        with pytest.raises(asyncpg.CheckViolationError):
+            await conn.execute(
+                "INSERT INTO cortex_curiosity_pursuits (id, owner_user_id, topic, status)"
+                " VALUES ($1, $2, 'x', 'surfaced')",
+                uuid4(),
+                owner_id,
+            )
+    finally:
+        await conn.close()
+
+    # Vuelta a head para no dejar la BD de la sesión a medias.
+    await asyncio.to_thread(command.upgrade, alembic_config, "head")

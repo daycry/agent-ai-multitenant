@@ -266,6 +266,31 @@ export function getCortexEpisodes(
   return cortexFetch<CortexEpisode[]>(`/episodes${qs ? `?${qs}` : ""}`);
 }
 
+/** Una persecución de curiosidad del owner ("lo que está aprendiendo", ADR 0078). */
+export interface CortexPursuit {
+  id: string;
+  topic: string;
+  status: string;
+  created_at: string;
+  surfaced_at: string | null;
+  learning_memory_id: string | null;
+  search_count: number;
+}
+
+/**
+ * GET /owner/cortex/curiosity/pursuits — historial de curiosidad (más reciente
+ * primero). `status` filtra por estado del ciclo de vida; `limit` acota.
+ */
+export function getCortexPursuits(
+  opts: { status?: string; limit?: number } = {},
+): Promise<CortexPursuit[]> {
+  const params = new URLSearchParams();
+  if (opts.status) params.set("status", opts.status);
+  if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  return cortexFetch<CortexPursuit[]>(`/curiosity/pursuits${qs ? `?${qs}` : ""}`);
+}
+
 // ---------------------------------------------------------------------------
 // Helpers puros del Panel de Mente — testeables sin React ni red.
 // ---------------------------------------------------------------------------

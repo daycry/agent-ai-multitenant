@@ -55,6 +55,7 @@ from api_server.cortex.model_config import (
 from api_server.cortex.self_context import (
     compose_self_context_prompt,
     load_self_context,
+    mark_pursuits_surfaced,
 )
 from api_server.cortex.self_context import (
     self_context_meta as _self_context_meta,
@@ -341,6 +342,16 @@ async def post_turn(
             },
         )
         cortex_turn_id = cortex_turn.id
+
+        # Surfacing (ADR 0078): los temas de curiosidad ofrecidos al prompt se
+        # marcan EN ESTA transacción — si el LLM hubiera fallado antes, el
+        # rollback los deja pendientes para el próximo encuentro.
+        await mark_pursuits_surfaced(
+            session,
+            owner_user_id=owner_id,
+            pursuit_ids=[p.pursuit_id for p in ctx.pending_learnings],
+            now=now,
+        )
 
     # Córtex F2 (ADR 0075): tras COMMIT del turno, dispara el distilador afectivo
     # fuera del hot-path (fire-and-forget). El appraisal es ASÍNCRONO: el dial PAD

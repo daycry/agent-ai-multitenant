@@ -41,10 +41,12 @@ import {
   getCortexAffectTimeseries,
   getCortexEpisodes,
   getCortexMind,
+  getCortexPursuits,
   padToPercent,
   type CortexAffectPoint,
   type CortexEpisode,
   type CortexMind,
+  type CortexPursuit,
   type PadDimension,
 } from "@/lib/cortex";
 import { useCurrentUser } from "@/lib/use-current-user";
@@ -103,6 +105,14 @@ function CortexMindBody() {
     queryFn: () => getCortexEpisodes({ limit: 50 }),
     refetchOnWindowFocus: false,
     retry: false,
+  });
+
+  const pursuitsQuery = useQuery<CortexPursuit[], ApiError>({
+    queryKey: ["cortex", "pursuits"],
+    queryFn: () => getCortexPursuits({ limit: 20 }),
+    refetchOnWindowFocus: false,
+    retry: false,
+    refetchInterval: POLL_INTERVAL_MS,
   });
 
   // Un 403 en cualquier consulta = dejaste de ser owner tras cargar: refleja el
@@ -192,7 +202,82 @@ function CortexMindBody() {
           isError={episodesQuery.isError}
         />
       </div>
+
+      <div className="mt-6">
+        <LearningPanel
+          pursuits={pursuitsQuery.data ?? []}
+          isLoading={pursuitsQuery.isLoading}
+          isError={pursuitsQuery.isError}
+        />
+      </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Lo que está aprendiendo — historial de curiosidad (ADR 0078, copy honesto)
+// ---------------------------------------------------------------------------
+
+/** Etiqueta ES por estado del ciclo de vida de un pursuit. */
+const PURSUIT_STATUS_LABELS: Record<string, string> = {
+  selected: "elegido",
+  searching: "investigando",
+  digested: "aprendido — pendiente de contarlo",
+  surfaced: "comentado en conversación",
+  skipped: "descartado",
+  failed: "falló",
+};
+
+function LearningPanel({
+  pursuits,
+  isLoading,
+  isError,
+}: {
+  pursuits: CortexPursuit[];
+  isLoading: boolean;
+  isError: boolean;
+}) {
+  return (
+    <Card data-testid="cortex-learning-panel">
+      <CardContent className="space-y-3 pt-5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Lo que está aprendiendo</h2>
+          <span className="text-muted-foreground text-xs">
+            Bucle de curiosidad programado — no es curiosidad consciente
+          </span>
+        </div>
+        {isLoading ? (
+          <p className="text-muted-foreground flex items-center gap-2 text-sm">
+            <Spinner />
+            Cargando…
+          </p>
+        ) : isError ? (
+          <p className="text-destructive text-sm">No se pudo cargar el historial de curiosidad.</p>
+        ) : pursuits.length === 0 ? (
+          <EmptyState
+            title="Aún no hay temas"
+            description="Cuando el bucle de curiosidad investigue un tema que menciones, aparecerá aquí y el córtex lo sacará en la próxima conversación."
+          />
+        ) : (
+          <ul className="divide-border divide-y" data-testid="cortex-learning-list">
+            {pursuits.map((pursuit) => (
+              <li key={pursuit.id} className="flex items-center justify-between gap-3 py-2">
+                <span className="truncate text-sm">{pursuit.topic}</span>
+                <span
+                  className={
+                    pursuit.status === "surfaced"
+                      ? "text-muted-foreground shrink-0 text-xs"
+                      : "shrink-0 text-xs font-medium text-emerald-600 dark:text-emerald-400"
+                  }
+                >
+                  {PURSUIT_STATUS_LABELS[pursuit.status] ?? pursuit.status}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
