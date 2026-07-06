@@ -34,6 +34,14 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "shell_exec": "code_changes",
     "stack_exec": "code_changes",
     "write_file": "code_changes",
+    # prod-03 A8 (auditoría 2026-07-06): estas tools estaban wired pero SIN
+    # categoría, así que escapaban al gate incluso bajo customer-external.
+    "delete_file": "code_changes",  # destructiva sobre el worktree (como write_file)
+    "run_pytest": "code_changes",  # ejecutan código arbitrario del repo
+    "run_lint": "code_changes",
+    "run_typecheck": "code_changes",
+    "run_build": "code_changes",
+    "send_notification": "external_communication",  # el preset promete gatear comunicación
     "http_get": "external_http_get",
     "http_post": "external_http_post",
     "agent_invoke": "code_changes",

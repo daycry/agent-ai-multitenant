@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from agent_runtime.approval import DEFAULT_TOOL_CATEGORIES, ApprovalGate
 from shared_domain.approval_categories import APPROVAL_CATEGORIES
+from shared_domain.tool_names import RUNTIME_WIRED_TOOL_NAMES
 
 
 def _preset(decision: str) -> dict[str, dict[str, str]]:
@@ -57,3 +58,34 @@ def test_old_broken_categories_are_not_canonical() -> None:
     """Documents the regression: the previous vocabulary had zero overlap."""
     old = {"code_execution", "file_write", "network_access", "agent_delegation"}
     assert old.isdisjoint(set(APPROVAL_CATEGORIES))
+
+
+# --- prod-03 A8 (auditoría 2026-07-06): contrato INVERSO. El test forward
+# (categoría ∈ CATEGORIES) no detectaba que tools sensibles wired NO tuvieran
+# categoría y escapasen al gate incluso bajo customer-external. Estas tools
+# DEBEN estar gateadas: destructivas, ejecutan código, o comunican al exterior.
+_MUST_BE_GATED = {
+    "delete_file",  # destructiva (write_file ya se gateaba, delete no)
+    "send_notification",  # comunicación externa — el preset la promete
+    "run_pytest",  # ejecutan código arbitrario del repo
+    "run_lint",
+    "run_typecheck",
+    "run_build",
+}
+
+
+def test_sensitive_wired_tools_are_gated() -> None:
+    for tool in _MUST_BE_GATED:
+        assert tool in RUNTIME_WIRED_TOOL_NAMES, f"{tool} ya no está wired — revisa la lista"
+        assert tool in DEFAULT_TOOL_CATEGORIES, (
+            f"{tool} es sensible y está wired pero NO tiene categoría → escapa al "
+            f"gate incluso bajo customer-external (prod-03 A8)"
+        )
+
+
+def test_customer_external_gates_the_leaking_tools() -> None:
+    gate = ApprovalGate(_preset("human_required"))
+    assert gate.review("send_notification") == "external_communication"
+    assert gate.review("delete_file") == "code_changes"
+    assert gate.review("run_build") == "code_changes"
+    assert gate.review("run_pytest") == "code_changes"
