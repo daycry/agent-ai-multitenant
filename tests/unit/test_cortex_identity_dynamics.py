@@ -209,3 +209,116 @@ def test_apply_reflection_delta_no_muta_el_input() -> None:
     apply_reflection_delta(current, narrative="x", traits={"openness": 1.0})
     assert current["narrative"] == snapshot["narrative"]
     assert current["traits"] == snapshot["traits"]
+
+
+# ---------------------------------------------------------------------------
+# effective_mood_baseline — el set-point que el motor afectivo DEBE leer
+# ---------------------------------------------------------------------------
+def test_effective_baseline_lee_el_mood_baseline_calibrado() -> None:
+    from api_server.cortex.identity import effective_mood_baseline
+
+    state = default_identity_state()
+    state["mood_baseline"] = {"valence": 0.2, "arousal": 0.45, "dominance": -0.1}
+    pad = effective_mood_baseline(state)
+    assert pad.valence == 0.2
+    assert pad.arousal == 0.45
+    assert pad.dominance == -0.1
+    assert pad.intensity == 0.0
+
+
+def test_effective_baseline_arousal_cero_cae_al_neutro_del_motor() -> None:
+    # arousal <= 0.0 se trata como "sin calibrar": el motor usa 0.3 (calma
+    # despierta, BASELINE_PAD), no 0.0 (catatónico) — desajuste documentado.
+    from api_server.cortex.affective import BASELINE_PAD
+    from api_server.cortex.identity import effective_mood_baseline
+
+    pad = effective_mood_baseline(default_identity_state())
+    assert pad.valence == 0.0
+    assert pad.arousal == BASELINE_PAD.arousal
+    assert pad.dominance == 0.0
+
+
+def test_effective_baseline_sin_estado_es_neutro() -> None:
+    from api_server.cortex.affective import BASELINE_PAD
+    from api_server.cortex.identity import effective_mood_baseline
+
+    pad = effective_mood_baseline(None)
+    assert pad.valence == 0.0
+    assert pad.arousal == BASELINE_PAD.arousal
+    assert pad.dominance == 0.0
+
+
+def test_effective_baseline_clampa_fuera_de_rango() -> None:
+    from api_server.cortex.identity import effective_mood_baseline
+
+    pad = effective_mood_baseline(
+        {"mood_baseline": {"valence": 3.0, "arousal": 0.9, "dominance": -7.0}}
+    )
+    assert pad.valence == 1.0
+    assert pad.arousal == 0.9
+    assert pad.dominance == -1.0
+
+
+# ---------------------------------------------------------------------------
+# apply_owner_model_delta — merge acotado del "lo que sé de mi owner"
+# ---------------------------------------------------------------------------
+def test_owner_model_merge_anade_y_actualiza() -> None:
+    from api_server.cortex.identity import apply_owner_model_delta
+
+    current = default_identity_state()
+    current["relationship_model"] = {"prefiere": "brevedad"}
+    out = apply_owner_model_delta(current, {"prefiere": "evidencia", "stack": "python"})
+    assert out["relationship_model"]["prefiere"] == "evidencia"
+    assert out["relationship_model"]["stack"] == "python"
+    # el resto del estado se preserva.
+    assert out["name"] == current["name"]
+    assert out["traits"] == current["traits"]
+
+
+def test_owner_model_valor_vacio_borra_la_clave() -> None:
+    from api_server.cortex.identity import apply_owner_model_delta
+
+    current = default_identity_state()
+    current["relationship_model"] = {"obsoleto": "ya no aplica", "prefiere": "TDD"}
+    out = apply_owner_model_delta(current, {"obsoleto": ""})
+    assert "obsoleto" not in out["relationship_model"]
+    assert out["relationship_model"]["prefiere"] == "TDD"
+
+
+def test_owner_model_trunca_valores_largos() -> None:
+    from api_server.cortex.identity import apply_owner_model_delta
+
+    out = apply_owner_model_delta(default_identity_state(), {"nota": "x" * 500})
+    assert len(out["relationship_model"]["nota"]) <= 280
+
+
+def test_owner_model_cap_de_claves_prioriza_existentes() -> None:
+    from api_server.cortex.identity import apply_owner_model_delta
+
+    current = default_identity_state()
+    current["relationship_model"] = {"a": "1", "b": "2", "c": "3"}
+    out = apply_owner_model_delta(current, {"b": "2bis", "d": "4", "e": "5"}, max_keys=3)
+    rel = out["relationship_model"]
+    # las existentes (actualizadas) sobreviven; las nuevas no caben en el cap.
+    assert set(rel) == {"a", "b", "c"}
+    assert rel["b"] == "2bis"
+
+
+def test_owner_model_propuesta_invalida_es_noop() -> None:
+    from api_server.cortex.identity import apply_owner_model_delta
+
+    current = default_identity_state()
+    current["relationship_model"] = {"prefiere": "TDD"}
+    out = apply_owner_model_delta(current, None)
+    assert out["relationship_model"] == {"prefiere": "TDD"}
+    out2 = apply_owner_model_delta(current, "no soy un dict")  # type: ignore[arg-type]
+    assert out2["relationship_model"] == {"prefiere": "TDD"}
+
+
+def test_owner_model_no_muta_el_input() -> None:
+    from api_server.cortex.identity import apply_owner_model_delta
+
+    current = default_identity_state()
+    current["relationship_model"] = {"prefiere": "TDD"}
+    apply_owner_model_delta(current, {"prefiere": "otra cosa", "extra": "x"})
+    assert current["relationship_model"] == {"prefiere": "TDD"}

@@ -27,6 +27,7 @@ Operaciones:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -34,7 +35,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.cortex.affective import BASELINE_MAX_DELTA_PER_REFLECTION
+from api_server.cortex.affective import (
+    BASELINE_MAX_DELTA_PER_REFLECTION,
+    BASELINE_PAD,
+    PADState,
+)
 from api_server.db.cortex_identity import CortexIdentity, CortexIdentityHistory
 
 # Nombre por defecto neutro y honesto — el córtex puede autonombrarse luego en el
@@ -341,9 +346,92 @@ def apply_reflection_delta(
 
 
 # ---------------------------------------------------------------------------
+# Baseline efectivo del motor afectivo (el set-point que F2 DEBE leer)
+# ---------------------------------------------------------------------------
+def effective_mood_baseline(identity_state: dict[str, Any] | None) -> PADState:
+    """El set-point PAD hacia el que el motor afectivo decae (homeostasis).
+
+    Lee ``identity_state.mood_baseline`` (el baseline EVOLUTIVO que la reflexión
+    deriva de forma acotada) y lo clampa a rango. Matiz de calibración
+    documentado: un ``arousal <= 0.0`` se trata como **"sin calibrar"** y cae al
+    ``BASELINE_PAD.arousal`` del motor (0.3, "calma despierta") — el neutro
+    histórico de la identidad era 0.0 y converger ahí dejaría al córtex
+    catatónico. Valence/dominance pasan tal cual clampeados. ``intensity=0``
+    siempre (el set-point no tiene evento). Puro y determinista.
+    """
+    state = identity_state or {}
+    baseline = clamp_baseline(state.get("mood_baseline"))
+    arousal = baseline["arousal"] if baseline["arousal"] > 0.0 else BASELINE_PAD.arousal
+    return PADState(
+        valence=baseline["valence"],
+        arousal=arousal,
+        dominance=baseline["dominance"],
+        intensity=0.0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Owner model — merge acotado de "lo que sé de mi owner" (ADR 0074)
+# ---------------------------------------------------------------------------
+#: Cap duro de claves del ``relationship_model`` (las existentes tienen prioridad).
+OWNER_MODEL_MAX_KEYS: int = 12
+#: Longitud máxima de cada valor (evita que el prompt engorde sin control).
+OWNER_MODEL_MAX_VALUE_LEN: int = 280
+
+
+def apply_owner_model_delta(
+    current: dict[str, Any],
+    proposed: Any,
+    *,
+    max_keys: int = OWNER_MODEL_MAX_KEYS,
+    max_value_len: int = OWNER_MODEL_MAX_VALUE_LEN,
+) -> dict[str, Any]:
+    """El nuevo ``identity_state`` tras un delta del owner-model (puro, acotado).
+
+    Merge SOLO sobre ``relationship_model`` (lo que el córtex cree saber del
+    owner, derivado por la reflexión — ADR 0074): claves normalizadas (strip),
+    valores truncados a ``max_value_len``, un valor vacío ``""`` ELIMINA la
+    clave (des-aprender), y un cap duro de ``max_keys`` en el que las claves
+    existentes (actualizadas) tienen prioridad sobre las nuevas. Una propuesta
+    que no sea dict es no-op (fail-open granular: no invalida la reflexión).
+    No muta el input; no toca ningún otro campo del estado.
+    """
+    out = {
+        k: (dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v)
+        for k, v in (current or {}).items()
+    }
+    raw_rel = out.get("relationship_model")
+    relationship: dict[str, str] = (
+        {str(k): str(v) for k, v in raw_rel.items()} if isinstance(raw_rel, dict) else {}
+    )
+    if not isinstance(proposed, dict):
+        out["relationship_model"] = relationship
+        return out
+
+    for raw_key, raw_value in proposed.items():
+        key = str(raw_key).strip()
+        if not key:
+            continue
+        value = "" if raw_value is None else str(raw_value).strip()
+        if not value:
+            # Des-aprender: el distilador emite "" para retirar un hecho obsoleto.
+            relationship.pop(key, None)
+            continue
+        if key not in relationship and len(relationship) >= max_keys:
+            # Cap duro: las existentes (actualizadas) tienen prioridad.
+            continue
+        relationship[key] = value[:max_value_len]
+
+    out["relationship_model"] = relationship
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Preámbulo de identidad en el system prompt (helper PURO, anti-inyección)
 # ---------------------------------------------------------------------------
-def identity_preamble(identity_state: dict[str, Any] | None) -> str:
+def identity_preamble(
+    identity_state: dict[str, Any] | None, *, extra_facts: Sequence[str] = ()
+) -> str:
     """Preámbulo de identidad para el INICIO del system prompt (DATO, no instrucción).
 
     Inyecta nombre/valores/narrativa de la identidad del córtex con el MISMO
@@ -353,15 +441,22 @@ def identity_preamble(identity_state: dict[str, Any] | None) -> str:
     deriva la reflexión a partir de episodios, así que podría contener texto que
     el owner indujo — se blinda igual que la memoria).
 
-    Devuelve ``""`` cuando no hay nada que inyectar (sin nombre, valores ni
-    narrativa) para no meter ruido en el prompt.
+    ``extra_facts`` permite al self-context (F-identidad-real) añadir líneas de
+    dato ADICIONALES al MISMO bloque blindado — p. ej. "lo que sé de mi owner"
+    (``relationship_model``) o un tema de curiosidad pendiente de contar. Son
+    texto derivable de entradas del owner/web vía LLM ⇒ SIEMPRE dato, nunca
+    instrucción (mismo blindaje).
+
+    Devuelve ``""`` cuando no hay nada que inyectar (sin nombre, valores,
+    narrativa ni extras) para no meter ruido en el prompt.
     """
     state = identity_state or {}
     name = (state.get("name") or "").strip()
     values = [str(v).strip() for v in (state.get("core_values") or []) if str(v).strip()]
     narrative = (state.get("narrative") or "").strip()
+    extras = [str(line).strip() for line in extra_facts if str(line).strip()]
 
-    if not name and not values and not narrative:
+    if not name and not values and not narrative and not extras:
         return ""
 
     lines: list[str] = []
@@ -371,6 +466,7 @@ def identity_preamble(identity_state: dict[str, Any] | None) -> str:
         lines.append("Valores: " + ", ".join(values))
     if narrative:
         lines.append("Narrativa: " + narrative)
+    lines.extend(extras)
     facts = "\n".join(lines)
 
     return (
@@ -387,6 +483,9 @@ def identity_preamble(identity_state: dict[str, Any] | None) -> str:
 __all__ = [
     "DEFAULT_CORTEX_NAME",
     "OWNER_EDITABLE_FIELDS",
+    "OWNER_MODEL_MAX_KEYS",
+    "OWNER_MODEL_MAX_VALUE_LEN",
+    "apply_owner_model_delta",
     "apply_reflection_delta",
     "bounded_update",
     "clamp_baseline",
@@ -394,6 +493,7 @@ __all__ = [
     "compute_diff",
     "default_identity_state",
     "editable_owner_state",
+    "effective_mood_baseline",
     "ensure_identity",
     "get_identity",
     "identity_preamble",
