@@ -56,7 +56,12 @@ export default function CortexChatPage() {
   const queryClient = useQueryClient();
 
   const [draft, setDraft] = useState("");
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  // Tri-estado del hilo activo: `undefined` = aún sin decidir (el efecto de
+  // auto-selección puede elegir el más reciente al cargar); `null` = el owner
+  // pulsó «Nueva conversación» (elección EXPLÍCITA — el auto-select no la pisa).
+  const [activeConversationId, setActiveConversationId] = useState<string | null | undefined>(
+    undefined,
+  );
   const [forbidden, setForbidden] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false);
   // El effort efectivo del último turno del córtex; alimenta el indicador de
@@ -75,10 +80,11 @@ export default function CortexChatPage() {
     retry: false,
   });
 
-  // Auto-selecciona el hilo más reciente en cuanto llega la lista. El backend
-  // devuelve los hilos más recientes primero, así que el primero es el activo.
+  // Auto-selecciona el hilo más reciente en cuanto llega la lista — SOLO si el
+  // owner aún no ha decidido (undefined). `null` es «Nueva conversación»
+  // explícita y el auto-select NO debe pisarla (bug QA 2026-07-06).
   useEffect(() => {
-    if (activeConversationId) return;
+    if (activeConversationId !== undefined) return;
     const conversations = conversationsQuery.data;
     if (conversations && conversations.length > 0) {
       setActiveConversationId(conversations[0].id);
@@ -201,7 +207,10 @@ export default function CortexChatPage() {
           <Select
             id="cortex-conversation-picker"
             value={activeConversationId ?? ""}
-            onChange={(e) => setActiveConversationId(e.target.value || null)}
+            onChange={(e) => {
+              setActiveConversationId(e.target.value || null);
+              setPendingEcho(null);
+            }}
             data-testid="cortex-conversation-picker"
             disabled={conversations.length === 0}
           >
@@ -222,11 +231,13 @@ export default function CortexChatPage() {
           data-testid="cortex-conversation-new"
           disabled={mutation.isPending}
           onClick={() => {
-            // "Nueva conversación" = desasociar el hilo activo; el próximo turno
-            // crea uno nuevo en el backend y lo adopta como activo.
+            // "Nueva conversación" = desasociar el hilo activo (null EXPLÍCITO,
+            // el auto-select no lo pisa); el próximo turno crea uno nuevo en el
+            // backend y lo adopta como activo.
             setActiveConversationId(null);
             setLastEffort(null);
             setDraft("");
+            setPendingEcho(null);
           }}
         >
           Nueva conversación

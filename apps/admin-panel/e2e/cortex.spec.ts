@@ -180,6 +180,50 @@ test("el mensaje del owner aparece en el hilo ANTES de que el córtex responda",
   await expect(page.getByTestId("cortex-question")).toHaveCount(1);
 });
 
+test("«Nueva conversación» limpia el hilo activo y no se re-selecciona solo", async ({ page }) => {
+  await mockMe(page, OWNER);
+  // Hay un hilo previo: al cargar se auto-selecciona y muestra sus turnos.
+  await page.route("**/owner/cortex/conversations", (route) =>
+    json(route, [
+      {
+        id: CONVERSATION_ID,
+        title: "Hilo previo",
+        created_at: "2026-06-24T09:00:00Z",
+        updated_at: "2026-06-24T10:00:01Z",
+        last_turn_preview: "Retomemos lo de la arquitectura.",
+      },
+    ]),
+  );
+  await page.route("**/owner/cortex/turns**", (route) =>
+    json(route, [
+      {
+        id: "tttt0001",
+        role: "user",
+        content: "Retomemos lo de la arquitectura.",
+        created_at: "2026-06-24T10:00:00Z",
+      },
+      {
+        id: "tttt0002",
+        role: "cortex",
+        content: CORTEX_ANSWER,
+        created_at: "2026-06-24T10:00:01Z",
+        model_id: "claude-sonnet-4-5",
+      },
+    ]),
+  );
+
+  await page.goto("/admin/cortex", { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("cortex-answer").first()).toBeVisible();
+
+  await page.getByTestId("cortex-conversation-new").click();
+
+  // El chat queda VACÍO y se mantiene así (el auto-select no lo pisa).
+  await expect(page.getByTestId("cortex-answer")).toHaveCount(0);
+  await expect(page.getByTestId("cortex-question")).toHaveCount(0);
+  await page.waitForTimeout(400); // margen para un re-select indebido
+  await expect(page.getByTestId("cortex-answer")).toHaveCount(0);
+});
+
 test("a tenant admin who is NOT the owner sees no-access and no input", async ({ page }) => {
   await mockMe(page, TENANT_ADMIN_NOT_OWNER);
   // Si la página intentara llamar (no debe), el backend devolvería 403.
