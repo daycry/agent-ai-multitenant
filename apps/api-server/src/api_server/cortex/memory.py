@@ -28,10 +28,12 @@ asistente (que comparte ``scope='private'`` del mismo usuario).
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from uuid import UUID
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import Integer, func, select, update
+from sqlalchemy import text as sqla_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.assistant.memory import MAX_MEMORY_CONTENT, augment_system_prompt
@@ -130,8 +132,63 @@ async def cortex_recall(
         )
     )
     cortex_ids = {row[0] for row in rows.all()}
-    out = [h.content for h in hits if h.memory_id in cortex_ids]
-    return out[:limit]
+    selected = [h for h in hits if h.memory_id in cortex_ids][:limit]
+
+    # recall_frequency real (ADR 0077): incrementa el contador de uso SOLO de las
+    # memorias DEVUELTAS (las que se inyectan al prompt), en la misma sesión.
+    # ≤ limit filas por PK ⇒ coste despreciable; un fallo del contador JAMÁS
+    # rompe el recall (best-effort).
+    if selected:
+        await _bump_recall_counters(
+            session,
+            owner_user_id=owner_user_id,
+            memory_ids=[h.memory_id for h in selected],
+        )
+    return [h.content for h in selected]
+
+
+async def _bump_recall_counters(
+    session: AsyncSession,
+    *,
+    owner_user_id: UUID,
+    memory_ids: list[UUID],
+) -> None:
+    """``metadata_.recall_count += 1`` y ``last_recalled_at`` de las memorias usadas.
+
+    UPDATE por PK re-filtrado por ``user_id=owner`` + ``scope='private'``
+    (cross-owner safe: un id ajeno no toca nada). Best-effort: cualquier fallo se
+    loguea y se traga — el contador alimenta la retención (``forgetting``), no el
+    turno."""
+    now_iso = datetime.now(UTC).isoformat()
+    try:
+        await session.execute(
+            update(MemoryEntry)
+            .where(
+                MemoryEntry.id.in_(memory_ids),
+                MemoryEntry.user_id == owner_user_id,
+                MemoryEntry.scope == "private",
+            )
+            .values(
+                metadata_=func.jsonb_set(
+                    func.jsonb_set(
+                        func.coalesce(MemoryEntry.metadata_, sqla_text("'{}'::jsonb")),
+                        sqla_text("'{recall_count}'"),
+                        func.to_jsonb(
+                            func.coalesce(
+                                MemoryEntry.metadata_["recall_count"].astext.cast(Integer), 0
+                            )
+                            + 1
+                        ),
+                        sqla_text("true"),
+                    ),
+                    sqla_text("'{last_recalled_at}'"),
+                    func.to_jsonb(now_iso),
+                    sqla_text("true"),
+                )
+            )
+        )
+    except Exception as exc:  # best-effort: el contador nunca rompe el recall
+        logger.warning("cortex.recall_counter_failed", error=str(exc))
 
 
 async def cortex_remember(

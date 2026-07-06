@@ -185,7 +185,7 @@ async def _forget_low_retention(
     + umbral de retención) y pone ``deleted_at=now`` a las candidatas. NUNCA borra
     físicamente (ADR 0059) ni toca identity/owner-model/reflection/learning.
     Idempotente: una fila ya soft-deleted no se re-selecciona."""
-    from api_server.cortex.forgetting import decide_forget
+    from api_server.cortex.forgetting import decide_forget, recall_frequency_factor
     from api_server.db.memory import MemoryEntry
 
     forgotten = 0
@@ -210,11 +210,14 @@ async def _forget_low_retention(
                 .all()
             )
             for row in rows:
+                metadata = row.metadata_ or {}
                 decision = decide_forget(
                     created_at=row.created_at,
                     now=now,
-                    metadata=row.metadata_ or {},
+                    metadata=metadata,
                     memory_type=row.type,
+                    # Uso real (ADR 0077): el contador que cortex_recall incrementa.
+                    recall_frequency=recall_frequency_factor(metadata.get("recall_count", 0)),
                 )
                 if decision.forget:
                     row.deleted_at = now

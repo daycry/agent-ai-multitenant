@@ -263,3 +263,47 @@ async def test_maintenance_is_idempotent(
     finally:
         await conn.close()
     assert forgotten == 1
+
+
+# ---------------------------------------------------------------------------
+# recall_frequency real en el mantenimiento: el uso salva a la memoria
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_forget_usa_recall_count_para_retener_lo_usado(
+    schema_at_head, migrations_pg_dsn: str, workers_settings
+) -> None:
+    seed = await _seed(migrations_pg_dsn)
+    await _set_autonomy(migrations_pg_dsn, True)
+    owner_id = seed["owner_id"]
+
+    # Dos episódicas de 45 días (importance default 0.5): la nunca-recallada cae
+    # bajo el umbral (0.5*0.35*0.5≈0.088<0.1); la recallada 5 veces se salva
+    # (0.5*0.35*1.0≈0.177).
+    nunca = uuid4()
+    usada = uuid4()
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        tenant_id = await conn.fetchval("SELECT id FROM organizations LIMIT 1")
+        for mid, meta in (
+            (nunca, '{"cortex": true}'),
+            (usada, '{"cortex": true, "recall_count": 5}'),
+        ):
+            await conn.execute(
+                "INSERT INTO memory_entries (id, tenant_id, scope, type, content, user_id,"
+                " metadata, created_at) VALUES ($1, $2, 'private', 'episodic', $3, $4,"
+                " $5::jsonb, now() - interval '45 days')",
+                mid,
+                tenant_id,
+                f"mem {mid}",
+                owner_id,
+                meta,
+            )
+    finally:
+        await conn.close()
+
+    from workers.cortex_maintenance import _run_maintenance
+
+    await _run_maintenance(workers_settings)
+
+    assert await _deleted_at(migrations_pg_dsn, nunca) is not None
+    assert await _deleted_at(migrations_pg_dsn, usada) is None

@@ -94,3 +94,65 @@ def test_recent_episodic_is_retained() -> None:
     )
     assert d.forget is False
     assert d.reason == "retained"
+
+
+# ---------------------------------------------------------------------------
+# recall_frequency_factor — uso real de la memoria en la retención (ADR 0077)
+# ---------------------------------------------------------------------------
+def test_recall_frequency_factor_curva_con_suelo() -> None:
+    from api_server.cortex.forgetting import recall_frequency_factor
+
+    # Suelo 0.5: una memoria jamás recallada no queda automáticamente condenada.
+    assert recall_frequency_factor(0) == 0.5
+    # Satura en 1.0 a partir de RECALL_COUNT_SATURATION.
+    assert recall_frequency_factor(5) == 1.0
+    assert recall_frequency_factor(50) == 1.0
+    # Monótona entre medias.
+    assert 0.5 < recall_frequency_factor(2) < 1.0
+    # Tolerante: negativos/sucios caen al suelo (nunca lanza).
+    assert recall_frequency_factor(-3) == 0.5
+
+
+def test_fresca_sin_recalls_se_retiene_pese_al_suelo() -> None:
+    from datetime import UTC, datetime
+
+    from api_server.cortex.forgetting import decide_forget, recall_frequency_factor
+
+    now = datetime.now(UTC)
+    decision = decide_forget(
+        created_at=now,
+        now=now,
+        metadata={"cortex": True},
+        memory_type="episodic",
+        recall_frequency=recall_frequency_factor(0),
+    )
+    # importance 0.5 * recency 1.0 * freq 0.5 = 0.25 > umbral 0.1 ⇒ retenida.
+    assert decision.forget is False
+    assert decision.score > 0.1
+
+
+def test_vieja_no_recallada_cae_y_recallada_se_salva() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from api_server.cortex.forgetting import decide_forget, recall_frequency_factor
+
+    now = datetime.now(UTC)
+    created = now - timedelta(days=45)
+
+    nunca_recallada = decide_forget(
+        created_at=created,
+        now=now,
+        metadata={"cortex": True},
+        memory_type="episodic",
+        recall_frequency=recall_frequency_factor(0),
+    )
+    assert nunca_recallada.forget is True
+
+    recallada = decide_forget(
+        created_at=created,
+        now=now,
+        metadata={"cortex": True, "recall_count": 5},
+        memory_type="episodic",
+        recall_frequency=recall_frequency_factor(5),
+    )
+    assert recallada.forget is False
