@@ -399,3 +399,53 @@ def test_trigger_swallows_broker_errors(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(mod.cortex_distill_affect, "apply_async", _boom)
     assert mod.trigger_cortex_distill_affect(uuid4()) is False
+
+
+# ---------------------------------------------------------------------------
+# Baseline evolutivo: el distilador escribe la caché viva CON el baseline
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_distill_escribe_cache_con_baseline_de_identidad(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    import json
+
+    seed = await _seed_turn(migrations_pg_dsn)
+    owner = seed["owner_id"]
+
+    # Identidad con mood_baseline calibrado por la reflexión.
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO cortex_identity (id, owner_user_id, identity_state, version,"
+            " updated_by, created_at, updated_at)"
+            " VALUES ($1, $2, $3::jsonb, 1, 'reflection', now(), now())",
+            uuid4(),
+            owner,
+            json.dumps({"mood_baseline": {"valence": 0.4, "arousal": 0.5, "dominance": 0.2}}),
+        )
+    finally:
+        await conn.close()
+
+    fake = _FakeLLM(
+        content='{"delta": {"valence": 0.2, "arousal": 0.1, "dominance": 0.0,'
+        ' "intensity": 0.2}, "reason": "elogio", "drive_satisfied": null,'
+        ' "drive_amount": 0}'
+    )
+    from workers.cortex_affect import _distill_affect_async
+
+    result = await _distill_affect_async(
+        seed["cortex_turn_id"], settings=workers_settings, llm_factory=lambda _s: fake
+    )
+    assert str(result["reason"]).startswith("ok")
+
+    from api_server.cortex.affect_cache import affect_cache_key
+
+    raw = await api_redis.get(affect_cache_key(str(owner)))
+    assert raw is not None
+    data = json.loads(raw)
+    # El baseline de la identidad viaja EMBEBIDO en la clave viva: las lecturas
+    # de la caché decaen hacia el temperamento del córtex, no hacia el neutro.
+    assert data["baseline"]["valence"] == pytest.approx(0.4)
+    assert data["baseline"]["arousal"] == pytest.approx(0.5)
+    assert data["baseline"]["dominance"] == pytest.approx(0.2)

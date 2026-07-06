@@ -514,12 +514,15 @@ async def _satisfy_curiosity(
     from api_server.cortex.affect_cache import write_affect_state
     from api_server.cortex.affect_store import load_affect_state, save_affect_snapshot
     from api_server.cortex.affective import AffectState, satisfy_drive
+    from api_server.cortex.identity import effective_mood_baseline, get_identity
 
     #: Cuánto sube el drive curiosity al saciarlo tras una pasada exitosa.
     delta = 0.3
     try:
         async with sessionmaker() as session, session.begin():
-            state = await load_affect_state(session, owner_id, now=now)
+            identity = await get_identity(session, owner_id)
+            baseline = effective_mood_baseline(identity.identity_state if identity else None)
+            state = await load_affect_state(session, owner_id, now=now, baseline=baseline)
             new_drives = satisfy_drive(state.drives, "curiosity", delta)
             new_state = AffectState(emotion=state.emotion, mood=state.mood, drives=new_drives)
             await save_affect_snapshot(
@@ -530,7 +533,7 @@ async def _satisfy_curiosity(
                 source_turn_id=None,
                 language="es",
             )
-        await write_affect_state(redis, str(owner_id), new_state, now=now)
+        await write_affect_state(redis, str(owner_id), new_state, now=now, baseline=baseline)
     except Exception as exc:  # best-effort
         _log.warning("cortex_curiosity.satisfy_failed", owner=str(owner_id), error=str(exc))
 
