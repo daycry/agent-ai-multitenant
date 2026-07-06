@@ -123,6 +123,63 @@ test("system owner sees the córtex input and gets a rendered answer", async ({ 
   await expect(page.getByTestId("cortex-answer").first()).toBeVisible();
 });
 
+test("el mensaje del owner aparece en el hilo ANTES de que el córtex responda", async ({
+  page,
+}) => {
+  await mockMe(page, OWNER);
+  await page.route("**/owner/cortex/conversations", (route) => json(route, []));
+
+  // El POST tarda (deliberación lenta): la burbuja del owner debe verse YA.
+  let releasePost: () => void = () => {};
+  const postGate = new Promise<void>((resolve) => {
+    releasePost = resolve;
+  });
+  await page.route("**/owner/cortex/turns**", async (route) => {
+    if (route.request().method() === "POST") {
+      await postGate;
+      return json(route, {
+        conversation_id: CONVERSATION_ID,
+        answer: CORTEX_ANSWER,
+        tools_called: [],
+        rounds: 1,
+        reasoning_effort: "high",
+        degraded: false,
+      });
+    }
+    return json(route, [
+      {
+        id: "tttt0001",
+        role: "user",
+        content: "Retomemos lo de la arquitectura.",
+        created_at: "2026-06-24T10:00:00Z",
+      },
+      {
+        id: "tttt0002",
+        role: "cortex",
+        content: CORTEX_ANSWER,
+        created_at: "2026-06-24T10:00:01Z",
+        model_id: "claude-sonnet-4-5",
+      },
+    ]);
+  });
+
+  await page.goto("/admin/cortex", { waitUntil: "domcontentloaded" });
+  await page.getByTestId("cortex-input").fill("Retomemos lo de la arquitectura.");
+  await page.getByTestId("cortex-send").click();
+
+  // Eco optimista: MI mensaje visible mientras el córtex aún piensa.
+  await expect(page.getByTestId("cortex-question")).toBeVisible();
+  await expect(page.getByTestId("cortex-question")).toContainText(
+    "Retomemos lo de la arquitectura.",
+  );
+  await expect(page.getByTestId("cortex-thinking")).toBeVisible();
+
+  // Libera la respuesta: llega la contestación y el mensaje NO se duplica.
+  releasePost();
+  await expect(page.getByTestId("cortex-answer").first()).toBeVisible();
+  await expect(page.getByTestId("cortex-question")).toHaveCount(1);
+});
+
 test("a tenant admin who is NOT the owner sees no-access and no input", async ({ page }) => {
   await mockMe(page, TENANT_ADMIN_NOT_OWNER);
   // Si la página intentara llamar (no debe), el backend devolvería 403.

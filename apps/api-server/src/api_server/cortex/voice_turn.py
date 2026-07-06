@@ -63,13 +63,14 @@ from api_server.db.platform_settings import get_cortex_web_enabled
 _log = structlog.get_logger("api_server.cortex.voice_turn")
 
 
-def _cortex_voice_base_prompt() -> str:
+def _cortex_voice_base_prompt(*, web_enabled: bool = False) -> str:
     """System prompt base del córtex en voz (copy honesto — sin fingir afecto).
 
     Espejo del prompt del chat (``routers.cortex._cortex_base_prompt``) con una
     nota de brevedad propia de la voz: las respuestas habladas deben ser concisas
-    (la TTS las lee), sin Markdown ni listas largas."""
-    return (
+    (la TTS las lee), sin Markdown ni listas largas. ``web_enabled`` anuncia la
+    affordance de la web (el modelo no usa lo que no sabe que tiene)."""
+    base = (
         "Eres el córtex del System Owner en una videollamada de voz: un asistente "
         "de deliberación con memoria persistente entre conversaciones. Razonas, "
         "recuerdas lo que el owner te cuenta y lo usas para ayudarle mejor. Como te "
@@ -78,6 +79,13 @@ def _cortex_voice_base_prompt() -> str:
         "en el idioma del owner (español o inglés). No afirmes tener emociones ni "
         "consciencia: eres un modelo computacional."
     )
+    if web_enabled:
+        base += (
+            " Tienes acceso a Internet mediante tus tools web_search y web_fetch "
+            "(salida por un proxy seguro); úsalas cuando necesites información "
+            "actual y menciona la fuente."
+        )
+    return base
 
 
 async def run_cortex_voice_turn(
@@ -143,7 +151,7 @@ async def run_cortex_voice_turn(
     )
     model = apply_effort_decision(model, decision)
     system_prompt = compose_self_context_prompt(
-        _cortex_voice_base_prompt(),
+        _cortex_voice_base_prompt(web_enabled=web_enabled),
         ctx,
         remember_enabled="cortex_remember" in enabled_tools,
     )

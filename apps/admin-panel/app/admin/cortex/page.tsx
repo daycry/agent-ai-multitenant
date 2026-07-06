@@ -62,6 +62,10 @@ export default function CortexChatPage() {
   // El effort efectivo del último turno del córtex; alimenta el indicador de
   // "pensando a fondo" del siguiente turno.
   const [lastEffort, setLastEffort] = useState<string | null>(null);
+  // Eco optimista: el mensaje recién enviado, visible como burbuja MIENTRAS el
+  // córtex delibera (el POST es síncrono y puede tardar). Se oculta solo cuando
+  // el refetch del hilo ya lo trae persistido (sin flicker ni duplicado).
+  const [pendingEcho, setPendingEcho] = useState<string | null>(null);
 
   const conversationsQuery = useQuery<CortexConversation[], ApiError>({
     queryKey: ["cortex", "conversations"],
@@ -106,7 +110,11 @@ export default function CortexChatPage() {
         queryKey: ["cortex", "turns", data.conversation_id],
       });
     },
-    onError: (error) => {
+    onError: (error, message) => {
+      // El envío falló: retira el eco y devuelve el texto al input para que el
+      // owner no pierda lo que escribió.
+      setPendingEcho(null);
+      setDraft((current) => current || message);
       // Un 403 aquí significa que dejaste de ser owner tras cargar: refleja el
       // gate del backend en vez de mostrar un chat que sabemos denegado.
       if (error.status === 403) setForbidden(true);
@@ -138,11 +146,16 @@ export default function CortexChatPage() {
     if (!canSend) return;
     const message = trimmed.slice(0, CORTEX_LIMITS.message.max);
     setDraft("");
+    setPendingEcho(message);
     mutation.mutate(message);
   };
 
   const conversations = conversationsQuery.data ?? [];
   const turns = turnsQuery.data ?? [];
+  // El eco optimista se muestra hasta que el refetch trae el turno persistido
+  // con el mismo contenido (entonces desaparece sin duplicarse ni parpadear).
+  const echoVisible =
+    pendingEcho !== null && !turns.some((t) => t.role === "user" && t.content === pendingEcho);
   // El effort se considera "profundo" cuando no es off/ninguno.
   const deepThinking = lastEffort !== null && lastEffort !== "off" && lastEffort !== "none";
 
@@ -232,7 +245,7 @@ export default function CortexChatPage() {
                 <Spinner />
                 Cargando turnos…
               </p>
-            ) : turns.length === 0 && !mutation.isPending ? (
+            ) : turns.length === 0 && !mutation.isPending && !echoVisible ? (
               <EmptyState
                 icon={Brain}
                 title="Empieza a pensar en voz alta"
@@ -241,6 +254,16 @@ export default function CortexChatPage() {
             ) : (
               turns.map((turn) => <CortexBubble key={turn.id} turn={turn} />)
             )}
+            {echoVisible ? (
+              <CortexBubble
+                turn={{
+                  id: "pending-echo",
+                  role: "user",
+                  content: pendingEcho as string,
+                  created_at: "",
+                }}
+              />
+            ) : null}
             {mutation.isPending ? (
               <p
                 className="text-muted-foreground flex items-center gap-2 text-sm"

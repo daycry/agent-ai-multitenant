@@ -272,7 +272,7 @@ async def post_turn(
         model = apply_effort_decision(model, decision)
 
         system_prompt = compose_self_context_prompt(
-            _cortex_base_prompt(),
+            _cortex_base_prompt(web_enabled=web_enabled),
             ctx,
             remember_enabled="cortex_remember" in enabled_tools,
         )
@@ -528,18 +528,32 @@ async def put_model(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _cortex_base_prompt() -> str:
+def _cortex_base_prompt(*, web_enabled: bool = False) -> str:
     """El system prompt base del córtex (copy honesto — F1 no simula afecto).
 
     El recall y la pista de escritura se añaden encima con
-    :func:`augment_cortex_prompt` (mismo blindaje anti-inyección del asistente)."""
-    return (
+    :func:`augment_cortex_prompt` (mismo blindaje anti-inyección del asistente).
+
+    ``web_enabled``: la affordance de la web se ANUNCIA explícitamente — el
+    modelo no puede usar lo que no sabe que tiene (sus priors buscan las tools
+    nativas «WebSearch/WebFetch», que aquí no existen: las del córtex son las
+    host tools ``web_search``/``web_fetch`` vía egress-proxy, ADR 0067)."""
+    base = (
         "Eres el córtex del System Owner: un asistente de deliberación con memoria "
         "persistente entre conversaciones. Razonas en profundidad, recuerdas lo que "
         "el owner te cuenta y lo usas para ayudarle mejor en futuros turnos. Responde "
         "con honestidad y precisión, en el idioma del owner (español o inglés). No "
         "afirmes tener emociones ni consciencia."
     )
+    if web_enabled:
+        base += (
+            " Tienes acceso a Internet mediante tus tools web_search (buscar) y "
+            "web_fetch (leer una URL concreta), con salida por un proxy seguro. "
+            "Úsalas cuando necesites información actual o externa (no las confundas "
+            "con «WebSearch/WebFetch», que no existen aquí), y di de dónde sacaste "
+            "lo que encuentres."
+        )
+    return base
 
 
 def _preview(content: str) -> str:

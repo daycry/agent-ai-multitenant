@@ -354,3 +354,59 @@ async def test_self_context_cross_owner_aislado(
     # A recibe SU identidad (default recién creada), nunca la de B.
     assert ctx.identity_state.get("name") != "Umbra"
     assert "secreta" not in json.dumps(ctx.identity_state)
+
+
+# ---------------------------------------------------------------------------
+# Affordance de la web: si está habilitada, el prompt LO DICE (el modelo no
+# puede usar lo que no sabe que tiene — reporte del operador 2026-07-06)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_prompt_anuncia_web_solo_cuando_esta_habilitada(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    seed = await _seed_owner(migrations_pg_dsn)
+    owner_id = seed["owner_id"]
+    tenant_id = seed["tenant_id"]
+
+    from api_server.routers.cortex import get_cortex_model
+
+    captured = _CapturingModel()
+    configured_app.dependency_overrides[get_cortex_model] = lambda: captured
+    token = await _mint(owner_id, tenant_id)
+
+    from httpx import ASGITransport, AsyncClient
+
+    # Web OFF (default): el prompt NO promete web.
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/owner/cortex/turns",
+            json={"message": "hola"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert "web_search" not in (captured.system_prompt or "")
+
+    # Web ON: el prompt anuncia web_search/web_fetch (affordance explícita).
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO platform_settings (key, value) VALUES ('cortex.web_enabled', 'true')"
+            " ON CONFLICT (key) DO UPDATE SET value = 'true'"
+        )
+    finally:
+        await conn.close()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/owner/cortex/turns",
+            json={"message": "hola de nuevo"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 200, resp.text
+    prompt = captured.system_prompt or ""
+    assert "web_search" in prompt
+    assert "web_fetch" in prompt
