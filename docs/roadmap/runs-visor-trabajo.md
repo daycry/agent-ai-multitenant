@@ -1,9 +1,9 @@
 ---
 plan_id: runs-visor-trabajo
 title: Visor de Runs en el menú Trabajo (lista + detalle + streaming + acceso desde Kanban)
-status: pending_approval
+status: pending_human_validation
 blocking_plan: []
-started_at: null
+started_at: 2026-06-26
 completed_at: null
 estimated_duration_calendar: 3-4 días
 estimated_effort_person_days: 3
@@ -23,6 +23,11 @@ docs_language: es
 > verde y la verificación E2 no se ha corrido como suite; A3 (tokens=0) se re-implementó de raíz en la
 > remediación de la auditoría (`_harvest` multi-canal en shared-llm, pendiente de rebuild de la imagen).
 > Ver `docs/roadmap/auditoria-runs-2026-07-02.md`.
+>
+> **Corrección (2026-07-06, auditoría de roadmap):** `status` estaba en `pending_approval` pese a
+> esta misma nota describir el feature como desplegado — corregido a `pending_human_validation`
+> (código hecho + changelog propio en `docs/07-changelog/runs-visor-trabajo.md`, falta la suite E2E
+> formal antes de `completed`).
 
 > **Origen:** petición del operador (2026-06-26): «en el menú trabajo, poder visualizar todos los runs en
 > forma de lista, las más recientes primero, y ver tokens consumidos, tiempo, dinero… al acceder ver el

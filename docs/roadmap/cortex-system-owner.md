@@ -1,8 +1,10 @@
 ---
 title: "Córtex del Owner + rol system_owner"
 type: plan
-status: pending_approval
+status: pending_human_validation
 date: 2026-06-22
+started_at: 2026-06-23
+completed_at: null
 author: claude-opus (workflow multi-agente: research + panel de diseño + jueces)
 blocking_plan: null
 related_adrs: ["0074", "0075", "0076", "0077", "0078", "0021", "0064", "0070", "0073", "0059", "0067"]
@@ -10,6 +12,15 @@ docs_language: es
 ---
 
 # Córtex del Owner — una mente sintética para el `system_owner`
+
+> **✅ IMPLEMENTADO Y DESPLEGADO** (verificado 2026-07-06 — auditoría de estado del roadmap). Este
+> diseño maestro quedó en `pending_approval` mientras las 5 fases que describe (ver
+> [cortex-fases.md](cortex-fases.md)) se implementaban por completo entre 2026-06-24 y 2026-07-06.
+> Desviación real vs. diseño: la búsqueda web salió por el ADR 0067 (provider-agnóstica,
+> egress-proxy), no por el ADR 0076 (WebSearch/WebFetch nativas de claude_sdk) que este documento
+> recomendaba como "camino preferente". Los ADRs 0075-0078 siguen en `proposed` en sus propios
+> ficheros pese a que el código que autorizan ya está en producción — pendiente de promoción
+> formal, no de implementación.
 
 > Diseño producido por un workflow multi-agente (research de 5 áreas → panel de 3 arquitecturas independientes → jueces → síntesis). El diseño ganador (score 90/100) es una **arquitectura cognitiva por capas** sobre el sustrato existente. La **crítica adversarial automática no llegó a correr** (límite de sesión); la suplo en la sección [Crítica de restricciones y seguridad](#crítica-de-restricciones-y-seguridad).
 

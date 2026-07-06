@@ -1,6 +1,6 @@
 ---
 title: "Córtex F1 — Córtex conversacional con memoria persistente"
-status: pending_approval
+status: pending_human_validation
 blocking_plan:
   [
     "F0 (rol system_owner, IMPLEMENTADO)",
@@ -11,7 +11,8 @@ blocking_plan:
     "ADR 0054",
     "ADR 0059",
   ]
-started_at: null
+started_at: 2026-06-23
+completed_at: null
 date: 2026-06-23
 related_adrs: ["0074", "0076", "0021", "0070", "0054", "0059", "0064"]
 docs_language: es
@@ -19,7 +20,19 @@ docs_language: es
 
 # Córtex F1 — Córtex conversacional con memoria persistente (mente útil mínima)
 
-> **🔒 GATED.** Plan listo-para-ejecutar de la Fase F1 del Córtex del `system_owner`. F0 (rol, migración 0091, gates DB-authoritative) **YA está desplegado**: este plan NO lo re-planifica. F1 introduce la **primera tabla tenant-less sobre BYPASSRLS** (excepción consciente al Principio 1) y **egress de Internet** vía claude_sdk — no se implementa nada hasta el visto bueno del operador por fase (ADR 0074) y, para la búsqueda web, la aprobación del ADR 0076.
+> **✅ IMPLEMENTADO Y DESPLEGADO** (verificado 2026-07-06 — auditoría de estado del roadmap). Este
+> plan quedó congelado en su estado de diseño (`pending_approval`/GATED) tras el commit `cf8f7cd`,
+> pero el código real se implementó en la rama `plan/runs-visor-trabajo` entre 2026-06-24 y
+> 2026-07-06: `cortex/graph.py`, `threads.py`, `tools.py`, `model_config.py`, migración
+> `0092_cortex_threads`, router `cortex.py` (`/turns`, `/conversations`), página
+> `app/admin/cortex/page.tsx`, y la suite `test_cortex_threads*`/`test_cortex_turns_endpoint.py`/
+> `test_cortex_cross_owner.py` en verde. **Desviación real vs. plan**: la búsqueda web NO usa el
+> camino "WebSearch/WebFetch nativas de claude_sdk" (ADR 0076) que este plan exigía — se implementó
+> una tool web provider-agnóstica (`cortex/web.py`, SearXNG/Brave + egress-proxy) bajo el ADR 0067,
+> ya `accepted`. Ver [cortex-identidad-real.md](cortex-identidad-real.md) para la capa añadida
+> encima (self-model unificado) y el resto de correcciones de la auditoría 2026-07-06. Checkboxes
+> de tareas de este documento NO se han re-verificado línea a línea; el status refleja el
+> veredicto agregado, no un cierre formal con changelog propio.
 
 ## Objetivo
 

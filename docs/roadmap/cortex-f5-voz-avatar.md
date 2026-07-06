@@ -1,21 +1,31 @@
 ---
 title: "Córtex F5 — Voz y avatar afectivo del system_owner + olvido de memoria"
-status: pending_approval
+status: pending_human_validation
 blocking_plan:
-  - "cortex-system-owner.md F1 (córtex conversacional con memoria persistente)"
-  - "cortex-system-owner.md F2 (modelo afectivo PAD + Panel de Mente)"
-  - "cortex-system-owner.md F4 (curiosidad + kill-switch/budget) — sólo para el bucle de mantenimiento"
+  - "cortex-system-owner.md F1 (córtex conversacional con memoria persistente) — IMPLEMENTADO"
+  - "cortex-system-owner.md F2 (modelo afectivo PAD + Panel de Mente) — IMPLEMENTADO"
+  - "cortex-system-owner.md F4 (curiosidad + kill-switch/budget) — IMPLEMENTADO"
   - "ADR 0073 (modo voz STT/TTS/avatar) — proposed"
   - "ADR 0075 (modelo afectivo computacional) — proposed"
   - "ADR 0077 (política de olvido) — debe pasar de proposed a accepted antes de F5.7"
-started_at: null
+started_at: 2026-06-24
+completed_at: null
 related_adrs: ["0073", "0075", "0077", "0021", "0070", "0074"]
 docs_language: es
 ---
 
 # Córtex F5 — Voz/avatar afectivo + olvido
 
-> **🔒 GATED.** Última fase del Córtex. Depende de F1-F4 (hoy SIN código: no existe `apps/api-server/src/api_server/cortex/`, ni tablas `cortex_*`, ni `app/admin/cortex`, ni claves Redis `cortex:*`). Este plan **reutiliza el modo voz del asistente (ADR 0073) verbatim** y lo conecta al cerebro + afecto del córtex. La migración encadena desde `0091` (HEAD actual) → **`0092`**.
+> **✅ IMPLEMENTADO Y DESPLEGADO** (verificado 2026-07-06 — auditoría de estado del roadmap). La
+> frase "hoy SIN código: no existe `apps/api-server/src/api_server/cortex/`" es falsa desde el
+> primer commit de F1 (2026-06-24): el directorio existe con 18+ ficheros. Código real de F5:
+> `cortex/voice_affect.py`, `voice_turn.py`, router `cortex_voice.py` (WS `/ws/owner/cortex/voice`),
+> `cortex/forgetting.py` (olvido, docstring propio "Córtex F4/F5") + worker `cortex_maintenance.py`
+> (entrada `sched["cortex-maintenance"]`), con `test_cortex_voice_ws.py`/`test_cortex_voice_turn.py`/
+> `test_cortex_forgetting.py` en verde, y frontend `cortex-voice-call.tsx`/`cortex-avatar.tsx`. Ver
+> [cortex-identidad-real.md](cortex-identidad-real.md) para `recall_frequency` real (este plan lo
+> dejaba a 1.0 hardcodeado). Checkboxes de tareas NO re-verificados línea a línea; el status
+> refleja el veredicto agregado, no un cierre formal con changelog propio.
 
 ## Objetivo
 

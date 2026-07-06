@@ -83,6 +83,12 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_01` — Añadir `--create` a los dos argv de tar + test de humo con tar real
 
+> **Estado (2026-07-06, auditoría de roadmap)**: PARCIAL — el fix del bug (`--create` en los argv
+> de tar) ya está en el código (`apps/workers/src/workers/backup.py:416,454,505`, commit `bdea0af`
+> "feat(infra): data-root de agentes durable... backup diario funcional"), pero el
+> `tests/integration/test_backup_tar_smoke.py` dedicado que este task pide NO existe — no marcar
+> `[x]` hasta añadirlo (la cobertura real con runner real sigue pendiente).
+
 - [ ] **Título**: Fix de `_tar_volume` y `_encrypt_bundle` + smoke test que ejecuta el binario `tar` REAL
 - **Descripción**: En `apps/workers/src/workers/backup.py`, añadir `--create` al argv de `_tar_volume` (≈ líneas 400-409) y al de `_encrypt_bundle` (≈ 451-456). Añadir `tests/integration/test_backup_tar_smoke.py` que ejecute los argv generados con `SubprocessRunner` real contra un directorio temporal (no requiere Docker ni stack vivo) y verifique que el archivo `.tar.gz` se crea, no está vacío y se extrae con el contenido original. Este test debe FALLAR con el código actual (rojo antes del fix).
 - **Tiempo**: 4 h · **Complejidad**: s

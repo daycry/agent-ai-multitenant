@@ -1,27 +1,33 @@
 ---
 title: "Córtex F3 — Identidad evolutiva + reflexión periódica"
-status: pending_approval
+status: pending_human_validation
 blocking_plan:
   - "docs/roadmap/cortex-system-owner.md (Fase 3)"
-  - "F1 — Córtex conversacional con memoria persistente (cortex_conversations/cortex_turns, grafo, recall híbrido, app/admin/cortex) — GATED, NO implementado"
-  - "F2 — Modelo afectivo + Panel de Mente (cortex_affect_snapshots, motor PAD, drives Redis, mood_baseline) — GATED, NO implementado"
+  - "F1 — Córtex conversacional con memoria persistente — IMPLEMENTADO"
+  - "F2 — Modelo afectivo + Panel de Mente — IMPLEMENTADO"
   - "ADR 0074 (rol system_owner / tablas BYPASSRLS; accepted-f0, F3 proposed)"
   - "ADR 0078 (bucles de fondo; proposed — exige aprobación + kill-switch)"
   - "ADR 0077 (protección identity/owner_model en olvido; proposed)"
   - "ADR 0021 (catálogo LLM cerrado) / ADR 0070 (reasoning_effort)"
-started_at: null
+started_at: 2026-06-24
+completed_at: null
 phase: F3
-gated: true
+gated: false
 docs_language: es
 ---
 
 # Córtex F3 — Identidad evolutiva + reflexión periódica (ADR 0074/0078)
 
-> **🔒 GATED — NO IMPLEMENTAR sin aprobación.** F3 depende de F1 y F2 (ambas `proposed`/sin código:
-> un `glob **/*cortex*` solo encuentra los docs y `tests/integration/test_cortex_f0_ownership.py`).
-> F3 introduce además un **bucle Celery beat autónomo** (reflexión) que consume LLM/coste cuando
-> nadie habla → regido por ADR 0078 (budget caps + kill-switch desde el MVP). Requiere: F1+F2 merged,
-> luz verde explícita del operador para F3, y promover ADR 0074/0078 al alcance F3.
+> **✅ IMPLEMENTADO Y DESPLEGADO** (verificado 2026-07-06 — auditoría de estado del roadmap). El
+> banner "GATED — F1/F2 sin código" era cierto el día que se escribió el diseño (commit `cf8f7cd`)
+> pero quedó congelado mientras F1-F3 se implementaban: `cortex/identity.py`, migración
+> `0094_cortex_identity`, endpoints `GET/PUT /identity` + `POST /reflect` en `cortex_mind.py`,
+> worker `cortex_reflection.py` (fail-open, clamp Δ≤0.05/ciclo), con `test_cortex_f3_identity_endpoints.py`/
+> `test_cortex_f3_reflection.py`/`test_cortex_identity_dynamics.py` en verde. Ver
+> [cortex-identidad-real.md](cortex-identidad-real.md) para el productor del `owner_model`
+> (relationship_model) añadido encima el 2026-07-06, que esta fase deja como campo vacío sin
+> escritor. Checkboxes de tareas NO re-verificados línea a línea; el status refleja el veredicto
+> agregado, no un cierre formal con changelog propio.
 
 ## Objetivo
 

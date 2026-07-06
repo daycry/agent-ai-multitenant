@@ -11,6 +11,12 @@ docs_language: es
 > `ProviderModelSelects` reutilizable + persona/agente/equipo/adopt por provider_id +
 > borrado `DefaultModelSection`). Pendiente: deploy + (follow-up) converger
 > `chat-model-section` al mismo componente y deprecar `/agents/model-options`.
+>
+> **Corrección (2026-07-06, auditoría de roadmap)**: esta nota de progreso decía "Fase 1-3 ✅"
+> desde hace 11 días, pero los checkboxes de abajo seguían en `[ ]` — ahora reflejan el veredicto
+> (Fase 1-2 completas y verificadas hoy; Fase 3 completa salvo "Consumidores" y "Converger",
+> no verificados). `GET /agents/model-options` (Fase 4) sigue vivo en `routers/agents.py:191` —
+> Fase 4 no empezada.
 
 # Plan — Unificación de modelo por `provider_id` (ADR 0082)
 
@@ -39,49 +45,63 @@ empezará a aplicarse.
 
 ## Fase 1 — Backend: validación provider_id-aware (sin cambiar resolución todavía)
 
-- [ ] **`validate_model_config`** (`db/platform_settings.py:560`): aceptar la forma
+- [x] **`validate_model_config`** (`db/platform_settings.py:560`): aceptar la forma
       `{provider_id, model}` validando contra la **fila** (activa + `model` ∈ sus modelos, vía
       `is_valid_selection`), conservando el camino kind-based para legacy. Reusar la lógica de
       `validate_chat_model_config`/`is_valid_selection` (no duplicar).
   - TDD: `tests/unit/test_model_config_chain.py` + nuevos casos: provider_id válido → ok;
     provider_id inactivo/model ajeno → 422; legacy kind-only → ok.
-- [ ] **Schema de agente** (`schemas/agents.py:106,150`): que `_validate_model_config` use
+    > **Verificado (2026-07-06, auditoría de roadmap)**: `platform_settings.py:577-590` valida
+    > `provider_id` explícitamente (comentario "ADR 0082").
+- [x] **Schema de agente** (`schemas/agents.py:106,150`): que `_validate_model_config` use
       la validación provider_id-aware. Mantener 422 esperado por tests existentes.
+  > **Verificado**: ambos `_validate_model_config` (create/update) llaman al validador de
+  > `platform_settings` de arriba.
 
 ## Fase 2 — Backend: herencia + dispatch propagan provider_id
 
-- [ ] **`config_needs_default_model`** (`platform_settings.py:649`): un cfg `{provider_id,
+- [x] **`config_needs_default_model`** (`platform_settings.py:649`): un cfg `{provider_id,
 model}` cuenta como **pineado** (no heredar). TDD.
-- [ ] **`resolve_model_config_chain`** (`:668`) + `_merge_inherited_model` (`:695`): propagar
+- [x] **`resolve_model_config_chain`** (`:668`) + `_merge_inherited_model` (`:695`): propagar
       `provider_id` verbatim al mergear; decidir `reasoning_effort` coherente con el nivel que
       pinea. TDD (cadena agente→equipo→proyecto→plataforma con provider_id en cada nivel).
-- [ ] **Dispatch** (`orchestrator/dispatch.py:480-506`): confirmar que el spec resultante
+  > **Verificado**: `platform_settings.py:686-690` — "pineado por provider CONCRETO
+  > (provider_id + model)".
+- [x] **Dispatch** (`orchestrator/dispatch.py:480-506`): confirmar que el spec resultante
       lleva `provider_id` cuando el config lo tiene → el worker `_resolve_by_provider_id` ya
       hace el resto. Test de integración: agente con `provider_id` de `ollama-cloud` → el spec
       resuelto trae el base_url cloud (no el local).
+  > **Verificado, transitivamente**: `dispatch.py` llama a `resolve_model_config_chain` (ya
+  > confirmado) y reenvía el dict resuelto sin tocarlo — no necesita mención literal de
+  > `provider_id`.
 - [ ] **`cost_resolution.resolve_plan_task_models`**: hereda automáticamente al usar la
-      misma cadena; verificar coste con provider_id.
+      misma cadena; verificar coste con provider*id. *(no verificado en esta auditoría)\_
 
 ## Fase 3 — Selector reutilizable (frontend, el corazón del mensaje del operador)
 
-- [ ] **Extraer `ProviderModelSelects` compartido** (hoy privado en `model-cards.tsx` / la
+- [x] **Extraer `ProviderModelSelects` compartido** (hoy privado en `model-cards.tsx` / la
       lógica de `chat-model-section.tsx`) a `components/capability/` (o `components/ui/`):
       consume `GET /agents/provider-options`, dropdown de filas concretas (`display_name (kind)`),
       emite `{provider_id, provider:kind, model, temperature?, reasoning_effort?}`, reasoning por
       kind de la fila, maneja "provider borrado/inactivo" (como cortex/asistente).
-- [ ] **`persona.ts`**: añadir `provider_id` a `ModelConfigDraft`, `buildModelConfig`,
+  > **Verificado**: `components/capability/provider-model-selects.tsx` existe y lo reutilizan
+  > `chat-model-section.tsx`, `persona-section.tsx`, `model-cards.tsx`.
+- [x] **`persona.ts`**: añadir `provider_id` a `ModelConfigDraft`, `buildModelConfig`,
       `draftFromConfig` (reconstruir provider_id; vacío si legacy solo-kind), `validateDraft`.
       `PROVIDER_KINDS`/`PROVIDER_LABEL` pasan a "etiqueta del kind heredado", no fuente del dropdown.
   - TDD: `lib/persona/persona.test.ts`.
-- [ ] **`PersonaModelFields`** (`persona-section.tsx`): usar el selector compartido (deja
+    > **Verificado**: `lib/persona/persona.ts` — `ModelConfigDraft.provider_id`, `validateDraft`,
+    > `draftFromConfig` todos referencian `provider_id` (comentarios "ADR 0082").
+- [x] **`PersonaModelFields`** (`persona-section.tsx`): usar el selector compartido (deja
       `/agents/model-options`). El resumen read-only `PersonaSection` muestra `display_name`.
 - [ ] **Consumidores** (sin cambios de API, heredan el componente): alta de agente
       (`agents/page.tsx`), edición (`agents/[id]/page.tsx`), **adopción de equipo**
-      (`adopt-team-dialog.tsx`).
+      (`adopt-team-dialog.tsx`). _(no verificado en esta auditoría)_
 - [ ] **Converger** chat/asistente/córtex/platform-defaults al MISMO componente compartido
       (hoy son variantes equivalentes) para que sea literalmente uno solo. (Si el coste es alto,
-      dejar asistente/córtex como follow-up — ya son por-provider correctos.)
-- [ ] **Borrar `DefaultModelSection`** (huérfano, confirmado sin consumidores).
+      dejar asistente/córtex como follow-up — ya son por-provider correctos.) _(no verificado)_
+- [x] **Borrar `DefaultModelSection`** (huérfano, confirmado sin consumidores).
+  > **Verificado**: 0 referencias a `DefaultModelSection` en `apps/admin-panel/`.
 
 ## Fase 4 — Limpieza + deprecación
 

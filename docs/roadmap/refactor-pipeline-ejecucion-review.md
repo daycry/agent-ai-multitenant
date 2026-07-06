@@ -1,7 +1,9 @@
 ---
 title: "Refactor limpio del pipeline ejecución + self-review (sin parches)"
-status: pending_approval
+status: pending_human_validation
 date: 2026-06-27
+started_at: 2026-06-27
+completed_at: null
 authors: [claude-opus, operador]
 kind: design-spec
 related_adr: ["0086", "0013", "0021", "0050"]
@@ -11,6 +13,13 @@ docs_language: es
 
 # Refactor limpio del pipeline ejecución + self-review
 
+> **Corrección (2026-07-06, auditoría de roadmap)**: `status` corregido de `pending_approval` a
+> `pending_human_validation` — la sección 9 de este mismo documento ("Estado de implementación",
+> más abajo) dice que TODAS las fases (A, A2, B, C0-C3, D, ADRs) están "HECHA" con commits
+> verificables (`f6b1a94`, `bcdd9cb`, `77f37fe`, `9e5501b`); el spec no podía seguir "sin aprobar"
+> cuando ya está implementado y desplegado. Este doc es el destino real del trabajo que
+> `prod-17-bucle-ai-reviewer.md` dejó pendiente — cruzar ambos antes de cerrar cualquiera.
+>
 > **Estado: `pending_approval`.** Este es el **spec de diseño** (no el plan de
 > implementación). Surge del análisis multi-agente del 2026-06-27 sobre la
 > dispersión de parches acumulados en el agent-runtime, y de tres decisiones de

@@ -1,9 +1,9 @@
 ---
 plan_id: prod-12-hardening-tools-agentes
 title: Hardening de tools de agentes — SSRF, egress, reaper y marketplace
-status: pending_approval
+status: in_progress
 blocking_plan: null
-started_at: null
+started_at: 2026-06-30
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 17
@@ -22,7 +22,7 @@ priority: P1
 | Campo                              | Valor                                  |
 | ---------------------------------- | -------------------------------------- |
 | **ID del Plan**                    | `prod-12-hardening-tools-agentes`      |
-| **Estado**                         | `pending_approval`                     |
+| **Estado**                         | `in_progress`                          |
 | **Prioridad**                      | P1                                     |
 | **Bloqueado por**                  | — (coordinar con prod-01 y prod-06)    |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                            |
@@ -30,6 +30,12 @@ priority: P1
 | **Rama git sugerida**              | `plan/prod-12-hardening-tools-agentes` |
 
 ---
+
+> **Estado (2026-07-06, auditoría de roadmap)**: frontmatter corregido de `pending_approval`/
+> `started_at: null` a `in_progress`/`started_at: 2026-06-30` para que coincida con la nota que el
+> propio cuerpo del documento ya llevaba fechada en `task_prod12_net_01` (ADR 0094 aprobado, mitad
+> de la tarea implementada y desplegada — ver esa sección para el detalle). El resto del plan
+> (marketplace, reaper, resto de SSRF/egress) sigue sin empezar.
 
 ## Resumen
 

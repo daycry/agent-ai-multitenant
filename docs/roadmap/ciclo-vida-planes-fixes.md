@@ -1,9 +1,9 @@
 ---
 plan_id: ciclo-vida-planes-fixes
 title: Ciclo de vida de planes y tareas — máquina de estados autoritativa, tenancy del orquestador y durabilidad del planning
-status: pending_approval
+status: in_progress
 blocking_plan: []
-started_at: null
+started_at: 2026-07-04
 completed_at: null
 estimated_duration_calendar: 4-5 días
 estimated_effort_person_days: 4
@@ -67,21 +67,28 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
 ## Tareas
 
 > **Estado (2026-07-05, rama `plan/runs-visor-trabajo`):** HECHAS y verificadas
-> **T1** (c10 PlanStatus), **T3** (c2 submit_verdict por state machine), **T5** (c5
+> **T3** (c2 submit_verdict por state machine), **T5** (c5
 > tenant_id dispatch), **T8** (c6 phases), **T9** (c7 warning de rol), **T10** (c11
 > complexity), **T6** (c9 durabilidad del turno — idempotencia + sweep de arranque)
-> — en la remediación fase 1/2 (ver changelogs). PENDIENTES: **T2** (c1 PUT→state
+> — en la remediación fase 1/2 (ver changelogs). PENDIENTES: **T1** (c10 PlanStatus —
+> `plan_progress.py` sigue con `Literal` divergente, ver nota inline; esta línea la
+> daba por hecha erróneamente hasta la corrección de 2026-07-06), **T2** (c1 PUT→state
 > machine — transversal + decisión de producto sobre estrictez del Kanban), **T4**
 > (guard-test estático — requiere T2 primero), **T7** (c3 — el escalado plan→blocked
 > YA está en dispatch; falta notificación + acción humana de desbloqueo), **T11** (c8
 > board gerencial por plan_id — frontend).
+>
+> **Corrección (2026-07-06, auditoría de roadmap)**: el `status` del frontmatter estaba en
+> `pending_approval` pese a 6 de 11 tareas hechas — corregido a `in_progress`. Los checkboxes de
+> T5/T8/T9/T10 no reflejaban esta nota (seguían en `[ ]`); ya se marcaron `[x]` con evidencia. T1
+> se re-verificó y **NO** está hecha (ver nota inline) — se corrige también esta línea de estado.
 
 ### Fase A — Fundación de tipos y máquina de estados
 
 - [ ] **T1 — Unificar `PlanStatus` (c10)**: una sola definición canónica (StrEnum de dominio) importada por
       `plan_progress.py` en vez del `Literal` divergente; o, si el `Literal` debe restringir, documentar y
       validar explícitamente en frontera. **Test:** no existen dos vocabularios de `PlanStatus`; mypy verde;
-      pasar `draft` a `transition_to_pending_human_validation` sigue siendo no-op seguro.
+      pasar `draft` a `transition_to_pending_human_validation` sigue siendo no-op seguro. > **Nota (2026-07-06, auditoría de roadmap)**: la línea "Estado (2026-07-05)" de arriba lista T1 > como hecha, pero **no lo está**: `apps/api-server/src/api_server/plan_progress.py:31` sigue > definiendo su propio `Literal[...]` (comentado "mirrors it EXACTLY" en vez de importar > `api_server.db.domain.PlanStatus`). No se marca `[x]`.
 - [ ] **T2 — `PUT /tasks` vía máquina de estados (c1)**: `update_task` encamina el cambio de `status` por
       `transition_task_status` (mantiene la validación DAG existente); transición ilegal → 409/422 con mensaje.
       **Test:** `backlog→done` y `done→in_progress` por PUT devuelven error; `backlog→ready` pasa; el
@@ -99,11 +106,11 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
 
 ### Fase B — Tenancy y durabilidad del orquestador
 
-- [ ] **T5 — `tenant_id` en `_revert_to_ready` (c5, hardening)**: añadir el predicado de tenant a las consultas
+- [x] **T5 — `tenant_id` en `_revert_to_ready` (c5, hardening)**: añadir el predicado de tenant a las consultas
       por id del orquestador en sesión BYPASSRLS (`_revert_to_ready:762`, `_dispatch:823`), por consistencia con
       la regla dura #1; documentar en el código que es defense-in-depth (no fuga explotable, lookup por PK).
       **Test:** guard-test estático que exige `tenant_id` en todo `select(Task/Plan).where(...id...)` del
-      orquestador; regresión de que el revert sigue funcionando.
+      orquestador; regresión de que el revert sigue funcionando. > **Verificado (2026-07-06, auditoría de roadmap)**: `dispatch.py` filtra `Task.tenant_id` en ambos > sitios; existe `tests/unit/test_orchestrator_tenant_scoping.py`.
 - [x] **T6 — Turno de planning durable (c9)**: en vez de migrar el responder a Celery (cambio arquitectónico
       grande: el responder vive en api-server con los proveedores LLM), se resuelve la durabilidad con
       **idempotencia + sweep de recuperación al arranque** en api-server: (1) `respond_to_conversation` tiene una
@@ -126,17 +133,17 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
 
 ### Fase D — Fidelidad del planner y board (c6, c7, c8, c11)
 
-- [ ] **T8 — `phases[]` en planes de chat (c6)**: `pm_plan_draft` emite `phases` (o se documenta y bloquea con
+- [x] **T8 — `phases[]` en planes de chat (c6)**: `pm_plan_draft` emite `phases` (o se documenta y bloquea con
       gracia el scope `phase` para planes de chat, que ya degrada bien). Recomendación: emitir `phases` para
       habilitar el sync por fases. **Test:** un plan de chat trae `phases` no vacío y el scope `phase` del sync
-      funciona; si se opta por no soportarlo, el radio queda deshabilitado con tooltip explicativo.
-- [ ] **T9 — Warning de rol desconocido (c7)**: `_resolve_assignment` loguea un warning cuando un rol no
+      funciona; si se opta por no soportarlo, el radio queda deshabilitado con tooltip explicativo. > **Verificado (2026-07-06, auditoría de roadmap)**: `chat/planning_llm.py:394-496` emite `phases`.
+- [x] **T9 — Warning de rol desconocido (c7)**: `_resolve_assignment` loguea un warning cuando un rol no
       resuelve a agente (typo o rol sin agente en el equipo); validación temprana opcional en create/approve.
       **Test:** un rol inexistente en el spec produce un warning con el nombre del rol; la tarea se materializa
-      igual (comportamiento ADR 0091 D1 preservado).
-- [ ] **T10 — `complexity` en planes de chat (c11)**: `pm_plan_draft` emite `complexity` por tarea; el desglose
+      igual (comportamiento ADR 0091 D1 preservado). > **Verificado (2026-07-06, auditoría de roadmap)**: `chat/sync_to_kanban.py:243` (comentario "(c7)" > explícito) loguea el warning de rol no resuelto.
+- [x] **T10 — `complexity` en planes de chat (c11)**: `pm_plan_draft` emite `complexity` por tarea; el desglose
       de coste deja de ponderar todo como `'m'`. **Test:** un plan de chat con tareas de complejidad mixta
-      produce un desglose de coste diferenciado.
+      produce un desglose de coste diferenciado. > **Verificado (2026-07-06, auditoría de roadmap)**: `chat/planning_llm.py:475-485` emite `complexity`.
 - [ ] **T11 — Board gerencial por `plan_id` (c8)**: `/admin/board` agrupa por planes reales
       (`/projects/{id}/plans` / tabla `plans`) en vez de proyectos; actualizar el comentario obsoleto. **Test:**
       el board muestra planes (no proyectos) como tarjetas de la fila superior; ADR 0008 satisfecho.

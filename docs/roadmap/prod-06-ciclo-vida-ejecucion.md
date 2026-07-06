@@ -1,7 +1,7 @@
 ---
 plan_id: prod-06-ciclo-vida-ejecucion
 title: Ciclo de vida de ejecución robusto — DAG, zombis, cancelación y budgets
-status: in_progress
+status: pending_human_validation
 blocking_plan: null
 started_at: 2026-06-25
 completed_at: null
@@ -22,7 +22,7 @@ priority: P1
 | Campo                              | Valor                               |
 | ---------------------------------- | ----------------------------------- |
 | **ID del Plan**                    | `prod-06-ciclo-vida-ejecucion`      |
-| **Estado**                         | `pending_approval`                  |
+| **Estado**                         | `pending_human_validation`          |
 | **Prioridad**                      | P1                                  |
 | **Bloqueado por**                  | — (coordinar con prod-01 y prod-07) |
 | **Tiempo estimado (calendario)**   | 4-5 semanas                         |
@@ -30,6 +30,13 @@ priority: P1
 | **Rama git sugerida**              | `plan/prod-06-ciclo-vida-ejecucion` |
 
 ---
+
+> **Estado (2026-07-06, auditoría de roadmap)**: `status` corregido de `in_progress` (congelado
+> desde 2026-06-25) a `pending_human_validation`. PR #55 fusionado a `master` (`9184d7c`); 15/16
+> checkboxes hechos, el único pendiente (`task_prod06_dag_03` parte A) está diferido a prod-17 por
+> decisión del operador (ADR 0084 Opción B) y ya lo anota el propio documento. La Cabecera y el
+> frontmatter estaban además desincronizados entre sí (`pending_approval` vs `in_progress`); ambos
+> quedan alineados a `pending_human_validation`.
 
 ## Resumen
 

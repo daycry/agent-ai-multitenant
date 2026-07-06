@@ -1,22 +1,31 @@
 ---
 title: "Córtex F2 — Modelo afectivo computacional (PAD + drives) + Panel de Mente"
-status: pending_approval
+status: pending_human_validation
 blocking_plan:
   [
-    "docs/roadmap/cortex-system-owner.md (F1)",
+    "docs/roadmap/cortex-system-owner.md (F1) — IMPLEMENTADO",
     "docs/05-architecture-decisions/0075-modelo-afectivo-computacional-cortex.md",
   ]
-started_at: null
+started_at: 2026-06-23
+completed_at: null
 date: 2026-06-23
 related_adrs: ["0075", "0074", "0070", "0021", "0056"]
 docs_language: es
 next_migration: "0092"
-gated: true
+gated: false
 ---
 
 # Córtex F2 — Modelo afectivo computacional + Panel de Mente
 
-> **GATED.** Bloqueado por F1 (sin código aún) y por ADR 0075 (`proposed`). Ver `gated_note`. No empezar hasta promover ADR 0075 a `accepted-f2` y tener F1 en verde (existen `cortex_turns` y la página `app/admin/cortex`).
+> **✅ IMPLEMENTADO Y DESPLEGADO** (verificado 2026-07-06 — auditoría de estado del roadmap). El
+> banner "GATED — bloqueado por F1 sin código" quedó congelado desde el commit de diseño `cf8f7cd`;
+> F1 SÍ existe y F2 se implementó encima: `cortex/affective.py`, `affect_store.py`, `affect_cache.py`,
+> migración `0093_cortex_affect`, worker `cortex_affect.py` (en `beat_schedule.py`), router
+> `cortex_mind.py` (`/mind`, `/affect/timeseries`, `/episodes`), WS `cortex_ws.py`, con
+> `test_cortex_affective*`/`test_cortex_affect_store.py`/`test_cortex_affect_cache.py`/
+> `test_cortex_affect_task.py` en verde. Ver [cortex-identidad-real.md](cortex-identidad-real.md)
+> para el cierre del lazo "el afecto modula el texto" (§2 de este plan lo dejaba solo prometido).
+> Checkboxes de tareas NO re-verificados línea a línea; el status refleja el veredicto agregado.
 
 ## Objetivo
 

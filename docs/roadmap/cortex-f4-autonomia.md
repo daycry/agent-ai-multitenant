@@ -1,13 +1,14 @@
 ---
 title: "Córtex F4 — Curiosidad y pensamiento de fondo (bucles cognitivos autónomos)"
-status: pending_approval
+status: pending_human_validation
 blocking_plan:
-  - "docs/roadmap/cortex-system-owner.md (F1, F2, F3 deben estar implementadas)"
+  - "docs/roadmap/cortex-system-owner.md (F1, F2, F3) — IMPLEMENTADAS"
   - "ADR 0078 (bucles cognitivos de fondo) — proposed → requiere accepted-f4"
   - "ADR 0076 (razonamiento profundo + egress confiable vía WebSearch del SDK)"
   - "ADR 0075 (drives homeostáticos)"
   - "ADR 0021 (catálogo LLM cerrado), ADR 0070 (reasoning_effort)"
-started_at: null
+started_at: 2026-06-24
+completed_at: null
 phase: F4
 related_adrs: ["0078", "0076", "0075", "0074", "0021", "0070", "0059"]
 docs_language: es
@@ -15,7 +16,16 @@ docs_language: es
 
 # Córtex F4 — Curiosidad y pensamiento de fondo
 
-> **GATED.** Introduce el primer comportamiento **autónomo** del córtex: actúa (consume LLM + egress) cuando _nadie_ habla. El gobierno de coste/egress (budget caps + circuit-breaker + kill-switch) es **parte del MVP del bucle, no un fast-follow** (ADR 0078). No empezar hasta que F1/F2/F3 estén desplegadas y ADR 0078 esté `accepted-f4`.
+> **✅ IMPLEMENTADO Y DESPLEGADO** (verificado 2026-07-06 — auditoría de estado del roadmap). El
+> banner GATED quedó congelado desde el diseño (commit `cf8f7cd`); el código real:
+> `cortex/autonomy.py`, `curiosity.py`, migraciones `0095_cortex_curiosity_pursuits` +
+> `0103_cortex_pursuit_surfaced`, worker `cortex_curiosity.py` (entrada `sched["cortex-curiosity"]`
+> en `beat_schedule.py`), endpoints `/curiosity/pursuits` + `GET/PUT /autonomy` (kill-switch), con
+> `test_cortex_autonomy*`/`test_cortex_curiosity_loop.py`/`test_cortex_topic_selection.py` en verde.
+> **El kill-switch `cortex.autonomy_enabled` sigue en OFF por defecto** (decisión del operador,
+> nadie lo ha encendido en dev). Ver [cortex-identidad-real.md](cortex-identidad-real.md) para el
+> cierre del "surfacing" (§2 de este plan decía "abre el tema en el próximo encuentro" — quedó sin
+> cablear hasta el 2026-07-06). Checkboxes de tareas NO re-verificados línea a línea.
 
 ## Objetivo
 

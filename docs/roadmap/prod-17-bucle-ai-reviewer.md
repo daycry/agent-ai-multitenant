@@ -1,7 +1,7 @@
 ---
 plan_id: prod-17-bucle-ai-reviewer
 title: Bucle del AI reviewer — in_review → veredicto → done/backlog (cierre del ciclo autónomo)
-status: in_progress
+status: pending_human_validation
 blocking_plan: [prod-06-ciclo-vida-ejecucion]
 started_at: 2026-06-26
 completed_at: null
@@ -22,7 +22,7 @@ priority: P2
 | Campo                            | Valor                                                        |
 | -------------------------------- | ------------------------------------------------------------ |
 | **ID del Plan**                  | `prod-17-bucle-ai-reviewer`                                  |
-| **Estado**                       | `in_progress`                                                |
+| **Estado**                       | `pending_human_validation`                                   |
 | **Prioridad**                    | P2                                                           |
 | **Bloqueado por**                | prod-06 (usa su transición a `in_review` y la promoción DAG) |
 | **Tiempo estimado (calendario)** | 2-3 semanas                                                  |
@@ -30,6 +30,15 @@ priority: P2
 | **ADR semilla**                  | `0084` (accepted, Opción B) + `0027` (bucle)                 |
 
 ---
+
+> **Estado (2026-07-06, auditoría de roadmap)**: `status` corregido de `in_progress` (congelado
+> desde 2026-06-26) a `pending_human_validation`. PR #56 fusionado a `master` (`0f4d505`); 6/7
+> checkboxes hechos, el único pendiente (`task_prod17_e2e_01`) requiere runner Docker real. El
+> bloqueo original de este plan (reviewer "ciego" al código, sin worktree) se resolvió **fuera**
+> de este documento, en un track paralelo sin cruce de vuelta: ADR 0086/0087 (self-review
+> autoritativo), ADR 0088 (reconciler), ADR 0095 D1 (worktree read-only del reviewer) —
+> formalizado en [refactor-pipeline-ejecucion-review.md](refactor-pipeline-ejecucion-review.md).
+> Antes de cerrar este plan de verdad, cruzarlo con ese documento.
 
 ## Resumen
 

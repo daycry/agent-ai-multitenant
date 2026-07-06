@@ -1,12 +1,22 @@
 ---
 title: "Córtex del system_owner — índice de planes por fase"
-status: in_progress
+status: pending_human_validation
 started_at: 2026-06-23
+completed_at: null
 docs_language: es
-related: ["cortex-system-owner", "0074", "0075", "0076", "0077", "0078", "0073"]
+related:
+  ["cortex-system-owner", "cortex-identidad-real", "0074", "0075", "0076", "0077", "0078", "0073"]
 ---
 
 # Córtex del `system_owner` — planes de implementación por fase
+
+> **✅ F0-F5 IMPLEMENTADAS Y DESPLEGADAS** (verificado 2026-07-06 — auditoría de estado del
+> roadmap). Este índice quedó en `in_progress` desde el 2026-06-23 y nunca se actualizó mientras
+> las 5 fases se completaban (21 commits entre 2026-06-24 y 2026-07-06). Los 5 planes de fase
+> (`cortex-f1`…`cortex-f5`) seguían con banner "GATED — NO IMPLEMENTAR"; se corrigieron hoy junto
+> con este índice. Encima de F1-F5 se implementó además una capa de "identidad real" (self-model
+> unificado) — ver [cortex-identidad-real.md](cortex-identidad-real.md), que es el único doc del
+> track que se mantuvo al día por sí mismo.
 
 Diseño completo en [cortex-system-owner.md](cortex-system-owner.md). **F0 (rol `system_owner`)
 YA está implementado y desplegado** (migración 0091, claim JWT `own`,
