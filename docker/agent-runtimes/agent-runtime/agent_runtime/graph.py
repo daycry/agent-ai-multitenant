@@ -1341,6 +1341,25 @@ class _AgentLoop:
         base = len(state["steps"])
         steps: list[dict[str, Any]] = []
 
+        # prod-17 A5 (auditoría 2026-07-06): un run de AI-REVIEWER NO se auto-revisa.
+        # Su entregable ES el veredicto (`<verdict>…` en el output), que el WORKER
+        # parsea con `parse_reviewer_output` — someterlo a una segunda `model.review()`
+        # duplicaba el coste y, si esa review de 2º orden salía inconclusa, mandaba un
+        # approve correcto a `blocked`. Se salta y enruta a END con el status que dejó
+        # `finalize` (el veredicto viaja en el output, no en `review_passed`).
+        if self.is_review:
+            steps.append(
+                node_step(
+                    base,
+                    "self_review",
+                    "Skipped self-review — this IS a review run (verdict is the output)",
+                    status=state["status"],
+                )
+            )
+            # review_passed=True enruta a END (no a retry); no reinterpreta el
+            # veredicto del reviewer (el worker lo lee del output, no de este flag).
+            return {"review_passed": True, "steps": steps}
+
         # NEEDS_HUMAN_REVIEW joins the skip-set (B2): a plan-trip escalation already
         # reached its verdict — running review() on it could turn a `passed` into a
         # false `done` (STATUS_DONE), erasing the escalation. _route_after_review
