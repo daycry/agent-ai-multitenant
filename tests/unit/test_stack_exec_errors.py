@@ -24,18 +24,23 @@ import docker
 pytestmark = pytest.mark.unit
 
 
-def _wire_db(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mockea engine+session: task→project(php-phpunit, composer permitido)→org."""
+def _wire_db(
+    monkeypatch: pytest.MonkeyPatch, *, project_slug: str = "api-ci", org_slug: str = "demo"
+) -> None:
+    """Mockea engine+session: task→project(php-phpunit, composer permitido)→org.
+
+    ``project_slug``/``org_slug`` son configurables (defaults iguales a los reales)
+    para ejercitar la guarda de slug vacío de ADR 0093 sin tocar los tests previos."""
     from workers import tasks
 
     project = SimpleNamespace(
         id=uuid4(),
-        slug="api-ci",
+        slug=project_slug,
         allowed_commands=["composer"],
         default_runtime_template="php-phpunit",
     )
     task = SimpleNamespace(id=uuid4(), project_id=project.id)
-    org = SimpleNamespace(slug="demo")
+    org = SimpleNamespace(slug=org_slug)
 
     class _Res:
         def __init__(self, obj: object) -> None:
@@ -106,6 +111,39 @@ async def test_missing_worktree_returns_actionable_error_without_launch(
     assert result["timed_out"] is False
     # Mensaje accionable: el problema es el workspace, no el worker/proxy.
     assert "worktree" in result["logs"] or "workspace" in result["logs"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("project_slug", "org_slug"), [("", "demo"), ("api-ci", "")])
+async def test_empty_slug_returns_not_resolvable_without_launch(
+    monkeypatch: pytest.MonkeyPatch, project_slug: str, org_slug: str
+) -> None:
+    """ADR 0093 (bug del slug vacío): un project/org con slug '' NO debe resolver un
+    worktree — el path colapsaría (``projects/<tenant>//worktrees/<task>``) apuntando a
+    un workspace ajeno o inexistente. La guarda corta ANTES de tocar Docker/el runtime.
+
+    Regresión: si se elimina la parte de slug de la guarda (tasks.py:541), el flujo
+    continúa, BareRepoLayout colapsa el path y el mensaje cambia → esta aserción falla.
+    """
+    from workers import tasks
+    from workers.config import Settings
+
+    _wire_db(monkeypatch, project_slug=project_slug, org_slug=org_slug)
+    launched: dict = {}
+
+    class _NeverRunner:
+        def __init__(self, settings: object) -> None: ...
+
+        def run_command(self, spec: object, command: str, *, timeout_s: int) -> tuple[int, str]:
+            launched["yes"] = True
+            return 0, "ok"
+
+    monkeypatch.setattr("workers.test_runtime.TestRuntimeRunner", _NeverRunner)
+
+    result = await tasks._run_stack_command(_request(), Settings())
+
+    assert launched == {}  # la guarda cortó antes de lanzar el runtime
+    assert result == {"exit_code": -1, "logs": "project/org not resolvable", "timed_out": False}
 
 
 @pytest.mark.asyncio
