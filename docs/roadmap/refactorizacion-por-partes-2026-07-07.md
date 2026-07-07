@@ -49,17 +49,20 @@ Split en `workers/maintenance/` (9 submódulos: `cleanup`, `review_runtimes`, `m
 Celery. Test de caracterización nuevo (`tests/unit/test_maintenance_package_surface.py`) fija los
 dos contratos. 54 tests (31 unit + 23 integración) verdes sin tocar aserciones.
 
-### P2 — `workers/execution.py`: extraer los clusters puros (bajo riesgo)
+### P2 — `workers/execution.py`: extraer los clusters puros ✅ HECHA
 
-- `workers/run_result.py`: `_parse_line`, `_scan_logs_for_terminal`, `_assemble_result`,
-  `_RuntimeResult`, `_EMPTY_USAGE` (parseo/ensamblado del resultado del contenedor — 100 % puro,
-  entra al gate mypy).
-- `workers/run_spec.py`: `_agent_spec`, `_resolve_tool_spec_images`, `_SDK_BASE_SHELL_COMMANDS`
-  (construcción del AGENT_TASK_SPEC). `_build_runtime_env` usa `mint_agent_token` (api_server) —
-  decidir en la parte si va con exclude o se queda en `execution.py`.
-- `workers.execution` re-exporta TODO lo movido (consumidores: `maintenance`, `memorizer`, tests,
-  scripts demo). `_load_project` + `_persist_guardrail_events` NO se mueven (test los parchea en
-  el mismo módulo); `_provision_worktree` NO se mueve (patch por string en workspace_failfast).
+Extraídos `workers/run_contract.py` (CrossTenantExecutionError + ExecutionRequest/Outcome, el
+contrato de wire), `workers/run_result.py` (`_parse_line`, `_scan_logs_for_terminal`,
+`_assemble_result`, `_RuntimeResult`, `_EMPTY_USAGE`) y `workers/run_spec.py` (`_agent_spec`,
+`_resolve_tool_spec_images`, `_SDK_BASE_SHELL_COMMANDS`). Los tres son puros y **entran al gate
+mypy** (antes nada de esto se type-checkeaba). `execution.py` queda en 1273 líneas y re-exporta
+todo (superficie intacta); `_build_runtime_env` se queda (mintea el token interno, api_server);
+`_load_project`/`_persist_guardrail_events`/`_provision_worktree` no se mueven (lookup sites de
+monkeypatch). 2047 unit + 109 integración verdes.
+
+De paso se arregló un rojo PREEXISTENTE de la rama: 2 tests de `test_run_tools_by_stack.py`
+afirmaban el contrato viejo de `tool_wiring` (raise) que `602a24b` cambió a skip+warning; se
+re-afirmaron al contrato vigente + test nuevo del raise dispatch-side.
 
 ### P3 — `workers/execution.py`: trocear `conduct_execution` (517 L) en fases nombradas
 
@@ -153,7 +156,7 @@ __main__` del agent-runtime y `dispatch/domain/models`.
 | Parte | Alcance                     | Riesgo                 | Estado                   |
 | ----- | --------------------------- | ---------------------- | ------------------------ |
 | P1    | maintenance → paquete       | bajo                   | ✅ hecha (2026-07-07)    |
-| P2    | execution: clusters puros   | bajo                   | pendiente                |
+| P2    | execution: clusters puros   | bajo                   | ✅ hecha (2026-07-07)    |
 | P3    | conduct_execution por fases | alto                   | pendiente                |
 | P4    | dispatch: builder común     | medio                  | pendiente                |
 | P5    | graph: módulos puros        | medio                  | pendiente                |
