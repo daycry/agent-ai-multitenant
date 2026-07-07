@@ -452,6 +452,28 @@ async def delete_task(
         extra_filters=(Task.project_id == project_id,),
         soft_delete_aware=False,
     )
-    # task_dependencies rows CASCADE off the task; no manual cleanup.
+    # HARDDEP: refuse to hard-delete a task other tasks DEPEND ON. task_dependencies
+    # has ON DELETE CASCADE on depends_on_task_id, so deleting a prerequisite would
+    # silently drop the dependents' dependency rows → they'd promote to `ready` as if
+    # the prerequisite had completed (DAG corruption). Force the operator to remove
+    # the edge (or delete the dependents) first. Deleting a leaf is unaffected.
+    dependents = (
+        (
+            await session.execute(
+                select(TaskDependency.task_id).where(TaskDependency.depends_on_task_id == task_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if dependents:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"task is a dependency of {len(dependents)} other task(s); "
+                "remove the dependency or delete them first"
+            ),
+        )
+    # task_dependencies rows (where this task is the dependent) CASCADE off it.
     await session.delete(task)
     await session.flush()
