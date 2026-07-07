@@ -628,6 +628,77 @@ class TaskDispatcher:
                 error=str(exc),
             )
 
+    async def _assemble_run_request(
+        self,
+        session: AsyncSession,
+        *,
+        task: Task,
+        agent: Agent,
+        project: Project | None,
+        model_spec: dict[str, Any],
+    ) -> dict[str, Any]:
+        """El payload COMÚN de un run del worker — implementador Y reviewer (P4).
+
+        Antes cada rama re-derivaba esto por su cuenta (~90 líneas duplicadas) y
+        ya divergieron una vez (H2: el reviewer re-derivaba la cadena de modelo
+        inline). Aquí vive todo lo que ambas derivan IGUAL; el caller añade sus
+        claves específicas (``review``/``review_context`` vs
+        ``prior_review_feedback``/``task_comments``). El ``model_spec`` llega ya
+        resuelto porque el implementador debe validarlo ANTES del claim atómico
+        (C3 F07) — el builder no lo re-resuelve.
+
+        Contratos de emisión (los lee ``ExecutionRequest.from_dict`` /
+        ``_agent_spec``):
+          * ``allowed_tools`` / ``tool_specs`` / ``skill_prompt_fragments``:
+            ``None`` = clave AUSENTE (sin restricción / sin familias nuevas /
+            prompt intacto — 06.15/06.18 backward-compat); una lista vacía SÍ se
+            emite (p.ej. allowlist deny-all).
+          * ``allowed_commands``: SIEMPRE emitida (la columna TEXT[] default
+            ``[]``); lista vacía = shell_exec deny-all (Plan 06.16).
+          * ``default_runtime_template`` / ``mcp_servers``: solo si el proyecto
+            los pinea — "no key" = defaults por-tool / sin sesión MCP.
+        """
+        agent_tool_names = await resolve_agent_tool_names(session, agent.id)
+        allowed_tools = combine_tool_allowlists(agent_tool_names, None)
+        tool_specs = await serialize_agent_tool_specs(session, agent.id)
+        skill_prompt_fragments = await resolve_agent_skill_prompt_fragments(session, agent.id)
+
+        # Per-run budget envelope (prod-06 budget_02): plataforma ← proyecto,
+        # clampado al techo del runtime. `None` = defaults compilados del runtime.
+        platform_budgets = await get_default_execution_budgets(session)
+        budgets = resolve_execution_budgets(
+            platform_default=platform_budgets,
+            project_override=getattr(project, "execution_budgets", None) if project else None,
+        )
+
+        request: dict[str, Any] = {
+            "tenant_id": str(task.tenant_id),
+            "task_id": str(task.id),
+            "agent_id": str(agent.id),
+            "task": {
+                "id": str(task.id),
+                "title": task.title,
+                "description": task.description or "",
+            },
+            "model": model_spec,
+            "budgets": budgets,
+        }
+        if allowed_tools is not None:
+            request["allowed_tools"] = allowed_tools
+        if tool_specs is not None:
+            request["tool_specs"] = tool_specs
+        if skill_prompt_fragments is not None:
+            request["skill_prompt_fragments"] = skill_prompt_fragments
+        project_commands = getattr(project, "allowed_commands", None) if project else None
+        request["allowed_commands"] = [str(c) for c in (project_commands or [])]
+        project_runtime = getattr(project, "default_runtime_template", None) if project else None
+        if project_runtime:
+            request["default_runtime_template"] = str(project_runtime)
+        project_mcp_servers = getattr(project, "mcp_servers", None) if project else None
+        if project_mcp_servers:
+            request["mcp_servers"] = [dict(server) for server in project_mcp_servers]
+        return request
+
     async def _build_review_request(
         self,
         session: AsyncSession,
@@ -646,21 +717,10 @@ class TaskDispatcher:
         execution's output) instead of mutating the task status. Kept separate from
         `_route_ai` to leave the central dispatch path untouched. The ``<test-report>``
         injection is layered in Fase C (task_prod17_test_02)."""
-        agent_tool_names = await resolve_agent_tool_names(session, reviewer.id)
-        allowed_tools = combine_tool_allowlists(agent_tool_names, None)
-        tool_specs = await serialize_agent_tool_specs(session, reviewer.id)
-        skill_prompt_fragments = await resolve_agent_skill_prompt_fragments(session, reviewer.id)
-
         # Hallazgo H2 (refactor 2026-07-07): la MISMA cadena de herencia ADR 0055
         # que el implementador — antes duplicada inline aquí, con riesgo de que un
         # cambio futuro en la cadena solo se aplicara a una de las dos ramas.
         model_spec = await self._resolve_model_spec(session, reviewer, project)
-
-        platform_budgets = await get_default_execution_budgets(session)
-        budgets = resolve_execution_budgets(
-            platform_default=platform_budgets,
-            project_override=getattr(project, "execution_budgets", None),
-        )
 
         # The implementer's most recent output for this task — what the reviewer judges.
         prior_output = (
@@ -693,46 +753,23 @@ class TaskDispatcher:
         )
         test_report = _format_test_report_block(list(reversed(test_outcomes)))
 
-        request: dict[str, Any] = {
-            "tenant_id": str(task.tenant_id),
-            "task_id": str(task.id),
-            "agent_id": str(reviewer.id),
-            # Marks this as a review run — the worker applies the verdict (loop_03)
-            # instead of the normal done/failed task transition (dag_01).
-            "review": True,
-            "task": {
-                "id": str(task.id),
-                "title": task.title,
-                "description": task.description or "",
-            },
-            "review_context": {
-                # F1.6a (auditoría 2026-07-02): el reviewer certifica contra los
-                # acceptance_criteria REALES de la task — antes recibía la
-                # description, mientras el implementador trabajaba contra los
-                # criteria: dos definiciones de "done" distintas en el mismo
-                # ciclo. La description queda solo como fallback sin criteria.
-                "acceptance_criteria": _render_acceptance_criteria(task),
-                "implementer_output": prior_output or "",
-                # `<test-report>` block (prod-17 test_02); "" when no tests ran yet.
-                "test_report": test_report,
-            },
-            "model": model_spec,
-            "budgets": budgets,
+        request = await self._assemble_run_request(
+            session, task=task, agent=reviewer, project=project, model_spec=model_spec
+        )
+        # Marks this as a review run — the worker applies the verdict (loop_03)
+        # instead of the normal done/failed task transition (dag_01).
+        request["review"] = True
+        request["review_context"] = {
+            # F1.6a (auditoría 2026-07-02): el reviewer certifica contra los
+            # acceptance_criteria REALES de la task — antes recibía la
+            # description, mientras el implementador trabajaba contra los
+            # criteria: dos definiciones de "done" distintas en el mismo
+            # ciclo. La description queda solo como fallback sin criteria.
+            "acceptance_criteria": _render_acceptance_criteria(task),
+            "implementer_output": prior_output or "",
+            # `<test-report>` block (prod-17 test_02); "" when no tests ran yet.
+            "test_report": test_report,
         }
-        if allowed_tools is not None:
-            request["allowed_tools"] = allowed_tools
-        if tool_specs is not None:
-            request["tool_specs"] = tool_specs
-        if skill_prompt_fragments is not None:
-            request["skill_prompt_fragments"] = skill_prompt_fragments
-        project_commands = getattr(project, "allowed_commands", None)
-        request["allowed_commands"] = [str(c) for c in (project_commands or [])]
-        project_runtime = getattr(project, "default_runtime_template", None)
-        if project_runtime:
-            request["default_runtime_template"] = str(project_runtime)
-        project_mcp_servers = getattr(project, "mcp_servers", None)
-        if project_mcp_servers:
-            request["mcp_servers"] = [dict(server) for server in project_mcp_servers]
         return request
 
     async def _enqueue_ai_run(self, event: TaskEvent, task_id: UUID, result: _AiDispatch) -> None:
@@ -1059,113 +1096,12 @@ class TaskDispatcher:
             _log.info("orchestrator.dispatch_lost_race", task_id=str(task.id))
             return None
 
-        # Per-agent tool enforcement (Plan 06.15 task_06_15_02). When the
-        # agent has `agent_tools` rows its resolved toolset is restricted to
-        # those tool names; the worker forwards the allowlist into the task
-        # spec and the runtime's ToolRegistry rejects any tool outside it at
-        # call time. No rows → `resolve_agent_tool_names` returns None →
-        # `combine_tool_allowlists` returns None → no `allowed_tools` key is
-        # emitted, preserving the current unrestricted behaviour. The
-        # task-dispatch path carries no chat-mode allowlist (modes apply to
-        # the chat/conversation path), so the per-agent set stands alone
-        # here; `combine_tool_allowlists` intersects with a mode allowlist
-        # when one is present.
-        agent_tool_names = await resolve_agent_tool_names(session, agent.id)
-        allowed_tools = combine_tool_allowlists(agent_tool_names, None)
-
-        # Executable ToolSpec serialisation (Plan 06.18 task_06_18_05). The
-        # allowlist (names) is not enough for the runtime to REGISTER a tool —
-        # it needs the implementation_type + type config. We serialise the
-        # agent's assigned Tool rows so the runtime boot wires the real
-        # executors (file/network/run_*/custom) under canonical names instead
-        # of falling into the silent "unknown tool". `None` when the agent has
-        # no assignments → no `tool_specs` key → the runtime keeps the pre-06.18
-        # echo/noop behaviour (06.15 backward-compat).
-        tool_specs = await serialize_agent_tool_specs(session, agent.id)
-
-        # Skills → inyección de prompt (Plan 06.18 task_06_18_13 / ADR 0050). El
-        # prompt_fragment de las skills asignadas se threadea al spec para que el
-        # runtime lo prependa al system prompt EFECTIVO. `None` cuando el agente
-        # no tiene skills → no se emite la clave → el prompt actual queda intacto
-        # (backward-compat, mismo sentinel que `tool_specs`).
-        skill_prompt_fragments = await resolve_agent_skill_prompt_fragments(session, agent.id)
-
-        # `model_spec` was resolved above (C3 F07) before the atomic claim.
-
-        # Per-run budget envelope (prod-06 task_prod06_budget_02 / workers-10).
-        # Resolve platform-default ← project-override and clamp every key to the
-        # runtime ceiling, so a runaway loop is bounded by an operator-tunable
-        # budget instead of only the agent-runtime's compiled-in defaults. `None`
-        # when nothing overrides → the runtime keeps its own dataclass defaults.
-        platform_budgets = await get_default_execution_budgets(session)
-        budgets = resolve_execution_budgets(
-            platform_default=platform_budgets,
-            project_override=getattr(project, "execution_budgets", None),
+        # Payload común implementador/reviewer (P4) — tools/skills/budgets/base
+        # dict/threading del proyecto. `model_spec` se resolvió ANTES del claim
+        # atómico (C3 F07) y viaja ya validado.
+        request = await self._assemble_run_request(
+            session, task=task, agent=agent, project=project, model_spec=model_spec
         )
-
-        request: dict[str, Any] = {
-            "tenant_id": str(task.tenant_id),
-            "task_id": str(task.id),
-            "agent_id": str(agent.id),
-            "task": {
-                "id": str(task.id),
-                "title": task.title,
-                "description": task.description or "",
-            },
-            # The agent carries its ModelClient spec; the worker
-            # feeds it to the agent-runtime verbatim.
-            "model": model_spec,
-            "budgets": budgets,
-        }
-        # Only emit the key when a restriction applies — `None` means "no
-        # key", which `ExecutionRequest.from_dict` / `_agent_spec` read as
-        # "no restriction". An empty list IS emitted (block every tool).
-        if allowed_tools is not None:
-            request["allowed_tools"] = allowed_tools
-
-        # Serialised executable ToolSpec list (task_06_18_05). Only emit when
-        # the agent has assignments — `None` keeps the key absent so the
-        # runtime boot stays on the pre-06.18 path (no new families wired).
-        if tool_specs is not None:
-            request["tool_specs"] = tool_specs
-
-        # Skill prompt fragments (task_06_18_13). Solo se emite cuando el agente
-        # tiene skills — `None` mantiene la clave ausente para que el runtime no
-        # altere el system prompt (06.15/06.18 backward-compat).
-        if skill_prompt_fragments is not None:
-            request["skill_prompt_fragments"] = skill_prompt_fragments
-
-        # Per-project shell-command allowlist (Plan 06.16 task_06_16_02). Thread
-        # `projects.allowed_commands` into the spec so the runtime can build a
-        # per-project `shell_exec` bound to exactly these program basenames
-        # (deny-by-default). A real project always carries the column (default
-        # `[]`), so the key is always emitted; an empty list registers a
-        # deny-all shell_exec. We coerce to a plain list of strings — the column
-        # is TEXT[] and may surface as a tuple/None depending on the driver.
-        project_commands = getattr(project, "allowed_commands", None) if project else None
-        request["allowed_commands"] = [str(c) for c in (project_commands or [])]
-
-        # Per-project stack runtime (Plan 06.16 task_06_16_03). Thread
-        # `projects.default_runtime_template` into the spec so the runtime's
-        # `run_*` docker_command tools resolve their RuntimeTemplate from the
-        # project stack (a PHP project with `php-phpunit` runs `run_pytest`
-        # there). Only emit the key when the project pinned a stack; NULL keeps
-        # each tool's own default runtime (backward-compatible). `_agent_spec`
-        # reads "no key" as "no override".
-        project_runtime = getattr(project, "default_runtime_template", None) if project else None
-        if project_runtime:
-            request["default_runtime_template"] = str(project_runtime)
-
-        # Per-project MCP servers (Plan 06.18 task_06_18_12 / ADR 0052). Thread
-        # `projects.mcp_servers` into the spec so the runtime opens an MCP
-        # session per declared server and registers its `<server>.<tool>` tools
-        # (which the agent∩mode allowlist then intersects, ADR 0048). Only emit
-        # the key when the project declares servers; an empty/absent list keeps
-        # the key absent so the runtime opens no MCP session (feature-safe — no
-        # behaviour change for projects without MCP).
-        project_mcp_servers = getattr(project, "mcp_servers", None) if project else None
-        if project_mcp_servers:
-            request["mcp_servers"] = [dict(server) for server in project_mcp_servers]
 
         # Inter-run reviewer feedback (A2). If THIS task was rejected by the AI
         # reviewer on a prior pass (in_review → backlog → ready → here), thread the
