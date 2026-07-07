@@ -146,15 +146,25 @@ def test_every_job_declares_a_timeout(workflows: dict[str, dict[str, Any]]) -> N
 
 def test_unit_job_enforces_a_coverage_floor() -> None:
     """The unit-test job must run pytest with `--cov-fail-under` so coverage
-    cannot silently rot (findings tests-5 / quality-6). This pins only that the
-    gate EXISTS — the floor itself is a ratchet raised over time in the workflow
-    and documented in pyproject.toml [tool.coverage]."""
+    cannot silently rot (findings tests-5 / quality-6). Pins that the gate EXISTS
+    AND that its ratchet floor never drops below the measured baseline (M9): the
+    old test only checked the string existed, which let the floor sit frozen at 19
+    for a month ~11 points below reality. The floor is a ratchet raised over time
+    toward conventions.md (70%/80%); this guard makes lowering it a red test."""
+    import re
+
     ci = _load(WORKFLOWS_DIR / "ci.yml")
     job = ci.get("jobs", {}).get("test-unit")
     assert job is not None, "ci.yml has no 'test-unit' job"
     run_blocks = "\n".join(
         step.get("run", "") for step in job.get("steps", []) if isinstance(step, dict)
     )
+    match = re.search(r"--cov-fail-under=(\d+)", run_blocks)
     assert (
-        "--cov-fail-under" in run_blocks
+        match is not None
     ), "the test-unit job must gate coverage with pytest --cov-fail-under=<floor>"
+    # Ratchet floor: measured 30.4% on 2026-07-07 (round-down = 30). Never lower.
+    assert int(match.group(1)) >= 30, (
+        f"coverage ratchet floor {match.group(1)} is below the 30 baseline — "
+        "raise it toward conventions.md (70%/80%), never lower it"
+    )

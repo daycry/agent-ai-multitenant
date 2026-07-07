@@ -211,7 +211,7 @@ jobs:
         # value the unit suite reaches today over these packages; raise over time
         # toward conventions.md (70%/80%). Never lower. See [tool.coverage] in
         # pyproject.toml.
-        run: pytest tests/unit -v --cov=api_server --cov=workers --cov=orchestrator --cov-report=term --cov-fail-under=19
+        run: pytest tests/unit -v --cov=api_server --cov=workers --cov=orchestrator --cov-report=term --cov-fail-under=30
 
       # Static hardening + documentation invariants (Plan prod-02 task_05,
       # findings tests-4). Both suites are static (no stack): tests/security

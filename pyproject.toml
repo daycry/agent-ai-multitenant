@@ -399,12 +399,14 @@ markers = [
 # NOT in the default addopts: only the CI unit-test step turns it on explicitly
 # (--cov=api_server --cov=workers --cov=orchestrator --cov-fail-under=N) so local
 # `pytest` stays fast. The floor is a RATCHET: it starts at the value the unit
-# suite actually reaches today (~21% over those packages — integration tests, not
-# counted here, cover much more) and is raised over time toward the
+# suite actually reaches today over those packages — integration tests, not
+# counted here, cover much more — and is raised over time toward the
 # conventions.md target (70% global / 80% critical domain). Never lower it.
-# Starting floor: 19% (the unit suite's measured line+branch coverage over the
-# three packages is 19.4%; integration/e2e suites cover much more but run in
-# other jobs and are not counted here).
+# Current floor: 30% (measured 2026-07-07: line+branch over the three packages is
+# 30.4% across 2038 unit tests; round-down per the ratchet rule). The 19% baseline
+# from 2026-06-15 sat frozen ~11 points below reality until M9 re-measured it and
+# added a meta-test guard (test_unit_job_enforces_a_coverage_floor asserts >= 30).
+# integration/e2e suites cover much more but run in other jobs and are not counted.
 [tool.coverage.run]
 branch = true
 omit = [
