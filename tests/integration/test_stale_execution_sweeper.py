@@ -175,14 +175,17 @@ async def test_sweep_closes_orphaned_running_rows_whose_container_is_gone(
     conn = await asyncpg.connect(migrations_pg_dsn)
     try:
         # El "stale" pasa a: 30 min de antigüedad (muy por debajo de 7h), SIN
-        # contenedor → huérfano. El "fresh" pasa a: 2h de antigüedad CON
-        # contenedor vivo → run legítimo largo, intocable.
+        # contenedor pero CON container_launched_at (huérfano genuino de
+        # engine-restart: el contenedor existió y se perdió). El "fresh" pasa a:
+        # 2h de antigüedad CON contenedor vivo → run legítimo largo, intocable.
         await conn.execute(
-            "UPDATE executions SET started_at = now() - interval '30 minutes' WHERE id=$1",
+            "UPDATE executions SET started_at = now() - interval '30 minutes',"
+            " container_launched_at = now() - interval '30 minutes' WHERE id=$1",
             ids["exec_stale"],
         )
         await conn.execute(
-            "UPDATE executions SET started_at = now() - interval '2 hours' WHERE id=$1",
+            "UPDATE executions SET started_at = now() - interval '2 hours',"
+            " container_launched_at = now() - interval '2 hours' WHERE id=$1",
             ids["exec_fresh"],
         )
     finally:
@@ -228,9 +231,11 @@ async def test_orphan_sweep_respects_grace_and_daemon_silence(
             "UPDATE executions SET started_at = now() - interval '2 minutes' WHERE id=$1",
             ids["exec_stale"],
         )
-        # 30 min sin contenedor, pero el daemon NO responde en este test.
+        # 30 min, huérfano genuino (container_launched_at puesto), pero el daemon NO
+        # responde en este test → aun así no se barre nada.
         await conn.execute(
-            "UPDATE executions SET started_at = now() - interval '30 minutes' WHERE id=$1",
+            "UPDATE executions SET started_at = now() - interval '30 minutes',"
+            " container_launched_at = now() - interval '30 minutes' WHERE id=$1",
             ids["exec_fresh"],
         )
     finally:
@@ -262,6 +267,52 @@ async def test_orphan_sweep_respects_grace_and_daemon_silence(
         now=datetime.now(UTC),
     )
     assert daemon_down["swept"] == 0
+
+
+@pytest.mark.asyncio
+async def test_orphan_sweep_skips_row_still_provisioning(
+    _migrated: None, workers_settings: object, migrations_pg_dsn: str
+) -> None:
+    """M1: una fila `running` que AÚN NO lanzó contenedor (container_launched_at
+    NULL — pull en frío / checkout git grande / Vault lento) NO es huérfana: no hay
+    contenedor que se haya perdido, solo provisión lenta. Con la gracia fija de 5
+    min el sweep la mataba (y su resultado sano se descartaba al finalizar). Tras el
+    fix queda protegida del reap temprano y solo caería por el umbral de 7 h."""
+    from workers.maintenance import _sweep_stale_executions_async
+
+    ids = await _seed(migrations_pg_dsn)
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        # 30 min de antigüedad (muy por encima de la gracia de 5 min, por debajo de
+        # 7h), container_launched_at = NULL → todavía provisionando.
+        await conn.execute(
+            "UPDATE executions SET started_at = now() - interval '30 minutes',"
+            " container_launched_at = NULL WHERE id=$1",
+            ids["exec_stale"],
+        )
+    finally:
+        await conn.close()
+
+    # Daemon vivo, SIN contenedores (managed_ids=set()): con el código viejo esto la
+    # marcaría huérfana; con el fix, container_launched_at NULL la protege.
+    result = await _sweep_stale_executions_async(
+        workers_settings,  # type: ignore[arg-type]
+        runner=_FakeRunner(managed_ids=set()),
+        stale_after=timedelta(hours=7),
+        now=datetime.now(UTC),
+    )
+
+    engine = create_async_engine(workers_settings.database_url)  # type: ignore[attr-defined]
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessionmaker() as session:
+            provisioning = await session.get(Execution, ids["exec_stale"])
+            task = await session.get(Task, ids["task_stale"])
+        assert provisioning is not None and provisioning.status == "running"
+        assert task is not None and task.status == TaskStatus.IN_PROGRESS.value
+        assert result["swept"] == 0
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

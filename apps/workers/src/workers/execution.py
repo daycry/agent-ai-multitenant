@@ -1527,6 +1527,14 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         active_runner = runner or AgentContainerRunner(settings)
         cancel_seen = False
 
+        # M1: provisioning succeeded and the container is about to be created — stamp
+        # it so the orphan sweeper can tell a lost container (reap after grace) from a
+        # run still provisioning (protect). Short own txn, both implementer & review.
+        async with sessionmaker() as launch_session, launch_session.begin():
+            ex = await get_execution(launch_session, execution_id)
+            if ex is not None and ex.container_launched_at is None:
+                ex.container_launched_at = datetime.now(UTC)
+
         async def _watch_for_cancel() -> None:
             """Poll ``cancel_requested_at`` while the container runs; on an operator
             cancel, kill the container (the LLM-cost source) so ``run_streamed`` exits

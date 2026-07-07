@@ -1162,6 +1162,17 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
+    # When the agent-runtime CONTAINER was created (M1). The row is `running` from
+    # the moment it is inserted — before model resolution (Vault), worktree
+    # provisioning (git) and `docker create`. The orphan sweeper must not reap a run
+    # still provisioning (no container to leak yet): it only treats a row as orphaned
+    # when this is set (a container did exist) and the daemon no longer lists it. A
+    # row still provisioning (NULL) is protected from the early reap and only falls to
+    # the conservative 7 h age backstop. NULL for a run that never launched / predates.
+    container_launched_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
     # Cooperative cancellation (auditoría / task_prod06_cancel_01). The operator's
     # POST /executions/{id}/cancel stamps `cancel_requested_at`; the worker polls it
     # to kill the container and finalises the row as `cancelled`. `celery_task_id` is

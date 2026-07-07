@@ -699,7 +699,15 @@ async def _sweep_stale_executions_async(
                 # Huérfano (2026-07-03): pasada la gracia, sin contenedor en el
                 # daemon → el run no puede terminar jamás; cerrarlo YA en vez de
                 # dejarlo 7 h de zombi vetando el re-despacho de su task.
-                orphaned = alive_ids is not None and str(execution.id) not in alive_ids
+                # M1: SOLO es huérfano si el contenedor llegó a existir
+                # (container_launched_at no NULL). Una fila `running` aún en provisión
+                # (pull en frío / checkout git / Vault lento) no tiene contenedor que se
+                # haya perdido — protegida del reap temprano, cae solo por edad (7 h).
+                orphaned = (
+                    alive_ids is not None
+                    and execution.container_launched_at is not None
+                    and str(execution.id) not in alive_ids
+                )
                 if not (stale_by_age or orphaned):
                     continue
                 # Defensa en profundidad (M2): sella por el primitivo idempotente —
