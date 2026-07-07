@@ -31,7 +31,7 @@ def _wire_db(
 
     ``project_slug``/``org_slug`` son configurables (defaults iguales a los reales)
     para ejercitar la guarda de slug vacío de ADR 0093 sin tocar los tests previos."""
-    from workers import tasks
+    from workers.tasks import stack_exec_task as tasks  # lookup site del split
 
     project = SimpleNamespace(
         id=uuid4(),
@@ -84,8 +84,8 @@ def _request() -> dict:
 async def test_missing_worktree_returns_actionable_error_without_launch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from workers import tasks
     from workers.config import Settings
+    from workers.tasks import stack_exec_task as tasks  # lookup site del split
 
     _wire_db(monkeypatch)
     missing = tmp_path / "nope" / "task"
@@ -125,8 +125,8 @@ async def test_empty_slug_returns_not_resolvable_without_launch(
     Regresión: si se elimina la parte de slug de la guarda (tasks.py:541), el flujo
     continúa, BareRepoLayout colapsa el path y el mensaje cambia → esta aserción falla.
     """
-    from workers import tasks
     from workers.config import Settings
+    from workers.tasks import stack_exec_task as tasks  # lookup site del split
 
     _wire_db(monkeypatch, project_slug=project_slug, org_slug=org_slug)
     launched: dict = {}
@@ -150,8 +150,8 @@ async def test_empty_slug_returns_not_resolvable_without_launch(
 async def test_docker_apierror_is_returned_structured(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from workers import tasks
     from workers.config import Settings
+    from workers.tasks import stack_exec_task as tasks  # lookup site del split
 
     _wire_db(monkeypatch)
     wt = tmp_path / "task"

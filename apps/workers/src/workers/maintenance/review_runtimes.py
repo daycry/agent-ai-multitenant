@@ -115,14 +115,10 @@ def _reap_review_containers(container_ids: list[str]) -> int:
     Runs OUTSIDE any DB transaction (Docker I/O must never hold a txn open)."""
     if not container_ids:
         return 0
-    try:
-        import docker
-    except ImportError:
-        return 0
-    try:
-        client = docker.from_env()
-        client.ping()
-    except Exception:  # docker.errors.DockerException — daemon unavailable
+    from workers.docker_client import get_docker_client
+
+    client = get_docker_client()
+    if client is None:
         return 0
     removed = 0
     for cid in container_ids:

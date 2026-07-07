@@ -1,0 +1,215 @@
+"""stack_exec — el agente pide al worker correr su toolchain (ADR 0093).
+
+El agent-runtime no puede lanzar contenedores (sin socket, principio 2):
+POSTea a /internal/agent/run-stack, que encola esta task. El comando se gatea
+contra el ``allowed_commands`` del proyecto (deny-by-default, ADR 0045) y
+corre en el runtime template del stack sobre el worktree de la tarea (RW),
+con egress proxied a los registries (ADR 0094).
+
+NO usa ``workers.docker_client``: distingue import-fail de daemon-fail en su
+mensaje al agente y necesita ``docker.errors.APIError`` en un ``except``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+from uuid import UUID
+
+import structlog
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from workers.celery_app import app
+from workers.config import Settings, get_settings
+
+_log = structlog.get_logger("workers.tasks")
+
+_STACK_EXEC_DEFAULT_TIMEOUT_S = 600
+
+
+def _stack_command_allowed(command: str, allowed: list[str]) -> str | None:
+    """Deny-by-default gate (ADR 0045), identical to ``shell_exec``: the first
+    token's basename must be in ``allowed``. Returns an error string, or ``None``
+    when the command is allowed. An empty allowlist denies everything."""
+    import shlex
+    from pathlib import Path
+
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        return f"could not parse command: {exc}"
+    if not argv:
+        return "empty command"
+    allowed_set = set(allowed)
+    program = Path(argv[0]).name
+    # Accept either the basename (`php`, `composer`) or the full relative token
+    # (`vendor/bin/phpunit`) — the project commands UI offers both shapes.
+    if program not in allowed_set and argv[0] not in allowed_set:
+        # Make the denial ACTIONABLE so the model self-corrects to a single allowed
+        # command instead of falling back to re-reading files (the read-churn that
+        # blocked "Auditar dependencias"). Keep the "command not allowed:" prefix so
+        # existing log asserts still match (use .startswith).
+        allowed_display = sorted(allowed_set) or ["(none configured)"]
+        hint = ""
+        if program in {"bash", "sh", "zsh", "dash"} or any(
+            op in command for op in ("&&", "||", ";", "|")
+        ):
+            hint = (
+                " stack_exec runs ONE allowed program per call; shell chaining "
+                "(&&, ||, ;, |) is NOT supported — issue each command in a separate call."
+            )
+        return f"command not allowed: {program}.{hint} Allowed: {allowed_display}."
+    return None
+
+
+def _resolve_stack_dep_cache(template: Any, worktree_host_path: str, data_root: str) -> str | None:
+    """Resolve the warm dep-cache host path for a stack command, or None.
+
+    Best-effort (ADR 0045/0093): a missing/cold lock file or cache layout must
+    never block the command — the install just runs cold (and resolves its
+    registries via the proxy, ADR 0094)."""
+    from pathlib import Path
+
+    from shared_test_runtimes.dep_cache import DepCacheManager, compute_lock_hash
+
+    try:
+        lock = compute_lock_hash(Path(worktree_host_path), template.id)
+        if not lock.hash:
+            return None
+        entry = DepCacheManager(Path(data_root) / "dep-cache").mount_for(template, lock.hash)
+        return str(entry.host_path) if entry is not None else None
+    except Exception:  # pragma: no cover - dep-cache is a best-effort optimisation
+        return None
+
+
+@app.task(name="workers.run_stack_command")  # type: ignore[untyped-decorator]
+def run_stack_command(request: dict[str, Any]) -> dict[str, Any]:
+    """Run one stack command for a task in its runtime template (ADR 0093).
+
+    ``request``: ``{tenant_id, task_id, command, timeout_s?}``. Returns
+    ``{exit_code, logs, timed_out}``. The command is gated by the project's
+    ``allowed_commands`` (deny-by-default) BEFORE it runs.
+    """
+    settings = get_settings()
+    return asyncio.run(_run_stack_command(request, settings))
+
+
+# justified: guard-clause style — each early return is a distinct, named
+# failure mode with an actionable message for the agent (F0.3).
+async def _run_stack_command(  # noqa: PLR0911
+    request: dict[str, Any], settings: Settings
+) -> dict[str, Any]:
+    """Async core: resolve task→project (slug/runtime/allowlist) + the existing
+    worktree path, gate the command against the allowlist, run it in the stack
+    runtime over the worktree (RW), return rc+logs."""
+    from pathlib import Path
+
+    from api_server.db.domain import Project, Task
+    from api_server.db.models import Organization
+    from sqlalchemy import select
+
+    tenant_id = UUID(str(request["tenant_id"]))
+    task_id = UUID(str(request["task_id"]))
+    command = str(request.get("command") or "")
+    timeout_s = int(request.get("timeout_s") or _STACK_EXEC_DEFAULT_TIMEOUT_S)
+
+    engine = create_async_engine(settings.database_url)
+    try:
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessionmaker() as session:
+            task = (
+                await session.execute(
+                    select(Task).where(Task.id == task_id, Task.tenant_id == tenant_id)
+                )
+            ).scalar_one_or_none()
+            if task is None:
+                return {"exit_code": -1, "logs": "task not found", "timed_out": False}
+            project = (
+                await session.execute(select(Project).where(Project.id == task.project_id))
+            ).scalar_one_or_none()
+            org = await session.get(Organization, tenant_id)
+            if project is None or org is None or not project.slug or not org.slug:
+                return {"exit_code": -1, "logs": "project/org not resolvable", "timed_out": False}
+            allowed = [str(c) for c in (project.allowed_commands or [])]
+            runtime_id = project.default_runtime_template
+            org_slug, project_slug = org.slug, project.slug
+    finally:
+        await engine.dispose()
+
+    deny = _stack_command_allowed(command, allowed)
+    if deny is not None:
+        return {"exit_code": -1, "logs": deny, "timed_out": False, "allowed": sorted(allowed)}
+
+    try:
+        import docker
+        from workers.git_repos import BareRepoLayout
+        from workers.test_runtime import (
+            RuntimePlan,
+            TestRuntimeRunner,
+            TestRuntimeSpec,
+            resolve_run_runtime,
+        )
+    except ImportError:
+        return {"exit_code": -1, "logs": "docker/runtime libs unavailable", "timed_out": False}
+    try:
+        docker.from_env().ping()
+    except Exception:  # docker.errors.DockerException — daemon unavailable
+        return {"exit_code": -1, "logs": "docker daemon unavailable", "timed_out": False}
+
+    template = resolve_run_runtime(project_default_runtime=runtime_id, tool_default_runtime=None)
+    layout = BareRepoLayout(
+        data_root=Path(settings.data_root), tenant_slug=org_slug, project_slug=project_slug
+    )
+    worktree_host_path = str(layout.worktree_path(str(task_id)))
+    # F0.3 (auditoría 2026-07-02): el bind-source debe existir ANTES de
+    # containers/create. Sin esta guarda, el daemon devolvía 400 «bind source
+    # path does not exist», la task Celery moría y el agente recibía un 502
+    # genérico y engañoso que alimentaba reintentos inútiles.
+    if not Path(worktree_host_path).is_dir():
+        return {
+            "exit_code": -1,
+            "logs": (
+                "workspace no provisionado: el worktree de la tarea no existe en el host "
+                f"({worktree_host_path}). No reintentes stack_exec — la tarea no tiene "
+                "workspace; hay que re-provisionarla (revisa /data/agent-platform)."
+            ),
+            "timed_out": False,
+        }
+    dep_cache_host_path = _resolve_stack_dep_cache(template, worktree_host_path, settings.data_root)
+
+    spec = TestRuntimeSpec(
+        plan=RuntimePlan(template=template, checks=()),
+        worktree_host_path=worktree_host_path,
+        dep_cache_host_path=dep_cache_host_path,
+        # ADR 0094: stack_exec IS the install (composer install / npm ci / …) —
+        # it needs proxied egress to the registries for the whole command.
+        dep_egress=True,
+    )
+    # Audit: a stack_exec launch with registry egress (prod-12 requirement).
+    _log.info(
+        "stack_exec_egress",
+        tenant_id=str(tenant_id),
+        task_id=str(task_id),
+        runtime=template.id,
+        command=command[:120],
+    )
+    runner = TestRuntimeRunner(settings)
+    try:
+        rc, logs = await asyncio.to_thread(runner.run_command, spec, command, timeout_s=timeout_s)
+    except docker.errors.APIError as exc:
+        # F0.3: un fallo del daemon al crear/lanzar el runtime NO debe matar la
+        # task Celery (el agente veía un 502 «failed to reach the worker» cuando
+        # el worker SÍ respondió). Se devuelve estructurado y accionable.
+        detail = exc.explanation or str(exc)
+        _log.warning(
+            "stack_exec_docker_error",
+            tenant_id=str(tenant_id),
+            task_id=str(task_id),
+            error=str(detail)[:300],
+        )
+        return {
+            "exit_code": -1,
+            "logs": f"docker API error al lanzar el runtime del stack: {detail}",
+            "timed_out": False,
+        }
+    return {"exit_code": rc, "logs": logs[-8000:], "timed_out": rc == 124}

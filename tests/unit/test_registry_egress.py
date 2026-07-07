@@ -101,8 +101,8 @@ def test_cache_env_values_target_the_dep_cache_mount() -> None:
 
 @pytest.mark.asyncio
 async def test_acceptance_launch_requests_dep_egress(monkeypatch: pytest.MonkeyPatch) -> None:
-    from workers import tasks
     from workers.config import Settings
+    from workers.tasks import test_runtime_task as tasks  # lookup site del split
 
     captured: dict = {}
     monkeypatch.setattr("workers.test_runtime.TestRuntimeRunner", _result_capture(captured))
@@ -129,8 +129,8 @@ async def test_acceptance_launch_requests_dep_egress(monkeypatch: pytest.MonkeyP
 async def test_stack_exec_requests_dep_egress(
     monkeypatch: pytest.MonkeyPatch, tmp_path: object
 ) -> None:
-    from workers import tasks
     from workers.config import Settings
+    from workers.tasks import stack_exec_task as tasks  # lookup site del split
 
     tenant_id, task_id = uuid4(), uuid4()
     project = SimpleNamespace(

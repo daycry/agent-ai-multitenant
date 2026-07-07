@@ -70,7 +70,9 @@ async def test_release_is_token_guarded() -> None:
 # --- Integración ligera: _run_execution SALTA si el lock ya está tomado (A6).
 @pytest.mark.asyncio
 async def test_run_execution_skips_when_lock_held(monkeypatch: pytest.MonkeyPatch) -> None:
-    import workers.tasks as tasks_mod
+    # El ciclo del run vive en el submódulo run_cycle (split 2026-07-08):
+    # se parchea AHÍ (el lookup site real), no en la façade del paquete.
+    import workers.tasks.run_cycle as tasks_mod
     from workers.run_lock import run_lock_key
 
     task_id = "11111111-1111-1111-1111-111111111111"
