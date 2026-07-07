@@ -193,9 +193,13 @@ async def test_core_isolates_a_failing_pass(monkeypatch: pytest.MonkeyPatch) -> 
     async def ok_plans(*_a: Any, **_k: Any) -> int:
         return 1
 
+    async def ok_worktrees(*_a: Any, **_k: Any) -> int:
+        return 2
+
     monkeypatch.setattr(m, "_reconcile_stuck_tasks", ok_stuck)
     monkeypatch.setattr(m, "_reconcile_orphan_reviews", boom_reviews)
     monkeypatch.setattr(m, "_reconcile_complete_plans", ok_plans)
+    monkeypatch.setattr(m, "_reconcile_unpushed_worktrees", ok_worktrees)
 
     class _FakeRedis:
         async def aclose(self) -> None:  # pragma: no cover - injected, never closed here
@@ -206,4 +210,9 @@ async def test_core_isolates_a_failing_pass(monkeypatch: pytest.MonkeyPatch) -> 
     # Engine is built from the (unused) default URL but never connected — the passes
     # are stubbed — so this stays pure (no DB / no Redis).
     result = await m._reconcile_pipeline_state_async(Settings(), redis=_FakeRedis())
-    assert result == {"stuck_tasks": 3, "orphan_reviews": 0, "completed_plans": 1}
+    assert result == {
+        "stuck_tasks": 3,
+        "orphan_reviews": 0,
+        "completed_plans": 1,
+        "pushed_worktrees": 2,
+    }

@@ -177,7 +177,12 @@ async def test_reconcile_pipeline_state(
         review_min_age=timedelta(minutes=5),
     )
 
-    assert result == {"stuck_tasks": 1, "orphan_reviews": 1, "completed_plans": 1}
+    assert result == {
+        "stuck_tasks": 1,
+        "orphan_reviews": 1,
+        "completed_plans": 1,
+        "pushed_worktrees": 0,
+    }
 
     engine = create_async_engine(workers_settings.database_url)  # type: ignore[attr-defined]
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
