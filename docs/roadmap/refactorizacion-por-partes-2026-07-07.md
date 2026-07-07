@@ -1,7 +1,8 @@
 ---
 title: Refactorización por partes del pipeline de runs (+revisión de prompts de sistema)
 date: 2026-07-07
-status: in_progress
+status: completed
+completed_at: 2026-07-08
 owner: operador (jmano)
 branch: plan/runs-visor-trabajo
 ---
@@ -64,36 +65,33 @@ De paso se arregló un rojo PREEXISTENTE de la rama: 2 tests de `test_run_tools_
 afirmaban el contrato viejo de `tool_wiring` (raise) que `602a24b` cambió a skip+warning; se
 re-afirmaron al contrato vigente + test nuevo del raise dispatch-side.
 
-### P3 — `workers/execution.py`: trocear `conduct_execution` (517 L) en fases nombradas
+### P3 — `workers/execution.py`: trocear `conduct_execution` en fases nombradas ✅ HECHA
 
-Extraer métodos/funciones por fase (provisión → lanzamiento → streaming → finalize →
-post-proceso: commit/tests/budgets/memorize) manteniendo `conduct_execution` como orquestador
-fino. La suite de integración existente es la red; añadir tests de fase solo donde falte
-cobertura. Es la parte más delicada — hacerla sola, sin mezclar con P2.
+(2026-07-08, 1535ab5) La god-function de 518 líneas es un orquestador fino de 5 fases en el
+MISMO módulo (los monkeypatch por string siguen resolviendo): `_prepare_run` (txn inicial) →
+`_provision_workspace` (git fuera de txn) → `_launch_and_stream` (docker+Redis+cancel) →
+`_finalize_and_transition` (txn atómica P0.5) → `_implementer_post_process` (commit/tests +
+publicación diferida prod-18). Dataclasses `_PreparedRun`/`_Workspace` como salida de fase;
+fail-fasts y guarda F12 en el orquestador. 2050 unit + 72 integración verdes sin tocar aserciones.
 
 ### P4 — `orchestrator/dispatch.py`: builder común del payload implementador/reviewer
 
-**Quick win HECHO (2026-07-08, cb96ad0):** la rama reviewer ya llama a `_resolve_model_spec` en
-vez de duplicar la cadena inline, con test de caracterización de la herencia
-(`test_ai_reviewer_inherits_model_through_the_chain`). **Pendiente** el constructor compartido
-para el resto de la duplicación (budgets, dict base, claves opcionales, threading de proyecto).
-Los tests de integración no parchean internos → seguro mientras se preserven `TaskDispatcher(...)`,
-`.handle()`, nombres de tarea y shape del request. Los alias re-importados por unit tests
-(`_COMPOSE_REVIEW_RUNTIME_TASK`, `_REVIEW_QUEUE`, `_DISPATCH_EVENT_TASK`,
-`publish_task_status_changed`) deben seguir en `dispatch`.
+✅ **HECHA** en dos tramos: quick win H2 (2026-07-08, cb96ad0 — la rama reviewer llama a
+`_resolve_model_spec`, con test de caracterización de la herencia) y el builder común
+(2026-07-08, 944997f — `_assemble_run_request` concentra tools/skills/budgets/dict
+base/claves opcionales/threading de proyecto; cada rama añade solo sus claves específicas).
+El `model_spec` llega al builder ya resuelto (el implementador lo valida ANTES del claim
+atómico — C3 F07). 114 tests de dispatch verdes sin tocar aserciones.
 
-### P5 — agent-runtime `graph.py`: extraer módulos puros
+### P5 — agent-runtime `graph.py`: extraer módulos puros ✅ HECHA
 
-- `tool_classification.py`: `_RESEARCH_TOOLS`/`_PRODUCING_TOOLS`/`_READONLY_TOOLS`,
-  `_base_tool_name`, `_read_target`, predicados, `_is_platform_error`.
-- `nudges.py`: los 5 nudges + `_research_exhausted` + umbrales.
-- `review_harvest.py`: `_workspace_root`, `_harvest_worktree_files`, `_referenced_paths`,
-  `_deliverable_summary`.
-- `graph.py` re-exporta (los tests del runtime importan `_AgentLoop`, `_loop_trip_outcome`,
-  umbrales y nudges directamente). El estado mutable por-run de `_AgentLoop` (read_targets,
-  has_produced, safeguard_stats…) NO se toca en esta parte.
-- Requiere rebuild de la imagen agent-runtime para desplegar (receta WITH_CLAUDE=1) — solo
-  cuando el operador abra ventana.
+(2026-07-08, bf68379) Extraídos `tool_classification.py` (clasificación research/producing/
+read-only + `_is_platform_error`), `nudges.py` (5 nudges + `_research_exhausted` + umbrales) y
+`review_harvest.py` (harvest acotado + `_referenced_paths`). `graph.py` 1639→1242 líneas, queda
+con el bucle (`_AgentLoop` + nodos + wiring) y re-exporta lo movido (los tests siguen importando
+de graph). El estado mutable por-run de `_AgentLoop` NO se tocó (deuda H6). Composición
+byte-idéntica de los textos. 244 tests del runtime verdes. Requiere rebuild de la imagen
+agent-runtime al desplegar (receta WITH_CLAUDE=1).
 
 ### P6 — agent-runtime `providers.py`: consolidar `decide()`/`review()` ✅ HECHA
 
@@ -164,9 +162,9 @@ fusión de los dos canales de veredicto como decisión aparte.
 | ----- | --------------------------- | ---------------------- | ------------------------ |
 | P1    | maintenance → paquete       | bajo                   | ✅ hecha (2026-07-07)    |
 | P2    | execution: clusters puros   | bajo                   | ✅ hecha (2026-07-07)    |
-| P3    | conduct_execution por fases | alto                   | pendiente                |
-| P4    | dispatch: builder común     | medio                  | ◐ quick win hecho (H2)   |
-| P5    | graph: módulos puros        | medio                  | pendiente                |
+| P3    | conduct_execution por fases | alto                   | ✅ hecha (2026-07-08)    |
+| P4    | dispatch: builder común     | medio                  | ✅ hecha (2026-07-08)    |
+| P5    | graph: módulos puros        | medio                  | ✅ hecha (2026-07-08)    |
 | P6    | providers: decide/review    | medio                  | ✅ hecha (2026-07-08)    |
 | P7    | prompts: verdict + fencing  | medio (cambia prompts) | ✅ hecha (2026-07-08)    |
 | P8    | domain vs models            | —                      | no abordar (documentado) |
