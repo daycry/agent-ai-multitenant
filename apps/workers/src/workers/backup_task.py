@@ -20,6 +20,7 @@ System Admin can write.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -115,6 +116,19 @@ async def _run_daily_backup(settings: Settings) -> dict[str, Any]:
     # backup for alerting purposes — it must not advance the success clock.
     _emit_backup_metric(run_settings, success=valid)
 
+    # Offsite upload (task_prod_04_12): ship ONLY a VERIFIED bundle to the
+    # configured remote destinations, so a corrupt local bundle never becomes the
+    # offsite copy. Best-effort: a destination failure is captured, never raised,
+    # so the daily beat still succeeds locally.
+    uploaded: list[str] = []
+    upload_failures: list[str] = []
+    if valid:
+        try:
+            destinations = await _read_backup_destinations(settings)
+            uploaded, upload_failures = await _upload_bundle_to_destinations(result, destinations)
+        except Exception as exc:  # pragma: no cover — defensive: beat must not die
+            _log.warning("backup.upload.error", error=str(exc))
+
     return {
         "enabled": True,
         "ok": True,
@@ -125,7 +139,85 @@ async def _run_daily_backup(settings: Settings) -> dict[str, Any]:
         "bundle_dir": str(result.bundle_dir),
         "artifacts": len(result.artifacts),
         "pruned": len(result.pruned),
+        "uploaded": uploaded,
+        "upload_failures": upload_failures,
     }
+
+
+async def _read_backup_destinations(settings: Settings) -> list[dict[str, Any]]:
+    """The operator's configured remote destinations (NON-secret config only).
+
+    Platform-global (the backup is a full logical dump across every tenant); read
+    from the same ``backup_destinations`` platform setting the admin panel writes."""
+    from api_server.db.platform_settings import get_backup_destinations
+
+    engine = create_async_engine(settings.database_url)
+    try:
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessionmaker() as db:
+            dests: list[dict[str, Any]] = list(await get_backup_destinations(db))
+            return dests
+    finally:
+        await engine.dispose()
+
+
+async def _upload_bundle_to_destinations(
+    result: Any, destinations: list[dict[str, Any]]
+) -> tuple[list[str], list[str]]:
+    """Pack the verified bundle into a single ``<backup_id>.tar`` and upload it to
+    every ENABLED destination. Best-effort per destination (task_prod_04_12).
+
+    Returns ``(uploaded_names, failed_names)``. A destination that raises is logged
+    (never the credential or the blob) and recorded in ``failed_names`` — the run
+    does not fail. The single-file ``.tar`` name matches ``_strip_bundle_suffix`` so
+    the restore listing dedupes by backup_id. Credentials resolve lazily through the
+    workers' ``EnvSecretsProvider`` (Vault/env seam); each adapter has its own
+    ``timeout_s``, so a hung upload can't block the beat forever."""
+    enabled = [d for d in destinations if d.get("enabled", True)]
+    if not enabled:
+        return [], []
+
+    import tempfile
+
+    from workers.backup import SubprocessRunner
+    from workers.backup_destinations import build_destination
+    from workers.backup_encryption import EnvSecretsProvider
+
+    bundle_dir = Path(result.bundle_dir)
+    backup_root = bundle_dir.parent
+    runner = SubprocessRunner()
+    secrets = EnvSecretsProvider()
+    uploaded: list[str] = []
+    failed: list[str] = []
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tar_path = Path(tmp) / f"{result.backup_id}.tar"
+        # Pack the bundle dir (relative to backup_root, so the archive holds
+        # <backup_id>/...) — explicit argv, no shell.
+        runner.run(
+            [
+                "tar",
+                "--create",
+                f"--directory={backup_root}",
+                f"--file={tar_path}",
+                str(result.backup_id),
+            ]
+        )
+        for dest in enabled:
+            name = str(dest.get("name") or dest.get("type") or "?")
+            try:
+                adapter = build_destination(
+                    {"type": dest.get("type"), "name": name, **(dest.get("config") or {})},
+                    secrets=secrets,
+                    runner=runner,
+                )
+                adapter.upload(tar_path)
+                uploaded.append(name)
+                _log.info("backup.dest.uploaded", destination=name)
+            except Exception as exc:
+                failed.append(name)
+                _log.warning("backup.dest.upload_failed", destination=name, error=str(exc))
+    return uploaded, failed
 
 
 def _verify_after_backup(settings: Settings, bundle_dir: Any) -> bool:
