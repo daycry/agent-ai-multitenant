@@ -15,11 +15,13 @@ from typing import Any
 import pytest
 from workers.maintenance import (
     _orphan_review_needs_reannounce,
+    _orphan_review_should_escalate,
     _stuck_task_needs_reconcile,
 )
 
 _NOW = datetime(2026, 6, 27, 12, 0, tzinfo=UTC)
 _MIN_AGE = timedelta(minutes=5)
+_MAX_STUCK = timedelta(hours=1)
 
 
 # --------------------------------------------------------------------------- case (a)
@@ -78,6 +80,32 @@ def test_orphan_review_reannounces_when_no_execution_at_all() -> None:
             min_age=_MIN_AGE,
         )
         is True
+    )
+
+
+# --------------------------------------------------------------------------- M5 cap
+# El reconciler tiene su PROPIO cap de escalado, independiente del cap D3 (ADR 0095)
+# que solo avanza cuando una ejecución de review llega a _apply_review_verdict. Con
+# el broker caído (no se despacha) o el worker de review SIGKILL-eado (la barre el
+# sweeper, que NO toca retry_count de una tarea in_review) el cap D3 nunca avanza y la
+# tarea re-anuncia review para siempre. Este cap corta por edad de Task.updated_at.
+
+
+def test_orphan_review_escalates_when_stuck_past_cap() -> None:
+    """Una tarea in_review sin progreso real más allá del cap → escalar (blocked)."""
+    updated = _NOW - timedelta(hours=2)
+    assert (
+        _orphan_review_should_escalate(task_updated_at=updated, now=_NOW, max_stuck=_MAX_STUCK)
+        is True
+    )
+
+
+def test_orphan_review_does_not_escalate_when_recent() -> None:
+    """Por debajo del cap se sigue re-anunciando, no se escala."""
+    updated = _NOW - timedelta(minutes=10)
+    assert (
+        _orphan_review_should_escalate(task_updated_at=updated, now=_NOW, max_stuck=_MAX_STUCK)
+        is False
     )
 
 

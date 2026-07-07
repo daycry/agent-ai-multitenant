@@ -912,6 +912,14 @@ _RECONCILE_STUCK_TASK_MIN_AGE = timedelta(minutes=5)
 # review run before we re-announce it — avoids double-dispatching a review whose
 # `in_review` event the orchestrator is still processing.
 _RECONCILE_REVIEW_MIN_AGE = timedelta(minutes=5)
+# The reconciler's OWN escalation cap (M5), independent of the ADR 0095-D3 cap that
+# only advances when a review execution reaches `_apply_review_verdict`. Two real
+# paths leave D3 stuck forever: the Celery broker down (no dispatch → no execution →
+# retry_count untouched) and a review worker SIGKILL/OOM (the zombie sweeper closes
+# the run but `transition_task_after_run` no-ops on an `in_review` task, so
+# retry_count never bumps). Past this age with no live/recent review run, the task
+# is escalated to a human (`blocked`) instead of re-announcing indefinitely.
+_RECONCILE_REVIEW_MAX_STUCK = timedelta(hours=1)
 
 # Execution statuses that mean the run is OVER — the owning task must no longer be
 # `in_progress`. Literal mirror of the terminal ``ExecutionStatus`` members, kept as
@@ -961,6 +969,22 @@ def _orphan_review_needs_reannounce(
     if not reviewer_is_ai or has_running_execution:
         return False
     return latest_completed_at is None or latest_completed_at <= now - min_age
+
+
+def _orphan_review_should_escalate(
+    *,
+    task_updated_at: datetime,
+    now: datetime,
+    max_stuck: timedelta,
+) -> bool:
+    """True when an `in_review` task has sat stuck past the reconciler's own cap (M5).
+
+    Pure decision — no DB. ``Task.updated_at`` (``onupdate=func.now()``, untouched by a
+    re-announce) tells how long the task has been degenerate without real progress.
+    Past ``max_stuck`` the reconciler escalates to a human (``blocked``) rather than
+    re-announcing the lost review forever — this is the cap the ADR 0095-D3 verdict
+    path can't reach when the broker is down or a review worker was SIGKILL-ed."""
+    return task_updated_at <= now - max_stuck
 
 
 async def _reconcile_stuck_tasks(
@@ -1036,15 +1060,23 @@ async def _reconcile_orphan_reviews(
     *,
     now: datetime,
     min_age: timedelta,
+    max_stuck: timedelta = _RECONCILE_REVIEW_MAX_STUCK,
 ) -> int:
-    """Case (b): re-announce `in_review` for AI-reviewed tasks whose review is lost.
+    """Case (b): re-announce `in_review` for AI-reviewed tasks whose review is lost,
+    OR escalate to a human when it has been stuck too long (M5 cap).
 
     An `in_review` task with an AI ``reviewer_agent_id``, no `running` execution and
     no recently-finished run had its review dispatch lost (the `in_review` event
     never reached the orchestrator). Re-publishing ``task.status_changed`` with
     ``new_status=in_review`` makes ``orchestrator._on_task_in_review`` re-dispatch the
     review. Best-effort and idempotent — the orchestrator re-checks live state and
-    no-ops on a stale re-announce. Returns how many tasks were re-announced."""
+    no-ops on a stale re-announce.
+
+    But re-announcing forever is a loop when nothing will ever advance the ADR
+    0095-D3 verdict cap (broker down / review worker SIGKILL-ed). So past
+    ``max_stuck`` (measured on ``Task.updated_at``) we escalate to ``blocked`` with an
+    audit event instead of re-announcing — the reconciler's own, verdict-independent
+    cap. Returns how many tasks were re-announced OR escalated."""
     from api_server.db.domain import (
         Agent,
         AgentType,
@@ -1053,7 +1085,9 @@ async def _reconcile_orphan_reviews(
         Task,
         TaskStatus,
     )
+    from api_server.db.task_audit_repo import append_audit_event
     from api_server.events import publish_task_status_changed
+    from api_server.task_state_machine import transition_task_status
     from sqlalchemy import func, select
 
     cutoff = now - min_age
@@ -1066,6 +1100,7 @@ async def _reconcile_orphan_reviews(
                         Task.tenant_id,
                         Task.project_id,
                         Task.reviewer_agent_id,
+                        Task.updated_at,
                     ).where(
                         Task.status == TaskStatus.IN_REVIEW.value,
                         Task.reviewer_agent_id.isnot(None),
@@ -1105,6 +1140,39 @@ async def _reconcile_orphan_reviews(
             now=now,
             min_age=min_age,
         ):
+            continue
+        # M5 cap: stuck past the ceiling with no live/recent review → escalate to a
+        # human instead of re-announcing forever (the D3 verdict cap never fires here).
+        if _orphan_review_should_escalate(
+            task_updated_at=row.updated_at, now=now, max_stuck=max_stuck
+        ):
+            async with sessionmaker() as db, db.begin():
+                task = await db.get(Task, row.id)
+                # Idempotency: only escalate if still in_review (the live path may
+                # have moved it since the candidate SELECT).
+                if task is None or task.status != TaskStatus.IN_REVIEW.value:
+                    continue
+                transition_task_status(task, TaskStatus.BLOCKED.value)
+                await append_audit_event(
+                    db,
+                    tenant_id=row.tenant_id,
+                    task_id=row.id,
+                    kind="review_comment",
+                    actor="reconciler",
+                    payload={"escalated": True, "reason": "review_stuck_reconcile_cap"},
+                )
+            task_ref = Task(id=row.id, tenant_id=row.tenant_id, project_id=row.project_id)
+            await publish_task_status_changed(
+                redis,
+                task_ref,
+                old_status=TaskStatus.IN_REVIEW.value,
+                new_status=TaskStatus.BLOCKED.value,
+            )
+            _log.warning(
+                "maintenance.reconcile_pipeline_state.review_escalated_stuck",
+                task_id=str(row.id),
+            )
+            reannounced += 1
             continue
         # A transient Task is just the value carrier the publisher reads
         # (id/tenant/project) — same pattern the dispatcher uses.

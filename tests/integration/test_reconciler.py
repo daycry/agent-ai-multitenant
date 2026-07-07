@@ -292,3 +292,99 @@ async def test_reconciler_escalates_plan_stuck_behind_blocked_dependency(
         assert plan is not None and plan.status == "blocked"
     finally:
         await engine.dispose()
+
+
+async def _seed_stuck_review(dsn: str) -> dict[str, UUID]:
+    """Una tarea in_review con reviewer IA, sin ejecución, updated_at hace 2 h
+    (más allá del cap de 1 h del reconciler). El cap D3 nunca avanzaría (no hay
+    ejecución de review) → el reconciler debe escalar a blocked (M5)."""
+    ids = {"tenant": uuid4(), "project": uuid4(), "reviewer": uuid4(), "task": uuid4()}
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "TRUNCATE task_audit_events, executions, tasks, plans, agents, projects,"
+            " organizations RESTART IDENTITY CASCADE"
+        )
+        await conn.execute(
+            "INSERT INTO organizations (id, name, slug) VALUES ($1, 'T m5', 't-m5-review')",
+            ids["tenant"],
+        )
+        await conn.execute(
+            "INSERT INTO projects (id, tenant_id, name, status, is_template)"
+            " VALUES ($1, $2, 'P', 'active', false)",
+            ids["project"],
+            ids["tenant"],
+        )
+        await conn.execute(
+            "INSERT INTO agents"
+            " (id, tenant_id, project_id, name, agent_type, scope, role, system_prompt)"
+            " VALUES ($1, $2, $3, 'Rev', 'ai', 'project_local', 'reviewer', 'You review.')",
+            ids["reviewer"],
+            ids["tenant"],
+            ids["project"],
+        )
+        await conn.execute(
+            "INSERT INTO tasks (id, tenant_id, project_id, title, status, priority,"
+            " reviewer_agent_id, updated_at) VALUES ($1, $2, $3, 'rev', 'in_review',"
+            " 'medium', $4, now() - interval '2 hours')",
+            ids["task"],
+            ids["tenant"],
+            ids["project"],
+            ids["reviewer"],
+        )
+        return ids
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_reconciler_escalates_review_stuck_past_cap(
+    _migrated: None, workers_settings: object, migrations_pg_dsn: str
+) -> None:
+    """M5: una review huérfana atascada más allá del cap del reconciler (1 h) NO se
+    re-anuncia para siempre — se escala a blocked con evento de auditoría, y el
+    task.status_changed publicado lleva new_status=blocked (no in_review)."""
+    from api_server.db.models import TaskAuditEvent
+    from sqlalchemy import select
+    from workers.maintenance import _reconcile_orphan_reviews
+
+    ids = await _seed_stuck_review(migrations_pg_dsn)
+    redis = _FakeRedis()
+    engine = create_async_engine(workers_settings.database_url)  # type: ignore[attr-defined]
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        escalated = await _reconcile_orphan_reviews(
+            sessionmaker,
+            redis,
+            now=datetime.now(UTC),
+            min_age=timedelta(minutes=5),
+            max_stuck=timedelta(hours=1),
+        )
+        assert escalated == 1
+
+        async with sessionmaker() as session:
+            task = await session.get(Task, ids["task"])
+            events = list(
+                (
+                    await session.execute(
+                        select(TaskAuditEvent).where(TaskAuditEvent.task_id == ids["task"])
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert task is not None and task.status == TaskStatus.BLOCKED.value
+        # Evento de auditoría del escalado del reconciler.
+        assert any(
+            e.actor == "reconciler" and e.payload.get("reason") == "review_stuck_reconcile_cap"
+            for e in events
+        )
+        # El evento publicado es in_review→blocked, no un re-anuncio.
+        new_statuses = [
+            json.loads(e["payload"]).get("new_status")
+            for e in redis.events
+            if e.get("type") == "task.status_changed"
+        ]
+        assert new_statuses == [TaskStatus.BLOCKED.value]
+    finally:
+        await engine.dispose()
