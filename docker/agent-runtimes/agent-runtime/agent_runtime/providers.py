@@ -790,7 +790,23 @@ def _run_with_retry(
 # Shared adapter — a `ModelClient` over any `LLMProvider`
 # ---------------------------------------------------------------------------
 class _ProviderModelClient:
-    """Adapter from `LLMProvider` (async) to `ModelClient` (sync)."""
+    """Adapter from `LLMProvider` (async) to `ModelClient` (sync).
+
+    Consolidación H4 (refactor 2026-07-07): ``decide()``/``review()`` viven aquí
+    UNA vez para las dos jerarquías (antes ``ClaudeSDKModelClient`` duplicaba los
+    cuerpos). Dos flags de clase parametrizan la única diferencia real de
+    protocolo:
+
+      * ``_advertises_submit_result`` — ADR 0087: los HTTP anuncian
+        ``submit_result`` junto a las tools del agente para cerrar con outcome
+        estructurado. claude_sdk NO: un tool call ahí fuerza ``content=""`` y
+        pierde la prosa (su FINISH es prosa + tag ``<finish>``).
+      * ``_forces_verdict_choice`` — F34: los HTTP fuerzan el verdict con
+        ``tool_choice``; el camino CLI del SDK no lo soporta (misma razón).
+    """
+
+    _advertises_submit_result: bool = True
+    _forces_verdict_choice: bool = True
 
     def __init__(
         self,
@@ -809,10 +825,13 @@ class _ProviderModelClient:
 
     def decide(self, state: dict[str, Any]) -> ModelResponse:
         # ADR 0087: advertise `submit_result` ALONGSIDE the agent's tools so the
-        # HTTP model finishes with a structured outcome. claude_sdk does NOT do
-        # this (see ClaudeSDKModelClient.decide) — a tool call there forces
-        # content="" and would drop the rich prose deliverable.
-        tools = [*(self._tools or []), _SUBMIT_RESULT_TOOL]
+        # model finishes with a structured outcome (HTTP only — see the class
+        # docstring for why claude_sdk keeps its raw tool list, possibly None).
+        tools = (
+            [*(self._tools or []), _SUBMIT_RESULT_TOOL]
+            if self._advertises_submit_result
+            else self._tools
+        )
         resp = _run_with_retry(
             lambda: self.provider.complete(
                 _decide_messages(state),
@@ -826,13 +845,15 @@ class _ProviderModelClient:
     def review(self, state: dict[str, Any]) -> ReviewResponse:
         # F34: force `submit_verdict` (tool_choice) so HTTP backends return the
         # verdict structured; the prose net in `_review_from` is only a fallback.
+        kwargs: dict[str, Any] = dict(self._extra_call_kwargs)
+        if self._forces_verdict_choice:
+            kwargs["tool_choice"] = _SUBMIT_VERDICT_TOOL_CHOICE
         resp = _run_with_retry(
             lambda: self.provider.complete(
                 _review_messages(state),
                 model=self.model,
                 tools=[_SUBMIT_VERDICT_TOOL],  # ADR 0086: verdict as a tool call
-                tool_choice=_SUBMIT_VERDICT_TOOL_CHOICE,
-                **self._extra_call_kwargs,
+                **kwargs,
             )
         )
         return _review_from(resp, model=self.model)
@@ -929,7 +950,7 @@ class OllamaModelClient(_ProviderModelClient):
 SdkQuery = Callable[..., AsyncIterator[Any]]
 
 
-class ClaudeSDKModelClient:
+class ClaudeSDKModelClient(_ProviderModelClient):
     """The Claude Agent SDK as a single-decision `ModelClient`.
 
     Wraps `shared_llm.providers.ClaudeAgentProvider`. That provider's
@@ -939,7 +960,15 @@ class ClaudeSDKModelClient:
     `can_use_tool`). So claude_sdk reaches ACT exactly like the
     OpenAI-compatible providers — provider-agnostic parity — and the LangGraph
     loop drives the multi-turn tool use (ADR 0018).
+
+    H4: hereda ``decide()``/``review()`` de la base (F25/F30: mismo guard de
+    timeout+retry). Los flags desactivan lo que el camino CLI no tolera — un
+    ``submit_result`` anunciado / un ``tool_choice`` forzado dejan ``content=""``
+    y pierden la prosa; el FINISH del SDK es prosa + tag ``<finish>``.
     """
+
+    _advertises_submit_result = False
+    _forces_verdict_choice = False
 
     def __init__(
         self,
@@ -952,47 +981,24 @@ class ClaudeSDKModelClient:
         max_turns: int = 1,
         reasoning_effort: str | None = None,
     ) -> None:
-        self.model = model
-        self._tools = tools
         self._max_turns = max_turns
         # ADR 0070: el SDK de Claude usa `effort` (low/medium/high/xhigh/max).
-        # `off`/vacío → None (sin extended thinking forzado).
+        # `off`/vacío → None (sin extended thinking forzado). Viaja en CADA
+        # llamada (decide y review) vía extra_call_kwargs, como antes.
         self._effort = reasoning_call_kwargs("claude_sdk", reasoning_effort).get("effort")
         # Feed the resolved credential to the SDK: api_key → ANTHROPIC_API_KEY,
         # oauth_token → CLAUDE_CODE_OAUTH_TOKEN (subscription Pro/Max, ADR 0063).
-        self.provider = ClaudeAgentProvider(
-            api_key=api_key,
-            oauth_token=oauth_token,
-            default_model=model,
-            query_fn=query_fn,
+        super().__init__(
+            provider=ClaudeAgentProvider(
+                api_key=api_key,
+                oauth_token=oauth_token,
+                default_model=model,
+                query_fn=query_fn,
+            ),
+            model=model,
+            tools=tools,
+            extra_call_kwargs={"effort": self._effort},
         )
-
-    def decide(self, state: dict[str, Any]) -> ModelResponse:
-        # F25/F30: same timeout+retry guard as the HTTP path — a stuck claude_sdk
-        # CLI must trip ProviderTimeout, not hang the loop. No `submit_result` /
-        # `tool_choice` here: a tool call would force content="" and drop the prose.
-        resp = _run_with_retry(
-            lambda: self.provider.complete(
-                _decide_messages(state),
-                model=self.model,
-                tools=self._tools,
-                effort=self._effort,
-            )
-        )
-        # complete() now emits tool_calls when the model asks for a tool, so this
-        # ramifies to ACT/FINISH like every other provider (no hardcoded FINISH).
-        return _decision_from(resp, model=self.model)
-
-    def review(self, state: dict[str, Any]) -> ReviewResponse:
-        resp = _run_with_retry(
-            lambda: self.provider.complete(
-                _review_messages(state),
-                model=self.model,
-                tools=[_SUBMIT_VERDICT_TOOL],  # ADR 0086: verdict as a tool call
-                effort=self._effort,
-            )
-        )
-        return _review_from(resp, model=self.model)
 
 
 # ---------------------------------------------------------------------------

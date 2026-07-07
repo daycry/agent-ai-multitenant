@@ -154,6 +154,40 @@ def test_http_decide_does_not_force_tool_choice() -> None:
     assert _SUBMIT_RESULT_TOOL in (call["tools"] or [])
 
 
+# --- H4: la consolidación decide/review preserva el protocolo claude_sdk -------
+def test_claude_sdk_decide_never_advertises_submit_result() -> None:
+    """claude_sdk NO anuncia submit_result (un tool call forzado deja content=''
+    y pierde la prosa — su FINISH es prosa + <finish>) y pasa `effort` nativo."""
+    from agent_runtime.providers import ClaudeSDKModelClient
+
+    client = ClaudeSDKModelClient(
+        model="claude-x", tools=[{"name": "write_file"}], reasoning_effort="high"
+    )
+    prov = _RecordingProvider(_resp(content='done <finish status="success"/>'))
+    client.provider = prov
+    client.decide({"task": {"title": "T"}})
+    call = prov.calls[0]
+    names = [t.get("name") for t in (call["tools"] or [])]
+    assert "submit_result" not in names
+    assert "write_file" in names
+    assert call["kwargs"].get("effort") == "high"
+    assert "tool_choice" not in call["kwargs"]
+
+
+def test_claude_sdk_review_does_not_force_tool_choice() -> None:
+    """El review del SDK ofrece submit_verdict pero sin tool_choice (no soportado
+    por el camino CLI; la red de prosa de _review_from es el fallback)."""
+    from agent_runtime.providers import ClaudeSDKModelClient
+
+    client = ClaudeSDKModelClient(model="claude-x")
+    prov = _RecordingProvider(_resp(tool_calls=[_call("submit_verdict", passed=True)]))
+    client.provider = prov
+    client.review({"task": {"title": "T"}, "output": "x"})
+    call = prov.calls[0]
+    assert call["tools"] == [_SUBMIT_VERDICT_TOOL]
+    assert "tool_choice" not in call["kwargs"]
+
+
 # --- F33: negation-aware pass matcher -----------------------------------------
 def test_pass_marker_present_respects_negation() -> None:
     assert _pass_marker_present("el output satisface los criterios", "satisface los criterios")
