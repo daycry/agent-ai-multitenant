@@ -42,7 +42,44 @@ de ~7 h por diseño).
 | A10 | Streaming roto en el compose generado (`EVENTS_REDIS_URL=/3`)           | ✅ resuelto (`/3`→`/0`, alineado con `manuals.yml`)                                                                                                                               | `f5ae375` |
 | —   | prod-06 MUST-ADDRESS (a): handler de `SoftTimeLimitExceeded`            | ✅ resuelto (finaliza la fila `running`, clasifica por cancel flag, mata el contenedor huérfano)                                                                                  | `99eb017` |
 
+### Segunda ola (2026-07-07): medios/bajos investigados e implementados
+
+Tras re-verificar cada hallazgo diferido contra el código real (workflow de
+investigación + verificación adversarial; el límite de sesión cortó 3 investigaciones
+y las verificaciones, suplidas con TDD rojo→verde). Implementados con TDD, commit por
+hallazgo:
+
+| #           | Hallazgo                                                                                          | Estado                                                                                  | Commit    |
+| ----------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | --------- |
+| M8b         | Guarda de slug vacío de `stack_exec` sin test de regresión                                        | ✅ test de mutación (quitar la guarda → cae)                                            | `cd329c7` |
+| CANCELAWAIT | Cancel no finalizaba ejecuciones `awaiting_human_approval` (colgadas + request resucitable)       | ✅ sella en línea + cierra el ApprovalRequest (nuevo estado `cancelled`)                | `de48bc4` |
+| M2          | 3 rutas de cierre sellaban `.status` a mano saltándose la guarda idempotente                      | ✅ primitivo único `seal_terminal_execution`                                            | `7939935` |
+| M9          | Gate de cobertura decorativo (`--cov-fail-under=19` vs 30.4% real)                                | ✅ floor 19→30 + meta-test que asserta `>=30`                                           | `fb1ca91` |
+| M5          | Reconciler de reviews sin cap propio (bucle si broker caído / worker SIGKILL)                     | ✅ cap por edad de `updated_at` → escala a `blocked`                                    | `1d9b830` |
+| M1          | El sweeper mataba runs en provisión lenta (>5 min) y descartaba su resultado                      | ✅ columna `container_launched_at` (migr. 0104); solo huérfano si el contenedor existió | `c51dc57` |
+| OFFSITE     | Offsite de backup implementado pero código muerto (no cableado al beat)                           | ✅ `_upload_bundle_to_destinations` best-effort, solo bundle verificado                 | `847a4bd` |
+| HARDDEP     | `DELETE` de tarea hard-borraba un prerequisito → dependientes vacuamente elegibles (DAG corrupto) | ✅ 409 si otras dependen de ella (fail-safe)                                            | `ada289d` |
+| A8b         | Proyecto sin `human_approval_policy` corría todo en auto (fail-open)                              | ✅ hereda preset `development` (decisión del operador, ADR 0104)                        | `3bd1b3a` |
+
+**Diferido (con spec):**
+
+- **M4** (no-atomicidad DB↔git: un crash entre finalize y push deja el diff fuera del
+  bare → PR final incompleto): implementable pero es el ÚNICO cambio adyacente a
+  corrupción de worktree (nueva pasada del reconciler con commit/push al bare + reuso
+  del lock A6) — merece una sesión dedicada con test git-backed, no el final de una
+  sesión con límite de cuota. Spec completa capturada en la investigación.
+
 **No abordados (deliberado):**
+
+- **M8** (exfil vía POST a host permitido): sin fix sin proxy MITM (terminación TLS),
+  explícitamente fuera de la postura de ADR 0094; riesgo residual acotado y aceptado.
+- **A4** (e2e del ciclo autónomo): el comportamiento ya lo cubren los tests de A1/M5
+  (unit + integración); el e2e completo queda como deuda de cobertura.
+- **LOWBUNDLE / M3**: docstrings obsoletos, healthcheck admin-panel 404, seeds
+  `{"all":"auto"}`, drift ADR 0095 D3 — cosméticos/aceptados; M3 (test_worker_lost
+  débil) ya cubierto por `test_run_lock.py`.
+
+**No abordados de la 1ª ola:**
 
 - **C2** (cierre 20/20 marcado sin arrancar el stack): es una lección de _proceso_, no código
   vivo — los bugs boot-blocking que destapó ya se corrigieron en su día (`3c7d8b6`, `326b884`).
