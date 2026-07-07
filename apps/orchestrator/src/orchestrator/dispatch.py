@@ -651,14 +651,10 @@ class TaskDispatcher:
         tool_specs = await serialize_agent_tool_specs(session, reviewer.id)
         skill_prompt_fragments = await resolve_agent_skill_prompt_fragments(session, reviewer.id)
 
-        model_spec = dict(reviewer.model_config or {})
-        if config_needs_default_model(model_spec):
-            platform_default = await get_default_model_config(session)
-            team_cfg = await self._team_model_config(session, project)
-            project_cfg = dict(getattr(project, "model_config", None) or {})
-            model_spec = resolve_model_config_chain(
-                model_spec, team_cfg, project_cfg, platform_default
-            )
+        # Hallazgo H2 (refactor 2026-07-07): la MISMA cadena de herencia ADR 0055
+        # que el implementador — antes duplicada inline aquí, con riesgo de que un
+        # cambio futuro en la cadena solo se aplicara a una de las dos ramas.
+        model_spec = await self._resolve_model_spec(session, reviewer, project)
 
         platform_budgets = await get_default_execution_budgets(session)
         budgets = resolve_execution_budgets(

@@ -42,9 +42,13 @@ async def _seed(
     reviewer_type: str | None,
     prior_output: str = "did the work",
     acceptance_criteria: list | None = None,
+    reviewer_model: dict | None = None,
+    project_model: dict | None = None,
 ) -> dict[str, UUID]:
     """A task in ``in_review``; ``reviewer_type`` = 'ai' | 'human' | None decides
-    whether a reviewer agent is attached and of which kind."""
+    whether a reviewer agent is attached and of which kind. ``reviewer_model``
+    overrides the reviewer's own ``model_config`` (pass ``{}`` for a legacy agent
+    that must inherit); ``project_model`` pins the project level of the chain."""
     ids = {"tenant": uuid4(), "project": uuid4(), "task": uuid4(), "reviewer": uuid4()}
     async with sm() as s, s.begin():
         await s.execute(
@@ -63,6 +67,7 @@ async def _seed(
                 status="active",
                 is_template=False,
                 worker_config={},
+                model_config=project_model,
             )
         )
         await s.flush()
@@ -78,7 +83,7 @@ async def _seed(
                     agent_type=reviewer_type,
                     scope="project_local",
                     project_id=ids["project"],
-                    model_config=_SCRIPTED,
+                    model_config=reviewer_model if reviewer_model is not None else _SCRIPTED,
                 )
             )
             await s.flush()
@@ -172,6 +177,40 @@ async def test_ai_reviewer_dispatches_review_execution(
         assert request["task_id"] == str(ids["task"])
         assert request["review_context"]["implementer_output"] == "implemented the parser"
         assert "acceptance: X must work" in request["review_context"]["acceptance_criteria"]
+    finally:
+        await engine.dispose()
+        await redis.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ai_reviewer_inherits_model_through_the_chain(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """Un reviewer sin modelo propio (``{}`` legacy) hereda por la MISMA cadena
+    ADR 0055 que el implementador (plataforma → proyecto → equipo → agente).
+
+    Caracterización del hallazgo H2 del refactor 2026-07-07: la rama de review
+    re-derivaba la cadena inline en vez de usar ``_resolve_model_spec`` — este
+    test fija la herencia observable para que la deduplicación no pueda divergir."""
+    engine = create_async_engine(admin_database_url)
+    redis = Redis.from_url(TEST_REDIS_URL)
+    await redis.delete("default")
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(
+            sm,
+            reviewer_type="ai",
+            reviewer_model={},
+            project_model={"kind": "ollama", "model": "llama3.1"},
+        )
+
+        await _dispatcher(sm).handle(_in_review_event(ids))
+
+        request = _run_request(await _drain(redis, "default"))
+        assert request["review"] is True
+        # El nivel proyecto de la cadena rellena el spec del reviewer legacy.
+        assert request["model"]["kind"] == "ollama"
+        assert request["model"]["model"] == "llama3.1"
     finally:
         await redis.delete("default")
         await redis.aclose()
