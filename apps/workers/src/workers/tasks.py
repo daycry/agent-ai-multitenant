@@ -35,7 +35,7 @@ _log = structlog.get_logger("workers.tasks")
 _DEAD_LETTER_STREAM = "dlq:executions"
 
 
-@app.task(name="workers.run_agent_container")  # type: ignore[misc]
+@app.task(name="workers.run_agent_container")  # type: ignore[untyped-decorator]
 def run_agent_container(
     image: str | None = None,
     command: list[str] | None = None,
@@ -58,7 +58,7 @@ def run_agent_container(
     return runner.run(spec).as_dict()
 
 
-@app.task(bind=True, name="workers.run_execution")  # type: ignore[misc]
+@app.task(bind=True, name="workers.run_execution")  # type: ignore[untyped-decorator]
 def run_execution(self: Any, request: dict[str, Any]) -> dict[str, Any]:
     """Conduct one agent execution end to end (Plan 02 Fase G).
 
@@ -272,7 +272,7 @@ async def _run_execution(
 # a body change, not a wire-protocol change.
 
 
-@app.task(name="workers.run_test_runtime")  # type: ignore[misc]
+@app.task(name="workers.run_test_runtime")  # type: ignore[untyped-decorator]
 def run_test_runtime(request: dict[str, Any]) -> dict[str, Any]:
     """Run the test-runtime for one task (Plan 06.5 Fase F task_06_5_16).
 
@@ -500,7 +500,7 @@ def _resolve_stack_dep_cache(template: Any, worktree_host_path: str, data_root: 
         return None
 
 
-@app.task(name="workers.run_stack_command")  # type: ignore[misc]
+@app.task(name="workers.run_stack_command")  # type: ignore[untyped-decorator]
 def run_stack_command(request: dict[str, Any]) -> dict[str, Any]:
     """Run one stack command for a task in its runtime template (ADR 0093).
 
@@ -633,7 +633,7 @@ async def _run_stack_command(  # noqa: PLR0911
     return {"exit_code": rc, "logs": logs[-8000:], "timed_out": rc == 124}
 
 
-@app.task(name="workers.compose_review_runtime")  # type: ignore[misc]
+@app.task(name="workers.compose_review_runtime")  # type: ignore[untyped-decorator]
 def compose_review_runtime(request: dict[str, Any]) -> dict[str, Any]:
     """Spawn the review-runtime + persist its session row.
 
@@ -779,7 +779,7 @@ async def _compose_review_runtime(request: dict[str, Any], settings: Settings) -
         # If we got container_ids, update the row.
         if container_ids:
             async with sessionmaker() as session, session.begin():
-                refreshed = await session.get(type(row), session_id)  # type: ignore[arg-type]
+                refreshed = await session.get(type(row), session_id)
                 if refreshed is not None:
                     refreshed.container_ids = list(container_ids)
                     await session.flush()

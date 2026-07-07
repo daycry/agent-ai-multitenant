@@ -56,7 +56,7 @@ _SNAPSHOT_RETENTION = timedelta(days=90)
 _FORGET_SCAN_LIMIT = 500
 
 
-@app.task(name="workers.cortex_maintenance")  # type: ignore[misc]
+@app.task(name="workers.cortex_maintenance")  # type: ignore[untyped-decorator]
 def cortex_maintenance() -> dict[str, Any]:
     """Celery entry point. Mantenimiento de fondo de la mente del córtex.
 

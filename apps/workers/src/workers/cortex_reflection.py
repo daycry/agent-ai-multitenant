@@ -118,7 +118,7 @@ def _default_llm_factory(settings: Settings) -> LLMProvider:
     )
 
 
-@app.task(name="workers.cortex_reflect")  # type: ignore[misc]
+@app.task(name="workers.cortex_reflect")  # type: ignore[untyped-decorator]
 def cortex_reflect(owner_user_id: str) -> dict[str, Any]:
     """Celery entry point. Reflexiona la identidad del córtex de un owner.
 
@@ -136,7 +136,7 @@ def cortex_reflect(owner_user_id: str) -> dict[str, Any]:
     )
 
 
-@app.task(name="workers.cortex_reflect_scheduled")  # type: ignore[misc]
+@app.task(name="workers.cortex_reflect_scheduled")  # type: ignore[untyped-decorator]
 def cortex_reflect_scheduled() -> dict[str, Any]:
     """Entry point del BEAT (sin args): reflexión AUTÓNOMA del córtex.
 

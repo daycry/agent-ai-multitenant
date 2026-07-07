@@ -43,7 +43,7 @@ def _default_embedder_factory(settings: Settings) -> Any:
     return OllamaEmbedder(base_url=settings.memory_embedder_base_url)
 
 
-@app.task(name="workers.backfill_memory_embeddings")  # type: ignore[misc]
+@app.task(name="workers.backfill_memory_embeddings")  # type: ignore[untyped-decorator]
 def backfill_memory_embeddings() -> dict[str, Any]:
     """Rellena los ``memory_entries.embedding`` NULL — IDEMPOTENTE, por lotes y
     throttled (Plan 06.17 task_06_17_03).

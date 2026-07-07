@@ -28,7 +28,7 @@ _SUSPEND_IDLE_AFTER = timedelta(hours=24)
 _TERMINAL_REVIEW_STATUSES = ("approved", "rejected", "expired", "cancelled")
 
 
-@app.task(name="workers.expire_review_runtimes")  # type: ignore[misc]
+@app.task(name="workers.expire_review_runtimes")  # type: ignore[untyped-decorator]
 def expire_review_runtimes() -> dict[str, Any]:
     """Expire overdue review-runtimes, suspend idle ones, reap terminal ones.
 

@@ -326,7 +326,7 @@ def test_build_tool_options_keeps_native_allowed_tools() -> None:
     interceptor `can_use_tool` captura. Requiere el SDK real (opcional)."""
     pytest.importorskip("claude_agent_sdk")
     p = ClaudeAgentProvider(default_model="claude-sonnet-4-5")
-    options = p._build_tool_options(  # type: ignore[attr-defined]
+    options = p._build_tool_options(
         system="s",
         model="claude-sonnet-4-5",
         specs=[{"name": "cortex_remember", "description": "x", "parameters": {}}],

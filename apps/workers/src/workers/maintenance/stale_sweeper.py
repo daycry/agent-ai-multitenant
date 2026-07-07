@@ -32,7 +32,7 @@ _STALE_EXECUTION_AFTER = timedelta(hours=7)
 _ORPHAN_CONTAINER_GRACE = timedelta(minutes=5)
 
 
-@app.task(name="workers.sweep_stale_executions")  # type: ignore[misc]
+@app.task(name="workers.sweep_stale_executions")  # type: ignore[untyped-decorator]
 def sweep_stale_executions() -> dict[str, Any]:
     """Close zombie executions + reap their orphan containers.
 
@@ -127,7 +127,9 @@ async def _sweep_stale_executions_async(
             )
             stale_ids = []
             for execution in candidates:
-                stale_by_age = execution.started_at < cutoff
+                # El SELECT ya exige started_at < orphan_cutoff (no-NULL); el
+                # narrow explícito lo hace visible para mypy y a prueba de refactors.
+                stale_by_age = execution.started_at is not None and execution.started_at < cutoff
                 # Huérfano (2026-07-03): pasada la gracia, sin contenedor en el
                 # daemon → el run no puede terminar jamás; cerrarlo YA en vez de
                 # dejarlo 7 h de zombi vetando el re-despacho de su task.

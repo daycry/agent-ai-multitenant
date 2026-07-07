@@ -159,7 +159,7 @@ async def _select_distiller(
     return llm_factory(settings), settings.memorizer_llm_model
 
 
-@app.task(name="workers.memorize_execution")  # type: ignore[misc]
+@app.task(name="workers.memorize_execution")  # type: ignore[untyped-decorator]
 def memorize_execution(execution_id: str) -> dict[str, Any]:
     """Celery entry point. Run the Memorizer for one finished Execution.
 
@@ -521,7 +521,7 @@ def _result(execution_id: UUID, persisted: int, reason: str) -> dict[str, Any]:
 # does not, which is why _resolve_owner skips private for AI).
 
 
-@app.task(name="workers.memorize_human_work_session")  # type: ignore[misc]
+@app.task(name="workers.memorize_human_work_session")  # type: ignore[untyped-decorator]
 def memorize_human_work_session(work_session_id: str) -> dict[str, Any]:
     """Celery entry point. Run the Memorizer for one finished HumanWorkSession.
 
@@ -599,7 +599,7 @@ async def _memorize_human_work_session_async(
         try:
             candidates = await distil_human_work_session(
                 session=ctx["session"],
-                agent=ctx["agent"],  # type: ignore[arg-type]
+                agent=ctx["agent"],
                 user=ctx["user"],
                 llm=llm,
             )

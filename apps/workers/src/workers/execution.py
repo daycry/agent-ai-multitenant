@@ -61,13 +61,32 @@ from workers.run_result import (
     _assemble_result,
     _parse_line,
     _RuntimeResult,
-    _scan_logs_for_terminal,  # noqa: F401  (re-export: su casa histórica es este módulo)
+    _scan_logs_for_terminal,
 )
 from workers.run_spec import (
-    _SDK_BASE_SHELL_COMMANDS,  # noqa: F401  (re-export: tests lo importan de aquí)
+    _SDK_BASE_SHELL_COMMANDS,
     _agent_spec,
-    _resolve_tool_spec_images,  # noqa: F401  (re-export: tests lo importan de aquí)
+    _resolve_tool_spec_images,
 )
+
+# Re-exports EXPLÍCITOS: la casa histórica de estos símbolos es este módulo —
+# tasks/maintenance/tests siguen importando de workers.execution. `__all__`
+# marca el re-export para mypy (no_implicit_reexport) y para ruff F401.
+__all__ = [
+    "CrossTenantExecutionError",
+    "ExecutionOutcome",
+    "ExecutionRequest",
+    "conduct_execution",
+    "transition_task_after_run",
+    "_EMPTY_USAGE",
+    "_RuntimeResult",
+    "_SDK_BASE_SHELL_COMMANDS",
+    "_agent_spec",
+    "_assemble_result",
+    "_parse_line",
+    "_resolve_tool_spec_images",
+    "_scan_logs_for_terminal",
+]
 
 _log = structlog.get_logger("workers.execution")
 

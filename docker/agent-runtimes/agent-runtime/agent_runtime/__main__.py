@@ -19,7 +19,7 @@ import sys
 from collections.abc import Iterable
 from importlib import metadata
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from agent_runtime.review_contract import VERDICT_APPROVE, VERDICT_REJECT
 
@@ -267,9 +267,15 @@ def _to_mcp_config(raw: dict[str, Any]) -> Any:
     """
     from shared_mcp import MCPServerConfig
 
+    transport = str(raw["transport"])
+    if transport not in ("stdio", "sse", "streamable_http"):
+        # El caller (_wire_mcp_servers) captura por-servidor y loguea: un
+        # transport inválido en el JSONB salta aquí con motivo claro en vez de
+        # fallar críptico dentro del cliente MCP.
+        raise ValueError(f"mcp server {raw.get('name')!r}: transporte inválido {transport!r}")
     return MCPServerConfig(
         name=str(raw["name"]),
-        transport=str(raw["transport"]),
+        transport=cast(Literal["stdio", "sse", "streamable_http"], transport),
         command=raw.get("command"),
         args=tuple(raw.get("args") or ()),
         env=dict(raw.get("env") or {}),
@@ -413,7 +419,7 @@ _PRIOR_FEEDBACK_INSTRUCTION = (
 )
 
 
-def build_prior_feedback_preamble(feedback: list[dict[str, Any]]) -> str:
+def build_prior_feedback_preamble(feedback: list[Any]) -> str:
     """The implementer's system preamble carrying the AI reviewer's prior feedback (A2).
 
     ``feedback`` is the orchestrator-threaded list of rejection payloads (newest

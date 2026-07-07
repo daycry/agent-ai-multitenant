@@ -25,7 +25,7 @@ _log = structlog.get_logger("workers.maintenance")
 # ---------------------------------------------------------------------------
 
 
-@app.task(name="workers.idle_sweep_pools")  # type: ignore[misc]
+@app.task(name="workers.idle_sweep_pools")  # type: ignore[untyped-decorator]
 def idle_sweep_pools() -> dict[str, Any]:
     """Trim runtime pools (Plan 06 Fase E2) that have idle slots above
     `min`.
@@ -46,7 +46,7 @@ def idle_sweep_pools() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@app.task(name="workers.purge_dep_cache")  # type: ignore[misc]
+@app.task(name="workers.purge_dep_cache")  # type: ignore[untyped-decorator]
 def purge_dep_cache() -> dict[str, Any]:
     """Drop dep-cache entries older than the configured TTL (default 30d).
 
@@ -81,7 +81,7 @@ def purge_dep_cache() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@app.task(name="workers.prune_worktrees")  # type: ignore[misc]
+@app.task(name="workers.prune_worktrees")  # type: ignore[untyped-decorator]
 def prune_worktrees() -> dict[str, Any]:
     """Remove worktrees idle past the TTL (default 30d).
 

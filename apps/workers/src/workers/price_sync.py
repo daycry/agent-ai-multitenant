@@ -52,7 +52,7 @@ from workers.config import Settings, get_settings
 _log = structlog.get_logger("workers.price_sync")
 
 
-@app.task(name="workers.sync_model_prices")  # type: ignore[misc]
+@app.task(name="workers.sync_model_prices")  # type: ignore[untyped-decorator]
 def sync_model_prices() -> dict[str, Any]:
     """Refresh the price catalog from the LiteLLM feed (scheduled).
 

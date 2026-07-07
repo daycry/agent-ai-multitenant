@@ -27,7 +27,17 @@ existe en ese venv.
 
 ## Fix
 
-Dos opciones, según el caso:
+**Resolución definitiva (2026-07-08, «mypy-total»):** el hook dejó de usar
+`mirrors-mypy` y su venv aislado. Ahora es un hook `repo: local` +
+`language: system` que ejecuta `scripts/mypy_gate.py`: corre mypy con el
+**entorno del proyecto** (el intérprete actual si tiene mypy — el caso de CI,
+que instala todo el workspace editable — o el `.venv` del repo como fallback),
+así que TODOS los paquetes hermanos resuelven y los excludes por path del hook
+desaparecieron (solo quedan migraciones y el SDK generado, en `pyproject.toml`).
+Chequea el árbol completo en cada commit con caché incremental.
+
+Las dos opciones históricas siguen documentadas por si un entorno nuevo
+reproduce el síntoma con otro runner aislado:
 
 **(a)** Si la dep es un paquete público (sqlalchemy, pydantic, jose,
 opentelemetry-\*), añádelo a `additional_dependencies:`:

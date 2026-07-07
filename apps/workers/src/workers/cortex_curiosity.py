@@ -99,7 +99,7 @@ async def _default_search_fn(query: str, limit: int) -> list[dict[str, str]]:
     return await web_search(query, limit=limit, provider=provider)
 
 
-@app.task(name="workers.cortex_curiosity_loop")  # type: ignore[misc]
+@app.task(name="workers.cortex_curiosity_loop")  # type: ignore[untyped-decorator]
 def cortex_curiosity_loop() -> dict[str, Any]:
     """Celery entry point. Una pasada de curiosidad autónoma del córtex.
 

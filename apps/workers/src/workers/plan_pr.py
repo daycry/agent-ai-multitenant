@@ -291,7 +291,7 @@ async def _open_plan_pr_async(
         await engine.dispose()
 
 
-@app.task(name="workers.open_plan_pr")  # type: ignore[misc]
+@app.task(name="workers.open_plan_pr")  # type: ignore[untyped-decorator]
 def open_plan_pr(project_id: str, plan_id: str, title: str, body: str) -> dict[str, Any]:
     """Entry point Celery. Best-effort: nunca propaga. La rama del plan se deriva
     de ``plan_id`` + ``title`` (make_plan_branch_name), consistente con el push."""

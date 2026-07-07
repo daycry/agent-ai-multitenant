@@ -93,7 +93,7 @@ def _default_llm_factory(settings: Settings) -> LLMProvider:
     )
 
 
-@app.task(name="workers.cortex_distill_affect")  # type: ignore[misc]
+@app.task(name="workers.cortex_distill_affect")  # type: ignore[untyped-decorator]
 def cortex_distill_affect(turn_id: str) -> dict[str, Any]:
     """Celery entry point. Distila el afecto de un turno del córtex.
 

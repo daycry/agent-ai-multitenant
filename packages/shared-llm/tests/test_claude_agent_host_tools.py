@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import sys
 import types
-from typing import Any
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from shared_llm.providers import ClaudeAgentProvider
@@ -153,8 +154,10 @@ def test_complete_without_tools_requests_native_disable(monkeypatch: pytest.Monk
     """End-to-end wiring: complete() with no tools calls _build_options with
     disallow_native_tools=True (spy on the kwargs, like the effort regression test)."""
 
-    async def _q(prompt: str, options: Any):  # type: ignore[no-untyped-def]
-        if False:  # pragma: no cover - empty async generator
+    async def _q(prompt: str, options: Any) -> AsyncIterator[Any]:
+        # Generador async VACÍO: el `yield` bajo TYPE_CHECKING (False en
+        # runtime) mantiene la función como generador sin código inalcanzable.
+        if TYPE_CHECKING:  # pragma: no cover
             yield None
 
     provider = ClaudeAgentProvider(query_fn=_q, default_model="claude-opus-4-8")
@@ -177,8 +180,10 @@ def test_complete_without_tools_requests_native_disable(monkeypatch: pytest.Monk
 def test_run_agent_does_not_request_native_disable(monkeypatch: pytest.MonkeyPatch) -> None:
     """The escape hatch must not ask to disable natives."""
 
-    async def _q(prompt: str, options: Any):  # type: ignore[no-untyped-def]
-        if False:  # pragma: no cover - empty async generator
+    async def _q(prompt: str, options: Any) -> AsyncIterator[Any]:
+        # Generador async VACÍO: el `yield` bajo TYPE_CHECKING (False en
+        # runtime) mantiene la función como generador sin código inalcanzable.
+        if TYPE_CHECKING:  # pragma: no cover
             yield None
 
     provider = ClaudeAgentProvider(query_fn=_q, default_model="claude-opus-4-8")

@@ -136,7 +136,7 @@ class DockerCommandTool:
             return self.docker_client
         # Lazy import — avoids importing the docker SDK at module load
         # time when this module is only browsed (e.g. by docs build).
-        import docker  # type: ignore[import-not-found]
+        import docker
 
         self.docker_client = docker.from_env()
         return self.docker_client

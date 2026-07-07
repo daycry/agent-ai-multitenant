@@ -54,68 +54,24 @@ repos:
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
 
-  # mypy runs in its own pre-commit-managed venv. Runtime libs whose
-  # types we import (sqlalchemy, pydantic, fastapi, ...) must be listed
-  # under additional_dependencies so the type checker can resolve them.
-  # Add a new lib here when a new app starts importing it.
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.10.0
+  # mypy-total (2026-07-08): el gate corre con el ENTORNO DEL PROYECTO — el
+  # venv local o el python de CI (el job lint-python instala TODO el workspace
+  # editable) — en vez del venv aislado de mirrors-mypy que no veía los
+  # paquetes hermanos y forzaba a excluir por path justo el código más crítico
+  # (execution/tasks/dispatch/maintenance/cortex_*). El wrapper
+  # scripts/mypy_gate.py elige el intérprete; chequea SIEMPRE el árbol
+  # completo (apps + packages + agent-runtime) con el caché incremental de
+  # mypy. Los únicos excludes que quedan viven en pyproject.toml (migraciones
+  # y SDK generado). Gotcha: docs/03-guides/gotchas/mypy-local-package-imports.md
+  - repo: local
     hooks:
       - id: mypy
-        additional_dependencies:
-          - "sqlalchemy[asyncio]>=2.0,<3"
-          - "uuid6>=2024.1"
-          - "pydantic>=2.5,<3"
-          - "pydantic-settings>=2.2,<3"
-          - "fastapi>=0.110,<1"
-          - "structlog>=24.1,<25"
-          - "redis>=5.0,<6"
-          - "alembic>=1.13,<2"
-          - "argon2-cffi>=23.1,<24"
-          - "types-python-jose>=3.3,<4"
-          - "opentelemetry-api>=1.27,<2"
-          - "opentelemetry-sdk>=1.27,<2"
-          - "opentelemetry-instrumentation-fastapi>=0.48b0,<1"
-          - "opentelemetry-instrumentation-sqlalchemy>=0.48b0,<1"
-          - "opentelemetry-instrumentation-asyncpg>=0.48b0,<1"
-          - "opentelemetry-instrumentation-redis>=0.48b0,<1"
-          - "opentelemetry-instrumentation-httpx>=0.48b0,<1"
-          - "httpx>=0.27,<1"
-          - "docker>=7.1,<8"
-          # Sandboxed Jinja2 template rendering (notification-dispatcher,
-          # Plan 10 task_10_03). Ships py.typed, so mypy needs it installed.
-          - "jinja2>=3.1,<4"
-          # Email channel SMTP transport (notification-dispatcher, Plan 10
-          # task_10_06). Ships py.typed, so mypy needs it installed to resolve
-          # the aiosmtplib import in the Email adapter.
-          - "aiosmtplib>=3.0,<4"
-          # S3 remote backup destination (workers, Plan 12 task_12_05). boto3
-          # itself is untyped; its TYPE stubs resolve the `mypy_boto3_s3.client`
-          # import used under TYPE_CHECKING in workers.backup_destinations.
-          - "boto3-stubs[s3]>=1.34,<2"
-          # SFTP/NAS remote backup destination (workers, Plan 12 task_12_07).
-          # paramiko ships type stubs separately; types-paramiko resolves the
-          # `paramiko` import used under TYPE_CHECKING in backup_destinations.
-          - "types-paramiko>=3.4,<4"
-        args: [--config-file=pyproject.toml]
-        files: ^(apps|packages)/.*\.py$
-        # Skip files that import sibling local packages — the hook
-        # venv only sees PyPI deps, not our editable apps/<x>:
-        #   apps/<x>/migrations/*.py             -> uses api_server.db
-        #   apps/watchdog/...                    -> uses api_server.logging
-        #   apps/orchestrator/.../__main__.py    -> uses api_server.logging
-        #   apps/orchestrator/.../dispatch.py    -> uses api_server.db
-        #   apps/workers/.../{execution,tasks,memorizer,cortex_affect,cortex_reflection}.py -> use api_server.db + .memorizer + .ingestion + .cortex
-        #   apps/workers/.../maintenance/*.py (package)  -> same api_server imports
-        #   apps/notification-dispatcher/.../{tasks,event_mapping}.py -> use api_server.db.notification
-        # Also skip tests under packages — the hook venv has no pytest
-        # available and tests carry untyped decorators by design.
-        # `packages/sdk-python/src/agentic_platform_sdk/*` is the GENERATED
-        # Python SDK (Plan 13 task_13_13): datamodel-code-generator output +
-        # a thin hand-written client. Generated style is not the repo's; it's
-        # verified by tests/integration/test_sdk_python.py instead (see
-        # packages/sdk-python/README.md).
-        exclude: ^(apps/(([^/]+/migrations/.*)|watchdog/.*|orchestrator/src/orchestrator/(__main__|dispatch)\.py|workers/src/workers/(execution|tasks|memorizer|cortex_affect|cortex_reflection)\.py|workers/src/workers/maintenance/.*\.py|notification-dispatcher/src/notification_dispatcher/(tasks|event_mapping)\.py)|packages/sdk-python/src/agentic_platform_sdk/.*|packages/[^/]+/tests/.*)$
+        name: mypy (entorno del proyecto, árbol completo)
+        entry: python scripts/mypy_gate.py
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
 
   # -------------------- TypeScript / JavaScript --------------------
   - repo: https://github.com/pre-commit/mirrors-prettier

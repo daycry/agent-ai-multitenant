@@ -140,7 +140,7 @@ class SendRequest:
         )
 
 
-@app.task(  # type: ignore[misc]
+@app.task(  # type: ignore[untyped-decorator]
     bind=True,
     name="notification_dispatcher.send_notification",
 )
@@ -258,7 +258,7 @@ async def _push_dead_letter(settings: Settings, request: dict[str, Any], exc: Ex
 # async function (`resolve_event_dispatch`) so it is unit-testable without
 # the broker; this task only adds the engine lifecycle + the enqueue.
 # ===========================================================================
-@app.task(name="notification_dispatcher.dispatch_event")  # type: ignore[misc]
+@app.task(name="notification_dispatcher.dispatch_event")  # type: ignore[untyped-decorator]
 def dispatch_event(event: dict[str, Any]) -> dict[str, Any]:
     """Fan one domain event out to its subscribed channels (task_10_04).
 

@@ -81,7 +81,7 @@ class CeleryHumanEscalationNotifier:
         )
 
 
-@app.task(name="workers.escalate_human_assignments")  # type: ignore[misc]
+@app.task(name="workers.escalate_human_assignments")  # type: ignore[untyped-decorator]
 def escalate_human_assignments() -> dict[str, Any]:
     """Sweep timed-out human-task assignments + escalate/block them (scheduled).
 

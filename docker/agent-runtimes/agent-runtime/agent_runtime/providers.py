@@ -705,7 +705,7 @@ def _review_from(resp: CompletionResponse, *, model: str) -> ReviewResponse:
     )
 
 
-class ProviderTimeout(LLMError):  # type: ignore[misc]  # noqa: N818 — stable typed name
+class ProviderTimeout(LLMError):  # noqa: N818 — stable typed name
     """An LLM call exceeded its per-call wall-clock budget (F25/P1.5).
 
     Raised when ``asyncio.wait_for`` trips the timeout around a provider call.

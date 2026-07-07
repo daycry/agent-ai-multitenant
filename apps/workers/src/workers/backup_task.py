@@ -35,7 +35,7 @@ from workers.config import Settings, get_settings
 _log = structlog.get_logger("workers.backup_task")
 
 
-@app.task(name="workers.run_daily_backup")  # type: ignore[misc]
+@app.task(name="workers.run_daily_backup")  # type: ignore[untyped-decorator]
 def run_daily_backup() -> dict[str, Any]:
     """Run the daily full backup (scheduled).
 

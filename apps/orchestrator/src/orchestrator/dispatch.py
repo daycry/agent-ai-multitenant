@@ -21,7 +21,7 @@ import contextlib
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import structlog
@@ -57,6 +57,7 @@ from api_server.db.platform_settings import (
 )
 from api_server.events import publish_task_status_changed
 from api_server.plan_progress import (
+    PlanStatus,
     TaskSnapshot,
     transition_to_blocked,
     transition_to_pending_human_validation,
@@ -415,7 +416,10 @@ class TaskDispatcher:
                 )
                 for r in rows
             ]
-            result = transition_to_pending_human_validation(plan.status, snapshots)
+            # La columna es `str`; el Literal PlanStatus refleja el StrEnum del
+            # dominio 1:1 (mypy-total 2026-07-08) — cast, no conversión.
+            plan_status = cast(PlanStatus, plan.status)
+            result = transition_to_pending_human_validation(plan_status, snapshots)
             if not result.transitioned:
                 # c3 (audit 2026-07-03): a plan whose only remaining open tasks
                 # are `blocked` can never reach pending_human_validation (blocked
@@ -423,7 +427,7 @@ class TaskDispatcher:
                 # automatic route out. Escalate it to `blocked` (same atomic,
                 # idempotent status=in_progress guard) so the operator sees the
                 # stall and can unblock/retry a task.
-                blocked = transition_to_blocked(plan.status, snapshots)
+                blocked = transition_to_blocked(plan_status, snapshots)
                 if blocked.transitioned:
                     won_blocked = (
                         await session.execute(

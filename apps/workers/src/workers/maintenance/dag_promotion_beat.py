@@ -17,7 +17,7 @@ from workers.config import Settings, get_settings
 _log = structlog.get_logger("workers.maintenance")
 
 
-@app.task(name="workers.promote_ready_plans")  # type: ignore[misc]
+@app.task(name="workers.promote_ready_plans")  # type: ignore[untyped-decorator]
 def promote_ready_plans() -> dict[str, Any]:
     """Safety-net DAG promotion: across every ``in_progress`` plan, promote
     eligible ``backlog`` tasks to ``ready`` and announce the undispatched ones.

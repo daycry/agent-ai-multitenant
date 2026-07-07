@@ -54,7 +54,7 @@ _log = structlog.get_logger("workers.restore_task")
 STATE_PROGRESS = "PROGRESS"
 
 
-@app.task(bind=True, name="workers.run_restore")  # type: ignore[misc]
+@app.task(bind=True, name="workers.run_restore")  # type: ignore[untyped-decorator]
 def run_restore(self: Any, backup_id: str, *, confirm: str) -> dict[str, Any]:
     """Run a FULL restore from ``backup_id`` (a background job).
 
@@ -82,7 +82,7 @@ def run_restore(self: Any, backup_id: str, *, confirm: str) -> dict[str, Any]:
     return result.to_dict()
 
 
-@app.task(bind=True, name="workers.run_restore_per_tenant")  # type: ignore[misc]
+@app.task(bind=True, name="workers.run_restore_per_tenant")  # type: ignore[untyped-decorator]
 def run_restore_per_tenant(
     self: Any,
     backup_id: str,

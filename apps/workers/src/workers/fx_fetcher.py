@@ -92,7 +92,7 @@ class CeleryFxFetchNotifier:
         )
 
 
-@app.task(name="workers.fetch_exchange_rates")  # type: ignore[misc]
+@app.task(name="workers.fetch_exchange_rates")  # type: ignore[untyped-decorator]
 def fetch_exchange_rates() -> dict[str, Any]:
     """Fetch + upsert the daily FX reference rates (scheduled).
 

@@ -33,7 +33,7 @@ import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal, cast
 from uuid import UUID
 
 import structlog
@@ -401,7 +401,13 @@ async def _simple_reply(
     system = _MODE_PROMPTS.get(mode, _MODE_PROMPTS["discussion"])
     messages = [LLMMessage(role="system", content=system)]
     for entry in history:
-        role = entry["role"] if entry["role"] in ("user", "assistant", "system") else "user"
+        raw_role = str(entry["role"])
+        # El history llega de JSONB (str libre); LLMMessage.role es un Literal —
+        # el `in` garantiza el valor en runtime, el cast solo informa a mypy.
+        role = cast(
+            Literal["system", "user", "assistant"],
+            raw_role if raw_role in ("user", "assistant", "system") else "user",
+        )
         messages.append(LLMMessage(role=role, content=str(entry["content"])))
     resp = await provider.complete(messages, model=model, temperature=temperature, **extra)
     return resp.content or ""

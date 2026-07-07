@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -335,6 +335,9 @@ async def _reconcile_complete_plans(sessionmaker: async_sessionmaker[AsyncSessio
     and best-effort, so the two paths converge."""
     from api_server.db.domain import Plan, PlanStatus, Task, TaskDependency
     from api_server.plan_progress import (
+        PlanStatus as PlanStatusLiteral,  # el StrEnum del dominio ya se llama PlanStatus aquí
+    )
+    from api_server.plan_progress import (
         TaskSnapshot,
         transition_to_blocked,
         transition_to_pending_human_validation,
@@ -392,13 +395,16 @@ async def _reconcile_complete_plans(sessionmaker: async_sessionmaker[AsyncSessio
                 )
                 for r in task_rows
             ]
-            result = transition_to_pending_human_validation(plan.status, snapshots)
+            # La columna es `str`; el Literal refleja el StrEnum del dominio 1:1
+            # (mypy-total 2026-07-08) — cast, no conversión.
+            plan_status = cast(PlanStatusLiteral, plan.status)
+            result = transition_to_pending_human_validation(plan_status, snapshots)
             # prod-06 A1: safety-net del escalado a blocked cuando el evento
             # `_on_task_done` del orchestrator se perdió — el mismo camino que el
             # dispatch, aquí como red del beat (un plan atascado NO se queda
             # in_progress para siempre sin señal al operador).
             if not result.transitioned:
-                result = transition_to_blocked(plan.status, snapshots)
+                result = transition_to_blocked(plan_status, snapshots)
             if not result.transitioned:
                 continue
             won_id = (
@@ -485,7 +491,7 @@ def _send_compose_review_runtime(request: dict[str, Any]) -> None:
     )
 
 
-@app.task(name="workers.reconcile_pipeline_state")  # type: ignore[misc]
+@app.task(name="workers.reconcile_pipeline_state")  # type: ignore[untyped-decorator]
 def reconcile_pipeline_state() -> dict[str, Any]:
     """Convergence safety net (audit C3 / P0.6): reconcile DERIVED pipeline state
     the live event path can miss.

@@ -120,7 +120,7 @@ async def _clone_project_repo_async(project_id: UUID, *, settings: Settings) -> 
         await engine.dispose()
 
 
-@app.task(name="workers.clone_project_repo")  # type: ignore[misc]
+@app.task(name="workers.clone_project_repo")  # type: ignore[untyped-decorator]
 def clone_project_repo(project_id: str) -> dict[str, Any]:
     """Entry point Celery. Best-effort: nunca propaga (un fallo de red/credencial
     se devuelve como estado para que la UI/logs lo vean)."""

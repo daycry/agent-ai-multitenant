@@ -125,6 +125,10 @@ exclude = [
   "^build/",
   "^dist/",
   "^node_modules/",
+  # Migraciones Alembic: historia append-only con el estilo del generador —
+  # fuera del gate strict (mypy-total 2026-07-08; antes las excluía el hook
+  # de pre-commit por path).
+  "/migrations/versions/",
   # Generated Python SDK (Plan 13 task_13_13): generated Pydantic models +
   # thin hand-written client. Excluded from the strict type gate; covered by
   # tests/integration/test_sdk_python.py (see packages/sdk-python/README.md).

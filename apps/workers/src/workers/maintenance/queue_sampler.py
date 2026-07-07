@@ -21,7 +21,7 @@ from workers.config import Settings, get_settings
 _log = structlog.get_logger("workers.maintenance")
 
 
-@app.task(name="workers.sample_queue_metrics")  # type: ignore[misc]
+@app.task(name="workers.sample_queue_metrics")  # type: ignore[untyped-decorator]
 def sample_queue_metrics() -> dict[str, Any]:
     """Sample Celery queue depth + task counts per status and write the
     node-exporter textfile (prod-06 task_prod06_dag_03).

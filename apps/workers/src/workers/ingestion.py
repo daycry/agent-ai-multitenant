@@ -235,13 +235,13 @@ async def _sweep_pending_documents_async(
 # ---------------------------------------------------------------------------
 # Celery tasks
 # ---------------------------------------------------------------------------
-@app.task(name="workers.ingest_document")  # type: ignore[misc]
+@app.task(name="workers.ingest_document")  # type: ignore[untyped-decorator]
 def ingest_document_task(document_id: str) -> dict[str, Any]:
     """Celery entry point. Ingest one document end-to-end."""
     return asyncio.run(_ingest_document_async(UUID(document_id), settings=get_settings()))
 
 
-@app.task(name="workers.sweep_pending_documents")  # type: ignore[misc]
+@app.task(name="workers.sweep_pending_documents")  # type: ignore[untyped-decorator]
 def sweep_pending_documents() -> dict[str, Any]:
     """Beat task: re-enqueue documents stuck in ``pending``."""
     return asyncio.run(

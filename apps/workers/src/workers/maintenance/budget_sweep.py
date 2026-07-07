@@ -16,7 +16,7 @@ from workers.config import Settings, get_settings
 _log = structlog.get_logger("workers.maintenance")
 
 
-@app.task(name="workers.refresh_budgets")  # type: ignore[misc]
+@app.task(name="workers.refresh_budgets")  # type: ignore[untyped-decorator]
 def refresh_budgets() -> dict[str, Any]:
     """Periodic per-tenant budget sweep: re-derive the auto-pause flags and fire
     any threshold alerts.
