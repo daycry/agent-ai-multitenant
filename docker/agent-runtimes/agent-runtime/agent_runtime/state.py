@@ -4,6 +4,16 @@
 *accumulate* across nodes (`context`, `reflections`, `steps`) carry an
 `operator.add` reducer; scalar fields are replaced by whichever node
 last wrote them.
+
+CONTRATO ENTRE MÓDULOS (hallazgo H6, 2026-07-07): ``graph.py`` Y ``providers.py``
+leen/escriben estas claves POR STRING — renombrar una sin tocar el otro lado
+compila y rompe en silencio (el TypedDict no protege los ``state.get("...")``).
+Claves compartidas hoy: ``status``, ``last_decision``, ``last_observation``,
+``review_retries``, ``last_review_feedback``, ``guidance_nudge``,
+``repetition_warning``, ``progress_summary``, ``output``, ``review_passed``,
+``is_review``, ``system_preamble``, ``context``, ``steps``, ``guardrail_events``
+(+ ``written_files``, inyectada solo en el estado que ve la self-review). Si
+añades o renombras una clave, actualiza AMBOS módulos y este listado.
 """
 
 from __future__ import annotations

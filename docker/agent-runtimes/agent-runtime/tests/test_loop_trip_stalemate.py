@@ -33,7 +33,9 @@ def test_in_review_cycle_reports_stalemate_with_feedback() -> None:
     # The escalation output carries the persistent reviewer feedback for the operator.
     assert output is not None
     assert "El contrato §2.2 exige {message, meta}, no ResponseTrait" in output
-    assert "insatisfacibles" in output
+    # H5: en inglés, como el resto de summaries/outputs de plataforma (el output
+    # además re-entra en prompts de runs posteriores como prior output).
+    assert "unsatisfiable" in output
 
 
 def test_in_review_cycle_without_feedback_has_no_output_override() -> None:

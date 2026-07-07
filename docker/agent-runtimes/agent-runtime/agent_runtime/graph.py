@@ -101,6 +101,11 @@ _READ_DIGESTS_MAX = 20
 # a digest instead of re-reading. 300 gives a few useful lines; the LRU cap (20) still
 # bounds the PROGRESS block. (Symbol-signature extraction for code = deferred follow-up.)
 _READ_DIGEST_CHARS = 300
+# H5 (2026-07-07): caps de lo que el bloque PROGRESS muestra por-turno (antes un
+# `12` suelto repetido inline). Ficheros ya escritos / digests de lectura más
+# recientes — presupuesto de prompt, la lista completa vive en el estado.
+_PROGRESS_FILES_MAX = 12
+_PROGRESS_DIGESTS_MAX = 12
 
 
 def _sterile_hard_limit(max_iterations: int) -> int:
@@ -244,11 +249,13 @@ def _loop_trip_outcome(
             f"Self-review stalemate: the reviewer keeps rejecting the output after "
             f"{review_retries} retr{plural}" + (f" — {feedback[:200]}" if feedback else "")
         )
+        # H5 (2026-07-07): in English like every other platform summary/output —
+        # this output also re-enters later runs' prompts as the prior output.
         output = (
-            "Escalado a validación humana: el self-review rechazó repetidamente la "
-            "implementación por el mismo motivo, así que los criterios de aceptación de "
-            "la tarea pueden ser contradictorios o insatisfacibles. "
-            f"Feedback del revisor: {feedback}"
+            "Escalated to human validation: the self-review repeatedly rejected the "
+            "implementation for the same reason, so the task's acceptance criteria "
+            "may be contradictory or unsatisfiable. "
+            f"Reviewer feedback: {feedback}"
             if feedback
             else None
         )
@@ -1218,9 +1225,9 @@ class _AgentLoop:
         parts = [f"iteration {used}/{cap}"]
         if self.written_files:
             names = sorted(self.written_files)
-            shown = ", ".join(names[:12])
-            if len(names) > 12:
-                shown += f" (+{len(names) - 12} more)"
+            shown = ", ".join(names[:_PROGRESS_FILES_MAX])
+            if len(names) > _PROGRESS_FILES_MAX:
+                shown += f" (+{len(names) - _PROGRESS_FILES_MAX} more)"
             parts.append(f"files you have ALREADY written (do not re-read them): {shown}")
         elif not self.is_review:
             # Sin sesgo a escribir (casuística del operador 2026-07-03): una
@@ -1233,10 +1240,10 @@ class _AgentLoop:
         if self.read_digests:
             # C1 (plan guardas-research): memoria de lecturas — el modelo relee
             # porque la ventana de contexto descarta lo leído; estos digests le
-            # devuelven lo esencial sin otra lectura. Las 12 más recientes.
+            # devuelven lo esencial sin otra lectura. Las más recientes.
             entries = [
                 f"{target.split(':', 1)[-1]} — {digest}"
-                for target, digest in list(self.read_digests.items())[-12:]
+                for target, digest in list(self.read_digests.items())[-_PROGRESS_DIGESTS_MAX:]
             ]
             parts.append(
                 "files you have already READ (use what you learned; do not re-read): "
