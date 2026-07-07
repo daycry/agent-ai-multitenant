@@ -49,25 +49,18 @@ investigación + verificación adversarial; el límite de sesión cortó 3 inves
 y las verificaciones, suplidas con TDD rojo→verde). Implementados con TDD, commit por
 hallazgo:
 
-| #           | Hallazgo                                                                                          | Estado                                                                                  | Commit    |
-| ----------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | --------- |
-| M8b         | Guarda de slug vacío de `stack_exec` sin test de regresión                                        | ✅ test de mutación (quitar la guarda → cae)                                            | `cd329c7` |
-| CANCELAWAIT | Cancel no finalizaba ejecuciones `awaiting_human_approval` (colgadas + request resucitable)       | ✅ sella en línea + cierra el ApprovalRequest (nuevo estado `cancelled`)                | `de48bc4` |
-| M2          | 3 rutas de cierre sellaban `.status` a mano saltándose la guarda idempotente                      | ✅ primitivo único `seal_terminal_execution`                                            | `7939935` |
-| M9          | Gate de cobertura decorativo (`--cov-fail-under=19` vs 30.4% real)                                | ✅ floor 19→30 + meta-test que asserta `>=30`                                           | `fb1ca91` |
-| M5          | Reconciler de reviews sin cap propio (bucle si broker caído / worker SIGKILL)                     | ✅ cap por edad de `updated_at` → escala a `blocked`                                    | `1d9b830` |
-| M1          | El sweeper mataba runs en provisión lenta (>5 min) y descartaba su resultado                      | ✅ columna `container_launched_at` (migr. 0104); solo huérfano si el contenedor existió | `c51dc57` |
-| OFFSITE     | Offsite de backup implementado pero código muerto (no cableado al beat)                           | ✅ `_upload_bundle_to_destinations` best-effort, solo bundle verificado                 | `847a4bd` |
-| HARDDEP     | `DELETE` de tarea hard-borraba un prerequisito → dependientes vacuamente elegibles (DAG corrupto) | ✅ 409 si otras dependen de ella (fail-safe)                                            | `ada289d` |
-| A8b         | Proyecto sin `human_approval_policy` corría todo en auto (fail-open)                              | ✅ hereda preset `development` (decisión del operador, ADR 0104)                        | `3bd1b3a` |
-
-**Diferido (con spec):**
-
-- **M4** (no-atomicidad DB↔git: un crash entre finalize y push deja el diff fuera del
-  bare → PR final incompleto): implementable pero es el ÚNICO cambio adyacente a
-  corrupción de worktree (nueva pasada del reconciler con commit/push al bare + reuso
-  del lock A6) — merece una sesión dedicada con test git-backed, no el final de una
-  sesión con límite de cuota. Spec completa capturada en la investigación.
+| #           | Hallazgo                                                                                          | Estado                                                                                      | Commit    |
+| ----------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | --------- |
+| M8b         | Guarda de slug vacío de `stack_exec` sin test de regresión                                        | ✅ test de mutación (quitar la guarda → cae)                                                | `cd329c7` |
+| CANCELAWAIT | Cancel no finalizaba ejecuciones `awaiting_human_approval` (colgadas + request resucitable)       | ✅ sella en línea + cierra el ApprovalRequest (nuevo estado `cancelled`)                    | `de48bc4` |
+| M2          | 3 rutas de cierre sellaban `.status` a mano saltándose la guarda idempotente                      | ✅ primitivo único `seal_terminal_execution`                                                | `7939935` |
+| M9          | Gate de cobertura decorativo (`--cov-fail-under=19` vs 30.4% real)                                | ✅ floor 19→30 + meta-test que asserta `>=30`                                               | `fb1ca91` |
+| M5          | Reconciler de reviews sin cap propio (bucle si broker caído / worker SIGKILL)                     | ✅ cap por edad de `updated_at` → escala a `blocked`                                        | `1d9b830` |
+| M1          | El sweeper mataba runs en provisión lenta (>5 min) y descartaba su resultado                      | ✅ columna `container_launched_at` (migr. 0104); solo huérfano si el contenedor existió     | `c51dc57` |
+| OFFSITE     | Offsite de backup implementado pero código muerto (no cableado al beat)                           | ✅ `_upload_bundle_to_destinations` best-effort, solo bundle verificado                     | `847a4bd` |
+| HARDDEP     | `DELETE` de tarea hard-borraba un prerequisito → dependientes vacuamente elegibles (DAG corrupto) | ✅ 409 si otras dependen de ella (fail-safe)                                                | `ada289d` |
+| A8b         | Proyecto sin `human_approval_policy` corría todo en auto (fail-open)                              | ✅ hereda preset `development` (decisión del operador, ADR 0104)                            | `3bd1b3a` |
+| M4          | No-atomicidad DB↔git: crash entre finalize y push deja el diff fuera del bare → PR incompleto     | ✅ 4ª pasada del reconciler backfillea el worktree (idempotente por Execution-Id + lock A6) | `5a9e038` |
 
 **No abordados (deliberado):**
 
