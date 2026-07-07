@@ -66,6 +66,40 @@ def test_review_run_skips_self_review_and_routes_end() -> None:
     assert _route_after_review(merged) == "end"  # type: ignore[arg-type]
 
 
+def test_review_run_clean_finish_lands_done() -> None:
+    """Regresión QA e2e 2026-07-07 (run 019f3ced): un run de review LIMPIO llega a
+    self_review con STATUS_RUNNING (en el flujo normal es la self-review quien pone
+    DONE — exactamente lo que A5 salta). El skip debe fijar `done` o el runtime
+    emite `execution.finished status=running` y el worker (ADR 0096) degrada el
+    approve a `blocked` — TODO review aprobado acababa bloqueado."""
+    model = _RecordingModel()
+    loop = _review_loop(model)
+    state = {"status": STATUS_RUNNING, "steps": [], "review_passed": False}
+
+    result = loop.self_review(state)  # type: ignore[arg-type]
+
+    assert model.review_calls == 0
+    merged = {**state, **result}
+    assert merged["status"] == STATUS_DONE
+    assert _route_after_review(merged) == "end"  # type: ignore[arg-type]
+
+
+def test_review_run_terminal_status_is_preserved() -> None:
+    """Un run de review que YA trae un status terminal (aborted/needs_human/
+    awaiting) no debe ser reescrito a done por el skip."""
+    from agent_runtime.state import STATUS_ABORTED
+
+    model = _RecordingModel()
+    loop = _review_loop(model)
+    state = {"status": STATUS_ABORTED, "steps": [], "review_passed": False}
+
+    result = loop.self_review(state)  # type: ignore[arg-type]
+
+    assert model.review_calls == 0
+    merged = {**state, **result}
+    assert merged["status"] == STATUS_ABORTED
+
+
 def test_implementer_run_still_self_reviews() -> None:
     # Regresión: un run NORMAL (no review) sí pasa por model.review().
     model = _RecordingModel()

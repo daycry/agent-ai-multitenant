@@ -59,6 +59,7 @@ from agent_runtime.state import (
     STATUS_AWAITING_APPROVAL,
     STATUS_DONE,
     STATUS_NEEDS_HUMAN_REVIEW,
+    STATUS_RUNNING,
     AgentState,
     AgentTask,
     initial_state,
@@ -948,20 +949,26 @@ class _AgentLoop:
         # Su entregable ES el veredicto (`<verdict>…` en el output), que el WORKER
         # parsea con `parse_reviewer_output` — someterlo a una segunda `model.review()`
         # duplicaba el coste y, si esa review de 2º orden salía inconclusa, mandaba un
-        # approve correcto a `blocked`. Se salta y enruta a END con el status que dejó
-        # `finalize` (el veredicto viaja en el output, no en `review_passed`).
+        # approve correcto a `blocked`. Se salta y enruta a END.
         if self.is_review:
+            # Regresión QA 2026-07-07 (run 019f3ced): en el flujo NORMAL es la
+            # self-review quien fija DONE — al saltarla, un review limpio llegaba
+            # aquí con STATUS_RUNNING y el runtime emitía `finished status=running`;
+            # el worker (ADR 0096) degradaba ese approve a `blocked`. El skip fija
+            # `done` para un run limpio y PRESERVA cualquier status ya terminal
+            # (aborted / needs_human_review / awaiting — las escaladas mandan).
+            final_status = STATUS_DONE if state["status"] == STATUS_RUNNING else state["status"]
             steps.append(
                 node_step(
                     base,
                     "self_review",
                     "Skipped self-review — this IS a review run (verdict is the output)",
-                    status=state["status"],
+                    status=final_status,
                 )
             )
             # review_passed=True enruta a END (no a retry); no reinterpreta el
             # veredicto del reviewer (el worker lo lee del output, no de este flag).
-            return {"review_passed": True, "steps": steps}
+            return {"review_passed": True, "status": final_status, "steps": steps}
 
         # NEEDS_HUMAN_REVIEW joins the skip-set (B2): a plan-trip escalation already
         # reached its verdict — running review() on it could turn a `passed` into a
