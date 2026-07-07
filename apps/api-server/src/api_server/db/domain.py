@@ -364,6 +364,11 @@ class ApprovalRequestStatus(enum.StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     TIMED_OUT = "timed_out"
+    # The task/plan/project was cancelled while this request was pending — the
+    # parked execution is sealed and the request leaves the inbox (CANCELAWAIT).
+    # Distinct from REJECTED ("a human said no") for honest audit. Fits the
+    # VARCHAR(16) column (9 chars), so no migration is needed.
+    CANCELLED = "cancelled"
 
 
 class HumanTaskAssignmentStatus(enum.StrEnum):

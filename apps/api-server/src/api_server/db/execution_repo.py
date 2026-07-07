@@ -17,7 +17,14 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.db.domain import Execution, ExecutionStatus, Task, TaskStatus
+from api_server.db.domain import (
+    ApprovalRequest,
+    ApprovalRequestStatus,
+    Execution,
+    ExecutionStatus,
+    Task,
+    TaskStatus,
+)
 from api_server.db.price_snapshot import PriceSnapshot, snapshot_model_call
 
 # The step kind that carries an LLM call's tokens + cost (the canonical
@@ -266,31 +273,71 @@ async def request_execution_cancel(session: AsyncSession, execution_id: UUID) ->
 async def cancel_running_executions_for_task(
     session: AsyncSession, task_id: UUID
 ) -> list[Execution]:
-    """Request cooperative cancellation of every still-`running` execution of a
-    task (prod-06 cancel_01/cancel_02).
+    """Cancel every non-terminal execution of a task (prod-06 cancel_01/cancel_02).
 
-    Seals ``cancel_requested_at`` on each (the worker polls it to kill the
-    container + finalise as ``cancelled``) and returns them — with their
-    ``celery_task_id`` — so the caller can ``revoke`` the queued jobs. Used when a
-    task is moved to ``cancelled`` (in_progress→cancelled) and by the plan-level
-    cancellation cascade. Idempotent; the caller owns the transaction.
+    Two cases, because a run can be parked without a live worker:
+
+      * ``running`` — a worker/container is (or was) live: seal only
+        ``cancel_requested_at``; the worker polls it, kills the container and
+        finalises the row as ``cancelled``.
+      * ``awaiting_human_approval`` — the run is parked mid-run with its container
+        already gone; NO worker will ever finalise it (the reaper/reconciler both
+        skip this state). Seal it terminally IN LINE (``cancelled`` + ``completed_at``)
+        and close its ``pending`` ApprovalRequest(s) so they leave the inbox and a
+        later ``resolve`` can't resurrect the cancelled task (CANCELAWAIT).
+
+    Returns every affected execution — with its ``celery_task_id`` — so the caller
+    can ``revoke`` the queued jobs (a no-op on an already-sealed row). Idempotent;
+    the caller owns the transaction.
     """
     rows = (
         (
             await session.execute(
                 select(Execution).where(
                     Execution.task_id == task_id,
-                    Execution.status == ExecutionStatus.RUNNING,
+                    Execution.status.in_(
+                        [
+                            ExecutionStatus.RUNNING.value,
+                            ExecutionStatus.AWAITING_HUMAN_APPROVAL.value,
+                        ]
+                    ),
                 )
             )
         )
         .scalars()
         .all()
     )
+    now = datetime.now(UTC)
     cancelled: list[Execution] = []
+    parked_exec_ids: list[UUID] = []
     for execution in rows:
-        execution.cancel_requested_at = execution.cancel_requested_at or datetime.now(UTC)
+        execution.cancel_requested_at = execution.cancel_requested_at or now
+        if execution.status == ExecutionStatus.AWAITING_HUMAN_APPROVAL.value:
+            # No worker owns this parked run — seal it here so it doesn't hang forever.
+            execution.status = ExecutionStatus.CANCELLED.value
+            execution.abort_code = "cancelled"
+            execution.completed_at = now
+            parked_exec_ids.append(execution.id)
         cancelled.append(execution)
+    if parked_exec_ids:
+        # Close the pending approval requests of the parked runs (tenant-scoped via
+        # the execution_id, which belongs to this task) so they leave the inbox.
+        pending = (
+            (
+                await session.execute(
+                    select(ApprovalRequest).where(
+                        ApprovalRequest.execution_id.in_(parked_exec_ids),
+                        ApprovalRequest.status == ApprovalRequestStatus.PENDING.value,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for request in pending:
+            request.status = ApprovalRequestStatus.CANCELLED.value
+            request.resolved_at = now
+            request.reason = "task cancelled"
     if cancelled:
         await session.flush()
     return cancelled
