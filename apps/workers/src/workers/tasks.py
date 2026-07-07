@@ -12,6 +12,7 @@ Two entry points:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import Any
 from uuid import UUID
@@ -75,6 +76,8 @@ def run_execution(self: Any, request: dict[str, Any]) -> dict[str, Any]:
     auto-retried — re-running is expensive and side-effecting; an operator
     reprocesses from the dead-letter stream (task_06_14_04).
     """
+    from celery.exceptions import SoftTimeLimitExceeded
+
     settings = get_settings()
     celery_task_id = getattr(self.request, "id", None)
     try:
@@ -85,6 +88,17 @@ def run_execution(self: Any, request: dict[str, Any]) -> dict[str, Any]:
                 celery_task_id=celery_task_id,
             )
         )
+    except SoftTimeLimitExceeded as exc:
+        # prod-06 (MUST-ADDRESS a): el soft-timeout de Celery lo captura AQUÍ (hilo
+        # principal), no `run_streamed`. Clasificamos por el flag de cancelación:
+        # con flag → `cancelled` SIN DLQ (fue un cancel del operador); sin flag →
+        # `failed(soft_time_limit_exceeded)` CON DLQ. En ambos casos finalizamos la
+        # fila `running` (no la dejamos colgada hasta el sweeper) y matamos el
+        # contenedor huérfano (el SIGKILL del hijo Celery no toca el contenedor DooD).
+        was_cancel = asyncio.run(_finalize_soft_timeout(settings, request))
+        if not was_cancel:
+            _record_execution_dead_letter(settings, request, exc)
+        raise
     except Exception as exc:
         _record_execution_dead_letter(settings, request, exc)
         raise
@@ -103,6 +117,66 @@ def _record_execution_dead_letter(
             task_id=str(request.get("task_id", "")),
             error=str(dlq_exc),
         )
+
+
+async def _finalize_soft_timeout(settings: Settings, request: dict[str, Any]) -> bool:
+    """Finalize a soft-timed-out run's `running` row(s) + kill its container.
+
+    Returns ``True`` iff it was an operator CANCEL (``cancel_requested_at`` set) —
+    the caller then skips the dead-letter. A genuine timeout (no flag) becomes
+    ``failed(soft_time_limit_exceeded)`` and IS dead-lettered. Sets
+    ``completed_at`` so a late finalize from the (killed) run is idempotent-guarded
+    (F46/F52). Best-effort: any error just leaves the row for the zombie sweeper."""
+    from datetime import UTC, datetime
+
+    from api_server.db.domain import Execution, ExecutionStatus
+
+    from workers.container import AgentContainerRunner
+
+    task_id_raw = str(request.get("task_id", ""))
+    if not task_id_raw:
+        return False
+    engine = create_async_engine(settings.database_url)
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    was_cancel = False
+    exec_ids: list[str] = []
+    try:
+        async with sessionmaker() as session, session.begin():
+            rows = (
+                (
+                    await session.execute(
+                        select(Execution).where(
+                            Execution.task_id == UUID(task_id_raw),
+                            Execution.status == ExecutionStatus.RUNNING.value,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            now = datetime.now(UTC)
+            for execution in rows:
+                if execution.cancel_requested_at is not None:
+                    execution.status = ExecutionStatus.CANCELLED.value
+                    execution.abort_code = "cancelled"
+                    was_cancel = True
+                else:
+                    execution.status = ExecutionStatus.FAILED.value
+                    execution.abort_code = "soft_time_limit_exceeded"
+                execution.completed_at = now
+                exec_ids.append(str(execution.id))
+    except Exception as exc:  # best-effort — the zombie sweeper is the backstop
+        _log.warning("workers.soft_timeout_finalize_failed", task_id=task_id_raw, error=str(exc))
+    finally:
+        await engine.dispose()
+    # Kill the orphaned container(s) — the DooD container outlives the SIGKILL of
+    # the Celery worker child; without this it burns LLM budget until it times out.
+    if exec_ids:
+        runner = AgentContainerRunner(settings)
+        for eid in exec_ids:
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(runner.kill_by_label, eid)
+    return was_cancel
 
 
 async def _push_execution_dead_letter(
