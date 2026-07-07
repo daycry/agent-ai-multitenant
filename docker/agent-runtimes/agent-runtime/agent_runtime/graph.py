@@ -22,12 +22,9 @@ so the loop is exercised offline and deterministically by the tests.
 
 from __future__ import annotations
 
-import os
-import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -37,8 +34,25 @@ from agent_runtime.approval import ApprovalGate
 from agent_runtime.guardrails import run_hook
 from agent_runtime.loop_detection import DEFAULT_LOOP_THRESHOLD, LoopDetector
 from agent_runtime.model import DecisionKind, ModelClient
+from agent_runtime.nudges import (
+    _PATH_CHURN_THRESHOLD,
+    _REREAD_CHURN_NUDGE_LIMIT,
+    _RESEARCH_HARD_LIMIT,  # noqa: F401  (re-export: los tests lo importan de aquí)
+    _SAME_TARGET_HARD_LIMIT,
+    _path_churn_nudge,
+    _repetition_nudge,
+    _reread_churn_nudge,
+    _research_exhausted,
+    _research_nudge,
+    _same_target_nudge,
+    _sterile_hard_limit,
+)
 from agent_runtime.providers import ProviderTimeout
-from agent_runtime.review_contract import REVIEW_FINISH_SUMMARY
+from agent_runtime.review_harvest import (
+    _harvest_worktree_files,
+    _referenced_paths,
+    _workspace_root,
+)
 from agent_runtime.safeguards import Budgets, SafeguardCode, SafeguardTracker
 from agent_runtime.state import (
     STATUS_ABORTED,
@@ -50,6 +64,14 @@ from agent_runtime.state import (
     initial_state,
 )
 from agent_runtime.steps import memory_read_step, model_call_step, node_step, tool_call_step
+from agent_runtime.tool_classification import (
+    _base_tool_name,
+    _is_mutating_tool,
+    _is_platform_error,
+    _is_producing_tool,
+    _is_research_tool,
+    _read_target,
+)
 from agent_runtime.tools import ToolRegistry, default_registry
 
 # The eight nodes of the loop, in declaration order.
@@ -65,34 +87,6 @@ NODE_NAMES: tuple[str, ...] = (
 )
 
 
-# Read/search tools that gather context but produce no deliverable. A run that
-# only calls these is researching, not making progress.
-# G4a (ADR 0103): search_code is a READ-ONLY inspection tool — it earns novelty like
-# any research call and is NOT a mutator (so repeating it can't hard-abort the run).
-_RESEARCH_TOOLS = frozenset(
-    {"list_files", "read_file", "memory_recall", "rag_search", "search_code"}
-)
-# Tools that produce/modify the deliverable — calling one means real progress
-# (and that the agent HAS produced, which changes the nudge from "write" to "finish").
-_PRODUCING_TOOLS = frozenset(
-    {"write_file", "edit_file", "create_file", "shell_exec", "stack_exec", "apply_patch"}
-)
-# ADR 0089-D4 + plan guardas-research-por-novedad: after this many STERILE
-# research calls in a row (no NEW target gathered — re-reads, untargetable calls
-# and ERRORED reads), trip a HARD backstop. The soft nudge fires at 3 but a model
-# can ignore it and churn to max_iterations. Floor of the budget-relative limit
-# (see `_sterile_hard_limit`). La CANTIDAD de research ya no corta nada: explorar
-# N ficheros NUEVOS es legítimo y lo acota el presupuesto de iteraciones.
-_RESEARCH_HARD_LIMIT = 10
-# Per-target read counters (plan guardas-research A1): a la N.ª lectura del MISMO
-# target, nudge específico nombrando el fichero; a la M.ª, el backstop duro. Caza
-# el patrón INTERCALADO (A,A,B,A,A,C…) que la racha consecutiva no ve.
-_SAME_TARGET_NUDGE_LIMIT = 3
-_SAME_TARGET_HARD_LIMIT = 5
-# After this many CONSECUTIVE sterile research calls (re-reads of already-seen
-# targets / errored reads), nudge the agent to stop re-reading and produce/finish
-# (fires before the hard backstop).
-_REREAD_CHURN_NUDGE_LIMIT = 3
 # Memoria de lecturas (plan guardas-research C1): digests por fichero leído,
 # renderizados en el bloque PROGRESS para que el modelo no relea para recordar.
 # LRU acotado — presupuesto de prompt, no de memoria.
@@ -106,109 +100,6 @@ _READ_DIGEST_CHARS = 300
 # recientes — presupuesto de prompt, la lista completa vive en el estado.
 _PROGRESS_FILES_MAX = 12
 _PROGRESS_DIGESTS_MAX = 12
-
-
-def _sterile_hard_limit(max_iterations: int) -> int:
-    """Límite duro de esterilidad RELATIVO al presupuesto (25 %, suelo fijo).
-
-    Con 50 iteraciones (claude_sdk implementador) → 12; con 25 (review/HTTP) →
-    el suelo de 10. Evita la trampa del umbral estático calibrado una vez
-    (lección del budget de 100k tokens, auditoría 2026-07-02)."""
-    return max(_RESEARCH_HARD_LIMIT, max_iterations // 4)
-
-
-# ADR 0089: after this many writes to the SAME path (ANY content), nudge the agent to
-# stop re-writing and FINISH — a 'churn' the byte-exact detector/nudge cannot see.
-_PATH_CHURN_THRESHOLD = 4
-
-
-def _base_tool_name(tool: str | None) -> str:
-    """The tool name without its MCP/custom namespace (``filesystem.write_file`` →
-    ``write_file``).
-
-    Audit cluster C2 (F24): production/research classification matched bare
-    builtin names only, so a file written via an MCP server (``fs.write_file``)
-    or a namespaced custom tool was invisible — ``has_produced`` never latched and
-    the self-review saw no code, escalating a run that DID produce. Stripping the
-    namespace lets the same writer verbs count whatever wires them.
-    """
-    return (tool or "").rsplit(".", 1)[-1]
-
-
-def _is_research_tool(tool: str | None) -> bool:
-    return _base_tool_name(tool) in _RESEARCH_TOOLS
-
-
-def _read_target(tool: str | None, args: dict[str, Any]) -> str | None:
-    """The normalized target a research call reads, or ``None``.
-
-    A NEW target is exploration (progress toward understanding); a REPEATED target
-    is read-churn. Cosmetic ``offset``/``limit`` are ignored so paging the same file
-    does not masquerade as a new target. Namespace-stripped so an MCP/custom reader
-    counts the same as the builtin."""
-    base = _base_tool_name(tool)
-    if base in {"read_file", "list_files"}:
-        return f"{base}:{args.get('path') or '.'}"
-    if base in {"rag_search", "memory_recall"}:
-        query = str(args.get("query") or "").strip()
-        return f"{base}:{query}" if query else None
-    if base == "search_code":  # G4a (ADR 0103)
-        needle = str(args.get("query") or args.get("pattern") or "").strip()
-        return f"{base}:{needle}" if needle else None
-    return None
-
-
-def _is_producing_tool(tool: str | None) -> bool:
-    return _base_tool_name(tool) in _PRODUCING_TOOLS
-
-
-# Read-only / idempotent tools EXEMPT from the hard repetitive-loop abort (Tema C):
-# repeating them wastes turns but cannot corrupt the deliverable, so they only earn
-# the repetition nudge (B1) and are bounded by max_iterations/wall_clock — never a
-# hard abort. The research/inspection tools are the read-only allowlist.
-_READONLY_TOOLS = _RESEARCH_TOOLS
-
-
-def _is_readonly_tool(tool: str | None) -> bool:
-    return _base_tool_name(tool) in _READONLY_TOOLS
-
-
-def _is_mutating_tool(tool: str | None) -> bool:
-    """Whether repeating ``tool`` could change the deliverable (Tema C).
-
-    A MUTATOR (a producing tool, OR any unknown/unclassified verb — conservative by
-    default, e.g. ``echo``) trips the hard repetitive-loop abort/escalation; a known
-    READ-ONLY tool (``_READONLY_TOOLS``) does NOT — repeating it merely wastes turns,
-    which the iteration / wall-clock budgets already bound, so it gets the B1 nudge
-    instead. Defaulting unknowns to MUTATING preserves the existing hard-abort
-    guarantee (a runaway writer — or any non-read-only verb — is always caught).
-    """
-    return not _is_readonly_tool(tool)
-
-
-# G3b (ADR 0103): substrings that mark a tool failure as the PLATFORM's fault (the
-# tool was denied / absent / has no executor, or the filesystem refused) rather than
-# the agent's own bad input (a guessed non-existent path). A platform failure must not
-# accumulate sterility — the agent did nothing wrong. A file-not-found on a path the
-# agent GUESSED still counts as sterile churn (anti-gaming, r5a).
-_PLATFORM_ERROR_MARKERS: tuple[str, ...] = (
-    "not allowed",
-    "unknown tool",
-    "no executor",
-    "not registered",
-    "permission denied",
-    "eacces",
-    "read-only file system",
-    "worktree is empty",
-)
-
-
-def _is_platform_error(observation: Any) -> bool:
-    err = observation.get("error") if isinstance(observation, dict) else None
-    if not err:
-        return False
-    low = str(err).lower()
-    return any(marker in low for marker in _PLATFORM_ERROR_MARKERS)
 
 
 def _abort_or_escalate_status(has_produced: bool, *, is_review: bool = False) -> str:
@@ -267,303 +158,10 @@ def _loop_trip_outcome(
     )
 
 
-def _repetition_nudge(
-    *, tool: str | None, repeat_count: int, threshold: int, has_produced: bool
-) -> str | None:
-    """Warn the agent one turn BEFORE the loop detector aborts a repeated action.
-
-    The detector aborts on the ``(threshold + 1)``-th IDENTICAL action (same tool +
-    same args → same bytes). This fires earlier, once ``repeat_count >= threshold``,
-    so the agent gets a chance to break the rut itself. Returns ``None`` until the
-    action has repeated enough to warn. The wording branches by tool CLASS:
-
-      * a MUTATING tool (``write_file``/``edit_file``/…) — the bytes are already
-        saved; repeating writes nothing new, so the fix is to apply the review
-        feedback or FINISH via ``submit_result``, not to re-write;
-      * a READ-ONLY / verification tool — the result is already in hand; reuse it
-        instead of re-running the identical query.
-    """
-    if tool is None or repeat_count < threshold:
-        return None
-    name = _base_tool_name(tool) or "that tool"
-    if _is_mutating_tool(tool):
-        finish_hint = (
-            "apply the REVIEW FEEDBACK or FINISH now by calling submit_result"
-            if has_produced
-            else "apply the REVIEW FEEDBACK or move on to a DIFFERENT step"
-        )
-        return (
-            f"You have written the SAME bytes with '{name}' {repeat_count} times — it "
-            f"is already saved and repeating it changes nothing. Stop repeating: {finish_hint}."
-        )
-    return (
-        f"You have already run '{name}' with these exact arguments {repeat_count} times — "
-        "use the result you already have instead of repeating it."
-    )
-
-
-def _path_churn_nudge(*, path: str | None, write_count: int, threshold: int) -> str | None:
-    """Advisory nudge when the agent keeps re-writing the SAME file without finishing.
-
-    A model can churn one file with slightly DIFFERENT content each turn — never
-    byte-identical, so the loop detector (content-aware fingerprint) and the
-    identical-args repetition nudge both miss it, yet it burns the iteration budget
-    without converging (observed: a migration re-written 17 times before MAX_ITERATIONS).
-    Fires once a path has been written ``threshold`` times, pushing the agent to FINISH
-    (and let the review / a human judge) or fix the SPECIFIC cross-file problem instead
-    of rewriting the whole file again. Advisory only — it never aborts; the iteration /
-    wall-clock budgets remain the hard ceiling.
-    """
-    if not path or write_count < threshold:
-        return None
-    return (
-        f"You have re-written '{path}' {write_count} times without finishing. STOP "
-        "re-writing it: either FINISH now by calling submit_result (the review / a human "
-        "will judge it), or fix the SPECIFIC cross-file inconsistency the review pointed "
-        "out — do NOT rewrite the whole file again."
-    )
-
-
-def _research_nudge(
-    *,
-    tool: str | None,
-    repeat_count: int,
-    has_produced: bool = False,
-    is_review: bool = False,
-) -> str | None:
-    """Guidance when a research tool is repeated with the SAME args.
-
-    Plan guardas-research-por-novedad A2: el trigger por CANTIDAD de research
-    (streak ciego de 5) se retiró — explorar N ficheros NUEVOS es legítimo y no
-    debe empujar a `write_file` prematuro. Queda solo la repetición exacta; la
-    esterilidad la cubre `_reread_churn_nudge` y el per-target
-    `_same_target_nudge`. Returns ``None`` when no nudge applies.
-    """
-    if not (_is_research_tool(tool) and repeat_count > 1):
-        return None
-    if is_review:
-        # ADR 0095: a reviewer is FORBIDDEN to write_file; push it to conclude with
-        # its verdict (claude_sdk FINISH = a no-tool-call prose turn) — never to
-        # "produce the deliverable".
-        return (
-            "You have enough context to judge this task. STOP researching and FINISH "
-            f"your review now: {REVIEW_FINISH_SUMMARY} — do NOT call "
-            "more tools and do NOT write files."
-        )
-    if has_produced:
-        # C0 (ADR 0087): provider-neutral wording — do NOT prescribe "no tool call".
-        # FINISH on the HTTP providers IS a `submit_result` tool call; on claude_sdk
-        # it is a prose summary. Either way: report the final result and stop.
-        return (
-            "You have ALREADY produced the deliverable. Stop verifying/re-reading and "
-            "FINISH now: report the final result and stop working."
-        )
-    return (
-        f"You already ran '{tool}' with these exact arguments {repeat_count} times. "
-        "Do not repeat it — use the result you already have and move forward."
-    )
-
-
-def _same_target_nudge(
-    *, target: str | None, count: int, has_produced: bool = False, is_review: bool = False
-) -> str | None:
-    """Nudge específico cuando el MISMO target se ha leído demasiadas veces
-    (plan guardas-research A1) — caza el patrón intercalado (A,A,B,A,A) que la
-    racha consecutiva no ve, y nombra el fichero exacto (mensaje accionable)."""
-    if target is None or count < _SAME_TARGET_NUDGE_LIMIT:
-        return None
-    name = target.split(":", 1)[-1]
-    if is_review:
-        return (
-            f"You have already read '{name}' {count} times — you have its content. "
-            f"FINISH your review now: {REVIEW_FINISH_SUMMARY}."
-        )
-    if has_produced:
-        return (
-            f"You have already read '{name}' {count} times and ALREADY produced the "
-            "deliverable. Stop re-reading it and FINISH now: report the final result."
-        )
-    return (
-        f"You have already read '{name}' {count} times — you already have its content "
-        "(see PROGRESS). Use what you learned; do not read it again."
-    )
-
-
-def _reread_churn_nudge(
-    *, churn_streak: int, limit: int, has_produced: bool, is_review: bool = False
-) -> str | None:
-    """Sharp nudge when the agent RE-reads the SAME targets in a row (read-churn).
-
-    Preferred over the generic ``research_streak`` nudge so a research-heavy run gets
-    an ACTIONABLE next move (produce, finish, or — for an analysis-only task — report
-    a conclusion) instead of a mis-aimed "write a file". Returns ``None`` below the
-    limit."""
-    if churn_streak < limit:
-        return None
-    if is_review:
-        return (
-            f"You have re-read the same files {churn_streak} times in a row. You have "
-            f"enough to judge — FINISH your review now: {REVIEW_FINISH_SUMMARY}. "
-            "Do NOT keep reading."
-        )
-    if has_produced:
-        return (
-            f"You have re-read the same files {churn_streak} times in a row and ALREADY "
-            "produced the deliverable. Stop re-reading and FINISH now: report the result."
-        )
-    return (
-        f"You have re-read the same files {churn_streak} times in a row without producing "
-        "anything. Produce the task's deliverable now; OR, if this task is analysis-only, "
-        "FINISH by reporting your findings/conclusion. Do not keep re-reading."
-    )
-
-
-def _research_exhausted(
-    *,
-    sterile_streak: int,
-    max_same_target_reads: int,
-    has_produced: bool,
-    review_retries: int,
-    sterile_limit: int,
-    same_target_limit: int,
-    is_review: bool = False,
-) -> bool:
-    """The HARD backstop, keyed on STERILITY — never on research volume
-    (plan guardas-research-por-novedad A3).
-
-    Eligible only when the run has something worth preserving (produced a deliverable,
-    OR a prior self-review failed, OR it is a review). A sterile analysis-only run
-    that legitimately only reads is NOT cut here — its termination stays bounded by
-    ``max_iterations``/``wall_clock`` (D3 invariant). When eligible, it trips on ANY of:
-
-      1. ``sterile_streak >= sterile_limit`` — N research calls seguidas SIN target
-         nuevo (re-reads, calls sin target, lecturas con error); el límite es
-         relativo al presupuesto (:func:`_sterile_hard_limit`).
-      2. ``max_same_target_reads >= same_target_limit`` — CUALQUIER target leído
-         demasiadas veces, aunque sea intercalado con lecturas nuevas (el patrón
-         A,A,B,A,A que la racha consecutiva no ve).
-
-    El techo de lecturas DISTINTAS (22) se retiró: la amplitud es exploración
-    legítima y ya la acota el presupuesto de iteraciones; cortarla castigaba a
-    reviewers y verificaciones amplias (falso positivo del 2026-07-03). El
-    carve-out antiguo de review por research_streak bruto cae por lo mismo.
-    """
-    if not (has_produced or review_retries > 0 or is_review):
-        return False
-    return sterile_streak >= sterile_limit or max_same_target_reads >= same_target_limit
-
-
 def _no_recall(_task: AgentTask) -> list[dict[str, Any]]:
     """Recall stub para bare runs sin API interno — el boot de producción
     cablea el recall real (``__main__._build_auto_recall``, D1 2026-07-03)."""
     return []
-
-
-# --- review harvest: the agent's CUMULATIVE deliverable, read from the worktree ---
-_WORKSPACE_ROOT_ENV = "AGENT_WORKSPACE_ROOT"
-# Never part of the reviewable deliverable: VCS, framework deps, agent scratch,
-# build noise. Mirrors what file_tools/list_files already hide from the agent.
-_REVIEW_EXCLUDE_DIRS = frozenset(
-    {".git", "vendor", "node_modules", "__pycache__", ".venv", "venv", ".claude"}
-)
-_REVIEW_EXCLUDE_NAMES = frozenset({"agent_task.json", ".claude.json"})
-_REVIEW_EXCLUDE_SUFFIXES = (".pyc", ".lock", ".log", ".map")
-# Bound the worktree scan (the review prompt caps further to _REVIEW_MAX_FILES).
-_WORKTREE_SCAN_MAX_FILES = 40
-_WORKTREE_SKIP_FILE_BYTES = 200_000
-
-
-def _workspace_root() -> Path:
-    """The worktree root the agent's file tools resolve against (``/workspace``,
-    or ``AGENT_WORKSPACE_ROOT`` for tests). Mirrors ``builtin_families``."""
-    return Path(os.environ.get(_WORKSPACE_ROOT_ENV) or "/workspace")
-
-
-def _harvest_worktree_files(root: Path, prefer: list[str]) -> list[dict[str, str]]:
-    """Read the agent's CUMULATIVE deliverable from the worktree on disk.
-
-    The per-run write capture (``_AgentLoop.written_files``) only sees files
-    written in the CURRENT run; an incremental run that builds on a prior committed
-    run leaves earlier files untouched, so the self-review would judge an INCOMPLETE
-    picture and reject a whole deliverable as "missing files" (observed live on a
-    re-run of an escalated JWT task). Reading the worktree gives the reviewer the
-    TRUE current state, and the on-disk content is the FINAL content (after every
-    edit), not the write-time argument. VCS/framework dirs are excluded and the scan
-    is bounded; ``prefer`` (this run's written paths) are ordered FIRST so the
-    current work is always shown even when the cap truncates. Returns ``[]`` when
-    there is no worktree (analysis/design runs, tests) → the caller falls back to the
-    per-run capture and prose-only review is unchanged.
-    """
-    if not root.is_dir():
-        return []
-    try:
-        candidates = [p for p in root.rglob("*") if p.is_file()]
-    except OSError:  # pragma: no cover - defensive (permission / race)
-        return []
-    rels: list[str] = []
-    for path in candidates:
-        try:
-            rel_path = path.relative_to(root)
-        except ValueError:  # pragma: no cover - defensive
-            continue
-        if set(rel_path.parts) & _REVIEW_EXCLUDE_DIRS:
-            continue
-        if rel_path.name in _REVIEW_EXCLUDE_NAMES or rel_path.suffix in _REVIEW_EXCLUDE_SUFFIXES:
-            continue
-        rels.append(rel_path.as_posix())
-    preferred = [r for r in prefer if r in rels]
-    ordered = preferred + sorted(r for r in rels if r not in preferred)
-    harvested: list[dict[str, str]] = []
-    for rel in ordered[:_WORKTREE_SCAN_MAX_FILES]:
-        file_path = root / rel
-        try:
-            if file_path.stat().st_size > _WORKTREE_SKIP_FILE_BYTES:
-                continue
-            harvested.append(
-                {"path": rel, "content": file_path.read_text(encoding="utf-8", errors="replace")}
-            )
-        except OSError:  # pragma: no cover - defensive (binary / permission)
-            continue
-    return harvested
-
-
-# Paths referenciados por la task/output — máx. entradas que se añaden a
-# `prefer` del harvest (caso 019f27cc: el entregable pre-existente quedaba
-# fuera del cap de 40 y el self-review no podía verlo).
-_REFERENCED_PATHS_MAX = 10
-# Path con directorio (docs/x.md) O nombre de fichero suelto en la raíz
-# (phpunit.xml — caso 019f27ed). La extensión debe EMPEZAR por letra para no
-# capturar números de versión («1.0.0»); las entradas que no existan en el
-# worktree las descarta el harvest (prefer ∩ rels), así que el regex puede ser
-# generoso sin riesgo.
-_PATH_TOKEN_RE = re.compile(r"[\w][\w./\\-]*\.[A-Za-z]\w{0,7}")
-
-
-def _referenced_paths(state: Mapping[str, Any]) -> list[str]:
-    """Paths tipo-fichero mencionados en la task (descripción + criterios) y en
-    el output final del agente, en orden de aparición y sin duplicados.
-
-    Alimenta el ``prefer`` del harvest del self-review: el entregable que los
-    criterios NOMBRAN debe estar siempre en el prompt del reviewer, aunque este
-    run no lo haya escrito (trabajo pre-existente de un run anterior — caso
-    019f27cc) y aunque el worktree tenga más ficheros que el cap del harvest."""
-    task = state.get("task") or {}
-    chunks: list[str] = [str(task.get("description") or "")]
-    for criterion in task.get("acceptance_criteria") or []:
-        if isinstance(criterion, dict):
-            chunks.append(" ".join(str(v) for v in criterion.values()))
-        else:
-            chunks.append(str(criterion))
-    chunks.append(str(state.get("output") or ""))
-    seen: list[str] = []
-    for chunk in chunks:
-        for match in _PATH_TOKEN_RE.findall(chunk):
-            normalized = match.replace("\\", "/").strip("/")
-            if normalized not in seen:
-                seen.append(normalized)
-            if len(seen) >= _REFERENCED_PATHS_MAX:
-                return seen
-    return seen
 
 
 def _provider_abort_code(exc: LLMError) -> str:
