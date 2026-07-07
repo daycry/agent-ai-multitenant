@@ -130,9 +130,30 @@ async def _run_execution(
     request: ExecutionRequest, settings: Settings, *, celery_task_id: str | None = None
 ) -> dict[str, Any]:
     """Async core of `run_execution` — owns the engine + Redis lifecycle."""
+    from workers.execution import ExecutionOutcome
+    from workers.run_lock import acquire_run_lock, release_run_lock
+
     engine = create_async_engine(settings.database_url)
     redis: Redis = Redis.from_url(settings.events_redis_url, decode_responses=True)
+    # prod-18 A6: a per-task lock so a re-delivered message (acks_late; the DooD
+    # container survives a worker crash) can't spawn a SECOND run of the same task
+    # whose worktree `reset --hard`+`clean -fdx` would corrupt the first's in-flight
+    # work. TTL = the longest container budget + margin, so a crashed holder frees
+    # the lock roughly when its orphaned container would time out anyway.
+    lock_token = celery_task_id or "1"
+    lock_ttl = settings.container_timeout_with_grace_for_kind("claude_sdk") + 300
+    acquired = False
     try:
+        acquired = await acquire_run_lock(redis, request.task_id, ttl_s=lock_ttl, token=lock_token)
+        if not acquired:
+            _log.warning(
+                "workers.run_lock_held_skip",
+                task_id=request.task_id,
+                reason="another run of this task is live (concurrent re-delivery)",
+            )
+            return ExecutionOutcome(
+                execution_id="", status="skipped", abort_code="concurrent_run_locked"
+            ).as_dict()
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         outcome = await conduct_execution(
             request,
@@ -143,6 +164,8 @@ async def _run_execution(
         )
         return outcome.as_dict()
     finally:
+        if acquired:
+            await release_run_lock(redis, request.task_id, token=lock_token)
         await redis.aclose()
         await engine.dispose()
 
