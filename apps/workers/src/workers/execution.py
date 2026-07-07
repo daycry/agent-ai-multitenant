@@ -21,7 +21,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -43,7 +42,6 @@ from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from workers.agent_tool_schemas import build_model_tool_schemas
 from workers.config import Settings
 from workers.container import AgentContainerRunner, ContainerSpec
 from workers.memorizer import trigger_memorize
@@ -51,6 +49,23 @@ from workers.model_resolver import (
     ModelResolutionError,
     resolve_model_spec,
     safe_spec_summary,
+)
+from workers.run_contract import (
+    CrossTenantExecutionError,
+    ExecutionOutcome,
+    ExecutionRequest,
+)
+from workers.run_result import (
+    _EMPTY_USAGE,
+    _assemble_result,
+    _parse_line,
+    _RuntimeResult,
+    _scan_logs_for_terminal,  # noqa: F401  (re-export: su casa histórica es este módulo)
+)
+from workers.run_spec import (
+    _SDK_BASE_SHELL_COMMANDS,  # noqa: F401  (re-export: tests lo importan de aquí)
+    _agent_spec,
+    _resolve_tool_spec_images,  # noqa: F401  (re-export: tests lo importan de aquí)
 )
 
 _log = structlog.get_logger("workers.execution")
@@ -63,179 +78,6 @@ _AWAITING_APPROVAL = "awaiting_human_approval"
 # How often the run polls `cancel_requested_at` while the container runs, to
 # kill it cooperatively on an operator cancel (POST /executions/{id}/cancel).
 _CANCEL_POLL_INTERVAL_S = 3.0
-
-# A zeroed usage roll-up — used when a run produces no result line
-# (the container crashed or timed out before `execution.finished`).
-_EMPTY_USAGE: dict[str, Any] = {
-    "iterations": 0,
-    "total_tokens": 0,
-    "cost_usd": 0.0,
-    "tool_calls": 0,
-    "model_calls": 0,
-}
-
-
-class CrossTenantExecutionError(RuntimeError):
-    """An ExecutionRequest's `task_id` does not belong to its declared
-    `tenant_id`.
-
-    The worker connects with the BYPASSRLS `migrations_user` role
-    (workers/config.py) because it legitimately writes `executions` rows
-    for many tenants — so RLS cannot catch a tampered or buggy Celery
-    payload that pairs one tenant with another tenant's task. We validate
-    the task↔tenant ownership explicitly at the worker boundary instead
-    (Plan 06.14 task_06_14_02 / multi-tenancy-rls-1, multi-tenancy-rls-5).
-    """
-
-
-@dataclass(frozen=True)
-class ExecutionRequest:
-    """Everything the worker needs to conduct one execution.
-
-    The orchestrator (task_02_31) builds this from a task event. `task`
-    and `model` are the spec dicts the agent-runtime entrypoint expects
-    (`AGENT_TASK_SPEC`); `task_id` / `tenant_id` are the real DB ids the
-    `executions` row is keyed on.
-    """
-
-    tenant_id: str
-    task_id: str
-    agent_id: str | None
-    task: dict[str, Any]
-    model: dict[str, Any]
-    budgets: dict[str, Any] | None = None
-    # The active chat mode's tool whitelist (`ChatModeConfig.allowed_tools`,
-    # task_06_14_07). ``None`` = no restriction (every registered tool
-    # callable). A list — including an empty one — installs the allowlist;
-    # the agent-runtime's ToolRegistry then rejects any tool outside it at
-    # call time. We keep ``None`` distinct from ``[]`` so the "block every
-    # tool" discussion mode is expressible.
-    allowed_tools: list[str] | None = None
-    # The project's shell-command allowlist (`projects.allowed_commands`,
-    # Plan 06.16 task_06_16_02). The orchestrator threads it from the task's
-    # project; the worker forwards it into the spec so the runtime can build a
-    # per-project `shell_exec` bound to exactly these program basenames
-    # (deny-by-default). ``None`` = no key (shell_exec not registered, e.g. a
-    # bare run); a list — including ``[]`` — registers shell_exec, with the
-    # empty list meaning deny-all (every command rejected).
-    allowed_commands: list[str] | None = None
-    # The project's stack runtime (`projects.default_runtime_template`, Plan
-    # 06.16 task_06_16_03). The orchestrator threads it from the task's project;
-    # the worker forwards it so the runtime's `run_*` docker_command tools
-    # (`run_pytest`/`run_lint`/`run_typecheck`/`run_build`) resolve their
-    # RuntimeTemplate from the project stack — a PHP project with `php-phpunit`
-    # runs `run_pytest` there, not in `python-pytest`. `None` (the default, and
-    # what a project that pinned no stack carries) keeps each tool's own default
-    # runtime (backward-compatible — no behaviour change for Python projects).
-    default_runtime_template: str | None = None
-    # The agent's assigned tools serialised as executable ToolSpec dicts
-    # (`serialize_agent_tool_specs`, Plan 06.18 task_06_18_05). The orchestrator
-    # builds it from the agent's `agent_tools` rows; the worker forwards it into
-    # the agent spec so `__main__.run_task` registers the real executors under
-    # canonical names. `None` = no key (no assignments) → the runtime keeps the
-    # pre-06.18 echo/noop behaviour (06.15 backward-compat). Before forwarding,
-    # the worker resolves any `docker_command` spec's `runtime_template` to a
-    # concrete image (the worker owns the runtime catalog; the sandboxed
-    # runtime must not import `shared_test_runtimes`).
-    tool_specs: list[dict[str, Any]] | None = None
-    # The project's MCP server declarations (`projects.mcp_servers`, JSONB; Plan
-    # 06.18 task_06_18_12 / ADR 0052). The orchestrator threads it from the
-    # task's project; the worker forwards it into the agent spec so
-    # `__main__.run_task` starts an `MCPToolRunner`, connects each server (auth
-    # via Vault) and registers its `<server>.<tool>` tools before the graph.
-    # `None` = no key (no MCP servers declared) -> the runtime opens no MCP
-    # session, the pre-06.18 behaviour (feature-safe). Each entry mirrors
-    # `shared_mcp.MCPServerConfig` / `api_server.mcp.config.MCPServerConfigModel`.
-    mcp_servers: list[dict[str, Any]] | None = None
-    # The agent's assigned skills' `prompt_fragment` list (Plan 06.18
-    # task_06_18_13 / ADR 0050). The orchestrator resolves it from the agent's
-    # `agent_skills` rows; the worker forwards it into the agent spec so
-    # `__main__.run_task` prepends it to the system prompt EFECTIVO. `None` = no
-    # key (no skills assigned) -> the runtime keeps the current prompt untouched
-    # (backward-compatible).
-    skill_prompt_fragments: list[str] | None = None
-    # prod-17 (bucle del AI reviewer): when True, this run is a REVIEW of the task
-    # by its reviewer agent. On finish the worker applies the parsed verdict
-    # (parse_reviewer_output → apply_reviewer_verdict) instead of the normal
-    # done/failed task transition (dag_01). `review_context` carries the review
-    # input (acceptance criteria + the implementer's prior output) the runtime
-    # injects into the reviewer's prompt. Default False/None = a normal run.
-    review: bool = False
-    review_context: dict[str, Any] | None = None
-    # Inter-run reviewer feedback (A2): the AI reviewer's prior rejection payloads
-    # for THIS task, threaded by the orchestrator when the task was rejected on an
-    # earlier pass and re-dispatched to the implementer (in_review → backlog →
-    # ready). Each entry is `{failed_criterion, what_to_fix, testreport_evidence}`.
-    # The runtime folds them into a corrective preamble so the IMPLEMENTER knows
-    # what to fix. `None` = no key (no prior rejection) → identical to the current
-    # behaviour for a first dispatch (backward-compat). Distinct from `review` /
-    # `review_context`, which drive the REVIEWER run, not the implementer.
-    prior_review_feedback: list[dict[str, Any]] | None = None
-    # Feature C: human comments on this task/plan (added in the Kanban/plan UI),
-    # threaded by the orchestrator. Each entry `{scope, content}`. The runtime folds
-    # them into a contextual preamble so the agent takes them into account. `None` =
-    # no key (no comments) → backward-compat.
-    task_comments: list[dict[str, Any]] | None = None
-
-    def as_dict(self) -> dict[str, Any]:
-        """JSON-safe dict — the Celery payload the orchestrator sends."""
-        return {
-            "tenant_id": self.tenant_id,
-            "task_id": self.task_id,
-            "agent_id": self.agent_id,
-            "task": self.task,
-            "model": self.model,
-            "budgets": self.budgets,
-            "allowed_tools": self.allowed_tools,
-            "allowed_commands": self.allowed_commands,
-            "default_runtime_template": self.default_runtime_template,
-            "tool_specs": self.tool_specs,
-            "mcp_servers": self.mcp_servers,
-            "skill_prompt_fragments": self.skill_prompt_fragments,
-            "review": self.review,
-            "review_context": self.review_context,
-            "prior_review_feedback": self.prior_review_feedback,
-            "task_comments": self.task_comments,
-        }
-
-    @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> ExecutionRequest:
-        """Rebuild a request from the Celery payload (worker side)."""
-        return cls(
-            tenant_id=raw["tenant_id"],
-            task_id=raw["task_id"],
-            agent_id=raw.get("agent_id"),
-            task=raw["task"],
-            model=raw["model"],
-            budgets=raw.get("budgets"),
-            allowed_tools=raw.get("allowed_tools"),
-            allowed_commands=raw.get("allowed_commands"),
-            default_runtime_template=raw.get("default_runtime_template"),
-            tool_specs=raw.get("tool_specs"),
-            mcp_servers=raw.get("mcp_servers"),
-            skill_prompt_fragments=raw.get("skill_prompt_fragments"),
-            review=bool(raw.get("review", False)),
-            review_context=raw.get("review_context"),
-            prior_review_feedback=raw.get("prior_review_feedback"),
-            task_comments=raw.get("task_comments"),
-        )
-
-
-@dataclass(frozen=True)
-class ExecutionOutcome:
-    """The result of one conducted execution."""
-
-    execution_id: str
-    status: str
-    abort_code: str | None
-
-    def as_dict(self) -> dict[str, Any]:
-        """JSON-safe summary — what the Celery result backend stores."""
-        return {
-            "execution_id": self.execution_id,
-            "status": self.status,
-            "abort_code": self.abort_code,
-        }
 
 
 # Eligibility (R5): the task status the orchestrator sets right before enqueueing
@@ -256,203 +98,6 @@ def _task_is_launchable(status: str, *, is_review: bool) -> bool:
     else means the task moved on and the run must be a no-op (R5).
     """
     return status == _LAUNCHABLE_STATUS_BY_KIND[is_review]
-
-
-@dataclass
-class _RuntimeResult:
-    """The agent run's result, in the shape `finalize_execution`
-    duck-types (`ExecutionResultLike`)."""
-
-    status: str
-    abort_code: str | None
-    output: str | None
-    iterations: int
-    steps: list[dict[str, Any]]
-    usage: dict[str, Any]
-    # ADR 0087: the agent's structured finish status (success|failed|partial) or
-    # None — carried from the runtime's execution.finished result.
-    finish_status: str | None = None
-    # Guardrail events (ADR 0102 / g1): triggered post_tool guardrails from the
-    # runtime's execution.finished result; persisted tenant-scoped after finalize.
-    guardrail_events: list[dict[str, Any]] = field(default_factory=list)
-
-
-# Track 1 / ADR 0021 addendum: a base shell allowlist for the natively-agentic
-# Claude Agent SDK. UNIONed with the project's allowlist for `claude_sdk` runs ONLY,
-# so the SDK can reconcile the worktree with file ops instead of being straitjacketed
-# by an empty allowlist. Safe inside the sandbox (cap-drop ALL, read-only rootfs except
-# /workspace+/tmp, internal network/no egress, no docker socket — ADR 0012/0019/0040):
-# every command is confined to the container and the task worktree.
-# NOTE (Feature D): `git` is deliberately NOT here. The agent never commits/pushes
-# (the worker owns git — principle 2, no credentials in the sandbox), and git is
-# BROKEN here anyway: the worktree's `.git` points to the bare repo's worktree
-# metadata, which is NOT mounted in the sandbox → every `git` exits 128. Exposing it
-# only made the agent waste turns on cryptic failures; the prompt tells it the
-# platform persists changes automatically.
-_SDK_BASE_SHELL_COMMANDS: frozenset[str] = frozenset(
-    {
-        "rm",
-        "mv",
-        "cp",
-        "mkdir",
-        "rmdir",
-        "ls",
-        "cat",
-        "find",
-        "grep",
-        "touch",
-        "head",
-        "tail",
-        "wc",
-        "diff",
-        # Read/text utilities the models reach for naturally to page/inspect
-        # files (G6a, audit 2026-07-03: `sed -n` was denied live twice, forcing
-        # sterile retries). No fine-grained arg validation: writing to the
-        # worktree is ALREADY allowed (rm/mv/cp are here), so these read-oriented
-        # tools add no attack surface — the sandbox (internal net, no docker
-        # socket, cap-drop ALL, seccomp) is the real boundary, not the allowlist.
-        "sed",
-        "awk",
-        "sort",
-        "uniq",
-        "cut",
-        "tr",
-        "echo",
-    }
-)
-
-
-def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del spec
-    request: ExecutionRequest,
-    approval_policy: dict[str, Any] | None,
-    *,
-    model_spec: dict[str, Any] | None = None,
-    acceptance_criteria: list[Any] | None = None,
-    wall_clock_budget_s: float | None = None,
-    max_iterations_budget: int | None = None,
-    max_tokens_budget: int | None = None,
-) -> dict[str, Any]:
-    """The `AGENT_TASK_SPEC` payload for the container.
-
-    ``model_spec`` is the RESOLVED model (kind + endpoint + credential,
-    ADR 0057 F1) the worker computed from ``request.model``; ``None`` keeps
-    the request's spec verbatim (pure-function callers / scripted tests).
-
-    ``acceptance_criteria`` (the task's definition of "done") is merged into
-    ``spec["task"]`` so the agent's decision prompt can show what completing the
-    task means — letting the TASK drive read/write/test behaviour instead of a
-    blanket rule. ``None``/empty keeps ``task`` as the request sent it.
-    """
-    task_payload = (
-        {**request.task, "acceptance_criteria": acceptance_criteria}
-        if acceptance_criteria
-        else request.task
-    )
-    spec: dict[str, Any] = {"task": task_payload, "model": model_spec or request.model}
-    # Agent-loop safeguard budgets. Align the internal wall-clock with the
-    # per-provider container budget so a slow claude_sdk run isn't aborted early
-    # by the 600s default (max_wall_clock_exceeded). An operator-supplied value in
-    # request.budgets always wins (setdefault).
-    budgets = dict(request.budgets or {})
-    if wall_clock_budget_s is not None:
-        budgets.setdefault("max_wall_clock_s", float(wall_clock_budget_s))
-    if max_iterations_budget is not None:
-        budgets.setdefault("max_iterations", int(max_iterations_budget))
-    if max_tokens_budget is not None:
-        # Auditoría 2026-07-02: con la contabilidad de usage arreglada (F1.4),
-        # el default de 100k del runtime corta runs sanos de claude_sdk a ~23
-        # iteraciones — presupuesto por-kind realista, como max_iterations.
-        budgets.setdefault("max_tokens", int(max_tokens_budget))
-    if budgets:
-        spec["budgets"] = budgets
-    # With a policy the loop gates sensitive tool calls (task_02_33).
-    if approval_policy:
-        spec["approval_policy"] = approval_policy
-    # Forward the chat mode's tool allowlist (task_06_14_07). Only emit the
-    # key when set — `None` means "no key", which the runtime reads as "no
-    # restriction". An empty list IS emitted (block every tool).
-    if request.allowed_tools is not None:
-        spec["allowed_tools"] = request.allowed_tools
-    # Forward the project's shell-command allowlist (task_06_16_02). Only emit
-    # the key when set — `None` means "no key" (shell_exec not registered). An
-    # empty list IS emitted: it registers a deny-all shell_exec. For a natively-
-    # agentic `claude_sdk` run, UNION the base VCS/file allowlist so the SDK can
-    # reconcile the worktree (Track 1 / ADR 0021) — this also forces shell_exec to
-    # register even when the project pinned nothing. Thin providers are unchanged.
-    kind = (model_spec or request.model or {}).get("kind")
-    allowed_commands = request.allowed_commands
-    if kind == "claude_sdk":
-        allowed_commands = sorted(_SDK_BASE_SHELL_COMMANDS.union(allowed_commands or []))
-    if allowed_commands is not None:
-        spec["allowed_commands"] = allowed_commands
-    # Forward the project's stack runtime (task_06_16_03). Only emit the key
-    # when the project pinned a stack; `None` means "no key", which the runtime
-    # reads as "keep each `run_*` tool's own default runtime" (python-pytest) —
-    # backward-compatible for existing Python projects.
-    if request.default_runtime_template is not None:
-        spec["default_runtime_template"] = request.default_runtime_template
-    # Forward the serialised executable ToolSpec list (task_06_18_05). Only emit
-    # when the agent has assignments — `None` means "no key", which the runtime
-    # reads as "register no new families" (pre-06.18 echo/noop behaviour). Before
-    # forwarding we resolve each docker_command spec's `runtime_template` to a
-    # concrete image (the worker owns the runtime catalog; the sandboxed runtime
-    # must not import `shared_test_runtimes`).
-    if request.tool_specs is not None:
-        spec["tool_specs"] = _resolve_tool_spec_images(
-            request.tool_specs, request.default_runtime_template
-        )
-    # Forward the project's MCP server declarations (task_06_18_12 / ADR 0052).
-    # Only emit the key when the project declares servers -- `None` means "no
-    # key", which the runtime reads as "open no MCP session" (feature-safe,
-    # pre-06.18 behaviour). The runtime starts an `MCPToolRunner`, connects each
-    # server and registers its `<server>.<tool>` tools before the graph.
-    if request.mcp_servers is not None:
-        spec["mcp_servers"] = request.mcp_servers
-    # Forward the assigned skills' prompt fragments (task_06_18_13 / ADR 0050).
-    # Only emit the key when the agent has skills -- `None` means "no key", which
-    # the runtime reads as "keep the system prompt untouched" (backward-compat).
-    if request.skill_prompt_fragments is not None:
-        spec["skill_prompt_fragments"] = request.skill_prompt_fragments
-    # Audit cluster C1 (F51): a REVIEW run MUST carry its review context to the
-    # container. The orchestrator builds `review_context` (acceptance criteria +
-    # the implementer's prior output + the <test-report>) but until now the worker
-    # never forwarded it, so the reviewer ran blind on title+description, produced
-    # no <verdict>, and the worker defensively rejected every reviewed task
-    # (in_review→backlog→blocked). The runtime reads `review` to build the
-    # reviewer's verdict-instruction preamble (`build_review_preamble`).
-    if request.review:
-        spec["review"] = True
-        if request.review_context is not None:
-            spec["review_context"] = request.review_context
-    # Inter-run reviewer feedback (A2): a re-dispatched IMPLEMENTER run carries the
-    # AI reviewer's prior rejection payloads so the runtime can fold them into a
-    # corrective preamble (`build_prior_feedback_preamble`). Only emit when present
-    # (`None`/absent = no prior rejection) — "no key" is the unchanged behaviour for
-    # a first dispatch (backward-compat). Independent of the REVIEW keys above: this
-    # is the implementer being told what to fix, not the reviewer judging.
-    if request.prior_review_feedback is not None:
-        spec["prior_review_feedback"] = request.prior_review_feedback
-    # Feature C: human task/plan comments → the runtime folds them into a contextual
-    # preamble (`build_comments_preamble`). Only emit when present (backward-compat).
-    if request.task_comments is not None:
-        spec["task_comments"] = request.task_comments
-    # Agentes #2: advertise the agent's tools to the LLM so it can actually call
-    # them (memory_recall/rag_search/read_file/…). Without this the model never
-    # sees any tool → it can neither recall memory nor work through tools, for ANY
-    # provider. Schemas come from the canonical builtin catalog + custom tool_specs,
-    # filtered to the effective allowlist (`allowed_tools`). Set inside `model` so
-    # `build_provider_client` reads `spec["tools"]` and passes them to complete().
-    # `include_system_tools=True`: the memory + orchestration families are
-    # runtime CAPABILITIES (not catalog assignments), so they never reach the
-    # allowlist — we advertise them here so every agent can recall/store memory
-    # and move the Kanban (H0/H3). An explicit empty allowlist (discussion mode)
-    # still suppresses everything inside build_model_tool_schemas.
-    model_tools = build_model_tool_schemas(
-        request.allowed_tools, request.tool_specs, include_system_tools=True
-    )
-    if model_tools:
-        spec["model"] = {**spec["model"], "tools": model_tools}
-    return spec
 
 
 def _build_runtime_env(
@@ -514,40 +159,6 @@ def _build_runtime_env(
     return env
 
 
-def _resolve_tool_spec_images(
-    tool_specs: list[dict[str, Any]], project_default_runtime: str | None
-) -> list[dict[str, Any]]:
-    """Pre-resolve each ``docker_command`` ToolSpec's ``runtime_template`` to a
-    concrete docker image (Plan 06.18 task_06_18_05).
-
-    The agent-runtime is a separate container with no access to
-    ``shared_test_runtimes``; only the worker can map a runtime-template id to
-    an image. So we resolve here — honouring the project stack over the tool
-    default (Plan 06.16 precedence) — and replace ``runtime_template`` with an
-    explicit ``image`` the runtime's ``docker_command`` builder consumes
-    directly. Specs that already carry an explicit ``image`` (Plan 05 custom
-    tools) are left untouched. An unknown runtime id surfaces as a clear
-    ``RuntimeResolutionError`` at dispatch, not a silent boot crash inside the
-    container.
-    """
-    from workers.test_runtime import resolve_run_runtime_image
-
-    resolved: list[dict[str, Any]] = []
-    for raw in tool_specs:
-        spec = dict(raw)
-        if spec.get("implementation_type") == "docker_command":
-            config = dict(spec.get("config") or {})
-            if not config.get("image"):
-                tool_runtime = config.pop("runtime_template", None)
-                config["image"] = resolve_run_runtime_image(
-                    project_default_runtime,
-                    str(tool_runtime) if tool_runtime else None,
-                )
-            spec["config"] = config
-        resolved.append(spec)
-    return resolved
-
-
 async def _load_project(session: AsyncSession, task_id: UUID) -> Project | None:
     """The task's project — its `human_approval_policy` gates the run."""
     task = await session.get(Task, task_id)
@@ -581,115 +192,6 @@ async def _resolve_effective_approval_policy(
         session, "default_approval_policy_preset", default=DEFAULT_APPROVAL_POLICY_PRESET
     )
     return preset_decisions(str(preset))
-
-
-def _parse_line(line: str) -> dict[str, Any] | None:
-    """Parse one stdout line into a JSON event, or None if it isn't one.
-
-    The agent-runtime emits one JSON object per line; LangGraph (and the
-    occasional library) may also print free text — those are ignored.
-    """
-    if not line.startswith("{"):
-        return None
-    try:
-        parsed = json.loads(line)
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
-def _scan_logs_for_terminal(logs: str) -> tuple[dict[str, Any] | None, str | None]:
-    """Re-parse the COMPLETE captured container logs for a terminal event the live
-    stream dropped (F16/P1.1).
-
-    The live drain pumps lines as they arrive and a torn follow read can lose the
-    final `execution.finished`/`execution.error` line even though the container
-    emitted it (Fase 1 guarantees ``ContainerResult.logs`` holds the full capture).
-    Returns ``(finished_result, error)`` — the LAST ``execution.finished`` ``result``
-    payload found (or ``None``) and the LAST ``execution.error`` message (or ``None``).
-    """
-    finished: dict[str, Any] | None = None
-    error: str | None = None
-    for line in logs.splitlines():
-        event = _parse_line(line)
-        if event is None or not event.get("event"):
-            continue
-        kind = str(event["event"])
-        if kind == "execution.finished":
-            result = event.get("result")
-            if isinstance(result, dict):
-                finished = result
-        elif kind == "execution.error":
-            error = event.get("error")
-    return finished, error
-
-
-def _assemble_result(
-    final_result: dict[str, Any] | None,
-    steps: list[dict[str, Any]],
-    *,
-    timed_out: bool,
-    exit_code: int,
-    runtime_error: str | None,
-    logs: str | None = None,
-) -> _RuntimeResult:
-    """Fold the streamed steps + final result line into a `_RuntimeResult`.
-
-    When the container produced an `execution.finished` line, that is
-    the result. Otherwise the run failed (crash, timeout, or an
-    `execution.error` line) — keep whatever steps streamed and mark it
-    `failed`.
-
-    F16/P1.1: before declaring a clean exit (exit 0, no timeout, no
-    `execution.error`) a failure, re-parse the COMPLETE captured ``logs`` for a
-    terminal line the live drain missed — the container DID emit
-    `execution.finished`, the worker just lost it on the wire.
-    """
-    if final_result is not None:
-        return _RuntimeResult(
-            status=final_result.get("status", "failed"),
-            abort_code=final_result.get("abort_code"),
-            output=final_result.get("output"),
-            iterations=int(final_result.get("iterations", 0)),
-            steps=steps,
-            usage=final_result.get("usage") or dict(_EMPTY_USAGE),
-            finish_status=final_result.get("finish_status"),
-            guardrail_events=final_result.get("guardrail_events") or [],
-        )
-
-    # F16/P1.1: a clean exit with no result on the live stream — recover from the
-    # full log capture before treating it as a failure. Only for an otherwise-clean
-    # exit (exit 0, no timeout, no live error); a crash/timeout keeps the hard path.
-    if logs and exit_code == 0 and not timed_out and runtime_error is None:
-        recovered, recovered_error = _scan_logs_for_terminal(logs)
-        if recovered is not None:
-            return _RuntimeResult(
-                status=recovered.get("status", "failed"),
-                abort_code=recovered.get("abort_code"),
-                output=recovered.get("output"),
-                iterations=int(recovered.get("iterations", 0)),
-                steps=steps,
-                usage=recovered.get("usage") or dict(_EMPTY_USAGE),
-                finish_status=recovered.get("finish_status"),
-                guardrail_events=recovered.get("guardrail_events") or [],
-            )
-        if recovered_error is not None:
-            runtime_error = recovered_error
-
-    if runtime_error is not None:
-        detail = f"agent-runtime error: {runtime_error}"
-    elif timed_out:
-        detail = "agent-runtime container timed out"
-    else:
-        detail = f"agent-runtime container exited {exit_code} with no result"
-    return _RuntimeResult(
-        status="failed",
-        abort_code=None,
-        output=detail,
-        iterations=0,
-        steps=steps,
-        usage=dict(_EMPTY_USAGE),
-    )
 
 
 def _default_vault_store() -> Any:
