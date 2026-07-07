@@ -21,7 +21,10 @@ from uuid import uuid4
 
 import api_server.review_autostart as ra
 import pytest
-import workers.maintenance as m
+
+# The autostart wiring lives in the reconciler submodule; patch/call it THERE
+# (rebinding the façade's re-export wouldn't affect the submodule's globals).
+import workers.maintenance.reconciler as m
 from api_server.review_autostart import (
     ACTIVE_REVIEW_STATUSES,
     COMPOSE_REVIEW_RUNTIME_TASK,

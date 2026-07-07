@@ -182,7 +182,9 @@ def test_reconciler_task_is_registered_in_celery() -> None:
 @pytest.mark.asyncio
 async def test_core_isolates_a_failing_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     """One pass raising (a bad row / a broker blip) must not tumble the other two."""
-    import workers.maintenance as m
+    # Patch the SUBMODULE the core looks the passes up in (the package façade
+    # re-exports them, but rebinding the façade attr wouldn't affect the core).
+    import workers.maintenance.reconciler as m
 
     async def ok_stuck(*_a: Any, **_k: Any) -> int:
         return 3

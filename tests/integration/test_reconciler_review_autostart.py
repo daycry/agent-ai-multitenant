@@ -24,7 +24,10 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-import workers.maintenance as m
+
+# The reconciler pass + its Celery `app` global live in the reconciler submodule;
+# patch/call them THERE (the façade re-export is not the lookup site).
+import workers.maintenance.reconciler as m
 from alembic import command
 from api_server.db.domain import Plan, Project, Task
 from api_server.db.models import Organization
