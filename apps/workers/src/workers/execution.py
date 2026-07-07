@@ -556,6 +556,33 @@ async def _load_project(session: AsyncSession, task_id: UUID) -> Project | None:
     return await session.get(Project, task.project_id)
 
 
+async def _resolve_effective_approval_policy(
+    session: AsyncSession, project: Project | None
+) -> dict[str, Any] | None:
+    """The approval policy that gates this run (A8b).
+
+    A project's explicit ``human_approval_policy`` wins. When it is None/empty the
+    run used to be FAIL-OPEN — the gate was never instantiated and every sensitive
+    category ran in auto. Now a project without a policy inherits the platform
+    DEFAULT preset (``default_approval_policy_preset`` setting, default
+    ``development``): the coding-loop categories stay auto but comms / http_post /
+    secrets / deploy / infra / PII / user_mgmt gate. The preset's decisions cover
+    all canonical categories, so there is no unlisted-category gap (never fail-open)."""
+    if project is not None and project.human_approval_policy:
+        policy: dict[str, Any] = project.human_approval_policy
+        return policy
+    from api_server.db.platform_settings import get_platform_setting
+    from api_server.seeds.builtin_approval_policies import (
+        DEFAULT_APPROVAL_POLICY_PRESET,
+        preset_decisions,
+    )
+
+    preset = await get_platform_setting(
+        session, "default_approval_policy_preset", default=DEFAULT_APPROVAL_POLICY_PRESET
+    )
+    return preset_decisions(str(preset))
+
+
 def _parse_line(line: str) -> dict[str, Any] | None:
     """Parse one stdout line into a JSON event, or None if it isn't one.
 
@@ -1293,7 +1320,7 @@ async def conduct_execution(  # noqa: PLR0915, PLR0912 - tramos lineales + poll 
         )
         execution_id = execution.id
         project = await session.get(Project, task.project_id)
-        approval_policy = project.human_approval_policy if project is not None else None
+        approval_policy = await _resolve_effective_approval_policy(session, project)
         # prod-18 task_prod18_provision_01: gather the (stable) slugs needed to
         # materialise the task's git worktree. An IMPLEMENTER run gets a fresh RW
         # worktree; a REVIEW run mounts the implementer's existing worktree READ-ONLY

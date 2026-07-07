@@ -105,6 +105,25 @@ BUILTIN_POLICIES: tuple[BuiltinPolicy, ...] = (
 )
 
 
+# The preset applied to a project that has NO explicit ``human_approval_policy``
+# (A8b). Was fail-open (policy None → gate never instantiated → everything auto);
+# now a project without a policy inherits this preset's decisions. Overridable at
+# runtime via the ``default_approval_policy_preset`` platform setting.
+DEFAULT_APPROVAL_POLICY_PRESET = "development"
+
+_POLICIES_BY_SLUG: dict[str, BuiltinPolicy] = {p.slug: p for p in BUILTIN_POLICIES}
+
+
+def preset_decisions(slug: str) -> dict[str, str]:
+    """The category→decision map of a built-in preset by slug (A8b).
+
+    Every preset's ``decisions`` covers ALL canonical categories (built on
+    ``_all(...)``), so the result is fully specified — no unlisted-category gap. An
+    unknown slug falls back to the safe default preset (never fail-open to auto)."""
+    policy = _POLICIES_BY_SLUG.get(slug) or _POLICIES_BY_SLUG[DEFAULT_APPROVAL_POLICY_PRESET]
+    return dict(policy.decisions)
+
+
 # ---------------------------------------------------------------------------
 # Upsert
 # ---------------------------------------------------------------------------
