@@ -73,14 +73,14 @@ cobertura. Es la parte más delicada — hacerla sola, sin mezclar con P2.
 
 ### P4 — `orchestrator/dispatch.py`: builder común del payload implementador/reviewer
 
-La rama reviewer (`_build_review_request`) **duplica inline la cadena de herencia de modelo** en
-vez de llamar a `_resolve_model_spec` (riesgo real de divergencia), y repite budgets, dict base,
-claves opcionales (`allowed_tools`/`tool_specs`/`skill_prompt_fragments`) y threading de proyecto
-del implementador (`_route_ai`). Extraer un constructor compartido; primero que el reviewer llame
-a `_resolve_model_spec` (quick win). Los tests de integración no parchean internos → seguro
-mientras se preserven `TaskDispatcher(...)`, `.handle()`, nombres de tarea y shape del request.
-Los alias re-importados por unit tests (`_COMPOSE_REVIEW_RUNTIME_TASK`, `_REVIEW_QUEUE`,
-`_DISPATCH_EVENT_TASK`, `publish_task_status_changed`) deben seguir en `dispatch`.
+**Quick win HECHO (2026-07-08, cb96ad0):** la rama reviewer ya llama a `_resolve_model_spec` en
+vez de duplicar la cadena inline, con test de caracterización de la herencia
+(`test_ai_reviewer_inherits_model_through_the_chain`). **Pendiente** el constructor compartido
+para el resto de la duplicación (budgets, dict base, claves opcionales, threading de proyecto).
+Los tests de integración no parchean internos → seguro mientras se preserven `TaskDispatcher(...)`,
+`.handle()`, nombres de tarea y shape del request. Los alias re-importados por unit tests
+(`_COMPOSE_REVIEW_RUNTIME_TASK`, `_REVIEW_QUEUE`, `_DISPATCH_EVENT_TASK`,
+`publish_task_status_changed`) deben seguir en `dispatch`.
 
 ### P5 — agent-runtime `graph.py`: extraer módulos puros
 
@@ -95,23 +95,27 @@ Los alias re-importados por unit tests (`_COMPOSE_REVIEW_RUNTIME_TASK`, `_REVIEW
 - Requiere rebuild de la imagen agent-runtime para desplegar (receta WITH_CLAUDE=1) — solo
   cuando el operador abra ventana.
 
-### P6 — agent-runtime `providers.py`: consolidar `decide()`/`review()`
+### P6 — agent-runtime `providers.py`: consolidar `decide()`/`review()` ✅ HECHA
 
-`_ProviderModelClient` y `ClaudeSDKModelClient` duplican los cuerpos de `decide`/`review`
-(mismo patrón retry+mensajes+parseo). Parametrizar la base con «advertir `submit_result`» y
-«call kwargs» y dejar en la subclase claude_sdk solo credencial dual, `max_turns`, effort y el
-no-tool-choice. Los 4 providers quedan como ya están (duplicación baja).
+(2026-07-08, 78ca74d) `ClaudeSDKModelClient` hereda de `_ProviderModelClient`; dos flags de
+clase (`_advertises_submit_result`, `_forces_verdict_choice`) parametrizan la única diferencia
+real de protocolo. Tests de caracterización del protocolo del SDK añadidos ANTES de consolidar.
 
-### P7 — prompts de sistema: única fuente del contrato `<verdict>` + fencing del review_context
+### P7 — prompts de sistema: contrato `<verdict>` + fencing ✅ HECHA
 
-Cambia comportamiento (texto de prompts) — validar con e2e de review, no solo unit:
+(2026-07-08, 3595b9a + 4f4fe80 + e436a9a) — CAMBIA los prompts de los runs; **pide QA e2e de un
+ciclo review al desplegar** (rebuild agent-runtime WITH_CLAUDE=1):
 
-- El formato del tag `<verdict>` vive en **5 sitios** (`_REVIEW_VERDICT_INSTRUCTION`,
-  `_REVIEW_RUN_SYSTEM` y 3 nudges de review) → constante única compartida.
-- **Fencing del `review_context`** (hallazgo de seguridad, ver §Hallazgos): delimitar
-  `implementer_output`/`test_report`/criterios como DATOS en el preámbulo del reviewer.
-- Números mágicos del texto: `12` de `_progress_summary` a constante; `output_override` de
-  `_loop_trip_outcome` en español → inglés (consistencia con el resto de summaries).
+- `agent_runtime/review_contract.py` = fuente única del tag `<verdict>` (los 5 sitios interpolan;
+  composición byte-idéntica). El contrato cruzado runtime↔worker lo ata
+  `tests/unit/test_review_verdict_wire_contract.py` (lo anunciado == lo que parsea
+  `parse_reviewer_output`).
+- **Fencing anti-injection**: review_context/feedback/comentarios viajan en un fence
+  `<<<UNTRUSTED_DATA … UNTRUSTED_DATA>>>` con aviso datos-no-órdenes y neutralización de
+  marcadores embebidos; el volcado del workspace en `_review_messages` se marca como datos.
+- Menores: caps de PROGRESS nombrados (`_PROGRESS_FILES_MAX`/`_PROGRESS_DIGESTS_MAX`),
+  `output_override` del stalemate en inglés, contrato de claves de estado documentado en
+  `state.py` (mitigación H6; la dataclass de estado queda como deuda).
 
 ### P8 — `db/domain.py` vs `db/models.py` — NO abordar ahora (documentado)
 
@@ -122,7 +126,10 @@ enorme. Si algún día se unifica: shim de re-export y de-precación gradual, nu
 ## Hallazgos de la revisión (implementación + prompts de sistema)
 
 Revisión hecha con 3 agentes de mapeo (2026-07-07) sobre `execution/tasks`, `graph/providers/
-__main__` del agent-runtime y `dispatch/domain/models`.
+__main__` del agent-runtime y `dispatch/domain/models`. **Corregidos el 2026-07-08** (orden del
+operador «revisa y corrige los hallazgos»): H1→`4f4fe80`, H2→`cb96ad0`, H3→`3595b9a`,
+H4→`78ca74d`, H5+H6→`e436a9a`. Queda H6-real (dataclass de estado) como deuda anotada y la
+fusión de los dos canales de veredicto como decisión aparte.
 
 1. **[seguridad, media] Prompt injection en el preámbulo del reviewer** —
    `agent_runtime/__main__.py:build_review_preamble` inserta `implementer_output`,
@@ -158,8 +165,8 @@ __main__` del agent-runtime y `dispatch/domain/models`.
 | P1    | maintenance → paquete       | bajo                   | ✅ hecha (2026-07-07)    |
 | P2    | execution: clusters puros   | bajo                   | ✅ hecha (2026-07-07)    |
 | P3    | conduct_execution por fases | alto                   | pendiente                |
-| P4    | dispatch: builder común     | medio                  | pendiente                |
+| P4    | dispatch: builder común     | medio                  | ◐ quick win hecho (H2)   |
 | P5    | graph: módulos puros        | medio                  | pendiente                |
-| P6    | providers: decide/review    | medio                  | pendiente                |
-| P7    | prompts: verdict + fencing  | medio (cambia prompts) | pendiente                |
+| P6    | providers: decide/review    | medio                  | ✅ hecha (2026-07-08)    |
+| P7    | prompts: verdict + fencing  | medio (cambia prompts) | ✅ hecha (2026-07-08)    |
 | P8    | domain vs models            | —                      | no abordar (documentado) |
