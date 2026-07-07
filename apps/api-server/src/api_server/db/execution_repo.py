@@ -412,16 +412,53 @@ async def supersede_running_executions(
         # task_acks_late) must close as CANCELLED, not FAILED/superseded — otherwise
         # the supersede would mask the operator's explicit cancel.
         if execution.cancel_requested_at is not None:
-            execution.status = ExecutionStatus.CANCELLED
-            execution.abort_code = "cancelled"
-            execution.output = "cancelled by operator"
+            seal_terminal_execution(
+                execution,
+                status=ExecutionStatus.CANCELLED.value,
+                abort_code="cancelled",
+                output="cancelled by operator",
+                now=now,
+            )
         else:
-            execution.status = ExecutionStatus.FAILED
-            execution.abort_code = "superseded"
-            execution.output = "superseded by a re-delivered execution (worker retry)"
-        execution.completed_at = now
+            seal_terminal_execution(
+                execution,
+                status=ExecutionStatus.FAILED.value,
+                abort_code="superseded",
+                output="superseded by a re-delivered execution (worker retry)",
+                now=now,
+            )
     await session.flush()
     return len(stale)
+
+
+def seal_terminal_execution(
+    execution: Execution,
+    *,
+    status: str,
+    abort_code: str | None = None,
+    output: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Seal a `running` execution row into a terminal state, idempotently (M2).
+
+    The single primitive the non-`finalize` close-out paths funnel through
+    (``supersede_running_executions``, the zombie sweeper, the soft-timeout
+    finalizer) instead of hand-writing ``status`` + ``abort_code`` + ``output`` +
+    ``completed_at`` four times. Reuses ``finalize_execution``'s F46/F52 guard: a
+    row already sealed (terminal status + non-NULL ``completed_at``) is left
+    untouched and ``False`` is returned — a re-delivery/race can no longer stomp a
+    freshly-sealed outcome. ``output`` is written only when passed (so a caller can
+    seal status without clobbering the existing output). Returns ``True`` iff it
+    sealed the row. Pure (no I/O); the caller owns the session/flush.
+    """
+    if is_terminal_execution_status(execution.status) and execution.completed_at is not None:
+        return False
+    execution.status = status
+    execution.abort_code = abort_code
+    if output is not None:
+        execution.output = output
+    execution.completed_at = now or datetime.now(UTC)
+    return True
 
 
 async def finalize_execution(

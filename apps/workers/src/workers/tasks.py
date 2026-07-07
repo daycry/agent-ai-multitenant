@@ -130,6 +130,7 @@ async def _finalize_soft_timeout(settings: Settings, request: dict[str, Any]) ->
     from datetime import UTC, datetime
 
     from api_server.db.domain import Execution, ExecutionStatus
+    from api_server.db.execution_repo import seal_terminal_execution
 
     from workers.container import AgentContainerRunner
 
@@ -157,13 +158,20 @@ async def _finalize_soft_timeout(settings: Settings, request: dict[str, Any]) ->
             now = datetime.now(UTC)
             for execution in rows:
                 if execution.cancel_requested_at is not None:
-                    execution.status = ExecutionStatus.CANCELLED.value
-                    execution.abort_code = "cancelled"
+                    seal_terminal_execution(
+                        execution,
+                        status=ExecutionStatus.CANCELLED.value,
+                        abort_code="cancelled",
+                        now=now,
+                    )
                     was_cancel = True
                 else:
-                    execution.status = ExecutionStatus.FAILED.value
-                    execution.abort_code = "soft_time_limit_exceeded"
-                execution.completed_at = now
+                    seal_terminal_execution(
+                        execution,
+                        status=ExecutionStatus.FAILED.value,
+                        abort_code="soft_time_limit_exceeded",
+                        now=now,
+                    )
                 exec_ids.append(str(execution.id))
     except Exception as exc:  # best-effort — the zombie sweeper is the backstop
         _log.warning("workers.soft_timeout_finalize_failed", task_id=task_id_raw, error=str(exc))

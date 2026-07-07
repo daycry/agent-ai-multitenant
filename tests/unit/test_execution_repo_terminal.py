@@ -206,6 +206,67 @@ async def test_finalize_preserves_cancelled_row(monkeypatch: pytest.MonkeyPatch)
     assert execution.completed_at is sealed_at
 
 
+# ---------------------------------------------------------------------------
+# M2 — un único primitivo de sellado terminal idempotente (seal_terminal_execution)
+# ---------------------------------------------------------------------------
+def test_seal_terminal_execution_seals_running_row() -> None:
+    from api_server.db.execution_repo import seal_terminal_execution
+
+    now = datetime(2026, 3, 1, tzinfo=UTC)
+    execution = _FakeExecution(status=ExecutionStatus.RUNNING, completed_at=None, output="live")
+
+    changed = seal_terminal_execution(
+        execution,  # type: ignore[arg-type]
+        status=ExecutionStatus.FAILED.value,
+        abort_code="stale_after_worker_loss",
+        output="worker lost",
+        now=now,
+    )
+
+    assert changed is True
+    assert execution.status == ExecutionStatus.FAILED.value
+    assert execution.abort_code == "stale_after_worker_loss"
+    assert execution.output == "worker lost"
+    assert execution.completed_at is now
+
+
+def test_seal_terminal_execution_noop_on_sealed_row() -> None:
+    """Guarda F46/F52: una fila ya terminal + completed_at NO se revierte."""
+    from api_server.db.execution_repo import seal_terminal_execution
+
+    sealed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    execution = _FakeExecution(status=ExecutionStatus.DONE, completed_at=sealed_at, output="kept")
+
+    changed = seal_terminal_execution(
+        execution,  # type: ignore[arg-type]
+        status=ExecutionStatus.FAILED.value,
+        abort_code="late overwrite",
+        output="LATE",
+        now=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+
+    assert changed is False
+    assert execution.status == ExecutionStatus.DONE  # no revertido
+    assert execution.output == "kept"
+    assert execution.completed_at is sealed_at  # no re-sellado
+
+
+def test_seal_terminal_execution_leaves_output_when_not_passed() -> None:
+    """output solo se escribe si se pasa (supersede lo pasa explícito)."""
+    from api_server.db.execution_repo import seal_terminal_execution
+
+    execution = _FakeExecution(status=ExecutionStatus.RUNNING, completed_at=None, output="prev")
+
+    seal_terminal_execution(
+        execution,  # type: ignore[arg-type]
+        status=ExecutionStatus.CANCELLED.value,
+        abort_code="cancelled",
+    )
+
+    assert execution.status == ExecutionStatus.CANCELLED.value
+    assert execution.output == "prev"  # intacto
+
+
 @pytest.mark.asyncio
 async def test_finalize_preserves_superseded_row(monkeypatch: pytest.MonkeyPatch) -> None:
     """F52: a FAILED/superseded row is not reverted to done/failed by a late finalize."""

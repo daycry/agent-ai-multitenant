@@ -659,6 +659,7 @@ async def _sweep_stale_executions_async(
     """Async core. ``runner`` (a container runner with ``kill_by_label``) and
     ``now`` are injectable so the test drives it without Docker or wall-clock."""
     from api_server.db.domain import Execution, ExecutionStatus
+    from api_server.db.execution_repo import seal_terminal_execution
     from sqlalchemy import select
 
     from workers.container import AgentContainerRunner
@@ -701,10 +702,16 @@ async def _sweep_stale_executions_async(
                 orphaned = alive_ids is not None and str(execution.id) not in alive_ids
                 if not (stale_by_age or orphaned):
                     continue
+                # Defensa en profundidad (M2): sella por el primitivo idempotente —
+                # si una finalize legítima concurrente ya cerró la fila, no la pisa.
+                if not seal_terminal_execution(
+                    execution,
+                    status=ExecutionStatus.FAILED.value,
+                    abort_code="stale_after_worker_loss",
+                    now=moment,
+                ):
+                    continue
                 stale_ids.append(str(execution.id))
-                execution.status = ExecutionStatus.FAILED.value
-                execution.abort_code = "stale_after_worker_loss"
-                execution.completed_at = moment
                 # Move the orphaned task off in_progress (dag_01 policy → blocked).
                 await transition_task_after_run(db, execution.task_id, ExecutionStatus.FAILED.value)
                 swept += 1
