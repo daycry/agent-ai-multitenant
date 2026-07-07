@@ -21,6 +21,8 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any
 
+from agent_runtime.review_contract import VERDICT_APPROVE, VERDICT_REJECT
+
 # Where the worker drops a task spec when it does not pass AGENT_TASK_SPEC.
 _TASK_SPEC_FILE = "/workspace/agent_task.json"
 
@@ -338,8 +340,8 @@ _REVIEW_VERDICT_INSTRUCTION = (
     "below satisfies the acceptance criteria. Do NOT re-implement the task or write "
     "files. Read what you need, then FINISH your run with a final summary that ENDS "
     "with exactly one verdict tag:\n"
-    "  <verdict>approve</verdict>  — the output satisfies the acceptance criteria; OR\n"
-    "  <verdict>reject</verdict>   — it does not, followed by a rejection block:\n"
+    f"  {VERDICT_APPROVE}  — the output satisfies the acceptance criteria; OR\n"
+    f"  {VERDICT_REJECT}   — it does not, followed by a rejection block:\n"
     "    <rejection><failed_criterion>...</failed_criterion>"
     "<testreport_evidence>...</testreport_evidence>"
     "<what_to_fix>...</what_to_fix></rejection>\n"

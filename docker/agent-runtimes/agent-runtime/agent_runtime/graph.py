@@ -38,6 +38,7 @@ from agent_runtime.guardrails import run_hook
 from agent_runtime.loop_detection import DEFAULT_LOOP_THRESHOLD, LoopDetector
 from agent_runtime.model import DecisionKind, ModelClient
 from agent_runtime.providers import ProviderTimeout
+from agent_runtime.review_contract import REVIEW_FINISH_SUMMARY
 from agent_runtime.safeguards import Budgets, SafeguardCode, SafeguardTracker
 from agent_runtime.state import (
     STATUS_ABORTED,
@@ -339,8 +340,7 @@ def _research_nudge(
         # "produce the deliverable".
         return (
             "You have enough context to judge this task. STOP researching and FINISH "
-            "your review now: reply with your final summary ending in exactly one "
-            "<verdict>approve</verdict> or <verdict>reject</verdict> tag — do NOT call "
+            f"your review now: {REVIEW_FINISH_SUMMARY} — do NOT call "
             "more tools and do NOT write files."
         )
     if has_produced:
@@ -369,8 +369,7 @@ def _same_target_nudge(
     if is_review:
         return (
             f"You have already read '{name}' {count} times — you have its content. "
-            "FINISH your review now: reply with your final summary ending in exactly "
-            "one <verdict>approve</verdict> or <verdict>reject</verdict> tag."
+            f"FINISH your review now: {REVIEW_FINISH_SUMMARY}."
         )
     if has_produced:
         return (
@@ -397,9 +396,8 @@ def _reread_churn_nudge(
     if is_review:
         return (
             f"You have re-read the same files {churn_streak} times in a row. You have "
-            "enough to judge — FINISH your review now: reply with your final summary "
-            "ending in exactly one <verdict>approve</verdict> or <verdict>reject</verdict> "
-            "tag. Do NOT keep reading."
+            f"enough to judge — FINISH your review now: {REVIEW_FINISH_SUMMARY}. "
+            "Do NOT keep reading."
         )
     if has_produced:
         return (

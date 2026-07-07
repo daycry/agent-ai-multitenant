@@ -61,6 +61,7 @@ from agent_runtime.model import (
     ModelResponse,
     ReviewResponse,
 )
+from agent_runtime.review_contract import VERDICT_APPROVE, VERDICT_REJECT
 
 _log = logging.getLogger(__name__)
 
@@ -117,7 +118,7 @@ _REVIEW_RUN_SYSTEM = (
     "genuinely need (read_file, list_files, search_code — never re-read a file "
     "you have already seen), or — once you can judge — FINISH with your review "
     "conclusion as prose that ENDS with exactly one verdict tag: "
-    "<verdict>approve</verdict> or <verdict>reject</verdict> (a reject is "
+    f"{VERDICT_APPROVE} or {VERDICT_REJECT} (a reject is "
     "followed by a <rejection><failed_criterion>…</failed_criterion>"
     "<what_to_fix>…</what_to_fix></rejection> block).\n"
     "Judge ONLY whether the implementer's output satisfies the task's acceptance "
