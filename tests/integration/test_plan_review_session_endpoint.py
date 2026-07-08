@@ -181,3 +181,7 @@ async def test_without_active_session_falls_back_to_the_newest(
     assert resp.status_code == 200
     assert resp.json()["session_id"] == str(ids["session_terminal"])
     assert resp.json()["status"] == "approved"
+    # ADR 0107: el contrato incluye el motivo de rechazo (None si la sesión
+    # terminal fue aprobada) — la tarjeta de correcciones lo consume.
+    assert "rejection_reason" in resp.json()
+    assert resp.json()["rejection_reason"] is None

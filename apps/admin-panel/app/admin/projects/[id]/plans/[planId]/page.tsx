@@ -61,6 +61,19 @@ interface PlanTaskSpec {
   role?: string;
   depends_on?: string[];
   estimated_hours?: number;
+  acceptance_criteria?: string[];
+  // ADR 0107: las tareas nacidas de un rechazo humano llevan origin=correction.
+  origin?: string;
+}
+
+// ADR 0107: meta del ciclo de correcciones en specification.corrections.
+interface PlanCorrectionEntry {
+  session_id: string;
+  reason?: string;
+  task_ids?: string[];
+  created_at?: string;
+  status?: string; // proposed | accepted
+  accepted_task_ids?: string[];
 }
 
 interface PlanPhaseSpec {
@@ -87,6 +100,7 @@ interface PlanSpecification {
     cost_ai_eur?: number | [number, number];
   };
   metadata?: Record<string, unknown>;
+  corrections?: PlanCorrectionEntry[];
 }
 
 interface PlanResponse {
@@ -204,6 +218,7 @@ export default function PlanDetailPage() {
 
       <PlanLifecycleSection planId={plan.id} status={plan.status} />
       <HumanValidationSection planId={plan.id} status={plan.status} />
+      <CorrectionsSection planId={plan.id} status={plan.status} spec={spec} />
       <PlanDeepLinksSection planId={plan.id} status={plan.status} />
       <SummarySection summary={spec.summary} />
       <EstimatesSection estimates={spec.estimates} />
@@ -1157,7 +1172,18 @@ function TasksSection({ tasks }: { tasks: PlanSpecification["tasks"] | undefined
                   data-testid={`plan-task-${task.id}`}
                 >
                   <td className="py-1 pr-2 font-mono">{task.id}</td>
-                  <td className="py-1 pr-2">{task.title}</td>
+                  <td className="py-1 pr-2">
+                    {task.title}
+                    {task.origin === "correction" ? (
+                      <Badge
+                        variant="warning"
+                        className="ml-1.5"
+                        data-testid={`plan-task-origin-${task.id}`}
+                      >
+                        corrección
+                      </Badge>
+                    ) : null}
+                  </td>
                   <td className="py-1 pr-2">{task.role ?? "—"}</td>
                   <td className="py-1 pr-2">{task.complexity ?? "—"}</td>
                   <td className="py-1 pr-2 font-mono">
@@ -1182,6 +1208,7 @@ interface ReviewSessionInfo {
   session_id: string;
   status: string;
   verdict: string | null;
+  rejection_reason: string | null;
   expires_at: string | null;
   review_url: string;
   app_url: string;
@@ -1335,7 +1362,9 @@ function HumanValidationSection({ planId, status }: { planId: string; status: st
                 <DialogBody className="space-y-3">
                   <p className="text-muted-foreground text-sm">
                     El motivo llega a los agentes como feedback del rework — cuanto más concreto
-                    (qué está mal, dónde y qué se espera), mejor corrige el equipo.
+                    (qué está mal, dónde y qué se espera), mejor corrige el equipo. Tras rechazar
+                    podrás generar tareas correctivas desde el motivo y aceptarlas en este mismo
+                    plan.
                   </p>
                   <MarkdownTextarea
                     value={rejectReason}
@@ -1370,6 +1399,238 @@ function HumanValidationSection({ planId, status }: { planId: string; status: st
             </Dialog>
           </>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Correcciones del rechazo (ADR 0107) — el motivo del veredicto rechazado se
+// convierte en tareas correctivas del MISMO plan; aceptarlas las sincroniza
+// al Kanban y reactiva el plan (rejected → in_progress).
+// --------------------------------------------------------------------------
+interface GenerateCorrectionsResponse {
+  session_id: string;
+  reason: string;
+  task_ids: string[];
+  tasks: PlanTaskSpec[];
+  already_generated: boolean;
+}
+
+function CorrectionsSection({
+  planId,
+  status,
+  spec,
+}: {
+  planId: string;
+  status: string;
+  spec: PlanSpecification;
+}) {
+  const queryClient = useQueryClient();
+  const [unchecked, setUnchecked] = useState<Set<string>>(new Set());
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [emptyGeneration, setEmptyGeneration] = useState(false);
+
+  const isRejected = status === "rejected";
+  const corrections = spec.corrections ?? [];
+  const proposed = corrections.filter((c) => c.status === "proposed");
+  const accepted = corrections.filter((c) => c.status === "accepted");
+
+  // El motivo vive en la sesión de review rechazada; una vez generada la
+  // tanda también queda copiado en la entrada de corrections del spec.
+  const sessionQuery = useQuery({
+    queryKey: ["plan-review-session", planId],
+    queryFn: () => apiFetch<ReviewSessionInfo>(`/plans/${planId}/review-session`),
+    enabled: isRejected,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["plan", planId] });
+    queryClient.invalidateQueries({ queryKey: ["project-tasks"] });
+  };
+  const onErr = (e: unknown) => setErrorMsg(e instanceof ApiError ? e.body : String(e));
+
+  const generate = useMutation({
+    mutationFn: () =>
+      apiFetch<GenerateCorrectionsResponse>(`/plans/${planId}/generate-corrections`, {
+        method: "POST",
+      }),
+    onSuccess: (res) => {
+      setErrorMsg(null);
+      setEmptyGeneration(res.task_ids.length === 0);
+      invalidate();
+    },
+    onError: onErr,
+  });
+
+  const tasksById = new Map((spec.tasks ?? []).map((t) => [t.id, t]));
+  const proposedIds = proposed.flatMap((c) => c.task_ids ?? []);
+  const selectedIds = proposedIds.filter((id) => !unchecked.has(id));
+
+  const accept = useMutation({
+    mutationFn: () =>
+      apiFetch<PlanResponse>(`/plans/${planId}/accept-corrections`, {
+        method: "POST",
+        body: { task_ids: selectedIds },
+      }),
+    onSuccess: () => {
+      setErrorMsg(null);
+      invalidate();
+    },
+    onError: onErr,
+  });
+
+  // Solo aparece en un plan rechazado (flujo vivo) o con historial de
+  // correcciones (lectura tras la aceptación).
+  if (!isRejected && corrections.length === 0) return null;
+
+  const reason =
+    sessionQuery.data?.rejection_reason ??
+    proposed[0]?.reason ??
+    accepted[accepted.length - 1]?.reason ??
+    null;
+
+  const toggle = (id: string) => {
+    setUnchecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  return (
+    <Card className="border-destructive/40 mt-6" data-testid="plan-corrections">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <XCircle className="text-destructive h-5 w-5" />
+          Correcciones del rechazo
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {reason ? (
+          <div
+            className="bg-muted/30 rounded-md border p-3 text-sm"
+            data-testid="plan-corrections-reason"
+          >
+            <p className="text-muted-foreground mb-1 text-xs font-semibold uppercase">
+              Motivo del validador
+            </p>
+            {renderPlanDraft(reason)}
+          </div>
+        ) : isRejected && sessionQuery.isError ? (
+          <p
+            className="text-muted-foreground text-sm italic"
+            data-testid="plan-corrections-no-reason"
+          >
+            El plan fue rechazado sin sesión de review con motivo: no hay nada desde lo que generar
+            correcciones automáticas.
+          </p>
+        ) : null}
+
+        {isRejected && proposed.length === 0 && !sessionQuery.isError ? (
+          <div className="space-y-2">
+            <p className="text-muted-foreground text-sm">
+              Genera tareas correctivas a partir del motivo: se añaden al plan como propuestas y
+              podrás revisarlas antes de aceptarlas. Al aceptar, se crean en el Kanban y el plan
+              vuelve a estar en curso — mismo plan, misma rama git.
+            </p>
+            <Button
+              onClick={() => generate.mutate()}
+              disabled={generate.isPending || !reason}
+              data-testid="plan-corrections-generate"
+            >
+              {generate.isPending ? "Generando tareas correctivas…" : "Generar tareas correctivas"}
+            </Button>
+            {emptyGeneration ? (
+              <p className="text-destructive text-xs" data-testid="plan-corrections-empty">
+                El modelo no propuso tareas usables. Reintenta o crea las tareas a mano.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {proposed.length > 0 ? (
+          <div className="space-y-3">
+            <p className="text-muted-foreground text-sm">
+              Tareas correctivas propuestas — desmarca las que no quieras materializar:
+            </p>
+            <ul className="space-y-2">
+              {proposedIds.map((id) => {
+                const task = tasksById.get(id);
+                if (!task) return null;
+                return (
+                  <li
+                    key={id}
+                    className="flex items-start gap-3 rounded-md border p-3"
+                    data-testid={`plan-correction-task-${id}`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={!unchecked.has(id)}
+                      onChange={() => toggle(id)}
+                      data-testid={`plan-correction-check-${id}`}
+                    />
+                    <div className="flex-1 text-sm">
+                      <p className="font-medium">
+                        <span className="text-muted-foreground mr-1.5 font-mono text-xs">{id}</span>
+                        {task.title}
+                      </p>
+                      {task.description ? (
+                        <p className="text-muted-foreground mt-0.5 text-xs">{task.description}</p>
+                      ) : null}
+                      <p className="text-muted-foreground mt-1 text-xs">
+                        {task.role ? <>rol: {task.role} · </> : null}
+                        complejidad: {task.complexity ?? "m"}
+                        {task.depends_on && task.depends_on.length > 0 ? (
+                          <> · depende de: {task.depends_on.join(", ")}</>
+                        ) : null}
+                      </p>
+                      {task.acceptance_criteria && task.acceptance_criteria.length > 0 ? (
+                        <ul className="mt-1 list-disc pl-5 text-xs">
+                          {task.acceptance_criteria.map((c, i) => (
+                            <li key={i}>{c}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+            {isRejected ? (
+              <Button
+                onClick={() => accept.mutate()}
+                disabled={accept.isPending || selectedIds.length === 0}
+                data-testid="plan-corrections-accept"
+              >
+                <CheckCircle2 className="mr-1.5 h-4 w-4" />
+                {accept.isPending ? "Aceptando…" : `Aceptar correcciones (${selectedIds.length})`}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {accepted.length > 0 ? (
+          <div className="space-y-1" data-testid="plan-corrections-accepted">
+            {accepted.map((entry, i) => (
+              <p key={i} className="text-muted-foreground flex items-center gap-2 text-xs">
+                <Badge variant="success">aceptada</Badge>
+                {(entry.accepted_task_ids ?? entry.task_ids ?? []).join(", ")} — las tareas están en
+                el Kanban y el plan sigue su ciclo.
+              </p>
+            ))}
+          </div>
+        ) : null}
+
+        {errorMsg ? (
+          <p className="text-destructive text-xs" data-testid="plan-corrections-error">
+            {errorMsg}
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   );

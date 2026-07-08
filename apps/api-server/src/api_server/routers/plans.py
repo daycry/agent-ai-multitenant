@@ -388,6 +388,9 @@ async def get_plan_review_session(
         "session_id": str(row.id),
         "status": row.status,
         "verdict": row.verdict,
+        # ADR 0107: la tarjeta de correcciones del plan rechazado muestra el
+        # motivo antes de generar las tareas correctivas.
+        "rejection_reason": row.rejection_reason,
         "expires_at": row.expires_at.isoformat() if row.expires_at else None,
         "review_url": urls["review_url"],
         "app_url": urls["app_url"],
