@@ -14,13 +14,19 @@ ENV COMPOSER_ALLOW_SUPERUSER=1 \
 # most often. `intl` (libicu) is REQUIRED by CodeIgniter 4 — its I18n/Time class
 # uses the `Locale` class; without it `php spark` fatals with
 # `Class "Locale" not found` (exit 255). `soap` (libxml2) is needed by tests/
-# clients that hit SOAP services. Anything more specific lives in the project's
-# composer.json and is installed by the worker at task start.
+# clients that hit SOAP services. `pcov` (pecl) is the coverage driver: without
+# one, a phpunit.xml with a `<coverage>` block warns "No code coverage driver
+# available" and PHPUnit exits 1 con la suite VERDE (hallazgo #5, QA
+# 2026-07-07) — quemaba turnos del agente y confundía al reviewer. Anything
+# more specific lives in the project's composer.json and is installed by the
+# worker at task start.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git unzip libzip-dev libpq-dev libonig-dev libicu-dev libxml2-dev \
  && rm -rf /var/lib/apt/lists/* \
  && docker-php-ext-install -j$(nproc) zip pdo pdo_pgsql pdo_mysql mbstring intl soap \
+ && pecl install pcov \
+ && docker-php-ext-enable pcov \
  && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
 WORKDIR /workspace
