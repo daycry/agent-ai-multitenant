@@ -391,10 +391,14 @@ def test_monitoring_includes_alertmanager_and_cadvisor() -> None:
 
     cad = services["cadvisor"]
     assert cad["image"].startswith("gcr.io/cadvisor/cadvisor:")
-    # Privileged metrics collector: read-only host mounts, no cap_drop/apparmor.
-    assert cad["privileged"] is True
-    assert "cap_drop" not in cad
-    assert all("apparmor=" not in o for o in cad["security_opt"])
+    # prod-12 cadv_01 (sandbox-8, decisión 5a): cAdvisor dejó de ser privileged
+    # — los stats salen de los bind-mounts read-only, así que lleva el MISMO
+    # hardening que el resto (cap_drop ALL + apparmor + no-new-privileges).
+    assert "privileged" not in cad
+    assert "devices" not in cad  # /dev/kmsg (decodificar OOM-kills) retirado
+    assert cad["cap_drop"] == ["ALL"]
+    assert any("apparmor=" in o for o in cad["security_opt"])
+    assert all(v.endswith(":ro") for v in cad["volumes"])
 
 
 # ---------------------------------------------------------------------------
@@ -498,10 +502,9 @@ def test_hardening_defaults_on_every_service() -> None:
     # One-shot init services pull-and-exit, so they CANNOT be unless-stopped —
     # they still carry the rest of the hardening posture.
     one_shots = {"ollama-bootstrap", "migrations"}
-    # cAdvisor MUST run privileged with host mounts to read container stats, so
-    # it is deliberately NOT cap-dropped and does NOT pin AppArmor (both would
-    # deny the host access it needs). It still sets no-new-privileges + limits.
-    privileged = {"cadvisor"}
+    # prod-12 cadv_01: ya no queda ningún servicio privileged en el compose
+    # generado (cAdvisor pasó al hardening estándar).
+    privileged: set[str] = set()
     for name, svc in compose["services"].items():
         assert svc["restart"] == ("no" if name in one_shots else "unless-stopped"), name
         opts = svc["security_opt"]

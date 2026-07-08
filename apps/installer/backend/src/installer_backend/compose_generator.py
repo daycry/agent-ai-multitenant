@@ -1167,26 +1167,21 @@ def _alertmanager_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
 def _cadvisor_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
     """cAdvisor — per-container CPU/memory/network/fs metrics.
 
-    Unlike the other trusted services it MUST run ``privileged`` with host
-    cgroup/Docker mounts to read container stats, so it is NOT cap-dropped and
-    does NOT pin the AppArmor profile here. NOTE: this CONTRADICTS
-    docker/docker-compose.monitoring.yml, which DOES pin
-    ``apparmor=agentic-default`` on cAdvisor. Whether the profile is the right
-    posture for a privileged container (could it deny the host access it needs
-    on real Linux?) is an UNRESOLVED question, and the test suite encodes both
-    sides: tests/unit/test_compose_generator.py asserts NO apparmor here, while
-    tests/security/test_apparmor.py asserts apparmor on every generated service.
-    Resolving the contradiction is owned by the monitoring/sandbox hardening
-    plans (finding sandbox-8); until then the generator keeps its committed
-    behaviour (no apparmor on privileged cAdvisor) and the two security
-    assertions are xfail-quarantined. All mounts are read-only;
-    ``no-new-privileges`` is still set.
+    prod-12 task_prod12_cadv_01 (sandbox-8, decisión 5 opción a): cAdvisor ya
+    NO corre ``privileged`` ni monta ``/dev/kmsg`` — los stats de contenedor
+    salen de los bind-mounts read-only (cgroups vía /sys + /rootfs +
+    /var/lib/docker), que funcionan con ``cap_drop: [ALL]`` + AppArmor pineado
+    como cualquier otro servicio de primera parte (validado empíricamente:
+    families container_cpu/memory/network/fs presentes sin privileged; lo que
+    se pierde es la decodificación de eventos OOM-kill del kernel vía
+    /dev/kmsg — trade-off documentado en el runbook de monitoring, con el
+    override legacy-privileged como opt-in manual para quien lo necesite).
+    Esto RESUELVE la contradicción sandbox-8 con
+    docker/docker-compose.monitoring.yml (que siempre pineó apparmor).
     """
-    return {
+    svc: dict[str, Any] = {
         "image": IMAGE_CADVISOR,
         "command": ["--docker_only=true", "--housekeeping_interval=30s"],
-        "privileged": True,
-        "devices": ["/dev/kmsg"],
         "volumes": [
             "/:/rootfs:ro",
             "/var/run:/var/run:ro",
@@ -1194,7 +1189,6 @@ def _cadvisor_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  #
             "/var/lib/docker/:/var/lib/docker:ro",
             "/dev/disk/:/dev/disk:ro",
         ],
-        "security_opt": ["no-new-privileges:true"],
         "healthcheck": {
             "test": ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"],
             "interval": "30s",
@@ -1203,10 +1197,9 @@ def _cadvisor_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  #
             "start_period": "30s",
         },
         "networks": ["agentic-net"],
-        "restart": "unless-stopped",
-        "logging": _logging_block(),
-        "deploy": {"resources": {"limits": {"cpus": "0.5", "memory": "256m"}}},
     }
+    svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
+    return svc
 
 
 def _grafana_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:

@@ -274,7 +274,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_img_01` — Imágenes de test-runtime no-root y dep-cache escribible
 
-- [ ] **Título**: Hornear `USER 1000:1000` y un home escribible (`/home/agent`) en los
+- [x] **Título**: Hornear `USER 1000:1000` y un home escribible (`/home/agent`) en los
       Dockerfiles de los templates de test-runtime (p.ej.
       docker/agent-runtimes/python-pytest/Dockerfile:32, hoy sin `USER`, y el resto del
       catálogo), igual que ya hace el agent-runtime como defensa en profundidad. Alinear
@@ -307,6 +307,19 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 > Se eligió (b) sobre la (a) recomendada deliberadamente: con `stack_exec` como vía real ya
 > desplegada, extirpar la familia del catálogo/seeds (run*\* en builtin_tools + equipos) es
 > cirugía de producto con estado en BD — queda anotada como follow-up en task_prod12_docs_01.
+
+> **HECHAS (2026-07-08) — task_prod12_img_01 y task_prod12_cadv_01**:
+> img_01: los 14 templates hornean `/home/agent` (chown 1000) + `ENV HOME` + `USER 1000:1000`
+> (numérico — uniforme debian/alpine) y el catálogo repunta TODOS los dep-caches y `cache_env`
+> de `/root/...`//`/usr/local/...` a `/home/agent/...`; imágenes PHP reconstruidas y verificadas
+> (uid 1000, HOME escribible). Tests: `test_runtime_catalog_dep_cache_paths.py` +
+> `test_test_runtime_nonroot_cache.py` (+ 35 de regresión dep-cache/launch actualizados).
+> cadv_01: **opción (a) validada empíricamente** (sonda no-privileged + cap-drop ALL sirve
+> container_cpu/memory/network/fs) → cAdvisor sin `privileged` ni `/dev/kmsg` en el generador Y
+> en el overlay de dev, con apparmor pineado; los DOS xfail-cuarentena de sandbox-8
+> (apparmor/seccomp) retirados y los sets del pentest endurecidos (0 servicios privileged).
+> Trade-off (OOM-kill events) + override opt-in documentados en
+> `docs/06-runbooks/monitoring-cadvisor.md`.
 
 #### `task_prod12_reaper_01` — Reaper beat de contenedores y redes huérfanos
 
@@ -405,7 +418,7 @@ documentando que la ejecución real de tests va por`TestRuntimeRunner` del worke
 
 #### `task_prod12_cadv_01` — Minimizar privilegios de cAdvisor o documentar el trade-off
 
-- [ ] **Título**: Aplicar la decisión 5 sobre el servicio cAdvisor del overlay de
+- [x] **Título**: Aplicar la decisión 5 sobre el servicio cAdvisor del overlay de
       monitoring (apps/installer/backend/src/installer_backend/compose_generator.py:636,
       hoy `privileged: True` + `/dev/kmsg` + montajes `/:/rootfs:ro`,
       `/var/run:/var/run:ro` — que expone el socket Docker en lectura — y

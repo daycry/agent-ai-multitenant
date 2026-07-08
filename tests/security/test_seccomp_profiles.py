@@ -424,16 +424,6 @@ def test_base_compose_never_sets_seccomp_unconfined() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Postura AppArmor de cAdvisor sin resolver (finding sandbox-8). El baseline "
-        "exigido aqui incluye apparmor=agentic-default en TODO servicio generado, pero "
-        "tests/unit/test_compose_generator.py asserta que el cAdvisor privilegiado NO "
-        "debe fijarlo: contradiccion committeada. Decision de prod-08/prod-12; prod-02 "
-        "lo deja en cuarentena para que el resto de tests/security gatee CI."
-    ),
-    strict=False,
-)
 def test_compose_generator_emits_trusted_baseline_without_custom_seccomp() -> None:
     """The installer's compose generator wires the SAME trusted posture as the
     committed compose (ADR 0040, revised): every generated service pins

@@ -154,9 +154,12 @@ services:
     command:
       - --docker_only=true
       - --housekeeping_interval=30s
-    privileged: true
-    devices:
-      - /dev/kmsg
+    # prod-12 cadv_01 (sandbox-8, decisión 5a): sin privileged ni /dev/kmsg —
+    # los stats salen de los bind-mounts ro; validado que las familias
+    # container_cpu/memory/network/fs sobreviven. Se pierde la decodificación
+    # de OOM-kills del kernel (runbook de monitoring documenta el override
+    # legacy-privileged como opt-in si un host lo necesita).
+    cap_drop: [ALL]
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
@@ -165,6 +168,7 @@ services:
       - /dev/disk/:/dev/disk:ro
     security_opt:
       - no-new-privileges:true
+      - apparmor=agentic-default
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
       interval: 30s
