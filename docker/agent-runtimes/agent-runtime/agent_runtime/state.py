@@ -14,6 +14,11 @@ Claves compartidas hoy: ``status``, ``last_decision``, ``last_observation``,
 ``is_review``, ``system_preamble``, ``context``, ``steps``, ``guardrail_events``
 (+ ``written_files``, inyectada solo en el estado que ve la self-review). Si
 añades o renombras una clave, actualiza AMBOS módulos y este listado.
+
+Desde 2026-07-08 el contrato es EJECUTABLE: ``tests/test_state_key_contract.py``
+escanea ambos módulos con AST y falla si algún ``state[...]``/``state.get(...)``
+usa una clave que no exista en este TypedDict (o en su lista de inyectadas) — el
+rename silencioso rompe en CI, no en producción.
 """
 
 from __future__ import annotations
