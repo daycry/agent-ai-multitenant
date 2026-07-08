@@ -270,14 +270,26 @@ function PlanLifecycleSection({ planId, status }: { planId: string; status: stri
     },
     onError: onErr,
   });
+  // hallazgo #3 (QA 2026-07-07): el desbloqueo solo existía en /plans/{id}/escalated
+  // y el operador no lo encontró desde el detalle. Misma mutación que allí.
+  const unblock = useMutation({
+    mutationFn: () => apiFetch<{ status: string }>(`/plans/${planId}/unblock`, { method: "POST" }),
+    onSuccess: () => {
+      setErrorMsg(null);
+      invalidate();
+    },
+    onError: onErr,
+  });
 
   const canSendToApproval = status === "draft";
   const canApprove = status === "pending_approval" || status === "pending_second_approval";
   const canStart = status === "approved";
+  const canUnblock = status === "blocked";
   // Action bar, not a status display: render nothing when no transition is offered.
-  if (!canSendToApproval && !canApprove && !canStart) return null;
+  if (!canSendToApproval && !canApprove && !canStart && !canUnblock) return null;
 
-  const pending = sendToApproval.isPending || approve.isPending || startExecution.isPending;
+  const pending =
+    sendToApproval.isPending || approve.isPending || startExecution.isPending || unblock.isPending;
 
   return (
     <Card className="mt-6" data-testid="plan-lifecycle">
@@ -311,6 +323,15 @@ function PlanLifecycleSection({ planId, status }: { planId: string; status: stri
               Empezar ejecución
             </Button>
           ) : null}
+          {canUnblock ? (
+            <Button
+              onClick={() => unblock.mutate()}
+              disabled={pending}
+              data-testid="plan-detail-unblock"
+            >
+              Desbloquear plan
+            </Button>
+          ) : null}
         </div>
       </CardHeader>
       <CardContent>
@@ -319,7 +340,9 @@ function PlanLifecycleSection({ planId, status }: { planId: string; status: stri
             ? "El plan está en borrador. Envíalo a aprobación para revisarlo y aprobarlo."
             : canApprove
               ? "El plan espera aprobación. Al aprobarlo podrás sincronizar sus tareas al Kanban."
-              : "El plan está aprobado. «Empezar ejecución» lo marca en curso y crea las tareas en el Kanban."}
+              : canUnblock
+                ? "El plan está bloqueado: ninguna tarea abierta puede avanzar. «Desbloquear plan» lo reactiva y re-encola todas sus tareas bloqueadas (reinicia sus reintentos)."
+                : "El plan está aprobado. «Empezar ejecución» lo marca en curso y crea las tareas en el Kanban."}
         </p>
         {errorMsg ? (
           <p className="text-destructive mt-2 text-xs" data-testid="plan-lifecycle-error">
@@ -1330,11 +1353,12 @@ function PlanDeepLinksSection({ planId, status }: { planId: string; status: stri
             </div>
             <div className="flex-1">
               <div className="flex items-center gap-1.5 text-sm font-semibold">
-                Tareas escaladas
+                Tareas escaladas y bloqueadas
                 <ExternalLink className="text-muted-foreground h-3.5 w-3.5" />
               </div>
               <p className="text-muted-foreground mt-0.5 text-xs">
-                Tareas del plan en <code>awaiting_human</code> tras agotar reintentos del revisor.
+                Tareas esperando una acción humana (aprobar, reintentar, desbloquear) — incluye las
+                bloqueadas por reintentos agotados y el desbloqueo del plan.
               </p>
             </div>
           </Link>

@@ -26,6 +26,7 @@ import { LayoutGrid, Lock, LockOpen } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { TaskDetailSheet } from "@/components/tasks/task-detail-sheet";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -184,6 +185,17 @@ export default function BoardPage() {
     [tasksQuery.data],
   );
 
+  // hallazgo #3: desbloquear un plan desde su tarjeta (misma mutación que el
+  // detalle y la página escalated — reactiva el plan y re-encola sus blocked).
+  const unblockPlan = useMutation({
+    mutationFn: async (planId: string) =>
+      apiFetch<{ status: string }>(`/plans/${planId}/unblock`, { method: "POST" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["plans", "tenant"] });
+      void queryClient.invalidateQueries({ queryKey: ["tasks", "by-plan"] });
+    },
+  });
+
   const moveTask = useMutation({
     mutationFn: async ({ task, newStatus }: { task: Task; newStatus: Task["status"] }) => {
       return apiFetch<Task>(`/projects/${task.project_id}/tasks/${task.id}`, {
@@ -329,6 +341,22 @@ export default function BoardPage() {
                     )}
                   </CardHeader>
                   <CardContent className="flex items-center justify-end gap-2">
+                    {/* hallazgo #3 (QA 2026-07-07): un plan bloqueado ofrece el
+                        desbloqueo AQUÍ, no solo en /plans/{id}/escalated. */}
+                    {p.status === "blocked" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={unblockPlan.isPending}
+                        data-testid={`plan-unblock-${p.id}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          unblockPlan.mutate(p.id);
+                        }}
+                      >
+                        Desbloquear
+                      </Button>
+                    )}
                     <Badge variant={PLAN_STATUS_VARIANT[p.status] ?? "muted"}>{p.status}</Badge>
                   </CardContent>
                 </Card>
