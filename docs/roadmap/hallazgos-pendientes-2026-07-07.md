@@ -1,10 +1,22 @@
 ---
 title: Hallazgos pendientes de implementar (QA e2e + refactor 2026-07-07/08)
 date: 2026-07-08
-status: pending_approval
+status: in_progress
 owner: operador (jmano)
 branch: plan/runs-visor-trabajo
 ---
+
+> **Estado (2026-07-08, tanda «adelante con la cola»)**: aprobado por el operador e implementado
+> con TDD + commit atómico por hallazgo: **#1** (`d1d2f41` — publish tras soltar el run-lock),
+> **#2** (`50f4e5d` — `transition_from_blocked` + re-evaluación en TODAS las vías humanas y el
+> PUT del Kanban), **#3** (`c6e8d99` — botón Desbloquear en detalle + board), **#4** (`e983ada` —
+> app-preview configurable, sin placeholder, 409 honesto), **#5** (`b2dd85f` — pcov en
+> php-phpunit Y php-pest, imágenes reconstruidas), **#6** (`e661201` — contrato de claves de
+> AgentState ejecutable). Además #8-parcial y #9-parcial: infra de render-tests jsdom + tests
+> B2/B3/C1/C2/D1/T11 + i18n (`e1ff76c`) — runs-visor y ciclo-vida quedaron `completed`.
+> **Siguen pendientes**: #7 (fusión canales verdict — decisión de producto del operador), #8
+> (e2e del ciclo autónomo con Docker real) y el grueso de #9 (refactor por partes del frontend)
+> y #10 (menores).
 
 # Hallazgos pendientes — backlog de implementación
 

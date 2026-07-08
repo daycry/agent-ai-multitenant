@@ -36,6 +36,17 @@ priority: P1
 > propio cuerpo del documento ya llevaba fechada en `task_prod12_net_01` (ADR 0094 aprobado, mitad
 > de la tarea implementada y desplegada — ver esa sección para el detalle). El resto del plan
 > (marketplace, reaper, resto de SSRF/egress) sigue sin empezar.
+>
+> **Estado (2026-07-08, tanda autónoma)**: **Fases A y B COMPLETAS** (`9cd2eb5` — ssrf*01/02/03 +
+> allow_01/02, ver nota en la Fase A) y **task_prod12_docker_01 HECHA** (`4d53f92`, opción b).
+> **task_prod12_mkt_01 investigada y BLOQUEADA**: `InstallOrchestrator.install()` (gates
+> completos) existe, pero corre sobre el `source_dir` de un artefacto FETCHEADO — la primera
+> instalación no tiene registry de artefactos ni materialización del contenido del listing
+> (el mismo gap H4/M1 de la auditoría de marketplace 2026-06-24); cablear solo el analizador
+> exige antes materializar el manifest a disco. Pendientes: net_01 (mitad marketplace),
+> img_01, reaper_01, mkt_01 (tras materialización), av_01 (+ADR corto), cadv_01, docs_01
+> (añadir además: UI del panel para `allowed_domains` y el follow-up de retirar run*\* de
+> seeds — docker_01 opción a).
 
 ## Resumen
 
