@@ -91,7 +91,7 @@ export function ReviewPreviewSection({ projectId, value }: ReviewPreviewSectionP
             <Input
               id="review-image"
               data-testid="review-image-input"
-              placeholder="registry.example.com/mi-app:latest"
+              placeholder="mi-app-preview:latest"
               value={image}
               onChange={(e) => {
                 setSaved(false);
@@ -99,8 +99,10 @@ export function ReviewPreviewSection({ projectId, value }: ReviewPreviewSectionP
               }}
             />
             <p className="text-muted-foreground text-xs">
-              Tag completo de una imagen auto-servible (arranca sola y sirve HTTP). Vacío =
-              app-preview desactivada.
+              Tag de imagen Docker auto-servible (su CMD arranca un servidor HTTP; el código del
+              plan se monta en /workspace). En dev vale un tag local (`docker build -t ...`); en
+              producción, la referencia del registry que publica tu CI. Vacío = app-preview
+              desactivada.
             </p>
           </div>
           <div className="space-y-1.5">
