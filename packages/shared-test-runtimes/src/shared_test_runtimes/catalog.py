@@ -46,13 +46,13 @@ def _image(slug: str) -> str:
 PYTHON_PYTEST = RuntimeTemplate(
     id="python-pytest",
     docker_image=_image("python-pytest"),
-    dep_cache_mount="/root/.cache/pip",
+    dep_cache_mount="/home/agent/.cache/pip",
     default_pre_install=(
         "pip install --upgrade pip",
         "pip install -r requirements.txt",
     ),
     output_parsers=("junit_xml", "raw_text"),
-    cache_env=(("PIP_CACHE_DIR", "/root/.cache/pip"),),
+    cache_env=(("PIP_CACHE_DIR", "/home/agent/.cache/pip"),),
 )
 
 # --- Node -----------------------------------------------------------
@@ -60,30 +60,30 @@ PYTHON_PYTEST = RuntimeTemplate(
 NODE_JEST = RuntimeTemplate(
     id="node-jest",
     docker_image=_image("node-jest"),
-    dep_cache_mount="/root/.npm",
+    dep_cache_mount="/home/agent/.npm",
     default_pre_install=("npm ci",),
     output_parsers=("jest_json", "junit_xml", "raw_text"),
-    cache_env=(("npm_config_cache", "/root/.npm"),),
+    cache_env=(("npm_config_cache", "/home/agent/.npm"),),
 )
 
 NODE_VITEST = RuntimeTemplate(
     id="node-vitest",
     docker_image=_image("node-vitest"),
-    dep_cache_mount="/root/.npm",
+    dep_cache_mount="/home/agent/.npm",
     default_pre_install=("npm ci",),
     output_parsers=("junit_xml", "raw_text"),
-    cache_env=(("npm_config_cache", "/root/.npm"),),
+    cache_env=(("npm_config_cache", "/home/agent/.npm"),),
 )
 
 NODE_PLAYWRIGHT = RuntimeTemplate(
     id="node-playwright",
     docker_image=_image("node-playwright"),
-    dep_cache_mount="/root/.npm",
+    dep_cache_mount="/home/agent/.npm",
     default_pre_install=("npm ci",),
     # Playwright is browser-heavy — give it more headroom.
     default_resources=Resources(cpu=2.0, memory_mb=2048),
     output_parsers=("playwright_json", "junit_xml", "raw_text"),
-    cache_env=(("npm_config_cache", "/root/.npm"),),
+    cache_env=(("npm_config_cache", "/home/agent/.npm"),),
 )
 
 # --- PHP ------------------------------------------------------------
@@ -91,19 +91,19 @@ NODE_PLAYWRIGHT = RuntimeTemplate(
 PHP_PHPUNIT = RuntimeTemplate(
     id="php-phpunit",
     docker_image=_image("php-phpunit"),
-    dep_cache_mount="/root/.composer/cache",
+    dep_cache_mount="/home/agent/.composer/cache",
     default_pre_install=("composer install --no-interaction --no-progress",),
     output_parsers=("junit_xml", "raw_text"),
-    cache_env=(("COMPOSER_CACHE_DIR", "/root/.composer/cache"),),
+    cache_env=(("COMPOSER_CACHE_DIR", "/home/agent/.composer/cache"),),
 )
 
 PHP_PEST = RuntimeTemplate(
     id="php-pest",
     docker_image=_image("php-pest"),
-    dep_cache_mount="/root/.composer/cache",
+    dep_cache_mount="/home/agent/.composer/cache",
     default_pre_install=("composer install --no-interaction --no-progress",),
     output_parsers=("junit_xml", "raw_text"),
-    cache_env=(("COMPOSER_CACHE_DIR", "/root/.composer/cache"),),
+    cache_env=(("COMPOSER_CACHE_DIR", "/home/agent/.composer/cache"),),
 )
 
 # --- Go -------------------------------------------------------------
@@ -111,14 +111,14 @@ PHP_PEST = RuntimeTemplate(
 GO_TEST = RuntimeTemplate(
     id="go-test",
     docker_image=_image("go-test"),
-    dep_cache_mount="/root/go/pkg/mod",
+    dep_cache_mount="/home/agent/go/pkg/mod",
     default_pre_install=("go mod download",),
     output_parsers=("go_test_json", "raw_text"),
-    # The golang image defaults GOPATH=/go, so the mount at /root/go/pkg/mod is
+    # The golang image defaults GOPATH=/go, so the mount at /home/agent/go/pkg/mod is
     # ignored unless we point the module cache at it explicitly.
     cache_env=(
-        ("GOPATH", "/root/go"),
-        ("GOMODCACHE", "/root/go/pkg/mod"),
+        ("GOPATH", "/home/agent/go"),
+        ("GOMODCACHE", "/home/agent/go/pkg/mod"),
     ),
 )
 
@@ -127,22 +127,22 @@ GO_TEST = RuntimeTemplate(
 JAVA_MAVEN = RuntimeTemplate(
     id="java-maven",
     docker_image=_image("java-maven"),
-    dep_cache_mount="/root/.m2/repository",
+    dep_cache_mount="/home/agent/.m2/repository",
     default_pre_install=("mvn -B dependency:go-offline",),
     default_resources=Resources(cpu=2.0, memory_mb=2048),
     output_parsers=("surefire_xml", "junit_xml", "raw_text"),
-    cache_env=(("MAVEN_OPTS", "-Dmaven.repo.local=/root/.m2/repository"),),
+    cache_env=(("MAVEN_OPTS", "-Dmaven.repo.local=/home/agent/.m2/repository"),),
 )
 
 JAVA_GRADLE = RuntimeTemplate(
     id="java-gradle",
     docker_image=_image("java-gradle"),
-    dep_cache_mount="/root/.gradle/caches",
+    dep_cache_mount="/home/agent/.gradle/caches",
     default_pre_install=("gradle --no-daemon dependencies",),
     default_resources=Resources(cpu=2.0, memory_mb=2048),
     output_parsers=("junit_xml", "raw_text"),
-    # caches/ live under $GRADLE_USER_HOME → /root/.gradle/caches.
-    cache_env=(("GRADLE_USER_HOME", "/root/.gradle"),),
+    # caches/ live under $GRADLE_USER_HOME → /home/agent/.gradle/caches.
+    cache_env=(("GRADLE_USER_HOME", "/home/agent/.gradle"),),
 )
 
 # --- Ruby -----------------------------------------------------------
@@ -150,10 +150,10 @@ JAVA_GRADLE = RuntimeTemplate(
 RUBY_RSPEC = RuntimeTemplate(
     id="ruby-rspec",
     docker_image=_image("ruby-rspec"),
-    dep_cache_mount="/usr/local/bundle",
+    dep_cache_mount="/home/agent/.bundle",
     default_pre_install=("bundle install --jobs=4",),
     output_parsers=("junit_xml", "raw_text"),
-    cache_env=(("BUNDLE_PATH", "/usr/local/bundle"),),
+    cache_env=(("BUNDLE_PATH", "/home/agent/.bundle"),),
 )
 
 # --- Rust -----------------------------------------------------------
@@ -161,12 +161,12 @@ RUBY_RSPEC = RuntimeTemplate(
 RUST_CARGO = RuntimeTemplate(
     id="rust-cargo",
     docker_image=_image("rust-cargo"),
-    dep_cache_mount="/usr/local/cargo/registry",
+    dep_cache_mount="/home/agent/.cargo/registry",
     default_pre_install=("cargo fetch",),
     default_resources=Resources(cpu=2.0, memory_mb=2048),
     output_parsers=("rust_test_json", "raw_text"),
-    # registry/ lives under $CARGO_HOME → /usr/local/cargo/registry.
-    cache_env=(("CARGO_HOME", "/usr/local/cargo"),),
+    # registry/ lives under $CARGO_HOME → /home/agent/.cargo/registry.
+    cache_env=(("CARGO_HOME", "/home/agent/.cargo"),),
 )
 
 # --- .NET -----------------------------------------------------------
@@ -174,11 +174,11 @@ RUST_CARGO = RuntimeTemplate(
 DOTNET_TEST = RuntimeTemplate(
     id="dotnet-test",
     docker_image=_image("dotnet-test"),
-    dep_cache_mount="/root/.nuget/packages",
+    dep_cache_mount="/home/agent/.nuget/packages",
     default_pre_install=("dotnet restore",),
     default_resources=Resources(cpu=2.0, memory_mb=2048),
     output_parsers=("trx", "junit_xml", "raw_text"),
-    cache_env=(("NUGET_PACKAGES", "/root/.nuget/packages"),),
+    cache_env=(("NUGET_PACKAGES", "/home/agent/.nuget/packages"),),
 )
 
 # --- Generic --------------------------------------------------------

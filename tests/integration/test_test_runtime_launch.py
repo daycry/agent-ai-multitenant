@@ -99,7 +99,7 @@ def test_launch_mounts_worktree_and_depcache() -> None:
     mounts = main.kwargs["mounts"]
     targets = {m["Target"] for m in mounts}
     assert "/workspace" in targets
-    assert "/root/.cache/pip" in targets
+    assert "/home/agent/.cache/pip" in targets
 
 
 def test_launch_applies_hardening_envelope() -> None:
@@ -358,8 +358,8 @@ def test_cache_env_is_injected_even_without_egress() -> None:
     tmpl = RuntimeTemplate(
         id="php-phpunit",
         docker_image="img:v1",
-        dep_cache_mount="/root/.composer/cache",
-        cache_env=(("COMPOSER_CACHE_DIR", "/root/.composer/cache"),),
+        dep_cache_mount="/home/agent/.composer/cache",
+        cache_env=(("COMPOSER_CACHE_DIR", "/home/agent/.composer/cache"),),
     )
     client, started = _fake_client()
     runner = TestRuntimeRunner(Settings(), client=client)
@@ -370,7 +370,7 @@ def test_cache_env_is_injected_even_without_egress() -> None:
     )
 
     env = started[0].kwargs["environment"]
-    assert env["COMPOSER_CACHE_DIR"] == "/root/.composer/cache"
+    assert env["COMPOSER_CACHE_DIR"] == "/home/agent/.composer/cache"
     assert "HTTP_PROXY" not in env  # no egress requested
 
 

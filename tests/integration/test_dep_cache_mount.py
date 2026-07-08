@@ -27,7 +27,7 @@ def test_mount_for_returns_entry_when_lock_hash_present(tmp_path: Path) -> None:
     mgr = DepCacheManager(tmp_path)
     entry = mgr.mount_for(_template("python-pytest"), "abc123")
     assert entry is not None
-    assert entry.container_mount == "/root/.cache/pip"
+    assert entry.container_mount == "/home/agent/.cache/pip"
     assert entry.host_path.is_dir()
     assert entry.host_path.name == "pip-abc123"
 
@@ -56,19 +56,19 @@ def test_mount_for_returns_none_when_template_has_no_dep_cache(
 
 def test_mount_path_matches_template_per_runtime(tmp_path: Path) -> None:
     """Each template advertises a runtime-correct mount path:
-    npm cache at /root/.npm, composer at /root/.composer/cache, etc."""
+    npm cache at /home/agent/.npm, composer at /home/agent/.composer/cache, etc."""
     from shared_test_runtimes.dep_cache import DepCacheManager
 
     mgr = DepCacheManager(tmp_path)
     cases: list[tuple[str, str]] = [
-        ("python-pytest", "/root/.cache/pip"),
-        ("node-jest", "/root/.npm"),
-        ("php-phpunit", "/root/.composer/cache"),
-        ("go-test", "/root/go/pkg/mod"),
-        ("java-maven", "/root/.m2/repository"),
-        ("ruby-rspec", "/usr/local/bundle"),
-        ("rust-cargo", "/usr/local/cargo/registry"),
-        ("dotnet-test", "/root/.nuget/packages"),
+        ("python-pytest", "/home/agent/.cache/pip"),
+        ("node-jest", "/home/agent/.npm"),
+        ("php-phpunit", "/home/agent/.composer/cache"),
+        ("go-test", "/home/agent/go/pkg/mod"),
+        ("java-maven", "/home/agent/.m2/repository"),
+        ("ruby-rspec", "/home/agent/.bundle"),
+        ("rust-cargo", "/home/agent/.cargo/registry"),
+        ("dotnet-test", "/home/agent/.nuget/packages"),
     ]
     for template_id, expected_mount in cases:
         entry = mgr.mount_for(_template(template_id), "h")

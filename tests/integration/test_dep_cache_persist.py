@@ -32,7 +32,7 @@ def test_ensure_entry_creates_dir_with_prefix_and_hash(tmp_path: Path) -> None:
     assert entry.host_path.is_dir()
     assert entry.host_path.name == "pip-abc123"
     assert entry.cache_key == "pip-abc123"
-    assert entry.container_mount == "/root/.cache/pip"
+    assert entry.container_mount == "/home/agent/.cache/pip"
 
 
 def test_ensure_entry_is_idempotent(tmp_path: Path) -> None:

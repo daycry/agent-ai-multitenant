@@ -180,11 +180,11 @@ def test_cache_env_accepts_pairs_and_stays_hashable() -> None:
     t = mod.RuntimeTemplate(
         id="php-phpunit",
         docker_image="img:v1",
-        dep_cache_mount="/root/.composer/cache",
-        cache_env=(("COMPOSER_CACHE_DIR", "/root/.composer/cache"),),
+        dep_cache_mount="/home/agent/.composer/cache",
+        cache_env=(("COMPOSER_CACHE_DIR", "/home/agent/.composer/cache"),),
     )
-    assert t.cache_env == (("COMPOSER_CACHE_DIR", "/root/.composer/cache"),)
-    assert dict(t.cache_env) == {"COMPOSER_CACHE_DIR": "/root/.composer/cache"}
+    assert t.cache_env == (("COMPOSER_CACHE_DIR", "/home/agent/.composer/cache"),)
+    assert dict(t.cache_env) == {"COMPOSER_CACHE_DIR": "/home/agent/.composer/cache"}
     # sigue hashable (par de tuplas)
     assert {t} == {t}
 
@@ -209,14 +209,14 @@ def test_full_template_with_all_fields() -> None:
         id="php-phpunit",
         docker_image="ghcr.io/agent-ai/agent-runtime-php-phpunit:v1.2.3",
         workspace_mount_path="/srv/app",
-        dep_cache_mount="/root/.composer/cache",
+        dep_cache_mount="/home/agent/.composer/cache",
         default_pre_install=("composer install --no-dev",),
         default_resources=mod.Resources(cpu=2.0, memory_mb=2048),
         output_parsers=("junit_xml", "raw_text"),
         network_policy="restricted",
     )
     assert t.workspace_mount_path == "/srv/app"
-    assert t.dep_cache_mount == "/root/.composer/cache"
+    assert t.dep_cache_mount == "/home/agent/.composer/cache"
     assert t.default_pre_install == ("composer install --no-dev",)
     assert t.default_resources.cpu == 2.0
     assert t.default_resources.memory_mb == 2048
