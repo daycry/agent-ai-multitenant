@@ -1191,6 +1191,8 @@ interface ReviewSessionInfo {
 function HumanValidationSection({ planId, status }: { planId: string; status: string }) {
   const queryClient = useQueryClient();
   const [verdictMsg, setVerdictMsg] = useState<string | null>(null);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const reviewQuery = useQuery({
@@ -1205,19 +1207,12 @@ function HumanValidationSection({ planId, status }: { planId: string; status: st
 
   const rs = reviewQuery.data;
 
-  const submitVerdict = async (verdict: "approved" | "rejected") => {
+  // El motivo del rechazo ES el feedback que reciben los agentes en el rework
+  // — antes iba un texto fijo y la intención del validador se perdía. La modal
+  // usa MarkdownTextarea (preferencia del operador: todo textarea con preview).
+  const submitVerdict = async (verdict: "approved" | "rejected", reason = "") => {
     if (!rs?.verdict_url) return;
-    // El motivo del rechazo ES el feedback que reciben los agentes en el
-    // rework — antes iba un texto fijo y la intención del validador se perdía.
-    let rejectionReason = "";
-    if (verdict === "rejected") {
-      const reason = window.prompt(
-        "¿Rechazar el plan? Escribe el motivo (los agentes lo reciben como feedback del rework):",
-        "",
-      );
-      if (reason === null) return; // cancelado
-      rejectionReason = reason.trim() || "Rechazado desde el panel de validación (sin motivo).";
-    }
+    const rejectionReason = reason.trim() || "Rechazado desde el panel de validación (sin motivo).";
     setSubmitting(true);
     setVerdictMsg(null);
     try {
@@ -1313,7 +1308,7 @@ function HumanValidationSection({ planId, status }: { planId: string; status: st
               </Button>
               <Button
                 variant="outline"
-                onClick={() => void submitVerdict("rejected")}
+                onClick={() => setRejectOpen(true)}
                 disabled={submitting || !!rs.verdict}
                 data-testid="plan-verdict-reject"
               >
@@ -1331,6 +1326,48 @@ function HumanValidationSection({ planId, status }: { planId: string; status: st
                 </Badge>
               )}
             </div>
+
+            <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
+              <DialogContent data-testid="plan-reject-dialog">
+                <DialogHeader>
+                  <DialogTitle>Rechazar plan</DialogTitle>
+                </DialogHeader>
+                <DialogBody className="space-y-3">
+                  <p className="text-muted-foreground text-sm">
+                    El motivo llega a los agentes como feedback del rework — cuanto más concreto
+                    (qué está mal, dónde y qué se espera), mejor corrige el equipo.
+                  </p>
+                  <MarkdownTextarea
+                    value={rejectReason}
+                    onChange={setRejectReason}
+                    placeholder="P. ej.: El filtro de Content-Type application/json es global; debe acotarse al grupo api/v1…"
+                    rows={6}
+                    data-testid="plan-reject-reason"
+                  />
+                </DialogBody>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setRejectOpen(false)}
+                    disabled={submitting}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    disabled={submitting}
+                    data-testid="plan-reject-confirm"
+                    onClick={() => {
+                      setRejectOpen(false);
+                      void submitVerdict("rejected", rejectReason);
+                    }}
+                  >
+                    <XCircle className="mr-1.5 h-4 w-4" />
+                    Rechazar plan
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </>
         )}
       </CardContent>
