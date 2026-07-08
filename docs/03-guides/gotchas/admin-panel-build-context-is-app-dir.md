@@ -34,12 +34,21 @@ stack: docker build, Next.js standalone, .dockerignore, NEXT_PUBLIC_*
   caddy:8080 como `/api`) → síntoma 2. Así lo documenta el propio
   `docker-compose.manuals.yml` («Image must be built with that build-arg»).
 
-## Fix (el comando COMPLETO, siempre)
+- **Path-mangling de Git Bash (MSYS)**: si el build se lanza desde Git Bash,
+  MSYS convierte el valor `/api` del build-arg en
+  `C:/Program Files/Git/api` → el navegador acaba haciendo
+  `fetch("file:///C:/Program Files/Git/api/auth/login")` («URL scheme "file"
+  is not supported» en la consola) → MISMO síntoma 2. Es el mismo mangling
+  que ya muerde en los `-v //ruta` de docker run.
+
+## Fix (el comando COMPLETO, SIEMPRE desde PowerShell)
 
 ```powershell
 Set-Location C:\laragon\python\agent-ai-multitenant
 docker build -f apps\admin-panel\Dockerfile --build-arg NEXT_PUBLIC_API_URL=/api -t agentic-platform/admin-panel:manuals apps\admin-panel
 ```
+
+(Desde Git Bash solo con `MSYS_NO_PATHCONV=1` delante; PowerShell es lo seguro.)
 
 ## Cómo verificar el fix
 
@@ -48,6 +57,11 @@ nueva; y tras recrear el servicio:
 
 ```bash
 docker exec agentic-platform-admin-panel-1 sh -c "ls .next/server/app/admin/<ruta>/"
-# La base URL horneada: NO debe aparecer localhost:8001 en los chunks.
-docker exec agentic-platform-admin-panel-1 sh -c "grep -rlo 'localhost:8001' .next/static/chunks/ | head -1"
+# La base URL horneada: el chunk de login debe llevar "/api" y NADA de
+# localhost:8001 ni "Program Files" (mangling de MSYS).
+docker exec agentic-platform-admin-panel-1 sh -c "grep -l 'localhost:8001' .next/static/chunks/app/login/*.js; grep -rl 'Program Files' .next/static/chunks/ | head -1"
 ```
+
+La verificación definitiva es funcional: la sonda headless
+(`apps/admin-panel` + playwright) debe ver «Invalid email or password» con
+credenciales falsas — no «Could not reach the server».
