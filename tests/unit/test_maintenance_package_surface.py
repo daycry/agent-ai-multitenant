@@ -13,9 +13,10 @@ preserve, BEFORE and AFTER:
 
 from __future__ import annotations
 
-# The 10 beat tasks the module registers (mirrors beat_schedule.py).
+# The beat tasks the module registers (mirrors beat_schedule.py).
 _BEAT_TASK_NAMES = (
     "workers.idle_sweep_pools",
+    "workers.reap_orphans",
     "workers.expire_review_runtimes",
     "workers.purge_dep_cache",
     "workers.prune_worktrees",

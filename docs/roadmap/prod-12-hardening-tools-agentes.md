@@ -310,7 +310,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_reaper_01` — Reaper beat de contenedores y redes huérfanos
 
-- [ ] **Título**: Nueva tarea beat en apps/workers/src/workers/maintenance.py (registrada
+- [x] **Título**: Nueva tarea beat en apps/workers/src/workers/maintenance.py (registrada
       en beat_schedule.py) que liste `containers.list(filters={'label':
 'com.agentic-platform.managed=true'})` (el label ya se estampa en container.py:31
       "para encontrar y reapear huérfanos"), identifique los que no tienen ejecución viva
@@ -327,6 +327,13 @@ de ingestión es fail-open si ClamAV está caído (api-1).
     runtime: python-pytest
     command: "pytest tests/integration/test_orphan_container_reaper.py -v"
   ```
+
+> **HECHA (2026-07-08) — task_prod12_reaper_01**: `workers.reap_orphans` (cada 10 min,
+> `maintenance/orphan_reaper.py`) — contenedores `managed=true` sin asociación VIVA (execution
+> `running` / review `running|suspended`; criterio de vida COMPARTIDO con el sweeper de zombis
+> de prod-06, nunca doble-kill) + redes bridge de test-runtime vacías; gracia anti-carrera 10
+> min; sin label de asociación solo cae a hard-limit+25 %. `idle_sweep_pools` se conserva (es el
+> heartbeat de pools in-process, otra cosa). Test `tests/integration/test_orphan_container_reaper.py`.
 
 #### `task_prod12_docker_01` — Retirar (o degradar con error claro) la tool `docker_command`
 

@@ -49,6 +49,15 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": schedule(run_every=30.0),
         "options": {"queue": "default"},
     },
+    # prod-12 task_prod12_reaper_01 (sandbox-5): reap de contenedores managed
+    # sin asociacion VIVA (execution running / review activa) + redes bridge
+    # per-task de test-runtime vacias. Criterio de vida compartido con el
+    # sweeper de zombis de prod-06 (nunca doble-kill). Cada 10 min.
+    "reap-orphans-every-10m": {
+        "task": "workers.reap_orphans",
+        "schedule": schedule(run_every=600.0),
+        "options": {"queue": "default"},
+    },
     # prod-06 task_prod06_dag_02 — safety-net DAG promotion: across in_progress
     # plans, promote eligible backlog tasks to ready and re-announce undispatched
     # ready tasks (the DB trigger flips status without publishing an event). Cheap

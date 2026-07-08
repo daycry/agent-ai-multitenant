@@ -37,6 +37,7 @@ from workers.maintenance.memory_backfill import (
     _default_embedder_factory,
     backfill_memory_embeddings,
 )
+from workers.maintenance.orphan_reaper import _reap_orphans_async, reap_orphans
 from workers.maintenance.queue_sampler import _sample_queue_metrics_async, sample_queue_metrics
 from workers.maintenance.reconciler import (
     _RECONCILE_REVIEW_MAX_STUCK,
@@ -69,6 +70,8 @@ from workers.maintenance.worktree_backfill import (
 
 __all__ = [
     "EmbedderFactory",
+    "reap_orphans",
+    "_reap_orphans_async",
     "backfill_memory_embeddings",
     "expire_review_runtimes",
     "idle_sweep_pools",
