@@ -1207,14 +1207,22 @@ function HumanValidationSection({ planId, status }: { planId: string; status: st
 
   const submitVerdict = async (verdict: "approved" | "rejected") => {
     if (!rs?.verdict_url) return;
-    if (verdict === "rejected" && !window.confirm("¿Rechazar el plan? Volverá al equipo.")) return;
+    // El motivo del rechazo ES el feedback que reciben los agentes en el
+    // rework — antes iba un texto fijo y la intención del validador se perdía.
+    let rejectionReason = "";
+    if (verdict === "rejected") {
+      const reason = window.prompt(
+        "¿Rechazar el plan? Escribe el motivo (los agentes lo reciben como feedback del rework):",
+        "",
+      );
+      if (reason === null) return; // cancelado
+      rejectionReason = reason.trim() || "Rechazado desde el panel de validación (sin motivo).";
+    }
     setSubmitting(true);
     setVerdictMsg(null);
     try {
       const body =
-        verdict === "rejected"
-          ? { verdict, rejection_reason: "Rechazado desde el panel de validación." }
-          : { verdict };
+        verdict === "rejected" ? { verdict, rejection_reason: rejectionReason } : { verdict };
       const res = await fetch(rs.verdict_url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
