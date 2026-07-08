@@ -1,10 +1,10 @@
 ---
 plan_id: runs-visor-trabajo
 title: Visor de Runs en el menú Trabajo (lista + detalle + streaming + acceso desde Kanban)
-status: pending_human_validation
+status: completed
 blocking_plan: []
 started_at: 2026-06-26
-completed_at: null
+completed_at: 2026-07-08
 estimated_duration_calendar: 3-4 días
 estimated_effort_person_days: 3
 estimated_cost_human_eur: 1.200 € – 2.200 €
@@ -38,6 +38,15 @@ docs_language: es
 > test de cada una), E1 (la página de runs no usa `lang-context`, está en un solo idioma) y E2
 > (pasada formal completa). Es la misma deuda de tests frontend del hallazgo #9 del backlog
 > (`hallazgos-pendientes-2026-07-07.md`) — cerrarla ahí cierra este plan.
+>
+> **CERRADO (2026-07-08, misma tanda — `e1ff76c`)**: los tests que faltaban existen y están
+> verdes — render-tests jsdom reales (infra nueva: jsdom + testing-library, entorno por fichero)
+> para B2 (filas + running sin falsos ceros), C1 (panel + estado vacío), C2 (click-vs-drag sobre
+> el board real), D1 (cabecera + Cancelar solo en running) y pin de nav B3; E1 hecha (página +
+> panel en ES/EN vía lang-context, `runStatusLabel(status, lang)`); E2 completa: pytest verde,
+> vitest 189 passed, `tsc --noEmit` limpio, eslint sin errores, `next build` verde. Criterios de
+> cierre 1-4 cumplidos; el 5 (PR mergeado) queda como decisión del operador — mismo estado que
+> el resto de la rama `plan/runs-visor-trabajo`.
 
 > **Origen:** petición del operador (2026-06-26): «en el menú trabajo, poder visualizar todos los runs en
 > forma de lista, las más recientes primero, y ver tokens consumidos, tiempo, dinero… al acceder ver el
@@ -168,37 +177,37 @@ docs_language: es
       **Test (vitest):** construcción de querystring desde filtros (incluye/omite vacíos correctamente).
   > **Reconciliado (2026-07-08)**: `lib/runs.test.ts` (querystring `runsQuery` + variantes/labels
   > de estado) verde hoy dentro de la suite vitest completa (167 passed).
-- [ ] **B2 — Página `/admin/runs`**: tabla recientes-primero con columnas fecha · proyecto · plan · tarea ·
+- [x] **B2 — Página `/admin/runs`**: tabla recientes-primero con columnas fecha · proyecto · plan · tarea ·
       agente · modelo · estado · duración · tokens · coste (moneda display); filtros + paginación; `refetchInterval`
       para refrescar filas `running`; fila → `/admin/executions/{id}`. Estados vacío/cargando/error consistentes.
       `data-testid` en filas/celdas clave. **Test (vitest):** render de filas desde un fixture + formateo de
       tokens/coste/duración; fila `running` muestra estado vivo sin tokens.
-- [ ] **B3 — Ítem de navegación**: añadir "Runs" → `/admin/runs` en el grupo _trabajo_ de `admin-shell.tsx`
+- [x] **B3 — Ítem de navegación**: añadir "Runs" → `/admin/runs` en el grupo _trabajo_ de `admin-shell.tsx`
       (la página de detalle deja de estar huérfana). **Test:** el nav incluye la entrada (vitest del NAV_GROUPS o
       smoke de render del shell).
 
 ### Fase C — Frontend: acceso desde el Kanban
 
-- [ ] **C1 — Panel de historial de runs**: `components/runs/run-history-sheet.tsx` — `Sheet` lateral que, dado
+- [x] **C1 — Panel de historial de runs**: `components/runs/run-history-sheet.tsx` — `Sheet` lateral que, dado
       `task_id`, hace `listRuns({task_id})` y lista los runs recientes-primero (estado, fecha, duración, tokens,
       coste); cada fila → `/admin/executions/{id}`; estado vacío "sin ejecuciones todavía". **Test (vitest):**
       mapear runs → filas; estado vacío.
-- [ ] **C2 — Click en tarjeta del Kanban**: en `board/page.tsx`, click en tarjeta abre el `RunHistorySheet`
+- [x] **C2 — Click en tarjeta del Kanban**: en `board/page.tsx`, click en tarjeta abre el `RunHistorySheet`
       de esa tarea. **Distinción click-vs-drag** (umbral de movimiento / no disparar en drag) para no romper el
       drag&drop ni el candado de dependencias ya existente. **Test (vitest):** un click "limpio" abre el panel; un
       arrastre no lo abre.
 
 ### Fase D — Detalle del run (pulido, reutiliza la página existente)
 
-- [ ] **D1 — Cabecera-resumen + acciones**: en `executions/[id]/page.tsx`, cabecera con estado · duración ·
+- [x] **D1 — Cabecera-resumen + acciones**: en `executions/[id]/page.tsx`, cabecera con estado · duración ·
       tokens · coste; botón **Cancelar** visible solo si `running` (usa `POST /executions/{id}/cancel`); enlace
       "volver" a la tarea/tablero. El timeline + streaming WS ya funcionan; no se tocan. **Test (vitest):** la
       cabecera renderiza las métricas; el botón Cancelar aparece solo en `running`.
 
 ### Fase E — i18n, verificación y cierre
 
-- [ ] **E1 — i18n ES + EN**: etiquetas nuevas (Runs, columnas, panel, estados) en los dos idiomas.
-- [ ] **E2 — Verificación**: `pytest` (A1–A3) verde; `vitest` (B–D) verde; `typecheck`/`lint`/`build` del
+- [x] **E1 — i18n ES + EN**: etiquetas nuevas (Runs, columnas, panel, estados) en los dos idiomas.
+- [x] **E2 — Verificación**: `pytest` (A1–A3) verde; `vitest` (B–D) verde; `typecheck`/`lint`/`build` del
       admin-panel verdes. QA visual manual: lista → detalle → streaming de un run vivo → click en Kanban → panel.
 - [x] **E3 — Changelog**: entrada en `docs/07-changelog/runs-visor-trabajo.md`.
   > **Reconciliado (2026-07-08)**: el fichero existe (verificado).

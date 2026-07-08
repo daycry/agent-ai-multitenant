@@ -1,10 +1,10 @@
 ---
 plan_id: ciclo-vida-planes-fixes
 title: Ciclo de vida de planes y tareas — máquina de estados autoritativa, tenancy del orquestador y durabilidad del planning
-status: in_progress
+status: completed
 blocking_plan: []
 started_at: 2026-07-04
-completed_at: null
+completed_at: 2026-07-08
 estimated_duration_calendar: 4-5 días
 estimated_effort_person_days: 4
 estimated_cost_human_eur: 1.600 € – 2.400 €
@@ -89,6 +89,13 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
 > **Quedan genuinamente pendientes: T4** (guard-test estático de mutación de estado — no existe;
 > tiene sentido hacerla ahora que T2 cerró la última puerta lateral) **y T11** (board por planes:
 > implementada y en uso, falta SOLO su test vitest — ver nota inline). 9 de 11 tareas cerradas.
+>
+> **CERRADO (2026-07-08, misma tanda)**: T4 entregada (`f123489` — guard AST con allowlist de
+> igualdad + el sweep de expiry encaminado por `transition_plan_status`) y T11 con su test
+> (`e1ff76c`). **11/11 tareas `[x]`** y los 5 criterios de cierre cumplidos (guard-tests T4+T5
+> activos, plan no puede quedar atascado — T7 + `transition_from_blocked` H2 —, turno de
+> planning durable T6, board por planes T11). El merge de la rama a master queda como decisión
+> del operador (mismo estado que el resto de la rama `plan/runs-visor-trabajo`).
 
 ### Fase A — Fundación de tipos y máquina de estados
 
@@ -118,10 +125,15 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
       comportamiento; se preserva el orden completar→encolar-PR (ADR 0072). **Test:** regresión verde
       (`test_plan_completion` + `test_review_execution_applies_verdict`, 15 casos) — misma transición y mismo
       encolado del auto-PR. _(El guard-test estático anti-asignación-cruda es T4, aparte.)_
-- [ ] **T4 — Guard-test estático de mutación de estado**: CI falla si aparece asignación directa de
+- [x] **T4 — Guard-test estático de mutación de estado**: CI falla si aparece asignación directa de
       `.status`/`setattr(..., 'status', ...)` sobre `Task`/`Plan` fuera de las funciones de transición
       (incluye `maintenance.py:126`, señalado en la verificación como el mismo patrón). **Test:** el linter/test
       detecta un caso sembrado.
+  > **HECHA (2026-07-08, `f123489`)**: `tests/unit/test_state_mutation_guard.py` — escáner AST
+  > sobre los 3 árboles con allowlist de igualdad justificada + auto-test de caso sembrado. El
+  > sitio del sweep de expiry (heredero del `maintenance.py:126` original, hoy
+  > `maintenance/review_runtimes.py`) quedó encaminado por `transition_plan_status` con el edge
+  > `pending_human_validation→blocked` declarado en la tabla canónica. Verde.
 
 ### Fase B — Tenancy y durabilidad del orquestador
 
@@ -170,14 +182,13 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
 - [x] **T10 — `complexity` en planes de chat (c11)**: `pm_plan_draft` emite `complexity` por tarea; el desglose
       de coste deja de ponderar todo como `'m'`. **Test:** un plan de chat con tareas de complejidad mixta
       produce un desglose de coste diferenciado. > **Verificado (2026-07-06, auditoría de roadmap)**: `chat/planning_llm.py:475-485` emite `complexity`.
-- [ ] **T11 — Board gerencial por `plan_id` (c8)**: `/admin/board` agrupa por planes reales
+- [x] **T11 — Board gerencial por `plan_id` (c8)**: `/admin/board` agrupa por planes reales
       (`/projects/{id}/plans` / tabla `plans`) en vez de proyectos; actualizar el comentario obsoleto. **Test:**
       el board muestra planes (no proyectos) como tarjetas de la fila superior; ADR 0008 satisfecho.
-  > **Estado (2026-07-08)**: la **feature está implementada y en uso** — `board/page.tsx:61`
-  > ("c8/T11: the top row shows real PLANS (GET /plans), not projects") y el operador la usó en
-  > el QA e2e (doble Kanban planes/tareas). NO se marca `[x]` porque el test vitest que exige
-  > este item no existe todavía (misma deuda de tests frontend que anota el hallazgo #9 del
-  > backlog). Solo falta el test, no la implementación.
+  > **HECHA (2026-07-08, `e1ff76c`)**: feature ya implementada (`board/page.tsx:61`, en uso en el
+  > QA e2e) y ahora con su test — `app/admin/board/page.test.tsx` (render jsdom del board real
+  > con API mockeada: la fila superior pinta PLANES de `GET /plans`, no proyectos). Verde
+  > (vitest 189 passed).
 
 ## Criterios de cierre
 
