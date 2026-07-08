@@ -15,6 +15,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+from api_server.events import publish_task_status_changed
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -222,6 +223,7 @@ async def _run_execution(
     lock_token = celery_task_id or "1"
     lock_ttl = settings.container_timeout_with_grace_for_kind("claude_sdk") + 300
     acquired = False
+    outcome: ExecutionOutcome | None = None
     try:
         acquired = await acquire_run_lock(redis, request.task_id, ttl_s=lock_ttl, token=lock_token)
         if not acquired:
@@ -245,5 +247,27 @@ async def _run_execution(
     finally:
         if acquired:
             await release_run_lock(redis, request.task_id, token=lock_token)
+        # H1: publish the deferred finish event ONLY once the lock is free — the
+        # orchestrator reacts in milliseconds (review dispatch on `in_review`,
+        # re-dispatch on reject→backlog) and a run_execution that lands while
+        # this task's lock is still held is dropped as `concurrent_run_locked`
+        # (then only the reconciler's ~6 min re-announce saves the cycle).
+        if outcome is not None and outcome.pending_task_event is not None:
+            task_obj, old_status, new_status = outcome.pending_task_event
+            try:
+                await publish_task_status_changed(
+                    redis, task_obj, old_status=old_status, new_status=new_status
+                )
+            except Exception:
+                # Best-effort: the state IS committed; the reconciler's pass (b)
+                # re-announces stale in_review/backlog tasks, so losing the event
+                # costs latency, never correctness. Crashing here instead would
+                # let Celery re-deliver an already-finished (and paid) run.
+                _log.exception(
+                    "workers.task_event_publish_failed",
+                    task_id=request.task_id,
+                    old_status=old_status,
+                    new_status=new_status,
+                )
         await redis.aclose()
         await engine.dispose()

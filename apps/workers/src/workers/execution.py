@@ -37,7 +37,7 @@ from api_server.db.execution_repo import (
     supersede_running_executions,
 )
 from api_server.db.models import Organization
-from api_server.events import publish_execution_event, publish_task_status_changed
+from api_server.events import publish_execution_event
 from api_server.task_state_machine import transition_task_status
 from redis.asyncio import Redis
 from sqlalchemy import func, select
@@ -1222,18 +1222,17 @@ async def _finalize_and_transition(
 async def _implementer_post_process(
     settings: Settings,
     sessionmaker: async_sessionmaker[AsyncSession],
-    redis: Redis,
     *,
     prepared: _PreparedRun,
     workspace: _Workspace,
     result: _RuntimeResult,
-    task_event: tuple[Any, str, str] | None,
     task_id: UUID,
     tenant_id: UUID,
     exec_id: str,
 ) -> None:
     """Fase 5 (P3): post-proceso del camino implementador (prod-18) — commit +
-    tests ANTES de publicar el evento de estado (ya persistido en fase 4).
+    tests ANTES de que el evento de estado sea visible (ya persistido en fase 4;
+    lo publica el caller de conduct_execution tras soltar el run-lock, H1).
 
     task_prod18_commit_01: a run that wrote into a worktree gets committed (with
     trailers) + pushed to the plan branch by the WORKER (the sandbox has no git
@@ -1273,11 +1272,10 @@ async def _implementer_post_process(
             # specific abort_code) on the execution row instead of reporting a
             # deliverable with an empty diff.
             await _mark_commit_failed(sessionmaker, prepared.execution_id, commit_abort_code)
-    # Now publish the deferred state-change event (the commit, if any, exists, so
-    # a reviewer/validator dispatched by it finds the diff).
-    if task_event is not None:
-        task_obj, old, new = task_event
-        await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
+    # The deferred state-change event is NOT published here (H1): it travels on
+    # the ExecutionOutcome so the caller publishes it after releasing the
+    # run-lock. The prod-18 ordering still holds — the commit above exists
+    # before any consumer can see the event.
 
 
 async def conduct_execution(
@@ -1302,9 +1300,11 @@ async def conduct_execution(
       3. fail-fast (modelo/workspace) o :func:`_launch_and_stream` — docker +
          streaming a Redis + poll de cancelación;
       4. :func:`_finalize_and_transition` — finalize + transición ATÓMICAS (P0.5);
-      5. publicación del evento (diferida en el camino implementador hasta
-         después de :func:`_implementer_post_process` — commit/tests, prod-18) +
-         budgets + memorize.
+      5. :func:`_implementer_post_process` (commit/tests, prod-18) + budgets +
+         memorize. El evento de estado NO se publica aquí: viaja en
+         ``ExecutionOutcome.pending_task_event`` y lo publica el caller tras
+         soltar el run-lock (H1 — evita `concurrent_run_locked` en el despacho
+         inmediato del review / re-dispatch).
     """
     task_id = UUID(request.task_id)
     tenant_id = UUID(request.tenant_id)
@@ -1406,10 +1406,9 @@ async def conduct_execution(
 
     # P0.5: for the implementer path the task transition is persisted ATOMICALLY with
     # finalize (same txn) so a crash here can never leave the execution terminal but
-    # the task `in_progress` forever. Only the EVENT publication is deferred until
-    # after the worktree commit exists (prod-18 ordering), so a dispatched
-    # reviewer/validator finds the committed diff + the <test-report>. The review +
-    # approval paths transition inside the txn too and publish immediately (no git).
+    # the task `in_progress` forever. The EVENT publication is deferred until after
+    # the worktree commit exists (prod-18 ordering) AND until the caller has released
+    # the run-lock (H1) — it travels on the returned outcome for ALL paths.
     task_event, implementer_path = await _finalize_and_transition(
         sessionmaker,
         request,
@@ -1420,20 +1419,18 @@ async def conduct_execution(
         approval=approval,
     )
 
-    # Publish the review / approval event now (these paths have no git/test follow-up).
-    if task_event is not None and not implementer_path:
-        task_obj, old, new = task_event
-        await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
-
+    # H1: NO event is published here (neither path). The finish event travels on
+    # the ExecutionOutcome (`pending_task_event`) and the caller publishes it
+    # AFTER releasing the per-task run-lock — the orchestrator's immediate
+    # dispatch (reviewer on in_review, re-dispatch on reject→backlog) otherwise
+    # lands while the lock is still held and is dropped (`concurrent_run_locked`).
     if implementer_path:
         await _implementer_post_process(
             settings,
             sessionmaker,
-            redis,
             prepared=prepared,
             workspace=workspace,
             result=result,
-            task_event=task_event,
             task_id=task_id,
             tenant_id=tenant_id,
             exec_id=exec_id,
@@ -1457,4 +1454,5 @@ async def conduct_execution(
         execution_id=exec_id,
         status=result.status,
         abort_code=result.abort_code,
+        pending_task_event=task_event,
     )

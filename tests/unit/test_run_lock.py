@@ -122,3 +122,123 @@ async def test_run_execution_skips_when_lock_held(monkeypatch: pytest.MonkeyPatc
     # El lock del run original SIGUE intacto (no lo liberó el run saltado).
     assert fake.store.get(run_lock_key(task_id)) == "run-original"
     assert aclose_called["v"] is True
+
+
+class _LockTestSettings:
+    database_url = "postgresql+asyncpg://x:y@h/db"
+    events_redis_url = "redis://h/0"
+
+    def container_timeout_with_grace_for_kind(self, _kind: str, *, is_review: bool = False) -> int:
+        return 7320
+
+
+# --- H1 (carrera lock A6 ↔ evento diferido): el evento de finish que devuelve
+# conduct_execution se publica DESPUÉS de soltar el run-lock, para que el
+# despacho inmediato del orchestrator (review / re-dispatch tras reject) no
+# choque con el lock aún vivo (`concurrent_run_locked` → 6 min de reconciler).
+@pytest.mark.asyncio
+async def test_pending_task_event_publishes_after_lock_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import workers.run_lock as run_lock_mod
+    import workers.tasks.run_cycle as tasks_mod
+    from workers.run_contract import ExecutionOutcome
+
+    task_id = "22222222-2222-2222-2222-222222222222"
+    calls: list[str] = []
+
+    fake = _FakeRedis()
+
+    async def _aclose() -> None: ...
+
+    fake.aclose = _aclose  # type: ignore[attr-defined]
+
+    class _FakeRedisFactory:
+        @staticmethod
+        def from_url(*_a: object, **_k: object) -> _FakeRedis:
+            return fake
+
+    class _FakeEngine:
+        async def dispose(self) -> None: ...
+
+    monkeypatch.setattr(tasks_mod, "Redis", _FakeRedisFactory)
+    monkeypatch.setattr(tasks_mod, "create_async_engine", lambda *_a, **_k: _FakeEngine())
+
+    sentinel_task = object()
+    outcome = ExecutionOutcome(
+        execution_id="e-1",
+        status="in_review",
+        abort_code=None,
+        pending_task_event=(sentinel_task, "in_progress", "in_review"),
+    )
+
+    async def _fake_conduct(*_a: object, **_k: object) -> ExecutionOutcome:
+        return outcome
+
+    monkeypatch.setattr(tasks_mod, "conduct_execution", _fake_conduct)
+
+    real_release = run_lock_mod.release_run_lock
+
+    async def _spy_release(redis: object, tid: str, *, token: str) -> None:
+        calls.append("release")
+        await real_release(redis, tid, token=token)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(run_lock_mod, "release_run_lock", _spy_release)
+
+    async def _spy_publish(
+        _redis: object, task_obj: object, *, old_status: str, new_status: str
+    ) -> None:
+        assert task_obj is sentinel_task
+        assert (old_status, new_status) == ("in_progress", "in_review")
+        # El lock DEBE estar ya libre cuando se publica el evento.
+        assert run_lock_key(task_id) not in fake.store
+        calls.append("publish")
+
+    monkeypatch.setattr(tasks_mod, "publish_task_status_changed", _spy_publish)
+
+    req = type("_Req", (), {"task_id": task_id})()
+    out = await tasks_mod._run_execution(req, _LockTestSettings(), celery_task_id="run-A")  # type: ignore[arg-type]
+
+    assert out["status"] == "in_review"
+    # El orden es el contrato: primero release, después publish.
+    assert calls == ["release", "publish"]
+
+
+@pytest.mark.asyncio
+async def test_outcome_without_pending_event_publishes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import workers.tasks.run_cycle as tasks_mod
+    from workers.run_contract import ExecutionOutcome
+
+    task_id = "33333333-3333-3333-3333-333333333333"
+    fake = _FakeRedis()
+
+    async def _aclose() -> None: ...
+
+    fake.aclose = _aclose  # type: ignore[attr-defined]
+
+    class _FakeRedisFactory:
+        @staticmethod
+        def from_url(*_a: object, **_k: object) -> _FakeRedis:
+            return fake
+
+    class _FakeEngine:
+        async def dispose(self) -> None: ...
+
+    monkeypatch.setattr(tasks_mod, "Redis", _FakeRedisFactory)
+    monkeypatch.setattr(tasks_mod, "create_async_engine", lambda *_a, **_k: _FakeEngine())
+
+    async def _fake_conduct(*_a: object, **_k: object) -> ExecutionOutcome:
+        return ExecutionOutcome(execution_id="e-2", status="done", abort_code=None)
+
+    monkeypatch.setattr(tasks_mod, "conduct_execution", _fake_conduct)
+
+    async def _boom_publish(*_a: object, **_k: object) -> None:
+        raise AssertionError("sin pending_task_event NO debe publicarse nada")
+
+    monkeypatch.setattr(tasks_mod, "publish_task_status_changed", _boom_publish)
+
+    req = type("_Req", (), {"task_id": task_id})()
+    out = await tasks_mod._run_execution(req, _LockTestSettings(), celery_task_id="run-A")  # type: ignore[arg-type]
+    assert out["status"] == "done"

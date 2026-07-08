@@ -164,11 +164,19 @@ class ExecutionRequest:
 
 @dataclass(frozen=True)
 class ExecutionOutcome:
-    """The result of one conducted execution."""
+    """The result of one conducted execution.
+
+    ``pending_task_event`` is the deferred ``(task, old_status, new_status)``
+    finish event that the CALLER must publish only after releasing the per-task
+    run-lock (H1): the orchestrator reacts to it in milliseconds and a dispatch
+    that lands while the lock is still held is dropped as
+    ``concurrent_run_locked``. Process-local — never serialized.
+    """
 
     execution_id: str
     status: str
     abort_code: str | None
+    pending_task_event: tuple[Any, str, str] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe summary — what the Celery result backend stores."""
