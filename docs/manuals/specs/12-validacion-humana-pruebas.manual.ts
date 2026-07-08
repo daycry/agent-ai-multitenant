@@ -1,7 +1,7 @@
 import { test } from "@playwright/test";
 import { login } from "../lib/auth";
 import { generateManual, ManualDef, Step } from "../lib/manual";
-import { seededPhpPlanId, seededPhpProjectId } from "../lib/seed-helper";
+import { seededCorrectionsPlanId, seededPhpPlanId, seededPhpProjectId } from "../lib/seed-helper";
 
 /**
  * Manual 12 — Validación humana: probar la app levantada (ADR 0062).
@@ -13,6 +13,7 @@ import { seededPhpPlanId, seededPhpProjectId } from "../lib/seed-helper";
  */
 const PID = seededPhpProjectId();
 const PLAN = seededPhpPlanId();
+const CORRECTIONS_PLAN = seededCorrectionsPlanId();
 
 const steps: Step[] =
   PID && PLAN
@@ -134,12 +135,100 @@ const steps: Step[] =
           },
           body: `<p>Tras probar la app y revisar el checklist, emites el
           <b>veredicto</b> desde el panel de validación: <b>«Aprobar plan»</b>
-          (el plan pasa a <code>completed</code> y se cierra el ciclo) o
-          <b>«Rechazar»</b> (vuelve al equipo con el motivo). Al emitir el
-          veredicto, el contenedor de revisión se destruye automáticamente.</p>
+          (el plan pasa a <code>completed</code>, se cierra el ciclo y la
+          plataforma abre automáticamente el <b>Pull Request del plan</b>) o
+          <b>«Rechazar»</b> (el plan pasa a <code>rejected</code> con tu
+          motivo). Los contenedores de la sesión los recicla el mantenimiento;
+          el veredicto y el motivo quedan en el historial de la sesión.</p>
           <p>Este es el control humano final: ningún plan se da por bueno sin que
           una persona haya <b>probado la app levantada</b> y dado el visto bueno.</p>`,
         },
+        {
+          title: "Rechazar con motivo: la modal con Markdown",
+          goto: `/admin/projects/${PID}/plans/${PLAN}`,
+          fullPage: false,
+          settleMs: 1500,
+          action: async (page) => {
+            await page
+              .getByTestId("plan-human-validation")
+              .scrollIntoViewIfNeeded()
+              .catch(() => {});
+            await page
+              .getByTestId("plan-verdict-reject")
+              .click({ timeout: 5000 })
+              .catch(() => {});
+            await page.waitForTimeout(600);
+          },
+          body: `<p>Si algo no está bien, <b>«Rechazar»</b> abre una modal con un
+          <b>textarea con vista previa de Markdown</b>. El motivo que escribas
+          aquí <b>no se pierde</b>: es la materia prima del ciclo de
+          correcciones. Escríbelo como se lo contarías al equipo — <b>qué está
+          mal, dónde y qué esperabas</b>.</p>
+          <ul>
+            <li>Cuanto más concreto el motivo, mejores serán las tareas
+            correctivas que la plataforma proponga después.</li>
+            <li>Puedes usar Markdown (código, listas, negritas) y previsualizarlo
+            antes de enviar.</li>
+            <li>Al confirmar, el plan pasa a <code>rejected</code> — un
+            aparcamiento seguro: nada se ejecuta hasta que alguien decida.</li>
+          </ul>`,
+        },
+        ...(CORRECTIONS_PLAN
+          ? ([
+              {
+                title: "La tarjeta «Correcciones del rechazo» (ADR 0107)",
+                goto: `/admin/projects/${PID}/plans/${CORRECTIONS_PLAN}`,
+                fullPage: true,
+                settleMs: 1800,
+                body: `<p>Un plan rechazado NO es un callejón sin salida. En su
+                detalle aparece la tarjeta <b>«Correcciones del rechazo»</b> con
+                tres piezas:</p>
+                <ul>
+                  <li><b>El motivo del validador</b>, renderizado en Markdown —
+                  la referencia compartida de qué hay que corregir.</li>
+                  <li><b>«Generar tareas correctivas»</b>: el Project Manager
+                  (el LLM del proyecto) convierte el motivo en tareas concretas
+                  con <b>criterios de aceptación verificables</b>, rol,
+                  complejidad y dependencias — ids <code>fix-1</code>,
+                  <code>fix-2</code>… que también verás en la tabla de tareas
+                  del plan con el badge <b>«corrección»</b>.</li>
+                  <li><b>Las propuestas con checkbox</b> (todas marcadas por
+                  defecto): revisa título, descripción y criterios de cada una,
+                  y desmarca las que no quieras materializar.</li>
+                </ul>
+                <p><b>«Aceptar correcciones»</b> crea las tareas marcadas en el
+                Kanban y <b>reactiva el plan</b> (<code>rejected →
+                in_progress</code>) en el mismo acto: los agentes corrigen en la
+                <b>misma rama git</b> del plan (el PR final llevará el trabajo
+                original + los fixes) y, cuando terminan, el plan vuelve a
+                validación humana con una sesión nueva. La relación
+                rechazo↔corrección queda guardada en el propio plan como
+                historial.</p>`,
+              },
+              {
+                title: "Las tareas correctivas en la tabla del plan",
+                goto: `/admin/projects/${PID}/plans/${CORRECTIONS_PLAN}`,
+                fullPage: false,
+                settleMs: 1500,
+                action: async (page) => {
+                  await page
+                    .getByTestId("plan-tasks")
+                    .scrollIntoViewIfNeeded()
+                    .catch(() => {});
+                },
+                body: `<p>Las tareas nacidas de un rechazo se distinguen a simple
+                vista: llevan el badge <b>«corrección»</b> junto al título en la
+                tabla de tareas del plan. Mantienen todo el contrato de una
+                tarea normal — rol, complejidad, dependencias (pueden depender
+                de tareas originales o de otras correctivas) y criterios de
+                aceptación — así el orquestador, el review IA y el Kanban las
+                tratan exactamente igual que al resto.</p>
+                <p>Si repites el ciclo (rechazas otra vez con otro motivo), cada
+                tanda genera ids nuevos deduplicados: el plan acumula su
+                historial de correcciones sin pisarse.</p>`,
+              },
+            ] as Step[])
+          : []),
       ]
     : [
         {

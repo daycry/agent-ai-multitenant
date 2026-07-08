@@ -55,7 +55,7 @@ Iteración rápida (sin reconstruir imágenes ni re-sembrar, un manual concreto)
 
 ## Verificación
 
-- `docs/manuals/pdf/` contiene los 12 PDFs + `manual-completo.pdf`.
+- `docs/manuals/pdf/` contiene los 14 PDFs (00-13) + `manual-completo.pdf`.
 - Abrir `manual-completo.pdf`: portada de marca, índice, y cada manual con sus
   pantallazos enmarcados (no pantallas de login: las capturas son de la app
   autenticada).
