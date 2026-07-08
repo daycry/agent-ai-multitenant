@@ -48,6 +48,12 @@ def test_completed_only_archives_next() -> None:
     assert allowed_transitions("completed") == frozenset({"archived"})
 
 
+def test_rejected_can_reopen_by_accepting_corrections() -> None:
+    """ADR 0107: aceptar tareas correctivas reactiva el plan rechazado
+    (rejected -> in_progress), además de los destinos clásicos."""
+    assert allowed_transitions("rejected") == frozenset({"draft", "archived", "in_progress"})
+
+
 def test_transition_function_stamps_approved_metadata() -> None:
     """Going INTO `approved` records approved_at and approved_by;
     other transitions only touch `status`."""

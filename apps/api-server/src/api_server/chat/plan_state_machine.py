@@ -16,7 +16,7 @@ This module is the single source of truth for what's legal:
   blocked -> in_progress | cancelled
   pending_human_validation -> completed | rejected | in_progress
   completed -> archived
-  rejected -> draft | archived
+  rejected -> draft | archived | in_progress
   cancelled -> archived
   archived -> (terminal)
 
@@ -86,7 +86,16 @@ _TRANSITIONS: dict[str, frozenset[str]] = {
         }
     ),
     PlanStatus.COMPLETED.value: frozenset({PlanStatus.ARCHIVED.value}),
-    PlanStatus.REJECTED.value: frozenset({PlanStatus.DRAFT.value, PlanStatus.ARCHIVED.value}),
+    PlanStatus.REJECTED.value: frozenset(
+        {
+            PlanStatus.DRAFT.value,
+            PlanStatus.ARCHIVED.value,
+            # ADR 0107: aceptar tareas correctivas nacidas del rechazo humano
+            # reactiva el plan en el mismo acto que las materializa en el
+            # Kanban (accept-corrections). Espejo de blocked -> in_progress.
+            PlanStatus.IN_PROGRESS.value,
+        }
+    ),
     PlanStatus.CANCELLED.value: frozenset({PlanStatus.ARCHIVED.value}),
     PlanStatus.ARCHIVED.value: frozenset(),
 }

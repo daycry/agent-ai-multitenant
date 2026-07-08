@@ -44,6 +44,11 @@ class PlanSpecification(BaseModel):
     tasks: list[dict[str, Any]] = Field(default_factory=list)
     estimates: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # ADR 0107: meta del ciclo de correcciones tras un rechazo humano —
+    # ``{session_id, reason, task_ids, created_at, status}``. Sin campo
+    # propio, un PUT con `specification` la perdería (pydantic descarta
+    # las claves no declaradas).
+    corrections: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_task_dependencies(self) -> PlanSpecification:
@@ -167,6 +172,7 @@ __all__ = [
     "AICostBreakdownResponse",
     "CostBreakdownResponse",
     "HumanCostBreakdownResponse",
+    "PlanAcceptCorrectionsRequest",
     "PlanCommentCreateRequest",
     "PlanCommentResponse",
     "PlanCreateRequest",
@@ -312,6 +318,15 @@ class PlanSyncRequest(BaseModel):
         if self.scope == "selection" and not self.task_ids:
             raise ValueError("scope='selection' requires a non-empty task_ids")
         return self
+
+
+class PlanAcceptCorrectionsRequest(BaseModel):
+    """Body de POST /plans/{plan_id}/accept-corrections (ADR 0107):
+    los spec-ids de las tareas correctivas que el validador acepta."""
+
+    model_config = _BASE_CONFIG
+
+    task_ids: list[str] = Field(min_length=1)
 
 
 class PlanSyncResponse(BaseModel):

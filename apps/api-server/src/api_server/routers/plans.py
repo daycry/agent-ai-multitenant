@@ -45,6 +45,7 @@ from api_server.chat.cost import (
 )
 from api_server.chat.cost_resolution import load_price_catalog, resolve_plan_task_models
 from api_server.chat.dag import DAGCycleError, validate_dag
+from api_server.chat.plan_corrections import mark_corrections_accepted
 from api_server.chat.plan_state_machine import (
     PlanTransitionError,
     SameSignerError,
@@ -76,6 +77,7 @@ from api_server.schemas.plans import (
     AICostBreakdownResponse,
     CostBreakdownResponse,
     HumanCostBreakdownResponse,
+    PlanAcceptCorrectionsRequest,
     PlanCommentCreateRequest,
     PlanCommentResponse,
     PlanCreateRequest,
@@ -824,6 +826,68 @@ async def start_plan_execution(
     # deps are already done) to `ready` and announce them, so the orchestrator
     # dispatches them. Without this a started plan sat in `backlog` forever —
     # nothing left it without a human moving cards by hand.
+    ready_tasks = await promote_ready_tasks(session, plan.id)
+    await session.flush()
+    await session.refresh(plan)
+    await announce_ready_tasks(redis, ready_tasks)
+    return to_plan_response(plan)
+
+
+# ADR 0107: estados desde los que se aceptan correcciones. `rejected` es el
+# caso nominal; `in_progress` cubre el reintento idempotente (la primera
+# aceptación ya reactivó el plan y la respuesta se perdió por red).
+_CORRECTIONS_ACCEPTABLE_STATUSES = frozenset(
+    {PlanStatus.REJECTED.value, PlanStatus.IN_PROGRESS.value}
+)
+
+
+@plans_router.post("/{plan_id}/accept-corrections", response_model=PlanResponse)
+async def accept_plan_corrections(
+    plan_id: UUID,
+    payload: PlanAcceptCorrectionsRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+    redis: Redis = Depends(get_redis),
+) -> PlanResponse:
+    """Acepta tareas correctivas de un plan RECHAZADO y lo reactiva (ADR 0107).
+
+    En una única transacción: materializa la selección en el Kanban
+    (``sync_plan_to_kanban(scope="selection")``, idempotente), transiciona el
+    plan ``rejected -> in_progress`` por la state machine y marca las entradas
+    de ``specification.corrections`` como aceptadas. El orden importa: el plan
+    nunca es observable ``in_progress`` con todas sus tareas ``done`` — sin las
+    tareas nuevas, el reconciler lo rebotaría a ``pending_human_validation`` y
+    re-lanzaría una sesión de review. Tras el commit, promoción DAG + announce
+    (patrón start-execution).
+    """
+    require_tenant_id(principal)
+    plan = await get_writable_or_404(
+        session, Plan, plan_id, principal, not_found_detail="plan not found"
+    )
+    if plan.status not in _CORRECTIONS_ACCEPTABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "plan_not_rejected",
+                "message": (
+                    "Solo un plan rechazado puede aceptar correcciones; "
+                    f"este plan está en estado '{plan.status}'."
+                ),
+                "status": plan.status,
+            },
+        )
+
+    try:
+        await sync_plan_to_kanban(session, plan, scope="selection", task_ids=payload.task_ids)
+    except SyncScopeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"error": "invalid_sync_scope", "message": str(exc)},
+        ) from exc
+
+    transition_plan_status(plan, PlanStatus.IN_PROGRESS.value, actor=principal.user_id)
+    plan.specification = mark_corrections_accepted(plan.specification or {}, payload.task_ids)
+
     ready_tasks = await promote_ready_tasks(session, plan.id)
     await session.flush()
     await session.refresh(plan)
