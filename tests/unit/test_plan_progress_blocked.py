@@ -114,3 +114,51 @@ def test_independent_backlog_keeps_plan_alive() -> None:
     tasks = [_dep("A", "blocked"), _dep("B", "backlog")]
     res = transition_to_blocked("in_progress", tasks)
     assert not res.transitioned
+
+
+# --- hallazgo #2 (QA 2026-07-07): la INVERSA — un plan `blocked` cuyo snapshot
+# ya no justifica el bloqueo revierte a `in_progress`. La usan las vías humanas
+# de desbloqueo de tarea (human-action, PUT del Kanban) para que soltar la
+# última tarea atascada no exija un segundo click a nivel de plan.
+def test_from_blocked_reverts_when_a_task_can_advance() -> None:
+    from api_server.plan_progress import transition_from_blocked
+
+    res = transition_from_blocked("blocked", [_t("done"), _t("ready")])
+    assert res.transitioned
+    assert res.new_status == "in_progress"
+
+
+def test_from_blocked_noop_while_still_stuck() -> None:
+    from api_server.plan_progress import transition_from_blocked
+
+    res = transition_from_blocked("blocked", [_t("done"), _t("blocked")])
+    assert not res.transitioned
+    assert res.new_status == "blocked"
+
+
+def test_from_blocked_noop_when_backlog_transitively_stuck() -> None:
+    from api_server.plan_progress import transition_from_blocked
+
+    # A sigue blocked; B backlog depende de A → nada puede avanzar todavía.
+    tasks = [_dep("A", "blocked"), _dep("B", "backlog", depends_on=("A",))]
+    res = transition_from_blocked("blocked", tasks)
+    assert not res.transitioned
+
+
+def test_from_blocked_all_done_reverts_for_completion_path() -> None:
+    from api_server.plan_progress import transition_from_blocked
+
+    # Todo done (p.ej. approve_manual de la última blocked): revierte a
+    # in_progress y el camino de completado normal toma el relevo.
+    res = transition_from_blocked("blocked", [_t("done"), _t("done")])
+    assert res.transitioned
+    assert res.new_status == "in_progress"
+
+
+def test_from_blocked_only_applies_to_blocked_plans() -> None:
+    from api_server.plan_progress import transition_from_blocked
+
+    for status in ("in_progress", "pending_human_validation", "completed", "draft"):
+        res = transition_from_blocked(status, [_t("ready")])
+        assert not res.transitioned
+        assert res.new_status == status

@@ -13,7 +13,7 @@ Endpoints in this router:
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -31,9 +31,11 @@ from api_server.auth.deps import (
 )
 from api_server.chat.dag_enforcement import DependenciesNotDoneError, assert_dependencies_done
 from api_server.chat.plan_state_machine import transition_plan_status
-from api_server.db.domain import Plan, Task
+from api_server.db.domain import Plan, Task, TaskDependency
 from api_server.db.task_audit_repo import append_audit_event, list_history, to_dict
 from api_server.events import publish_task_status_changed
+from api_server.plan_progress import PlanStatus as PlanStatusLiteral
+from api_server.plan_progress import TaskSnapshot, transition_from_blocked
 from api_server.routers._helpers import require_tenant_id
 
 router = APIRouter(prefix="/tasks", tags=["task-lifecycle"])
@@ -131,6 +133,47 @@ async def apply_task_retry(session: AsyncSession, task: Task) -> str:
     return task.status
 
 
+async def reactivate_plan_if_unstuck(session: AsyncSession, plan_id: UUID) -> bool:
+    """Revert a ``blocked`` plan to ``in_progress`` when its task snapshot no
+    longer justifies the block (hallazgo #2, QA 2026-07-07).
+
+    Called after ANY human gesture that un-sticks a task (human-action, the
+    Kanban PUT) so freeing the last stuck task never demands a SECOND
+    plan-level click. Snapshot-based (:func:`transition_from_blocked`): a plan
+    that is still genuinely stuck — another blocked task, a transitively-stuck
+    backlog chain — stays ``blocked``. Returns whether the plan was reverted.
+    The session runs under tenant RLS, so the lookups are tenant-scoped."""
+    plan = await session.get(Plan, plan_id)
+    if plan is None or plan.status != "blocked":
+        return False
+    rows = (
+        await session.execute(select(Task.id, Task.status).where(Task.plan_id == plan.id))
+    ).all()
+    dep_rows = (
+        await session.execute(
+            select(TaskDependency.task_id, TaskDependency.depends_on_task_id).where(
+                TaskDependency.task_id.in_([r.id for r in rows])
+            )
+        )
+    ).all()
+    deps_by_task: dict[str, list[str]] = {}
+    for dr in dep_rows:
+        deps_by_task.setdefault(str(dr.task_id), []).append(str(dr.depends_on_task_id))
+    snapshots = [
+        TaskSnapshot(
+            id=str(r.id),
+            status=r.status,
+            depends_on=tuple(deps_by_task.get(str(r.id), ())),
+        )
+        for r in rows
+    ]
+    result = transition_from_blocked(cast(PlanStatusLiteral, plan.status), snapshots)
+    if not result.transitioned:
+        return False
+    transition_plan_status(plan, "in_progress")
+    return True
+
+
 @router.post("/{task_id}/human-action")
 async def apply_human_action(
     task_id: UUID,
@@ -173,19 +216,19 @@ async def apply_human_action(
     original_status = task_row.status
     new_status, kind, bump_retry = _ACTION_TABLE[payload.action]
     if payload.action == "retry":
-        # T7c (c3, ratified A+D): un-stick a blocked task (→ready/backlog + reset the
-        # retry budget) and reactivate its plan (blocked→in_progress) so the promoter
-        # picks it up again.
+        # T7c (c3, ratified A+D): un-stick a blocked task (→ready/backlog + reset
+        # the retry budget); the plan re-evaluation below picks it up.
         await apply_task_retry(session, task_row)
-        if task_row.plan_id is not None:
-            plan = await session.get(Plan, task_row.plan_id)
-            if plan is not None and plan.status == "blocked":
-                transition_plan_status(plan, "in_progress")
     else:
         task_row.status = new_status
         if bump_retry:
             task_row.retry_count += 1
     await session.flush()
+    # hallazgo #2 (QA 2026-07-07): ANY human action that moves a task out of
+    # `blocked` re-evaluates its blocked plan against the snapshot — not just
+    # `retry`. Snapshot-based: a plan still genuinely stuck stays blocked.
+    if original_status == "blocked" and task_row.plan_id is not None:
+        await reactivate_plan_if_unstuck(session, task_row.plan_id)
 
     # T7c: a retried task that reached `ready` must reach the orchestrator so it is
     # re-dispatched (its plan is in_progress again). Deferred to after commit so the

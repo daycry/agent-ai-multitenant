@@ -54,6 +54,7 @@ from api_server.routers._pagination import (
     offset_query,
 )
 from api_server.routers.llm_providers import get_provider_vault_store
+from api_server.routers.task_lifecycle import reactivate_plan_if_unstuck
 from api_server.schemas.tasks import (
     GeneratedAcceptanceCriteria,
     TaskCreateRequest,
@@ -420,6 +421,11 @@ async def update_task(
                 get_redis(), task, old_status=old_status, new_status=new_status
             ),
         )
+        # hallazgo #2 (QA 2026-07-07): dragging a task out of the Bloqueada
+        # column must re-evaluate its blocked plan too — same snapshot-based
+        # reversal as the human actions (task_lifecycle).
+        if old_status == TaskStatus.BLOCKED.value and task.plan_id is not None:
+            await reactivate_plan_if_unstuck(session, task.plan_id)
         # prod-06 cancel_01: cancelling a task in flight must also cancel its
         # running execution(s) — seal cancel_requested_at (the worker polls it
         # to kill the container + finalise as cancelled) and revoke the queued

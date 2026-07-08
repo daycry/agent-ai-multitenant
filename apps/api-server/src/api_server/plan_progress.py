@@ -219,6 +219,40 @@ def transition_to_blocked(
     return TransitionResult(new_status="blocked", transitioned=True)
 
 
+def transition_from_blocked(
+    current_status: PlanStatus,
+    tasks: Iterable[TaskSnapshot],
+) -> TransitionResult:
+    """Revert a plan from ``blocked`` back to ``in_progress`` once its task
+    snapshot no longer justifies the block — the inverse of
+    :func:`transition_to_blocked` (hallazgo #2, QA 2026-07-07).
+
+    Fires when the escalation would NOT fire on this snapshot from
+    ``in_progress``: either nothing is blocked anymore, or at least one open
+    task can advance on its own. A plan whose tasks are now ALL done/cancelled
+    also reverts — the ordinary completion path
+    (:func:`transition_to_pending_human_validation`, orchestrator) takes over
+    from there. A no-op for any other plan status and while the plan is still
+    genuinely stuck, so callers can invoke it unconditionally after un-sticking
+    a task.
+    """
+    if current_status != "blocked":
+        return TransitionResult(
+            new_status=current_status,
+            transitioned=False,
+            reason=f"plan is {current_status!r}, only blocked can revert",
+        )
+    materialised = list(tasks)
+    would_block = transition_to_blocked("in_progress", materialised)
+    if would_block.transitioned:
+        return TransitionResult(
+            new_status="blocked",
+            transitioned=False,
+            reason="snapshot still justifies the block",
+        )
+    return TransitionResult(new_status="in_progress", transitioned=True)
+
+
 #: Task statuses that are actively progressing (work queued/running/awaiting) and
 #: will reach a terminal state without being gated behind an unmet dependency.
 _ADVANCING_TASK_STATUSES = frozenset(
@@ -297,6 +331,7 @@ __all__ = [
     "TaskSnapshot",
     "TransitionResult",
     "compute_plan_progress",
+    "transition_from_blocked",
     "transition_to_blocked",
     "transition_to_completed",
     "transition_to_pending_human_validation",

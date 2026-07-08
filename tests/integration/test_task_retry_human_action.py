@@ -194,3 +194,108 @@ async def test_plan_unblock_reactivates_and_reenqueues_blocked_tasks(
     assert plan_status == "in_progress"
     assert row["status"] == "ready"
     assert row["retry_count"] == 0
+
+
+async def _plan_and_task_status(dsn: str, ids: dict[str, UUID]) -> tuple[str, str]:
+    conn = await asyncpg.connect(dsn)
+    try:
+        plan_status = await conn.fetchval("SELECT status FROM plans WHERE id = $1", ids["plan"])
+        task_status = await conn.fetchval("SELECT status FROM tasks WHERE id = $1", ids["task"])
+    finally:
+        await conn.close()
+    return str(plan_status), str(task_status)
+
+
+# --- hallazgo #2 (QA 2026-07-07): TODAS las vías humanas que sacan una tarea de
+# `blocked` re-evalúan su plan `blocked` contra el snapshot (inversa de c3), no
+# solo la acción `retry`.
+
+
+@pytest.mark.asyncio
+async def test_approve_manual_on_blocked_task_reactivates_plan(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    ids = await _seed(migrations_pg_dsn)
+    token = await _mint_token(ids["user"], ids["tenant"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            f"/tasks/{ids['task']}/human-action",
+            json={"action": "approve_manual"},
+            headers=headers,
+        )
+
+    assert resp.status_code == 200, resp.text
+    plan_status, task_status = await _plan_and_task_status(migrations_pg_dsn, ids)
+    assert task_status == "done"
+    # Todo done → el plan revierte a in_progress y el camino de completado
+    # normal (orchestrator/reconciler) toma el relevo.
+    assert plan_status == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_plan_stays_blocked_while_snapshot_still_stuck(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Aprobar UNA tarea blocked no reactiva el plan si OTRA sigue atascada."""
+    ids = await _seed(migrations_pg_dsn)
+    other_task = uuid4()
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO tasks (id, tenant_id, project_id, plan_id, title, status, priority,"
+            " acceptance_criteria, inputs, retry_count, max_retries)"
+            " VALUES ($1, $2, $3, $4, 'T2', 'blocked', 'medium', '[]'::jsonb, '{}'::jsonb, 0, 3)",
+            other_task,
+            ids["tenant"],
+            ids["project"],
+            ids["plan"],
+        )
+    finally:
+        await conn.close()
+    token = await _mint_token(ids["user"], ids["tenant"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            f"/tasks/{ids['task']}/human-action",
+            json={"action": "approve_manual"},
+            headers=headers,
+        )
+
+    assert resp.status_code == 200, resp.text
+    plan_status, task_status = await _plan_and_task_status(migrations_pg_dsn, ids)
+    assert task_status == "done"
+    # La otra tarea sigue blocked y nada puede avanzar → el plan NO revierte.
+    assert plan_status == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_kanban_put_out_of_blocked_reactivates_plan(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """La vía del Kanban (PUT /projects/{pid}/tasks/{tid}, drag fuera de la
+    columna Bloqueada) también re-evalúa el plan — la vía que usó el operador
+    en el QA."""
+    ids = await _seed(migrations_pg_dsn)
+    token = await _mint_token(ids["user"], ids["tenant"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            f"/projects/{ids['project']}/tasks/{ids['task']}",
+            json={"status": "ready"},
+            headers=headers,
+        )
+
+    assert resp.status_code == 200, resp.text
+    plan_status, task_status = await _plan_and_task_status(migrations_pg_dsn, ids)
+    assert task_status == "ready"
+    assert plan_status == "in_progress"
