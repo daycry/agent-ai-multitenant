@@ -15,6 +15,10 @@ import { defineConfig } from "vitest/config";
  * vitest the same way they do under Next.js / tsc.
  */
 export default defineConfig({
+  // Next compila JSX con el runtime automático (los componentes no importan
+  // React); esbuild bajo vitest debe hacer lo mismo o los render-tests jsdom
+  // caen con "React is not defined".
+  esbuild: { jsx: "automatic" },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL(".", import.meta.url)),
@@ -23,6 +27,8 @@ export default defineConfig({
   test: {
     include: ["**/*.test.{ts,tsx}"],
     exclude: ["node_modules", ".next", "e2e", "test-results"],
+    // Node por defecto (tests de lógica pura); los render-tests declaran
+    // `// @vitest-environment jsdom` por fichero.
     environment: "node",
   },
 });

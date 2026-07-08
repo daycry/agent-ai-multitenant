@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ApiError } from "@/lib/api";
+import { useLang } from "@/lib/lang-context";
 import { fmtRunDuration, fmtRunMoney, fmtRunTokens, fmtRunWhen, listRuns } from "@/lib/runs";
 
 const VERDICT_VARIANT: Record<string, BadgeVariant> = {
@@ -33,6 +34,24 @@ const VERDICT_VARIANT: Record<string, BadgeVariant> = {
   cancelled: "muted",
   failed: "danger",
 };
+
+// runs-visor E1: copy del panel en los dos idiomas soportados.
+const COPY = {
+  es: {
+    title: "Runs de la tarea",
+    loading: "Cargando runs…",
+    loadError: "No se pudieron cargar los runs:",
+    empty: "Esta tarea no tiene ejecuciones todavía.",
+    close: "Cerrar",
+  },
+  en: {
+    title: "Task runs",
+    loading: "Loading runs…",
+    loadError: "Runs could not be loaded:",
+    empty: "This task has no executions yet.",
+    close: "Close",
+  },
+} as const;
 
 export function RunHistorySheet({
   taskId,
@@ -46,6 +65,8 @@ export function RunHistorySheet({
   onOpenChange: (next: boolean) => void;
 }) {
   const router = useRouter();
+  const { lang } = useLang();
+  const t = COPY[lang];
 
   const runsQuery = useQuery({
     queryKey: ["task-runs", taskId],
@@ -67,20 +88,20 @@ export function RunHistorySheet({
     <Dialog open={open} onOpenChange={onOpenChange} size="xl">
       <DialogContent data-testid="run-history-sheet">
         <DialogHeader>
-          <DialogTitle>Runs de la tarea</DialogTitle>
+          <DialogTitle>{t.title}</DialogTitle>
           {taskTitle && <p className="text-muted-foreground text-sm">{taskTitle}</p>}
         </DialogHeader>
         <DialogBody>
-          {runsQuery.isLoading && <p className="text-muted-foreground text-sm">Cargando runs…</p>}
+          {runsQuery.isLoading && <p className="text-muted-foreground text-sm">{t.loading}</p>}
           {runsQuery.isError && (
             <p className="text-destructive text-sm">
-              No se pudieron cargar los runs:{" "}
+              {t.loadError}{" "}
               {runsQuery.error instanceof ApiError ? runsQuery.error.body : String(runsQuery.error)}
             </p>
           )}
           {!runsQuery.isLoading && !runsQuery.isError && rows.length === 0 && (
             <p className="text-muted-foreground text-sm italic" data-testid="run-history-empty">
-              Esta tarea no tiene ejecuciones todavía.
+              {t.empty}
             </p>
           )}
           {rows.map((r) => (
@@ -109,7 +130,7 @@ export function RunHistorySheet({
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-            Cerrar
+            {t.close}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -104,12 +104,26 @@ export const RUN_STATUS_LABEL: Record<string, string> = {
   failed: "Fallido",
 };
 
+// E1 (runs-visor): etiquetas de estado también en inglés; `runStatusLabel`
+// acepta el idioma del lang-context (default es — retrocompatible).
+export const RUN_STATUS_LABEL_EN: Record<string, string> = {
+  running: "Running",
+  done: "Done",
+  awaiting_human_approval: "Awaiting approval",
+  needs_human_review: "Human review",
+  aborted: "Aborted",
+  cancelled: "Cancelled",
+  error: "Error",
+  failed: "Failed",
+};
+
 export function runStatusVariant(status: string): BadgeVariant {
   return RUN_STATUS_VARIANT[status] ?? "muted";
 }
 
-export function runStatusLabel(status: string): string {
-  return RUN_STATUS_LABEL[status] ?? status;
+export function runStatusLabel(status: string, lang: "es" | "en" = "es"): string {
+  const table = lang === "en" ? RUN_STATUS_LABEL_EN : RUN_STATUS_LABEL;
+  return table[status] ?? status;
 }
 
 // --- shared display formatters (the list page + the Kanban history panel) -----
