@@ -16,7 +16,11 @@
 from __future__ import annotations
 
 import pytest
-from api_server.chat.plan_corrections import mark_corrections_accepted
+from api_server.chat.plan_corrections import (
+    append_corrections,
+    find_correction_for_session,
+    mark_corrections_accepted,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -111,3 +115,46 @@ def test_spec_without_corrections_is_a_noop_copy() -> None:
     out = mark_corrections_accepted(spec, ["t1"])
     assert out["corrections"] == []
     assert out is not spec
+
+
+# ---------------------------------------------------------------------------
+# append_corrections + find_correction_for_session (ADR 0107, generate)
+# ---------------------------------------------------------------------------
+def test_append_corrections_adds_tasks_and_proposed_entry() -> None:
+    spec = {"tasks": [{"id": "t1", "title": "Original"}]}
+    fixes = [
+        {"id": "fix-1", "title": "Corrección A", "origin": "correction"},
+        {"id": "fix-2", "title": "Corrección B", "origin": "correction"},
+    ]
+    out = append_corrections(
+        spec,
+        session_id="sess-1",
+        reason="filtro global",
+        tasks=fixes,
+        created_at="2026-07-08T00:00:00+00:00",
+    )
+    assert [t["id"] for t in out["tasks"]] == ["t1", "fix-1", "fix-2"]
+    entry = out["corrections"][0]
+    assert entry == {
+        "session_id": "sess-1",
+        "reason": "filtro global",
+        "task_ids": ["fix-1", "fix-2"],
+        "created_at": "2026-07-08T00:00:00+00:00",
+        "status": "proposed",
+    }
+    # No muta el original.
+    assert len(spec["tasks"]) == 1
+    assert "corrections" not in spec
+
+
+def test_find_correction_for_session_matches_by_id() -> None:
+    spec = {
+        "corrections": [
+            {"session_id": "sess-1", "task_ids": ["fix-1"], "status": "proposed"},
+            {"session_id": "sess-2", "task_ids": ["fix-2"], "status": "accepted"},
+        ]
+    }
+    hit = find_correction_for_session(spec, "sess-2")
+    assert hit is not None and hit["task_ids"] == ["fix-2"]
+    assert find_correction_for_session(spec, "sess-9") is None
+    assert find_correction_for_session({}, "sess-1") is None

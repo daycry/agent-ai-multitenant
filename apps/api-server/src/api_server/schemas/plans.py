@@ -176,6 +176,7 @@ __all__ = [
     "PlanCommentCreateRequest",
     "PlanCommentResponse",
     "PlanCreateRequest",
+    "PlanGenerateCorrectionsResponse",
     "PlanResponse",
     "PlanSpecification",
     "PlanSyncRequest",
@@ -327,6 +328,22 @@ class PlanAcceptCorrectionsRequest(BaseModel):
     model_config = _BASE_CONFIG
 
     task_ids: list[str] = Field(min_length=1)
+
+
+class PlanGenerateCorrectionsResponse(BaseModel):
+    """Resultado de POST /plans/{plan_id}/generate-corrections (ADR 0107):
+    la tanda de tareas correctivas propuesta para la sesión rechazada más
+    reciente. ``already_generated`` marca la respuesta idempotente (la
+    sesión ya tenía tanda en el spec y no se regeneró). ``tasks`` vacío =
+    el modelo no produjo nada usable y el spec no se tocó."""
+
+    model_config = _BASE_CONFIG
+
+    session_id: UUID
+    reason: str
+    task_ids: list[str] = Field(default_factory=list)
+    tasks: list[dict[str, Any]] = Field(default_factory=list)
+    already_generated: bool = False
 
 
 class PlanSyncResponse(BaseModel):

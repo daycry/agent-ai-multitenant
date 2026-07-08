@@ -15,6 +15,8 @@ Creation paths:
 
 from __future__ import annotations
 
+import contextlib
+from datetime import UTC, datetime
 from decimal import Decimal
 from functools import partial
 from typing import Any
@@ -37,6 +39,7 @@ from api_server.auth.deps import (
     schedule_after_commit,
 )
 from api_server.celery_client import revoke_job_callback
+from api_server.chat.corrections_llm import generate_corrective_tasks
 from api_server.chat.cost import (
     DEFAULT_HOURLY_RATE_EUR,
     AICostBreakdown,
@@ -45,12 +48,17 @@ from api_server.chat.cost import (
 )
 from api_server.chat.cost_resolution import load_price_catalog, resolve_plan_task_models
 from api_server.chat.dag import DAGCycleError, validate_dag
-from api_server.chat.plan_corrections import mark_corrections_accepted
+from api_server.chat.plan_corrections import (
+    append_corrections,
+    find_correction_for_session,
+    mark_corrections_accepted,
+)
 from api_server.chat.plan_state_machine import (
     PlanTransitionError,
     SameSignerError,
     transition_plan_status,
 )
+from api_server.chat.responder import _resolve_chat_provider, resolve_chat_model_config
 from api_server.chat.sync_to_kanban import SyncScopeError, sync_plan_to_kanban
 from api_server.dag_promotion import announce_ready_tasks, promote_ready_tasks
 from api_server.db.conversation import Conversation, Message
@@ -61,6 +69,7 @@ from api_server.db.plan_comment import PlanComment
 from api_server.db.platform_settings import get_double_signature_threshold
 from api_server.db.review_session_repo import list_review_sessions_for_plan
 from api_server.events import publish_task_status_changed
+from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._helpers import (
     get_writable_or_404,
     require_tenant_id,
@@ -71,6 +80,7 @@ from api_server.routers._pagination import (
     limit_query,
     offset_query,
 )
+from api_server.routers.llm_providers import get_provider_vault_store
 from api_server.routers.review import build_review_urls
 from api_server.routers.task_lifecycle import apply_task_retry
 from api_server.schemas.plans import (
@@ -81,6 +91,7 @@ from api_server.schemas.plans import (
     PlanCommentCreateRequest,
     PlanCommentResponse,
     PlanCreateRequest,
+    PlanGenerateCorrectionsResponse,
     PlanResponse,
     PlanSyncRequest,
     PlanSyncResponse,
@@ -831,6 +842,116 @@ async def start_plan_execution(
     await session.refresh(plan)
     await announce_ready_tasks(redis, ready_tasks)
     return to_plan_response(plan)
+
+
+@plans_router.post(
+    "/{plan_id}/generate-corrections", response_model=PlanGenerateCorrectionsResponse
+)
+async def generate_plan_corrections(
+    plan_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+    vault: LLMProviderVaultStore | None = Depends(get_provider_vault_store),
+) -> PlanGenerateCorrectionsResponse:
+    """Convierte el motivo del rechazo humano en tareas correctivas (ADR 0107).
+
+    Lee el ``rejection_reason`` de la sesión de review RECHAZADA más reciente y
+    se lo pasa al LLM del proyecto (mismo kit que generate-acceptance-criteria);
+    la tanda normalizada se añade a ``specification.tasks`` (``origin:
+    correction``) con su entrada ``proposed`` en ``specification.corrections``.
+    NO reactiva el plan: eso es accept-corrections. Idempotente por sesión —
+    repetir devuelve la tanda ya propuesta sin regenerar."""
+    require_tenant_id(principal)
+    plan = await get_writable_or_404(
+        session, Plan, plan_id, principal, not_found_detail="plan not found"
+    )
+    if plan.status != PlanStatus.REJECTED.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "plan_not_rejected",
+                "message": (
+                    "Solo un plan rechazado puede generar correcciones; "
+                    f"este plan está en estado '{plan.status}'."
+                ),
+                "status": plan.status,
+            },
+        )
+
+    sessions = await list_review_sessions_for_plan(session, plan.id)
+    rejected = next(
+        (s for s in sessions if s.verdict == "rejected" and (s.rejection_reason or "").strip()),
+        None,
+    )
+    if rejected is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "no_rejection_reason",
+                "message": (
+                    "Este plan no tiene ninguna sesión de review rechazada con motivo; "
+                    "no hay nada que convertir en tareas correctivas."
+                ),
+            },
+        )
+    reason = (rejected.rejection_reason or "").strip()
+
+    spec: dict[str, Any] = plan.specification or {}
+    existing_entry = find_correction_for_session(spec, str(rejected.id))
+    if existing_entry is not None:
+        task_ids = [str(t) for t in existing_entry.get("task_ids") or []]
+        by_id = {str(t.get("id")): t for t in spec.get("tasks") or [] if isinstance(t, dict)}
+        return PlanGenerateCorrectionsResponse(
+            session_id=rejected.id,
+            reason=str(existing_entry.get("reason") or reason),
+            task_ids=task_ids,
+            tasks=[by_id[tid] for tid in task_ids if tid in by_id],
+            already_generated=True,
+        )
+
+    project = await _verify_project_visible(session, plan.project_id)
+    effective = await resolve_chat_model_config(session, project)
+    provider, _kind, api_model = await _resolve_chat_provider(session, effective, vault)
+    if provider is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No hay proveedor LLM configurado para el chat de este proyecto.",
+        )
+    existing_tasks = [t for t in spec.get("tasks") or [] if isinstance(t, dict)]
+    raw_summary = spec.get("summary")
+    try:
+        fixes = await generate_corrective_tasks(
+            provider,
+            rejection_reason=reason,
+            plan_title=plan.title,
+            plan_summary=raw_summary if isinstance(raw_summary, str) else "",
+            existing_tasks=existing_tasks,
+            model=api_model,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            await provider.aclose()
+
+    if not fixes:
+        # Nada usable: el spec no se toca; la UI ofrece reintentar.
+        return PlanGenerateCorrectionsResponse(
+            session_id=rejected.id, reason=reason, task_ids=[], tasks=[]
+        )
+
+    plan.specification = append_corrections(
+        spec,
+        session_id=str(rejected.id),
+        reason=reason,
+        tasks=fixes,
+        created_at=datetime.now(tz=UTC).isoformat(),
+    )
+    await session.flush()
+    return PlanGenerateCorrectionsResponse(
+        session_id=rejected.id,
+        reason=reason,
+        task_ids=[str(t["id"]) for t in fixes],
+        tasks=fixes,
+    )
 
 
 # ADR 0107: estados desde los que se aceptan correcciones. `rejected` es el

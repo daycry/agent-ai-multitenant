@@ -28,6 +28,39 @@ CORRECTION_STATUS_PROPOSED = "proposed"
 CORRECTION_STATUS_ACCEPTED = "accepted"
 
 
+def append_corrections(
+    spec: dict[str, Any],
+    *,
+    session_id: str,
+    reason: str,
+    tasks: list[dict[str, Any]],
+    created_at: str,
+) -> dict[str, Any]:
+    """Devuelve un spec NUEVO con las tareas correctivas añadidas al listado
+    plano (``origin: correction`` ya viene puesto por el normalizador) y la
+    entrada ``proposed`` del ciclo en `corrections`."""
+    new_spec = dict(spec)
+    new_spec["tasks"] = list(new_spec.get("tasks") or []) + [dict(t) for t in tasks]
+    entry = {
+        "session_id": session_id,
+        "reason": reason,
+        "task_ids": [t["id"] for t in tasks],
+        "created_at": created_at,
+        "status": CORRECTION_STATUS_PROPOSED,
+    }
+    new_spec["corrections"] = [*(new_spec.get("corrections") or []), entry]
+    return new_spec
+
+
+def find_correction_for_session(spec: dict[str, Any], session_id: str) -> dict[str, Any] | None:
+    """La entrada de `corrections` de una sesión de review concreta, si existe
+    (idempotencia del generate: una sesión rechazada produce UNA tanda)."""
+    for entry in spec.get("corrections") or []:
+        if isinstance(entry, dict) and str(entry.get("session_id")) == session_id:
+            return entry
+    return None
+
+
 def mark_corrections_accepted(spec: dict[str, Any], task_ids: Iterable[str]) -> dict[str, Any]:
     """Devuelve un spec NUEVO con las entradas de `corrections` cuya
     ``task_ids`` interseca la selección marcadas como aceptadas.
@@ -55,5 +88,7 @@ __all__ = [
     "CORRECTION_ORIGIN",
     "CORRECTION_STATUS_ACCEPTED",
     "CORRECTION_STATUS_PROPOSED",
+    "append_corrections",
+    "find_correction_for_session",
     "mark_corrections_accepted",
 ]
