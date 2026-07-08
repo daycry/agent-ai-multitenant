@@ -28,6 +28,16 @@ docs_language: es
 > esta misma nota describir el feature como desplegado — corregido a `pending_human_validation`
 > (código hecho + changelog propio en `docs/07-changelog/runs-visor-trabajo.md`, falta la suite E2E
 > formal antes de `completed`).
+>
+> **Reconciliación (2026-07-08, tests corridos):** se marcan `[x]` **A1, A2, A3, B1 y E3** — sus
+> tests automáticos están verdes hoy (integración 9 passed, shared-llm verde, vitest 167 passed;
+> ver notas inline). El QA visual del criterio de cierre 4 quedó cubierto de facto en el QA e2e
+> del 2026-07-07/08 (lista → detalle con streaming → Kanban → panel de historial, usados en vivo
+> por el operador). **Lo genuinamente pendiente** para cerrar: los tests vitest de componente que
+> exigen B2/B3/C1/C2/D1 (las features están implementadas, desplegadas y en uso — falta SOLO el
+> test de cada una), E1 (la página de runs no usa `lang-context`, está en un solo idioma) y E2
+> (pasada formal completa). Es la misma deuda de tests frontend del hallazgo #9 del backlog
+> (`hallazgos-pendientes-2026-07-07.md`) — cerrarla ahí cierra este plan.
 
 > **Origen:** petición del operador (2026-06-26): «en el menú trabajo, poder visualizar todos los runs en
 > forma de lista, las más recientes primero, y ver tokens consumidos, tiempo, dinero… al acceder ver el
@@ -126,24 +136,38 @@ docs_language: es
 
 ### Fase A — Backend: endpoint de runs para miembros + fix de tokens
 
-- [ ] **A1 — Extraer la query de runs**: mover la lógica de listado/filtrado de `/tenant-stats/runs` a
+- [x] **A1 — Extraer la query de runs**: mover la lógica de listado/filtrado de `/tenant-stats/runs` a
       `db/execution_runs.py::query_execution_runs(session, *, filters, limit, offset) -> list[ExecutionRunRow]`.
       `/tenant-stats/runs` pasa a llamarla. **Test:** los tests existentes de `/tenant-stats/runs` siguen verdes
       (sin cambio de comportamiento). `pytest tests/integration -k tenant_stats`.
-- [ ] **A2 — `GET /runs` accesible a miembros**: nuevo `routers/runs.py` con `require_tenant_member` +
+  > **Reconciliado (2026-07-08)**: hecha con una variante de ubicación — `query_execution_runs`
+  > vive en `routers/tenant_stats.py` (no en un `db/execution_runs.py` nuevo) y la reutiliza
+  > `routers/runs.py:20`. Mismo objetivo (una sola query para ambas superficies). Tests del
+  > módulo verdes hoy (9 passed).
+- [x] **A2 — `GET /runs` accesible a miembros**: nuevo `routers/runs.py` con `require_tenant_member` +
       `get_tenant_session`; mismos filtros (`project_id`, `plan_id`, `task_id`, `agent_id`, `verdict`, `model`,
       `min_cost`, ventana de fechas) + paginación; orden `created_at DESC`. Registrar el router. **Test
       (integración, nuevo):** (a) un miembro lista runs de su tenant, recientes-primero; (b) filtro `task_id`
       devuelve solo los de esa tarea; (c) **aislamiento cross-tenant**: un principal de otro tenant no ve estos
       runs (RLS). `pytest tests/integration/test_runs_endpoint.py`.
-- [ ] **A3 — Fix tokens=0 en `claude_sdk`**: en `claude_agent.py`, al cosechar el `ResultMessage` del SDK,
+  > **Reconciliado (2026-07-08)**: hecha; los tests viven en
+  > `tests/integration/test_tenant_stats_dashboard.py` (sección "runs-visor A2":
+  > `test_member_can_list_runs`, `test_member_runs_filter_by_task`,
+  > `test_member_runs_cross_tenant_isolation`) en vez del fichero previsto. Verdes hoy.
+- [x] **A3 — Fix tokens=0 en `claude_sdk`**: en `claude_agent.py`, al cosechar el `ResultMessage` del SDK,
       poblar `Usage.input_tokens`/`output_tokens` (hoy solo se captura `cost_usd`). **Test (nuevo, SDK fake):** un
       `ResultMessage` con `usage` produce `tokens_in/out` > 0 en el `model_call`. `pytest packages/shared-llm/tests/test_claude_agent_usage.py`.
+  > **Reconciliado (2026-07-08)**: re-implementada de raíz en la remediación de la auditoría de
+  > runs (`_harvest` multi-canal en shared-llm); `test_claude_agent_usage.py` verde hoy y la
+  > imagen ya está reconstruida y desplegada (deploy a HEAD del 2026-07-07) — los presupuestos
+  > de tokens (500k/250k) operan sobre estos contadores en dev.
 
 ### Fase B — Frontend: lista de runs + navegación
 
-- [ ] **B1 — Cliente API**: en `lib/api.ts`, `listRuns(filters)` (GET `/runs`) + tipo `ExecutionRunRow`.
+- [x] **B1 — Cliente API**: en `lib/api.ts`, `listRuns(filters)` (GET `/runs`) + tipo `ExecutionRunRow`.
       **Test (vitest):** construcción de querystring desde filtros (incluye/omite vacíos correctamente).
+  > **Reconciliado (2026-07-08)**: `lib/runs.test.ts` (querystring `runsQuery` + variantes/labels
+  > de estado) verde hoy dentro de la suite vitest completa (167 passed).
 - [ ] **B2 — Página `/admin/runs`**: tabla recientes-primero con columnas fecha · proyecto · plan · tarea ·
       agente · modelo · estado · duración · tokens · coste (moneda display); filtros + paginación; `refetchInterval`
       para refrescar filas `running`; fila → `/admin/executions/{id}`. Estados vacío/cargando/error consistentes.
@@ -176,7 +200,8 @@ docs_language: es
 - [ ] **E1 — i18n ES + EN**: etiquetas nuevas (Runs, columnas, panel, estados) en los dos idiomas.
 - [ ] **E2 — Verificación**: `pytest` (A1–A3) verde; `vitest` (B–D) verde; `typecheck`/`lint`/`build` del
       admin-panel verdes. QA visual manual: lista → detalle → streaming de un run vivo → click en Kanban → panel.
-- [ ] **E3 — Changelog**: entrada en `docs/07-changelog/runs-visor-trabajo.md`.
+- [x] **E3 — Changelog**: entrada en `docs/07-changelog/runs-visor-trabajo.md`.
+  > **Reconciliado (2026-07-08)**: el fichero existe (verificado).
 
 ## Deuda relacionada (fuera de alcance, anotada por el debug del 2026-06-26)
 

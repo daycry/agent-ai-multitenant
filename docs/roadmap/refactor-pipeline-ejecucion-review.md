@@ -1,9 +1,9 @@
 ---
 title: "Refactor limpio del pipeline ejecución + self-review (sin parches)"
-status: pending_human_validation
+status: completed
 date: 2026-06-27
 started_at: 2026-06-27
-completed_at: null
+completed_at: 2026-07-08
 authors: [claude-opus, operador]
 kind: design-spec
 related_adr: ["0086", "0013", "0021", "0050"]
@@ -19,6 +19,16 @@ docs_language: es
 > verificables (`f6b1a94`, `bcdd9cb`, `77f37fe`, `9e5501b`); el spec no podía seguir "sin aprobar"
 > cuando ya está implementado y desplegado. Este doc es el destino real del trabajo que
 > `prod-17-bucle-ai-reviewer.md` dejó pendiente — cruzar ambos antes de cerrar cualquiera.
+>
+> **CERRADO (2026-07-08)**: la validación humana pendiente se cumplió en el **QA e2e en vivo del
+> plan CI4** (2026-07-07/08, operador presente): review autoritativo por tool con veredicto
+> 3-estados ejercitado en ×3 ciclos review→done, la vía inconcluso/retries→`needs_human_review`→
+> tarea `blocked` ejercitada en vivo (escalado + desbloqueo humano), y el smoke del §Deploy
+> cumplido (stack a HEAD, migración 0104 > 0100). El QA cazó además una regresión del skip de
+> self-review en runs de review (A5) corregida con TDD en `faf2c78`. Cruce con prod-17 hecho: a
+> ese plan solo le queda su e2e automatizado (bloqueado por infra Docker-real; misma deuda que el
+> hallazgo #8 del backlog). El merge de la rama `plan/runs-visor-trabajo` a master queda como
+> decisión del operador (mismo estado que el resto del trabajo de la rama).
 >
 > **Estado: `pending_approval`.** Este es el **spec de diseño** (no el plan de
 > implementación). Surge del análisis multi-agente del 2026-06-27 sobre la

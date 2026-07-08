@@ -47,6 +47,16 @@ avance, revertir plan→`in_progress` en la misma transacción (misma lógica in
 `transition_to_blocked`). Alternativa/red: una pasada del reconciler que re-evalúe planes
 `blocked` cuyo snapshot ya no justifica el bloqueo.
 
+**Reencuadre (2026-07-08, reconciliación de roadmap):** el fix propuesto YA existe en parte —
+la acción `retry` de `POST /tasks/{id}/human-action` (`routers/task_lifecycle.py:175`, T7c)
+reactiva el plan `blocked→in_progress` en la misma operación, y su test
+(`test_retry_unsticks_blocked_task_and_reactivates_plan`) está verde. Lo que queda de este
+hallazgo: (a) **investigar por qué en el QA el plan no revirtió** — probablemente el desbloqueo
+del operador fue por otra vía (botón de la tarjeta/Kanban ≠ human-action retry) o el plan se
+bloqueó DESPUÉS del desbloqueo de la tarea; (b) cubrir esas otras vías (que cualquier desbloqueo
+de tarea re-evalúe el plan) o añadir la pasada del reconciler como red. El alcance real es menor
+que el enunciado original.
+
 ### 3. Botón «Desbloquear plan» invisible en la superficie natural
 
 **Visto en vivo:** el botón solo existe en `/admin/plans/{id}/escalated` (tarjeta "Tareas

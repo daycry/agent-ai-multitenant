@@ -39,6 +39,13 @@ priority: P2
 > autoritativo), ADR 0088 (reconciler), ADR 0095 D1 (worktree read-only del reviewer) —
 > formalizado en [refactor-pipeline-ejecucion-review.md](refactor-pipeline-ejecucion-review.md).
 > Antes de cerrar este plan de verdad, cruzarlo con ese documento.
+>
+> **Cruce hecho (2026-07-08)**: `refactor-pipeline-ejecucion-review.md` queda **`completed`** —
+> el bucle del reviewer se validó humanamente en el QA e2e en vivo del plan CI4 (2026-07-07/08):
+> ×3 ciclos in_review→veredicto por tool→done, vía de escalado a humano ejercitada, plan 14/14 a
+> `pending_human_validation` con sesión de review auto-creada. A ESTE plan le queda únicamente
+> `task_prod17_e2e_01` (e2e automatizado con Docker real — la misma deuda que el hallazgo #8 de
+> `hallazgos-pendientes-2026-07-07.md`); al cerrarse aquélla, cerrar este plan.
 
 ## Resumen
 

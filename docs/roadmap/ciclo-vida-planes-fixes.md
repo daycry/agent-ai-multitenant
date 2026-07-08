@@ -82,17 +82,36 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
 > `pending_approval` pese a 6 de 11 tareas hechas — corregido a `in_progress`. Los checkboxes de
 > T5/T8/T9/T10 no reflejaban esta nota (seguían en `[ ]`); ya se marcaron `[x]` con evidencia. T1
 > se re-verificó y **NO** está hecha (ver nota inline) — se corrige también esta línea de estado.
+>
+> **Reconciliación (2026-07-08, tests corridos)**: **T1, T2 y T7 se marcan `[x]`** con evidencia
+> y tests verdes hoy (ver notas inline de cada una: consistency-pin de PlanStatus, PUT→409 con
+> force de admin, human-action retry + plan unblock validados además en vivo en el QA e2e).
+> **Quedan genuinamente pendientes: T4** (guard-test estático de mutación de estado — no existe;
+> tiene sentido hacerla ahora que T2 cerró la última puerta lateral) **y T11** (board por planes:
+> implementada y en uso, falta SOLO su test vitest — ver nota inline). 9 de 11 tareas cerradas.
 
 ### Fase A — Fundación de tipos y máquina de estados
 
-- [ ] **T1 — Unificar `PlanStatus` (c10)**: una sola definición canónica (StrEnum de dominio) importada por
+- [x] **T1 — Unificar `PlanStatus` (c10)**: una sola definición canónica (StrEnum de dominio) importada por
       `plan_progress.py` en vez del `Literal` divergente; o, si el `Literal` debe restringir, documentar y
       validar explícitamente en frontera. **Test:** no existen dos vocabularios de `PlanStatus`; mypy verde;
       pasar `draft` a `transition_to_pending_human_validation` sigue siendo no-op seguro. > **Nota (2026-07-06, auditoría de roadmap)**: la línea "Estado (2026-07-05)" de arriba lista T1 > como hecha, pero **no lo está**: `apps/api-server/src/api_server/plan_progress.py:31` sigue > definiendo su propio `Literal[...]` (comentado "mirrors it EXACTLY" en vez de importar > `api_server.db.domain.PlanStatus`). No se marca `[x]`.
-- [ ] **T2 — `PUT /tasks` vía máquina de estados (c1)**: `update_task` encamina el cambio de `status` por
+  > **Reconciliado (2026-07-08)**: cumplida por la **segunda rama del propio item** ("documentar
+  > y validar explícitamente en frontera"): el `Literal` de `plan_progress.py` ya NO diverge
+  > (espejo exacto del StrEnum, incluye `draft`/`pending_second_approval`), está documentado
+  > (el módulo es puro y no puede importar el dominio cargado de SQLAlchemy) y
+  > `tests/unit/test_plan_status_consistency.py` **pinea los dos conjuntos iguales** (verde
+  > hoy) — un solo vocabulario, imposible de driftear en silencio. mypy verde (gate mypy-total
+  > `db1c5d0`).
+- [x] **T2 — `PUT /tasks` vía máquina de estados (c1)**: `update_task` encamina el cambio de `status` por
       `transition_task_status` (mantiene la validación DAG existente); transición ilegal → 409/422 con mensaje.
       **Test:** `backlog→done` y `done→in_progress` por PUT devuelven error; `backlog→ready` pasa; el
       drag&drop del Kanban respeta las columnas legales.
+  > **Reconciliado (2026-07-08)**: implementada — `routers/tasks.py:375` valida
+  > `allowed_transitions(old_status)` → 409 (distinto del 422 de DAG) con override explícito
+  > `?force=` solo para `tenant_admin`. Test dedicado
+  > `test_dag_enforcement.py::test_illegal_transition_is_409_and_tenant_admin_can_force`
+  > (módulo completo verde hoy, 7 passed).
 - [x] **T3 — `submit_verdict` vía `transition_plan_status` (c2, higiene)**: `submit_verdict` (`review.py:469`)
       encamina el cierre `pending_human_validation→completed|rejected` por `transition_plan_status` (la única
       puerta) en vez de asignar `.status` en crudo. La transición es legal (línea 17 del state machine) → mismo
@@ -123,13 +142,20 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
 
 ### Fase C — Propagación de `blocked` (c3)
 
-- [~] **T7 — Ruta de salida de tarea `blocked` + propagación al plan (c3, confirmado)** — **2 de 3 partes
-  hechas**: (a) el escalado plan `in_progress→blocked` cuando las únicas tareas abiertas son `blocked` ya está
-  (fase 1, `dispatch.py:_on_task_done`); (b) **notificación al operador HECHA** — evento `plan_blocked` en el
-  registro del notification-dispatcher + plantillas es/en + el orquestador lo encola tras el escalado
-  (`_send_plan_blocked_notification`, fuera de la txn, best-effort; restructure `if/else` behavior-preserving).
-  **Test** (`tests/unit/test_plan_blocked_notification.py`, 2 casos + 28 de registro/plantilla + 5 de dispatch
-  sin regresión). PENDIENTE (c): la **acción humana de desbloqueo/reintento** de una tarea `blocked` (endpoint + máquina de estados de tarea + UI) — el operador ya ve el plan `blocked` y recibe la notificación.
+- [x] **T7 — Ruta de salida de tarea `blocked` + propagación al plan (c3, confirmado)** — **3 de 3 partes
+      hechas**: (a) el escalado plan `in_progress→blocked` cuando las únicas tareas abiertas son `blocked` ya está
+      (fase 1, `dispatch.py:_on_task_done`); (b) **notificación al operador HECHA** — evento `plan_blocked` en el
+      registro del notification-dispatcher + plantillas es/en + el orquestador lo encola tras el escalado
+      (`_send_plan_blocked_notification`, fuera de la txn, best-effort; restructure `if/else` behavior-preserving).
+      **Test** (`tests/unit/test_plan_blocked_notification.py`, 2 casos + 28 de registro/plantilla + 5 de dispatch
+      sin regresión). (c) la **acción humana de desbloqueo/reintento HECHA**:
+      `POST /tasks/{id}/human-action` con `action=retry` (`routers/task_lifecycle.py:175` — tarea →
+      `ready`/`backlog` + reset del presupuesto de reintentos + **reactivación del plan**
+      `blocked→in_progress`) y `POST /plans/{id}/unblock` (`routers/plans.py:303`, reactiva y re-encola);
+      UI en `/admin/plans/{id}/escalated` (ambas acciones, usadas en vivo por el operador en el QA e2e
+      2026-07-07/08). **Test** (`tests/integration/test_task_retry_human_action.py`, 2 casos, verde hoy).
+  > **Fricción residual de UX** (no de lógica): visibilidad del botón de desbloqueo fuera de la
+  > página escalated → hallazgos #2/#3 de `hallazgos-pendientes-2026-07-07.md`.
 
 ### Fase D — Fidelidad del planner y board (c6, c7, c8, c11)
 
@@ -147,6 +173,11 @@ planes). El re-diseño del gate de guardrails va en `tools-y-cierre-plan-fixes.m
 - [ ] **T11 — Board gerencial por `plan_id` (c8)**: `/admin/board` agrupa por planes reales
       (`/projects/{id}/plans` / tabla `plans`) en vez de proyectos; actualizar el comentario obsoleto. **Test:**
       el board muestra planes (no proyectos) como tarjetas de la fila superior; ADR 0008 satisfecho.
+  > **Estado (2026-07-08)**: la **feature está implementada y en uso** — `board/page.tsx:61`
+  > ("c8/T11: the top row shows real PLANS (GET /plans), not projects") y el operador la usó en
+  > el QA e2e (doble Kanban planes/tareas). NO se marca `[x]` porque el test vitest que exige
+  > este item no existe todavía (misma deuda de tests frontend que anota el hallazgo #9 del
+  > backlog). Solo falta el test, no la implementación.
 
 ## Criterios de cierre
 

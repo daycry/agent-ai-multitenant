@@ -17,6 +17,15 @@ docs_language: es
 > (Fase 1-2 completas y verificadas hoy; Fase 3 completa salvo "Consumidores" y "Converger",
 > no verificados). `GET /agents/model-options` (Fase 4) sigue vivo en `routers/agents.py:191` —
 > Fase 4 no empezada.
+>
+> **Reconciliación (2026-07-08)**: verificados contra código los items que la auditoría del 06
+> dejó pendientes — "cost_resolution" (usa la cadena unificada) y "Consumidores" (las 3
+> superficies usan `PersonaModelFields`) se marcan `[x]` con evidencia inline; Fase 0 se marca
+> consumida (rollout del 2026-06-25 hecho y desplegado sin incidencias de resolución desde
+> entonces). **Queda genuinamente pendiente**: "Converger" (córtex/platform-defaults siguen con
+> variante propia `cortex-model-section.tsx` + `/owner/cortex/model-options`; chat y asistente SÍ
+> convergidos) y la Fase 4 completa. Ambos son follow-ups de prioridad baja permitidos por el
+> propio texto de los items.
 
 # Plan — Unificación de modelo por `provider_id` (ADR 0082)
 
@@ -39,9 +48,14 @@ ejecución (`validate_model_config`, `resolve_model_config_chain`, dispatch).
 La UI de platform-defaults YA guardó `provider_id` que el backend ignora. Al activarlo,
 empezará a aplicarse.
 
-- [ ] Inventariar `model.default_config` + `model_config` de agentes/equipos/proyectos con
+- [x] Inventariar `model.default_config` + `model_config` de agentes/equipos/proyectos con
       `provider_id` ya presente; confirmar que apuntan a la fila intencionada (no a una vieja).
-- [ ] Documentar el valor esperado del default antes del rollout.
+  > **Reconciliado (2026-07-08)**: hecha el 2026-06-25 (nota de progreso: "Fase 0 ✅ — default
+  > era ollama-cloud pero resolvía mal a local"); tarea puntual pre-rollout, consumida por el
+  > propio rollout, desplegado desde entonces sin incidencias de resolución.
+- [x] Documentar el valor esperado del default antes del rollout.
+  > **Reconciliado (2026-07-08)**: el valor esperado (ollama-cloud) quedó documentado en la
+  > nota de progreso de cabecera y ratificado en la memoria de entrega del ADR 0082.
 
 ## Fase 1 — Backend: validación provider_id-aware (sin cambiar resolución todavía)
 
@@ -74,8 +88,11 @@ model}` cuenta como **pineado** (no heredar). TDD.
   > **Verificado, transitivamente**: `dispatch.py` llama a `resolve_model_config_chain` (ya
   > confirmado) y reenvía el dict resuelto sin tocarlo — no necesita mención literal de
   > `provider_id`.
-- [ ] **`cost_resolution.resolve_plan_task_models`**: hereda automáticamente al usar la
-      misma cadena; verificar coste con provider*id. *(no verificado en esta auditoría)\_
+- [x] **`cost_resolution.resolve_plan_task_models`**: hereda automáticamente al usar la
+      misma cadena; verificar coste con provider_id.
+  > **Verificado (2026-07-08)**: `chat/cost_resolution.py:106` llama a
+  > `resolve_model_config_chain` (la cadena ya confirmada arriba propaga `provider_id`
+  > verbatim) — hereda automáticamente, como predecía el item.
 
 ## Fase 3 — Selector reutilizable (frontend, el corazón del mensaje del operador)
 
@@ -94,12 +111,20 @@ model}` cuenta como **pineado** (no heredar). TDD.
     > `draftFromConfig` todos referencian `provider_id` (comentarios "ADR 0082").
 - [x] **`PersonaModelFields`** (`persona-section.tsx`): usar el selector compartido (deja
       `/agents/model-options`). El resumen read-only `PersonaSection` muestra `display_name`.
-- [ ] **Consumidores** (sin cambios de API, heredan el componente): alta de agente
+- [x] **Consumidores** (sin cambios de API, heredan el componente): alta de agente
       (`agents/page.tsx`), edición (`agents/[id]/page.tsx`), **adopción de equipo**
-      (`adopt-team-dialog.tsx`). _(no verificado en esta auditoría)_
+      (`adopt-team-dialog.tsx`).
+  > **Verificado (2026-07-08)**: las tres superficies usan `PersonaModelFields`
+  > (`components/teams/adopt-team-dialog.tsx:29,228` y ambos `agents/*.tsx`), que internamente
+  > renderiza el `ProviderModelSelects` compartido.
 - [ ] **Converger** chat/asistente/córtex/platform-defaults al MISMO componente compartido
       (hoy son variantes equivalentes) para que sea literalmente uno solo. (Si el coste es alto,
-      dejar asistente/córtex como follow-up — ya son por-provider correctos.) _(no verificado)_
+      dejar asistente/córtex como follow-up — ya son por-provider correctos.)
+  > **Estado (2026-07-08)**: chat (`chat-model-section.tsx`) y asistente
+  > (`assistant/settings/model-cards.tsx`) SÍ reutilizan `ProviderModelSelects`; córtex y
+  > platform-defaults siguen con variante propia (`settings/platform-defaults/cortex-model-section.tsx`
+  >
+  > - `GET /owner/cortex/model-options`). Follow-up de prioridad baja permitido por este item.
 - [x] **Borrar `DefaultModelSection`** (huérfano, confirmado sin consumidores).
   > **Verificado**: 0 referencias a `DefaultModelSection` en `apps/admin-panel/`.
 
