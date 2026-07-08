@@ -145,8 +145,9 @@ frontend; `default_runtime_template` se valida con `field_validator` en
 `agent_runtime.__main__.run_task` construye un `WiringContext` y registra
 **todas** las familias bajo su nombre **canónico**
 (`register_builtin_families`: file / red / orquestación / notificación /
-conocimiento / memoria) + los `run_*` (`docker_command`, vía
-`register_tool_specs` desde los `tool_specs` que serializa el orquestador)
+conocimiento / memoria) + los `run_*` (vía `register_tool_specs` desde los
+`tool_specs` que serializa el orquestador — hoy **fallan rápido**: ver
+«`docker_command` retirada» más abajo)
 
 - `shell_exec` (por proyecto, desde `allowed_commands`) + MCP
   (`register_mcp_server` por cada server de `project.mcp_servers`). Cada
@@ -200,3 +201,45 @@ rejected: …` (el ssrf_guard vetó la resolución — IP literal, rango interno
 > hay opt-in — la denylist de rangos internos aplica siempre. El opt-in por
 > proyecto sandbox queda documentado como decisión pendiente en el plan
 > prod-12 (task_prod12_ssrf_03).
+
+## `docker_command` retirada — el toolchain va por `stack_exec` (ADR 0093)
+
+La familia `run_*` (`run_tests`, `run_lint`, …) se cableaba sobre la tool
+`docker_command`, que dentro del sandbox del agente es **inservible por
+diseño**: el contenedor del agente no tiene socket Docker (Principio 2), así
+que `docker.from_env()` nunca puede funcionar ahí. Desde prod-12
+`task_prod12_docker_01` (opción b):
+
+- **`DockerCommandTool` falla rápido** con un error accionable — `«docker
+no está soportado dentro del sandbox del agente; usa stack_exec»` — sin
+  intentar tocar el daemon. El agente no quema turnos en un camino muerto.
+- **La vía real es `stack_exec`** (ADR 0093): el agente PIDE al worker
+  ejecutar su toolchain (`composer install`, `phpunit`, `php spark`, `npm
+test`, `pytest`…) y el worker lo corre en el **runtime-template** del stack
+  (imagen mantenida por la plataforma) sobre el worktree de la tarea, con la
+  misma política de red endurecida (ver siguiente sección). El resultado
+  (rc + stdout/err truncados) vuelve al agente como observación.
+- Las filas `run_*` siguen en el catálogo de plataforma por compatibilidad
+  con proyectos que las tuvieran asignadas; su retirada total (seeds +
+  contract tests) es el follow-up F5 de
+  [`registry-egress-followups`](../roadmap/registry-egress-followups.md).
+
+## `network_policy` de los runtimes: nunca NAT crudo (ADR 0094)
+
+La política de red de un runtime-template (test-runtime del worker y sandbox
+de instalación del marketplace) tiene tres valores, y desde ADR 0094 **ningún
+valor entrega internet crudo** — el bridge per-task/per-probe es SIEMPRE
+`internal=True`:
+
+| Valor        | Semántica efectiva                                                                                                                                                                                                                                   |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `none`       | Sin red: solo los sidecars del propio bridge interno.                                                                                                                                                                                                |
+| `restricted` | Bridge interno; sin egress (el enforcement por-dominio del proxy de plataforma es una capa upstream).                                                                                                                                                |
+| `open`       | Alias de `registries`: bridge interno + **registry-proxy** allowlistado conectado al bridge e inyectado como `HTTP(S)_PROXY`. Solo registries públicos de paquetes y git por HTTPS; cada uso queda en el audit log. Sin proxy configurado → OFFLINE. |
+
+El `registry-proxy` es un segundo tinyproxy compartido (servicio del compose)
+con allowlist de registries públicos (Packagist, PyPI, npm, Go proxy, NuGet,
+crates.io, RubyGems…) y git hosts; el worker/sandbox lo **conecta** al bridge
+efímero al arrancar y lo **desconecta** al terminar (nunca lo destruye).
+Registries/git **privados** con credenciales = follow-up F1 (diferido,
+solapa ADR 0067 B0.2).

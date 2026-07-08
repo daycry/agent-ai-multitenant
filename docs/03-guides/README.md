@@ -24,13 +24,15 @@ y la tabla de NIVELES) vive en
 
 ## Operar la plataforma
 
-| Guía                                                             | Para qué                                                             |
-| ---------------------------------------------------------------- | -------------------------------------------------------------------- |
-| [roles-y-permisos.md](./roles-y-permisos.md)                     | Qué puede hacer cada rol del tenant (RBAC) y cómo se diferencian     |
-| [configurar-proveedores-llm.md](./configurar-proveedores-llm.md) | Configurar los 4 proveedores LLM del catálogo cerrado (System Admin) |
-| [publicar-en-marketplace.md](./publicar-en-marketplace.md)       | Publicar/despublicar skills, tools y MCP servers en el marketplace   |
-| [plan-to-kanban-sync.md](./plan-to-kanban-sync.md)               | Cómo se sincroniza la vista Plan con el Kanban                       |
-| [api-publica-y-webhooks.md](./api-publica-y-webhooks.md)         | Usar la API v1 (token + SDKs + curl) y registrar webhooks entrantes  |
+| Guía                                                               | Para qué                                                                       |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| [roles-y-permisos.md](./roles-y-permisos.md)                       | Qué puede hacer cada rol del tenant (RBAC) y cómo se diferencian               |
+| [configurar-proveedores-llm.md](./configurar-proveedores-llm.md)   | Configurar los 4 proveedores LLM del catálogo cerrado (System Admin)           |
+| [publicar-en-marketplace.md](./publicar-en-marketplace.md)         | Publicar/despublicar skills, tools y MCP servers en el marketplace             |
+| [plan-to-kanban-sync.md](./plan-to-kanban-sync.md)                 | Cómo se sincroniza la vista Plan con el Kanban                                 |
+| [validacion-humana-de-planes.md](./validacion-humana-de-planes.md) | Probar la app del plan, aprobar/rechazar y el ciclo de correcciones (ADR 0107) |
+| [app-review-images.md](./app-review-images.md)                     | Construir la imagen de app-preview, con ejemplos PHP/Node/Python/Go            |
+| [api-publica-y-webhooks.md](./api-publica-y-webhooks.md)           | Usar la API v1 (token + SDKs + curl) y registrar webhooks entrantes            |
 
 ## Desarrollo, demos y diseño
 

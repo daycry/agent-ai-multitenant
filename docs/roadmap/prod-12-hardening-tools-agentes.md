@@ -1,7 +1,7 @@
 ---
 plan_id: prod-12-hardening-tools-agentes
 title: Hardening de tools de agentes — SSRF, egress, reaper y marketplace
-status: in_progress
+status: pending_human_validation
 blocking_plan: null
 started_at: 2026-06-30
 completed_at: null
@@ -386,7 +386,7 @@ documentando que la ejecución real de tests va por`TestRuntimeRunner` del worke
 
 #### `task_prod12_mkt_01` — Análisis estático en la PRIMERA instalación del marketplace
 
-- [ ] **Título**: Cablear `InstallOrchestrator._run_static_analysis`
+- [x] **Título**: Cablear `InstallOrchestrator._run_static_analysis`
       (apps/api-server/src/api_server/marketplace/install.py:618, bandit/semgrep ya
       implementados y funcionando) también en `install_listing`
       (routers/marketplace.py:902, donde vive el `TODO(Plan 09 Fase B/C)`), igual que ya
@@ -394,6 +394,12 @@ documentando que la ejecución real de tests va por`TestRuntimeRunner` del worke
       Persistir los hallazgos del análisis y respetar el gate de consentimiento existente
       (community/experimental instalan DISABLED hasta consentir). Test que verifica que
       install y update pasan por el MISMO pipeline de análisis.
+- **HECHA (2026-07-08, `03f7251`)**: `InstallOrchestrator.analyze_for_install` (mismo
+  `_gate_static_analysis` del update) cableado en `install_listing`; bloqueo → 422 + audit
+  de aborto; artefacto ausente → skip honesto `no_artifact` (no cierra en falso el catálogo
+  pre-registry, ADR 0081); informe en `detail.gates.static_analysis`; consent gate intacto.
+  Test `test_marketplace_install_static_analysis.py` (4) incluye el pin «mismo pipeline»
+  (el MISMO analyzer inyectado ve install y update).
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -450,13 +456,22 @@ documentando que la ejecución real de tests va por`TestRuntimeRunner` del worke
 
 #### `task_prod12_docs_01` — Documentación de referencia y runbook
 
-- [ ] **Título**: Actualizar `docs/04-reference/` con la superficie endurecida: semántica
+- [x] **Título**: Actualizar `docs/04-reference/` con la superficie endurecida: semántica
       de `allowed_domains` y defensas SSRF de las tools HTTP, semántica final de
       `network_policy` (según ADR de la decisión 2), catálogo de tools sin
       `docker_command` (o con su error documentado), modo de fallo del antivirus y
       estados de documento (`pending_scan`). Añadir al runbook de monitoring el apartado
       de cAdvisor y, si aparecieron trampas de toolchain durante el plan, registrarlas
       en `docs/03-guides/gotchas/`.
+- **HECHA (2026-07-09)**: `04-reference/tools.md` (SSRF/allowed*domains ya estaba; añadido
+  «docker_command retirada → stack_exec» y la tabla final de `network_policy` ADR 0094),
+  `04-reference/marketplace.md` (gate de análisis en el install + sandbox sin NAT crudo),
+  `04-reference/domain-model.md` (`pending_scan` + `rejected` no-terminal ADR 0107);
+  runbook `06-runbooks/monitoring-cadvisor.md` ya escrito con cadv_01; gotchas registradas
+  durante el plan (build del panel, base-image de workers/orchestrator). Guías nuevas:
+  `03-guides/app-review-images.md` y `03-guides/validacion-humana-de-planes.md`.
+  Follow-ups que NO entran aquí: UI de `allowed_domains` en ajustes del proyecto y
+  retirada total de `run*\*`de seeds (F5) — anotados en`registry-egress-followups.md`.
 - **Tiempo**: 1 día · **Complejidad**: s
 - **Depende de**: task_prod12_allow_02, task_prod12_net_01, task_prod12_docker_01, task_prod12_av_01, task_prod12_cadv_01
 - **Tests automáticos**: no aplica (documentación); el gate es la revisión humana del PR.

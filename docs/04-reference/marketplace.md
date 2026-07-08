@@ -84,7 +84,14 @@ vs. tenant (community/privado).
 - **Sandbox.** El smoke test del listing corre en un **contenedor efímero
   endurecido** (cap-drop ALL, no-new-privileges, root read-only, límites
   mem/pids/cpu, política de red honrada, **socket Docker NUNCA montado**), no
-  en el proceso de la api-server.
+  en el proceso de la api-server. Desde prod-12 `task_prod12_net_01` el bridge
+  del probe es **siempre `internal`** — `network_policy='open'` ya NO entrega
+  internet crudo: significa egress **proxificado** por el `registry-proxy`
+  allowlistado (registries públicos de paquetes y git), conectado al bridge e
+  inyectado como `HTTP(S)_PROXY`; sin proxy configurado el probe queda
+  offline. Cada uso de `open` queda en el log estructurado y en el audit row
+  (`SandboxResult.network_policy` / `proxied_egress`). Ver la tabla de
+  `network_policy` en [`tools.md`](./tools.md).
 - **Consentimiento por permiso.** Para `community`/`experimental`, el project
   owner aprueba CADA permiso (`allowed_domains` / `allowed_paths` /
   `network_policy`) uno a uno; el install nace `disabled` y solo se habilita
@@ -124,7 +131,16 @@ desconocido); paginación `limit`/`offset` con orden determinista.
   (opcionalmente en un proyecto). Un `community`/`experimental` nace
   `disabled` (sin permisos concedidos); un `verified` instala `enabled`. El
   guard de duplicado-vivo (índice parcial único
-  `uq_marketplace_installations_live`) devuelve 409.
+  `uq_marketplace_installations_live`) devuelve 409. Desde prod-12
+  `task_prod12_mkt_01` la instalación fresca corre el **gate de análisis
+  estático** (el MISMO pipeline bandit/semgrep del update): un hallazgo por
+  encima de la política de confianza aborta con 422 + audit row
+  (`static_analysis_blocked`) sin persistir nada; el informe viaja en el
+  audit del install (`detail.gates.static_analysis`). Un listing **sin
+  artefacto en disco** (`MARKETPLACE_ARTIFACT_ROOT`) instala registrando un
+  skip honesto (`skipped_reason=no_artifact`) — el hueco pre-registry que
+  ADR 0081 documenta. Firma y sandbox en el install fresco siguen diferidos
+  a la Fase B/C (ADR 0081).
 - **`GET .../permissions`** lista los permisos solicitados + su estado
   (GRANTED / DENIED / PENDING) para la UI de consentimiento.
 - **`POST .../consent`** registra la decisión grant/deny por permiso. Cuando
