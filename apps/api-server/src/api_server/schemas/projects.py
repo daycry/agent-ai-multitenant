@@ -11,7 +11,9 @@ the API does not accept it from the request.
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
@@ -41,6 +43,104 @@ _MAX_JSON_CONFIG_BYTES = 65536
 # — not a free-form dumping ground.
 _MAX_ALLOWED_COMMANDS = 100
 _MAX_COMMAND_LENGTH = 128
+
+
+# --- allowed_domains (prod-12 task_prod12_ssrf_03) ---------------------------
+# Deny-by-default FQDN allowlist for the agent HTTP tools. Server-side
+# validation is the FIRST layer; the runtime's ssrf_guard re-validates every
+# resolution (defence in depth). Entries are normalised (lowercase, no scheme /
+# port / path) before persisting so the runtime's textual match is exact.
+_MAX_ALLOWED_DOMAINS = 100
+_MAX_DOMAIN_LENGTH = 253
+_DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+# Hostnames internos del compose (y equivalentes docker) que jamás pueden ser
+# destino de una tool de agente — el mensaje explícito ayuda al operador.
+_COMPOSE_INTERNAL_HOSTS = frozenset(
+    {
+        "api-server",
+        "orchestrator",
+        "workers",
+        "postgres",
+        "redis",
+        "vault",
+        "minio",
+        "clamav",
+        "docling-serve",
+        "ollama",
+        "egress-proxy",
+        "registry-proxy",
+        "prometheus",
+        "grafana",
+        "loki",
+        "localhost",
+        "host.docker.internal",
+        "gateway.docker.internal",
+    }
+)
+
+
+def _strip_to_bare_domain(raw: str) -> str:
+    """Lowercase + drop scheme/path/port (IPv6 brackets first) + trailing dot."""
+    domain = raw.strip().lower()
+    if "://" in domain:
+        domain = domain.split("://", 1)[1]
+    domain = domain.split("/", 1)[0]
+    if domain.startswith("["):
+        domain = domain.strip("[]").split("]", 1)[0]
+    elif domain.count(":") == 1:
+        domain = domain.split(":", 1)[0]
+    return domain.rstrip(".")
+
+
+def _validate_domain_entry(raw: str, domain: str) -> None:
+    """Reject an entry that can never be a legitimate agent destination."""
+    if len(domain) > _MAX_DOMAIN_LENGTH:
+        raise ValueError(f"allowed_domains entry too long ({len(domain)} chars)")
+    try:
+        ipaddress.ip_address(domain)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(
+            f"allowed_domains: literal IP addresses are not allowed ({raw!r}); "
+            "use a fully-qualified domain name"
+        )
+    if domain in _COMPOSE_INTERNAL_HOSTS or domain.endswith(".localhost"):
+        raise ValueError(
+            f"allowed_domains: {raw!r} is an internal platform host and can never "
+            "be an agent tool destination"
+        )
+    labels = domain.split(".")
+    if len(labels) < 2:
+        raise ValueError(
+            f"allowed_domains: {raw!r} is not a fully-qualified domain name "
+            "(expected e.g. 'api.example.com')"
+        )
+    if not all(_DOMAIN_LABEL_RE.match(label) for label in labels):
+        raise ValueError(f"allowed_domains: {raw!r} is not a valid domain name")
+
+
+def _normalise_allowed_domains(value: list[str]) -> list[str]:
+    """Normalise + validate the project's HTTP-tools domain allowlist.
+
+    Per entry: lowercase, strip scheme/port/path; reject literal IPs,
+    ``localhost``/compose-internal hostnames and non-FQDN names (no dot) with a
+    clear operator-facing message. De-dup order-preserving; caps enforced.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in value:
+        domain = _strip_to_bare_domain(raw)
+        if not domain:
+            continue
+        _validate_domain_entry(raw, domain)
+        if domain in seen:
+            continue
+        seen.add(domain)
+        out.append(domain)
+    if len(out) > _MAX_ALLOWED_DOMAINS:
+        raise ValueError(f"too many allowed_domains ({len(out)}); max {_MAX_ALLOWED_DOMAINS}")
+    return out
 
 
 def _normalise_allowed_commands(value: list[str]) -> list[str]:
@@ -165,6 +265,11 @@ class ProjectCreateRequest(BaseModel):
     allowed_commands: list[str] = Field(default_factory=list)
     default_runtime_template: str | None = Field(default=None, min_length=1, max_length=64)
 
+    # prod-12 Fase B: FQDN allowlist de las tools HTTP del agente
+    # (deny-by-default — lista vacía = sin red). Validada server-side
+    # (task_prod12_ssrf_03) además del ssrf_guard por-resolución del runtime.
+    allowed_domains: list[str] = Field(default_factory=list)
+
     # Plan 16 task_16_11: how a human task's deliverable is reviewed once
     # submitted. Default auto_approve (submit -> done, no extra review step).
     human_task_review_mode: HumanTaskReviewMode = HumanTaskReviewMode.AUTO_APPROVE
@@ -184,6 +289,11 @@ class ProjectCreateRequest(BaseModel):
     @classmethod
     def _validate_allowed_commands(cls, value: list[str]) -> list[str]:
         return _normalise_allowed_commands(value)
+
+    @field_validator("allowed_domains", mode="after")
+    @classmethod
+    def _validate_allowed_domains(cls, value: list[str]) -> list[str]:
+        return _normalise_allowed_domains(value)
 
     @field_validator("default_runtime_template", mode="after")
     @classmethod
@@ -230,6 +340,8 @@ class ProjectUpdateRequest(BaseModel):
     # `[]` clears the allowlist back to deny-all; `default_runtime_template:
     # null` clears the runtime back to per-tool defaults.
     allowed_commands: list[str] | None = None
+    # prod-12 Fase B: mismo contrato PATCH — `[]` explícito = deny-all.
+    allowed_domains: list[str] | None = None
     default_runtime_template: str | None = Field(default=None, min_length=1, max_length=64)
 
     # Plan 16 task_16_11. None = unchanged (PATCH-style partial update).
@@ -280,6 +392,13 @@ class ProjectUpdateRequest(BaseModel):
         if value is None:
             return None
         return _normalise_allowed_commands(value)
+
+    @field_validator("allowed_domains", mode="after")
+    @classmethod
+    def _validate_allowed_domains(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return _normalise_allowed_domains(value)
 
     @field_validator("default_runtime_template", mode="after")
     @classmethod
@@ -346,6 +465,8 @@ class ProjectResponse(BaseModel):
     # Plan 06.16 task_06_16_01.
     allowed_commands: list[str]
     default_runtime_template: str | None
+    # prod-12 Fase B: FQDN allowlist de las tools HTTP del agente.
+    allowed_domains: list[str]
 
     # Plan 16 task_16_11.
     human_task_review_mode: str
@@ -385,6 +506,7 @@ def to_project_response(p: Project) -> ProjectResponse:
         "secrets_vault_id": p.secrets_vault_id,
         "allowed_commands": p.allowed_commands,
         "default_runtime_template": p.default_runtime_template,
+        "allowed_domains": p.allowed_domains,
         "human_task_review_mode": p.human_task_review_mode,
         "budget_amount": p.budget_amount,
         "budget_currency": p.budget_currency,

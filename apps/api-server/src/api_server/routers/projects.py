@@ -206,6 +206,7 @@ async def create_project(
         secrets_vault_id=payload.secrets_vault_id,
         allowed_commands=payload.allowed_commands,
         default_runtime_template=payload.default_runtime_template,
+        allowed_domains=payload.allowed_domains,
         human_task_review_mode=payload.human_task_review_mode.value,
         budget_amount=payload.budget_amount,
         budget_currency=payload.budget_currency,

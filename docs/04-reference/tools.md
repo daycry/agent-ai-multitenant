@@ -161,3 +161,42 @@ conocimiento / memoria) + los `run_*` (`docker_command`, vía
   `docs/05-architecture-decisions/`).
 - Plan: [`docs/roadmap/06.18-tools-overhaul.md`](../roadmap/06.18-tools-overhaul.md).
 - Changelog: [`docs/07-changelog/06.18-tools-overhaul.md`](../07-changelog/06.18-tools-overhaul.md).
+
+## Red de las tools HTTP: `allowed_domains` + defensa SSRF (prod-12)
+
+Desde prod-12 Fase A/B (2026-07-08), la superficie de red de los agentes
+(`http_request` y las tools `http_endpoint`) se gobierna así:
+
+- **`projects.allowed_domains`** (TEXT[], deny-by-default): la allowlist de
+  FQDNs que las tools HTTP del proyecto pueden alcanzar. **Lista vacía =
+  deny-all** (ninguna petición sale — el comportamiento histórico, antes
+  accidental, ahora explícito). El orquestador la enhebra en cada run
+  (`ExecutionRequest.allowed_domains` → `spec.allowed_domains`).
+- **Validación al guardar** (`task_prod12_ssrf_03`): el api-server normaliza
+  cada entrada (minúsculas, sin esquema/puerto/ruta) y **rechaza** IPs
+  literales, `localhost`/`*.localhost`, hostnames internos del compose
+  (`vault`, `redis`, `postgres`, `minio`, `api-server`…, y
+  `host.docker.internal`) y nombres no-FQDN, con mensaje claro (422).
+- **Guard SSRF por-resolución** (`agent_runtime/ssrf_guard.py`, Fase A): en
+  CADA petición el runtime resuelve el hostname UNA vez (A+AAAA), valida
+  TODAS las IPs (rechaza loopback, RFC1918, link-local, ULA/fd00::/8,
+  multicast, reservadas y el endpoint de metadata `169.254.169.254`) y
+  **conecta a la IP pineada** preservando `Host` y SNI — sin ventana
+  DNS-rebinding (gap4-1). Las IPs literales en la URL se rechazan siempre.
+- **Redirects**: `follow_redirects=False` explícito (gap4-3) — un 30x de un
+  dominio permitido hacia un host interno NUNCA se sigue; la tool devuelve la
+  respuesta 30x tal cual.
+- **Centinela de CI**: `tests/unit/test_execution_request_allowed_domains.py`
+  falla si la emisión de `allowed_domains` existe sin el guard aplicado en
+  ambas tools (riesgo 1 del plan prod-12). Cadena e2e:
+  `tests/e2e/test_agent_http_allowlist_chain.py`.
+- **Diagnóstico para el operador**: `domain not allowed: <host>` (no está en
+  la allowlist; la respuesta incluye la lista vigente) vs `destination
+rejected: …` (el ssrf_guard vetó la resolución — IP literal, rango interno
+  o rebinding). El egress-proxy de prod-01 es una segunda capa cuando llegue;
+  esta defensa se sostiene sola.
+
+> Caso on-prem (rangos privados legítimos, p. ej. un GitLab en 10.x): hoy NO
+> hay opt-in — la denylist de rangos internos aplica siempre. El opt-in por
+> proyecto sandbox queda documentado como decisión pendiente en el plan
+> prod-12 (task_prod12_ssrf_03).

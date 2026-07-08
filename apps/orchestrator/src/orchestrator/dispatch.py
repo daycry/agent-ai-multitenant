@@ -695,6 +695,11 @@ class TaskDispatcher:
             request["skill_prompt_fragments"] = skill_prompt_fragments
         project_commands = getattr(project, "allowed_commands", None) if project else None
         request["allowed_commands"] = [str(c) for c in (project_commands or [])]
+        # prod-12 Fase B (gap4-2): la allowlist de dominios de las tools HTTP,
+        # SIEMPRE emitida (columna TEXT[] default []); lista vacia = deny-all
+        # explicito. El runtime re-valida cada resolucion con el ssrf_guard.
+        project_domains = getattr(project, "allowed_domains", None) if project else None
+        request["allowed_domains"] = [str(d) for d in (project_domains or [])]
         project_runtime = getattr(project, "default_runtime_template", None) if project else None
         if project_runtime:
             request["default_runtime_template"] = str(project_runtime)

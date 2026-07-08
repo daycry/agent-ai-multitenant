@@ -60,6 +60,15 @@ class ExecutionRequest:
     # bare run); a list — including ``[]`` — registers shell_exec, with the
     # empty list meaning deny-all (every command rejected).
     allowed_commands: list[str] | None = None
+    # The project's HTTP-tools domain allowlist (`projects.allowed_domains`,
+    # prod-12 Fase B / gap4-2). The orchestrator threads it from the task's
+    # project; the worker forwards it into the spec so the runtime binds
+    # `http_request` + the http_endpoint tools to exactly these FQDNs. ``None``
+    # = no key (legacy payloads); a list — including ``[]`` — is forwarded, the
+    # empty list meaning deny-all (the historical accidental default, now
+    # explicit). GATED: only wired once the runtime's ssrf_guard (Fase A) is in
+    # both tools — see tests/unit/test_ssrf_wiring_sentinel.py.
+    allowed_domains: list[str] | None = None
     # The project's stack runtime (`projects.default_runtime_template`, Plan
     # 06.16 task_06_16_03). The orchestrator threads it from the task's project;
     # the worker forwards it so the runtime's `run_*` docker_command tools
@@ -129,6 +138,7 @@ class ExecutionRequest:
             "budgets": self.budgets,
             "allowed_tools": self.allowed_tools,
             "allowed_commands": self.allowed_commands,
+            "allowed_domains": self.allowed_domains,
             "default_runtime_template": self.default_runtime_template,
             "tool_specs": self.tool_specs,
             "mcp_servers": self.mcp_servers,
@@ -151,6 +161,7 @@ class ExecutionRequest:
             budgets=raw.get("budgets"),
             allowed_tools=raw.get("allowed_tools"),
             allowed_commands=raw.get("allowed_commands"),
+            allowed_domains=raw.get("allowed_domains"),
             default_runtime_template=raw.get("default_runtime_template"),
             tool_specs=raw.get("tool_specs"),
             mcp_servers=raw.get("mcp_servers"),

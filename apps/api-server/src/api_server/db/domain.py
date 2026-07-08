@@ -835,6 +835,16 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     )
     default_runtime_template: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # prod-12 Fase B (gap4-2): per-project deny-by-default allowlist of FQDNs
+    # the HTTP tools (`http_request` + http_endpoint) may reach; `[]` = las
+    # tools de red no alcanzan nada. Entries are validated server-side
+    # (task_prod12_ssrf_03: FQDN en minusculas, sin esquema/puerto, nunca IPs
+    # literales/localhost/hosts internos del compose) y el runtime aplica
+    # ADEMAS el ssrf_guard por-resolucion (Fase A) — defensa en profundidad.
+    allowed_domains: Mapped[list[str]] = mapped_column(
+        ARRAY(String), nullable=False, server_default=text("'{}'::text[]")
+    )
+
     # Soft-FK to the Vault entry that holds the project's secrets. Vault
     # is an external system so no DB-level FK.
     secrets_vault_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)

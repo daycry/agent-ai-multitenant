@@ -124,6 +124,13 @@ def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del sp
         allowed_commands = sorted(_SDK_BASE_SHELL_COMMANDS.union(allowed_commands or []))
     if allowed_commands is not None:
         spec["allowed_commands"] = allowed_commands
+    # Forward the project's HTTP-tools domain allowlist (prod-12 Fase B /
+    # gap4-2). Only emit the key when set — `None` = legacy payload (the
+    # runtime keeps its deny-all default). An empty list IS emitted (explicit
+    # deny-all). The runtime re-validates every resolution with the ssrf_guard
+    # (Fase A) — see tests/unit/test_ssrf_wiring_sentinel.py.
+    if request.allowed_domains is not None:
+        spec["allowed_domains"] = [str(d) for d in request.allowed_domains]
     # Forward the project's stack runtime (task_06_16_03). Only emit the key
     # when the project pinned a stack; `None` means "no key", which the runtime
     # reads as "keep each `run_*` tool's own default runtime" (python-pytest) —
