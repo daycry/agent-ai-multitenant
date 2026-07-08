@@ -28,16 +28,16 @@ con deps privadas no instala.
 gating de credenciales de Vault. Decisión del operador (2026-06-30) lo dejó fuera de la 1ª entrega.
 **Esfuerzo:** M–L. **Prioridad:** media (alta si un tenant real necesita registry privado).
 
-## F2 — `marketplace/sandbox.py`: misma semántica de egress proxificado (ADR 0094 / task_prod12_net_01)
+## F2 — `marketplace/sandbox.py`: misma semántica de egress proxificado — ✅ CERRADA 2026-07-08
 
 **Qué:** `apps/api-server/src/api_server/marketplace/sandbox.py` (`build_sandbox_run_kwargs`,
-`is_egress_allowed`) carga la MISMA semántica `network_policy='open'` = bridge no-interno con NAT
-crudo que se eliminó en `test_runtime.py` (ADR 0094 D1). Es la **otra mitad** de
-`task_prod12_net_01`: el sandbox del marketplace debe reusar el mismo helper de attach del
-`registry-proxy` (o un proxy equivalente) en vez de NAT crudo.
-**Por qué importa:** coherencia del Principio 2 — mientras esté sin tocar, el `open` del marketplace
-sigue siendo una vía de egress sin allowlist.
-**Dónde:** `task_prod12_net_01` (prod-12, Fase C). **Esfuerzo:** M. **Prioridad:** media.
+`is_egress_allowed`) cargaba la MISMA semántica `network_policy='open'` = bridge no-interno con NAT
+crudo que se eliminó en `test_runtime.py` (ADR 0094 D1). Era la **otra mitad** de
+`task_prod12_net_01`.
+**Resolución:** bridge SIEMPRE `internal=True`; 'open' = attach del `registry-proxy` +
+`HTTP(S)_PROXY` (offline si el proxy no está, nunca NAT crudo); uso de 'open' registrado
+(log + `SandboxResult`); copy de consentimiento actualizado. Ver el estado de
+`task_prod12_net_01` en `prod-12-hardening-tools-agentes.md`.
 
 ## F3 — `/tmp` del runtime (tmpfs 64m) puede quedarse corto
 

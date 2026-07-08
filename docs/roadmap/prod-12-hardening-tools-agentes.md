@@ -47,6 +47,14 @@ priority: P1
 > img_01, reaper_01, mkt_01 (tras materialización), av_01 (+ADR corto), cadv_01, docs_01
 > (añadir además: UI del panel para `allowed_domains` y el follow-up de retirar run*\* de
 > seeds — docker_01 opción a).
+>
+> **Estado (2026-07-08, 2ª pasada — DESBLOQUEO de mkt_01)**: la lectura «bloqueada» era más
+> estricta de lo necesario — el gate de análisis NO exige registry: cuando el artefacto del
+> listing existe en disco (`MARKETPLACE_ARTIFACT_ROOT`, catálogo oficial) se analiza; cuando
+> no existe, se registra un skip honesto (`no_artifact`) sin cerrar en falso el catálogo
+> pre-registry (ADR 0081 sigue documentando el gap de firma+sandbox). **mkt_01 HECHA**
+> (`03f7251`) y **net_01 CERRADA** (mitad marketplace: bridge interno siempre, registry-proxy
+> y texto de consentimiento — ver nota en la tarea). Solo queda **docs_01** de este plan.
 
 ## Resumen
 
@@ -248,7 +256,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_net_01` — `network_policy='open'` sin internet crudo
 
-- [ ] **Título**: Redactar ADR (decisión 2) y, tras aprobación, implementar: en
+- [x] **Título**: Redactar ADR (decisión 2) y, tras aprobación, implementar: en
       `TestRuntimeRunner._create_bridge` (apps/workers/src/workers/test_runtime.py:581-588,
       hoy `internal = policy != "open"`) y en el sandbox del marketplace
       (apps/api-server/src/api_server/marketplace/sandbox.py:211), la política 'open'
@@ -260,10 +268,16 @@ de ingestión es fail-open si ClamAV está caído (api-1).
   **`TestRuntimeRunner`** está IMPLEMENTADA + DESPLEGADA + verificada e2e: `_create_bridge` es
   siempre `internal=True` (fin del NAT crudo de 'open'); el egress va por el nuevo `registry-proxy`
   (allowlist de registries públicos) que el worker conecta al bridge per-task; audit-log
-  `stack_exec_egress`. **Pendiente de esta tarea**: la mitad de
-  `marketplace/sandbox.py` (mismo helper de attach, sin NAT crudo) + la allowlist por-proyecto +
-  el texto de consentimiento → ver `docs/roadmap/registry-egress-followups.md` (F1, F2). NO marcar
-  `[x]` hasta cerrar también el marketplace.
+  `stack_exec_egress`.
+- **HECHA (2026-07-08) — mitad marketplace**: `marketplace/sandbox.py` con la MISMA semántica —
+  `_create_bridge` siempre `internal=True`; 'open' = attach del `registry-proxy` al bridge +
+  `HTTP(S)_PROXY` inyectado (sin proxy configurado, 'open' queda OFFLINE, nunca NAT crudo);
+  cada uso de 'open' al log estructurado + `SandboxResult.network_policy/proxied_egress` (→
+  audit row del install); texto de la consola de consentimiento actualizado con la semántica
+  real. Tests: `test_install_sandbox.py` re-pineado (bridge interno para TODAS las políticas,
+  attach+env+detach, offline sin proxy). La **allowlist por-proyecto** (registries/git privados
+  con credenciales) es F1 de `registry-egress-followups.md` — diferida por decisión del operador
+  2026-06-30 (solapa con ADR 0067 B0.2, gated).
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Tests automáticos**:
   ```yaml

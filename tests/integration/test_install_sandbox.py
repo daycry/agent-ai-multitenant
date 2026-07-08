@@ -161,12 +161,13 @@ def test_no_workspace_mount_when_unset() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Network policy honored
+# Network policy honored (ADR 0094 / task_prod12_net_01: NUNCA NAT crudo)
 # ---------------------------------------------------------------------------
-def test_default_network_policy_is_internal_bridge() -> None:
-    """The default (NONE) and RESTRICTED both ride an INTERNAL bridge
-    (no host egress); only OPEN gets a non-internal one."""
-    for policy in (NetworkPolicy.NONE, NetworkPolicy.RESTRICTED):
+def test_every_network_policy_rides_an_internal_bridge() -> None:
+    """TODAS las políticas (incluida OPEN) van en bridge INTERNAL — el NAT
+    crudo de 'open' se eliminó (ADR 0094 D1, mitad marketplace de
+    task_prod12_net_01). El egress de 'open' es SOLO vía registry-proxy."""
+    for policy in (NetworkPolicy.NONE, NetworkPolicy.RESTRICTED, NetworkPolicy.OPEN):
         client, _ = _fake_client()
         MarketplaceSandbox(client=client).run(_spec(network_policy=policy))
         kwargs = client.networks.create.call_args.kwargs
@@ -174,11 +175,57 @@ def test_default_network_policy_is_internal_bridge() -> None:
         assert kwargs["driver"] == "bridge"
 
 
-def test_open_network_policy_creates_non_internal_bridge() -> None:
-    client, _ = _fake_client()
-    MarketplaceSandbox(client=client).run(_spec(network_policy=NetworkPolicy.OPEN))
-    kwargs = client.networks.create.call_args.kwargs
-    assert kwargs["internal"] is False
+def test_open_policy_attaches_registry_proxy_and_injects_proxy_env() -> None:
+    """OPEN = egress PROXIFICADO: el registry-proxy se conecta al bridge
+    interno, el contenedor recibe HTTP(S)_PROXY apuntándole, y al terminar
+    el proxy se DESCONECTA (nunca se borra — es un servicio compartido)."""
+    client, started = _fake_client()
+    proxy = MagicMock()
+    client.containers.get.return_value = proxy
+    network = client.networks.create.return_value
+
+    result = (
+        MarketplaceSandbox(
+            client=client,
+            registry_proxy_url="http://registry-proxy:8888",
+            registry_proxy_container="agentic-registry-proxy",
+            registry_proxy_alias="registry-proxy",
+        )
+    ).run(_spec(network_policy=NetworkPolicy.OPEN))
+
+    client.containers.get.assert_called_once_with("agentic-registry-proxy")
+    network.connect.assert_called_once_with(proxy, aliases=["registry-proxy"])
+    env = started[0].kwargs["environment"]
+    assert env["HTTP_PROXY"] == "http://registry-proxy:8888"
+    assert env["HTTPS_PROXY"] == "http://registry-proxy:8888"
+    # Teardown: disconnect (force) — nunca remove del proxy compartido.
+    network.disconnect.assert_called_once()
+    assert result.proxied_egress is True
+    assert result.network_policy == "open"
+
+
+def test_open_policy_without_proxy_configured_stays_offline() -> None:
+    """Sin registry-proxy configurado/alcanzable, OPEN se queda OFFLINE
+    (bridge interno sin attach, sin env de proxy) — nunca NAT crudo."""
+    client, started = _fake_client()
+    sandbox = MarketplaceSandbox(client=client, registry_proxy_url="", registry_proxy_container="")
+    result = sandbox.run(_spec(network_policy=NetworkPolicy.OPEN))
+
+    assert client.networks.create.call_args.kwargs["internal"] is True
+    env = started[0].kwargs["environment"]
+    assert "HTTP_PROXY" not in env
+    assert result.proxied_egress is False
+
+
+def test_none_policy_never_touches_the_proxy() -> None:
+    client, started = _fake_client()
+    MarketplaceSandbox(
+        client=client,
+        registry_proxy_url="http://registry-proxy:8888",
+        registry_proxy_container="agentic-registry-proxy",
+    ).run(_spec(network_policy=NetworkPolicy.NONE))
+    client.containers.get.assert_not_called()
+    assert "HTTP_PROXY" not in started[0].kwargs["environment"]
 
 
 def test_network_policy_stamped_as_label() -> None:

@@ -64,6 +64,17 @@ const PERMISSION_LABEL: Record<string, string> = {
   network_policy: "Política de red",
 };
 
+// Ayuda inline por tipo de permiso — el riesgo real que se está aprobando.
+// `network_policy` refleja la semántica endurecida (ADR 0094 /
+// task_prod12_net_01): 'open' ya NO es internet crudo.
+const PERMISSION_HELP: Record<string, string> = {
+  allowed_domains:
+    "La tool solo podrá hacer peticiones HTTP a estos dominios, siempre a través del proxy de salida de la plataforma.",
+  allowed_paths: "Rutas del workspace a las que la tool tendrá acceso.",
+  network_policy:
+    "none = sin red. restricted = red interna sin salida. open = salida a internet SOLO a través del proxy con allowlist de la plataforma (registries públicos de paquetes y git) — nunca internet crudo; cada uso queda registrado en el audit log.",
+};
+
 const STATE_BADGE: Record<ConsentState, { variant: BadgeVariant; label: string }> = {
   granted: { variant: "success", label: "Concedido" },
   denied: { variant: "danger", label: "Denegado" },
@@ -215,6 +226,14 @@ export default function InstallationPermissionsPage() {
                           >
                             {renderValue(perm.descriptor)}
                           </p>
+                          {PERMISSION_HELP[perm.type] ? (
+                            <p
+                              className="text-muted-foreground mt-1 text-xs"
+                              data-testid={`consent-help-${perm.type}`}
+                            >
+                              {PERMISSION_HELP[perm.type]}
+                            </p>
+                          ) : null}
                         </div>
                         <RoleGuard min="tenant_admin">
                           <div className="flex shrink-0 items-center gap-1">
