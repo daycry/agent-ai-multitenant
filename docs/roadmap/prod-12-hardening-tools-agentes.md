@@ -130,9 +130,21 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 ### Fase A — Defensa SSRF en las tools HTTP del agent-runtime (gap4-1, gap4-3)
 
+> **HECHAS (2026-07-08, `9cd2eb5`) — Fases A y B completas.** Variantes de ubicación respecto al
+> plan: los tests del runtime viven en `docker/agent-runtimes/agent-runtime/tests/` (convención
+> del árbol) — `test_ssrf_guard.py` (20) y `test_http_tools_destination_validation.py` (7); la
+> validación del api-server en `tests/integration/test_allowed_domains_validation.py` (12, con
+> la migración 0105 que CREA la columna `projects.allowed_domains` — no existía); el cableado en
+> `tests/unit/test_execution_request_allowed_domains.py` (6, incluye el test-centinela del
+> riesgo 1) y el e2e de la cadena en `tests/e2e/test_agent_http_allowlist_chain.py` (5, sin
+> Docker: seams de resolver/transporte sobre el código de producción). El opt-in sandbox para
+> rangos privados on-prem (decisión de task_prod12_ssrf_03) queda deliberadamente SIN
+> implementar — documentado en `docs/04-reference/tools.md`. Falta la UI del panel para editar
+> `allowed_domains` (hoy vía API), anotado en task_prod12_docs_01.
+
 #### `task_prod12_ssrf_01` — Guard de destino con resolución y validación de IP
 
-- [ ] **Título**: Crear `agent_runtime/ssrf_guard.py` (módulo compartido) que: resuelva
+- [x] **Título**: Crear `agent_runtime/ssrf_guard.py` (módulo compartido) que: resuelva
       el hostname UNA vez (`getaddrinfo`, A y AAAA), valide TODAS las IPs resueltas con
       `ipaddress` (`is_private`, `is_loopback`, `is_link_local`, `is_reserved`,
       `is_multicast`, más 169.254.169.254 y fd00::/8/::1 explícitos) y rechace si
@@ -153,7 +165,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_ssrf_02` — Anclaje de DNS y `follow_redirects=False` explícito
 
-- [ ] **Título**: Cerrar la ventana TOCTOU: conectar a la IP validada (transporte httpx
+- [x] **Título**: Cerrar la ventana TOCTOU: conectar a la IP validada (transporte httpx
       con resolución fijada/cacheada preservando Host y SNI, decisión 1) en vez de dejar
       que `client.stream()` re-resuelva (http_tool.py:54-56, http_endpoint_tool.py:149-156).
       Pasar `follow_redirects=False` de forma EXPLÍCITA al construir `httpx.Client()` en
@@ -170,7 +182,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_ssrf_03` — Validar las entradas de allowlist en el api-server
 
-- [ ] **Título**: En el endpoint del api-server que persiste `allowed_domains` del
+- [x] **Título**: En el endpoint del api-server que persiste `allowed_domains` del
       proyecto, validar cada entrada: rechazar IP literales, `localhost`, nombres
       no-FQDN y los hostnames internos del compose (vault, api-server, redis, postgres,
       minio…), salvo opt-in explícito de proyecto sandbox (plantilla de validación
@@ -188,7 +200,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_allow_01` — Propagar `allowed_domains` del proyecto al spec del agente
 
-- [ ] **Título**: Añadir el campo `allowed_domains` a `ExecutionRequest`
+- [x] **Título**: Añadir el campo `allowed_domains` a `ExecutionRequest`
       (apps/workers/src/workers/execution.py:91-146, incluyendo `as_dict`/`from_dict`),
       poblarlo en el dispatcher/orchestrator desde el campo del proyecto, y emitirlo en
       `_agent_spec` (execution.py:226) para que `__main__.py:120` del runtime deje de
@@ -206,7 +218,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_allow_02` — Test e2e de la cadena de allowlist + documentación
 
-- [ ] **Título**: Test e2e: proyecto con `allowed_domains=["example.com"]` → el agente
+- [x] **Título**: Test e2e: proyecto con `allowed_domains=["example.com"]` → el agente
       alcanza example.com con `http_get`, recibe rechazo claro para cualquier otro host,
       para IP literales y para hosts que resuelven a rango privado. Documentar en
       `docs/04-reference/` la semántica (lista vacía = deny-all, defensa de IP siempre
@@ -276,6 +288,15 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 ### Fase D — Reaper de huérfanos y tool `docker_command` (sandbox-5, sandbox-7)
 
+> **HECHA (2026-07-08) — task_prod12_docker_01, opción (b) del propio item**: el executor
+> `DockerCommandTool` falla rápido con error accionable («not supported inside the agent
+> sandbox… use stack*exec, ADR 0093») sin tocar `docker.from_env()`; el seam de tests conserva
+> el camino real. Test `tests/test_docker_command_tool_retired.py` + el boot-test actualizado
+> (antes solo pasaba inyectando un módulo `docker` fake — el camino muerto exacto del hallazgo).
+> Se eligió (b) sobre la (a) recomendada deliberadamente: con `stack_exec` como vía real ya
+> desplegada, extirpar la familia del catálogo/seeds (run*\* en builtin_tools + equipos) es
+> cirugía de producto con estado en BD — queda anotada como follow-up en task_prod12_docs_01.
+
 #### `task_prod12_reaper_01` — Reaper beat de contenedores y redes huérfanos
 
 - [ ] **Título**: Nueva tarea beat en apps/workers/src/workers/maintenance.py (registrada
@@ -298,7 +319,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_docker_01` — Retirar (o degradar con error claro) la tool `docker_command`
 
-- [ ] **Título**: Aplicar la decisión 3: la tool `docker_command`
+- [x] **Título**: Aplicar la decisión 3: la tool `docker_command`
       (docker/agent-runtimes/agent-runtime/agent*runtime/docker_command_tool.py:139)
       hace `docker.from_env()` dentro del sandbox, pero la imagen no instala el paquete
       `docker` (pyproject.toml:6) ni recibe socket por diseño (Dockerfile:8 "carries NO

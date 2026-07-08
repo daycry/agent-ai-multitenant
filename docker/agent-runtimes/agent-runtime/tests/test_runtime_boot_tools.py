@@ -15,8 +15,6 @@ loop deterministically; the docker_command tool's client is monkeypatched.
 from __future__ import annotations
 
 import json
-import sys
-import types
 from typing import Any, ClassVar
 
 import pytest
@@ -96,19 +94,15 @@ def test_assigned_network_tool_is_wired_not_unknown(
 
 
 # ---------------------------------------------------------------------------
-# An assigned run_* docker_command tool resolves its image and runs.
+# An assigned run_* docker_command tool is WIRED (not "unknown tool") but its
+# in-sandbox execution is retired (task_prod12_docker_01, sandbox-7): the call
+# fails fast pointing at stack_exec (ADR 0093) instead of a cryptic
+# ImportError/daemon error. Before, this test only passed because it injected a
+# fake `docker` module — the exact production path the audit flagged as dead.
 # ---------------------------------------------------------------------------
-def test_assigned_run_pytest_is_wired_and_runs(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_assigned_run_pytest_is_wired_but_sandbox_execution_is_retired(
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from unittest.mock import MagicMock
-
-    fake_client = MagicMock()
-    fake_client.containers.run.return_value = b"1 passed\n"
-    fake_docker = types.ModuleType("docker")
-    fake_docker.from_env = lambda: fake_client  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "docker", fake_docker)
-
     spec = {
         "task": {"id": "t-3", "title": "test", "description": ""},
         "model": _scripted("run_pytest", {"path": "tests/"}),
@@ -127,8 +121,10 @@ def test_assigned_run_pytest_is_wired_and_runs(
         ],
     }
     step = _act_step(_run(spec, capsys))
-    assert step["result"]["ok"] is True
-    assert "unknown tool" not in (step["result"].get("error") or "")
+    error = step["result"].get("error") or ""
+    assert "unknown tool" not in error
+    assert step["result"]["ok"] is False
+    assert "stack_exec" in error
 
 
 # ---------------------------------------------------------------------------
