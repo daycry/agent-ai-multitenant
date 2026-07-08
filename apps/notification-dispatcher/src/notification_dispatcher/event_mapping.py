@@ -135,6 +135,14 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.DEFAULT,
         default_channel_types=("in_app", "telegram"),
     ),
+    # prod-12 av_01 (ADR 0105): el backend antivirus lleva >N min inalcanzable —
+    # la ingesta está en fail-closed acumulando `pending_scan`; el operador debe
+    # levantar ClamAV (el sweep reescanea solo al volver).
+    "antivirus_unreachable": EventSpec(
+        "antivirus_unreachable",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app", "telegram"),
+    ),
     "task_failed": EventSpec(
         "task_failed",
         lane=NotificationLane.DEFAULT,

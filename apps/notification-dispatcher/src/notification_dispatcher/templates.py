@@ -119,6 +119,26 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "was approved by {{ approver | default('an administrator') }}."
         ),
     ),
+    # --- antivirus_unreachable (prod-12 av_01 / ADR 0105) -------------------
+    ("antivirus_unreachable", "es"): TemplateSource(
+        subject="Antivirus inalcanzable ({{ minutes_down | default('?') }} min)",
+        body=(
+            "El backend antivirus (ClamAV) lleva {{ minutes_down | default('?') }} "
+            "minutos sin responder. La ingesta de documentos esta en fail-closed: "
+            "los documentos nuevos quedan en `pending_scan` (no se indexan) y se "
+            "reescanearan solos cuando el antivirus vuelva. Revisa el servicio clamav."
+        ),
+    ),
+    ("antivirus_unreachable", "en"): TemplateSource(
+        subject="Antivirus unreachable ({{ minutes_down | default('?') }} min)",
+        body=(
+            "The antivirus backend (ClamAV) has been unreachable for "
+            "{{ minutes_down | default('?') }} minutes. Document ingestion is "
+            "fail-closed: new documents stay in `pending_scan` (not indexed) and "
+            "will be rescanned automatically once the antivirus is back. Check the "
+            "clamav service."
+        ),
+    ),
     # --- plan_blocked (c3/T7) ---------------------------------------------
     ("plan_blocked", "es"): TemplateSource(
         subject="Plan bloqueado: {{ plan_name | default('(sin nombre)') }}",

@@ -6,6 +6,7 @@ Env-driven via pydantic-settings, prefix `WORKERS_`.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -42,6 +43,23 @@ class Settings(BaseSettings):
         description="Redis URL hosting the per-execution event streams "
         "(`exec:{id}`). DB 0 — the same instance the api-server WebSocket "
         "tails, kept off the broker (DB 1) and result backend (DB 2).",
+    )
+
+    # ----- Ingesta: modo de fallo del antivirus (prod-12 av_01 / ADR 0105) ---
+    # fail_closed (default): con ClamAV inalcanzable el documento queda en
+    # `pending_scan` (NO se indexa) y el sweep lo reintenta. fail_open: se
+    # indexa con warning — SOLO aceptable en dev/sandbox.
+    av_failure_mode: Literal["fail_closed", "fail_open"] = Field(
+        default="fail_closed",
+        description="Qué hacer si el backend antivirus no responde durante la "
+        "ingesta: fail_closed = pending_scan + reintento (default producción); "
+        "fail_open = indexar con warning (solo dev/sandbox).",
+    )
+    # Cola del notification-dispatcher (misma que usa el orchestrator) para el
+    # aviso de antivirus inalcanzable > N minutos.
+    notifications_event_queue: str = Field(
+        default="notifications",
+        description="Celery queue the notification-dispatcher drains.",
     )
 
     # ----- Agent-runtime containers (Plan 02 Fase B) -----

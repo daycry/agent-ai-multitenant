@@ -377,7 +377,7 @@ documentando que la ejecución real de tests va por`TestRuntimeRunner` del worke
 
 #### `task_prod12_av_01` — Antivirus fail-closed configurable con `pending_scan`
 
-- [ ] **Título**: Aplicar la decisión 4 (tras ADR corto aprobado): en el pipeline de
+- [x] **Título**: Aplicar la decisión 4 (tras ADR corto aprobado): en el pipeline de
       ingestión (apps/api-server/src/api_server/ingestion/pipeline.py:101-107), ante
       `AntivirusVerdict.ERROR` (clamd inalcanzable/timeout, antivirus.py:101) NO indexar:
       dejar el documento en estado `pending_scan` y reintentar vía el sweep de Celery
@@ -392,6 +392,14 @@ documentando que la ejecución real de tests va por`TestRuntimeRunner` del worke
     runtime: python-pytest
     command: "pytest tests/integration/test_ingestion_av_fail_closed.py -v"
   ```
+
+> **HECHA (2026-07-08) — task_prod12_av_01, ADR 0105 (opción a de la decisión 4)**:
+> fail-closed por defecto (`WORKERS_AV_FAILURE_MODE`, `fail_open` solo dev/sandbox); ante
+> `AntivirusVerdict.ERROR` el documento queda en `pending_scan` (CHECK ampliada, migración
+> **0106**, reversible) y el sweep de pendientes existente lo re-encola solo; notificación
+> `antivirus_unreachable` (in_app+telegram, umbral 15 min, re-aviso 6 h) registrada en el
+> notification-dispatcher con plantillas es/en. Tests: `test_ingestion_av_fail_closed.py`
+> (fail-closed, fail-open legacy, sweep re-encola) + regresión ingesta y dispatcher verdes.
 
 ### Fase F — cAdvisor y cierre documental (sandbox-8)
 
