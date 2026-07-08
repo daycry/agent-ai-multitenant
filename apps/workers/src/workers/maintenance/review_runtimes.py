@@ -24,7 +24,8 @@ _log = structlog.get_logger("workers.maintenance")
 _SUSPEND_IDLE_AFTER = timedelta(hours=24)
 
 # Terminal review-session statuses — a session here no longer holds a runtime, so
-# the expiry sweep reaps its containers (`docker rm -f`) + soft-deletes it (C8 F41).
+# the expiry sweep reaps its containers (`docker rm -f`) and clears its
+# container_ids (C8 F41); la fila sobrevive con veredicto+motivo (ADR 0107).
 _TERMINAL_REVIEW_STATUSES = ("approved", "rejected", "expired", "cancelled")
 
 
@@ -40,8 +41,11 @@ def expire_review_runtimes() -> dict[str, Any]:
       2. ``status='running' AND last_activity_at < now - 24h`` → ``suspended``
          (containers paused by the worker that owns them; out of scope here).
       3. Every TERMINAL session (approved/rejected/expired/cancelled) with leftover
-         containers → ``docker rm -f`` them by id + soft-delete the row (closes the
-         container leak the verdict path left — submit_verdict only marks terminal).
+         containers → ``docker rm -f`` them by id + clear its ``container_ids``
+         (closes the container leak the verdict path left — submit_verdict only
+         marks terminal). The row itself SURVIVES: the verdict and the
+         ``rejection_reason`` feed the panel's fallback view and
+         generate-corrections (ADR 0107).
     """
     settings = get_settings()
     return asyncio.run(_expire_review_runtimes(settings))
@@ -158,10 +162,10 @@ async def _expire_review_runtimes(settings: Settings) -> dict[str, Any]:
     # Lazy import — avoids paying the api_server import cost on workers
     # that don't route the `review` queue.
     from api_server.db.review_session_repo import (
+        get_review_session,
         list_running_idle,
         list_running_overdue,
         mark_terminal,
-        soft_delete_session,
         suspend_session,
     )
 
@@ -187,9 +191,14 @@ async def _expire_review_runtimes(settings: Settings) -> dict[str, Any]:
             for row in idle:
                 await suspend_session(db, row.id)
                 suspended += 1
-        # 3. Reap terminal sessions' leftover containers, then soft-delete them.
-        #    Docker I/O runs OUTSIDE the txn; the soft-delete makes the sweep
-        #    idempotent (a reaped row is no longer re-listed).
+        # 3. Reap terminal sessions' leftover containers and clear their
+        #    container_ids. Docker I/O runs OUTSIDE the txn; clearing the ids
+        #    already makes the sweep idempotent (a reaped row is no longer
+        #    re-listed). La fila NO se soft-borra (ADR 0107): el veredicto y el
+        #    rejection_reason son historia que consumen el panel (fallback a la
+        #    sesión terminal más reciente) y generate-corrections — el
+        #    soft-delete original destruía el motivo minutos después del
+        #    rechazo (visto en vivo con el plan CI4).
         async with sessionmaker() as db:
             terminal = await _list_terminal_sessions_with_containers(db)
             to_reap = [(r.id, [str(c) for c in r.container_ids]) for r in terminal]
@@ -199,9 +208,9 @@ async def _expire_review_runtimes(settings: Settings) -> dict[str, Any]:
         if to_reap:
             async with sessionmaker() as db, db.begin():
                 for session_id, _container_ids in to_reap:
-                    deleted = await soft_delete_session(db, session_id)
-                    if deleted is not None:
-                        deleted.container_ids = []
+                    reaped_row = await get_review_session(db, session_id)
+                    if reaped_row is not None:
+                        reaped_row.container_ids = []
                         await db.flush()
     except Exception as exc:  # pragma: no cover — defensive logging
         _log.warning("maintenance.expire_review_runtimes.error", error=str(exc))

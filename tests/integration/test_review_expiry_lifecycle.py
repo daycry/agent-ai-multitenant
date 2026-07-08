@@ -4,11 +4,15 @@ Drives ``workers.maintenance._expire_review_runtimes`` against the real Postgres
 
   * an OVERDUE ``running`` session → ``expired`` AND its plan
     ``pending_human_validation`` → ``blocked`` (F40),
-  * a TERMINAL session with leftover ``container_ids`` → soft-deleted with its
-    ``container_ids`` cleared (F41; the ``docker rm -f`` is best-effort and no-ops
-    without a daemon, so only the DB effects are asserted here),
+  * a TERMINAL session with leftover ``container_ids`` → containers reaped and
+    ``container_ids`` cleared, but the ROW SURVIVES (F41 + ADR 0107: el
+    veredicto y el ``rejection_reason`` son historia que consumen el panel y
+    generate-corrections; el soft-delete original destruía esa historia — visto
+    en vivo con el plan CI4). The ``docker rm -f`` is best-effort and no-ops
+    without a daemon, so only the DB effects are asserted here,
   * the sweep is IDEMPOTENT: a second pass neither re-transitions the (now
-    ``blocked``) plan nor re-deletes the already-soft-deleted session.
+    ``blocked``) plan nor re-lists the already-reaped session (its
+    ``container_ids`` are empty).
 
 NOT RUN by the implementing agent (needs a live Postgres at TEST_PG_*). The
 container-reaping branch needs Docker and is covered by the unit test for
@@ -132,13 +136,15 @@ async def test_expiry_blocks_plan_and_soft_deletes_terminal(
         # F40: the overdue session expired + the plan is now blocked.
         assert overdue is not None and overdue.status == "expired"
         assert plan is not None and plan.status == "blocked"
-        # F41: the terminal session is soft-deleted + its container_ids cleared.
+        # F41 + ADR 0107: containers reaped (ids cleared) pero la fila SOBREVIVE
+        # — el veredicto/motivo siguen visibles para el panel y para
+        # generate-corrections.
         assert terminal is not None
-        assert terminal.deleted_at is not None
+        assert terminal.deleted_at is None
         assert terminal.container_ids == []
 
-        # Idempotent: a second pass is a clean no-op (plan already blocked, terminal
-        # session already soft-deleted ⇒ not re-listed).
+        # Idempotent: a second pass is a clean no-op (plan already blocked; the
+        # reaped session has no container_ids left ⇒ not re-listed).
         second = await _expire_review_runtimes(workers_settings)  # type: ignore[arg-type]
         assert second["expired"] == 0
         assert second["reaped"] == 0
