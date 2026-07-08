@@ -60,6 +60,7 @@ import {
   type GitConfig,
   type GitPolicies,
 } from "@/components/projects/git-config-section";
+import { ReviewPreviewSection } from "@/components/projects/review-preview-section";
 import { ApiError, apiFetch } from "@/lib/api";
 
 type ProjectStatus = "active" | "paused" | "archived";
@@ -79,6 +80,8 @@ interface Project {
   git_config: GitConfig | null;
   // worker_config.git_policies guarda las políticas del flujo git del plan (ADR 0072).
   worker_config?: Record<string, unknown> | null;
+  // repository_config.review_image/review_port: app-preview de validación humana (ADR 0063).
+  repository_config?: Record<string, unknown> | null;
 }
 
 interface ProjectUpdate {
@@ -326,6 +329,11 @@ export default function ProjectHubPage() {
                 (project.worker_config?.["git_policies"] as GitPolicies | undefined) ?? null
               }
             />
+          </div>
+
+          {/* hallazgo #4: imagen/puerto del app-preview de validación humana (ADR 0063). */}
+          <div className="mb-6">
+            <ReviewPreviewSection projectId={projectId} value={project.repository_config ?? null} />
           </div>
 
           {/* Sub-sections grid */}

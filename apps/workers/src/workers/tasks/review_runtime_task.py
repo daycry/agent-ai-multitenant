@@ -144,7 +144,13 @@ async def _compose_review_runtime(request: dict[str, Any], settings: Settings) -
         # row + signed URLs still work, only the live app-preview is inert.
         worktree_host_path = _resolve_review_worktree_host_path(request, settings)
         request = {**request, "worktree_host_path": worktree_host_path}
+        # hallazgo #4 (QA 2026-07-07): sin imagen pineada por el proyecto NO se
+        # lanza contenedor (el placeholder alpine:3.20 está retirado). La fila +
+        # URLs firmadas siguen vivas; el proxy/SPA leen `app_configured` y
+        # explican honestamente que el proyecto no tiene app-preview.
+        app_configured = bool(str(request.get("main_image") or "").strip())
         spec_payload = {k: v for k, v in request.items() if k not in {"tenant_id"}}
+        spec_payload["app_configured"] = app_configured
 
         # Persist the row first. Spawn failures are recoverable; a missing DB row
         # is not.
@@ -157,15 +163,18 @@ async def _compose_review_runtime(request: dict[str, Any], settings: Settings) -
                 expires_at=expires_at,
             )
             session_id = row.id
-            # Record where the api-server will reverse-proxy the app (ADR 0062):
-            # the container's deterministic name on agentic-agents. The proxy
-            # reads `spec.main_host`; default falls back to the same name.
-            spec_with_host = {**spec_payload, "main_host": f"agentic-review-{session_id}"}
-            row.spec = spec_with_host
-            await session.flush()
+            if app_configured:
+                # Record where the api-server will reverse-proxy the app (ADR
+                # 0062): the container's deterministic name on agentic-agents.
+                # The proxy reads `spec.main_host`; default falls back to the
+                # same name.
+                row.spec = {**spec_payload, "main_host": f"agentic-review-{session_id}"}
+                await session.flush()
 
-        # Try the real spawn.
-        container_ids = _spawn_review_runtime(request, str(session_id), settings)
+        # Try the real spawn (no-op without a configured image).
+        container_ids = (
+            _spawn_review_runtime(request, str(session_id), settings) if app_configured else ()
+        )
 
         # If we got container_ids, update the row.
         if container_ids:
@@ -188,7 +197,9 @@ async def _compose_review_runtime(request: dict[str, Any], settings: Settings) -
         "expires_at_unix": expires_at.timestamp(),
         "container_ids": list(container_ids) if container_ids else [],
     }
-    if not container_ids:
+    if not app_configured:
+        result["note"] = "no review app image configured — session persisted, app-preview disabled"
+    elif not container_ids:
         result["note"] = "docker unavailable — session row persisted, container spawn pending"
     return result
 
@@ -299,6 +310,13 @@ def _spawn_review_runtime(
     Docker socket tripwire. The worktree is bind-mounted at
     ``/workspace``.
     """
+    # hallazgo #4: sin imagen configurada no hay nada que lanzar — el caller ya
+    # persistió la sesión con `app_configured=false`. Guard defensivo aquí
+    # también, antes de tocar el daemon.
+    main_image = str(request.get("main_image") or "").strip()
+    if not main_image:
+        return ()
+
     try:
         from workers.isolation import (
             assert_no_docker_socket,
@@ -311,7 +329,6 @@ def _spawn_review_runtime(
     if client is None:
         return ()
 
-    main_image = str(request["main_image"])
     worktree_host_path = str(request["worktree_host_path"])
 
     kwargs = build_hardened_run_kwargs(settings, workspace_host_path=worktree_host_path)

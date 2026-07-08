@@ -124,6 +124,7 @@ _SPA_HTML = """<!doctype html>
     </p>
   </header>
   <main>
+    {app_note}
     <p class="placeholder">
       Esta es la shell del SPA de review. El asset bundle (Plan 06
       task_06_29) montara aqui los 4 paneles (terminal / logs WS /
@@ -167,7 +168,19 @@ async def serve_review_spa(
     async with sm() as db, db.begin():
         await touch_activity(db, session_id)
 
-    return HTMLResponse(content=_SPA_HTML.format(session_id=session_id))
+    # hallazgo #4: si el proyecto no tiene app-preview configurada, dilo aquí en
+    # claro (la checklist y el veredicto funcionan igual sin ella).
+    app_note = ""
+    if (row.spec or {}).get("app_configured") is False:
+        app_note = (
+            '<p style="border:1px solid #7a5c1e;background:#2a2410;color:#e8c96a;'
+            'padding:0.75rem 1rem;border-radius:6px;">'
+            "Este proyecto no tiene app-preview configurada: define "
+            "<code>repository_config.review_image</code> (una imagen construida y "
+            "publicada por la CI del propio proyecto) en los ajustes del proyecto. "
+            "La checklist y el veredicto de esta sesi&oacute;n funcionan sin ella.</p>"
+        )
+    return HTMLResponse(content=_SPA_HTML.format(session_id=session_id, app_note=app_note))
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +327,10 @@ def _session_json(row: ReviewSessionRow) -> dict[str, Any]:
         # Relative path the SPA hits for the live app (same signature carried in
         # the page URL the browser already has).
         "app_path": f"/review/{row.id}/app/",
+        # hallazgo #4: false = el proyecto no pineó imagen y NO hay contenedor;
+        # el SPA muestra el aviso en vez de un iframe roto. Ausente en sesiones
+        # legacy → true (comportamiento anterior).
+        "app_configured": bool(spec.get("app_configured", True)),
         "expires_at": row.expires_at.isoformat() if row.expires_at else None,
     }
 
@@ -390,6 +407,18 @@ async def proxy_review_app(
         raise HTTPException(status_code=404, detail="review session not found")
     if row.status not in {"running", "suspended"}:
         raise HTTPException(status_code=410, detail=f"review session is {row.status}")
+    # hallazgo #4: sin imagen configurada no hay contenedor que proxyear —
+    # mensaje accionable en vez del críptico error de DNS del placeholder.
+    if (row.spec or {}).get("app_configured") is False:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "this project has no app-preview configured: set "
+                "repository_config.review_image (an image built and published by "
+                "the project's own CI — ADR 0063) in the project settings; the "
+                "checklist and verdict of this review session work without it"
+            ),
+        )
 
     # Opening / interacting with the app counts as activity.
     sm = get_admin_sessionmaker()

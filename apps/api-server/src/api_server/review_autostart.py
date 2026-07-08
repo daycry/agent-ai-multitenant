@@ -55,11 +55,12 @@ ACTIVE_REVIEW_STATUSES = ("running", "suspended")
 # Mirrors workers.review_runtime.DEFAULT_VERDICT_TIMEOUT_S (48h) WITHOUT importing
 # the workers package.
 REVIEW_VERDICT_TIMEOUT_S = 48 * 60 * 60
-# Fallback image when a project pins none. The session row + signed URLs (SPA
-# shell, checklist, verdict) still work; only the live app-preview proxy is inert
-# until the project configures its built image — graceful degradation, never a
-# stuck plan.
-DEFAULT_REVIEW_MAIN_IMAGE = "alpine:3.20"
+# hallazgo #4 (QA 2026-07-07): there is NO fallback image anymore. A project
+# that pins none gets a session WITHOUT an app-preview container
+# (``main_image=None`` → the worker skips the spawn and records
+# ``spec.app_configured=false``); the session row + signed URLs (SPA shell,
+# checklist, verdict) still work and the proxy answers with an honest 409
+# instead of a DNS error against a dead placeholder.
 DEFAULT_REVIEW_MAIN_PORT = 8080
 # The notification event a freshly-spawned review-runtime fires so the plan owner
 # (and the tenant's subscribed channels) learn human validation is pending. The
@@ -76,16 +77,18 @@ HUMAN_VALIDATION_NEEDED_EVENT = "human_validation_needed"
 def resolve_review_main_image(
     repository_config: dict[str, Any] | None,
     worker_config: dict[str, Any] | None,
-) -> str:
+) -> str | None:
     """Resolve the project's review-runtime ``main_image`` (ADR 0063, C8 F39).
 
     The platform never BUILDS this image — the project's own CI does, and the
     review-runtime references it by tag. Provenance is an open product decision,
     so we read it from the project config with a tolerant precedence
     (``repository_config.review_image`` → ``repository_config.main_image`` →
-    ``worker_config.review_main_image``) and fall back to a tiny placeholder when
-    nothing is pinned. The fallback keeps the session row + signed URLs working
-    (only the live app-preview is inert) — a stuck plan is never the outcome.
+    ``worker_config.review_main_image``). ``None`` when nothing is pinned
+    (hallazgo #4): the worker then creates the session WITHOUT an app-preview
+    container — the row + signed URLs still work, and the proxy/SPA explain
+    honestly that the project has no app-preview configured. A stuck plan is
+    never the outcome.
     """
     repo_cfg = repository_config or {}
     worker_cfg = worker_config or {}
@@ -97,7 +100,7 @@ def resolve_review_main_image(
         value = source.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    return DEFAULT_REVIEW_MAIN_IMAGE
+    return None
 
 
 def resolve_review_main_port(
@@ -242,7 +245,6 @@ async def build_review_autostart_request(
 __all__ = [
     "ACTIVE_REVIEW_STATUSES",
     "COMPOSE_REVIEW_RUNTIME_TASK",
-    "DEFAULT_REVIEW_MAIN_IMAGE",
     "DEFAULT_REVIEW_MAIN_PORT",
     "HUMAN_VALIDATION_NEEDED_EVENT",
     "REVIEW_QUEUE",

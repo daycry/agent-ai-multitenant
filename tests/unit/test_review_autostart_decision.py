@@ -12,7 +12,6 @@ from typing import Any
 
 import pytest
 from api_server.review_autostart import (
-    DEFAULT_REVIEW_MAIN_IMAGE,
     DEFAULT_REVIEW_MAIN_PORT,
     build_review_human_checklist,
     resolve_review_main_image,
@@ -42,12 +41,16 @@ def test_main_image_falls_back_through_chain() -> None:
     assert resolve_review_main_image(None, {"review_main_image": "svc:1"}) == "svc:1"
 
 
-def test_main_image_default_when_unpinned() -> None:
-    assert resolve_review_main_image(None, None) == DEFAULT_REVIEW_MAIN_IMAGE
-    assert resolve_review_main_image({}, {}) == DEFAULT_REVIEW_MAIN_IMAGE
+def test_main_image_none_when_unpinned() -> None:
+    # hallazgo #4 (QA 2026-07-07): sin imagen configurada NO hay placeholder —
+    # None significa "no lanzar contenedor" y la sesión + URLs siguen vivas con
+    # un mensaje honesto en el proxy/SPA (antes: alpine:3.20 que salía con
+    # exit 0 y el proxy moría con un críptico "Name or service not known").
+    assert resolve_review_main_image(None, None) is None
+    assert resolve_review_main_image({}, {}) is None
     # Blank / non-string never wins.
-    assert resolve_review_main_image({"review_image": "  "}, None) == DEFAULT_REVIEW_MAIN_IMAGE
-    assert resolve_review_main_image({"review_image": 123}, None) == DEFAULT_REVIEW_MAIN_IMAGE
+    assert resolve_review_main_image({"review_image": "  "}, None) is None
+    assert resolve_review_main_image({"review_image": 123}, None) is None
 
 
 # --- resolve_review_main_port ---------------------------------------------
