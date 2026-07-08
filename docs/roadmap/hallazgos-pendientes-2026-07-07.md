@@ -102,7 +102,7 @@ que sale con exit 0 al instante. No existe UI para configurar la imagen.
 El agente se auto-corrigió con `--no-coverage`, pero quema turnos y confunde al reviewer
 (criterios que exigen exit 0). Añadir `pcov` al Dockerfile del template y re-publicar.
 
-### 11. El rechazo humano de un plan no dispara rework (añadido 2026-07-08)
+### 11. El rechazo humano de un plan no dispara rework — ✅ RESUELTO 2026-07-08 (ADR 0107)
 
 **Visto en vivo (validación del plan CI4):** el operador rechazó el plan con un motivo
 concreto y accionable (filtro Content-Type global → acotar a api/v1). El sistema persiste
@@ -111,12 +111,15 @@ consume el motivo** (verificado: 0 consumidores fuera de la capa de persistencia
 tareas siguen `done` y no se genera trabajo correctivo. El validador tiene que crear a mano
 un plan nuevo en el chat de planning.
 
-**Diseño a decidir (producto — relacionado con el #7):** (a) rechazo → plan correctivo
-auto-generado (draft) con el `rejection_reason` como brief, para aprobar; (b) rechazo →
-re-abrir las tareas afectadas con el motivo como `prior_review_feedback` (la infra
-task-level ya existe); (c) mantener manual pero con CTA en la UI («crear plan correctivo
-desde este rechazo») que pre-rellene el chat de planning. La (c) es la más barata y no
-decide semántica; la (a) es la más redonda.
+**Resolución (diseño del operador, ADR 0107 — commits `6f01531`, `71fb169`, `0eeafea`):**
+rework en el MISMO plan. `POST /plans/{id}/generate-corrections` convierte el
+`rejection_reason` en tareas correctivas (`origin: correction`, ids `fix-*`) dentro de
+`specification.tasks` + entrada `proposed` en `specification.corrections`;
+`POST /plans/{id}/accept-corrections` materializa la selección al Kanban y reactiva el plan
+por la arista nueva `rejected → in_progress` en la MISMA transacción (anti-rebote del
+reconciler garantizado). La UI del detalle del plan gana la tarjeta «Correcciones del
+rechazo» (motivo + generar + checkboxes + aceptar) y el badge «corrección». Se descartaron
+las opciones (a) plan correctivo separado (pierde rama/trazabilidad) y (b/c) — ver ADR.
 
 ## P2 — Deuda estructural anotada (del refactor y la revisión)
 
