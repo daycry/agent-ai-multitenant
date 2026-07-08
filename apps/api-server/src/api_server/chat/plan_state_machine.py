@@ -79,6 +79,10 @@ _TRANSITIONS: dict[str, frozenset[str]] = {
             # in_progress so the team can iterate without losing the
             # already-approved status.
             PlanStatus.IN_PROGRESS.value,
+            # An expired review session escalates the plan to blocked so the
+            # operator sees it needs attention (C8 F40 expiry sweep — T4 routed
+            # that sweep through this gate instead of a raw assignment).
+            PlanStatus.BLOCKED.value,
         }
     ),
     PlanStatus.COMPLETED.value: frozenset({PlanStatus.ARCHIVED.value}),

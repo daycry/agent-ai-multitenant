@@ -62,6 +62,7 @@ async def _block_plan_for_expired_session(db: AsyncSession, row: Any) -> dict[st
     and return the owner-notification payload (or ``None`` when no transition was
     warranted). The Plan load is BYPASSRLS (worker engine); the session row already
     carries the tenant scope."""
+    from api_server.chat.plan_state_machine import transition_plan_status
     from api_server.db.domain import Plan
 
     plan = await db.get(Plan, row.plan_id)
@@ -70,7 +71,9 @@ async def _block_plan_for_expired_session(db: AsyncSession, row: Any) -> dict[st
     new_status = plan_status_after_expiry(plan.status)
     if new_status is None:
         return None
-    plan.status = new_status
+    # T4 (ciclo-vida): toda mutación de estado de plan pasa por la única puerta
+    # (el edge pending_human_validation→blocked es legal en la tabla, C8 F40).
+    transition_plan_status(plan, new_status)
     await db.flush()
     spec = row.spec or {}
     return {
