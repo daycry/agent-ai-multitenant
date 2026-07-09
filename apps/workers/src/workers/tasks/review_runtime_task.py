@@ -218,20 +218,21 @@ def _sync_explicit_review_worktree(path: str, request: dict[str, Any], settings:
     try:
         from pathlib import Path
 
-        from workers.git_repos import BareRepoLayout, _run_git
-        from workers.plan_git import make_plan_branch_name
+        from workers.git_repos import _run_git
+        from workers.plan_git import worktree_coordinates
 
         tenant_slug = request.get("tenant_slug")
         project_slug = request.get("project_slug")
         if not tenant_slug or not project_slug:
             return
-        layout = BareRepoLayout(
-            data_root=Path(settings.data_root),
+        layout, branch = worktree_coordinates(  # coordenadas únicas (hallazgo #10a)
+            data_root=settings.data_root,
             tenant_slug=str(tenant_slug),
             project_slug=str(project_slug),
+            plan_id=str(request["plan_id"]),
+            plan_slug=str(request.get("plan_slug") or ""),
         )
         bare = layout.bare_repo_path(str(request.get("repo_name") or project_slug))
-        branch = make_plan_branch_name(str(request["plan_id"]), str(request.get("plan_slug") or ""))
         wt = Path(path)
         if not wt.exists() or not bare.exists():
             return
@@ -270,20 +271,21 @@ def _resolve_review_worktree_host_path(request: dict[str, Any], settings: Settin
     if not tenant_slug or not project_slug:
         return ""
     try:
-        from pathlib import Path
-
-        from workers.git_repos import BareRepoLayout, BareRepoManager, WorktreeManager
-        from workers.plan_git import make_plan_branch_name
+        from workers.git_repos import BareRepoManager, WorktreeManager
+        from workers.plan_git import worktree_coordinates
     except ImportError:
         return ""
     try:
-        layout = BareRepoLayout(
-            data_root=Path(settings.data_root),
+        # Mismas coordenadas que la provisión per-task (hallazgo #10a); repo_name
+        # conserva el override legacy por-request (ADR 0085 = project_slug).
+        layout, branch = worktree_coordinates(
+            data_root=settings.data_root,
             tenant_slug=str(tenant_slug),
             project_slug=str(project_slug),
+            plan_id=str(request["plan_id"]),
+            plan_slug=str(request.get("plan_slug") or ""),
         )
         repo_name = str(request.get("repo_name") or project_slug)
-        branch = make_plan_branch_name(str(request["plan_id"]), str(request.get("plan_slug") or ""))
         mgr = BareRepoManager(layout)
         mgr.ensure_repo(repo_name)
         mgr.seed_initial_commit_if_empty(repo_name)

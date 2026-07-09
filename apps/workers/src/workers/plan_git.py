@@ -37,7 +37,7 @@ from typing import Any, Literal
 
 import structlog
 
-from workers.git_repos import GitCommandError, _run_git
+from workers.git_repos import BareRepoLayout, GitCommandError, _run_git
 
 # Optimistic-concurrency retries for the worktree→bare push: sibling tasks of the
 # same plan push to the SAME plan branch, so a losing task must rebase onto the
@@ -123,6 +123,35 @@ def plan_git_identity(plan_id: str, plan_slug: str, project_slug: str) -> PlanGi
     return PlanGitIdentity(
         project_slug=project_slug,
         plan_branch=make_plan_branch_name(plan_id, plan_slug),
+    )
+
+
+def worktree_coordinates(
+    *,
+    data_root: str | Path,
+    tenant_slug: str,
+    project_slug: str,
+    plan_id: str,
+    plan_slug: str,
+) -> tuple[BareRepoLayout, str]:
+    """``(BareRepoLayout, plan_branch)`` — las coordenadas de worktree que TODOS los
+    sitios (provisión, resolución read-only, commit/push, review, back-fill) deben
+    derivar IDÉNTICAS (hallazgo #10a). Antes cada uno reconstruía el ``BareRepoLayout``
+    + ``make_plan_branch_name`` a mano — 5+ puntos propensos a divergir del contrato de
+    :func:`plan_git_identity` («Execution, clone and the auto-PR MUST resolve IDENTICAL
+    coordinates»).
+
+    IDENTIDAD DooD (CRÍTICO): ``settings.data_root`` es un path DAEMON-SIDE que el worker
+    monta en la MISMA ruta y entrega VERBATIM al daemon como bind source. Este helper NO
+    normaliza (``Path(data_root)`` sin ``resolve()``/realpath) para preservar la identidad
+    container-side == daemon-side de los binds ``/workspace``. El ``repo_name`` (nombre del
+    bare, ADR 0085 = ``project_slug`` salvo override legacy por-request) lo resuelve cada
+    caller y lo pasa a ``layout.bare_repo_path`` / ``WorktreeManager``."""
+    return (
+        BareRepoLayout(
+            data_root=Path(data_root), tenant_slug=tenant_slug, project_slug=project_slug
+        ),
+        make_plan_branch_name(plan_id, plan_slug),
     )
 
 

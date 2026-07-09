@@ -40,23 +40,25 @@ def _backfill_worktree_to_bare(
     that produced NO change (clean tree, no such commit) is left alone — no empty push.
     Returns one of ``pushed`` / ``already_present`` / ``no_change`` / ``no_worktree`` /
     ``no_bare``. Raises ``GitCommandError`` on a real git failure (rebase conflict…)."""
-    from pathlib import Path
-
-    from workers.git_repos import BareRepoLayout, GitCommandError, _run_git
+    from workers.git_repos import GitCommandError, _run_git
     from workers.plan_git import (
         CommitTrailers,
         PlanGitPolicies,
         PlanGitWorkflow,
         commit_task,
-        make_plan_branch_name,
+        worktree_coordinates,
     )
 
-    layout = BareRepoLayout(
-        data_root=Path(data_root), tenant_slug=tenant_slug, project_slug=project_slug
+    # Coordenadas ÚNICAS (hallazgo #10a): mismo (layout, branch) que la provisión.
+    layout, branch = worktree_coordinates(
+        data_root=data_root,
+        tenant_slug=tenant_slug,
+        project_slug=project_slug,
+        plan_id=str(plan_id),
+        plan_slug=plan_slug,
     )
     bare = layout.bare_repo_path(project_slug)
     worktree = layout.worktree_path(str(task_id))
-    branch = make_plan_branch_name(str(plan_id), plan_slug)
     if not bare.is_dir():
         return "no_bare"
     if not worktree.is_dir():

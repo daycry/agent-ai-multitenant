@@ -438,17 +438,20 @@ async def _provision_worktree(
     lanza :class:`RepoHistoryLostError` en vez de fabricar un workspace vacío."""
     from pathlib import Path
 
-    from workers.git_repos import BareRepoLayout, BareRepoManager, WorktreeManager
-    from workers.plan_git import make_plan_branch_name
+    from workers.git_repos import BareRepoManager, WorktreeManager
+    from workers.plan_git import worktree_coordinates
 
     def _git() -> str:
-        layout = BareRepoLayout(
-            data_root=Path(settings.data_root),
+        # Coordenadas ÚNICAS (hallazgo #10a): mismo (layout, branch) que resuelven la
+        # resolución read-only, el commit/push, el review y el back-fill.
+        layout, branch = worktree_coordinates(
+            data_root=settings.data_root,
             tenant_slug=tenant_slug,
             project_slug=project_slug,
+            plan_id=plan_id,
+            plan_slug=plan_slug,
         )
         repo_name = project_slug  # ADR 0085 decision 2: one bare repo per project (MVP).
-        branch = make_plan_branch_name(plan_id, plan_slug)
         mgr = BareRepoManager(layout)
         mgr.ensure_repo(repo_name)
         # A fresh local bare (no remote/clone) is empty → seed a root commit so the
@@ -547,13 +550,13 @@ async def _commit_and_push_worktree(
     """
     from pathlib import Path
 
-    from workers.git_repos import BareRepoLayout, GitCommandError
+    from workers.git_repos import GitCommandError
     from workers.plan_git import (
         CommitTrailers,
         PlanGitPolicies,
         PlanGitWorkflow,
         commit_task,
-        make_plan_branch_name,
+        worktree_coordinates,
     )
 
     message = (
@@ -561,12 +564,13 @@ async def _commit_and_push_worktree(
     )
 
     def _git() -> str | None:
-        layout = BareRepoLayout(
-            data_root=Path(settings.data_root),
+        layout, branch = worktree_coordinates(
+            data_root=settings.data_root,
             tenant_slug=tenant_slug,
             project_slug=project_slug,
+            plan_id=plan_id,
+            plan_slug=plan_slug,
         )
-        branch = make_plan_branch_name(plan_id, plan_slug)
         try:
             sha = commit_task(
                 Path(host_path),
