@@ -13,6 +13,7 @@ real provider is ever contacted (the established chat-test pattern).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -22,6 +23,12 @@ from shared_llm.types import Role
 
 from api_server.assistant.graph import AssistantState, ModelTurn, ToolInvocation
 from api_server.assistant.tools import tool_schemas
+
+# Función que traduce las tools habilitadas a sus JSON schemas. El default es el
+# catálogo del ASISTENTE; el córtex inyecta el suyo (``cortex_tool_schemas``) —
+# antes usaba SIEMPRE el del asistente, que no conoce las tools del córtex, así
+# que toda ``complete()`` del córtex iba con ``tools=None`` (hallazgo #10e).
+SchemaFn = Callable[[tuple[str, ...]], list[dict[str, Any]]]
 
 
 @dataclass
@@ -51,10 +58,14 @@ class LLMAssistantModel:
     # se persistía NULL) y que la política afectiva lo module por-request.
     reasoning_effort: str | None = None
     provider_kind: str | None = None
+    # Catálogo de schemas a enviar (hallazgo #10e). Default = asistente; el córtex
+    # pasa ``cortex_tool_schemas``. Es un field de INSTANCIA (no method), así que
+    # ``dataclasses.replace`` en ``apply_effort_decision`` lo preserva sin binding.
+    schema_fn: SchemaFn = field(default=tool_schemas)
 
     async def decide(self, state: AssistantState) -> ModelTurn:
         messages = self._build_messages(state)
-        schemas = tool_schemas(state.enabled_tools)
+        schemas = self.schema_fn(state.enabled_tools)
         # Wrap each schema in the OpenAI-style {type:function,function:{...}}
         # envelope most providers expect; harmless for those that ignore it.
         tools = [{"type": "function", "function": s} for s in schemas] if schemas else None

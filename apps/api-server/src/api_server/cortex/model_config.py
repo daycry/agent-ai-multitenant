@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.assistant.graph import AssistantModelClient
 from api_server.assistant.llm import LLMAssistantModel
+from api_server.cortex.tools import cortex_tool_schemas
 
 if TYPE_CHECKING:
     from api_server.cortex.affect_policy import EffortDecision
@@ -208,6 +209,10 @@ def build_cortex_model(
         extra_call_kwargs=extra,
         reasoning_effort=resolved.reasoning_effort,
         provider_kind=resolved.provider_kind,
+        # Hallazgo #10e: el córtex debe enviar SU catálogo de schemas (web_search,
+        # web_fetch, cortex_remember, cortex_recall_more), no el del asistente —
+        # que no las conoce y dejaba toda complete() del córtex con tools=None.
+        schema_fn=cortex_tool_schemas,
     )
 
 
