@@ -197,13 +197,20 @@ async def _run_turn(
         cortex_turn_id_holder["id"] = turn_id
         return result.content
 
+    async def _emit_transcript(user_text: str) -> None:
+        # Transcript + thinking tras el STT (antes del cerebro): feedback
+        # inmediato y tráfico intermedio que evita que el keepalive del WS mate
+        # un turno del córtex largo pero legítimo (40-90s con razonamiento).
+        await ws.send_json({"type": "transcript", "text": user_text})
+        await ws.send_json({"type": "thinking"})
+
     session = VoiceSession(
         transcribe=_transcribe,
         respond=_respond,
         synthesize=lambda t: tts.synthesize(t, voice=state.voice, speed=speed),
     )
     try:
-        turn: VoiceTurn = await session.handle_turn(audio)
+        turn: VoiceTurn = await session.handle_turn(audio, on_transcript=_emit_transcript)
     except CortexNoTenantError as exc:
         await ws.send_json({"type": "error", "detail": f"cortex has no tenant: {exc}"})
         return
@@ -216,7 +223,6 @@ async def _run_turn(
         await ws.send_json({"type": "turn_end", "empty": True})
         return
 
-    await ws.send_json({"type": "transcript", "text": turn.user_text})
     await ws.send_json({"type": "answer", "text": turn.answer_text})
     # Affect frame for the avatar (color/expression/sway) BEFORE the audio.
     await ws.send_json(affect_frame(affect))

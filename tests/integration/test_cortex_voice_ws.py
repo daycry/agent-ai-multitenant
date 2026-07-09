@@ -265,6 +265,9 @@ def test_ws_owner_completes_voice_turn_with_affect_frame(
 
         transcript = ws.receive_json()
         assert transcript == {"type": "transcript", "text": "hola córtex"}
+        # Frame `thinking` tras el STT y antes del cerebro (streaming: feedback
+        # inmediato + tráfico intermedio que aleja el keepalive en turnos largos).
+        assert ws.receive_json() == {"type": "thinking"}
         answer = ws.receive_json()
         assert answer == {"type": "answer", "text": "Hola, soy tu córtex."}
         affect = ws.receive_json()

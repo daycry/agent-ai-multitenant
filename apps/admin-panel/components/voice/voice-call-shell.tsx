@@ -247,6 +247,10 @@ export function VoiceCallShell({
         setTranscript(asString(frame.text));
         setAnswer("");
         break;
+      case "thinking":
+        // El servidor transcribió y está llamando al cerebro (turno largo).
+        setStatus((s) => (s === "recording" ? s : "thinking"));
+        break;
       case "answer":
         setAnswer(asString(frame.text));
         break;

@@ -184,4 +184,15 @@ describe("VoiceCallShell — fixes del diagnóstico de voz", () => {
       expect(screen.getByTestId("voice-answer").textContent).toContain("¿En qué te ayudo?");
     });
   });
+
+  it("el frame thinking (turno largo) muestra el estado Pensando", async () => {
+    mount();
+    const ws = await connect();
+    ws.emit({ type: "ready", voice: "ef_dora" });
+    ws.emit({ type: "transcript", text: "una pregunta larga" });
+    ws.emit({ type: "thinking" });
+    await waitFor(() =>
+      expect(screen.getByTestId("voice-status").textContent).toContain("Pensando"),
+    );
+  });
 });

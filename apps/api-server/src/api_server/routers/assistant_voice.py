@@ -146,13 +146,21 @@ async def _run_turn(
     socket (the user can keep talking). ``audio_mime`` is the real content type
     the browser announced (MediaRecorder emits webm/opus, not wav) — propagating
     it (instead of hardcoding ``audio/wav``) is the shared STT robustness fix."""
+
+    async def _emit_transcript(user_text: str) -> None:
+        # Feedback inmediato tras el STT (antes del cerebro): el usuario ve sus
+        # palabras y el `thinking` mantiene tráfico mientras el modelo piensa —
+        # un turno largo (40-90s) ya no muere por el keepalive del WS.
+        await ws.send_json({"type": "transcript", "text": user_text})
+        await ws.send_json({"type": "thinking"})
+
     session = VoiceSession(
         transcribe=lambda a: stt.transcribe(a, content_type=audio_mime),
         respond=lambda t: _respond(principal, model, t),
         synthesize=lambda t: tts.synthesize(t, voice=voice),
     )
     try:
-        turn: VoiceTurn = await session.handle_turn(audio)
+        turn: VoiceTurn = await session.handle_turn(audio, on_transcript=_emit_transcript)
     except Exception as exc:  # media/provider failure must not kill the socket
         _log.warning("assistant_voice.turn_failed", error=str(exc))
         await ws.send_json({"type": "error", "detail": f"voice turn failed: {exc}"})
@@ -160,7 +168,6 @@ async def _run_turn(
     if turn.empty:
         await ws.send_json({"type": "turn_end", "empty": True})
         return
-    await ws.send_json({"type": "transcript", "text": turn.user_text})
     await ws.send_json({"type": "answer", "text": turn.answer_text})
     if turn.audio:
         await ws.send_bytes(turn.audio)
