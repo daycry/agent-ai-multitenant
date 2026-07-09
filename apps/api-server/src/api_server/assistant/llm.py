@@ -95,6 +95,11 @@ class LLMAssistantModel:
                     content=f"Resultados de herramientas:\n{summary}",
                 )
             )
+        # Orden imperativa del turno de cierre (FINISH_NUDGE) — va como ÚLTIMO
+        # mensaje (recencia) para forzar la redacción final cuando el modelo no ha
+        # comprometido respuesta. Solo la fija el nodo `finish`; None en el resto.
+        if state.final_instruction:
+            messages.append(LLMMessage(role="system", content=state.final_instruction))
         return messages
 
 

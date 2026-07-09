@@ -57,6 +57,21 @@ MAX_CALLS_PER_TOOL = 3
 # exact same 1/turn guarantee — it reuses this graph, so it reuses this cap.
 _PER_TOOL_CALL_CAP: dict[str, int] = {"remember_about_me": 1, "cortex_remember": 1}
 
+# Orden imperativa del turno de CIERRE. Algunos modelos de razonamiento
+# (gpt-oss:120b con reasoning_effort alto) se quedan pidiendo herramientas ronda
+# tras ronda y NUNCA comprometen una respuesta en prosa: gastan el presupuesto en
+# el canal `reasoning` y el `content` sale vacío. Con preguntas amplias (visto en
+# vivo: «¿últimas noticias de tecnología hoy?») el turno terminaba con answer="".
+# En el nodo `finish` re-preguntamos SIN herramientas y con esta orden inyectada
+# como instrucción final (tras los resultados de tools) para forzar la redacción a
+# partir de lo ya reunido. Verificado e2e: con la orden, gpt-oss redacta el resumen.
+FINISH_NUDGE = (
+    "Ya tienes toda la información necesaria de esta conversación, incluidos los "
+    "resultados de las herramientas. Redacta AHORA la respuesta final para el "
+    "usuario con lo que ya tienes. No pidas más datos ni llames a ninguna "
+    "herramienta: responde directamente en prosa."
+)
+
 
 def _tool_call_cap(name: str) -> int:
     """Max times tool ``name`` may run in one turn (write tool capped tighter)."""
@@ -155,6 +170,11 @@ class AssistantState:
     # The latest non-empty content the model produced this turn — used as the
     # answer when the loop ends without a fresh content turn.
     last_content: str | None = None
+    # Instrucción imperativa a incrustar como ÚLTIMO mensaje del prompt (tras los
+    # resultados de tools). Solo la fija el nodo `finish` (FINISH_NUDGE) para forzar
+    # una respuesta en prosa cuando el modelo no ha comprometido ninguna. El adapter
+    # LLM la renderiza; el asistente/córtex normales la dejan en None.
+    final_instruction: str | None = None
     # Signatures (name+args) of tool calls already executed this turn, so an
     # over-eager model re-calling the SAME tool doesn't loop (a weak/reasoning
     # model otherwise repeats the same call until the round ceiling).
@@ -265,9 +285,11 @@ def _node_finish(model: AssistantModelClient) -> AssistantNode:
             state.answer = state.last_content
             return state
         # The model kept calling tools without ever answering. Ask once more
-        # with NO tools available so it MUST produce a textual answer, grounded
-        # on the tool results gathered so far.
-        final = replace(state, enabled_tools=(), pending=None)
+        # with NO tools available AND an imperative order (FINISH_NUDGE) so it
+        # MUST produce a textual answer, grounded on the tool results gathered so
+        # far. Sin la orden, un modelo de razonamiento se quedaba pidiendo tools
+        # (deduplicadas) y devolvía content vacío → answer="" (silencio).
+        final = replace(state, enabled_tools=(), pending=None, final_instruction=FINISH_NUDGE)
         turn = await model.decide(final)
         state.answer = turn.content or ""
         return state
@@ -339,6 +361,7 @@ async def run_assistant_turn(
 
 
 __all__ = [
+    "FINISH_NUDGE",
     "MAX_TOOL_ROUNDS",
     "AssistantModelClient",
     "AssistantState",

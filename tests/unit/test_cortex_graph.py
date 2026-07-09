@@ -21,6 +21,8 @@ from uuid import uuid4
 
 import pytest
 from api_server.assistant.graph import (
+    FINISH_NUDGE,
+    AssistantState,
     ModelTurn,
     ScriptedAssistantModel,
     ToolInvocation,
@@ -150,6 +152,59 @@ async def test_real_answer_after_tool_is_used_not_the_preamble() -> None:
         chat_history=[{"role": "user", "content": "¿qué tiempo hace?"}],
     )
     assert result.content == "En Barcelona hace sol, 28 grados."
+
+
+@dataclass
+class _RecordingModel:
+    """Modelo scripted que ADEMÁS registra el estado que recibe cada ``decide``,
+    para poder afirmar qué se le pasó en el turno de cierre (finish)."""
+
+    turns: list[ModelTurn]
+    seen: list[AssistantState] = field(default_factory=list)
+    _cursor: int = 0
+
+    async def decide(self, state: AssistantState) -> ModelTurn:
+        self.seen.append(state)
+        index = min(self._cursor, len(self.turns) - 1)
+        self._cursor += 1
+        return self.turns[index]
+
+
+@pytest.mark.asyncio
+async def test_finish_reask_forces_prose_with_a_nudge() -> None:
+    """Modelo de razonamiento (gpt-oss:120b) que se queda pidiendo tools sin
+    comprometer NUNCA una respuesta: llama a la tool, y el turno siguiente vuelve
+    a pedir la MISMA tool (deduplicada) con content vacío → el loop llega a finish
+    sin respuesta. Antes eso devolvía answer="" (visto en vivo con «¿últimas
+    noticias de tecnología hoy?»). Ahora el turno de finish re-pregunta SIN tools y
+    con una orden imperativa (``FINISH_NUDGE``) que fuerza la redacción final."""
+    model = _RecordingModel(
+        turns=[
+            ModelTurn(
+                content="We need to search the web.",
+                tool_calls=(ToolInvocation(name=READ_TOOL, arguments={"query": "noticias"}),),
+            ),
+            # Misma firma → deduplicada → kept vacío → el loop enruta a finish.
+            ModelTurn(
+                content="",
+                tool_calls=(ToolInvocation(name=READ_TOOL, arguments={"query": "noticias"}),),
+            ),
+            # Re-ask del finish: ahora sí redacta.
+            ModelTurn(content="Hoy destacan tres noticias de tecnología."),
+        ]
+    )
+    result = await run_cortex_turn(
+        model,
+        system_prompt="Eres el córtex.",
+        enabled_tools=(READ_TOOL,),
+        tool_ctx=_ctx(),
+        chat_history=[{"role": "user", "content": "¿últimas noticias de tecnología hoy?"}],
+    )
+    assert result.content == "Hoy destacan tres noticias de tecnología."
+    # El ÚLTIMO decide es el re-ask del finish: sin tools y con la orden imperativa.
+    finish_state = model.seen[-1]
+    assert finish_state.enabled_tools == ()
+    assert finish_state.final_instruction == FINISH_NUDGE
 
 
 @pytest.mark.asyncio
