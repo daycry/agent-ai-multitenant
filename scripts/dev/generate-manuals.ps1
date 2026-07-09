@@ -55,7 +55,14 @@ try {
   }
 
   Write-Host "==> Levantando overlay contenerizado (api-server + admin-panel + caddy)" -ForegroundColor Cyan
-  & docker compose @Compose up -d api-server admin-panel caddy
+  # PS 5.1 + $ErrorActionPreference=Stop: compose escribe WARNINGS benignos por
+  # stderr (p.ej. "Found orphan containers" cuando la infra dev corre con más
+  # ficheros -f que este overlay) y eso abortaba el runner como NativeCommandError.
+  # OJO: NO añadir --remove-orphans — se cargaría los servicios de monitoring.
+  $eap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+  cmd /c "docker compose $($Compose -join ' ') up -d api-server admin-panel caddy 2>&1"
+  $ErrorActionPreference = $eap
+  if ($LASTEXITCODE -ne 0) { throw "docker compose up falló (exit $LASTEXITCODE)" }
 
   Write-Host "==> Esperando a Caddy en $Base (max 90s)" -ForegroundColor Cyan
   $deadline = (Get-Date).AddSeconds(90); $up = $false
