@@ -195,11 +195,15 @@ async def test_core_isolates_a_failing_pass(monkeypatch: pytest.MonkeyPatch) -> 
     async def ok_plans(*_a: Any, **_k: Any) -> int:
         return 1
 
+    async def ok_unblocked(*_a: Any, **_k: Any) -> int:
+        return 4
+
     async def ok_worktrees(*_a: Any, **_k: Any) -> int:
         return 2
 
     monkeypatch.setattr(m, "_reconcile_stuck_tasks", ok_stuck)
     monkeypatch.setattr(m, "_reconcile_orphan_reviews", boom_reviews)
+    monkeypatch.setattr(m, "_reconcile_unblocked_plans", ok_unblocked)
     monkeypatch.setattr(m, "_reconcile_complete_plans", ok_plans)
     monkeypatch.setattr(m, "_reconcile_unpushed_worktrees", ok_worktrees)
 
@@ -215,6 +219,7 @@ async def test_core_isolates_a_failing_pass(monkeypatch: pytest.MonkeyPatch) -> 
     assert result == {
         "stuck_tasks": 3,
         "orphan_reviews": 0,
+        "unblocked_plans": 4,
         "completed_plans": 1,
         "pushed_worktrees": 2,
     }

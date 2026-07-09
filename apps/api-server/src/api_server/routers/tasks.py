@@ -434,6 +434,12 @@ async def update_task(
             for execution in await cancel_running_executions_for_task(session, task.id):
                 if execution.celery_task_id:
                     schedule_after_commit(session, revoke_job_callback(execution.celery_task_id))
+    # hallazgo #2: editar SOLO las dependencias (sin cambio de status) puede
+    # desatascar un backlog transitivamente bloqueado (quitar la arista que lo ata
+    # a la tarea blocked) → re-evaluar el plan. El branch de status de arriba ya
+    # cubre las SALIDAS de blocked; aquí basta el caso sin cambio de status.
+    elif deps_change and task.plan_id is not None:
+        await reactivate_plan_if_unstuck(session, task.plan_id)
     return to_task_response(task, deps)
 
 
@@ -480,6 +486,13 @@ async def delete_task(
                 "remove the dependency or delete them first"
             ),
         )
+    # hallazgo #2 (QA 2026-07-07): borrar la tarea blocked (hoja) elimina la CAUSA
+    # del bloqueo del plan → re-evaluar. Capturamos plan_id ANTES del delete (el
+    # objeto queda expirado tras el flush). reactivate_plan_if_unstuck es no-op si
+    # el plan no está blocked, así que es seguro llamarlo siempre que haya plan.
+    plan_id = task.plan_id
     # task_dependencies rows (where this task is the dependent) CASCADE off it.
     await session.delete(task)
     await session.flush()
+    if plan_id is not None:
+        await reactivate_plan_if_unstuck(session, plan_id)

@@ -437,6 +437,99 @@ async def _reconcile_complete_plans(sessionmaker: async_sessionmaker[AsyncSessio
     return transitioned
 
 
+async def _reconcile_unblocked_plans(sessionmaker: async_sessionmaker[AsyncSession]) -> int:
+    """Red de seguridad del hallazgo #2: revierte planes ``blocked`` cuyo snapshot
+    de tareas YA no justifica el bloqueo, sin exigir un segundo click humano.
+
+    Espejo exacto de :func:`_reconcile_complete_plans` (mismos snapshots con
+    dependencias, mismo guard atómico ``WHERE status='blocked'``) pero con la
+    transición INVERSA ``transition_from_blocked``. Cubre las vías que desatascan
+    una tarea/plan sin re-evaluar el plan (un evento perdido, o un desbloqueo por
+    un camino que no llamó ``reactivate_plan_if_unstuck``). Sin ping-pong:
+    ``transition_from_blocked`` es la negación EXACTA de ``transition_to_blocked``
+    sobre el mismo snapshot, así que un plan genuinamente atascado se queda
+    ``blocked``. Al ganar, el beat de promoción DAG (que filtra ``in_progress``)
+    re-anuncia las tareas ``ready`` en su siguiente pasada. Devuelve cuántos
+    planes revirtió."""
+    from api_server.db.domain import Plan, PlanStatus, Task, TaskDependency
+    from api_server.plan_progress import PlanStatus as PlanStatusLiteral
+    from api_server.plan_progress import (
+        TaskSnapshot,
+        transition_from_blocked,
+    )
+    from sqlalchemy import select, update
+
+    async with sessionmaker() as db:
+        plan_rows = list(
+            (
+                await db.execute(
+                    select(Plan.id, Plan.tenant_id).where(Plan.status == PlanStatus.BLOCKED.value)
+                )
+            ).all()
+        )
+    reverted = 0
+    for prow in plan_rows:
+        async with sessionmaker() as db, db.begin():
+            task_rows = list(
+                (
+                    await db.execute(
+                        select(Task.id, Task.status).where(
+                            Task.plan_id == prow.id,
+                            Task.tenant_id == prow.tenant_id,
+                        )
+                    )
+                ).all()
+            )
+            if not task_rows:
+                continue
+            plan = await db.get(Plan, prow.id)
+            if plan is None:
+                continue
+            dep_rows = list(
+                (
+                    await db.execute(
+                        select(TaskDependency.task_id, TaskDependency.depends_on_task_id).where(
+                            TaskDependency.task_id.in_([r.id for r in task_rows])
+                        )
+                    )
+                ).all()
+            )
+            deps_by_task: dict[str, list[str]] = {}
+            for dr in dep_rows:
+                deps_by_task.setdefault(str(dr.task_id), []).append(str(dr.depends_on_task_id))
+            snapshots = [
+                TaskSnapshot(
+                    id=str(r.id),
+                    status=r.status,
+                    depends_on=tuple(deps_by_task.get(str(r.id), ())),
+                )
+                for r in task_rows
+            ]
+            result = transition_from_blocked(cast(PlanStatusLiteral, plan.status), snapshots)
+            if not result.transitioned:
+                continue
+            won_id = (
+                await db.execute(
+                    update(Plan)
+                    .where(
+                        Plan.id == prow.id,
+                        Plan.tenant_id == prow.tenant_id,
+                        Plan.status == PlanStatus.BLOCKED.value,
+                    )
+                    .values(status=result.new_status)
+                    .returning(Plan.id)
+                )
+            ).scalar_one_or_none()
+            if won_id is not None:
+                _log.info(
+                    "maintenance.reconcile_pipeline_state.plan_unblocked",
+                    plan_id=str(prow.id),
+                    new_status=result.new_status,
+                )
+                reverted += 1
+    return reverted
+
+
 async def _autostart_review_runtime(
     sessionmaker: async_sessionmaker[AsyncSession],
     *,
@@ -525,6 +618,7 @@ async def _reconcile_pipeline_state_async(
         "stuck_tasks": 0,
         "orphan_reviews": 0,
         "completed_plans": 0,
+        "unblocked_plans": 0,
         "pushed_worktrees": 0,
     }
     try:
@@ -541,6 +635,16 @@ async def _reconcile_pipeline_state_async(
         except Exception as exc:
             _log.warning(
                 "maintenance.reconcile_pipeline_state.orphan_reviews_error", error=str(exc)
+            )
+        # unblocked ANTES que completed: un plan blocked cuyo snapshot ya no
+        # justifica el bloqueo (p.ej. todas las tareas terminaron) revierte a
+        # in_progress y, en la MISMA pasada, _reconcile_complete_plans lo lleva a
+        # pending_human_validation — sin esperar al siguiente beat.
+        try:
+            result["unblocked_plans"] = await _reconcile_unblocked_plans(sessionmaker)
+        except Exception as exc:
+            _log.warning(
+                "maintenance.reconcile_pipeline_state.unblocked_plans_error", error=str(exc)
             )
         try:
             result["completed_plans"] = await _reconcile_complete_plans(sessionmaker)

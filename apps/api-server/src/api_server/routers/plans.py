@@ -82,7 +82,7 @@ from api_server.routers._pagination import (
 )
 from api_server.routers.llm_providers import get_provider_vault_store
 from api_server.routers.review import build_review_urls
-from api_server.routers.task_lifecycle import apply_task_retry
+from api_server.routers.task_lifecycle import apply_task_retry, reactivate_plan_if_unstuck
 from api_server.schemas.plans import (
     AICostBreakdownResponse,
     CostBreakdownResponse,
@@ -1120,6 +1120,11 @@ async def create_free_task(
     )
     session.add(task)
     await session.flush()
+
+    # hallazgo #2: añadir una tarea avanzable (backlog, sin deps) a un plan blocked
+    # invalida el bloqueo (ya HAY una vía de avance) → re-evaluar. No-op si el plan
+    # no está blocked.
+    await reactivate_plan_if_unstuck(session, plan.id)
 
     return {
         "id": str(task.id),
