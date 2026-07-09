@@ -81,9 +81,13 @@ def _cortex_voice_base_prompt(*, web_enabled: bool = False) -> str:
     )
     if web_enabled:
         base += (
-            " Tienes acceso a Internet mediante tus tools web_search y web_fetch "
-            "(salida por un proxy seguro); úsalas cuando necesites información "
-            "actual y menciona la fuente."
+            " SÍ tienes acceso a Internet mediante tus tools web_search y web_fetch "
+            "(salida por un proxy seguro). NUNCA digas que no tienes acceso a Internet "
+            "ni permiso para buscar: LO TIENES. Siempre que te pregunten por información "
+            "ACTUAL o del mundo real (el tiempo, noticias, precios, datos recientes, "
+            "cualquier cosa que no sepas con certeza), LLAMA a web_search ANTES de "
+            "responder y basa tu respuesta en los resultados, mencionando la fuente. "
+            "Solo di que no lo sabes si la búsqueda no devuelve nada útil."
         )
     return base
 

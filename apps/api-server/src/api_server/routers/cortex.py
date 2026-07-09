@@ -547,11 +547,15 @@ def _cortex_base_prompt(*, web_enabled: bool = False) -> str:
     )
     if web_enabled:
         base += (
-            " Tienes acceso a Internet mediante tus tools web_search (buscar) y "
-            "web_fetch (leer una URL concreta), con salida por un proxy seguro. "
-            "Úsalas cuando necesites información actual o externa (no las confundas "
-            "con «WebSearch/WebFetch», que no existen aquí), y di de dónde sacaste "
-            "lo que encuentres."
+            " SÍ tienes acceso a Internet mediante tus tools web_search (buscar) y "
+            "web_fetch (leer una URL concreta), con salida por un proxy seguro. NUNCA "
+            "digas que no tienes acceso a Internet ni permiso para buscar: LO TIENES. "
+            "Siempre que te pregunten por información ACTUAL o externa (el tiempo, "
+            "noticias, precios, datos recientes, cualquier cosa que no sepas con "
+            "certeza), LLAMA a web_search ANTES de responder y basa tu respuesta en "
+            "los resultados, citando la fuente (no confundas estas tools con "
+            "«WebSearch/WebFetch», que no existen aquí). Solo di que no lo sabes si "
+            "la búsqueda no devuelve nada útil."
         )
     return base
 
