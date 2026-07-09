@@ -57,19 +57,22 @@ MAX_CALLS_PER_TOOL = 3
 # exact same 1/turn guarantee — it reuses this graph, so it reuses this cap.
 _PER_TOOL_CALL_CAP: dict[str, int] = {"remember_about_me": 1, "cortex_remember": 1}
 
-# Orden imperativa del turno de CIERRE. Algunos modelos de razonamiento
-# (gpt-oss:120b con reasoning_effort alto) se quedan pidiendo herramientas ronda
-# tras ronda y NUNCA comprometen una respuesta en prosa: gastan el presupuesto en
-# el canal `reasoning` y el `content` sale vacío. Con preguntas amplias (visto en
-# vivo: «¿últimas noticias de tecnología hoy?») el turno terminaba con answer="".
-# En el nodo `finish` re-preguntamos SIN herramientas y con esta orden inyectada
-# como instrucción final (tras los resultados de tools) para forzar la redacción a
-# partir de lo ya reunido. Verificado e2e: con la orden, gpt-oss redacta el resumen.
+# Orden imperativa del turno de CIERRE. Con preguntas amplias (visto en vivo:
+# «¿últimas noticias de tecnología hoy?») gpt-oss:120b NUNCA comprometía una
+# respuesta: tras el web_search seguía emitiendo tool_calls NATIVAS de su
+# herramienta `browser` (harmony: `web_fetch {cursor,id}` para «abrir» un
+# resultado) con `content` vacío, ronda tras ronda, hasta terminar con answer="".
+# Prohibir «llamar a herramientas» a secas no bastaba: el modelo quería NAVEGAR
+# (abrir/scroll), no llamar a nuestras tools. Hay que prohibir EXPLÍCITAMENTE el
+# browsing. En el nodo `finish` re-preguntamos SIN herramientas y con esta orden
+# como instrucción final (tras los resultados de tools). Verificado e2e 3/3: con
+# la prohibición de navegar, gpt-oss redacta el resumen desde los snippets. No
+# fija idioma (lo hace el system prompt); vale para asistente y córtex.
 FINISH_NUDGE = (
-    "Ya tienes toda la información necesaria de esta conversación, incluidos los "
-    "resultados de las herramientas. Redacta AHORA la respuesta final para el "
-    "usuario con lo que ya tienes. No pidas más datos ni llames a ninguna "
-    "herramienta: responde directamente en prosa."
+    "Ya tienes en esta conversación los resultados de búsqueda necesarios. Está "
+    "TERMINANTEMENTE PROHIBIDO abrir páginas, navegar, hacer scroll o pedir más "
+    "búsquedas o herramientas. Redacta AHORA la respuesta final para el usuario, "
+    "breve y en prosa, ÚNICAMENTE con la información que ya tienes."
 )
 
 
