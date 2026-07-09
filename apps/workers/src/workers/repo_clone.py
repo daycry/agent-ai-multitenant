@@ -112,10 +112,34 @@ async def _clone_project_repo_async(project_id: UUID, *, settings: Settings) -> 
             repo_name = project_slug
             mgr.ensure_repo(repo_name, remote_url=remote_url)
             mgr.fetch_remote(repo_name, auth_env=auth.env or None)
+            # La base local debe nacer de la historia del REMOTO, no de una
+            # raíz sintética (visto en vivo: PR final con «no history in
+            # common»). Conservador: crea/avanza (ff) la rama default local;
+            # un remoto vacío o una divergencia se reportan, nunca se pisan.
+            alignment = mgr.align_default_branch(
+                repo_name, str(cfg.get("default_branch") or "main")
+            )
+            if alignment in ("remote_empty", "diverged"):
+                _log.warning(
+                    "repo_clone.default_branch_not_aligned",
+                    project_id=str(project_id),
+                    repo=repo_name,
+                    alignment=alignment,
+                )
         finally:
             auth.cleanup()
-        _log.info("repo_clone.ok", project_id=str(project_id), repo=repo_name)
-        return {"project_id": str(project_id), "status": "ok", "repo": repo_name}
+        _log.info(
+            "repo_clone.ok",
+            project_id=str(project_id),
+            repo=repo_name,
+            default_branch_alignment=alignment,
+        )
+        return {
+            "project_id": str(project_id),
+            "status": "ok",
+            "repo": repo_name,
+            "default_branch_alignment": alignment,
+        }
     finally:
         await engine.dispose()
 

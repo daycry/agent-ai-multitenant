@@ -260,6 +260,10 @@ async def _open_plan_pr_async(
                 policies=policies,
                 pr_opener=pr_opener,
                 auth_env=auth.env or None,
+                # Guard de ancestro contra la base remota: una divergencia se
+                # reporta con un motivo accionable en pr_error, no con el 422
+                # crudo del proveedor.
+                base_branch=base,
             )
             info = wf.open_plan_pr(title=title, body=body)
             pr_url = info.url

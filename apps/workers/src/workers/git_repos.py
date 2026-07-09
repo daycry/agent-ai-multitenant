@@ -289,6 +289,62 @@ class BareRepoManager:
             raise GitCommandError(f"bare repo {repo_name!r} does not exist at {path}")
         _run_git("fetch", "--prune", "origin", cwd=path, env_extra=auth_env)
 
+    def align_default_branch(self, repo_name: str, branch: str) -> str:
+        """Alinea la rama default LOCAL con ``origin/<branch>`` tras un fetch.
+
+        El clone inicial solo materializa ``refs/remotes/origin/*``; sin este
+        paso la rama default local no existe y el primer worktree la SIEMBRA
+        con una raíz sintética — si el remoto tiene (o gana después) su propia
+        historia, el PR final choca con «no history in common» (visto en vivo
+        con el plan CI4, 2026-07-09). Semántica conservadora:
+
+          * ``created``        — no había local: se crea apuntando al remoto
+            (y HEAD del bare pasa a esa rama).
+          * ``fast_forwarded`` — la local iba estrictamente por detrás.
+          * ``up_to_date``     — ya coinciden.
+          * ``remote_empty``   — el remoto no tiene esa rama; NO se inventa
+            nada (el caller decide si sembrar y avisa).
+          * ``diverged``       — historias sin ancestro común o local por
+            delante: NUNCA se reescribe trabajo local; se reporta.
+        """
+        path = self._layout.bare_repo_path(repo_name)
+        if not path.exists():
+            raise GitCommandError(f"bare repo {repo_name!r} does not exist at {path}")
+        remote_ref = f"refs/remotes/origin/{branch}"
+        local_ref = f"refs/heads/{branch}"
+        try:
+            remote_sha = _run_git("rev-parse", "--verify", remote_ref, cwd=path).strip()
+        except GitCommandError:
+            return "remote_empty"
+        try:
+            local_sha = _run_git("rev-parse", "--verify", local_ref, cwd=path).strip()
+        except GitCommandError:
+            _run_git("update-ref", local_ref, remote_sha, cwd=path)
+            _run_git("symbolic-ref", "HEAD", local_ref, cwd=path)
+            _log.info(
+                "bare.default_branch_created",
+                repo=repo_name,
+                branch=branch,
+                sha=remote_sha[:12],
+            )
+            return "created"
+        if local_sha == remote_sha:
+            return "up_to_date"
+        try:
+            # fast-forward SOLO si la local es ancestro estricto del remoto.
+            _run_git("merge-base", "--is-ancestor", local_sha, remote_sha, cwd=path)
+        except GitCommandError:
+            _log.warning(
+                "bare.default_branch_diverged",
+                repo=repo_name,
+                branch=branch,
+                local=local_sha[:12],
+                remote=remote_sha[:12],
+            )
+            return "diverged"
+        _run_git("update-ref", local_ref, remote_sha, local_sha, cwd=path)
+        return "fast_forwarded"
+
 
 # ---------------------------------------------------------------------------
 # task_06_18 / 06_19 / 06_20 — Worktrees

@@ -250,6 +250,7 @@ class PlanGitWorkflow:
         policies: PlanGitPolicies,
         pr_opener: PrOpener | None = None,
         auth_env: dict[str, str] | None = None,
+        base_branch: str | None = None,
     ) -> None:
         self._bare_path = bare_repo_path
         self._plan_branch = plan_branch
@@ -258,10 +259,47 @@ class PlanGitWorkflow:
         # ADR 0072: env de auth git (GIT_ASKPASS/GIT_SSH_COMMAND) para el push al
         # remoto. None = remoto local o ya autenticable por el host.
         self._auth_env = auth_env
+        # Rama base del PR (default_branch del git config). Cuando está
+        # presente, open_plan_pr verifica ANTES de llamar a la API que la base
+        # remota comparte historia con la rama del plan — el 422 «no history
+        # in common» del proveedor deja de ser el primer aviso.
+        self._base_branch = base_branch
 
     @property
     def plan_branch(self) -> str:
         return self._plan_branch
+
+    def _base_ancestry_guard(self) -> str | None:
+        """Motivo accionable para NO llamar a la API del proveedor, o ``None``.
+
+        Re-fetch de la rama base + ``merge-base`` contra la rama del plan.
+        Best-effort: un fallo transitorio del fetch (red/credenciales) NO
+        bloquea el intento de PR (contrato anterior); solo bloquean los dos
+        casos deterministas — base ausente en el remoto e historias sin
+        ancestro común (el caso api-ci: base local sembrada sintética).
+        """
+        base = self._base_branch
+        if not base:
+            return None
+        try:
+            _run_git("fetch", "origin", base, cwd=self._bare_path, env_extra=self._auth_env)
+        except GitCommandError as exc:
+            if "couldn't find remote ref" in str(exc).lower():
+                return (
+                    f"el remoto no tiene la rama base '{base}': haz un push inicial de esa "
+                    "rama o corrige default_branch en el git del proyecto"
+                )
+            _log.warning("plan_pr.base_fetch_failed", base=base, error=str(exc))
+            return None  # transitorio → no bloquear el intento
+        try:
+            _run_git("merge-base", "FETCH_HEAD", self._plan_branch, cwd=self._bare_path)
+        except GitCommandError:
+            return (
+                f"la rama base '{base}' del remoto no comparte historia con la rama del plan "
+                "(la base local se sembró sin el contenido del remoto): re-sincroniza el git "
+                "del proyecto y rebasa la rama del plan, o ajusta default_branch"
+            )
+        return None
 
     # ----- task_06_23 — transitions ------------------------------------
 
@@ -387,6 +425,21 @@ class PlanGitWorkflow:
                 branch=self._plan_branch,
                 url=None,
                 skipped_reason="no pr_opener wired",
+            )
+
+        guard = self._base_ancestry_guard()
+        if guard is not None:
+            _log.warning(
+                "plan_pr.base_guard_skip",
+                repo=self._bare_path.stem,
+                branch=self._plan_branch,
+                reason=guard,
+            )
+            return PrInfo(
+                repo_name=self._bare_path.stem,
+                branch=self._plan_branch,
+                url=None,
+                skipped_reason=guard,
             )
 
         url = self._pr_opener(title, body)
