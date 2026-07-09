@@ -184,18 +184,9 @@ export default function CortexChatPage() {
         data-testid="cortex-chat-header"
       />
 
-      {voiceMode ? (
-        <Card className="mt-6" data-testid="cortex-voice-card">
-          <CardContent className="pt-5">
-            <p className="text-muted-foreground mb-3 text-xs">
-              Habla con tu córtex. El avatar refleja su afecto simulado (color y expresión según
-              valencia y activación) — es un modelo computacional determinista, no sentimientos
-              reales.
-            </p>
-            <CortexVoiceCall />
-          </CardContent>
-        </Card>
-      ) : null}
+      {/* Videollamada a pantalla completa; el copy de honestidad (afecto
+          simulado, ADR 0075) viaja en el subtítulo y la etiqueta de mood. */}
+      {voiceMode ? <CortexVoiceCall onClose={() => setVoiceMode(false)} /> : null}
 
       {/* Historial de hilos: cambia entre conversaciones o empieza una nueva
           sin borrar las demás (patrón del chat de proyecto). */}

@@ -160,13 +160,8 @@ export default function AssistantChatPage() {
         data-testid="assistant-chat-header"
       />
 
-      {voiceMode ? (
-        <Card className="mt-6" data-testid="assistant-voice-card">
-          <CardContent className="pt-5">
-            <VoiceCall />
-          </CardContent>
-        </Card>
-      ) : null}
+      {/* La videollamada es un overlay a pantalla completa (shell compartida). */}
+      {voiceMode ? <VoiceCall onClose={() => setVoiceMode(false)} /> : null}
 
       <Card className="mt-6">
         <CardContent className="flex flex-col gap-4 pt-5">
