@@ -59,6 +59,15 @@ CORTEX_DEFAULT_MODEL_KEY = "cortex.default_model"
 # (ADR 0074: el córtex delibera en profundidad por diseño, no en "modo chat").
 CORTEX_DEFAULT_REASONING_EFFORT = "high"
 
+# Presupuesto de tokens del córtex. El default del AssistantModel (1024) es para
+# modelos NO de razonamiento; un modelo de razonamiento OpenAI-compatible
+# (gpt-oss, o1…) con effort alto emite su cadena de pensamiento en el canal
+# `reasoning`, que CUENTA contra `max_tokens` — con 1024 se agota razonando y
+# `content` (la respuesta real) queda VACÍO (visto en vivo: la voz del córtex no
+# respondía). 16k da holgura al razonamiento profundo MÁS la respuesta; es un
+# techo, no un objetivo (el modelo para en su stop natural).
+CORTEX_MAX_TOKENS = 16384
+
 # Tools web NATIVAS del Claude Agent SDK (ADR 0076). Anthropic gestiona el fetch
 # (anti-SSRF) — no se implementa navegador/egress propio. Sólo se pasan en el
 # camino claude_sdk.
@@ -195,6 +204,7 @@ def build_cortex_model(
     return LLMAssistantModel(
         provider=provider,
         model=api_model,
+        max_tokens=CORTEX_MAX_TOKENS,
         extra_call_kwargs=extra,
         reasoning_effort=resolved.reasoning_effort,
         provider_kind=resolved.provider_kind,

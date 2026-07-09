@@ -70,6 +70,38 @@ def _stub_memory(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_failure_does_not_crash_the_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Una tool que LANZA (p.ej. web_fetch con el egress bloqueado) NO debe
+    tumbar el turno: el error se devuelve al modelo como resultado de la tool
+    y el modelo responde igualmente (con lo que ya tiene). Visto en vivo: un
+    web_fetch fallido mataba la voz del córtex con «voice turn failed» en vez
+    de responder desde los resultados de búsqueda."""
+
+    async def _boom(session, *, owner_user_id, tenant_id, query, **_: Any):
+        raise RuntimeError("All connection attempts failed")
+
+    monkeypatch.setattr("api_server.cortex.tools.cortex_recall", _boom)
+
+    model = ScriptedAssistantModel(
+        turns=[
+            ModelTurn(tool_calls=(ToolInvocation(name=READ_TOOL, arguments={"query": "tiempo"}),)),
+            ModelTurn(content="Según lo que sé, hace sol."),
+        ]
+    )
+    ctx = _ctx()
+    result = await run_cortex_turn(
+        model,
+        system_prompt="Eres el córtex.",
+        enabled_tools=(WRITE_TOOL, READ_TOOL),
+        tool_ctx=ctx,
+        chat_history=[{"role": "user", "content": "¿qué tiempo hace?"}],
+    )
+    # El turno SOBREVIVE y responde; la tool que falló se registra igualmente.
+    assert result.content == "Según lo que sé, hace sol."
+    assert READ_TOOL in result.tools_called
+
+
+@pytest.mark.asyncio
 async def test_run_cortex_turn_calls_remember_then_answers() -> None:
     model = ScriptedAssistantModel(
         turns=[

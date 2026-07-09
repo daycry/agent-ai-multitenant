@@ -103,7 +103,9 @@ def _host_is_blocked_name(host: str) -> bool:
     return any(h.endswith(suffix) for suffix in _BLOCKED_HOST_SUFFIXES)
 
 
-def assert_safe_url(url: str, *, resolver: Resolver | None = None) -> None:
+def assert_safe_url(
+    url: str, *, resolver: Resolver | None = None, allow_internal: bool = False
+) -> None:
     """Valida que ``url`` es segura para un GET de egress; lanza si no.
 
     Pasos (cualquiera que falle levanta :class:`UnsafeUrlError`):
@@ -114,6 +116,15 @@ def assert_safe_url(url: str, *, resolver: Resolver | None = None) -> None:
       4. puerto (explícito o por defecto del esquema) ∈ :data:`ALLOWED_PORTS`;
       5. si el host es una IP literal, esa IP debe ser pública;
       6. en otro caso, se resuelve el host y TODAS las IPs deben ser públicas.
+
+    ``allow_internal=True`` relaja SOLO los pasos 5/6 (la exigencia de IP
+    pública) para un backend de CONFIANZA configurado por el operador (el
+    buscador searxng/brave, `cortex.searxng_url`, sólo escribible por un System
+    Admin), que por diseño vive en la red interna del docker con IP privada. El
+    guard estricto (sin este flag) sigue aplicándose a las URLs de los
+    RESULTADOS (web_fetch), que sí son controladas por el modelo/la web. El
+    resto de validaciones (esquema, host, nombres de metadata, puerto) se
+    mantienen siempre — un flag laxo no abre `file://` ni ``localhost``.
 
     ``resolver`` se inyecta en tests para no tocar la red; en producción se usa
     ``getaddrinfo``. No devuelve nada (es una aserción)."""
@@ -140,11 +151,12 @@ def assert_safe_url(url: str, *, resolver: Resolver | None = None) -> None:
     # ¿Es el host una IP literal? Entonces se valida directamente, sin resolver.
     literal_ip = _parse_ip_literal(host)
     if literal_ip is not None:
-        if not _is_public_ip(literal_ip):
+        if not allow_internal and not _is_public_ip(literal_ip):
             raise UnsafeUrlError(f"IP no pública en el host: {host!r}")
         return
 
-    # Nombre de host → resolver y comprobar TODAS las IPs.
+    # Nombre de host → resolver; con allow_internal basta que resuelva, si no
+    # TODAS sus IPs deben ser públicas (delegado a un helper para acotar ramas).
     resolve = resolver or _default_resolver
     try:
         addresses = resolve(host, port)
@@ -152,6 +164,12 @@ def assert_safe_url(url: str, *, resolver: Resolver | None = None) -> None:
         raise UnsafeUrlError(f"no se pudo resolver el host {host!r}") from exc
     if not addresses:
         raise UnsafeUrlError(f"el host {host!r} no resolvió a ninguna IP")
+    if not allow_internal:
+        _assert_resolved_ips_public(host, addresses)
+
+
+def _assert_resolved_ips_public(host: str, addresses: list[str]) -> None:
+    """Lanza si alguna de las IPs resueltas de ``host`` no es pública."""
     for addr in addresses:
         ip = _parse_ip_literal(addr)
         if ip is None:

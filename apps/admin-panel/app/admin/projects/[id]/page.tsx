@@ -59,6 +59,7 @@ import {
   GitConfigSection,
   type GitConfig,
   type GitPolicies,
+  type LastGitSync,
 } from "@/components/projects/git-config-section";
 import { ReviewPreviewSection } from "@/components/projects/review-preview-section";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -327,6 +328,9 @@ export default function ProjectHubPage() {
               value={project.git_config}
               policies={
                 (project.worker_config?.["git_policies"] as GitPolicies | undefined) ?? null
+              }
+              lastSync={
+                (project.repository_config?.["last_git_sync"] as LastGitSync | undefined) ?? null
               }
             />
           </div>

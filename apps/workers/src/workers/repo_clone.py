@@ -126,8 +126,20 @@ async def _clone_project_repo_async(project_id: UUID, *, settings: Settings) -> 
                     repo=repo_name,
                     alignment=alignment,
                 )
+        except Exception as exc:
+            # Persistimos el fallo para que la UI del proyecto lo VEA (el
+            # operador no sabía si la cola ejecutaba el clone) en vez de que
+            # muera solo en los logs del worker.
+            await _persist_sync_status(
+                sessionmaker, project_id, status="error", alignment=None, error=str(exc)
+            )
+            _log.warning("repo_clone.git_failed", project_id=str(project_id), error=str(exc))
+            return {"project_id": str(project_id), "status": f"error:{exc}"}
         finally:
             auth.cleanup()
+        await _persist_sync_status(
+            sessionmaker, project_id, status="ok", alignment=alignment, error=None
+        )
         _log.info(
             "repo_clone.ok",
             project_id=str(project_id),
@@ -142,6 +154,47 @@ async def _clone_project_repo_async(project_id: UUID, *, settings: Settings) -> 
         }
     finally:
         await engine.dispose()
+
+
+async def _persist_sync_status(
+    sessionmaker: Any,
+    project_id: UUID,
+    *,
+    status: str,
+    alignment: str | None,
+    error: str | None,
+) -> None:
+    """Escribe el resultado del clone/sync en ``project.repository_config``.
+
+    Da al operador feedback de que la cola SÍ ejecutó (era su duda) y, sobre
+    todo, la ALINEACIÓN de la rama default local con el remoto: ``diverged``
+    explica por qué el PR final falla con «no history in common» (el caso
+    api-ci). Merge del dict (no pisa ``review_image``/``review_port``);
+    best-effort — un fallo aquí nunca rompe el clone ya hecho. El worker corre
+    como ``migrations_user`` (BYPASSRLS), así que la escritura no necesita
+    contexto de tenant."""
+    from datetime import UTC, datetime
+
+    from api_server.db.domain import Project
+
+    payload: dict[str, Any] = {
+        "at": datetime.now(tz=UTC).isoformat(),
+        "status": status,
+    }
+    if alignment is not None:
+        payload["default_branch_alignment"] = alignment
+    if error is not None:
+        payload["error"] = error[:500]
+    try:
+        async with sessionmaker() as session, session.begin():
+            project = await session.get(Project, project_id)
+            if project is not None:
+                project.repository_config = {
+                    **(project.repository_config or {}),
+                    "last_git_sync": payload,
+                }
+    except Exception as exc:  # pragma: no cover - defensive best-effort
+        _log.warning("repo_clone.persist_status_failed", project_id=str(project_id), error=str(exc))
 
 
 @app.task(name="workers.clone_project_repo")  # type: ignore[untyped-decorator]

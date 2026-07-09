@@ -23,9 +23,12 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, runtime_checkable
 
+import structlog
 from langgraph.graph import END, START, StateGraph
 
 from api_server.assistant.tools import AssistantToolContext, run_assistant_tool
+
+_log = structlog.get_logger("api_server.assistant.graph")
 
 # A node is async because the tool round awaits DB queries.
 AssistantNode = Callable[["AssistantState"], Awaitable["AssistantState"]]
@@ -222,7 +225,16 @@ def _node_run_tools(tool_runner: ToolRunner) -> AssistantNode:
         state.rounds += 1
         for call in state.pending.tool_calls:
             state.executed_signatures.add(_signature(call))
-            result = await tool_runner(call.name, state.tool_ctx, call.arguments)
+            try:
+                result: Any = await tool_runner(call.name, state.tool_ctx, call.arguments)
+            except Exception as exc:
+                # Una tool que falla (p.ej. web_fetch con el egress bloqueado, un
+                # timeout de red) NO debe tumbar el turno: se devuelve el error al
+                # modelo como resultado, y este responde con lo que ya tiene (los
+                # snippets de búsqueda, la memoria…). Antes la excepción propagaba
+                # y mataba la respuesta entera («voice turn failed»).
+                _log.warning("assistant.tool_failed", tool=call.name, error=str(exc))
+                result = {"error": f"la herramienta '{call.name}' falló: {exc}"}
             state.tools_called.append(call.name)
             state.tool_results.append({"tool": call.name, "result": result})
         return state

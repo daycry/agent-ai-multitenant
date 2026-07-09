@@ -41,6 +41,29 @@ _PUBLIC = _resolver("8.8.8.8")
 # ---------------------------------------------------------------------------
 # Acepta https público
 # ---------------------------------------------------------------------------
+def test_allow_internal_permits_a_trusted_private_backend() -> None:
+    """El backend de búsqueda (searxng/brave) es config de confianza del System
+    Admin y vive en la red interna del docker (IP privada). Con
+    ``allow_internal=True`` el guard permite esa IP privada — el guard estricto
+    sigue aplicándose a las URLs de los RESULTADOS (web_fetch). Visto en vivo:
+    el córtex no podía buscar porque el guard bloqueaba su propio searxng."""
+    private = _resolver("172.20.0.27")  # red docker
+    # Sin allow_internal → bloqueado (comportamiento por defecto, web_fetch).
+    with pytest.raises(UnsafeUrlError):
+        assert_safe_url("http://searxng:8080/search", resolver=private)
+    # Con allow_internal → permitido (el backend de confianza).
+    assert_safe_url("http://searxng:8080/search", resolver=private, allow_internal=True)
+
+
+def test_allow_internal_still_blocks_bad_scheme_and_port() -> None:
+    """``allow_internal`` relaja SOLO la exigencia de IP pública: esquema, host,
+    nombres de metadata y puerto se siguen validando."""
+    with pytest.raises(UnsafeUrlError):
+        assert_safe_url("file:///etc/passwd", allow_internal=True)
+    with pytest.raises(UnsafeUrlError):
+        assert_safe_url("http://localhost:8080/", allow_internal=True)  # nombre bloqueado
+
+
 def test_accepts_public_https() -> None:
     # No debe lanzar.
     assert_safe_url("https://example.com/path?q=1", resolver=_PUBLIC)

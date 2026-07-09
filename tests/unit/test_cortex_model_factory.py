@@ -87,6 +87,21 @@ def test_build_cortex_model_wires_reasoning_effort_for_non_claude() -> None:
     assert "effort" not in model.extra_call_kwargs
 
 
+def test_build_cortex_model_uses_a_generous_token_budget() -> None:
+    """El córtex razona hondo por defecto (effort alto). Con el default de
+    1024 tokens, un modelo de razonamiento OpenAI-compatible (gpt-oss) gasta
+    TODO el presupuesto en el canal `reasoning` y devuelve `content` VACÍO —
+    visto en vivo: la voz del córtex no respondía. El presupuesto debe dar
+    holgura al razonamiento MÁS la respuesta."""
+    model = build_cortex_model(
+        _resolved("ollama", "high"),
+        provider=_StubProvider(),
+        claude_sdk_available=False,  # type: ignore[arg-type]
+    )
+    assert isinstance(model, LLMAssistantModel)
+    assert model.max_tokens >= 8192
+
+
 # ---------------------------------------------------------------------------
 # Degradación honesta: claude_sdk sin el SDK y sin provider construible → no 500.
 # El builder señaliza la indisponibilidad con una excepción específica que el
