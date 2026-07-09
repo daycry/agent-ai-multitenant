@@ -204,17 +204,66 @@ async def _compose_review_runtime(request: dict[str, Any], settings: Settings) -
     return result
 
 
+def _sync_explicit_review_worktree(path: str, request: dict[str, Any], settings: Settings) -> None:
+    """Best-effort: trae un worktree de review EXPLÍCITO a la punta de la rama
+    del plan (fetch + reset --hard, **sin** ``clean``).
+
+    Visto en vivo (plan CI4, ADR 0107): un spawn que reusa el
+    ``worktree_host_path`` de un spec anterior (p.ej. el re-run del sweep, o un
+    relanzamiento manual) servía el commit de la PRIMERA ronda — el validador
+    veía el bug ya corregido como si las correcciones no existieran. Sin
+    ``clean`` a propósito: los artefactos no trackeados (``vendor/`` de
+    composer, ``node_modules/``…) deben sobrevivir — la app de preview los
+    necesita y su contenedor no tiene red para reinstalarlos."""
+    try:
+        from pathlib import Path
+
+        from workers.git_repos import BareRepoLayout, _run_git
+        from workers.plan_git import make_plan_branch_name
+
+        tenant_slug = request.get("tenant_slug")
+        project_slug = request.get("project_slug")
+        if not tenant_slug or not project_slug:
+            return
+        layout = BareRepoLayout(
+            data_root=Path(settings.data_root),
+            tenant_slug=str(tenant_slug),
+            project_slug=str(project_slug),
+        )
+        bare = layout.bare_repo_path(str(request.get("repo_name") or project_slug))
+        branch = make_plan_branch_name(str(request["plan_id"]), str(request.get("plan_slug") or ""))
+        wt = Path(path)
+        if not wt.exists() or not bare.exists():
+            return
+        _run_git("fetch", str(bare), branch, cwd=wt)
+        _run_git("reset", "--hard", "FETCH_HEAD", cwd=wt)
+        _log.info(
+            "review_runtime.worktree_synced",
+            plan_id=str(request.get("plan_id", "")),
+            branch=branch,
+        )
+    except Exception as exc:  # best-effort: mejor preview desfasada que ninguna
+        _log.warning(
+            "review_runtime.worktree_sync_failed",
+            plan_id=str(request.get("plan_id", "")),
+            error=str(exc),
+        )
+
+
 def _resolve_review_worktree_host_path(request: dict[str, Any], settings: Settings) -> str:
     """Resolve (provisioning if needed) the plan-level worktree host path (C8 F39).
 
-    Honours an explicit ``worktree_host_path`` when the caller already has one.
-    Otherwise materialises a detached worktree on the plan branch (``plan/{id8}-
-    {slug}``) from the project's bare repo — the same Plan 06 git libraries the
-    per-task provisioning uses. Best-effort: any failure (missing slugs, no git,
-    bare-repo error) returns ``""`` so the session still persists with an inert
-    app-preview rather than failing the whole spawn."""
+    Honours an explicit ``worktree_host_path`` when the caller already has one —
+    sincronizándolo antes a la punta de la rama del plan (ver
+    :func:`_sync_explicit_review_worktree`). Otherwise materialises a detached
+    worktree on the plan branch (``plan/{id8}-{slug}``) from the project's bare
+    repo — the same Plan 06 git libraries the per-task provisioning uses.
+    Best-effort: any failure (missing slugs, no git, bare-repo error) returns
+    ``""`` so the session still persists with an inert app-preview rather than
+    failing the whole spawn."""
     explicit = request.get("worktree_host_path")
     if isinstance(explicit, str) and explicit:
+        _sync_explicit_review_worktree(explicit, request, settings)
         return explicit
     tenant_slug = request.get("tenant_slug")
     project_slug = request.get("project_slug")
