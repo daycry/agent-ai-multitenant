@@ -149,6 +149,55 @@ def test_prose_finish_unchanged() -> None:
     assert d.finish_status is None
 
 
+# --- hallazgo #10c: la señal de truncado del claude_sdk (stop_reason) protege ---
+#     también el FINISH en prosa (antes solo protegía a los providers HTTP vía raw)
+from shared_llm.types import CompletionResponse, Usage  # noqa: E402
+
+
+def _sdk_resp(content: str, *, stop_reason: str | None) -> CompletionResponse:
+    """Un CompletionResponse como el que devuelve claude_sdk: `raw` es una LISTA de
+    mensajes SDK (de la que completion_signals NO deriva truncado) y la señal viaja
+    en el campo tipado `stop_reason`."""
+    return CompletionResponse(
+        content=content,
+        model="m",
+        provider="claude_sdk",
+        usage=Usage(),
+        tool_calls=None,
+        raw=["msg-a", "msg-b"],
+        stop_reason=stop_reason,
+    )
+
+
+def test_completion_signals_maps_max_tokens_stop_reason_to_truncated() -> None:
+    # claude_sdk: aunque `raw` sea una lista (all-False), stop_reason=max_tokens
+    # marca truncado — la señal que antes solo tenían los providers HTTP.
+    s = _completion_signals(_sdk_resp("cortado a mit", stop_reason="max_tokens"))
+    assert s.truncated is True
+
+
+def test_completion_signals_end_turn_stop_reason_not_truncated() -> None:
+    s = _completion_signals(_sdk_resp("respuesta completa", stop_reason="end_turn"))
+    assert s.truncated is False
+    # sin stop_reason (fakes viejos / SDK antiguo) tampoco marca truncado
+    assert _completion_signals(_sdk_resp("x", stop_reason=None)).truncated is False
+
+
+def test_prose_finish_truncated_retries_instead_of_finishing() -> None:
+    # El FINISH en prosa de claude_sdk cortado en el tope de salida NO se acepta como
+    # entregable legítimo: se emite un noop ACT para reintentar (bounded).
+    d = _decision_from(_sdk_resp("He implementado la funci", stop_reason="max_tokens"), model="m")
+    assert d.decision.kind == DecisionKind.ACT
+    assert d.decision.tool == "noop"
+
+
+def test_prose_finish_not_truncated_still_finishes() -> None:
+    # Regresión: una prosa completa (end_turn) sigue cerrando como FINISH.
+    d = _decision_from(_sdk_resp("Tarea terminada.", stop_reason="end_turn"), model="m")
+    assert d.decision.kind == DecisionKind.FINISH
+    assert d.decision.output == "Tarea terminada."
+
+
 # --- _review_from: well-formed verdict is EXACTLY as before --------------------
 def test_well_formed_submit_verdict_unchanged() -> None:
     args = json.dumps({"passed": True, "feedback": "ok"})

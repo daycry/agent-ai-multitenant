@@ -80,6 +80,13 @@ class CompletionResponse:
     # bits we did not surface in typed fields. Not part of the contract;
     # do not rely on its shape across providers.
     raw: Any = None
+    # Por qué terminó la generación, normalizado del provider (OpenAI-compat:
+    # ``finish_reason``; Claude SDK: ``stop_reason``). ``"max_tokens"``/``"length"``
+    # señalan TRUNCADO — parte del contrato tipado (a diferencia de ``raw``), para
+    # que la detección de truncado (F32) proteja también a claude_sdk, cuyo ``raw``
+    # es una lista de mensajes SDK de la que ``completion_signals`` no puede derivar
+    # la señal (hallazgo #10c). ``None`` cuando el provider no la reporta.
+    stop_reason: str | None = None
 
 
 @dataclass

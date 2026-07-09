@@ -99,6 +99,29 @@ def _usage_get(u: Any, name: str, default: int = 0) -> int:
     return int(val or 0)
 
 
+def _harvest_stop_reason(messages: list[Any]) -> str | None:
+    """El motivo de parada del turno (hallazgo #10c): el ``stop_reason`` del ÚLTIMO
+    ``AssistantMessage`` (el que decide si el turno acabó truncado), con el del
+    ``ResultMessage`` como respaldo. ``getattr`` defensivo: los fakes/SDK antiguos
+    sin el atributo devuelven ``None`` (retrocompatible). Cosechado aparte de
+    ``_harvest`` para no tocar su firma. ``"max_tokens"`` aguas arriba = TRUNCADO
+    (F32), lo que hoy el ``raw``-lista de claude_sdk no permite derivar."""
+    assistant_reason: str | None = None
+    result_reason: str | None = None
+    for msg in messages:
+        reason = getattr(msg, "stop_reason", None)
+        if not reason:
+            continue
+        is_result = getattr(msg, "total_cost_usd", None) is not None or (
+            getattr(msg, "model_usage", None) is not None
+        )
+        if is_result:
+            result_reason = str(reason)
+        else:
+            assistant_reason = str(reason)  # el último AssistantMessage manda
+    return assistant_reason or result_reason
+
+
 # Markers in the CLI's error ``result`` text that mean "fix your credential", so a
 # failed run raises the typed ``AuthError`` (actionable: tell the operator to set
 # the provider's api_key / oauth_token — ADR 0064) instead of a generic error.
@@ -390,6 +413,7 @@ class ClaudeAgentProvider:
             usage=usage,
             tool_calls=None,  # no tools requested
             raw=collected,
+            stop_reason=_harvest_stop_reason(collected),
         )
 
     async def _complete_with_tools(
@@ -453,6 +477,7 @@ class ClaudeAgentProvider:
                 usage=usage,
                 tool_calls=tool_calls,
                 raw=collected,
+                stop_reason=_harvest_stop_reason(collected),
             )
         text_parts, usage = self._harvest(collected)
         tool_calls = _harvest_tool_calls(collected)
@@ -466,6 +491,7 @@ class ClaudeAgentProvider:
             usage=usage,
             tool_calls=tool_calls or None,
             raw=collected,
+            stop_reason=_harvest_stop_reason(collected),
         )
 
     def _build_tool_options(

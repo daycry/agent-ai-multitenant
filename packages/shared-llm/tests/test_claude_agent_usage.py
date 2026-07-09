@@ -76,6 +76,52 @@ def test_result_model_usage_is_the_fallback_channel() -> None:
     assert usage.cost_usd == 0.03
 
 
+# ---------------------------------------------------------------------------
+# _harvest_stop_reason — hallazgo #10c: el claude_sdk expone el motivo de parada
+# (AssistantMessage.stop_reason / ResultMessage.stop_reason) pero la cosecha lo
+# tiraba, así que la detección de truncado (F32, `max_tokens`) solo protegía a los
+# providers HTTP. El campo tipado CompletionResponse.stop_reason lo transporta.
+# ---------------------------------------------------------------------------
+
+from shared_llm.providers.claude_agent import _harvest_stop_reason  # noqa: E402
+
+
+def test_stop_reason_of_the_last_assistant_message() -> None:
+    msgs = [_Obj(content=[], usage=None, stop_reason="max_tokens")]
+    assert _harvest_stop_reason(msgs) == "max_tokens"
+
+
+def test_stop_reason_end_turn() -> None:
+    msgs = [_Obj(content=[], usage=None, stop_reason="end_turn")]
+    assert _harvest_stop_reason(msgs) == "end_turn"
+
+
+def test_stop_reason_none_when_absent() -> None:
+    """Fakes viejos sin el atributo → None (retrocompatible)."""
+    assert _harvest_stop_reason([_Obj(content=[], usage=None)]) is None
+    assert _harvest_stop_reason([]) is None
+
+
+def test_last_assistant_stop_reason_wins() -> None:
+    """Un turno con mensajes intermedios tool_use y final max_tokens devuelve el
+    ÚLTIMO — es el que decide si el turno acabó truncado."""
+    msgs = [
+        _Obj(content=[], usage=None, stop_reason="tool_use"),
+        _Obj(content=[], usage=None, stop_reason="max_tokens"),
+    ]
+    assert _harvest_stop_reason(msgs) == "max_tokens"
+
+
+def test_result_message_stop_reason_is_the_fallback() -> None:
+    """Si ningún AssistantMessage trae stop_reason pero el ResultMessage sí, se usa
+    ese como respaldo."""
+    msgs = [
+        _Obj(content=[], usage=None),  # assistant sin stop_reason
+        _Obj(content=None, usage={}, total_cost_usd=0.01, stop_reason="end_turn"),  # result
+    ]
+    assert _harvest_stop_reason(msgs) == "end_turn"
+
+
 def test_result_aggregate_usage_still_wins_when_present() -> None:
     msgs = [
         _Obj(content=[], usage={"input_tokens": 100, "output_tokens": 10}),

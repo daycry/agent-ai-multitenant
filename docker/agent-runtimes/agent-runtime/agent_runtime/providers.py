@@ -551,10 +551,21 @@ def _completion_signals(resp: CompletionResponse) -> CompletionSignals:
 
     Defensive on every shape: a response with no `raw` (test fakes), a non-dict
     `raw` (the claude_sdk path), or an unexpected payload all collapse to the
-    all-False default, so only the OpenAI-compatible HTTP providers — whose `raw`
-    is the `/chat/completions` dict — can ever flag truncation / malformed args.
+    all-False default from the OpenAI-compat helper.
+
+    Hallazgo #10c: the claude_sdk path stores a LIST of SDK messages in `raw`, from
+    which `completion_signals` can NOT derive truncation — so F32 protected only the
+    HTTP providers. The typed `CompletionResponse.stop_reason` (harvested from the
+    SDK's AssistantMessage) carries the signal for claude_sdk: a turn cut off at the
+    output cap reports ``"max_tokens"``, which we map to ``truncated`` here so the
+    downstream guard (a corrupt/truncated FINISH → retry, not a lost result) fires
+    for BOTH transports. Only ``"max_tokens"``/``"length"`` mean truncated; a normal
+    ``"end_turn"``/``"tool_use"`` never flags it.
     """
-    return completion_signals(getattr(resp, "raw", None))
+    base = completion_signals(getattr(resp, "raw", None))
+    if getattr(resp, "stop_reason", None) in ("max_tokens", "length"):
+        return CompletionSignals(truncated=True, malformed_tool_args=base.malformed_tool_args)
+    return base
 
 
 def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
@@ -634,10 +645,32 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
     else:
         # Prosa sin tool call (el FINISH de claude_sdk): F1.5 — parsear el tag
         # `<finish status="..."/>` para recuperar el finish_status estructurado.
-        output, finish_status = _parse_finish_tag(resp.content or "")
-        decision = ModelDecision(
-            kind=DecisionKind.FINISH, output=output, finish_status=finish_status
-        )
+        # Hallazgo #10c: este es el FINISH REAL de claude_sdk y no tenía guard F32.
+        # Si el turno salió TRUNCADO (stop_reason=max_tokens), la prosa está cortada
+        # a mitad → NO la aceptamos como FINISH legítimo (entregable incompleto que
+        # se cuela como done); emitimos un noop ACT para que el loop reintente
+        # (acotado por el loop-detector / presupuesto de iteraciones → fail-closed:
+        # si el CLI golpea su tope de output persistentemente, escala a blocked en
+        # vez de cerrar con un entregable cortado).
+        signals = _completion_signals(resp)
+        if signals.truncated:
+            _log.warning(
+                "prose FINISH treated as INVALID (truncated) — retrying the decision "
+                "instead of finishing on a response cut off at the output cap"
+            )
+            decision = ModelDecision(
+                kind=DecisionKind.ACT,
+                tool="noop",
+                rationale=(
+                    "la respuesta se cortó en el tope de salida (truncada); reintento "
+                    "en vez de cerrar con un entregable incompleto"
+                ),
+            )
+        else:
+            output, finish_status = _parse_finish_tag(resp.content or "")
+            decision = ModelDecision(
+                kind=DecisionKind.FINISH, output=output, finish_status=finish_status
+            )
     return ModelResponse(
         decision=decision,
         model=resp.model or model,
