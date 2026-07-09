@@ -44,6 +44,20 @@ branch: plan/runs-visor-trabajo
 >   secciones del detalle de plan de 1703 líneas, model-prices/mcp-servers/knowledge-bases;
 >   caracterizar jsdom → extraer → verde). Los ficheros extraídos deben llamarse `*-section.tsx`
 >   (nunca `page.tsx`/`layout.tsx`/`route.ts` dentro de `app/**`) y llevar `'use client'`.
+>
+> **Estado (2026-07-09, tanda «implementa lo diferido»)**:
+>
+> - **#8 (e2e ciclo autónomo) — HECHO** (`2a0d5496`): `tests/integration/test_autonomous_cycle.py`
+>   corre el ciclo COMPLETO sobre Docker real (implementador→in_review→reviewer approve→done, y
+>   reject→backlog) con modelos scripted. VERDE local (2 tests, ~32 s), NO skippeado. Va en
+>   integration/ (no e2e/) porque reutiliza el harness probado del smoke; e2e/ es solo el install.
+> - **#9 (refactor frontend) — detalle de plan HECHO** (`415a2578`, `618e6844`): el peor hotspot
+>   (1703 líneas) modularizado en 3 ficheros — `plan-spec-types.ts` (interfaces + STATUS\_\* +
+>   formatCostRange), `plan-spec-sections.tsx` (8 secciones presentacionales puras),
+>   `plan-interactive-sections.tsx` (7 secciones con hooks) — y `page.tsx` queda en **161 líneas**
+>   de composición. Verbatim, testids intactos; tsc 0 + vitest 201/201 + `next build` OK. **RESTA
+>   (tramo)**: model-prices (1311), mcp-servers (1105), knowledge-bases (1042) — NO tienen red de
+>   tests, así que necesitan caracterización jsdom ANTES de extraer; mismo patrón probado aquí.
 
 # Hallazgos pendientes — backlog de implementación
 
