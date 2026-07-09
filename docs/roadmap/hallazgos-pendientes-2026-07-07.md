@@ -162,6 +162,17 @@ worktree_host_path`) — semánticas distintas, unificar con cuidado.
   (F32) solo protege a los providers HTTP. Mejorable en `shared-llm`.
 - P8 (unificar `db/domain.py` vs `db/models.py`): NO abordar — 273 ficheros importadores,
   beneficio moderado (registrado en el plan de refactorización).
+- **Schema-gap del córtex (2026-07-09):** `LLMAssistantModel.decide` construye los schemas de
+  tools con `tool_schemas` del **asistente** (`api_server.assistant.tools`), que no conoce las
+  tools del córtex (`web_search`, `web_fetch`, `cortex_remember`, `cortex_recall_more`). Efecto
+  medido: **todas** las llamadas `complete()` del córtex van con `tools=None` (el modelo nunca
+  recibe los schemas). `web_search` funciona igualmente porque gpt-oss:120b la trae nativa; las
+  demás tools del córtex operan «a ciegas» (el modelo infiere args del prompt/self-context).
+  Fix propuesto: inyectar un `schema_fn` en `LLMAssistantModel` (default `tool_schemas`) y que
+  `build_cortex_model`/`build_cortex_default_model` pase `cortex_tool_schemas`. RIESGO: cambio
+  de comportamiento en un sistema que converge; validar que no rompe `web_search` (posible
+  duplicado con la nativa) ni la escritura de memoria. NO se bundleó con el fix del answer
+  vacío (`ffd38f4`, `FINISH_NUDGE`), que es la corrección correcta e independiente del cierre.
 
 ## Referencias
 
