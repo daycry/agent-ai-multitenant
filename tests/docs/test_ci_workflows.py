@@ -168,3 +168,22 @@ def test_unit_job_enforces_a_coverage_floor() -> None:
         f"coverage ratchet floor {match.group(1)} is below the 30 baseline — "
         "raise it toward conventions.md (70%/80%), never lower it"
     )
+
+
+def test_unit_job_runs_the_agent_runtime_suite() -> None:
+    """Los tests del agent-runtime (docker/agent-runtimes/agent-runtime/tests) deben
+    correr en CI (hallazgo #6, PASO 0): viven fuera de ``tests/unit`` — el job los
+    ignoraba, así que el contrato de review (tag <verdict>, F32, wire-format) y la
+    señal de truncado del claude_sdk (#10c) quedaban SIN protección. Este guard hace
+    de olvidarlos un test rojo. El paquete ya se instala editable en el job."""
+    ci = _load(WORKFLOWS_DIR / "ci.yml")
+    job = ci.get("jobs", {}).get("test-unit")
+    assert job is not None, "ci.yml has no 'test-unit' job"
+    run_blocks = "\n".join(
+        step.get("run", "") for step in job.get("steps", []) if isinstance(step, dict)
+    )
+    assert "docker/agent-runtimes/agent-runtime/tests" in run_blocks, (
+        "the test-unit job must run the agent-runtime suite "
+        "(pytest docker/agent-runtimes/agent-runtime/tests) — those tests pin the "
+        "review verdict contract and F32/truncation signals and live outside tests/unit"
+    )

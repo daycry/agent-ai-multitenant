@@ -19,13 +19,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from agent_runtime.state import AgentState
+from agent_runtime.state import AgentState, ReviewState
 
 _RUNTIME_DIR = Path(__file__).resolve().parents[1] / "agent_runtime"
 
-# Claves que NO están en el TypedDict pero se inyectan deliberadamente en dicts
-# derivados del estado (documentadas en state.py). Mantener MÍNIMA.
-_INJECTED_KEYS = frozenset({"written_files"})
+# Las claves inyectadas ad-hoc en dicts derivados del estado ya NO son una lista
+# mágica: viven TIPADAS en ``ReviewState`` (subclase de AgentState). El scanner las
+# deriva de la jerarquía de TypedDicts, así que añadir/renombrar una clave inyectada
+# obliga a tocar el tipo (no una constante paralela en el test) — hallazgo #6.
+_INJECTED_KEYS = frozenset(ReviewState.__annotations__) - frozenset(AgentState.__annotations__)
 
 
 def _state_keys_accessed(source: str) -> set[str]:

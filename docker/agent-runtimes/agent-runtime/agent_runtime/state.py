@@ -11,9 +11,11 @@ compila y rompe en silencio (el TypedDict no protege los ``state.get("...")``).
 Claves compartidas hoy: ``status``, ``last_decision``, ``last_observation``,
 ``review_retries``, ``last_review_feedback``, ``guidance_nudge``,
 ``repetition_warning``, ``progress_summary``, ``output``, ``review_passed``,
-``is_review``, ``system_preamble``, ``context``, ``steps``, ``guardrail_events``
-(+ ``written_files``, inyectada solo en el estado que ve la self-review). Si
-añades o renombras una clave, actualiza AMBOS módulos y este listado.
+``is_review``, ``system_preamble``, ``context``, ``steps``, ``guardrail_events``.
+La clave ``written_files`` (inyectada solo en el estado que ve la self-review) ya
+NO es mágica: vive TIPADA en :class:`ReviewState` (subclase ``total=False``), y el
+test-contrato deriva las claves inyectadas de esa jerarquía de tipos. Si añades o
+renombras una clave, actualiza AMBOS módulos y este listado.
 
 Desde 2026-07-08 el contrato es EJECUTABLE: ``tests/test_state_key_contract.py``
 escanea ambos módulos con AST y falla si algún ``state[...]``/``state.get(...)``
@@ -108,6 +110,19 @@ class AgentState(TypedDict):
     # Guardrail events (ADR 0102 / g1): triggered post_tool guardrails accumulated
     # across the run; the worker persists them (RLS) from the result envelope.
     guardrail_events: Annotated[list[dict[str, Any]], operator.add]
+
+
+class ReviewState(AgentState, total=False):
+    """El estado que ve la self-review: ``AgentState`` MÁS la clave ``written_files``
+    que ``graph.py`` inyecta en el dict derivado antes de llamar a ``model.review``.
+
+    Antes ``written_files`` era una clave mágica sin tipo (una lista literal
+    ``_INJECTED_KEYS`` en el test-contrato); tiparla aquí como subclase ``total=False``
+    (opcional) la hace visible a mypy y al scanner AST — el rename silencioso de la
+    ÚNICA clave inyectada se convierte también en un fallo tipado, sin tocar el código
+    caliente del loop (hallazgo #6, H6-real). Cada entrada es ``{"path", "content"}``."""
+
+    written_files: list[dict[str, str]]
 
 
 def initial_state(

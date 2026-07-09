@@ -213,6 +213,16 @@ jobs:
         # pyproject.toml.
         run: pytest tests/unit -v --cov=api_server --cov=workers --cov=orchestrator --cov-report=term --cov-fail-under=30
 
+      # agent-runtime suite (hallazgo #6, PASO 0): estos tests viven FUERA de
+      # tests/unit (el runtime es un paquete Docker aparte, ya instalado editable
+      # arriba) y clavaban el contrato de review (tag <verdict>, wire-format) y las
+      # señales de robustez F32 / truncado del claude_sdk (#10c) — pero el job no
+      # los corría, así que quedaban sin protección. Sin cobertura (miden el
+      # paquete agent_runtime, fuera del ratchet de api_server/workers/orchestrator).
+      - name: pytest agent-runtime suite
+        if: steps.detect.outputs.has_tests == 'true'
+        run: pytest docker/agent-runtimes/agent-runtime/tests -v
+
       # Static hardening + documentation invariants (Plan prod-02 task_05,
       # findings tests-4). Both suites are static (no stack): tests/security
       # asserts the compose/seccomp/apparmor/secrets invariants, tests/docs the
