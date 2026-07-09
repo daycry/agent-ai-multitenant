@@ -102,6 +102,57 @@ async def test_tool_failure_does_not_crash_the_turn(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
+async def test_reasoning_preamble_of_a_tool_turn_never_becomes_the_answer() -> None:
+    """El `content` de un turno que PIDE una tool es preámbulo/razonamiento del
+    modelo (p.ej. gpt-oss emite «We need to use web_search»), NO una respuesta.
+    Si el turno final tras la tool sale VACÍO, la respuesta NUNCA debe ser ese
+    preámbulo — visto en vivo: el córtex «respondía» «We need to use
+    web_search» (además en inglés). Mejor una respuesta vacía que el
+    pensamiento crudo."""
+    model = ScriptedAssistantModel(
+        turns=[
+            ModelTurn(
+                content="We need to use web_search.",
+                tool_calls=(ToolInvocation(name=READ_TOOL, arguments={"query": "tiempo"}),),
+            ),
+            ModelTurn(content=""),  # el modelo no produjo respuesta tras la tool
+        ]
+    )
+    result = await run_cortex_turn(
+        model,
+        system_prompt="Eres el córtex.",
+        enabled_tools=(WRITE_TOOL, READ_TOOL),
+        tool_ctx=_ctx(),
+        chat_history=[{"role": "user", "content": "¿qué tiempo hace?"}],
+    )
+    assert "web_search" not in result.content
+    assert result.content == ""  # sin respuesta real → vacío, jamás el preámbulo
+
+
+@pytest.mark.asyncio
+async def test_real_answer_after_tool_is_used_not_the_preamble() -> None:
+    """El caso feliz: el preámbulo del turno-tool se ignora y se usa la
+    respuesta real del turno posterior."""
+    model = ScriptedAssistantModel(
+        turns=[
+            ModelTurn(
+                content="We need to use web_search.",
+                tool_calls=(ToolInvocation(name=READ_TOOL, arguments={"query": "tiempo"}),),
+            ),
+            ModelTurn(content="En Barcelona hace sol, 28 grados."),
+        ]
+    )
+    result = await run_cortex_turn(
+        model,
+        system_prompt="Eres el córtex.",
+        enabled_tools=(WRITE_TOOL, READ_TOOL),
+        tool_ctx=_ctx(),
+        chat_history=[{"role": "user", "content": "¿qué tiempo hace?"}],
+    )
+    assert result.content == "En Barcelona hace sol, 28 grados."
+
+
+@pytest.mark.asyncio
 async def test_run_cortex_turn_calls_remember_then_answers() -> None:
     model = ScriptedAssistantModel(
         turns=[

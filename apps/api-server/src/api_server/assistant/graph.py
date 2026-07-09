@@ -203,16 +203,22 @@ def _admissible_tool_calls(
 def _node_decide(model: AssistantModelClient) -> AssistantNode:
     async def _run(state: AssistantState) -> AssistantState:
         turn = await model.decide(state)
-        if turn.content:
+        # SOLO guardamos como último contenido válido el de un turno que NO pide
+        # tools: cuando el modelo llama a una tool, su `content` es un preámbulo
+        # de razonamiento («We need to use web_search»), no una respuesta. Si se
+        # guardara, un turno final vacío lo devolvería como respuesta (visto en
+        # vivo: el córtex «respondía» su propio pensamiento, además en inglés).
+        if turn.content and not turn.tool_calls:
             state.last_content = turn.content
         # Filter to the calls the host will actually run (enabled, not already
         # executed, under the per-tool cap incl. this round) — see _admissible_tool_calls.
         kept = _admissible_tool_calls(state, turn.tool_calls)
         state.pending = ModelTurn(content=turn.content, tool_calls=kept)
         if not kept:
-            # No new work to do → this is the answer (the model's content, or
-            # the latest content it produced earlier this turn).
-            state.answer = turn.content or state.last_content or ""
+            # No new work to do → this is the answer. Si el turno actual trae
+            # respuesta, esa; si viene vacío, la última respuesta REAL previa
+            # (nunca un preámbulo de tool); si tampoco hay, vacío.
+            state.answer = (turn.content if not turn.tool_calls else "") or state.last_content or ""
         return state
 
     return _run
