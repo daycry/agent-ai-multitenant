@@ -163,9 +163,10 @@ def test_unit_job_enforces_a_coverage_floor() -> None:
     assert (
         match is not None
     ), "the test-unit job must gate coverage with pytest --cov-fail-under=<floor>"
-    # Ratchet floor: measured 30.4% on 2026-07-07 (round-down = 30). Never lower.
-    assert int(match.group(1)) >= 30, (
-        f"coverage ratchet floor {match.group(1)} is below the 30 baseline — "
+    # Ratchet floor: 30.4% (2026-07-07) → 31%+ (2026-07-09, tras los tests puros de
+    # detect_outliers, hallazgo #8). Never lower — raise toward conventions.md (70/80).
+    assert int(match.group(1)) >= 31, (
+        f"coverage ratchet floor {match.group(1)} is below the 31 baseline — "
         "raise it toward conventions.md (70%/80%), never lower it"
     )
 

@@ -211,7 +211,7 @@ jobs:
         # value the unit suite reaches today over these packages; raise over time
         # toward conventions.md (70%/80%). Never lower. See [tool.coverage] in
         # pyproject.toml.
-        run: pytest tests/unit -v --cov=api_server --cov=workers --cov=orchestrator --cov-report=term --cov-fail-under=30
+        run: pytest tests/unit -v --cov=api_server --cov=workers --cov=orchestrator --cov-report=term --cov-fail-under=31
 
       # agent-runtime suite (hallazgo #6, PASO 0): estos tests viven FUERA de
       # tests/unit (el runtime es un paquete Docker aparte, ya instalado editable
