@@ -70,6 +70,39 @@ def _resolve_voice(requested: str, current: str) -> str:
     return requested if requested in _SUPPORTED_VOICES else current
 
 
+# Idioma de la voz Kokoro por la PRIMERA letra del prefijo (a/b = inglés,
+# e = español). El idioma de la RESPUESTA sigue a la voz elegida: el operador
+# que pone una voz española espera respuesta en español, pero gpt-oss razona
+# en inglés y a veces respondía en inglés aunque la pregunta fuese en español.
+_VOICE_LANGUAGE: dict[str, str] = {
+    "af_heart": "en",
+    "am_michael": "en",
+    "bf_emma": "en",
+    "bm_george": "en",
+    "ef_dora": "es",
+    "em_alex": "es",
+}
+
+
+def voice_language(voice: str) -> str:
+    """``"es"`` | ``"en"`` según la voz (default español — despliegue ES-first)."""
+    return _VOICE_LANGUAGE.get(voice, "es")
+
+
+def voice_language_instruction(voice: str) -> str:
+    """Instrucción imperativa para que la respuesta salga en el idioma de la voz
+    elegida, pase lo que pase con el razonamiento interno del modelo."""
+    if voice_language(voice) == "en":
+        return (
+            " CRITICAL: answer ONLY in English, regardless of the language of your "
+            "internal reasoning or the question."
+        )
+    return (
+        " IMPORTANTE: responde SIEMPRE en español, sea cual sea el idioma de tu "
+        "razonamiento interno o de la pregunta. NUNCA respondas en inglés."
+    )
+
+
 # RFC 6455: el payload de un frame de control cabe en 125 bytes; 2 van al
 # código de cierre → el reason del close se limita a 123 bytes UTF-8. Un
 # reason mayor hace LANZAR a ws.close() — y con el suppress de abajo el
@@ -98,12 +131,13 @@ async def _reject(ws: WebSocket, reason: str) -> None:
         await ws.close(code=_CLOSE_POLICY, reason=_clip_close_reason(reason))
 
 
-async def _respond(principal: AuthPrincipal, model: Any, user_text: str) -> str:
+async def _respond(principal: AuthPrincipal, model: Any, user_text: str, voice: str = "") -> str:
     """Run ONE assistant turn for `user_text`, reusing the chat brain verbatim.
 
     Opens a fresh RLS-bound tenant session per turn (like the REST chat endpoint),
     recalls the user's memory, folds it into the system prompt, and runs the
-    provider-agnostic graph. Returns the answer text."""
+    provider-agnostic graph. Returns the answer text. ``voice`` fija el idioma de
+    la respuesta al de la voz elegida (español para ef_/em_)."""
     tenant_id = require_tenant_id(principal)
     async with open_tenant_session(principal) as session:
         identity = await get_assistant_identity(session, tenant_id)
@@ -116,6 +150,8 @@ async def _respond(principal: AuthPrincipal, model: Any, user_text: str) -> str:
             known_facts=known_facts,
             remember_enabled="remember_about_me" in enabled_tools,
         )
+        if voice:
+            system_prompt += voice_language_instruction(voice)
         tool_ctx = AssistantToolContext(
             session=session, tenant_id=tenant_id, user_id=principal.user_id
         )
@@ -156,7 +192,7 @@ async def _run_turn(
 
     session = VoiceSession(
         transcribe=lambda a: stt.transcribe(a, content_type=audio_mime),
-        respond=lambda t: _respond(principal, model, t),
+        respond=lambda t: _respond(principal, model, t, voice),
         synthesize=lambda t: tts.synthesize(t, voice=voice),
     )
     try:

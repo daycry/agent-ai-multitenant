@@ -63,22 +63,27 @@ from api_server.db.platform_settings import get_cortex_web_enabled
 _log = structlog.get_logger("api_server.cortex.voice_turn")
 
 
-def _cortex_voice_base_prompt(*, web_enabled: bool = False) -> str:
+def _cortex_voice_base_prompt(*, web_enabled: bool = False, language_instruction: str = "") -> str:
     """System prompt base del córtex en voz (copy honesto — sin fingir afecto).
 
     Espejo del prompt del chat (``routers.cortex._cortex_base_prompt``) con una
     nota de brevedad propia de la voz: las respuestas habladas deben ser concisas
     (la TTS las lee), sin Markdown ni listas largas. ``web_enabled`` anuncia la
-    affordance de la web (el modelo no usa lo que no sabe que tiene)."""
+    affordance de la web (el modelo no usa lo que no sabe que tiene).
+    ``language_instruction`` fija el idioma de la RESPUESTA al de la voz elegida
+    (el owner reportó que con voz española el córtex contestaba en inglés)."""
     base = (
         "Eres el córtex del System Owner en una videollamada de voz: un asistente "
         "de deliberación con memoria persistente entre conversaciones. Razonas, "
         "recuerdas lo que el owner te cuenta y lo usas para ayudarle mejor. Como te "
         "están ESCUCHANDO (no leyendo), responde de forma breve, natural y hablada: "
-        "sin Markdown, sin listas largas, frases cortas. Responde con honestidad y "
-        "en el idioma del owner (español o inglés). No afirmes tener emociones ni "
-        "consciencia: eres un modelo computacional."
+        "sin Markdown, sin listas largas, frases cortas. No afirmes tener emociones "
+        "ni consciencia: eres un modelo computacional."
     )
+    if language_instruction:
+        base += language_instruction
+    else:
+        base += " Responde con honestidad y en el idioma del owner (español o inglés)."
     if web_enabled:
         base += (
             " SÍ tienes acceso a Internet mediante tus tools web_search y web_fetch "
@@ -101,6 +106,7 @@ async def run_cortex_voice_turn(
     conversation_id: UUID | None,
     affect: AffectState | None = None,
     now: datetime | None = None,
+    language_instruction: str = "",
 ) -> tuple[AssistantTurnResult, UUID, UUID]:
     """Corre UN turno del córtex para ``user_text`` y persiste ambos turnos.
 
@@ -155,7 +161,9 @@ async def run_cortex_voice_turn(
     )
     model = apply_effort_decision(model, decision)
     system_prompt = compose_self_context_prompt(
-        _cortex_voice_base_prompt(web_enabled=web_enabled),
+        _cortex_voice_base_prompt(
+            web_enabled=web_enabled, language_instruction=language_instruction
+        ),
         ctx,
         remember_enabled="cortex_remember" in enabled_tools,
     )

@@ -67,6 +67,7 @@ from api_server.routers.assistant_voice import (
     _SUPPORTED_VOICES,  # noqa: F401  (re-exported allowlist; kept for parity/tests)
     _reject,
     _resolve_voice,
+    voice_language_instruction,
 )
 from api_server.routers.cortex import build_cortex_default_model
 from api_server.routers.llm_providers import get_provider_vault_store
@@ -192,6 +193,7 @@ async def _run_turn(
                 conversation_id=state.conversation_id,
                 affect=affect,
                 now=now,
+                language_instruction=voice_language_instruction(state.voice),
             )
         state.conversation_id = conv_id
         cortex_turn_id_holder["id"] = turn_id
