@@ -280,8 +280,21 @@ class Settings(BaseSettings):
         description="TTS (Kokoro-FastAPI) base URL — /v1/audio/speech (ADR 0073).",
     )
     assistant_tts_default_voice: str = Field(
-        default="af_heart",
-        description="Voz TTS por defecto (Kokoro). La UI permite elegir M/F.",
+        default="ef_dora",
+        description=(
+            "Voz TTS por defecto del asistente (Kokoro). Despliegue ES-first: "
+            "ef_dora (femenina, español) — el prefijo Kokoro fija el IDIOMA de "
+            "síntesis (e*=ES, a*=EN-US, b*=EN-GB), así que un default inglés "
+            "leía el español con fonemizador inglés. La UI permite elegir M/F."
+        ),
+    )
+    cortex_tts_default_voice: str = Field(
+        default="ef_dora",
+        description=(
+            "Voz TTS por defecto del córtex del System Owner (Kokoro). Propia "
+            "del córtex — antes reutilizaba la del asistente y el frame "
+            "'ready' pisaba la elección en español del frontend."
+        ),
     )
     ollama_url: str = Field(
         default="http://localhost:11434",

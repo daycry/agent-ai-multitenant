@@ -52,7 +52,10 @@ class HttpSpeechToText:
     async def transcribe(
         self, audio: bytes, *, content_type: str = "audio/wav", language: str | None = None
     ) -> str:
-        files = {"file": ("audio", audio, content_type)}
+        # Filename CON extensión derivada del mime: faster-whisper sniffa el
+        # contenido, pero otros backends OpenAI-compatibles validan la
+        # extensión del upload y rechazarían un fichero llamado solo `audio`.
+        files = {"file": (_stt_filename(content_type), audio, content_type)}
         data: dict[str, str] = {"model": self._model, "response_format": "json"}
         if language:
             data["language"] = language
@@ -108,20 +111,57 @@ class HttpTextToSpeech:
             return resp.content
 
 
+class SttResponseError(RuntimeError):
+    """A 200 from the STT whose body carries no usable transcript.
+
+    Distinto de «silencio» (``{"text": ""}`` es VÁLIDO): esto es un backend
+    que respondió otra forma (``{"error": ...}``, lista de segmentos, null…).
+    Antes se degradaba a transcript vacío y el usuario veía «no te he oído»
+    con el STT roto — ahora aflora como error explícito (el WS lo convierte
+    en un frame ``error`` visible)."""
+
+
 def _extract_text(body: Any) -> str:
-    """Pull the transcript out of an OpenAI-style transcription response."""
+    """Pull the transcript out of an OpenAI-style transcription response.
+
+    Raises :class:`SttResponseError` for any shape that is not a transcript —
+    a broken STT must never masquerade as silence."""
     if isinstance(body, dict):
         text = body.get("text")
         if isinstance(text, str):
             return text
     if isinstance(body, str):
         return body
-    return ""
+    raise SttResponseError(f"unexpected STT response shape: {str(body)[:200]!r}")
+
+
+# Extensión de fichero por content_type para el multipart del STT: los backends
+# OpenAI-compatibles estrictos validan la EXTENSIÓN del upload (faster-whisper
+# sniffa el contenido, pero no todos lo hacen). El navegador manda webm/opus.
+_AUDIO_EXTENSIONS: dict[str, str] = {
+    "audio/webm": "webm",
+    "audio/ogg": "ogg",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/wave": "wav",
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/mp4": "m4a",
+    "audio/aac": "aac",
+    "audio/flac": "flac",
+}
+
+
+def _stt_filename(content_type: str) -> str:
+    """``audio.<ext>`` derivado del mime (``audio.bin`` si es desconocido)."""
+    base = content_type.split(";")[0].strip().lower()
+    return f"audio.{_AUDIO_EXTENSIONS.get(base, 'bin')}"
 
 
 __all__ = [
     "HttpSpeechToText",
     "HttpTextToSpeech",
     "SpeechToText",
+    "SttResponseError",
     "TextToSpeech",
 ]

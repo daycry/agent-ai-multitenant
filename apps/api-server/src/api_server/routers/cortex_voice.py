@@ -65,6 +65,7 @@ from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers.assistant_voice import (
     _MAX_UTTERANCE_BYTES,
     _SUPPORTED_VOICES,  # noqa: F401  (re-exported allowlist; kept for parity/tests)
+    _reject,
     _resolve_voice,
 )
 from api_server.routers.cortex import build_cortex_default_model
@@ -109,9 +110,9 @@ async def get_cortex_voice_model(
     return await build_cortex_default_model(vault)
 
 
-async def _reject(ws: WebSocket, reason: str) -> None:
-    with contextlib.suppress(Exception):
-        await ws.close(code=_CLOSE_POLICY, reason=reason)
+# El _reject compartido (frame `error` + reason recortado a 123 bytes, RFC
+# 6455) se importa de assistant_voice — antes cada WS llevaba su copia y un
+# detail largo derribaba el socket con un 1006 mudo.
 
 
 async def _resolve_voice_model(
@@ -306,7 +307,7 @@ async def cortex_voice(
         await _reject(ws, str(exc.detail))
         return
 
-    state = _VoiceLoopState(voice=get_settings().assistant_tts_default_voice)
+    state = _VoiceLoopState(voice=get_settings().cortex_tts_default_voice)
     await ws.send_json({"type": "ready", "voice": state.voice})
     try:
         while await _handle_frame(

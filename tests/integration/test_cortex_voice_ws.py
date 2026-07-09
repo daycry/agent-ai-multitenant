@@ -201,18 +201,25 @@ def _override_media(configured_app, stt: _FakeSTT, tts: _FakeTTS) -> None:
 # Gate — cross-owner (regla dura BYPASSRLS)
 # ===========================================================================
 def test_ws_rejects_missing_token(ws_client) -> None:
+    """Rechazo con DIAGNÓSTICO: un frame ``error`` con el motivo completo
+    precede al cierre 1008 (antes un detail >123 bytes hacía fallar el close
+    y el cliente veía un 1006 mudo — endurecimiento 2026-07-09)."""
     with (
         ws_client.websocket_connect("/ws/owner/cortex/voice") as ws,
         pytest.raises(WebSocketDisconnect) as exc,
     ):
-        ws.receive_json()
+        first = ws.receive_json()
+        assert first["type"] == "error"
+        assert "unauthenticated" in first["detail"]
+        ws.receive_json()  # tras el frame de error solo queda el cierre
     assert exc.value.code == 1008
 
 
 def test_ws_rejects_non_owner_even_with_forged_claim(
     ws_client, configured_app, migrations_pg_dsn: str
 ) -> None:
-    """Un NO-owner (con claim ``own`` forjado) → cierre 1008 y NO ejecuta turno."""
+    """Un NO-owner (con claim ``own`` forjado) → frame error + cierre 1008 y
+    NO ejecuta turno."""
     seed = asyncio.run(_seed(migrations_pg_dsn, owner_is_owner=False))
     stt, tts = _FakeSTT(), _FakeTTS()
     _override_media(configured_app, stt, tts)
@@ -222,6 +229,9 @@ def test_ws_rejects_non_owner_even_with_forged_claim(
         ws_client.websocket_connect(f"/ws/owner/cortex/voice?token={token}") as ws,
         pytest.raises(WebSocketDisconnect) as exc,
     ):
+        first = ws.receive_json()
+        assert first["type"] == "error"
+        assert "forbidden" in first["detail"]
         ws.receive_json()
     assert exc.value.code == 1008
     # El cerebro NUNCA se tocó (no hubo turno).

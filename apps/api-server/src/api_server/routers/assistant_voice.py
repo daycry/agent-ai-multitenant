@@ -70,9 +70,32 @@ def _resolve_voice(requested: str, current: str) -> str:
     return requested if requested in _SUPPORTED_VOICES else current
 
 
+# RFC 6455: el payload de un frame de control cabe en 125 bytes; 2 van al
+# código de cierre → el reason del close se limita a 123 bytes UTF-8. Un
+# reason mayor hace LANZAR a ws.close() — y con el suppress de abajo el
+# navegador acababa viendo un 1006 mudo en vez del 1008 con diagnóstico
+# (visto en vivo: el detail de «no hay proveedor LLM» medía 205 bytes).
+_MAX_CLOSE_REASON_BYTES = 123
+
+
+def _clip_close_reason(reason: str) -> str:
+    """Recorta ``reason`` a ≤123 bytes UTF-8 sin partir un carácter multibyte."""
+    raw = reason.encode("utf-8")
+    if len(raw) <= _MAX_CLOSE_REASON_BYTES:
+        return reason
+    return raw[:_MAX_CLOSE_REASON_BYTES].decode("utf-8", errors="ignore")
+
+
 async def _reject(ws: WebSocket, reason: str) -> None:
+    """Cierra con 1008 SIN perder el diagnóstico.
+
+    El motivo completo viaja primero en un frame ``error`` (sin límite de
+    tamaño); el close lleva la versión recortada a 123 bytes para que el
+    cierre en sí nunca falle."""
     with contextlib.suppress(Exception):
-        await ws.close(code=_CLOSE_POLICY, reason=reason)
+        await ws.send_json({"type": "error", "detail": reason})
+    with contextlib.suppress(Exception):
+        await ws.close(code=_CLOSE_POLICY, reason=_clip_close_reason(reason))
 
 
 async def _respond(principal: AuthPrincipal, model: Any, user_text: str) -> str:
