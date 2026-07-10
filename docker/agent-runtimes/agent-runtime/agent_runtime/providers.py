@@ -631,6 +631,15 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
             decision = ModelDecision(
                 kind=DecisionKind.ACT,
                 tool="noop",
+                # I-5: el `reason` viaja como output del noop → el modelo VE por qué
+                # se rechazó su FINISH y cómo corregirlo (reintento dirigido, no ciego).
+                tool_args={
+                    "reason": (
+                        "your submit_result arrived corrupt or truncated at the output "
+                        "token cap — its summary/status were lost. Re-emit submit_result "
+                        "with a SHORTER summary so it fits within the cap."
+                    )
+                },
                 rationale=(
                     "submit_result arrived corrupt or truncated; retrying instead of "
                     "finishing on a lost result"
@@ -674,6 +683,14 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
             decision = ModelDecision(
                 kind=DecisionKind.ACT,
                 tool="noop",
+                # I-5: reintento dirigido — ver la nota del branch submit_result.
+                tool_args={
+                    "reason": (
+                        "your previous reply was cut off at the output token cap, so it "
+                        "cannot be accepted as a FINISH. Retry MORE CONCISELY: shorter "
+                        "prose, summarising instead of repeating content."
+                    )
+                },
                 rationale=(
                     "la respuesta se cortó en el tope de salida (truncada); reintento "
                     "en vez de cerrar con un entregable incompleto"

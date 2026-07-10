@@ -110,6 +110,8 @@ def test_malformed_submit_result_args_retries_not_empty_finish() -> None:
     assert d.kind == DecisionKind.ACT
     assert d.tool == "noop"
     assert d.finish_status is None
+    # I-5: el reintento es DIRIGIDO — la observación del noop dirá el motivo.
+    assert "submit_result" in d.tool_args.get("reason", "")
 
 
 def test_truncated_response_with_submit_result_retries() -> None:
@@ -120,6 +122,7 @@ def test_truncated_response_with_submit_result_retries() -> None:
     d = _decision_from(_resp(payload), model="m").decision
     assert d.kind == DecisionKind.ACT
     assert d.tool == "noop"
+    assert "reason" in d.tool_args
 
 
 def test_legit_finish_not_blocked_by_unrelated_corrupt_call() -> None:
@@ -190,6 +193,23 @@ def test_prose_finish_truncated_retries_instead_of_finishing() -> None:
     d = _decision_from(_sdk_resp("He implementado la funci", stop_reason="max_tokens"), model="m")
     assert d.decision.kind == DecisionKind.ACT
     assert d.decision.tool == "noop"
+    # I-5: reintento DIRIGIDO — el modelo verá por qué se rechazó su FINISH y la
+    # instrucción de ser más conciso (antes: {"ok": true, "output": null} ciego).
+    assert "cut off" in d.decision.tool_args.get("reason", "")
+
+
+def test_noop_echoes_the_retry_reason() -> None:
+    # I-5: la tool noop devuelve el `reason` como output — así la observación del
+    # turno siguiente lleva el motivo del rechazo en vez de un éxito vacío. Sin
+    # `reason` sigue siendo el no-op histórico (output None).
+    from agent_runtime.tools import default_registry
+
+    registry = default_registry()
+    informed = registry.call("noop", {"reason": "tu respuesta se cortó; sé más conciso"})
+    assert informed.ok is True
+    assert informed.output == "tu respuesta se cortó; sé más conciso"
+    silent = registry.call("noop", {})
+    assert silent.ok is True and silent.output is None
 
 
 def test_prose_finish_not_truncated_still_finishes() -> None:

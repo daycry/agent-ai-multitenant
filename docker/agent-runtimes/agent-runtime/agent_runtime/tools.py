@@ -103,8 +103,13 @@ def _echo_tool(args: dict[str, Any]) -> ToolResult:
     return ToolResult(ok=True, output=args.get("text", ""))
 
 
-def _noop_tool(args: dict[str, Any]) -> ToolResult:  # noqa: ARG001
-    return ToolResult(ok=True, output=None)
+def _noop_tool(args: dict[str, Any]) -> ToolResult:
+    # I-5 (auditoría 2026-07-10): sin efectos secundarios, pero si el caller (los
+    # guards F32 de `_decision_from`) pasa un `reason`, se devuelve como output —
+    # la observación del turno siguiente lleva POR QUÉ se rechazó el FINISH en vez
+    # de un `{"ok": true, "output": null}` ciego que invita a repetir el mismo
+    # output truncado hasta quemar max_iterations.
+    return ToolResult(ok=True, output=args.get("reason"))
 
 
 def default_registry() -> ToolRegistry:
