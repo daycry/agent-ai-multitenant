@@ -301,6 +301,13 @@ async def create_task(
     if payload.depends_on:
         await _set_dependencies(session, task.id, project_id, payload.depends_on)
 
+    # Vía (D) del hallazgo #2 (I-1, auditoría 2026-07-10): crear una tarea
+    # avanzable en un plan blocked invalida el bloqueo (ya hay vía de avance) —
+    # misma semántica que la free-task. No-op si el plan no está blocked. Va tras
+    # ``_set_dependencies``: el snapshot debe ver las aristas de la tarea nueva.
+    if payload.plan_id is not None:
+        await reactivate_plan_if_unstuck(session, payload.plan_id)
+
     await session.refresh(task)
     deps = await _load_dependencies(session, task.id)
     # Notify the orchestrator AFTER the request transaction commits (see

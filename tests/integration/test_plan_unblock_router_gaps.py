@@ -8,6 +8,8 @@ varado esperando un segundo click humano:
   (B) PUT de SOLO dependencias (sin cambio de status) — quita la arista que ataba un
       backlog transitivamente bloqueado.
   (C) POST /plans/{id}/free-task — añade una tarea avanzable a un plan blocked.
+  (D) POST /projects/{id}/tasks con ``plan_id`` — gemela de (C) por el router de
+      tareas (I-1, auditoría 2026-07-10).
 
 Cada una llama ahora ``reactivate_plan_if_unstuck`` (no-op si el plan no está blocked).
 """
@@ -210,6 +212,32 @@ async def test_free_task_on_blocked_plan_reactivates(
         resp = await client.post(
             f"/plans/{ids['plan']}/free-task",
             json={"title": "Tarea extra", "description": "algo que faltaba"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 201, resp.text
+    assert await _plan_status(migrations_pg_dsn, ids["plan"]) == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_create_task_with_plan_id_on_blocked_plan_reactivates(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """(D) Crear una tarea avanzable en un plan blocked por el router de tareas
+    (``POST /projects/{id}/tasks`` con ``plan_id``) lo revierte — misma semántica
+    que la free-task (C), distinta puerta de entrada."""
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        ids = await _seed_base(conn)
+        await _add_task(conn, ids, uuid4(), status="blocked")
+    finally:
+        await conn.close()
+    token = await _mint_token(ids["user"], ids["tenant"])
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            f"/projects/{ids['project']}/tasks",
+            json={"title": "Tarea por el router de tareas", "plan_id": str(ids["plan"])},
             headers={"Authorization": f"Bearer {token}"},
         )
     assert resp.status_code == 201, resp.text
