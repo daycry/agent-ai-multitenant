@@ -37,15 +37,13 @@ import {
   SummarySection,
   TasksSection,
 } from "./plan-spec-sections";
-import {
-  CommentsSection,
-  CorrectionsSection,
-  CostBreakdownSection,
-  HumanValidationSection,
-  PlanDeepLinksSection,
-  PlanLifecycleSection,
-  SyncToKanbanSection,
-} from "./plan-interactive-sections";
+import { CommentsSection } from "./plan-comments-section";
+import { CorrectionsSection } from "./plan-corrections-section";
+import { CostBreakdownSection } from "./plan-cost-section";
+import { PlanDeepLinksSection } from "./plan-deep-links-section";
+import { PlanLifecycleSection } from "./plan-lifecycle-section";
+import { SyncToKanbanSection } from "./plan-sync-section";
+import { HumanValidationSection } from "./plan-validation-section";
 
 // --------------------------------------------------------------------------
 // Page
