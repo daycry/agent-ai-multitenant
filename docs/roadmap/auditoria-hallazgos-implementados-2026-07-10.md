@@ -211,9 +211,16 @@ Verificación tras la remediación: unit 2149 en verde con ratchet 31, agent-run
   Los MENORES del §2 siguen abiertos salvo los absorbidos de paso (nota de módulo
   F32, comentario del floor en `pyproject.toml`, `TEST_REDIS_URL`).
 
-**Deploy pendiente**: los cambios de runtime (I-4/I-5) viven en la imagen
-`agent-runtime:v1` y los de api-server/workers (C-1, I-1, I-6) en sus imágenes —
-requieren rebuild+redeploy del stack dev para estar vivos.
+**Deploy HECHO (2026-07-10, misma sesión)**: rebuild de las 4 imágenes —
+`api-server:manuals` (WITH_CLAUDE=1), `orchestrator:manuals` y `workers:ci`
+(ambas con `BASE_IMAGE=agentic-platform/api-server:manuals`, gotcha
+`orchestrator-workers-base-image-arg`) y `agent-runtime:v1` (contexto raíz,
+WITH_CLAUDE=1) — y stack levantado completo (`docker compose -p agentic-platform`
+con los 6 overlays del proyecto). Verificado en vivo: todos los servicios
+`healthy`, los símbolos nuevos importan DENTRO de los contenedores corriendo
+(`has_open_tasks`, `worktree_layout`, `cortex_tool_schemas_without_host_web`,
+`_TRUNCATED_PROSE_VERDICT_FEEDBACK` + noop con `reason`), y el e2e del ciclo
+autónomo pasa 2/2 contra el stack desplegado.
 
 ## Referencias
 
