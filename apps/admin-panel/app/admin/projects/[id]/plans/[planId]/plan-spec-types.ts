@@ -23,7 +23,9 @@ export interface PlanTaskSpec {
 }
 
 // ADR 0107: meta del ciclo de correcciones en specification.corrections.
-export interface PlanCorrectionEntry {
+// Privado del módulo (M-7, auditoría 2026-07-10): ningún fichero lo importa —
+// solo se consume vía PlanSpecification.corrections; espejo del shape backend.
+interface PlanCorrectionEntry {
   session_id: string;
   reason?: string;
   task_ids?: string[];
