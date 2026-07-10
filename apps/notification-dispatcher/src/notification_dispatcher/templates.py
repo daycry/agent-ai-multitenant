@@ -159,6 +159,25 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "on its own. Review it and unblock or retry a task to continue."
         ),
     ),
+    # --- plan_unblocked (M-1, auditoría 2026-07-10) --------------------------
+    ("plan_unblocked", "es"): TemplateSource(
+        subject="Plan reactivado: {{ plan_name | default('(sin nombre)') }}",
+        body=(
+            "El plan «{{ plan_name | default('(sin nombre)') }}» volvió a "
+            "estar en curso: su bloqueo ya no está justificado (una tarea se "
+            "desatascó o la red del reconciler lo revirtió). Si recibiste un "
+            "aviso de bloqueo anterior, ya no requiere acción."
+        ),
+    ),
+    ("plan_unblocked", "en"): TemplateSource(
+        subject="Plan reactivated: {{ plan_name | default('(unnamed)') }}",
+        body=(
+            "Plan \"{{ plan_name | default('(unnamed)') }}\" is back in "
+            "progress: its block is no longer justified (a task was un-stuck "
+            "or the reconciler net reverted it). Any earlier blocked alert "
+            "for this plan needs no further action."
+        ),
+    ),
     # --- task_failed -------------------------------------------------------
     ("task_failed", "es"): TemplateSource(
         subject="Tarea fallida: {{ task_title | default('(sin título)') }}",

@@ -52,6 +52,16 @@ def test_priority_events_use_priority_lane() -> None:
     assert EVENT_REGISTRY["plan_approved"].lane is NotificationLane.DEFAULT
 
 
+def test_plan_unblocked_event_is_registered() -> None:
+    """M-1 (auditoría 2026-07-10, hallazgo #2): el simétrico de ``plan_blocked``.
+    Sin él, el operador puede actuar sobre una notificación de bloqueo ya obsoleta
+    (el plan se auto-revirtió por una vía humana o por la red del reconciler).
+    Informativo, no accionable → lane DEFAULT e in_app (sin telegram)."""
+    spec = EVENT_REGISTRY["plan_unblocked"]
+    assert spec.lane is NotificationLane.DEFAULT
+    assert spec.default_channel_types == ("in_app",)
+
+
 class _Settings:
     """Minimal stand-in carrying just the two queue names lane_queue reads."""
 

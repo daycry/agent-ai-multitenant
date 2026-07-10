@@ -177,6 +177,24 @@ async def reactivate_plan_if_unstuck(session: AsyncSession, plan_id: UUID) -> bo
     if not result.transitioned:
         return False
     transition_plan_status(plan, "in_progress")
+    # M-1 (auditoría 2026-07-10): notificar la reversión — el simétrico del
+    # `plan_blocked` del escalado, para que una notificación de bloqueo previa no
+    # quede accionable en falso. Post-commit (la fila debe ser durable) y
+    # best-effort (enqueue_event_dispatch traga fallos de broker).
+    plan_name, plan_tenant = plan.title or "", str(plan.tenant_id)
+
+    async def _notify_unblocked() -> None:
+        from api_server.celery_client import enqueue_event_dispatch
+
+        await enqueue_event_dispatch(
+            {
+                "event_type": "plan_unblocked",
+                "tenant_id": plan_tenant,
+                "context": {"plan_name": plan_name, "plan_id": str(plan_id)},
+            }
+        )
+
+    schedule_after_commit(session, _notify_unblocked)
     return True
 
 

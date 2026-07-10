@@ -136,6 +136,30 @@ async def test_reconciler_leaves_genuinely_blocked_plan_alone(
 
 
 @pytest.mark.asyncio
+async def test_reconciler_revert_emits_plan_unblocked_event(
+    _migrated: None,
+    workers_settings: object,
+    migrations_pg_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M-1: la red async también notifica ``plan_unblocked`` al revertir — la vía
+    donde con más motivo nadie se entera de otro modo (no hubo gesto humano)."""
+    events: list[dict] = []
+
+    async def _capture(event: dict, **_kw: object) -> bool:
+        events.append(event)
+        return True
+
+    monkeypatch.setattr("api_server.celery_client.enqueue_event_dispatch", _capture)
+    ids = await _seed_blocked_plan(migrations_pg_dsn, task_status="ready")
+    await _run_reconcile(workers_settings)
+    assert await _plan_status(workers_settings, ids["plan"]) == "in_progress"
+    unblocked = [e for e in events if e.get("event_type") == "plan_unblocked"]
+    assert unblocked, f"no se emitió plan_unblocked (eventos: {events})"
+    assert unblocked[0]["context"]["plan_id"] == str(ids["plan"])
+
+
+@pytest.mark.asyncio
 async def test_reconciler_leaves_all_done_blocked_plan_alone(
     _migrated: None, workers_settings: object, migrations_pg_dsn: str
 ) -> None:

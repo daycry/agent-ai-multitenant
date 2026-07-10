@@ -135,6 +135,15 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.DEFAULT,
         default_channel_types=("in_app", "telegram"),
     ),
+    # M-1 (auditoría 2026-07-10, hallazgo #2): el simétrico — el plan volvió a
+    # in_progress (un gesto humano lo desatascó o la red del reconciler lo
+    # revirtió), así que la notificación de bloqueo previa queda obsoleta.
+    # Informativo, no accionable → solo in_app.
+    "plan_unblocked": EventSpec(
+        "plan_unblocked",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app",),
+    ),
     # prod-12 av_01 (ADR 0105): el backend antivirus lleva >N min inalcanzable —
     # la ingesta está en fail-closed acumulando `pending_scan`; el operador debe
     # levantar ClamAV (el sweep reescanea solo al volver).

@@ -538,7 +538,35 @@ async def _reconcile_unblocked_plans(sessionmaker: async_sessionmaker[AsyncSessi
                     new_status=result.new_status,
                 )
                 reverted += 1
+                # M-1 (auditoría 2026-07-10): notificar la reversión — en esta vía
+                # (la red async) nadie se entera de otro modo: no hubo gesto humano.
+                # Best-effort tras el commit del guard atómico; espejo del
+                # `review_escalated` de review_runtimes.
+                await _notify_plan_unblocked(
+                    tenant_id=str(prow.tenant_id),
+                    plan_id=str(prow.id),
+                    plan_name=plan.title or "",
+                )
     return reverted
+
+
+async def _notify_plan_unblocked(*, tenant_id: str, plan_id: str, plan_name: str) -> None:
+    """Encola el evento ``plan_unblocked`` al dispatcher (M-1). Best-effort: un
+    fallo de import/broker se loguea y nunca tumba la pasada del reconciler."""
+    try:
+        from api_server.celery_client import enqueue_event_dispatch
+    except ImportError:  # pragma: no cover - api_server siempre presente en workers
+        return
+    try:
+        await enqueue_event_dispatch(
+            {
+                "event_type": "plan_unblocked",
+                "tenant_id": tenant_id,
+                "context": {"plan_name": plan_name, "plan_id": plan_id},
+            }
+        )
+    except Exception as exc:  # - la notificación nunca rompe la red
+        _log.warning("maintenance.plan_unblocked_notify_failed", plan_id=plan_id, error=str(exc))
 
 
 async def _autostart_review_runtime(

@@ -325,6 +325,42 @@ async def test_moving_advanceable_task_in_reactivates_destination_plan(
 
 
 @pytest.mark.asyncio
+async def test_reactivation_emits_plan_unblocked_event(
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M-1: la reversión automática notifica ``plan_unblocked`` — sin él, el
+    operador puede actuar sobre una notificación ``plan_blocked`` ya obsoleta."""
+    events: list[dict] = []
+
+    async def _capture(event: dict, **_kw: object) -> bool:
+        events.append(event)
+        return True
+
+    monkeypatch.setattr("api_server.celery_client.enqueue_event_dispatch", _capture)
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        ids = await _seed_base(conn)
+        task_blocked = uuid4()
+        await _add_task(conn, ids, task_blocked, status="blocked")
+    finally:
+        await conn.close()
+    token = await _mint_token(ids["user"], ids["tenant"])
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.delete(
+            f"/projects/{ids['project']}/tasks/{task_blocked}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 204, resp.text
+    assert await _plan_status(migrations_pg_dsn, ids["plan"]) == "in_progress"
+    unblocked = [e for e in events if e.get("event_type") == "plan_unblocked"]
+    assert unblocked, f"no se emitió plan_unblocked (eventos: {events})"
+    assert unblocked[0]["context"]["plan_id"] == str(ids["plan"])
+    assert unblocked[0]["tenant_id"] == str(ids["tenant"])
+
+
+@pytest.mark.asyncio
 async def test_delete_one_of_two_blocked_tasks_keeps_plan_blocked(
     configured_app, migrations_pg_dsn: str
 ) -> None:
