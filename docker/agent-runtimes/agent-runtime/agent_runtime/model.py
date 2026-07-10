@@ -19,6 +19,8 @@ import enum
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from agent_runtime.state import ReviewState
+
 
 class DecisionKind(enum.StrEnum):
     ACT = "act"  # call a tool
@@ -90,7 +92,11 @@ class ModelClient(Protocol):
 
     def decide(self, state: dict[str, Any]) -> ModelResponse: ...
 
-    def review(self, state: dict[str, Any]) -> ReviewResponse: ...
+    # M-5 (auditoría 2026-07-10, hallazgo #6): la review ve el estado TIPADO —
+    # `ReviewState` = AgentState + la clave inyectada `written_files` — así que
+    # mypy verifica de verdad el contrato (antes el tipo era solo documentación
+    # y quien protegía era únicamente el scanner AST del test-contrato).
+    def review(self, state: ReviewState) -> ReviewResponse: ...
 
 
 @dataclass
@@ -114,7 +120,7 @@ class ScriptedModelClient:
         self._decide_cursor += 1
         return self.decisions[index]
 
-    def review(self, state: dict[str, Any]) -> ReviewResponse:  # noqa: ARG002
+    def review(self, state: ReviewState) -> ReviewResponse:  # noqa: ARG002
         if not self.reviews:
             return ReviewResponse(passed=True)
         index = min(self._review_cursor, len(self.reviews) - 1)

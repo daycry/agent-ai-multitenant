@@ -34,7 +34,7 @@ import logging
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -62,6 +62,7 @@ from agent_runtime.model import (
     ReviewResponse,
 )
 from agent_runtime.review_contract import VERDICT_APPROVE, VERDICT_REJECT
+from agent_runtime.state import ReviewState
 
 _log = logging.getLogger(__name__)
 
@@ -323,15 +324,20 @@ def _decide_messages(state: dict[str, Any]) -> list[Message]:
     ]
 
 
-def _review_messages(state: dict[str, Any]) -> list[Message]:
+def _review_messages(state: ReviewState) -> list[Message]:
     """Turn the agent-loop state into the chat messages for a review.
 
     The authoritative reviewer (ADR 0087) sees the task's ACCEPTANCE CRITERIA —
     the definition of done it must certify against — and, when present, the
     agent's self-reported finish status as a HINT (the reviewer still judges the
-    output itself; the status is not the verdict).
+    output itself; the status is not the verdict). M-5: el estado llega TIPADO
+    (``ReviewState`` — AgentState + ``written_files``), verificado por mypy.
     """
-    task = state.get("task") or {}
+    # Vista re-ensanchada SOLO para los .get defensivos: los tests construyen
+    # estados parciales (TypedDict no valida en runtime) y el `or {}` debe seguir
+    # siendo alcanzable sin que warn_unreachable proteste por la clave requerida.
+    data: Mapping[str, Any] = state
+    task = data.get("task") or {}
     lines = [f"Task: {task.get('title', '')}".strip()]
     if task.get("description"):
         lines.append(str(task["description"]))
@@ -339,7 +345,7 @@ def _review_messages(state: dict[str, Any]) -> list[Message]:
     if criteria:
         lines.append("Acceptance criteria (the definition of done to certify against):")
         lines += [f"- {_criterion_text(c)}" for c in criteria]
-    status = (state.get("last_decision") or {}).get("finish_status")
+    status = (data.get("last_decision") or {}).get("finish_status")
     if status:
         lines.append(
             f"The agent self-reported status='{status}' — a HINT only; verify it "
@@ -355,7 +361,7 @@ def _review_messages(state: dict[str, Any]) -> list[Message]:
     # re-ejecutar una task tras un reset o cuando un run previo escalado ya
     # produjo el trabajo). Antes la etiqueta «Files the agent wrote» invitaba a
     # rechazar en bucle trabajo correcto por no haberse escrito en ESTE run.
-    written = state.get("written_files") or []
+    written = data.get("written_files") or []
     if written:
         lines.append(
             "Current workspace state — the CUMULATIVE deliverable on disk (it may "
@@ -917,7 +923,7 @@ class _ProviderModelClient:
         )
         return _decision_from(resp, model=self.model)
 
-    def review(self, state: dict[str, Any]) -> ReviewResponse:
+    def review(self, state: ReviewState) -> ReviewResponse:
         # F34: force `submit_verdict` (tool_choice) so HTTP backends return the
         # verdict structured; the prose net in `_review_from` is only a fallback.
         kwargs: dict[str, Any] = dict(self._extra_call_kwargs)

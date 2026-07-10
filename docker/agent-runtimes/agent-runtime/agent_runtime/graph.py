@@ -25,7 +25,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
 from shared_llm import LLMError
@@ -62,6 +62,7 @@ from agent_runtime.state import (
     STATUS_RUNNING,
     AgentState,
     AgentTask,
+    ReviewState,
     initial_state,
 )
 from agent_runtime.steps import memory_read_step, model_call_step, node_step, tool_call_step
@@ -995,7 +996,9 @@ class _AgentLoop:
         # (the "missing files" false negative observed live); fall back to this run's
         # write capture when there is no worktree (analysis/design runs, tests) →
         # prose-only review unchanged.
-        review_state = dict(state)
+        # M-5 (auditoría 2026-07-10): tipado como ReviewState — la clave inyectada
+        # `written_files` de abajo la verifica mypy además del scanner AST.
+        review_state = cast(ReviewState, dict(state))
         # Caso 019f27cc (2026-07-03): los paths que la task/output NOMBRAN entran
         # primero en el harvest — un entregable pre-existente (run anterior) debe
         # ser visible para el reviewer aunque este run no escribiera nada y el
