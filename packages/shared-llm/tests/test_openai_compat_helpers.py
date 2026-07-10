@@ -82,6 +82,28 @@ def test_parse_chat_completion_text_only() -> None:
     assert resp.usage.output_tokens == 5
 
 
+def test_parse_chat_completion_populates_typed_stop_reason() -> None:
+    """M-4 (auditoría 2026-07-10): el campo tipado ``stop_reason`` prometía estar
+    «normalizado del provider» pero los providers HTTP nunca lo poblaban (solo
+    claude_sdk, #10c) — trampa para quien confíe en él. Ahora viaja el
+    ``finish_reason`` del payload; ausente → None (fakes/shapes viejos)."""
+
+    def _with(finish_reason: str | None) -> dict[str, object]:
+        choice: dict[str, object] = {"message": {"role": "assistant", "content": "x"}}
+        if finish_reason is not None:
+            choice["finish_reason"] = finish_reason
+        return {"model": "m", "choices": [choice], "usage": {}}
+
+    assert (
+        parse_chat_completion(_with("length"), provider="x", fallback_model="m").stop_reason
+        == "length"
+    )
+    assert (
+        parse_chat_completion(_with("stop"), provider="x", fallback_model="m").stop_reason == "stop"
+    )
+    assert parse_chat_completion(_with(None), provider="x", fallback_model="m").stop_reason is None
+
+
 def test_parse_chat_completion_with_tool_calls() -> None:
     data = {
         "model": "m1",

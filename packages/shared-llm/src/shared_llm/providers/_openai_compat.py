@@ -107,6 +107,11 @@ def parse_chat_completion(
         output_tokens=int(usage_d.get("completion_tokens", 0)),
         cost_usd=float(usage_d.get("cost", 0.0) or 0.0),
     )
+    # M-4 (auditoría 2026-07-10): el campo tipado `stop_reason` viaja también en
+    # los providers HTTP (antes solo claude_sdk lo poblaba, #10c) — el
+    # finish_reason verbatim del payload; ausente → None. `completion_signals`
+    # sigue derivando el truncado del raw (misma señal, sin cambio de conducta).
+    finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
     return CompletionResponse(
         content=content,
         model=str(data.get("model") or fallback_model),
@@ -114,6 +119,7 @@ def parse_chat_completion(
         usage=usage,
         tool_calls=tool_calls,
         raw=data,
+        stop_reason=str(finish_reason) if finish_reason is not None else None,
     )
 
 
