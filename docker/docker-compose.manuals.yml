@@ -515,6 +515,47 @@ services:
     networks: [agentic-net]
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # notification-dispatcher — el consumidor de las colas notifications.* (M-1,
+  # auditoría 2026-07-10). Sin él, TODO evento del dispatcher (plan_blocked /
+  # plan_unblocked, review_escalated, budget_alert, human_validation_needed…)
+  # se encolaba en dev sin que nadie lo convirtiera en notificación (in-app
+  # incluidas): los workers dev solo consumen default/test/review/ingestion/
+  # privileged. Espejo dev del servicio que el installer genera en prod
+  # (compose_generator._notification_dispatcher_service): mismo broker /1 que
+  # publica el api-server y misma DB con el usuario de plataforma. Imagen en
+  # capas sobre la base api-server (mismo patrón BASE_IMAGE que workers):
+  #   docker build -f apps/notification-dispatcher/Dockerfile \
+  #     --build-arg BASE_IMAGE=agentic-platform/api-server:manuals \
+  #     -t agentic-platform/notification-dispatcher:manuals .
+  # ---------------------------------------------------------------------------
+  notification-dispatcher:
+    image: agentic-platform/notification-dispatcher:manuals
+    environment:
+      NOTIFY_ENVIRONMENT: dev
+      NOTIFY_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      NOTIFY_BROKER_URL: redis://redis:6379/1
+      NOTIFY_RESULT_BACKEND: redis://redis:6379/2
+      NOTIFY_EVENTS_REDIS_URL: redis://redis:6379/0
+    healthcheck:
+      # -A = el módulo real de la app (el del CMD del Dockerfile); `-d
+      # celery@$$HOSTNAME` pinga ESTE nodo (el broker /1 es compartido con los
+      # workers y un ping sin destino contestaría cualquiera).
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A notification_dispatcher.celery_app:app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [agentic-net]
+    restart: unless-stopped
+
 volumes:
   # Unseal keys + root token del Vault persistente (Camino B). Volumen docker,
   # NO en el repo. Borrarlo obliga a re-inicializar Vault (perderías los secretos).

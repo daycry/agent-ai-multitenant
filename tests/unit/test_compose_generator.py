@@ -564,6 +564,20 @@ def test_python_app_healthchecks_do_not_rely_on_wget() -> None:
         assert "python" in flat, f"{name} healthcheck must use python (no wget in the image)"
 
 
+def test_notification_dispatcher_healthcheck_loads_a_real_celery_app() -> None:
+    """Bug cazado en vivo (2026-07-10, al desplegar el dispatcher en dev):
+    ``celery -A notification_dispatcher inspect ping`` NO carga la app —
+    «Module 'notification_dispatcher' has no attribute 'celery'» — así que el
+    servicio quedaba permanentemente unhealthy pese al worker `ready`. El -A
+    debe apuntar al módulo real (``notification_dispatcher.celery_app:app``,
+    el mismo target del CMD del Dockerfile) y hacer ping a SU nodo (-d
+    celery@$$HOSTNAME), no a cualquier worker del broker compartido."""
+    compose = generate_compose(_config(), monitoring=False)
+    flat = " ".join(compose["services"]["notification-dispatcher"]["healthcheck"]["test"])
+    assert "notification_dispatcher.celery_app:app" in flat
+    assert "HOSTNAME" in flat
+
+
 def test_generated_services_rely_on_docker_default_seccomp() -> None:
     """TRUSTED first-party services do NOT pin a hand-rolled seccomp profile
     (ADR 0040, revised): they rely on Docker's proven DEFAULT seccomp. The

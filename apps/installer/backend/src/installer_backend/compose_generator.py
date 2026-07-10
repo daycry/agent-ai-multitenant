@@ -874,8 +874,16 @@ def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dic
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/notification-dispatcher:{APP_IMAGE_TAG}",
         "environment": env,
+        # -A debe ser el módulo REAL de la app (el mismo target del CMD del
+        # Dockerfile): `-A notification_dispatcher` no carga («no attribute
+        # 'celery'») y dejaba el servicio permanentemente unhealthy (cazado en
+        # vivo 2026-07-10). `-d celery@$$HOSTNAME` hace ping a ESTE nodo — el
+        # broker es compartido y un ping sin destino contestaría cualquier
+        # worker vivo aunque este contenedor estuviera roto.
         "healthcheck": _healthcheck(
-            "celery -A notification_dispatcher inspect ping -t 5 || exit 1", start_period="40s"
+            "celery -A notification_dispatcher.celery_app:app inspect ping "
+            "-d celery@$$HOSTNAME -t 5 || exit 1",
+            start_period="40s",
         ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
