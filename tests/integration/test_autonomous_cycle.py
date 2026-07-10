@@ -6,15 +6,30 @@ segunda mitad del ciclo: el reviewer IA. Una tarea de un plan viaja de punta a p
     ready → dispatch → run implementador (agent-runtime) → in_review →
     dispatch review → run reviewer (agent-runtime) → verdict → done | backlog
 
-con TODAS las piezas cableadas (orchestrator + Celery seam + contenedor +
-``_apply_review_verdict``), no mockeadas. El único seam que el test juega es el
-proceso worker de Celery: lee el mensaje que el dispatcher encoló e invoca
-``run_execution`` con ese payload exacto — la misma llamada que haría un daemon.
+con las piezas de máquina de estados cableadas (orchestrator + Celery seam +
+contenedor + ``_apply_review_verdict``), no mockeadas. Seams y límites DECLARADOS
+(I-7, auditoría 2026-07-10):
+
+  * Proceso worker de Celery: el test lee el mensaje que el dispatcher encoló e
+    invoca ``run_execution`` con ese payload exacto — la misma llamada que haría
+    un daemon.
+  * El evento INICIAL (backlog→ready) se fabrica en un stream de test: en
+    producción lo publica el API/beat de promoción, no el worker. En cambio el
+    eslabón worker→orchestrator del REVIEW se prueba REAL: el dispatch del review
+    consume de ``events:tasks`` el ``task.status_changed`` que ``run_cycle``
+    publicó de verdad al soltar el run-lock (H1) — si
+    ``publish_task_status_changed`` se rompiera, este test se pone rojo.
+  * SIN dimensión git: el proyecto sembrado no tiene repos → no hay worktree ni
+    commits con trailers, y el reviewer corre en el modo sin-workspace (ADR 0095).
+    Esa dimensión tiene cobertura propia (``test_commit_trailers``,
+    ``test_branch_push_*``, ``test_plan_completion``); aquí se prueba el CICLO de
+    la máquina de estados.
 
 Modelos SCRIPTED (sin LLM real): el implementador escribe+finish; el reviewer cierra
 con el tag ``<verdict>approve|reject</verdict>`` (el canal de veredicto del run
 reviewer, ADR 0084). Necesita el stack local: Docker + ``agent-runtime:v1`` + Postgres
-+ Redis (``@requires_docker`` + ``_agent_runtime_image`` hacen skip honesto si faltan).
++ Redis (``@requires_docker`` + ``_agent_runtime_image`` hacen skip honesto si faltan)
++ el api-server del stack dev (la runtime llama a la API interna en ``agentic-agents``).
 
 NOTA de ubicación: vive en ``tests/integration/`` (no ``tests/e2e/``) porque reutiliza
 el harness de integración probado del smoke (PG efímero + imagen agent-runtime +
@@ -52,7 +67,9 @@ from ._docker_helpers import docker_client, requires_docker, skip_or_fail
 pytestmark = pytest.mark.integration
 
 _IMAGE = "agent-runtime:v1"
-TEST_REDIS_URL = "redis://localhost:6379/15"
+# Overridable por env, como en conftest (I-7 menor: el hardcode rompía distinto
+# que el resto de la suite si la CI mueve Redis).
+TEST_REDIS_URL = os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/15")
 
 # Implementador: una acción + finish (un loop completo con tool call).
 _IMPLEMENTER_MODEL = {
@@ -92,7 +109,18 @@ def _agent_runtime_image() -> None:
 
 async def _seed(db_url: str, *, verdict_tag: str) -> dict[str, UUID]:
     """Tenant + project + plan + implementador + reviewer + tarea ready con
-    ``reviewer_agent_id`` (para que el run del implementador la pase a in_review)."""
+    ``reviewer_agent_id`` (para que el run del implementador la pase a in_review).
+
+    Limpia además el stream REAL ``events:tasks`` del Redis de test: el dispatch
+    del review consumirá de ahí el evento que el worker publique de verdad (I-7),
+    y los restos de sesiones/tests previos no deben contaminar la lectura."""
+    from api_server.events import EVENTS_STREAM
+
+    redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
+    try:
+        await redis.delete(EVENTS_STREAM)
+    finally:
+        await redis.aclose()
     ids = {
         "tenant": uuid4(),
         "project": uuid4(),
@@ -181,18 +209,24 @@ async def _seed(db_url: str, *, verdict_tag: str) -> dict[str, UUID]:
         await engine.dispose()
 
 
-async def _dispatch(db_url: str, ids: dict[str, UUID], *, old: str, new: str) -> dict[str, Any]:
-    """Publica un ``task.status_changed`` (old→new), corre el consumer una vez y
-    devuelve el request de ejecución que el dispatcher encoló para el worker."""
+async def _consume_and_take_job(
+    db_url: str, *, events_stream: str, seed_event: dict[str, str] | None
+) -> dict[str, Any]:
+    """Corre el consumer/dispatcher REALES sobre ``events_stream`` una vez y devuelve
+    el request de ejecución que el dispatcher encoló para el worker. Si
+    ``seed_event`` viene, se publica antes (el evento inicial fabricado); con
+    ``None`` se consume lo que YA haya publicado el worker (el eslabón real)."""
     redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
     engine = create_async_engine(db_url)
-    stream = f"test:cycle:{uuid4().hex[:8]}"
     try:
         sm = async_sessionmaker(engine, expire_on_commit=False)
         settings = OrchestratorSettings(
             redis_url=TEST_REDIS_URL,
-            events_stream=stream,
-            consumer_group="cycle",
+            events_stream=events_stream,
+            # Grupo fresco por llamada: ensure_group crea en id="0" (mkstream), así
+            # que lee el stream desde el principio — incluidos los eventos que el
+            # worker publicó ANTES de crear el grupo.
+            consumer_group=f"cycle-{uuid4().hex[:8]}",
             consumer_name="cycle-1",
             block_ms=200,
         )
@@ -201,9 +235,32 @@ async def _dispatch(db_url: str, ids: dict[str, UUID], *, old: str, new: str) ->
         consumer = StreamConsumer(redis, settings, dispatcher.handle)
         await consumer.ensure_group()
         await redis.delete("default")
-        await redis.xadd(
-            stream,
-            {
+        if seed_event is not None:
+            await redis.xadd(events_stream, seed_event)
+        result = await consumer.consume_once()
+        assert result.processed == 1, "el orchestrator no procesó exactamente un evento"
+        messages = await redis.lrange("default", 0, -1)
+        await redis.delete("default")
+        assert len(messages) == 1, "el dispatcher no encoló exactamente un job"
+        body = json.loads(base64.b64decode(json.loads(messages[0])["body"]))
+        _args, kwargs, _embed = body
+        return kwargs["request"]  # type: ignore[no-any-return]
+    finally:
+        await redis.aclose()
+        await engine.dispose()
+
+
+async def _dispatch(db_url: str, ids: dict[str, UUID], *, old: str, new: str) -> dict[str, Any]:
+    """Dispatch desde un ``task.status_changed`` FABRICADO en un stream de test —
+    solo para el evento inicial (backlog→ready), que en producción publica el
+    API/beat de promoción, no el worker."""
+    stream = f"test:cycle:{uuid4().hex[:8]}"
+    redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
+    try:
+        request = await _consume_and_take_job(
+            db_url,
+            events_stream=stream,
+            seed_event={
                 "type": "task.status_changed",
                 "tenant_id": str(ids["tenant"]),
                 "project_id": str(ids["project"]),
@@ -212,18 +269,21 @@ async def _dispatch(db_url: str, ids: dict[str, UUID], *, old: str, new: str) ->
                 "payload": json.dumps({"old_status": old, "new_status": new}),
             },
         )
-        result = await consumer.consume_once()
-        assert result.processed == 1, "el orchestrator no procesó el evento"
-        messages = await redis.lrange("default", 0, -1)
-        await redis.delete("default")
         await redis.delete(stream)
-        assert len(messages) == 1, "el dispatcher no encoló exactamente un job"
-        body = json.loads(base64.b64decode(json.loads(messages[0])["body"]))
-        _args, kwargs, _embed = body
-        return kwargs["request"]  # type: ignore[no-any-return]
+        return request
     finally:
         await redis.aclose()
-        await engine.dispose()
+
+
+async def _dispatch_from_worker_event(db_url: str) -> dict[str, Any]:
+    """Dispatch del REVIEW consumiendo el evento REAL de ``events:tasks`` (I-7):
+    el ``task.status_changed`` in_progress→in_review que ``run_cycle`` publicó al
+    soltar el run-lock (H1). Si ``publish_task_status_changed`` emitiera un payload
+    malformado o al stream equivocado, el ``processed == 1`` de abajo se pone rojo
+    — antes el test fabricaba este evento y ese fallo pasaba invisible."""
+    from api_server.events import EVENTS_STREAM
+
+    return await _consume_and_take_job(db_url, events_stream=EVENTS_STREAM, seed_event=None)
 
 
 async def _task_status(db_url: str, task_id: UUID) -> str:
@@ -281,7 +341,9 @@ def test_plan_task_travels_dispatch_run_review_to_done(
     assert asyncio.run(_task_status(admin_database_url, ids["task"])) == "in_review"
 
     # --- 2) reviewer: in_review → dispatch review → run → done --------------
-    review_req = asyncio.run(_dispatch(admin_database_url, ids, old="in_progress", new="in_review"))
+    # El evento in_progress→in_review NO se fabrica: se consume el que el worker
+    # publicó de verdad en events:tasks al soltar el run-lock (I-7).
+    review_req = asyncio.run(_dispatch_from_worker_event(admin_database_url))
     assert review_req["review"] is True
     assert review_req["agent_id"] == str(ids["reviewer"])
     assert "el endpoint responde 200" in review_req["review_context"]["acceptance_criteria"]
@@ -306,7 +368,7 @@ def test_reviewer_reject_sends_task_back_to_backlog(
     assert _run(impl_req, admin_database_url)["status"] == ExecutionStatus.DONE
     assert asyncio.run(_task_status(admin_database_url, ids["task"])) == "in_review"
 
-    review_req = asyncio.run(_dispatch(admin_database_url, ids, old="in_progress", new="in_review"))
+    review_req = asyncio.run(_dispatch_from_worker_event(admin_database_url))
     assert review_req["review"] is True
     _run(review_req, admin_database_url)
 
