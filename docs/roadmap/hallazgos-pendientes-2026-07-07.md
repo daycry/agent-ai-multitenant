@@ -199,7 +199,17 @@ La validación de hoy fue manual (QA humano guiado). Falta el e2e automatizado d
 completo (deuda aceptada de la auditoría) y seguir subiendo `--cov-fail-under` (hoy 30;
 objetivo CLAUDE.md ≥70 en dominio crítico) por tramos con tests nuevos.
 
-### 9. Ronda frontend por partes — ⏳ DEFERIDO (tramo dedicado; plan en el estado de cabecera)
+### 9. Ronda frontend por partes — ✅ RESUELTO 2026-07-10 (los 4 hotspots modularizados)
+
+**Cierre (2026-07-10, tramo dedicado):** los 3 hotspots restantes modularizados con el
+patrón probado (caracterizar jsdom → split mecánico verbatim por rangos de línea →
+verde → commit): **model-prices** 1311→517 (`model-price-types.ts` +
+`model-price-dialogs.tsx`, 5 tests, 66/66 testids), **mcp-servers** 1105→180
+(`mcp-server-types.ts` + `mcp-server-sections.tsx`, 4 tests, 45/45 testids),
+**knowledge-bases** 1042→208 (`kb-types.ts` + `kb-sections.tsx`, 4 tests, 35/35
+testids). tsc 0 + vitest 214/214 + `next build` OK. Con el detalle de plan
+(1703→134, tanda anterior), los 4 hotspots del hallazgo quedan cerrados. Pendiente
+menor heredado de la auditoría: partir `plan-interactive-sections.tsx` (1248).
 
 El admin-panel tiene los mismos hotspots que tenía el backend: detalle de plan (~1400
 líneas), model-prices (~1300), mcp-servers (~1100), knowledge-bases (~1050)… Mismo método:
