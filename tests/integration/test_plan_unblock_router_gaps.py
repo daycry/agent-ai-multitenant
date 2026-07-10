@@ -10,6 +10,9 @@ varado esperando un segundo click humano:
   (C) POST /plans/{id}/free-task — añade una tarea avanzable a un plan blocked.
   (D) POST /projects/{id}/tasks con ``plan_id`` — gemela de (C) por el router de
       tareas (I-1, auditoría 2026-07-10).
+  (E/F) PUT que MUEVE ``plan_id`` — re-evalúa el plan ORIGEN (sacar la tarea
+      blocked lo desatasca) y el DESTINO (meter una tarea avanzable lo desatasca)
+      (M-3, auditoría 2026-07-10).
 
 Cada una llama ahora ``reactivate_plan_if_unstuck`` (no-op si el plan no está blocked).
 """
@@ -242,3 +245,107 @@ async def test_create_task_with_plan_id_on_blocked_plan_reactivates(
         )
     assert resp.status_code == 201, resp.text
     assert await _plan_status(migrations_pg_dsn, ids["plan"]) == "in_progress"
+
+
+async def _add_second_plan(conn: asyncpg.Connection, ids: dict[str, UUID], *, status: str) -> UUID:
+    plan_b = uuid4()
+    await conn.execute(
+        "INSERT INTO plans (id, tenant_id, project_id, title, slug, status)"
+        " VALUES ($1, $2, $3, 'Plan B', 'plan-b', $4)",
+        plan_b,
+        ids["tenant"],
+        ids["project"],
+        status,
+    )
+    return plan_b
+
+
+@pytest.mark.asyncio
+async def test_moving_blocked_task_out_reactivates_origin_plan(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """(E) PUT que mueve la tarea blocked (la causa) a OTRO plan re-evalúa el plan
+    ORIGEN — misma semántica que borrarla (A), distinta puerta."""
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        ids = await _seed_base(conn)
+        task_blocked, task_done = uuid4(), uuid4()
+        await _add_task(conn, ids, task_blocked, status="blocked")
+        await _add_task(conn, ids, task_done, status="done")
+        plan_b = await _add_second_plan(conn, ids, status="in_progress")
+    finally:
+        await conn.close()
+    token = await _mint_token(ids["user"], ids["tenant"])
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            f"/projects/{ids['project']}/tasks/{task_blocked}",
+            json={"plan_id": str(plan_b)},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert await _plan_status(migrations_pg_dsn, ids["plan"]) == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_moving_advanceable_task_in_reactivates_destination_plan(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """(F) PUT que mueve una tarea avanzable A un plan blocked lo re-evalúa —
+    misma semántica que crearla dentro (D)."""
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        ids = await _seed_base(conn)  # ids["plan"] está blocked
+        await _add_task(conn, ids, uuid4(), status="blocked")
+        plan_b = await _add_second_plan(conn, ids, status="in_progress")
+        movable = uuid4()
+        await conn.execute(
+            "INSERT INTO tasks (id, tenant_id, project_id, plan_id, title, status, priority,"
+            " acceptance_criteria, inputs) VALUES ($1, $2, $3, $4, 'M', 'backlog', 'medium',"
+            " '[]'::jsonb, '{}'::jsonb)",
+            movable,
+            ids["tenant"],
+            ids["project"],
+            plan_b,
+        )
+    finally:
+        await conn.close()
+    token = await _mint_token(ids["user"], ids["tenant"])
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            f"/projects/{ids['project']}/tasks/{movable}",
+            json={"plan_id": str(ids["plan"])},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert await _plan_status(migrations_pg_dsn, ids["plan"]) == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_delete_one_of_two_blocked_tasks_keeps_plan_blocked(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Negativo a nivel router (M-2): borrar UNA de DOS tareas blocked no
+    desbloquea el plan — la reversión síncrona respeta el snapshot igual que la
+    red del reconciler."""
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        ids = await _seed_base(conn)
+        first_blocked = uuid4()
+        await _add_task(conn, ids, first_blocked, status="blocked")
+        await _add_task(conn, ids, uuid4(), status="blocked")
+    finally:
+        await conn.close()
+    token = await _mint_token(ids["user"], ids["tenant"])
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.delete(
+            f"/projects/{ids['project']}/tasks/{first_blocked}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 204, resp.text
+    assert await _plan_status(migrations_pg_dsn, ids["plan"]) == "blocked"

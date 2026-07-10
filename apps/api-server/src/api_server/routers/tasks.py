@@ -320,6 +320,17 @@ async def create_task(
     return to_task_response(task, deps)
 
 
+async def _reactivate_both_plans(
+    session: AsyncSession, old_plan_id: UUID | None, new_plan_id: UUID | None
+) -> None:
+    """Re-evalúa origen y destino de un movimiento de plan (M-3); no-op por lado
+    cuando no hay plan o el plan no está ``blocked``."""
+    if old_plan_id is not None:
+        await reactivate_plan_if_unstuck(session, old_plan_id)
+    if new_plan_id is not None:
+        await reactivate_plan_if_unstuck(session, new_plan_id)
+
+
 # ---------------------------------------------------------------------------
 # PUT /projects/{project_id}/tasks/{task_id}
 # ---------------------------------------------------------------------------
@@ -401,6 +412,7 @@ async def update_task(
     # UUIDs onto the SA column.
     sent = payload.model_fields_set
     deps_change = "depends_on" in sent
+    old_plan_id = task.plan_id
     payload_for_obj = payload.model_copy(update={"depends_on": None})
     payload_for_obj.__pydantic_fields_set__.discard("depends_on")
 
@@ -410,6 +422,14 @@ async def update_task(
         enum_fields=("status", "priority", "estimated_complexity"),
     )
     await session.flush()
+
+    # M-3 (auditoría 2026-07-10, hallazgo #2): mover la tarea de plan re-evalúa
+    # AMBOS extremos — sacar la tarea blocked desatasca el ORIGEN (como borrarla)
+    # y meter una avanzable desatasca el DESTINO (como crearla dentro). No-op en
+    # planes que no estén blocked. Los branches de status/deps de abajo solo
+    # miran task.plan_id (el destino) y solo ante cambio de status/aristas.
+    if task.plan_id != old_plan_id:
+        await _reactivate_both_plans(session, old_plan_id, task.plan_id)
 
     if deps_change:
         await _set_dependencies(session, task.id, project_id, payload.depends_on or [])

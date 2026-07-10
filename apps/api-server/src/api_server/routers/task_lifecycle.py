@@ -142,8 +142,14 @@ async def reactivate_plan_if_unstuck(session: AsyncSession, plan_id: UUID) -> bo
     plan-level click. Snapshot-based (:func:`transition_from_blocked`): a plan
     that is still genuinely stuck — another blocked task, a transitively-stuck
     backlog chain — stays ``blocked``. Returns whether the plan was reverted.
-    The session runs under tenant RLS, so the lookups are tenant-scoped."""
-    plan = await session.get(Plan, plan_id)
+    The session runs under tenant RLS, so the lookups are tenant-scoped.
+
+    M-2 (auditoría 2026-07-10): la fila del plan se lee ``FOR UPDATE`` — sin el
+    lock, una transición concurrente (otro admin cancelando el plan) podía
+    perderse por lost-update en read-committed (read-ORM + write sin guard). El
+    camino equivalente del reconciler ya era atómico (``UPDATE ... WHERE
+    status='blocked'``)."""
+    plan = await session.get(Plan, plan_id, with_for_update=True)
     if plan is None or plan.status != "blocked":
         return False
     rows = (
