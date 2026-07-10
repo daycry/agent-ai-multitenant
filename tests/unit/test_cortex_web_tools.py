@@ -128,6 +128,54 @@ def test_without_native_web_host_schemas_are_intact() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Caracterización del modo de fallo PREVIO al fix del schema-gap (#10e): sin los
+# schemas, gpt-oss infería los args de su web_search NATIVA ({topn, source}) y
+# el dispatch host los rechazaba. El fallo era (y debe seguir siendo) CONTROLADO:
+# TypeError en el despacho — antes de tocar la red — que _node_run_tools captura
+# y devuelve al modelo como resultado de error, sin tumbar el turno.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_native_style_args_fail_at_dispatch_before_any_network() -> None:
+    from types import SimpleNamespace
+
+    from api_server.cortex.tools import run_cortex_tool
+
+    ctx = SimpleNamespace(web_enabled=True)  # sin proveedor de búsqueda: si se
+    # llegara a la red, el impl reventaría por otro camino — el TypeError del
+    # despacho debe saltar ANTES.
+    with pytest.raises(TypeError):
+        await run_cortex_tool("web_search", ctx, {"topn": 3, "source": "news"})  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_tool_dispatch_error_returns_to_the_model_not_the_turn() -> None:
+    from types import SimpleNamespace
+
+    from api_server.assistant.graph import (
+        AssistantState,
+        ModelTurn,
+        ToolInvocation,
+        _node_run_tools,
+    )
+    from api_server.cortex.tools import run_cortex_tool
+
+    state = AssistantState(system_prompt="x", enabled_tools=("web_search",))
+    state.pending = ModelTurn(
+        content=None,
+        tool_calls=(ToolInvocation(name="web_search", arguments={"topn": 3, "source": "news"}),),
+    )
+    state.tool_ctx = SimpleNamespace(web_enabled=True)  # type: ignore[assignment]
+
+    out = await _node_run_tools(run_cortex_tool)(state)
+
+    # El turno sobrevive: la excepción se convierte en un resultado de error que
+    # el modelo ve en la ronda siguiente (y corrige los args — hoy, con los
+    # schemas enviados, ya no necesita adivinarlos).
+    assert out.tool_results and out.tool_results[0]["tool"] == "web_search"
+    assert "falló" in str(out.tool_results[0]["result"].get("error", ""))
+
+
+# ---------------------------------------------------------------------------
 # Propagación por la vía agéntica del provider: ``run_agent`` pasa los
 # ``allowed_tools`` recibidos a ``_build_options`` (de donde el SDK los consume).
 # Sin depender de tener el SDK instalado: capturamos el argumento con un

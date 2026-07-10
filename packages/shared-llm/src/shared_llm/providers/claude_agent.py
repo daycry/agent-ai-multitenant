@@ -105,7 +105,20 @@ def _harvest_stop_reason(messages: list[Any]) -> str | None:
     ``ResultMessage`` como respaldo. ``getattr`` defensivo: los fakes/SDK antiguos
     sin el atributo devuelven ``None`` (retrocompatible). Cosechado aparte de
     ``_harvest`` para no tocar su firma. ``"max_tokens"`` aguas arriba = TRUNCADO
-    (F32), lo que hoy el ``raw``-lista de claude_sdk no permite derivar."""
+    (F32), lo que hoy el ``raw``-lista de claude_sdk no permite derivar.
+
+    Límites DELIBERADOS de la heurística (auditoría 2026-07-10, marginales con el
+    CLI real; documentados en vez de sobre-ingeniería):
+
+    * Assistant-vs-Result se distingue por la PRESENCIA de ``total_cost_usd`` /
+      ``model_usage`` (no por el tipo, que los fakes no comparten): un
+      ``ResultMessage`` de ERROR con ambos a ``None`` que trajera ``stop_reason``
+      se clasificaría como assistant y podría pisar al último assistant real.
+    * La semántica es «último ``stop_reason`` NO-VACÍO», no «stop_reason del
+      último mensaje»: un assistant intermedio truncado seguido de un mensaje
+      final SIN señal deja el turno marcado como truncado — dirección
+      conservadora a propósito (mejor reintentar de más que aceptar un
+      entregable cortado como FINISH, F32 fail-closed)."""
     assistant_reason: str | None = None
     result_reason: str | None = None
     for msg in messages:
