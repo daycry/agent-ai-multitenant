@@ -63,6 +63,17 @@ branch: plan/runs-visor-trabajo
 >   (tramo)**: model-prices (1311), mcp-servers (1105), knowledge-bases (1042) — NO tienen red de
 >   tests, así que necesitan caracterización jsdom ANTES de extraer; mismo patrón probado aquí.
 
+> **Estado (2026-07-10, auditoría + remediación)**: auditoría completa de la tanda
+> 2026-07-09 en `auditoria-hallazgos-implementados-2026-07-10.md` — implementación
+> sustancialmente correcta (todas las suites verificadas en verde), con 1 crítico y
+> 7 importantes destapados y **REMEDIADOS el mismo día** (commits `0456c09c`,
+> `0527bf3c`, `f203d279`, `dcdf3e0f`, `ffe4ebbc`, `56c0a6b4`, `0df2796b`): ping-pong
+> reconciler↔C8-F40, 4ª vía `create_task(plan_id)`, remate real de #10a
+> (`worktree_layout` + golden literal), verdict-prosa truncado fail-closed, reintento
+> F32 dirigido, pins de `schema_fn` + exclusión mutua web, y el e2e consumiendo el
+> evento real de `events:tasks`. Menores del informe siguen abiertos. Deploy
+> (rebuild api-server/workers/agent-runtime) pendiente.
+
 # Hallazgos pendientes — backlog de implementación
 
 Hallazgos destapados durante el refactor por partes, la habilitación de mypy-total y —
