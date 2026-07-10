@@ -39,37 +39,32 @@ el harness de integración probado del smoke (PG efímero + imagen agent-runtime
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
-import os
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
 from api_server.db.domain import Agent, ExecutionStatus, Plan, Project, Task
-from api_server.db.execution_repo import list_executions_for_task
 from api_server.db.models import Organization
-from orchestrator.config import Settings as OrchestratorSettings
-from orchestrator.consumer import StreamConsumer
-from orchestrator.dispatch import TaskDispatcher
 from redis.asyncio import Redis
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from workers.celery_app import build_celery_app
-from workers.config import Settings as WorkerSettings
-from workers.config import reset_settings_cache
 
-import docker
+from ._docker_helpers import requires_docker
+from ._pipeline_helpers import (
+    TEST_REDIS_URL,
+    audit_event_kinds,
+    consume_and_take_job,
+    execution_statuses,
+    require_agent_runtime_image,
+    run_worker_job,
+    status_changed_event,
+    task_status,
+)
 
-from ._docker_helpers import docker_client, requires_docker, skip_or_fail
-
-pytestmark = pytest.mark.integration
-
-_IMAGE = "agent-runtime:v1"
-# Overridable por env, como en conftest (I-7 menor: el hardcode rompía distinto
-# que el resto de la suite si la CI mueve Redis).
-TEST_REDIS_URL = os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/15")
+# M-6: timeout por-test — si un contenedor se cuelga, el test muere acotado en
+# vez de depender del timeout del job de CI (45 min).
+pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
 # Implementador: una acción + finish (un loop completo con tool call).
 _IMPLEMENTER_MODEL = {
@@ -96,15 +91,7 @@ def _migrated(alembic_config: object) -> None:
 
 @pytest.fixture()
 def _agent_runtime_image() -> None:
-    """Skip local si ``agent-runtime:v1`` no está construido; FAIL bajo CI (el job de
-    integración la construye, así que su ausencia allí es una regresión real)."""
-    client = docker_client()
-    try:
-        client.images.get(_IMAGE)
-    except docker.errors.ImageNotFound:  # pragma: no cover - env-dependent
-        skip_or_fail(f"{_IMAGE} not built — run: docker build -t {_IMAGE} ...")
-    finally:
-        client.close()
+    require_agent_runtime_image()
 
 
 async def _seed(db_url: str, *, verdict_tag: str) -> dict[str, UUID]:
@@ -209,47 +196,6 @@ async def _seed(db_url: str, *, verdict_tag: str) -> dict[str, UUID]:
         await engine.dispose()
 
 
-async def _consume_and_take_job(
-    db_url: str, *, events_stream: str, seed_event: dict[str, str] | None
-) -> dict[str, Any]:
-    """Corre el consumer/dispatcher REALES sobre ``events_stream`` una vez y devuelve
-    el request de ejecución que el dispatcher encoló para el worker. Si
-    ``seed_event`` viene, se publica antes (el evento inicial fabricado); con
-    ``None`` se consume lo que YA haya publicado el worker (el eslabón real)."""
-    redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
-    engine = create_async_engine(db_url)
-    try:
-        sm = async_sessionmaker(engine, expire_on_commit=False)
-        settings = OrchestratorSettings(
-            redis_url=TEST_REDIS_URL,
-            events_stream=events_stream,
-            # Grupo fresco por llamada: ensure_group crea en id="0" (mkstream), así
-            # que lee el stream desde el principio — incluidos los eventos que el
-            # worker publicó ANTES de crear el grupo.
-            consumer_group=f"cycle-{uuid4().hex[:8]}",
-            consumer_name="cycle-1",
-            block_ms=200,
-        )
-        celery_app = build_celery_app(WorkerSettings(broker_url=TEST_REDIS_URL))
-        dispatcher = TaskDispatcher(sessionmaker=sm, celery_app=celery_app, settings=settings)
-        consumer = StreamConsumer(redis, settings, dispatcher.handle)
-        await consumer.ensure_group()
-        await redis.delete("default")
-        if seed_event is not None:
-            await redis.xadd(events_stream, seed_event)
-        result = await consumer.consume_once()
-        assert result.processed == 1, "el orchestrator no procesó exactamente un evento"
-        messages = await redis.lrange("default", 0, -1)
-        await redis.delete("default")
-        assert len(messages) == 1, "el dispatcher no encoló exactamente un job"
-        body = json.loads(base64.b64decode(json.loads(messages[0])["body"]))
-        _args, kwargs, _embed = body
-        return kwargs["request"]  # type: ignore[no-any-return]
-    finally:
-        await redis.aclose()
-        await engine.dispose()
-
-
 async def _dispatch(db_url: str, ids: dict[str, UUID], *, old: str, new: str) -> dict[str, Any]:
     """Dispatch desde un ``task.status_changed`` FABRICADO en un stream de test —
     solo para el evento inicial (backlog→ready), que en producción publica el
@@ -257,17 +203,10 @@ async def _dispatch(db_url: str, ids: dict[str, UUID], *, old: str, new: str) ->
     stream = f"test:cycle:{uuid4().hex[:8]}"
     redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
     try:
-        request = await _consume_and_take_job(
+        request = await consume_and_take_job(
             db_url,
             events_stream=stream,
-            seed_event={
-                "type": "task.status_changed",
-                "tenant_id": str(ids["tenant"]),
-                "project_id": str(ids["project"]),
-                "task_id": str(ids["task"]),
-                "occurred_at": "2026-07-09T00:00:00+00:00",
-                "payload": json.dumps({"old_status": old, "new_status": new}),
-            },
+            seed_event=status_changed_event(ids, old=old, new=new),
         )
         await redis.delete(stream)
         return request
@@ -279,47 +218,16 @@ async def _dispatch_from_worker_event(db_url: str) -> dict[str, Any]:
     """Dispatch del REVIEW consumiendo el evento REAL de ``events:tasks`` (I-7):
     el ``task.status_changed`` in_progress→in_review que ``run_cycle`` publicó al
     soltar el run-lock (H1). Si ``publish_task_status_changed`` emitiera un payload
-    malformado o al stream equivocado, el ``processed == 1`` de abajo se pone rojo
+    malformado o al stream equivocado, el ``processed == 1`` del helper se pone rojo
     — antes el test fabricaba este evento y ese fallo pasaba invisible."""
     from api_server.events import EVENTS_STREAM
 
-    return await _consume_and_take_job(db_url, events_stream=EVENTS_STREAM, seed_event=None)
+    return await consume_and_take_job(db_url, events_stream=EVENTS_STREAM, seed_event=None)
 
 
-async def _task_status(db_url: str, task_id: UUID) -> str:
-    engine = create_async_engine(db_url)
-    try:
-        sm = async_sessionmaker(engine, expire_on_commit=False)
-        async with sm() as s:
-            return (await s.execute(select(Task).where(Task.id == task_id))).scalar_one().status
-    finally:
-        await engine.dispose()
-
-
-async def _execution_statuses(db_url: str, task_id: UUID) -> list[str]:
-    engine = create_async_engine(db_url)
-    try:
-        sm = async_sessionmaker(engine, expire_on_commit=False)
-        async with sm() as s:
-            rows = await list_executions_for_task(s, task_id)
-            return [r.status for r in rows]
-    finally:
-        await engine.dispose()
-
-
-def _run(request: dict[str, Any], admin_database_url: str) -> dict[str, Any]:
-    """Corre ``run_execution`` como lo hace Celery (evento loop propio de la tarea)."""
-    from workers.tasks import run_execution
-
-    os.environ["WORKERS_DATABASE_URL"] = admin_database_url
-    os.environ["WORKERS_EVENTS_REDIS_URL"] = TEST_REDIS_URL
-    reset_settings_cache()
-    try:
-        return run_execution(request)
-    finally:
-        os.environ.pop("WORKERS_DATABASE_URL", None)
-        os.environ.pop("WORKERS_EVENTS_REDIS_URL", None)
-        reset_settings_cache()
+_task_status = task_status
+_execution_statuses = execution_statuses
+_run = run_worker_job
 
 
 @requires_docker
@@ -374,3 +282,10 @@ def test_reviewer_reject_sends_task_back_to_backlog(
 
     # reject → la tarea vuelve a backlog (no cierra).
     assert asyncio.run(_task_status(admin_database_url, ids["task"])) == "backlog"
+    # M-6: el valor del reject es la SIGUIENTE ronda — ambas ejecuciones (impl +
+    # review) acabaron done, y el rechazo persistió un `review_comment` que el
+    # re-dispatch inyecta al implementador (prior_review_feedback, dispatch A2).
+    statuses = asyncio.run(_execution_statuses(admin_database_url, ids["task"]))
+    assert statuses.count(ExecutionStatus.DONE) == 2
+    kinds = asyncio.run(audit_event_kinds(admin_database_url, ids["task"]))
+    assert "review_comment" in kinds, f"el reject no persistió feedback (audit: {kinds})"
