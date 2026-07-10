@@ -205,11 +205,28 @@ Implementados con TDD + commit atómico en `plan/runs-visor-trabajo`:
 | I-7      | `0df2796b` | El dispatch del review consume el evento REAL de `events:tasks` (grupo fresco id=0, limpieza en seed); docstring declara los seams y el límite sin-git; `TEST_REDIS_URL` overridable.                                                                                           |
 
 Verificación tras la remediación: unit 2149 en verde con ratchet 31, agent-runtime
+y shared-llm y meta-tests 506 en verde, integración afectada (smoke + reconcilers +
+router-gaps) 13 en verde, e2e ciclo autónomo 2/2 (~37 s) consumiendo el evento real.
 
-- shared-llm + meta-tests 506 en verde, integración afectada (smoke + reconcilers +
-  router-gaps) 13 en verde, e2e ciclo autónomo 2/2 (~37 s) consumiendo el evento real.
-  Los MENORES del §2 siguen abiertos salvo los absorbidos de paso (nota de módulo
-  F32, comentario del floor en `pyproject.toml`, `TEST_REDIS_URL`).
+### Menores — segunda tanda (2026-07-10, misma sesión)
+
+| Menor        | Commit     | Qué se hizo                                                                                                                                                                                                                                                                                                |
+| ------------ | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M-2/M-3 (#2) | `582bbcb1` | PUT que mueve `plan_id` re-evalúa ORIGEN y DESTINO; `reactivate_plan_if_unstuck` lee el plan `FOR UPDATE` (cierra el lost-update); test negativo a nivel router (una de dos blocked → sigue blocked).                                                                                                      |
+| M-1 (#2)     | `a820a3f1` | Evento `plan_unblocked` (registro + templates ES/EN, in_app) emitido post-commit desde `reactivate_plan_if_unstuck` y best-effort desde la red del reconciler. NOTA: el stack dev no despliega el notification-dispatcher (sin servicio en los compose) — el enqueue es best-effort sin consumidor en dev. |
+| M-4 (#10c)   | `909e672b` | `parse_chat_completion` puebla `stop_reason` desde `finish_reason` — el campo tipado deja de ser una trampa en los providers HTTP.                                                                                                                                                                         |
+| M-5 (#6)     | `c38336db` | `review_state` anotado como `ReviewState` (graph + Protocol + scripted + provider + `_review_messages`): mypy verifica el contrato de la clave inyectada de verdad.                                                                                                                                        |
+| M-6 (#8)     | `62ccc86d` | `_pipeline_helpers.py` compartido smoke/ciclo (fin de las ~80 líneas duplicadas); asserts del reject (2 executions done + `review_comment` persistido); `pytest.mark.timeout(300)` en ambos.                                                                                                               |
+| M-7 (#9)     | `1ab58363` | `PlanCorrectionEntry` deja de exportarse (export muerto).                                                                                                                                                                                                                                                  |
+
+Quedan abiertos (deliberadamente, coste/beneficio): la partición de
+`plan-interactive-sections.tsx` (1248 líneas — tramo #9 restante), el test del
+transporte claude_sdk del córtex (I-6 parcial), la heurística documentable de
+`_harvest_stop_reason` y el test de caracterización del schema-gap previo (#10e).
+
+**Deploy de los menores (2026-07-10, tras la 2ª tanda)**: segundo rebuild de las
+4 imágenes (mismas recetas) + redeploy; admin-panel NO se reconstruye por M-7
+(cambio solo de tipos, sin superficie runtime — lo recogerá el siguiente build).
 
 **Deploy HECHO (2026-07-10, misma sesión)**: rebuild de las 4 imágenes —
 `api-server:manuals` (WITH_CLAUDE=1), `orchestrator:manuals` y `workers:ci`
