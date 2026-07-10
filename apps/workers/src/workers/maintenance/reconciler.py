@@ -448,13 +448,16 @@ async def _reconcile_unblocked_plans(sessionmaker: async_sessionmaker[AsyncSessi
     un camino que no llamó ``reactivate_plan_if_unstuck``). Sin ping-pong:
     ``transition_from_blocked`` es la negación EXACTA de ``transition_to_blocked``
     sobre el mismo snapshot, así que un plan genuinamente atascado se queda
-    ``blocked``. Al ganar, el beat de promoción DAG (que filtra ``in_progress``)
-    re-anuncia las tareas ``ready`` en su siguiente pasada. Devuelve cuántos
-    planes revirtió."""
+    ``blocked``; y un snapshot TODO-terminal se salta (C-1: es el bloqueo C8 F40
+    de review expirada, no un bloqueo por snapshot — revertirlo re-armaría el
+    autostart de review en bucle). Al ganar, el beat de promoción DAG (que filtra
+    ``in_progress``) re-anuncia las tareas ``ready`` en su siguiente pasada.
+    Devuelve cuántos planes revirtió."""
     from api_server.db.domain import Plan, PlanStatus, Task, TaskDependency
     from api_server.plan_progress import PlanStatus as PlanStatusLiteral
     from api_server.plan_progress import (
         TaskSnapshot,
+        has_open_tasks,
         transition_from_blocked,
     )
     from sqlalchemy import select, update
@@ -505,6 +508,14 @@ async def _reconcile_unblocked_plans(sessionmaker: async_sessionmaker[AsyncSessi
                 )
                 for r in task_rows
             ]
+            # C-1 (auditoría 2026-07-10): un snapshot TODO-terminal no puede venir
+            # del escalado por snapshot (exige ≥1 tarea blocked) — es la firma del
+            # bloqueo C8 F40 (review expirada). Revertirlo aquí re-promocionaría el
+            # plan y re-armaría el autostart de review en bucle de 48 h; ese
+            # bloqueo lo levanta el humano. El caso legítimo «borré la última tarea
+            # blocked y solo quedan done» ya lo revierte síncronamente el router.
+            if not has_open_tasks(snapshots):
+                continue
             result = transition_from_blocked(cast(PlanStatusLiteral, plan.status), snapshots)
             if not result.transitioned:
                 continue

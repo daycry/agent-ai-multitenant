@@ -133,3 +133,19 @@ async def test_reconciler_leaves_genuinely_blocked_plan_alone(
     ids = await _seed_blocked_plan(migrations_pg_dsn, task_status="blocked")
     await _run_reconcile(workers_settings)
     assert await _plan_status(workers_settings, ids["plan"]) == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_reconciler_leaves_all_done_blocked_plan_alone(
+    _migrated: None, workers_settings: object, migrations_pg_dsn: str
+) -> None:
+    """Anti ping-pong con C8 F40 (auditoría 2026-07-10, C-1): un plan ``blocked``
+    con TODAS las tareas terminales no viene del escalado por snapshot (ese exige
+    ≥1 tarea blocked) sino de la escalación de review expirada
+    (``pending_human_validation → blocked``). Revertirlo re-promociona el plan y
+    re-arma ``_autostart_review_runtime`` → bucle infinito de runtimes cada 48 h.
+    La red NO lo toca; ese bloqueo lo levanta el humano (o el delete síncrono de
+    la última tarea blocked, que ya re-evalúa en el router)."""
+    ids = await _seed_blocked_plan(migrations_pg_dsn, task_status="done")
+    await _run_reconcile(workers_settings)
+    assert await _plan_status(workers_settings, ids["plan"]) == "blocked"

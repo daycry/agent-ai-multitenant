@@ -219,6 +219,17 @@ def transition_to_blocked(
     return TransitionResult(new_status="blocked", transitioned=True)
 
 
+def has_open_tasks(tasks: Iterable[TaskSnapshot]) -> bool:
+    """¿Queda alguna tarea NO terminal (ni ``done`` ni ``cancelled``) en el snapshot?
+
+    Distingue los dos productores de plan-``blocked`` (C-1, auditoría 2026-07-10):
+    el escalado por snapshot (:func:`transition_to_blocked`) exige ≥1 tarea
+    ``blocked``, así que un plan bloqueado con snapshot todo-terminal solo puede
+    venir de la escalación C8 F40 (review expirada sobre ``pending_human_validation``)
+    — y ese bloqueo debe levantarlo un humano, no una red automática."""
+    return any(t.status in _OPEN_TASK_STATUSES for t in tasks)
+
+
 def transition_from_blocked(
     current_status: PlanStatus,
     tasks: Iterable[TaskSnapshot],

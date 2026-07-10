@@ -181,6 +181,7 @@ async def test_reconcile_pipeline_state(
         "stuck_tasks": 1,
         "orphan_reviews": 1,
         "completed_plans": 1,
+        "unblocked_plans": 0,
         "pushed_worktrees": 0,
     }
 
