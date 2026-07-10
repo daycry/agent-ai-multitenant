@@ -219,10 +219,18 @@ router-gaps) 13 en verde, e2e ciclo autónomo 2/2 (~37 s) consumiendo el evento 
 | M-6 (#8)     | `62ccc86d` | `_pipeline_helpers.py` compartido smoke/ciclo (fin de las ~80 líneas duplicadas); asserts del reject (2 executions done + `review_comment` persistido); `pytest.mark.timeout(300)` en ambos.                                                                                                               |
 | M-7 (#9)     | `1ab58363` | `PlanCorrectionEntry` deja de exportarse (export muerto).                                                                                                                                                                                                                                                  |
 
-Quedan abiertos (deliberadamente, coste/beneficio): la partición de
-`plan-interactive-sections.tsx` (1248 líneas — tramo #9 restante), el test del
-transporte claude_sdk del córtex (I-6 parcial), la heurística documentable de
+### Cola final (2026-07-10, tercera tanda de la sesión)
+
+| Ítem                                      | Commit        | Qué se hizo                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Partición `plan-interactive-sections.tsx` | (refactor #9) | 1248 líneas → 7 ficheros `plan-*-section.tsx` (76-250 líneas cada uno), imports por uso, `ReviewSessionInfo` exportado de validation (corrections lee la misma sesión); 67/67 testids, tsc 0 + vitest 214/214.                                                                                                                                                                                                                                                       |
+| Anclas ADR 0108                           | (docs #7)     | Comentario-ancla en los DOS parsers de veredicto (`parse_reviewer_output` y `_review_from`) con el porqué de la divergencia y el puntero al ADR. **La decisión A/B/C sigue siendo del operador** (ADR en `proposed`).                                                                                                                                                                                                                                                |
+| notification-dispatcher en dev            | (feat)        | Los workers dev no consumían `notifications.*`: TODAS las notificaciones estaban muertas en dev. Servicio añadido al overlay manuals (espejo del de prod), imagen construida (BASE_IMAGE=manuals), healthy, verificado e2e (`dispatch_event succeeded`). De paso se cazó y arregló un **bug de prod**: el healthcheck que genera el installer no cargaba la app celery (`-A notification_dispatcher` → «no attribute 'celery'») — fix en `compose_generator` + test. |
+
+Quedan abiertos (deliberadamente, coste/beneficio): el test del transporte
+claude_sdk del córtex (I-6 parcial), la heurística documentable de
 `_harvest_stop_reason` y el test de caracterización del schema-gap previo (#10e).
+Y la decisión del ADR 0108 (operador).
 
 **Deploy de los menores (2026-07-10, tras la 2ª tanda)**: segundo rebuild de las
 4 imágenes (mismas recetas) + redeploy; admin-panel NO se reconstruye por M-7
