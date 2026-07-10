@@ -96,6 +96,18 @@ def parse_reviewer_output(text: str) -> ReviewerVerdict:
     agent may have changed its mind mid-output; we honour the final call). The
     tag body is matched tolerantly (`_normalise_verdict`) so minor format drift
     no longer flips a real verdict to `unknown`.
+
+    ADR 0108 (ancla): este es UNO de los DOS canales de veredicto y la
+    divergencia es INTENCIONAL — el run reviewer externo cierra un loop
+    multi-turn cuyo FINISH en claude_sdk es prosa (un tool call forzaría
+    ``content=""`` y perdería el resumen), así que su veredicto viaja como tag
+    parseado aquí; la self-review interna es single-turn con ``tool_choice``
+    forzable y usa la tool ``submit_verdict``
+    (``agent_runtime/providers.py::_review_from``). Tolerancias distintas a
+    propósito: aquí ``unknown → reject`` defensivo; el runtime hace
+    ``inconclusive → humano``. Fuente única del wire-format:
+    ``agent_runtime/review_contract.py`` + ``test_review_verdict_wire_contract``.
+    Antes de unificar canales, leer el ADR 0108 (opciones A/B/C y riesgos).
     """
     label: VerdictLabel = "unknown"
     for body in _VERDICT_RE.findall(text or ""):

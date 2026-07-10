@@ -743,6 +743,16 @@ def _review_from(resp: CompletionResponse, *, model: str) -> ReviewResponse:
       2. else the prose net (`_parse_verdict`: embedded JSON > conservative
          markers) — kept permanently because the claude_sdk CLI may degrade.
 
+    ADR 0108 (ancla): este es UNO de los DOS canales de veredicto y la
+    divergencia es INTENCIONAL — la self-review es una llamada single-turn donde
+    ``tool_choice`` es forzable en HTTP (F34), de ahí la tool tipada con
+    ``inconclusive → humano``; el run reviewer EXTERNO es un loop multi-turn
+    cuyo FINISH en claude_sdk es prosa y cierra con el tag ``<verdict>`` que
+    parsea el worker (``api_server/reviewer_bridge.py::parse_reviewer_output``,
+    con ``unknown → reject`` defensivo). Fuente única del wire-format:
+    ``review_contract.py`` + ``test_review_verdict_wire_contract``. Antes de
+    unificar canales, leer el ADR 0108 (opciones A/B/C y riesgos).
+
     Three-state: ``passed is None`` (inconclusive) maps to
     ``ReviewResponse(passed=False, inconclusive=True)`` so it never auto-passes;
     the loop escalates it to a human.
