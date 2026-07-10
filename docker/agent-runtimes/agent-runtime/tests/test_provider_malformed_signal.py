@@ -29,6 +29,7 @@ from typing import Any
 from agent_runtime.model import DecisionKind
 from agent_runtime.providers import (
     _CORRUPT_VERDICT_FEEDBACK,
+    _TRUNCATED_PROSE_VERDICT_FEEDBACK,
     _completion_signals,
     _decision_from,
     _review_from,
@@ -246,3 +247,31 @@ def test_ambiguous_prose_verdict_not_relabelled() -> None:
     r = _review_from(_resp(_payload(content="he mirado el código")), model="m")
     assert r.passed is False and r.inconclusive is True
     assert r.feedback != _CORRUPT_VERDICT_FEEDBACK
+
+
+# --- I-4 (auditoría 2026-07-10): el verdict en PROSA truncado nunca cuela un PASS.
+#     A diferencia del caso estructurado (un boolean `passed` parseado entero es de
+#     fiar aunque el resto se cortara), en prosa un marcador/JSON de PASS puede ser
+#     ANÁLISIS INTERMEDIO cortado antes del «pero no C» → inconcluso, fail-closed.
+def test_truncated_prose_verdict_with_pass_json_is_inconclusive() -> None:
+    # claude_sdk degradado a prosa: el body truncado (stop_reason=max_tokens) trae
+    # un JSON de pass de su análisis — NO es un veredicto de fiar.
+    resp = _sdk_resp('{"passed": true, "feedback": "cumple A y B"} y ade', stop_reason="max_tokens")
+    r = _review_from(resp, model="m")
+    assert r.passed is False and r.inconclusive is True
+    assert r.feedback == _TRUNCATED_PROSE_VERDICT_FEEDBACK
+
+
+def test_truncated_http_prose_verdict_is_inconclusive() -> None:
+    # Mismo guard vía la señal raw de los providers HTTP (finish_reason=length).
+    payload = _payload(content='{"passed": true, "feedback": "ok"} …', finish_reason="length")
+    r = _review_from(_resp(payload), model="m")
+    assert r.passed is False and r.inconclusive is True
+    assert r.feedback == _TRUNCATED_PROSE_VERDICT_FEEDBACK
+
+
+def test_complete_prose_verdict_still_passes() -> None:
+    # Regresión: una prosa COMPLETA (end_turn) con veredicto claro sigue pasando.
+    resp = _sdk_resp('{"passed": true, "feedback": "todo ok"}', stop_reason="end_turn")
+    r = _review_from(resp, model="m")
+    assert r.passed is True and r.inconclusive is False

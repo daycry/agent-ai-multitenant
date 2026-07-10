@@ -538,11 +538,24 @@ def _parse_verdict(content: str) -> tuple[bool | None, str]:
 # this signal, designed to take `CompletionResponse.raw` directly — so we consume
 # it here rather than re-deriving (and risking drift). The claude_sdk path stores
 # a LIST of SDK messages in `raw` (not an openai dict), and the test fakes carry no
-# `raw` at all; both yield the all-False default, so those paths are unchanged.
+# `raw` at all; both yield the all-False default from the raw-derived base — for
+# claude_sdk the truncation signal travels on the TYPED `stop_reason` instead
+# (hallazgo #10c), which `_completion_signals` overlays on top of that base.
 _CORRUPT_VERDICT_FEEDBACK = (
     "verdict corrupt/truncated — the model emitted submit_verdict but its arguments "
     "could not be decoded (malformed JSON or a response cut off at the token cap); "
     "retry the review rather than treating this as an ambiguous prose verdict"
+)
+
+# I-4 (auditoría 2026-07-10): el espejo PROSA del relabel de arriba. Una review en
+# prosa cortada en el tope de salida puede contener marcadores/JSON de PASS de su
+# análisis INTERMEDIO (cortado antes del «pero no C»); a diferencia del boolean
+# estructurado — parseado entero, de fiar aunque el resto se truncara — en prosa no
+# hay forma de distinguir veredicto final de análisis a medias → inconcluso.
+_TRUNCATED_PROSE_VERDICT_FEEDBACK = (
+    "verdict truncated — the prose review reply was cut off at the output cap, so any "
+    "pass/fail markers may belong to intermediate analysis rather than a final verdict; "
+    "retry the review instead of honouring a verdict from a truncated body"
 )
 
 
@@ -715,8 +728,14 @@ def _review_from(resp: CompletionResponse, *, model: str) -> ReviewResponse:
     inconclusive AND the robustness signal flags corruption/truncation, the
     feedback is relabelled to say so explicitly — distinguishing "the model
     produced a verdict we couldn't decode (retry the review)" from "ambiguous
-    prose". A WELL-FORMED structured verdict (a real boolean ``passed``) and the
-    no-tool-call prose path are both left EXACTLY as before.
+    prose". A WELL-FORMED structured verdict (a real boolean ``passed``) is left
+    EXACTLY as before.
+
+    I-4 (auditoría 2026-07-10): the PROSE path is guarded too — a truncated body
+    can carry pass markers/JSON from the model's INTERMEDIATE analysis, which
+    `_parse_verdict` would honour as a final PASS on the authoritative gate. With
+    the truncation signal set, the prose verdict is forced INCONCLUSIVE (escalates,
+    fail-closed) regardless of what the cut-off text appears to say.
     """
     tool_verdict = _verdict_from_tool_calls(resp)
     if tool_verdict is not None:
@@ -725,6 +744,12 @@ def _review_from(resp: CompletionResponse, *, model: str) -> ReviewResponse:
             signals = _completion_signals(resp)
             if signals.malformed_tool_args or signals.truncated:
                 feedback = _CORRUPT_VERDICT_FEEDBACK
+    elif _completion_signals(resp).truncated:
+        _log.warning(
+            "prose review verdict treated as INCONCLUSIVE (truncated) — a cut-off body "
+            "cannot be trusted to carry a final verdict"
+        )
+        passed, feedback = None, _TRUNCATED_PROSE_VERDICT_FEEDBACK
     else:
         passed, feedback = _parse_verdict(resp.content or "")
     return ReviewResponse(
