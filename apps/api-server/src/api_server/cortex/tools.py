@@ -369,6 +369,16 @@ def cortex_tool_schemas(enabled: tuple[str, ...]) -> list[dict[str, Any]]:
     return [CORTEX_TOOLS[name].schema for name in enabled if name in CORTEX_TOOLS]
 
 
+def cortex_tool_schemas_without_host_web(enabled: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Como :func:`cortex_tool_schemas` pero SIN las host web tools (I-6, auditoría
+    2026-07-10): cuando las web tools NATIVAS del SDK están activas (``allowed_tools``
+    WebSearch/WebFetch, ADR 0076), el modelo no debe ver además ``web_search``/
+    ``web_fetch`` del catálogo host — dos herramientas para el mismo trabajo confunden
+    la elección y duplican el gasto. ``build_cortex_model`` elige esta variante como
+    ``schema_fn`` solo en ese caso (exclusión mutua nativa/host)."""
+    return cortex_tool_schemas(tuple(name for name in enabled if name not in _WEB_TOOL_NAMES))
+
+
 __all__ = [
     "CORTEX_TOOLS",
     "CortexToolContext",
@@ -376,5 +386,6 @@ __all__ = [
     "UnknownCortexToolError",
     "cortex_enabled_tool_names",
     "cortex_tool_schemas",
+    "cortex_tool_schemas_without_host_web",
     "run_cortex_tool",
 ]

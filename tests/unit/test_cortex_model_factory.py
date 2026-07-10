@@ -138,6 +138,41 @@ async def test_resolve_cortex_model_none_when_unconfigured() -> None:
 
 
 # ---------------------------------------------------------------------------
+# I-6 (auditoría 2026-07-10): pins del cableado de schema_fn — un revert
+# accidental del kwarg en build_cortex_model pasaría la suite en verde (los
+# tests del hallazgo #10e inyectan cortex_tool_schemas a mano); estos lo clavan.
+# ---------------------------------------------------------------------------
+def test_build_cortex_model_pins_the_cortex_schema_catalog() -> None:
+    from api_server.cortex.tools import cortex_tool_schemas
+
+    model = build_cortex_model(
+        _resolved("ollama", "high"),
+        provider=_StubProvider(),  # type: ignore[arg-type]
+        claude_sdk_available=False,
+    )
+    assert model.schema_fn is cortex_tool_schemas
+
+
+def test_apply_effort_decision_preserva_schema_fn() -> None:
+    from api_server.cortex.affect_policy import EffortDecision
+    from api_server.cortex.model_config import apply_effort_decision
+    from api_server.cortex.tools import cortex_tool_schemas
+
+    model = build_cortex_model(
+        _resolved("ollama", "high"),
+        provider=_StubProvider(),  # type: ignore[arg-type]
+        claude_sdk_available=False,
+    )
+    out = apply_effort_decision(
+        model, EffortDecision(base="high", effective="xhigh", reasons=("arousal_high:0.9",))
+    )
+    assert out is not model
+    # El camino por-request de la política afectiva reconstruye el modelo — el
+    # catálogo del córtex debe sobrevivir a la reconstrucción.
+    assert out.schema_fn is cortex_tool_schemas
+
+
+# ---------------------------------------------------------------------------
 # apply_effort_decision — reconstrucción acotada del modelo (afecto→effort)
 # ---------------------------------------------------------------------------
 def test_apply_effort_decision_reconstruye_kwargs_preservando_el_resto() -> None:

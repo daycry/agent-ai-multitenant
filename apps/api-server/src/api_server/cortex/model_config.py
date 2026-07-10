@@ -36,7 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.assistant.graph import AssistantModelClient
 from api_server.assistant.llm import LLMAssistantModel
-from api_server.cortex.tools import cortex_tool_schemas
+from api_server.cortex.tools import cortex_tool_schemas, cortex_tool_schemas_without_host_web
 
 if TYPE_CHECKING:
     from api_server.cortex.affect_policy import EffortDecision
@@ -202,6 +202,11 @@ def build_cortex_model(
         resolved.reasoning_effort,
         web_enabled=web_enabled,
     )
+    # I-6 (auditoría 2026-07-10): exclusión mutua nativa/host — con las web tools
+    # NATIVAS del SDK activas (allowed_tools de arriba), el catálogo de schemas no
+    # ofrece además web_search/web_fetch host: dos herramientas para el mismo
+    # trabajo confunden la elección del modelo y duplican el gasto.
+    native_web = web_enabled and resolved.provider_kind == "claude_sdk"
     return LLMAssistantModel(
         provider=provider,
         model=api_model,
@@ -212,7 +217,7 @@ def build_cortex_model(
         # Hallazgo #10e: el córtex debe enviar SU catálogo de schemas (web_search,
         # web_fetch, cortex_remember, cortex_recall_more), no el del asistente —
         # que no las conoce y dejaba toda complete() del córtex con tools=None.
-        schema_fn=cortex_tool_schemas,
+        schema_fn=cortex_tool_schemas_without_host_web if native_web else cortex_tool_schemas,
     )
 
 

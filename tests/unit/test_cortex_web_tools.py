@@ -89,6 +89,45 @@ def test_build_cortex_model_non_claude_has_no_web_tools() -> None:
 
 
 # ---------------------------------------------------------------------------
+# I-6 (auditoría 2026-07-10): exclusión mutua nativa/host. Con las web tools
+# NATIVAS del SDK activas (allowed_tools WebSearch/WebFetch, ADR 0076), el modelo
+# no debe ver ADEMÁS los schemas de las host tools web_search/web_fetch (ADR 0067)
+# — dos herramientas para lo mismo confunden al modelo y duplican el gasto. El
+# resto del catálogo (cortex_remember, cortex_recall_more) sigue disponible.
+# ---------------------------------------------------------------------------
+def test_native_web_excludes_host_web_schemas() -> None:
+    from api_server.cortex.tools import cortex_enabled_tool_names
+
+    model = build_cortex_model(
+        _resolved("claude_sdk"),
+        provider=_StubProvider(),  # type: ignore[arg-type]
+        claude_sdk_available=True,
+        web_enabled=True,
+    )
+    enabled = cortex_enabled_tool_names(web_enabled=True)
+    names = [s["name"] for s in model.schema_fn(enabled)]
+    assert "web_search" not in names and "web_fetch" not in names
+    assert "cortex_remember" in names and "cortex_recall_more" in names
+
+
+def test_without_native_web_host_schemas_are_intact() -> None:
+    from api_server.cortex.tools import cortex_enabled_tool_names, cortex_tool_schemas
+
+    # Sin web nativa (kind no-claude, aunque web_enabled=True) el catálogo host
+    # completo sigue siendo la fuente de schemas — incluidas las web tools, cuyo
+    # gate real es cortex_enabled_tool_names/run_cortex_tool (ADR 0067).
+    model = build_cortex_model(
+        _resolved("ollama"),
+        provider=_StubProvider(),  # type: ignore[arg-type]
+        claude_sdk_available=False,
+        web_enabled=True,
+    )
+    assert model.schema_fn is cortex_tool_schemas
+    names = [s["name"] for s in model.schema_fn(cortex_enabled_tool_names(web_enabled=True))]
+    assert "web_search" in names and "web_fetch" in names
+
+
+# ---------------------------------------------------------------------------
 # Propagación por la vía agéntica del provider: ``run_agent`` pasa los
 # ``allowed_tools`` recibidos a ``_build_options`` (de donde el SDK los consume).
 # Sin depender de tener el SDK instalado: capturamos el argumento con un
