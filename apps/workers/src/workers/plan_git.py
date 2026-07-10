@@ -126,6 +126,26 @@ def plan_git_identity(plan_id: str, plan_slug: str, project_slug: str) -> PlanGi
     )
 
 
+def worktree_layout(
+    *,
+    data_root: str | Path,
+    tenant_slug: str,
+    project_slug: str,
+) -> BareRepoLayout:
+    """La primitiva de LAYOUT de :func:`worktree_coordinates` (remate I-2, auditoría
+    2026-07-10): el sitio que solo necesita el layout — la resolución read-only del
+    worktree del review, que no tiene plan a mano — la llama directamente en vez de
+    reconstruir ``BareRepoLayout`` a mano, y no puede divergir de los demás.
+
+    IDENTIDAD DooD (CRÍTICO): ``settings.data_root`` es un path DAEMON-SIDE que el worker
+    monta en la MISMA ruta y entrega VERBATIM al daemon como bind source. NO normaliza
+    (``Path(data_root)`` sin ``resolve()``/realpath) para preservar la identidad
+    container-side == daemon-side de los binds ``/workspace``."""
+    return BareRepoLayout(
+        data_root=Path(data_root), tenant_slug=tenant_slug, project_slug=project_slug
+    )
+
+
 def worktree_coordinates(
     *,
     data_root: str | Path,
@@ -139,18 +159,14 @@ def worktree_coordinates(
     derivar IDÉNTICAS (hallazgo #10a). Antes cada uno reconstruía el ``BareRepoLayout``
     + ``make_plan_branch_name`` a mano — 5+ puntos propensos a divergir del contrato de
     :func:`plan_git_identity` («Execution, clone and the auto-PR MUST resolve IDENTICAL
-    coordinates»).
+    coordinates»). El layout sale de :func:`worktree_layout` (misma primitiva que usa
+    la resolución read-only del review); ver allí el invariante DooD de no-normalización.
 
-    IDENTIDAD DooD (CRÍTICO): ``settings.data_root`` es un path DAEMON-SIDE que el worker
-    monta en la MISMA ruta y entrega VERBATIM al daemon como bind source. Este helper NO
-    normaliza (``Path(data_root)`` sin ``resolve()``/realpath) para preservar la identidad
-    container-side == daemon-side de los binds ``/workspace``. El ``repo_name`` (nombre del
-    bare, ADR 0085 = ``project_slug`` salvo override legacy por-request) lo resuelve cada
-    caller y lo pasa a ``layout.bare_repo_path`` / ``WorktreeManager``."""
+    El ``repo_name`` (nombre del bare, ADR 0085 = ``project_slug`` salvo override legacy
+    por-request) lo resuelve cada caller y lo pasa a ``layout.bare_repo_path`` /
+    ``WorktreeManager``."""
     return (
-        BareRepoLayout(
-            data_root=Path(data_root), tenant_slug=tenant_slug, project_slug=project_slug
-        ),
+        worktree_layout(data_root=data_root, tenant_slug=tenant_slug, project_slug=project_slug),
         make_plan_branch_name(plan_id, plan_slug),
     )
 

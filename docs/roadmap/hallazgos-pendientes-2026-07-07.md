@@ -37,8 +37,12 @@ branch: plan/runs-visor-trabajo
 >   `CompletionResponse.stop_reason` cosechado del SDK; guard extendido a la rama prose-FINISH.
 > - **#10e** (`944085a`) — schema-gap del córtex: `schema_fn` inyectable, el córtex pasa
 >   `cortex_tool_schemas` (verificado en vivo: web_search recibe args correctos).
-> - **#10a** (`0642211c`) — `worktree_coordinates`, fuente única de coordenadas de worktree en 6
->   sitios, con golden test que clava la identidad de path DooD.
+> - **#10a** (`0642211c`) — `worktree_coordinates`, fuente única de coordenadas de worktree en 5
+>   sitios (provisión ×2, review-runtime ×2, back-fill), con golden test. **Remate 2026-07-10**
+>   (auditoría I-2/I-3): la resolución read-only del review (`_resolve_review_worktree`, el 6º
+>   sitio, DooD-crítico) unificada vía la primitiva `worktree_layout`; golden test endurecido
+>   (strings literales + guarda anti-`resolve()` efectiva en CI + contrato de fuente única
+>   sobre `execution.py`).
 > - **#9** (refactor frontend) — **DEFERIDO** como tramo dedicado: es mecánico sobre código que
 >   funciona y con riesgo de big-bang; el mapa dejó el plan (extraer `plan-spec-types.ts` + 8-9
 >   secciones del detalle de plan de 1703 líneas, model-prices/mcp-servers/knowledge-bases;

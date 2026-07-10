@@ -495,13 +495,16 @@ def _resolve_review_worktree(
     (committed + uncommitted) exactly as the implementer left it; the reviewer
     only reads it. Returns the host path, or ``None`` when the worktree does not
     exist (the implementer ran in an ephemeral tmpfs) so the reviewer falls back
-    to an empty ``/workspace``."""
-    from pathlib import Path
+    to an empty ``/workspace``.
 
-    from workers.git_repos import BareRepoLayout
+    El layout sale de ``worktree_layout`` — la MISMA primitiva que usa
+    ``worktree_coordinates`` en la provisión (remate I-2, auditoría 2026-07-10):
+    este path alimenta un bind DooD (mount read-only del reviewer, ADR 0095) y no
+    puede divergir de donde el implementador dejó el worktree."""
+    from workers.plan_git import worktree_layout
 
-    layout = BareRepoLayout(
-        data_root=Path(settings.data_root),
+    layout = worktree_layout(
+        data_root=settings.data_root,
         tenant_slug=tenant_slug,
         project_slug=project_slug,
     )
