@@ -115,3 +115,44 @@ async def test_foreign_users_conversation_is_404(configured_app, migrations_pg_d
             headers=headers_b,
         )
         assert cont.status_code == 404
+
+
+# ===========================================================================
+# A4: tool search_knowledge — el asistente por fin puede consultar las KBs del
+# tenant («¿qué dice nuestra documentación sobre X?»). Cross-proyecto bajo la
+# sesión RLS; BM25 con es_unaccent (P0-4).
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_search_knowledge_reads_tenant_kbs(configured_app, migrations_pg_dsn: str) -> None:
+    from api_server.assistant.tools import AssistantToolContext, run_assistant_tool
+    from sqlalchemy import text as sa_text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from tests.integration._rag_helpers import seed_rag_corpus
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seeded = await seed_rag_corpus(migrations_pg_dsn)
+
+    import os
+
+    app_url = os.environ["API_SERVER_DATABASE_URL"]
+    engine = create_async_engine(app_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        async with sm() as session:
+            await session.execute(
+                sa_text("SELECT set_config('app.tenant_id', :tid, false)"),
+                {"tid": str(seeded["tenant_id"])},
+            )
+            ctx = AssistantToolContext(
+                session=session,
+                tenant_id=seeded["tenant_id"],
+                user_id=seeded["tenant_id"],  # cualquier UUID: la tool no lo usa
+            )
+            result = await run_assistant_tool("search_knowledge", ctx, {"query": "asyncpg"})
+    finally:
+        await engine.dispose()
+
+    assert result["hits"], result
+    assert any("asyncpg" in h["snippet"] for h in result["hits"])

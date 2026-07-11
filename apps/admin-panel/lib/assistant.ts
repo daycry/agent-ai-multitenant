@@ -134,6 +134,12 @@ export const ASSISTANT_TOOL_CATALOGUE: readonly AssistantToolDef[] = [
     description: "Tareas humanas sin aceptar desde hace más de N horas (por defecto 24h).",
   },
   {
+    name: "search_knowledge",
+    label: "Buscar en el conocimiento",
+    description:
+      "Busca pasajes relevantes en las bases de conocimiento del tenant (documentación, guías).",
+  },
+  {
     name: "remember_about_me",
     label: "Recordar sobre ti",
     description:
