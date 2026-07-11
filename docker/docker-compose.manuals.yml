@@ -558,7 +558,31 @@ services:
     networks: [agentic-net]
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # Sidecar WhatsApp neonize/whatsmeow (ADR 0109) — OPCIONAL, apagado por
+  # defecto (profile). Arranque:
+  #   docker compose ... --profile neonize up -d whatsapp-neonize
+  # Primera vez: emparejar con QR (docker logs -f whatsapp-neonize) — runbook
+  # docs/06-runbooks/whatsapp-neonize-pairing.md. Build:
+  #   docker build -t agentic-platform/whatsapp-neonize:dev docker/whatsapp-neonize
+  # El canal whatsapp del tenant usa provider "neonize" + secreto = NEONIZE_TOKEN.
+  # ---------------------------------------------------------------------------
+  whatsapp-neonize:
+    image: agentic-platform/whatsapp-neonize:dev
+    profiles: [neonize]
+    environment:
+      NEONIZE_TOKEN: dev-neonize-token
+      NEONIZE_SESSION_DB: /data/session.sqlite3
+    volumes:
+      - whatsapp_neonize_session:/data
+    networks: [agentic-net]
+    restart: unless-stopped
+
 volumes:
+  # Sesión whatsmeow del sidecar neonize (ADR 0109): borrarla obliga a
+  # re-emparejar por QR.
+  whatsapp_neonize_session:
+    name: agentic_whatsapp_neonize_session
   # Unseal keys + root token del Vault persistente (Camino B). Volumen docker,
   # NO en el repo. Borrarlo obliga a re-inicializar Vault (perderías los secretos).
   vault_init:

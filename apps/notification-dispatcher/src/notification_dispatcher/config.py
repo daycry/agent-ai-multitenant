@@ -260,6 +260,18 @@ class Settings(BaseSettings):
         "dispatcher's overall send budget still wraps it. Tunable, not a magic "
         "number.",
     )
+    # ADR 0109: transporte alternativo `provider: "neonize"` — sidecar
+    # whatsmeow self-hosted (texto libre, sin plantillas de Meta). El canal
+    # puede pinear su propio `config.base_url`; esto es el default del stack.
+    whatsapp_neonize_base_url: str = Field(
+        default="http://whatsapp-neonize:8085",
+        description="Base URL of the self-hosted neonize/whatsmeow sidecar "
+        "(ADR 0109). Channel config.base_url overrides per channel.",
+    )
+    whatsapp_neonize_request_timeout_s: float = Field(
+        default=10.0,
+        description="Per-request HTTP timeout for the neonize sidecar send.",
+    )
 
     # ----- SMS / Twilio channel (task_10_11) -----
     twilio_api_base_url: str = Field(

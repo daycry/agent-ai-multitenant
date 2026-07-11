@@ -167,6 +167,12 @@ class WhatsAppAdapter:
             )
 
         config = message.config or {}
+        # ADR 0109: `provider: "neonize"` desvía al sidecar whatsmeow
+        # self-hosted (texto libre) — misma rama de config.provider que el
+        # canal email (SMTP vs SendGrid). Default "cloud" = camino Meta intacto.
+        if str(config.get("provider") or "cloud").lower() == "neonize":
+            return await self._send_neonize(message, token=str(token), settings=settings)
+
         phone_number_id = config.get("phone_number_id")
         if not phone_number_id:
             raise ChannelSendError(
@@ -199,6 +205,62 @@ class WhatsAppAdapter:
             raise ChannelSendError(f"whatsapp transport error: {type(exc).__name__}") from exc
 
         return self._interpret_response(response, to=to)
+
+    # ------------------------------------------------------------------
+    # ADR 0109: transporte alternativo neonize (sidecar whatsmeow).
+    # ------------------------------------------------------------------
+    async def _send_neonize(
+        self, message: ChannelMessage, *, token: str, settings: Settings
+    ) -> DeliveryResult:
+        """Texto libre vía el sidecar neonize: ``POST {base}/send {to, text}``.
+
+        Sin plantillas de Meta: el ``message.body`` ya renderizado (builtins
+        ES/EN del Plan 10) ES el mensaje. El Bearer es el secreto del canal
+        (token del sidecar, no de Meta). Un 409 ``not_paired`` significa que la
+        sesión QR no está vinculada — error de canal accionable, no transporte."""
+        config = message.config or {}
+        to = message.target or config.get("to")
+        if not to:
+            raise ChannelSendError("whatsapp(neonize) channel has no recipient (target)")
+        text = (message.body or "").strip()
+        if not text:
+            raise ChannelSendError("whatsapp(neonize) send has an empty body")
+
+        base_url = str(config.get("base_url") or settings.whatsapp_neonize_base_url).rstrip("/")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(
+                timeout=settings.whatsapp_neonize_request_timeout_s
+            ) as client:
+                response = await client.post(
+                    f"{base_url}/send", json={"to": str(to), "text": text}, headers=headers
+                )
+        except httpx.HTTPError as exc:
+            raise ChannelSendError(
+                f"whatsapp(neonize) transport error: {type(exc).__name__}"
+            ) from exc
+
+        if response.status_code >= 400:
+            detail = ""
+            try:
+                detail = str((response.json() or {}).get("error") or "")
+            except Exception:  # cuerpo no-JSON — el status basta
+                detail = ""
+            raise ChannelSendError(
+                f"whatsapp(neonize) send failed: HTTP {response.status_code}"
+                + (f" ({detail})" if detail else "")
+            )
+        provider_id: str | None = None
+        try:
+            body = response.json()
+            if isinstance(body, dict) and body.get("id") is not None:
+                provider_id = str(body["id"])
+        except Exception:  # cuerpo no-JSON — el 2xx basta
+            provider_id = None
+        return DeliveryResult(ok=True, provider_message_id=provider_id)
 
     # ------------------------------------------------------------------
     # Template resolution + validation.
