@@ -153,6 +153,99 @@ def _preference_to_response(pref: NotificationPreference) -> NotificationPrefere
 
 
 # ===========================================================================
+# Event catalogue — the events a tenant can subscribe to (NOTIF-3)
+# ===========================================================================
+# La UI de preferencias hardcodeaba 4 eventos (uno inexistente, `review_needed`)
+# desalineados del registro real del dispatcher. Este catálogo es la fuente que
+# consume la UI. El api-server NO importa el dispatcher (frontera limpia), así
+# que la lista vive aquí y un test unitario la mantiene en sync con
+# `notification_dispatcher.event_mapping.EVENT_REGISTRY` (los tests sí pueden
+# importar ambos paquetes).
+NOTIFICATION_EVENT_CATALOG: tuple[dict[str, str], ...] = (
+    {"event_type": "task_blocked", "label_es": "Tarea bloqueada", "label_en": "Task blocked"},
+    {"event_type": "plan_approved", "label_es": "Plan aprobado", "label_en": "Plan approved"},
+    {"event_type": "plan_rejected", "label_es": "Plan rechazado", "label_en": "Plan rejected"},
+    {"event_type": "plan_blocked", "label_es": "Plan bloqueado", "label_en": "Plan blocked"},
+    {"event_type": "plan_unblocked", "label_es": "Plan desbloqueado", "label_en": "Plan unblocked"},
+    {
+        "event_type": "execution_finished",
+        "label_es": "Ejecución finalizada",
+        "label_en": "Execution finished",
+    },
+    {
+        "event_type": "execution_failed",
+        "label_es": "Ejecución fallida",
+        "label_en": "Execution failed",
+    },
+    {
+        "event_type": "review_requested",
+        "label_es": "Revisión solicitada",
+        "label_en": "Review requested",
+    },
+    {
+        "event_type": "human_validation_needed",
+        "label_es": "Validación humana pendiente",
+        "label_en": "Human validation needed",
+    },
+    {
+        "event_type": "human_task_assigned",
+        "label_es": "Tarea humana asignada",
+        "label_en": "Human task assigned",
+    },
+    {
+        "event_type": "review_escalated",
+        "label_es": "Revisión escalada",
+        "label_en": "Review escalated",
+    },
+    {"event_type": "budget_alert", "label_es": "Alerta de presupuesto", "label_en": "Budget alert"},
+    {
+        "event_type": "guardrail_alert",
+        "label_es": "Alerta de guardrail",
+        "label_en": "Guardrail alert",
+    },
+    {
+        "event_type": "quality_drift_alert",
+        "label_es": "Deriva de calidad",
+        "label_en": "Quality drift alert",
+    },
+    {
+        "event_type": "agent_outlier_alert",
+        "label_es": "Agente atípico",
+        "label_en": "Agent outlier alert",
+    },
+    {
+        "event_type": "antivirus_unreachable",
+        "label_es": "Antivirus inaccesible",
+        "label_en": "Antivirus unreachable",
+    },
+    {
+        "event_type": "credential_rotation_failed",
+        "label_es": "Rotación de credenciales fallida",
+        "label_en": "Credential rotation failed",
+    },
+    {
+        "event_type": "fx_fetch_failed",
+        "label_es": "Actualización de divisas fallida",
+        "label_en": "FX update failed",
+    },
+    {
+        "event_type": "infra_alert",
+        "label_es": "Alerta de infraestructura",
+        "label_en": "Infrastructure alert",
+    },
+)
+
+
+@router.get("/event-catalog")
+async def get_event_catalog(
+    _: AuthPrincipal = Depends(require_tenant_member),
+) -> list[dict[str, str]]:
+    """Los eventos suscribibles, con etiquetas ES/EN — la fuente de la UI de
+    preferencias (antes hardcodeaba una lista desalineada del registro)."""
+    return list(NOTIFICATION_EVENT_CATALOG)
+
+
+# ===========================================================================
 # Platform layer — System Admin enables channel transports globally
 # ===========================================================================
 @router.get("/platform/channel-types", response_model=PlatformChannelTypesResponse)

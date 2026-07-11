@@ -152,25 +152,32 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.DEFAULT,
         default_channel_types=("in_app", "telegram"),
     ),
-    "task_failed": EventSpec(
-        "task_failed",
-        lane=NotificationLane.DEFAULT,
-        default_channel_types=("in_app",),
-    ),
+    # NOTIF-3 (auditoría 2026-07-12): `task_failed` se RETIRÓ del registro —
+    # era imposible por diseño (las tareas nunca alcanzan un estado "failed":
+    # los fallos de run convergen en `blocked`, que ya notifica task_blocked).
+    # Mantenerlo daba cobertura ilusoria.
+    #
+    # execution_finished: EMITIDO por el worker al terminar un run `done`.
+    # Opt-in (sin default): un in_app por CADA ejecución inundaría el inbox;
+    # quien lo quiera crea la preferencia explícita (evento, canal).
     "execution_finished": EventSpec(
         "execution_finished",
         lane=NotificationLane.DEFAULT,
-        default_channel_types=("in_app",),
+        default_channel_types=(),
     ),
+    # execution_failed: EMITIDO por el worker cuando un run muere
+    # (failed/aborted) — antes solo quedaba en el log del worker.
     "execution_failed": EventSpec(
         "execution_failed",
         lane=NotificationLane.PRIORITY,
         default_channel_types=("in_app", "telegram"),
     ),
+    # review_requested: EMITIDO por el orquestador al despachar la review de IA.
+    # Opt-in (sin default): cada review notificando a telegram sería ruido.
     "review_requested": EventSpec(
         "review_requested",
         lane=NotificationLane.DEFAULT,
-        default_channel_types=("in_app", "telegram"),
+        default_channel_types=(),
     ),
     "human_validation_needed": EventSpec(
         "human_validation_needed",

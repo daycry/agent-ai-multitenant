@@ -1285,6 +1285,43 @@ async def _implementer_post_process(
     # before any consumer can see the event.
 
 
+# NOTIF-3: estados de run que notifican execution_failed (prioridad). `done`
+# emite execution_finished (opt-in: sin default de canal para no inundar).
+_EXECUTION_FAILED_STATUSES = frozenset({"failed", "aborted"})
+
+
+async def _notify_execution_outcome(
+    *, tenant_id: str, task_id: str, task_title: str, status: str, abort_code: str | None
+) -> None:
+    """Encola execution_failed/execution_finished al dispatcher (NOTIF-3).
+
+    Best-effort (mismo contrato que el _notify_plan_unblocked del reconciler):
+    un fallo de broker se loguea y JAMÁS rompe el run ya terminado."""
+    if status in _EXECUTION_FAILED_STATUSES:
+        event_type = "execution_failed"
+    elif status == "done":
+        event_type = "execution_finished"
+    else:
+        return  # needs_human_review/cancelled tienen sus propios raíles
+    try:
+        from api_server.celery_client import enqueue_event_dispatch
+
+        await enqueue_event_dispatch(
+            {
+                "event_type": event_type,
+                "tenant_id": tenant_id,
+                "context": {
+                    "task_title": task_title,
+                    "task_id": task_id,
+                    "status": status,
+                    "abort_code": abort_code or "",
+                },
+            }
+        )
+    except Exception as exc:  # la notificación nunca rompe el run
+        _log.warning("workers.execution_outcome_notify_failed", task_id=task_id, error=str(exc))
+
+
 async def conduct_execution(
     request: ExecutionRequest,
     *,
@@ -1455,6 +1492,17 @@ async def conduct_execution(
     # `trigger_memorize` swallows broker errors — a Memorizer outage
     # must never break an agent run.
     trigger_memorize(prepared.execution_id, result.status)
+
+    # NOTIF-3 (auditoría 2026-07-12): los eventos execution_failed /
+    # execution_finished estaban registrados (+plantillas ES/EN) pero NADIE los
+    # emitía — un run que moría solo dejaba log. Best-effort, nunca rompe el run.
+    await _notify_execution_outcome(
+        tenant_id=str(tenant_id),
+        task_id=str(task_id),
+        task_title=str((request.task or {}).get("title") or ""),
+        status=result.status,
+        abort_code=result.abort_code,
+    )
 
     _log.info("workers.execution_finished", execution_id=exec_id, status=result.status)
     return ExecutionOutcome(

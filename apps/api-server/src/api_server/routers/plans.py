@@ -737,6 +737,24 @@ async def approve_plan(
 
     await session.flush()
     await session.refresh(plan)
+    # NOTIF-3 (auditoría 2026-07-12): plan_approved estaba registrado (+plantillas
+    # ES/EN) pero NADIE lo emitía. Solo cuando la aprobación queda COMPLETA
+    # (no en la primera de dos firmas). Post-commit y best-effort.
+    if plan.status == PlanStatus.APPROVED.value:
+        plan_title, plan_tenant, plan_id_str = plan.title or "", str(plan.tenant_id), str(plan.id)
+
+        async def _notify_plan_approved() -> None:
+            from api_server.celery_client import enqueue_event_dispatch
+
+            await enqueue_event_dispatch(
+                {
+                    "event_type": "plan_approved",
+                    "tenant_id": plan_tenant,
+                    "context": {"plan_name": plan_title, "plan_id": plan_id_str},
+                }
+            )
+
+        schedule_after_commit(session, _notify_plan_approved)
     return to_plan_response(plan)
 
 

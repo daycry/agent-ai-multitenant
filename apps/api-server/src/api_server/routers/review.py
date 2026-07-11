@@ -22,6 +22,7 @@ tenant context.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any, Literal
 from uuid import UUID
 
@@ -43,7 +44,7 @@ from sqlalchemy import select
 from workers.review_runtime import sign_review_url, verify_review_url
 
 from api_server.auth.deps import get_redis
-from api_server.celery_client import enqueue_open_plan_pr
+from api_server.celery_client import enqueue_event_dispatch, enqueue_open_plan_pr
 from api_server.chat.plan_state_machine import transition_plan_status
 from api_server.config import get_settings
 from api_server.db.domain import Plan
@@ -524,6 +525,22 @@ async def submit_verdict(
                 f"Plan: {plan_title}\nID: {plan_id}"
             ),
         )
+    # NOTIF-3 (auditoría 2026-07-12): plan_rejected estaba registrado
+    # (+plantillas ES/EN) pero NADIE lo emitía. Post-commit (el begin() de
+    # arriba ya cerró) y best-effort — nunca rompe el veredicto ya persistido.
+    if body.verdict == "rejected" and plan is not None:
+        with contextlib.suppress(Exception):
+            await enqueue_event_dispatch(
+                {
+                    "event_type": "plan_rejected",
+                    "tenant_id": str(plan.tenant_id),
+                    "context": {
+                        "plan_name": plan.title or "",
+                        "plan_id": str(plan.id),
+                        "reason": body.rejection_reason or "",
+                    },
+                }
+            )
     return {
         "session_id": str(session_id),
         "verdict": body.verdict,

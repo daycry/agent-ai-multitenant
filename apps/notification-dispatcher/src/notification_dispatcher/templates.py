@@ -178,23 +178,8 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "for this plan needs no further action."
         ),
     ),
-    # --- task_failed -------------------------------------------------------
-    ("task_failed", "es"): TemplateSource(
-        subject="Tarea fallida: {{ task_title | default('(sin título)') }}",
-        body=(
-            "La tarea «{{ task_title | default('(sin título)') }}» "
-            "del proyecto «{{ project_name | default('(sin proyecto)') }}» "
-            "ha fallado. Motivo: {{ reason | default('desconocido') }}."
-        ),
-    ),
-    ("task_failed", "en"): TemplateSource(
-        subject="Task failed: {{ task_title | default('(untitled)') }}",
-        body=(
-            "Task \"{{ task_title | default('(untitled)') }}\" "
-            "in project \"{{ project_name | default('(no project)') }}\" "
-            "failed. Reason: {{ reason | default('unknown') }}."
-        ),
-    ),
+    # --- task_failed: RETIRADO (NOTIF-3) — evento imposible por diseño (los
+    # fallos de run convergen en `blocked`, que ya notifica task_blocked).
     # --- execution_finished ------------------------------------------------
     ("execution_finished", "es"): TemplateSource(
         subject="Ejecución finalizada: {{ plan_name | default('(sin nombre)') }}",

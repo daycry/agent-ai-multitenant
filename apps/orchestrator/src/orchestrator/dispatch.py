@@ -626,6 +626,27 @@ class TaskDispatcher:
                 task_id=str(task_id),
                 reviewer_agent_id=reviewer_agent_id_str,
             )
+            # NOTIF-3 (auditoría 2026-07-12): review_requested estaba registrado
+            # (+plantillas) pero NADIE lo emitía. Opt-in (sin default de canal:
+            # cada review de IA notificando a telegram sería ruido); best-effort.
+            try:
+                await asyncio.to_thread(
+                    self._send_dispatch_event,
+                    {
+                        "event_type": "review_requested",
+                        "tenant_id": str(task.tenant_id),
+                        "context": {
+                            "task_title": task.title or "",
+                            "task_id": str(task_id),
+                        },
+                    },
+                )
+            except Exception as exc:  # la notificación nunca rompe el dispatch
+                _log.warning(
+                    "orchestrator.review_requested_notify_failed",
+                    task_id=str(task_id),
+                    error=str(exc),
+                )
         except Exception as exc:
             _log.error(
                 "orchestrator.review_enqueue_failed",

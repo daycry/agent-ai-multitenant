@@ -173,9 +173,10 @@ async def test_event_fans_out_to_subscribed_channels(schema_at_head) -> None:
     try:
         await _reset(conn)
         tenant = await _seed_tenant(conn, "tenant-fanout")
-        # in_app is a default channel for review_requested → fans out with
+        # in_app is a default channel for plan_approved → fans out with
         # no explicit preference. telegram is opted IN explicitly. email is
-        # NOT a default for review_requested and has no preference → skipped.
+        # NOT a default for plan_approved and has no preference → skipped.
+        # (NOTIF-3: review_requested pasó a opt-in puro, ya no sirve de especimen.)
         ch_inapp = await _add_channel(
             conn, tenant_id=tenant, channel_type="in_app", name="inbox", target="inbox-1"
         )
@@ -185,17 +186,15 @@ async def test_event_fans_out_to_subscribed_channels(schema_at_head) -> None:
         await _add_channel(
             conn, tenant_id=tenant, channel_type="email", name="mail", target="a@b.c"
         )
-        await _add_pref(
-            conn, tenant_id=tenant, event_type="review_requested", channel_type="telegram"
-        )
+        await _add_pref(conn, tenant_id=tenant, event_type="plan_approved", channel_type="telegram")
     finally:
         await conn.close()
 
     plan = await _resolve(
         IncomingEvent(
-            event_type="review_requested",
+            event_type="plan_approved",
             tenant_id=str(tenant),
-            context={"task_title": "Fix auth", "project_name": "Core"},
+            context={"plan_name": "Launch", "project_name": "Core", "approver": "Ana"},
             locale="en",
         )
     )
@@ -209,7 +208,7 @@ async def test_event_fans_out_to_subscribed_channels(schema_at_head) -> None:
     # All sends carry a rendered body (the EN builtin).
     for d in plan.to_send:
         assert d.send_request is not None
-        assert "review" in d.send_request["body"].lower()
+        assert "approved" in d.send_request["body"].lower()
 
 
 # ===========================================================================
