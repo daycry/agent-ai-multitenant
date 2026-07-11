@@ -419,3 +419,41 @@ async def test_tenant_isolation_event_never_crosses(schema_at_head) -> None:
     for d in plan.to_send:
         assert d.send_request is not None
         assert d.send_request["tenant_id"] == str(tenant_a)
+
+
+# ===========================================================================
+# NOTIF-1 (auditoría notificaciones 2026-07-12): el structured del send_request
+# debe llevar body + event_type + severity. Antes solo llevaba subject, así que
+# (a) WhatsApp rellenaba sus plantillas con body VACÍO (los params se resuelven
+# de structured, no de message.body) y (b) slack/teams/discord/webhook perdían
+# la metadata de evento y el color por severidad — features muertas de facto.
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_send_request_structured_carries_body_event_type_and_severity(
+    schema_at_head,
+) -> None:
+    conn = await asyncpg.connect(_sync_dsn())
+    try:
+        await _reset(conn)
+        tenant = await _seed_tenant(conn, "tenant-structured")
+        await _add_channel(
+            conn, tenant_id=tenant, channel_type="telegram", name="tg", target="chat-1"
+        )
+    finally:
+        await conn.close()
+
+    plan = await _resolve(
+        IncomingEvent(
+            event_type="task_blocked",
+            tenant_id=str(tenant),
+            context={"task_title": "Fix auth", "project_name": "Core", "severity": "critical"},
+            locale="es",
+        )
+    )
+
+    assert plan.to_send, plan.decisions
+    for d in plan.to_send:
+        st = d.send_request["structured"]
+        assert st["body"] == d.send_request["body"]
+        assert st["event_type"] == "task_blocked"
+        assert st["severity"] == "critical"

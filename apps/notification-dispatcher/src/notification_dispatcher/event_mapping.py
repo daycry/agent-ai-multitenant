@@ -594,13 +594,27 @@ def _decide_channel(
             reason=f"template render failed: {exc}",
         )
 
+    # NOTIF-1 (auditoría 2026-07-12): structured lleva TAMBIÉN body, event_type
+    # y severity (del contexto del evento, si la trae). Antes solo iba subject,
+    # así que WhatsApp rellenaba sus plantillas con body vacío (los params se
+    # resuelven de structured) y slack/teams/discord/webhook perdían la metadata
+    # de evento y el color por severidad.
+    structured: dict[str, Any] = {
+        "body": rendered.body,
+        "event_type": spec.notification_event_type,
+    }
+    if rendered.subject is not None:
+        structured["subject"] = rendered.subject
+    severity = event.context.get("severity")
+    if severity:
+        structured["severity"] = str(severity)
     send_request = {
         "channel_id": str(channel_id),
         "event_type": spec.notification_event_type,
         "tenant_id": event.tenant_id,
         "target": None,  # the dispatcher falls back to the channel config.
         "body": rendered.body,
-        "structured": ({"subject": rendered.subject} if rendered.subject is not None else None),
+        "structured": structured,
     }
 
     # Quiet hours: defer (don't drop) — compute an ETA past the window.

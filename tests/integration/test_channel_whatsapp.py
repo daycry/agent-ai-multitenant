@@ -425,3 +425,21 @@ def test_adapter_registered_under_whatsapp_channel_type() -> None:
     adapter = get_adapter("whatsapp")
     assert adapter is not None
     assert adapter.channel_type == "whatsapp"
+
+
+@pytest.mark.asyncio
+async def test_body_param_falls_back_to_message_body(patch_transport) -> None:
+    """NOTIF-1: un structured SIN 'body' (la forma histórica del pipeline) no
+    puede producir una plantilla con cuerpo en blanco — el param 'body' cae al
+    message.body renderizado."""
+    settings = _test_settings()
+    requests = patch_transport(httpx.Response(200, json={"messages": [{"id": "wamid.fb"}]}))
+
+    adapter = WhatsAppAdapter(settings=settings)
+    message = _message(structured={"template": "agentic_notification", "subject": "S"})
+    result = await adapter.send(message)
+
+    assert result.ok is True
+    payload = json.loads(requests[0].content.decode("utf-8"))
+    params = payload["template"]["components"][0]["parameters"]
+    assert params[0]["text"] == "Task X is blocked. Reason: timeout."

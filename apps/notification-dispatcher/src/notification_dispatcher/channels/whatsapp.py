@@ -241,11 +241,16 @@ class WhatsAppAdapter:
             or settings.whatsapp_default_language
         )
 
-        params = self._resolve_params(template, structured)
+        params = self._resolve_params(template, structured, fallback_body=message.body)
         return _SendPlan(template=template, language=str(language), params=params)
 
     @staticmethod
-    def _resolve_params(template: WhatsAppTemplate, structured: dict[str, Any]) -> list[str]:
+    def _resolve_params(
+        template: WhatsAppTemplate,
+        structured: dict[str, Any],
+        *,
+        fallback_body: str | None = None,
+    ) -> list[str]:
         """Fill the template's body parameters in order.
 
         Explicit ``structured.params`` wins (an ordered list the caller built);
@@ -254,6 +259,11 @@ class WhatsAppAdapter:
         produces a well-formed, if blank, parameter rather than a KeyError).
         The count is validated against the template's declared arity so a
         mismatched explicit list is caught before sending.
+
+        NOTIF-1 (auditoría 2026-07-12): the ``body`` param falls back to the
+        rendered ``message.body`` when ``structured`` lacks it — the historical
+        pipeline only carried ``subject`` in structured, so every event-driven
+        WhatsApp template went out with a BLANK body.
         """
         explicit = structured.get("params")
         if explicit is not None:
@@ -264,7 +274,13 @@ class WhatsAppAdapter:
                     f"{len(template.param_fields)} body parameter(s), got {len(params)}"
                 )
             return params
-        return [str(structured.get(field_name, "")) for field_name in template.param_fields]
+        params = []
+        for field_name in template.param_fields:
+            value = structured.get(field_name, "")
+            if not value and field_name == "body" and fallback_body:
+                value = fallback_body
+            params.append(str(value))
+        return params
 
     # ------------------------------------------------------------------
     # Payload + URL construction.
