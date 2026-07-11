@@ -93,6 +93,7 @@ def test_system_tools_advertised_for_unassigned_agent_when_requested() -> None:
         "kanban_update",
         "task_comment",
         "agent_invoke",
+        "rag_search",
     }
 
 
@@ -151,3 +152,12 @@ def test_no_advertised_builtin_lacks_a_runtime_executor() -> None:
     advertised = set(_names(out))
     unwired = {n for n in advertised if not is_runtime_wired(n)}
     assert not unwired, f"advertised builtins without a runtime executor: {sorted(unwired)}"
+
+
+def test_rag_search_advertised_as_system_capability() -> None:
+    # P0-3 (investigación 2026-07-11): un modo con whitelist sin semantic_search
+    # ya no silencia la KB — rag_search se advierte como capacidad de sistema.
+    out = build_model_tool_schemas(["read_file"], None, include_system_tools=True)
+    assert "rag_search" in _names(out)
+    # El block-all explícito (discussion) sigue suprimiendo todo.
+    assert build_model_tool_schemas([], None, include_system_tools=True) == []

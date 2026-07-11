@@ -145,11 +145,13 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
     },
 }
 
-# Runtime-only family tools (memory + orchestration) that are NOT in the
-# assignable catalog and therefore can NEVER be in a per-agent allowlist. They
-# are system CAPABILITIES, advertised to the LLM independently of the allowlist
-# (``include_system_tools=True``) so every agent can recall/store memory and
-# participate in the Kanban. Memory first (the universal capability).
+# System CAPABILITY tools, advertised to the LLM independently of the allowlist
+# (``include_system_tools=True``): memory + orchestration (runtime-only, no
+# catalog row) so every agent can recall/store memory and participate in the
+# Kanban — plus ``rag_search`` (P0-3, investigación 2026-07-11): the READ-ONLY
+# KB search IS a catalog tool (semantic_search), but knowledge retrieval is as
+# fundamental as memory and a mode whitelist that omitted it silenced the KB.
+# Memory first (the universal capability).
 # MUST stay in sync with agent_runtime.builtin_families.SYSTEM_FAMILY_TOOL_NAMES
 # (the two packages deliberately do not import one another — the runtime is
 # container-side). Order is the advertisement order.
@@ -159,6 +161,7 @@ SYSTEM_TOOL_NAMES: tuple[str, ...] = (
     "kanban_update",
     "task_comment",
     "agent_invoke",
+    "rag_search",
 )
 
 

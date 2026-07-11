@@ -200,15 +200,27 @@ def register_builtin_families(
     return registered
 
 
-# Runtime-only SYSTEM family tools (memory + orchestration). They have NO
-# catalog row (not in api_server.seeds.builtin_tools), so they can NEVER be in
-# a per-agent allowlist — yet every agent needs them to recall/store memory
-# (H0) and move the Kanban / invoke subagents (H3). They are therefore wired
-# regardless of `agent_tools` and exempt from the per-agent allowlist.
+# Runtime SYSTEM capability tools (memory + orchestration + KB search). Memory
+# and orchestration have NO catalog row (not in api_server.seeds.builtin_tools),
+# so they can NEVER be in a per-agent allowlist — yet every agent needs them to
+# recall/store memory (H0) and move the Kanban / invoke subagents (H3).
+# `rag_search` (P0-3, investigación 2026-07-11) IS a catalog tool
+# (semantic_search), but KB retrieval is as fundamental as memory: a mode
+# whitelist that omitted it silenced the agent's knowledge access. Only the
+# READ-ONLY search is exempted; the mutating knowledge tools (document_convert /
+# promote_to_kb) stay catalog-gated. All of these are wired regardless of
+# `agent_tools` and exempt from the per-agent allowlist.
 # MUST stay in sync with workers.agent_tool_schemas.SYSTEM_TOOL_NAMES (the two
 # packages deliberately do not import one another — the runtime is container-side).
 SYSTEM_FAMILY_TOOL_NAMES: frozenset[str] = frozenset(
-    {"memory_recall", "memory_store", "kanban_update", "task_comment", "agent_invoke"}
+    {
+        "memory_recall",
+        "memory_store",
+        "kanban_update",
+        "task_comment",
+        "agent_invoke",
+        "rag_search",
+    }
 )
 
 
@@ -219,18 +231,19 @@ def register_system_families(
     sink: OrchestrationSink,
     flags: dict[str, bool] | None = None,
 ) -> list[str]:
-    """Register ONLY the runtime-only SYSTEM families — orchestration + memory.
+    """Register ONLY the SYSTEM capabilities — orchestration + memory + KB search.
 
     These are wired ALWAYS by the boot path (even when the agent has no
     ``agent_tools`` and the catalog families stay un-wired), so memory recall /
-    store and the Kanban tools are available to every agent (H0/H3 / L5). The
-    catalog families (file / network / knowledge) remain gated on the presence
-    of ``tool_specs`` via :func:`register_builtin_families`.
+    store, the Kanban tools and the KB search are available to every agent
+    (H0/H3 / L5 / P0-3). The remaining catalog families (file / network / the
+    mutating knowledge tools) stay gated on the presence of ``tool_specs`` via
+    :func:`register_builtin_families`.
 
     Honours the same per-family flags as :func:`register_builtin_families`.
     ``api is None`` (a bare run with no minted token) skips the api-backed
-    memory family but still wires orchestration (sink-only). Returns the
-    canonical names actually registered.
+    memory + knowledge families but still wires orchestration (sink-only).
+    Returns the canonical names actually registered.
     """
     registered: list[str] = []
 
@@ -248,6 +261,13 @@ def register_system_families(
         memory = MemoryTools(api)
         _add("memory_recall", memory.memory_recall)
         _add("memory_store", memory.memory_store)
+
+    # P0-3: la búsqueda en la KB (read-only) es capacidad de sistema — sin ella
+    # un modo con whitelist dejaba al agente sin acceso al conocimiento en
+    # silencio. Los mutadores de la familia siguen en register_builtin_families.
+    if api is not None and family_enabled(FAMILY_CONOCIMIENTO, flags):
+        rag = RagTools(api)
+        _add("rag_search", rag.rag_search)
 
     return registered
 
