@@ -66,10 +66,11 @@ from api_server.db.platform_settings import (
 )
 from api_server.db.session import get_admin_sessionmaker
 from api_server.events import EVENT_MESSAGE_CREATED, publish_conversation_event
+from api_server.ingestion.embeddings import OllamaEmbedder
 from api_server.llm_providers.factory import build_llm_provider, build_provider_from_kind
 from api_server.llm_providers.factory_resolver import resolve_provider_config
 from api_server.llm_providers.vault import LLMProviderVaultStore
-from api_server.rag.search import recall_chunks
+from api_server.rag.tool import rag_search
 
 _log = structlog.get_logger("api_server.chat.responder")
 
@@ -277,7 +278,12 @@ def _plan_summary(plan: Plan) -> str:
 
 
 async def build_project_context(
-    session: AsyncSession, project: Project | None, query_text: str
+    session: AsyncSession,
+    project: Project | None,
+    query_text: str,
+    *,
+    agent_id: UUID | None = None,
+    embedder: Any | None = None,
 ) -> dict[str, Any]:
     """Assemble what the team needs to know to plan well in an EXISTING project:
     identity + prior plans + project-scoped memories + relevant docs/code (RAG).
@@ -287,7 +293,13 @@ async def build_project_context(
     for claude_sdk), the system RETRIEVES the context and injects it into the planning
     prompt (``project_context`` already reaches every planning prompt). Identical for
     ollama / claude_sdk / azure / copilot. Each source is best-effort: a failure is
-    omitted, never sinks the turn."""
+    omitted, never sinks the turn.
+
+    P0-5 (investigación 2026-07-11): ``agent_id`` une las KBs granted al agente
+    (rol — ``agent_knowledge_bases``, Plan 06.9) con las del proyecto, y
+    ``embedder`` habilita el path vectorial del recall híbrido — sin él el
+    planning era BM25-only (``vector_chunks`` devolvía siempre []). Ambos son
+    opcionales y best-effort (Ollama caído → BM25, igual que los agentes)."""
     if project is None:
         return {}
     ctx: dict[str, Any] = {"name": project.name, "description": project.description or ""}
@@ -332,16 +344,19 @@ async def build_project_context(
         if mems:
             ctx["memories"] = [str(m) for m in mems]
 
-    # Relevant docs/code from the project's KBs (RAG; BM25-only when no embedding,
-    # so no embedder dependency on the hot path).
+    # Relevant docs/code from the project's KBs — the same end-to-end retrieval
+    # the agents use (rag_search: embed best-effort → hybrid recall → top-N),
+    # including the agent's role-granted KBs when we know who plans (P0-5).
     if query_text.strip():
         with contextlib.suppress(Exception):
-            hits = await recall_chunks(
+            hits = await rag_search(
                 session,
                 query=query_text,
                 tenant_id=project.tenant_id,
                 project_id=project.id,
+                agent_id=agent_id,
                 limit=5,
+                embedder=embedder,
             )
             if hits:
                 ctx["docs"] = [h.content[:500] for h in hits]
@@ -791,10 +806,24 @@ async def respond_to_conversation(
             # Ground the planning in the project's existing state (prior plans,
             # project memories, docs/code via RAG) — provider-agnostic context, not an
             # agent browsing the repo. The latest USER message drives the doc retrieval.
+            # P0-5: con el embedder real el retrieval es híbrido (BM25+vector) y el
+            # agent_id del PM une sus KBs de rol; ambos best-effort (Ollama caído →
+            # BM25-only dentro de rag_search).
             latest_user_text = next(
                 (m.content for m in reversed(list(rows)) if m.author_kind == "user"), ""
             )
-            project_context = await build_project_context(session, project, latest_user_text)
+            query_embedder = OllamaEmbedder()
+            try:
+                project_context = await build_project_context(
+                    session,
+                    project,
+                    latest_user_text,
+                    agent_id=default_agent_id,
+                    embedder=query_embedder,
+                )
+            finally:
+                with contextlib.suppress(Exception):
+                    await query_embedder.aclose()
         # An 'agent' message needs an agent to attribute to. No team agents → the
         # team can't speak; tell the user instead of failing on the DB CHECK.
         if default_agent_id is None:
