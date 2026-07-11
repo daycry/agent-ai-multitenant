@@ -36,21 +36,8 @@ def _workspace_root() -> Path:
     return Path(os.environ.get(_WORKSPACE_ROOT_ENV) or "/workspace")
 
 
-def _harvest_worktree_files(root: Path, prefer: list[str]) -> list[dict[str, str]]:
-    """Read the agent's CUMULATIVE deliverable from the worktree on disk.
-
-    The per-run write capture (``_AgentLoop.written_files``) only sees files
-    written in the CURRENT run; an incremental run that builds on a prior committed
-    run leaves earlier files untouched, so the self-review would judge an INCOMPLETE
-    picture and reject a whole deliverable as "missing files" (observed live on a
-    re-run of an escalated JWT task). Reading the worktree gives the reviewer the
-    TRUE current state, and the on-disk content is the FINAL content (after every
-    edit), not the write-time argument. VCS/framework dirs are excluded and the scan
-    is bounded; ``prefer`` (this run's written paths) are ordered FIRST so the
-    current work is always shown even when the cap truncates. Returns ``[]`` when
-    there is no worktree (analysis/design runs, tests) → the caller falls back to the
-    per-run capture and prose-only review is unchanged.
-    """
+def _collect_rel_paths(root: Path) -> list[str]:
+    """Relative worktree paths, minus VCS/deps/scratch (shared filter)."""
     if not root.is_dir():
         return []
     try:
@@ -68,6 +55,45 @@ def _harvest_worktree_files(root: Path, prefer: list[str]) -> list[dict[str, str
         if rel_path.name in _REVIEW_EXCLUDE_NAMES or rel_path.suffix in _REVIEW_EXCLUDE_SUFFIXES:
             continue
         rels.append(rel_path.as_posix())
+    return rels
+
+
+# P0-6 (investigación 2026-07-11): overview inicial del worktree para el
+# IMPLEMENTADOR — solo paths (sin contenidos), acotado. Un re-dispatch arranca
+# sobre trabajo acumulado y antes lo re-descubría a base de list_files/read_file
+# (read-churn). Techo mayor que el harvest de review (60 vs 40) porque son
+# rutas, no contenidos.
+_OVERVIEW_MAX_FILES = 60
+
+
+def worktree_file_list(
+    root: Path | None = None, *, max_files: int = _OVERVIEW_MAX_FILES
+) -> list[str]:
+    """Bounded, sorted list of the worktree's existing files (paths only, P0-6).
+
+    Empty worktree / missing root → ``[]`` (a first attempt stays noise-free).
+    Same exclusion rules as the reviewer's harvest."""
+    return sorted(_collect_rel_paths(root if root is not None else _workspace_root()))[:max_files]
+
+
+def _harvest_worktree_files(root: Path, prefer: list[str]) -> list[dict[str, str]]:
+    """Read the agent's CUMULATIVE deliverable from the worktree on disk.
+
+    The per-run write capture (``_AgentLoop.written_files``) only sees files
+    written in the CURRENT run; an incremental run that builds on a prior committed
+    run leaves earlier files untouched, so the self-review would judge an INCOMPLETE
+    picture and reject a whole deliverable as "missing files" (observed live on a
+    re-run of an escalated JWT task). Reading the worktree gives the reviewer the
+    TRUE current state, and the on-disk content is the FINAL content (after every
+    edit), not the write-time argument. VCS/framework dirs are excluded and the scan
+    is bounded; ``prefer`` (this run's written paths) are ordered FIRST so the
+    current work is always shown even when the cap truncates. Returns ``[]`` when
+    there is no worktree (analysis/design runs, tests) → the caller falls back to the
+    per-run capture and prose-only review is unchanged.
+    """
+    rels = _collect_rel_paths(root)
+    if not rels:
+        return []
     preferred = [r for r in prefer if r in rels]
     ordered = preferred + sorted(r for r in rels if r not in preferred)
     harvested: list[dict[str, str]] = []

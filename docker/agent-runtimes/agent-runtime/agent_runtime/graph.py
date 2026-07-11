@@ -52,6 +52,7 @@ from agent_runtime.review_harvest import (
     _harvest_worktree_files,
     _referenced_paths,
     _workspace_root,
+    worktree_file_list,
 )
 from agent_runtime.safeguards import Budgets, SafeguardCode, SafeguardTracker
 from agent_runtime.state import (
@@ -317,15 +318,37 @@ class _AgentLoop:
     # -- nodes ---------------------------------------------------------------
     @staticmethod
     def perceive(state: AgentState) -> dict[str, Any]:
-        """Read the task and seed the working context."""
+        """Read the task and seed the working context.
+
+        P0-6 (investigación 2026-07-11): en un re-dispatch el worktree acumula
+        el trabajo de intentos anteriores, pero el implementador arrancaba CIEGO
+        y lo re-descubría a base de list_files/read_file (read-churn). Sembramos
+        un overview acotado (solo paths) para orientarlo desde el turno 1.
+        Worktree vacío (primer intento) → sin bloque, cero ruido."""
         task = state["task"]
-        context = {
-            "role": "task",
-            "title": task["title"],
-            "description": task.get("description", ""),
-        }
-        step = node_step(len(state["steps"]), "perceive", f"Perceived task: {task['title']}")
-        return {"context": [context], "steps": [step]}
+        context: list[dict[str, Any]] = [
+            {
+                "role": "task",
+                "title": task["title"],
+                "description": task.get("description", ""),
+            }
+        ]
+        summary = f"Perceived task: {task['title']}"
+        existing_files = worktree_file_list()
+        if existing_files:
+            context.append(
+                {
+                    "role": "workspace",
+                    "note": (
+                        "these files ALREADY EXIST in the worktree (prior work) — "
+                        "read what you need before re-creating anything"
+                    ),
+                    "files": existing_files,
+                }
+            )
+            summary += f" — {len(existing_files)} existing file(s) in worktree"
+        step = node_step(len(state["steps"]), "perceive", summary)
+        return {"context": context, "steps": [step]}
 
     def recall(self, state: AgentState) -> dict[str, Any]:
         """Pull relevant memories for the task into the model's context.
