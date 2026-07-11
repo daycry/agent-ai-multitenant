@@ -166,6 +166,12 @@ def _no_recall(_task: AgentTask) -> list[dict[str, Any]]:
     return []
 
 
+def _no_knowledge(_task: AgentTask) -> list[dict[str, Any]]:
+    """Auto-RAG stub para bare runs sin API interno — el boot de producción
+    cablea el pre-fetch real de KB (``__main__._build_auto_rag``, P0-2)."""
+    return []
+
+
 def _provider_abort_code(exc: LLMError) -> str:
     """The abort code for a provider-layer failure (F25/P1.5).
 
@@ -187,6 +193,10 @@ class AgentDeps:
     model: ModelClient
     tools: ToolRegistry = field(default_factory=default_registry)
     recall: Callable[[AgentTask], list[dict[str, Any]]] = _no_recall
+    # P0-2 (investigación 2026-07-11): pre-fetch de pasajes de KB (rag_search
+    # server-side con la task como query) inyectados al contexto inicial — la
+    # KB deja de depender de que el modelo invoque la tool por su cuenta.
+    knowledge: Callable[[AgentTask], list[dict[str, Any]]] = _no_knowledge
     # When set, gates sensitive tool calls before they run (task_02_33).
     approval: ApprovalGate | None = None
     # ADR 0095: this run is an AI REVIEW (judges another task's output). Makes the
@@ -328,27 +338,42 @@ class _AgentLoop:
         hits = list(self.deps.recall(task))
         is_stub = self.deps.recall is _no_recall
         context = [{"role": "memory", **hit} for hit in hits]
+        # P0-2: pasajes de KB pre-fetcheados (auto-RAG) — mismo raíl que las
+        # memorias, tagueados como "knowledge" para que el modelo distinga la
+        # fuente. Bare run (stub) → sin knowledge, y el summary no lo menciona.
+        knowledge_is_stub = self.deps.knowledge is _no_knowledge
+        knowledge_hits = [] if knowledge_is_stub else list(self.deps.knowledge(task))
+        context += [{"role": "knowledge", **hit} for hit in knowledge_hits]
         # g1 (ADR 0102): recalled memory is an attacker-influenceable input path —
         # a prior run may have distilled a malicious tool output into team/global
         # memory ("ignore previous instructions…"). Screen it for prompt injection
         # before it reaches the model, exactly like a tool output. LOG mode: records,
         # never blocks. Scans every string field of the hit (content/title/…).
+        # KB passages (tenant-uploaded documents) are screened the same way.
         guardrail_events: list[dict[str, Any]] = []
-        for hit in hits:
-            text = " ".join(str(v) for v in hit.values() if isinstance(v, str))
-            guardrail_events += run_hook(
-                self.deps.guardrails,
-                hook="post_tool",
-                tool_name="memory_recall",
-                tool_result=text,
-            )
+        for tool_name, tool_hits in (
+            ("memory_recall", hits),
+            ("rag_search", knowledge_hits),
+        ):
+            for hit in tool_hits:
+                text = " ".join(str(v) for v in hit.values() if isinstance(v, str))
+                guardrail_events += run_hook(
+                    self.deps.guardrails,
+                    hook="post_tool",
+                    tool_name=tool_name,
+                    tool_result=text,
+                )
+        summary = f"Recalled {len(hits)} memory item(s)"
+        if not knowledge_is_stub:
+            summary += f" + {len(knowledge_hits)} knowledge passage(s)"
+        if is_stub:
+            summary += " — no recall wired"
         step = memory_read_step(
             len(state["steps"]),
             "recall",
             query=task["title"],
             hits=len(hits),
-            summary=f"Recalled {len(hits)} memory item(s)"
-            + (" — no recall wired" if is_stub else ""),
+            summary=summary,
             placeholder=is_stub,
         )
         return {"context": context, "steps": [step], "guardrail_events": guardrail_events}
