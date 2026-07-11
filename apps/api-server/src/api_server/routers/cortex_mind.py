@@ -59,6 +59,7 @@ from api_server.schemas.cortex_mind import (
     CortexAffectPoint,
     CortexDrives,
     CortexEpisodeItem,
+    CortexJournalEntry,
     CortexMindResponse,
 )
 
@@ -206,6 +207,83 @@ async def get_episodes(
             )
         )
     return out
+
+
+@router.get("/journal", response_model=list[CortexJournalEntry])
+async def get_journal(
+    principal: AuthPrincipal = Depends(require_system_owner),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[CortexJournalEntry]:
+    """El diario del córtex (C4, investigación 2026-07-11): línea temporal única.
+
+    La vida interior existía (PAD, drives, episodios, pursuits) pero sin RELATO:
+    la narrativa es UN campo que cada reflexión sobrescribe. Este endpoint
+    reconstruye la línea temporal mezclando (a) las narrativas versionadas de
+    ``cortex_identity_history`` (dedup de consecutivas idénticas, con su
+    ``reason``) y (b) las memorias ``kind='reflection'`` / ``kind='learning'``
+    — entradas de diario de facto. Aislamiento: ``owner_user_id`` explícito."""
+    from api_server.db.cortex_identity import CortexIdentityHistory
+
+    owner_id: UUID = principal.user_id
+    sessionmaker = get_admin_sessionmaker()
+    entries: list[CortexJournalEntry] = []
+    async with sessionmaker() as session:
+        history = list(
+            (
+                await session.execute(
+                    select(CortexIdentityHistory)
+                    .where(CortexIdentityHistory.owner_user_id == owner_id)
+                    .order_by(CortexIdentityHistory.created_at.desc())
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        prev_narrative: str | None = None
+        for row in reversed(history):  # cronológico para dedup de consecutivas
+            narrative = str((row.identity_state or {}).get("narrative") or "").strip()
+            if narrative and narrative != prev_narrative:
+                entries.append(
+                    CortexJournalEntry(
+                        kind="narrative",
+                        content=narrative,
+                        reason=row.reason,
+                        created_at=row.created_at,
+                    )
+                )
+            prev_narrative = narrative or prev_narrative
+
+        memories = list(
+            (
+                await session.execute(
+                    select(MemoryEntry)
+                    .where(
+                        MemoryEntry.user_id == owner_id,
+                        MemoryEntry.scope == "private",
+                        MemoryEntry.deleted_at.is_(None),
+                        MemoryEntry.metadata_["cortex"].astext == "true",
+                        MemoryEntry.metadata_["kind"].astext.in_(("reflection", "learning")),
+                    )
+                    .order_by(MemoryEntry.created_at.desc())
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for mem in memories:
+            entries.append(
+                CortexJournalEntry(
+                    kind=str((mem.metadata_ or {}).get("kind") or "reflection"),
+                    content=mem.content,
+                    reason=None,
+                    created_at=mem.created_at,
+                )
+            )
+
+    entries.sort(key=lambda e: e.created_at, reverse=True)
+    return entries[:limit]
 
 
 # ===========================================================================
