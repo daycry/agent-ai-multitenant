@@ -19,7 +19,7 @@
  * "exclusivo para administradores".
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Bot, Phone, Send, Settings } from "lucide-react";
@@ -38,6 +38,8 @@ import {
   getAssistantEnabled,
   type AssistantChatResponse,
   type AssistantToggleState,
+  type AssistantConversationItem,
+  type AssistantTurnItem,
 } from "@/lib/assistant";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/use-current-user";
@@ -59,6 +61,8 @@ export default function AssistantChatPage() {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [forbidden, setForbidden] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false);
+  // A1 (hilos persistentes): el hilo activo; null = hilo nuevo al enviar.
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Read the on/off toggle (tenant_admin-only, NOT toggle-gated) so a Tenant
@@ -74,13 +78,46 @@ export default function AssistantChatPage() {
   });
   const assistantDisabled = toggleQuery.data ? !toggleQuery.data.enabled : false;
 
+  // A1: hilos del usuario + turnos del hilo activo (persisten entre recargas —
+  // human_10_04: el asistente mantiene contexto entre mensajes).
+  const conversationsQuery = useQuery<AssistantConversationItem[], ApiError>({
+    queryKey: ["assistant-conversations"],
+    queryFn: () => apiFetch<AssistantConversationItem[]>("/assistant/conversations"),
+    enabled: isTenantAdmin && !assistantDisabled,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const turnsQuery = useQuery<AssistantTurnItem[], ApiError>({
+    queryKey: ["assistant-turns", conversationId],
+    queryFn: () =>
+      apiFetch<AssistantTurnItem[]>(`/assistant/conversations/${conversationId}/turns`),
+    enabled: conversationId !== null,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  useEffect(() => {
+    if (conversationId === null) return;
+    const loaded = turnsQuery.data;
+    if (!loaded) return;
+    setTurns(
+      loaded.map((t) => ({
+        id: nextId(),
+        role: t.role === "assistant" ? "assistant" : "user",
+        content: t.content,
+        toolsCalled: t.tools_called,
+        rounds: t.rounds,
+      })),
+    );
+  }, [conversationId, turnsQuery.data]);
+
   const mutation = useMutation<AssistantChatResponse, ApiError, string>({
     mutationFn: (message) =>
       apiFetch<AssistantChatResponse>("/assistant/chat", {
         method: "POST",
-        body: { message },
+        body: conversationId ? { message, conversation_id: conversationId } : { message },
       }),
     onSuccess: (data) => {
+      if (data.conversation_id) setConversationId(data.conversation_id);
       setTurns((prev) => [
         ...prev,
         {
@@ -162,6 +199,36 @@ export default function AssistantChatPage() {
 
       {/* La videollamada es un overlay a pantalla completa (shell compartida). */}
       {voiceMode ? <VoiceCall onClose={() => setVoiceMode(false)} /> : null}
+
+      {/* A1: hilos persistentes — cambia de conversación o empieza una nueva
+          sin perder las demás (los turnos viven en el backend). */}
+      <div className="mt-4 flex flex-wrap items-center gap-2" data-testid="assistant-history-bar">
+        <label htmlFor="assistant-conversation-picker" className="text-muted-foreground text-sm">
+          Hilo:
+        </label>
+        <select
+          id="assistant-conversation-picker"
+          data-testid="assistant-conversation-picker"
+          className="bg-background w-full min-w-0 rounded-md border px-2 py-1 text-sm sm:w-72"
+          value={conversationId ?? ""}
+          onChange={(e) => {
+            const value = e.target.value;
+            if (!value) {
+              setConversationId(null);
+              setTurns([]);
+            } else {
+              setConversationId(value);
+            }
+          }}
+        >
+          <option value="">Nuevo hilo</option>
+          {(conversationsQuery.data ?? []).map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.title ?? c.id.slice(0, 8)}
+            </option>
+          ))}
+        </select>
+      </div>
 
       <Card className="mt-6">
         <CardContent className="flex flex-col gap-4 pt-5">

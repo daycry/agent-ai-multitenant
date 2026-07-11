@@ -37,6 +37,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import INET, JSONB, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 
+# Córtex F1 (ADR 0074): import the córtex models so they register on
+# ``Base.metadata``. The Alembic env imports this module, so this guarantees the
+# autogenerate metadata + the running app both see the tenant-less córtex tables
+# (re-exported in ``__all__``).
+from api_server.db.assistant_chat import AssistantConversation, AssistantTurn
 from api_server.db.base import (
     Base,
     SoftDeleteMixin,
@@ -44,11 +49,6 @@ from api_server.db.base import (
     TimestampMixin,
     UUIDPrimaryKeyMixin,
 )
-
-# Córtex F1 (ADR 0074): import the córtex models so they register on
-# ``Base.metadata``. The Alembic env imports this module, so this guarantees the
-# autogenerate metadata + the running app both see the tenant-less córtex tables
-# (re-exported in ``__all__``).
 from api_server.db.cortex import CortexConversation, CortexTurn
 
 # Córtex F2 (ADR 0075): import the affect-snapshot model so it registers on
@@ -1127,6 +1127,8 @@ __all__ = [
     "AuditAction",
     "AuditLog",
     "CortexAffectSnapshot",
+    "AssistantConversation",
+    "AssistantTurn",
     "CortexConversation",
     "CortexCuriosityPursuit",
     "CortexIdentity",

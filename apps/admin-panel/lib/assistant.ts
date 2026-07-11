@@ -54,6 +54,22 @@ export interface AssistantChatResponse {
   answer: string;
   tools_called: string[];
   rounds: number;
+  // A1: hilo persistente — el backend crea/reutiliza y devuelve el id.
+  conversation_id: string | null;
+}
+
+export interface AssistantConversationItem {
+  id: string;
+  title: string | null;
+  updated_at: string;
+}
+
+export interface AssistantTurnItem {
+  role: string;
+  content: string;
+  tools_called: string[];
+  rounds: number;
+  created_at: string;
 }
 
 // ---------------------------------------------------------------------------
