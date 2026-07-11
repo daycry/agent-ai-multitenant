@@ -488,6 +488,37 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "check the exchange-rates source."
         ),
     ),
+    # --- infra_alert (NOTIF-2 / prod-08 alert_ingest_01) --------------------
+    # Alerta de infraestructura de Alertmanager, platform-scoped. El contexto
+    # son labels/annotations secret-free (alertname/severity/summary/...).
+    ("infra_alert", "es"): TemplateSource(
+        subject=(
+            "[{{ severity | default('warning') | upper }}] "
+            "{{ alertname | default('Alerta de infraestructura') }}"
+            "{% if status == 'resolved' %} — RESUELTA{% endif %}"
+        ),
+        body=(
+            "Alerta de infraestructura {{ status | default('firing') }}: "
+            "{{ alertname | default('(sin nombre)') }} "
+            "({{ severity | default('warning') }})"
+            "{% if instance %} en {{ instance }}{% endif %}. "
+            "{{ summary | default('') }} {{ description | default('') }}"
+        ),
+    ),
+    ("infra_alert", "en"): TemplateSource(
+        subject=(
+            "[{{ severity | default('warning') | upper }}] "
+            "{{ alertname | default('Infrastructure alert') }}"
+            "{% if status == 'resolved' %} — RESOLVED{% endif %}"
+        ),
+        body=(
+            "Infrastructure alert {{ status | default('firing') }}: "
+            "{{ alertname | default('(unnamed)') }} "
+            "({{ severity | default('warning') }})"
+            "{% if instance %} on {{ instance }}{% endif %}. "
+            "{{ summary | default('') }} {{ description | default('') }}"
+        ),
+    ),
 }
 
 # Public, read-only view of the builtin catalogue keyed by

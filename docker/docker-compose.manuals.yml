@@ -30,6 +30,8 @@ services:
       API_SERVER_BROKER_URL: redis://redis:6379/1
       API_SERVER_RESULT_BACKEND: redis://redis:6379/2
       API_SERVER_JWT_SECRET: dev-only-jwt-secret-change-me
+      # NOTIF-2: debe coincidir con el Bearer de alertmanager.yml (dev).
+      API_SERVER_ALERTS_INGEST_TOKEN: dev-alerts-ingest-token
       # High limit so the Playwright manual capture is never rate-limited.
       API_SERVER_LOGIN_RATE_LIMIT_COUNT: "1000"
       API_SERVER_LOGIN_RATE_LIMIT_WINDOW_SECONDS: "60"

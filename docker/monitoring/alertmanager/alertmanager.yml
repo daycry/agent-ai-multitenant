@@ -53,8 +53,16 @@ receivers:
       # The platform notification ingest (System Admin channel). The api-server
       # turns this Alertmanager payload into a Plan 10 notification and fans it
       # out over the configured channels (email / Slack / Telegram / ...).
+      # NOTIF-2: el endpoint exige un token Bearer compartido — DEBE coincidir
+      # con API_SERVER_ALERTS_INGEST_TOKEN del api-server (fail-closed: sin
+      # token el ingest responde 503 y la alerta se pierde). Valor de DEV; el
+      # instalador genera uno aleatorio por despliegue en producción.
       - url: "http://api-server:8000/internal/alerts/ingest"
         send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: "dev-alerts-ingest-token"
 
 # ---------------------------------------------------------------------------
 # Inhibition: while the host kernel is OOM-killing, suppress the noisier

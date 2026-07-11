@@ -249,6 +249,16 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.PRIORITY,
         default_channel_types=("in_app", "email"),
     ),
+    # NOTIF-2 (auditoría 2026-07-12 / prod-08 alert_ingest_01) — una alerta de
+    # INFRAESTRUCTURA de Alertmanager (disco, OOM, backup, servicio caído)
+    # ingerida por /internal/alerts/ingest. Platform-scoped (tenant_id=None):
+    # solo el System Admin. Prioritaria y con fan-out a in-app + telegram (el
+    # canal ops más robusto); el contexto es secret-free (labels/annotations).
+    "infra_alert": EventSpec(
+        "infra_alert",
+        lane=NotificationLane.PRIORITY,
+        default_channel_types=("in_app", "telegram"),
+    ),
 }
 
 

@@ -606,6 +606,10 @@ def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             # is NOT here: it is optional (default None) and injected by the Vault
             # bootstrap (task 15_09), not the .env.
             "API_SERVER_JWT_SECRET": _env_ref("API_SERVER_JWT_SECRET", None, prod=prod),
+            # NOTIF-2: Bearer del ingest de Alertmanager (fail-closed sin el).
+            "API_SERVER_ALERTS_INGEST_TOKEN": _env_ref(
+                "API_SERVER_ALERTS_INGEST_TOKEN", None, prod=prod
+            ),
             "API_SERVER_MINIO_ACCESS_KEY": _env_ref("API_SERVER_MINIO_ACCESS_KEY", None, prod=prod),
             "API_SERVER_MINIO_SECRET_KEY": _env_ref("API_SERVER_MINIO_SECRET_KEY", None, prod=prod),
             "API_SERVER_SSO_ENCRYPTION_KEY": _env_ref(

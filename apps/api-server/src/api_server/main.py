@@ -62,6 +62,7 @@ from api_server.routers.human_inbox import router as human_inbox_router
 from api_server.routers.incoming_webhook_configs import router as incoming_webhook_configs_router
 from api_server.routers.incoming_webhooks import router as incoming_webhooks_router
 from api_server.routers.internal_agent import router as internal_agent_router
+from api_server.routers.internal_alerts import router as internal_alerts_router
 from api_server.routers.kb_categories import router as kb_categories_router
 from api_server.routers.knowledge_bases import (
     documents_router,
@@ -204,6 +205,7 @@ def _register_routers(app: FastAPI) -> None:
         tenant_stats_router,
         cross_tenant_stats_router,
         internal_agent_router,
+        internal_alerts_router,
         project_conversations_router,
         conversations_router,
         chat_modes_router,

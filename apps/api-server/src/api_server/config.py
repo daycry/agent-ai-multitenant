@@ -199,6 +199,21 @@ class Settings(BaseSettings):
         description="Redis connection URL.",
     )
 
+    # NOTIF-2 (auditoría 2026-07-12 / prod-08 alert_ingest_01): token Bearer
+    # compartido que Alertmanager presenta en POST /internal/alerts/ingest.
+    # Sin configurar → el endpoint responde 503 (fail-closed, nunca abierto).
+    alerts_ingest_token: str | None = Field(
+        default=None,
+        description="Shared bearer token for the Alertmanager ingest endpoint.",
+    )
+    # TTL del dedup por fingerprint+status: justo por debajo del repeat_interval
+    # de 1h de las alertas critical para tragarse los repeats sin silenciar el
+    # siguiente ciclo.
+    alerts_dedup_ttl_s: int = Field(
+        default=3300,
+        description="Dedup TTL (seconds) for repeated Alertmanager notifications.",
+    )
+
     # ----- Celery broker (enqueue-only; api-server runs no tasks) -----
     broker_url: str = Field(
         default="redis://localhost:6379/1",
