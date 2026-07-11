@@ -77,6 +77,12 @@ class SelfContext:
     affect: AffectState
     known_facts: list[str]
     pending_learnings: tuple[PendingLearning, ...] = ()
+    # C3 (investigación 2026-07-11): conciencia temporal — el córtex no sabía
+    # qué día/hora es ni cuánto hacía que no hablaba con su owner. `now` es el
+    # instante del turno; `last_turn_at` el turno anterior del owner (None =
+    # primera conversación). Ambos opcionales: sin `now`, cero cambio de prompt.
+    now: datetime | None = None
+    last_turn_at: datetime | None = None
 
 
 def _truncate(text: str, limit: int = FACT_TRUNCATE_LEN) -> str:
@@ -89,6 +95,73 @@ def _truncate(text: str, limit: int = FACT_TRUNCATE_LEN) -> str:
 
 def _language_of(identity_state: dict[str, Any]) -> Language:
     return "en" if identity_state.get("language") == "en" else "es"
+
+
+# =============================================================================
+# C3 — conciencia temporal (pura; sin now, silenciosa)
+# =============================================================================
+_MONTHS_ES = (
+    "enero",
+    "febrero",
+    "marzo",
+    "abril",
+    "mayo",
+    "junio",
+    "julio",
+    "agosto",
+    "septiembre",
+    "octubre",
+    "noviembre",
+    "diciembre",
+)
+_WEEKDAYS_ES = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+
+# Umbral bajo el cual un turno previo se lee como continuación de la misma
+# conversación, no como reencuentro.
+_CONTINUATION_THRESHOLD_S = 30 * 60
+
+
+def temporal_context_lines(
+    now: datetime, last_turn_at: datetime | None, *, language: Language
+) -> list[str]:
+    """Líneas de contexto temporal para la guía del turno (C3, puras).
+
+    Fecha/hora actual + cuánto hace del último turno del owner (reencuentro),
+    para que «buenos días» a las 23h o ignorar tres días de silencio dejen de
+    ser posibles. Generadas por código (confiables) → van FUERA de DATOS."""
+    lines: list[str] = []
+    if language == "en":
+        lines.append(f"Right now it is {now.strftime('%A %d %B %Y, %H:%M')} (UTC).")
+        if last_turn_at is None:
+            lines.append("This is your first conversation with your owner.")
+        else:
+            gap = max(0.0, (now - last_turn_at).total_seconds())
+            if gap < _CONTINUATION_THRESHOLD_S:
+                lines.append("You are continuing a conversation from a few minutes ago.")
+            elif gap < 48 * 3600:
+                lines.append(f"You last spoke about {int(gap // 3600)} hour(s) ago.")
+            else:
+                lines.append(f"You last spoke {int(gap // 86400)} day(s) ago.")
+        return lines
+
+    fecha = (
+        f"{_WEEKDAYS_ES[now.weekday()]} {now.day} de "
+        f"{_MONTHS_ES[now.month - 1]} de {now.year}, {now.strftime('%H:%M')}"
+    )
+    lines.append(f"Ahora mismo es {fecha} (UTC).")
+    if last_turn_at is None:
+        lines.append("Esta es tu primera conversación con tu owner.")
+    else:
+        gap = max(0.0, (now - last_turn_at).total_seconds())
+        if gap < _CONTINUATION_THRESHOLD_S:
+            lines.append("Continuáis una conversación de hace unos minutos.")
+        elif gap < 48 * 3600:
+            horas = int(gap // 3600)
+            lines.append(f"Hace {horas} hora(s) que no hablabais.")
+        else:
+            dias = int(gap // 86400)
+            lines.append(f"Hace {dias} día(s) que no hablabais.")
+    return lines
 
 
 # =============================================================================
@@ -228,6 +301,12 @@ def compose_self_context_prompt(
     guidance = tone_guidance(ctx.affect, language=language) + trait_style_guidance(
         identity_state.get("traits"), language=language
     )
+    # C3: contexto temporal (fecha/hora + reencuentro) — generado por código,
+    # confiable → fuera de DATOS, dentro de la guía. Sin `now`, silencioso.
+    if ctx.now is not None:
+        guidance = tuple(
+            temporal_context_lines(ctx.now, ctx.last_turn_at, language=language)
+        ) + tuple(guidance)
 
     parts: list[str] = []
     if preamble:
@@ -412,12 +491,40 @@ async def load_self_context(
         limit=recall_limit,
     )
     learnings = await _load_pending_learnings(session, owner_user_id=owner_user_id)
+    last_turn_at = await _load_last_turn_at(session, owner_user_id=owner_user_id)
     return SelfContext(
         identity_state=dict(identity.identity_state or {}),
         affect=affect,
         known_facts=known_facts,
         pending_learnings=learnings,
+        now=now,
+        last_turn_at=last_turn_at,
     )
+
+
+async def _load_last_turn_at(session: AsyncSession, *, owner_user_id: UUID) -> datetime | None:
+    """El último turno en que el CÓRTEX habló (C3) — best-effort.
+
+    Se usa el role='cortex' a propósito: el turno de usuario ACTUAL puede estar
+    ya persistido cuando se compone el prompt, y contaminaría el gap con ~0s.
+    La respuesta anterior del córtex es el «cuándo hablamos por última vez»
+    semánticamente correcto. ``None`` = primera conversación."""
+    try:
+        from sqlalchemy import func, select
+
+        from api_server.db.cortex import CortexTurn
+
+        return (
+            await session.execute(
+                select(func.max(CortexTurn.created_at)).where(
+                    CortexTurn.owner_user_id == owner_user_id,
+                    CortexTurn.role == "cortex",
+                )
+            )
+        ).scalar_one_or_none()
+    except Exception as exc:  # fail-open: el tiempo nunca rompe el turno
+        _log.warning("cortex.self_context_last_turn_failed", error=str(exc))
+        return None
 
 
 __all__ = [

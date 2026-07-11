@@ -171,3 +171,65 @@ def test_guias_llevan_copy_honesto() -> None:
 def test_sin_afecto_destacado_no_hay_bloque_de_guia() -> None:
     prompt = compose_self_context_prompt(_BASE, _ctx(), remember_enabled=True)
     assert "simulado" not in prompt.lower()
+
+
+# ---------------------------------------------------------------------------
+# C3 (investigación córtex 2026-07-11): conciencia temporal. El córtex no sabía
+# qué día/hora es ni cuánto hacía que no hablaba con su owner — el paso del
+# tiempo solo existía como decay de floats, invisible como "hecho".
+# ---------------------------------------------------------------------------
+def test_temporal_lines_carry_date_and_reunion_gap() -> None:
+    from datetime import UTC, datetime
+
+    from api_server.cortex.self_context import temporal_context_lines
+
+    now = datetime(2026, 7, 12, 9, 30, tzinfo=UTC)
+    last = datetime(2026, 7, 9, 18, 0, tzinfo=UTC)
+    lines = temporal_context_lines(now, last, language="es")
+    joined = " ".join(lines)
+    assert "2026" in joined and ("julio" in joined or "07" in joined)
+    assert "2 día" in joined  # ~2.6 días → floor honesto: «hace 2 día(s)»
+
+
+def test_temporal_lines_recent_turn_reads_as_continuation() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from api_server.cortex.self_context import temporal_context_lines
+
+    now = datetime(2026, 7, 12, 9, 30, tzinfo=UTC)
+    lines = temporal_context_lines(now, now - timedelta(minutes=5), language="es")
+    assert any("continu" in line.lower() for line in lines)
+
+
+def test_temporal_lines_first_conversation() -> None:
+    from datetime import UTC, datetime
+
+    from api_server.cortex.self_context import temporal_context_lines
+
+    lines = temporal_context_lines(datetime(2026, 7, 12, tzinfo=UTC), None, language="es")
+    assert any("primera" in line.lower() for line in lines)
+
+
+def test_compose_includes_temporal_context_outside_datos() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime(2026, 7, 12, 9, 30, tzinfo=UTC)
+    ctx = _ctx()
+    ctx = SelfContext(
+        identity_state=ctx.identity_state,
+        affect=ctx.affect,
+        known_facts=ctx.known_facts,
+        pending_learnings=ctx.pending_learnings,
+        now=now,
+        last_turn_at=now - timedelta(days=2),
+    )
+    prompt = compose_self_context_prompt("BASE", ctx, remember_enabled=False)
+    assert "2026" in prompt
+    assert "2 día" in prompt
+    # Generado por código puro, confiable → fuera del blindaje DATOS.
+    assert all("2026" not in s for s in _datos_sections(prompt))
+
+
+def test_compose_without_now_stays_untouched() -> None:
+    prompt = compose_self_context_prompt("BASE", _ctx(), remember_enabled=False)
+    assert "2026" not in prompt
