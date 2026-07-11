@@ -126,6 +126,12 @@ class ExecutionRequest:
     # them into a contextual preamble so the agent takes them into account. `None` =
     # no key (no comments) → backward-compat.
     task_comments: list[dict[str, Any]] | None = None
+    # P0-7 (investigación 2026-07-11): the previous NON-review failure of this
+    # task ({status, abort_code, output_tail}), threaded when the latest
+    # execution died without finishing (failed/aborted). The runtime folds a
+    # corrective preamble so the re-dispatched implementer avoids the same dead
+    # end. `None` = no key (no prior failure / superseded by a done run).
+    prior_failure: dict[str, Any] | None = None
     # P0-1 (investigación 2026-07-11): the agent's effective persona
     # (`{prompt, role?, name?}`), resolved by the orchestrator from
     # `agents.system_prompt` / `model_config.system_prompts`. The runtime
@@ -154,6 +160,7 @@ class ExecutionRequest:
             "review_context": self.review_context,
             "prior_review_feedback": self.prior_review_feedback,
             "task_comments": self.task_comments,
+            "prior_failure": self.prior_failure,
             "agent_persona": self.agent_persona,
         }
 
@@ -178,6 +185,7 @@ class ExecutionRequest:
             review_context=raw.get("review_context"),
             prior_review_feedback=raw.get("prior_review_feedback"),
             task_comments=raw.get("task_comments"),
+            prior_failure=raw.get("prior_failure"),
             agent_persona=raw.get("agent_persona"),
         )
 

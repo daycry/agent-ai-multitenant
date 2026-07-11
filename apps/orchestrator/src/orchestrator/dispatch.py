@@ -1127,6 +1127,13 @@ class TaskDispatcher:
         prior_feedback = await self._read_prior_review_feedback(session, task)
         if prior_feedback:
             request["prior_review_feedback"] = prior_feedback
+        # P0-7 (investigación 2026-07-11): a run that died WITHOUT finishing
+        # (failed/aborted: loop, budget, provider bug) left no trace in the next
+        # attempt's prompt — only reviewer rejections travelled. Thread the latest
+        # failure so the implementer avoids the same dead end.
+        prior_failure = await self._read_prior_failure(session, task)
+        if prior_failure:
+            request["prior_failure"] = prior_failure
         # Feature C: human comments on this task/plan → the runtime folds them into a
         # contextual preamble so the agent takes them into account.
         comments = await self._read_relevant_comments(session, task)
@@ -1221,6 +1228,39 @@ class TaskDispatcher:
                 }
             )
         return feedback
+
+    # P0-7: cola del output del run muerto — suficiente para orientar sin
+    # desplazar la tarea del prompt (mismo orden de magnitud que el tail del
+    # test-report, _TEST_REPORT_LOG_TAIL).
+    _PRIOR_FAILURE_OUTPUT_TAIL = 1500
+
+    async def _read_prior_failure(self, session: AsyncSession, task: Task) -> dict[str, str] | None:
+        """The LATEST execution's failure payload, or ``None`` (P0-7).
+
+        Only the most recent execution counts: a later successful run (done —
+        e.g. the failure was transient and a retry finished) supersedes the
+        failure, so a stale crash does not haunt the agent forever. Review
+        rejections travel by their own rail (``prior_review_feedback``).
+        BYPASSRLS → explicit ``tenant_id`` predicate (defence-in-depth)."""
+        latest = (
+            await session.execute(
+                select(Execution.status, Execution.abort_code, Execution.output)
+                .where(
+                    Execution.task_id == task.id,
+                    Execution.tenant_id == task.tenant_id,
+                )
+                .order_by(Execution.created_at.desc())
+                .limit(1)
+            )
+        ).first()
+        if latest is None or latest.status not in ("failed", "aborted"):
+            return None
+        output_tail = str(latest.output or "")[-self._PRIOR_FAILURE_OUTPUT_TAIL :]
+        return {
+            "status": str(latest.status),
+            "abort_code": str(latest.abort_code or ""),
+            "output_tail": output_tail,
+        }
 
     async def _resolve_model_spec(
         self, session: AsyncSession, agent: Agent, project: Project | None

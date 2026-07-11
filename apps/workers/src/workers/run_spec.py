@@ -182,6 +182,10 @@ def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del sp
     # preamble (`build_comments_preamble`). Only emit when present (backward-compat).
     if request.task_comments is not None:
         spec["task_comments"] = request.task_comments
+    # P0-7: the previous non-review failure → the runtime folds a corrective
+    # preamble (build_prior_failure_preamble). Only emit when present.
+    if request.prior_failure is not None:
+        spec["prior_failure"] = request.prior_failure
     # P0-1 (investigación 2026-07-11): the agent's persona → the runtime prepends
     # it as the FIRST system-preamble block (`build_persona_preamble`), so the run
     # carries the agent's domain identity (role, conventions, expertise). Only

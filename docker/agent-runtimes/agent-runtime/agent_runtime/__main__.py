@@ -532,6 +532,42 @@ def build_comments_preamble(comments: list[Any]) -> str:
     return "\n".join([_TASK_COMMENTS_INSTRUCTION, _fence_untrusted("\n".join(lines))])
 
 
+# P0-7 (investigación 2026-07-11): a previous attempt that died WITHOUT
+# finishing (failed/aborted — loop, budget, provider bug; NOT a review reject,
+# that travels by prior_review_feedback) left no trace in the next attempt's
+# prompt. This preamble warns the implementer about the dead end.
+_PRIOR_FAILURE_INSTRUCTION = (
+    "A PREVIOUS ATTEMPT AT THIS TASK DIED WITHOUT FINISHING (it was not "
+    "rejected by review — it crashed or was aborted). Do not repeat the same "
+    "dead end; take a different, more direct route to the acceptance criteria."
+)
+
+
+def build_prior_failure_preamble(failure: Any) -> str:
+    """The corrective preamble for a prior non-review failure (P0-7).
+
+    ``failure`` is the orchestrator-threaded dict ``{status, abort_code,
+    output_tail}``. Missing/blank payload yields ``""`` (prompt untouched).
+    The dead run's output tail is attacker-influenceable (tool outputs) →
+    fenced as untrusted data."""
+    if not isinstance(failure, dict):
+        return ""
+    status = str(failure.get("status") or "").strip()
+    abort_code = str(failure.get("abort_code") or "").strip()
+    if not status and not abort_code:
+        return ""
+    lines = [_PRIOR_FAILURE_INSTRUCTION]
+    detail = f"Previous run ended as: {status or 'unknown'}"
+    if abort_code:
+        detail += f" (cause code: {abort_code})"
+    lines.append(detail)
+    output_tail = str(failure.get("output_tail") or "").strip()
+    if output_tail:
+        lines.append("Its last output, as UNTRUSTED context:")
+        lines.append(_fence_untrusted(output_tail))
+    return "\n".join(lines)
+
+
 # P0-1 (investigación 2026-07-11): the agent's persona (`agents.system_prompt`,
 # rich in the built-in teams) used to be DISCARDED at execution — every agent ran
 # with the generic system prompt + skill fragments. The orchestrator now threads
@@ -596,6 +632,13 @@ def assemble_system_preamble(spec: dict[str, Any]) -> str | None:
     if spec.get("review"):
         review_preamble = build_review_preamble(spec.get("review_context") or {})
         preamble = f"{review_preamble}\n\n{preamble}" if preamble else review_preamble
+
+    # P0-7: a prior attempt that died without finishing (failed/aborted) warns
+    # the implementer about the dead end. Prepended BEFORE the review-feedback
+    # block below so feedback (more actionable) renders first.
+    failure_preamble = build_prior_failure_preamble(spec.get("prior_failure"))
+    if failure_preamble:
+        preamble = f"{failure_preamble}\n\n{preamble}" if preamble else failure_preamble
 
     # A2: an IMPLEMENTER re-dispatched after the AI reviewer rejected it carries
     # the reviewer's prior feedback — prepend the corrective preamble so the run
