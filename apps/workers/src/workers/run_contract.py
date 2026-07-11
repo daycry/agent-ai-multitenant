@@ -126,6 +126,13 @@ class ExecutionRequest:
     # them into a contextual preamble so the agent takes them into account. `None` =
     # no key (no comments) → backward-compat.
     task_comments: list[dict[str, Any]] | None = None
+    # P0-1 (investigación 2026-07-11): the agent's effective persona
+    # (`{prompt, role?, name?}`), resolved by the orchestrator from
+    # `agents.system_prompt` / `model_config.system_prompts`. The runtime
+    # prepends it as the FIRST system-preamble block so implementer and
+    # reviewer runs carry the agent's domain identity. `None` = no key
+    # (agent without persona) → prompt untouched (backward-compat).
+    agent_persona: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict — the Celery payload the orchestrator sends."""
@@ -147,6 +154,7 @@ class ExecutionRequest:
             "review_context": self.review_context,
             "prior_review_feedback": self.prior_review_feedback,
             "task_comments": self.task_comments,
+            "agent_persona": self.agent_persona,
         }
 
     @classmethod
@@ -170,6 +178,7 @@ class ExecutionRequest:
             review_context=raw.get("review_context"),
             prior_review_feedback=raw.get("prior_review_feedback"),
             task_comments=raw.get("task_comments"),
+            agent_persona=raw.get("agent_persona"),
         )
 
 

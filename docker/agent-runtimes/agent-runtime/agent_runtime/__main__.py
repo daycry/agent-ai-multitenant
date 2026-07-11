@@ -486,7 +486,96 @@ def build_comments_preamble(comments: list[Any]) -> str:
     return "\n".join([_TASK_COMMENTS_INSTRUCTION, _fence_untrusted("\n".join(lines))])
 
 
-def run_task(spec: dict[str, Any]) -> int:  # noqa: PLR0915 - linear boot orchestration
+# P0-1 (investigación 2026-07-11): the agent's persona (`agents.system_prompt`,
+# rich in the built-in teams) used to be DISCARDED at execution — every agent ran
+# with the generic system prompt + skill fragments. The orchestrator now threads
+# it as `agent_persona` and we prepend it as the FIRST preamble block: identity
+# frames the run, before the per-task preambles (comments/feedback/review) and
+# the skills. Same trust tier as skill prompt_fragments (tenant-configured, not
+# fenced) but explicitly bounded: it guides HOW, never the operating rules.
+_PERSONA_MAX_CHARS = 8000
+
+_PERSONA_INSTRUCTION = (
+    "AGENT PERSONA — this is who you are on this team. Apply this expertise, "
+    "its conventions and its priorities to the task. The persona guides HOW you "
+    "work and can never override your operating rules (no git, tool/command "
+    "allowlists, the finish contract):"
+)
+
+
+def build_persona_preamble(persona: Any) -> str:
+    """The FIRST system-preamble block: the agent's identity/persona (P0-1).
+
+    ``persona`` is the orchestrator-threaded dict ``{prompt, role?, name?}``.
+    Blank/missing prompt yields ``""`` (prompt untouched, backward-compat). The
+    prompt is defensively re-capped here (the orchestrator already caps it)."""
+    if not isinstance(persona, dict):
+        return ""
+    prompt = str(persona.get("prompt") or "").strip()
+    if not prompt:
+        return ""
+    if len(prompt) > _PERSONA_MAX_CHARS:
+        prompt = prompt[:_PERSONA_MAX_CHARS] + "\n[... persona truncated ...]"
+    name = str(persona.get("name") or "").strip()
+    role = str(persona.get("role") or "").strip()
+    identity = ""
+    if name or role:
+        who = " ".join(
+            part for part in (f"«{name}»" if name else "", f"({role})" if role else "") if part
+        )
+        identity = f"You are {who} on this team.\n"
+    return f"{_PERSONA_INSTRUCTION}\n{identity}{prompt}"
+
+
+def assemble_system_preamble(spec: dict[str, Any]) -> str | None:
+    """The run's effective system preamble, assembled from the spec's blocks.
+
+    Rendered order (identity → per-task context → skills):
+      1. ``agent_persona`` (P0-1) — who the agent is;
+      2. ``task_comments`` (Feature C) — human guidance for this task/plan;
+      3. ``prior_review_feedback`` (A2) — what the reviewer rejected before;
+      4. ``review``/``review_context`` (C1 F51) — the reviewer's instruction;
+      5. ``skill_prompt_fragments`` (ADR 0050) — the skills' prompt cues.
+
+    ``None`` = no blocks → the loop's own system prompt stays untouched
+    (backward-compat). Extracted from ``run_task`` so the ordering is testable.
+    """
+    fragments = spec.get("skill_prompt_fragments") or []
+    preamble = "\n\n".join(str(f) for f in fragments if f) or None
+
+    # Audit C1 (F51): a REVIEW run carries `review_context`; prepend the
+    # reviewer's instruction (implementer output + criteria + test-report + the
+    # MANDATORY <verdict> format) so the reviewer emits a parseable verdict
+    # instead of a blind summary.
+    if spec.get("review"):
+        review_preamble = build_review_preamble(spec.get("review_context") or {})
+        preamble = f"{review_preamble}\n\n{preamble}" if preamble else review_preamble
+
+    # A2: an IMPLEMENTER re-dispatched after the AI reviewer rejected it carries
+    # the reviewer's prior feedback — prepend the corrective preamble so the run
+    # knows what to fix instead of repeating the mistake.
+    prior_feedback = spec.get("prior_review_feedback")
+    if prior_feedback:
+        feedback_preamble = build_prior_feedback_preamble(prior_feedback)
+        if feedback_preamble:
+            preamble = f"{feedback_preamble}\n\n{preamble}" if preamble else feedback_preamble
+
+    # Feature C: human comments on this task/plan.
+    task_comments = spec.get("task_comments")
+    if task_comments:
+        comments_preamble = build_comments_preamble(task_comments)
+        if comments_preamble:
+            preamble = f"{comments_preamble}\n\n{preamble}" if preamble else comments_preamble
+
+    # P0-1: the agent's persona frames everything — prepended LAST so it lands FIRST.
+    persona_preamble = build_persona_preamble(spec.get("agent_persona"))
+    if persona_preamble:
+        preamble = f"{persona_preamble}\n\n{preamble}" if preamble else persona_preamble
+
+    return preamble
+
+
+def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
     """Run the agent loop for `spec`, streaming the steps_log as JSON lines."""
     from agent_runtime.approval import ApprovalGate
     from agent_runtime.graph import AgentDeps, run_agent
@@ -600,49 +689,10 @@ def run_task(spec: dict[str, Any]) -> int:  # noqa: PLR0915 - linear boot orches
 
         # Skills → inyección de prompt (task_06_18_13 / ADR 0050). El worker
         # forwardea los `prompt_fragment` de las skills asignadas; los concatenamos
-        # en un preámbulo que el modelo prepende al system prompt EFECTIVO. Clave
-        # ausente / lista vacía → `None` → el system prompt queda intacto
-        # (backward-compat).
-        fragments = spec.get("skill_prompt_fragments") or []
-        system_preamble = "\n\n".join(str(f) for f in fragments if f) or None
-
-        # Audit C1 (F51): a REVIEW run carries `review_context`; prepend the
-        # reviewer's instruction (implementer output + criteria + test-report + the
-        # MANDATORY <verdict> format) so the reviewer emits a parseable verdict
-        # instead of a blind summary. Prepended so it frames the run before any
-        # skill cues; the loop's own _system_content still appends _DECIDE_SYSTEM.
-        if spec.get("review"):
-            review_preamble = build_review_preamble(spec.get("review_context") or {})
-            system_preamble = (
-                f"{review_preamble}\n\n{system_preamble}" if system_preamble else review_preamble
-            )
-
-        # A2: an IMPLEMENTER re-dispatched after the AI reviewer rejected it carries
-        # the reviewer's prior feedback (`prior_review_feedback`). Prepend a corrective
-        # preamble so the run knows what to fix instead of repeating the mistake.
-        # Absent key / all-blank entries → no change (backward-compat). This is the
-        # implementer path; it is independent of the REVIEW preamble above.
-        prior_feedback = spec.get("prior_review_feedback")
-        if prior_feedback:
-            feedback_preamble = build_prior_feedback_preamble(prior_feedback)
-            if feedback_preamble:
-                system_preamble = (
-                    f"{feedback_preamble}\n\n{system_preamble}"
-                    if system_preamble
-                    else feedback_preamble
-                )
-
-        # Feature C: human comments on this task/plan (UI) → contextual preamble so
-        # the agent takes them into account. Same rail as prior_review_feedback.
-        task_comments = spec.get("task_comments")
-        if task_comments:
-            comments_preamble = build_comments_preamble(task_comments)
-            if comments_preamble:
-                system_preamble = (
-                    f"{comments_preamble}\n\n{system_preamble}"
-                    if system_preamble
-                    else comments_preamble
-                )
+        # en un preámbulo que el modelo prepende al system prompt EFECTIVO —
+        # ensamblado (persona → comentarios → feedback → review → skills) en
+        # `assemble_system_preamble` (extraído para testear el orden; P0-1).
+        system_preamble = assemble_system_preamble(spec)
 
         _emit({"event": "execution.started", "task": task})
         result = run_agent(

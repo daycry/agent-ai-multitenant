@@ -25,6 +25,7 @@ from typing import Any, cast
 from uuid import UUID
 
 import structlog
+from api_server.agent_persona import resolve_agent_persona
 from api_server.agent_skills_enforcement import resolve_agent_skill_prompt_fragments
 from api_server.agent_tools_enforcement import (
     combine_tool_allowlists,
@@ -693,6 +694,12 @@ class TaskDispatcher:
             request["tool_specs"] = tool_specs
         if skill_prompt_fragments is not None:
             request["skill_prompt_fragments"] = skill_prompt_fragments
+        # P0-1 (investigación 2026-07-11): la persona del agente (system_prompt /
+        # model_config.system_prompts) viaja al run — el runtime la prepende como
+        # PRIMER bloque del system preamble. Sin persona → clave ausente.
+        agent_persona = resolve_agent_persona(agent)
+        if agent_persona is not None:
+            request["agent_persona"] = agent_persona
         project_commands = getattr(project, "allowed_commands", None) if project else None
         request["allowed_commands"] = [str(c) for c in (project_commands or [])]
         # prod-12 Fase B (gap4-2): la allowlist de dominios de las tools HTTP,
