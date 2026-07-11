@@ -880,6 +880,13 @@ def _run_with_retry(
 # ---------------------------------------------------------------------------
 # Shared adapter — a `ModelClient` over any `LLMProvider`
 # ---------------------------------------------------------------------------
+def _temperature_kwargs(temperature: Any) -> dict[str, Any]:
+    """P1-8: el kwarg de temperature para los kinds HTTP (vacío si no viene)."""
+    if temperature is None:
+        return {}
+    return {"temperature": float(temperature)}
+
+
 class _ProviderModelClient:
     """Adapter from `LLMProvider` (async) to `ModelClient` (sync).
 
@@ -972,6 +979,7 @@ class AzureFoundryModelClient(_ProviderModelClient):
         tools: list[dict[str, Any]] | None = None,
         http_client: httpx.AsyncClient | None = None,
         reasoning_effort: str | None = None,
+        temperature: float | None = None,
     ) -> None:
         super().__init__(
             provider=AzureFoundryAPIMProvider(
@@ -984,7 +992,10 @@ class AzureFoundryModelClient(_ProviderModelClient):
             ),
             model=model,
             tools=tools,
-            extra_call_kwargs=reasoning_call_kwargs("azure_foundry", reasoning_effort),
+            extra_call_kwargs={
+                **reasoning_call_kwargs("azure_foundry", reasoning_effort),
+                **_temperature_kwargs(temperature),
+            },
         )
 
 
@@ -1000,12 +1011,16 @@ class CopilotModelClient(_ProviderModelClient):
         tools: list[dict[str, Any]] | None = None,
         http_client: httpx.AsyncClient | None = None,
         reasoning_effort: str | None = None,
+        temperature: float | None = None,
     ) -> None:
         super().__init__(
             provider=CopilotProvider(github_token=github_token, http_client=http_client),
             model=model,
             tools=tools,
-            extra_call_kwargs=reasoning_call_kwargs("copilot", reasoning_effort),
+            extra_call_kwargs={
+                **reasoning_call_kwargs("copilot", reasoning_effort),
+                **_temperature_kwargs(temperature),
+            },
         )
 
 
@@ -1021,6 +1036,7 @@ class OllamaModelClient(_ProviderModelClient):
         tools: list[dict[str, Any]] | None = None,
         http_client: httpx.AsyncClient | None = None,
         reasoning_effort: str | None = None,
+        temperature: float | None = None,
     ) -> None:
         super().__init__(
             provider=OllamaProvider(
@@ -1031,7 +1047,10 @@ class OllamaModelClient(_ProviderModelClient):
             ),
             model=model,
             tools=tools,
-            extra_call_kwargs=reasoning_call_kwargs("ollama", reasoning_effort),
+            extra_call_kwargs={
+                **reasoning_call_kwargs("ollama", reasoning_effort),
+                **_temperature_kwargs(temperature),
+            },
         )
 
 
@@ -1216,6 +1235,10 @@ def build_provider_client(
     # ADR 0070: esfuerzo de razonamiento por proveedor (clave de model_config que
     # viaja en el spec). Cada adaptador lo traduce a su parámetro nativo.
     reasoning = spec.get("reasoning_effort")
+    # P1-8 (investigación 2026-07-11): temperature se validaba (0-2) y viajaba
+    # en el spec pero moría aquí — palanca declarada que no operaba. Los kinds
+    # HTTP la pliegan al body; claude_sdk la ignora (el SDK no la expone).
+    temperature = spec.get("temperature")
     if kind == "azure_foundry":
         return AzureFoundryModelClient(
             model=model,
@@ -1226,6 +1249,7 @@ def build_provider_client(
             api_version=spec.get("api_version", "2024-10-21"),
             tools=tools,
             reasoning_effort=reasoning,
+            temperature=temperature,
         )
     if kind == "copilot":
         return CopilotModelClient(
@@ -1233,6 +1257,7 @@ def build_provider_client(
             github_token=spec["github_token"],
             tools=tools,
             reasoning_effort=reasoning,
+            temperature=temperature,
         )
     if kind in ("claude_sdk", "claude"):
         return ClaudeSDKModelClient(
@@ -1250,6 +1275,7 @@ def build_provider_client(
             api_key=spec.get("api_key"),
             tools=tools,
             reasoning_effort=reasoning,
+            temperature=temperature,
         )
     if kind == "litellm":
         raise ValueError(
