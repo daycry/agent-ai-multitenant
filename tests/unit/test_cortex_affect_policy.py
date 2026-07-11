@@ -169,3 +169,34 @@ def test_tono_bilingue() -> None:
     assert lines
     assert any("warm" in line for line in lines)
     assert not any("cálido" in line for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# C9 (investigación córtex 2026-07-11): aburrimiento — arousal bajo y TODOS los
+# drives bajos mapean a un estado humano básico que antes no existía.
+# ---------------------------------------------------------------------------
+def test_boredom_emits_its_own_tone_line() -> None:
+    from api_server.cortex.affect_policy import TONE_DRIVE_BORED, tone_guidance
+    from api_server.cortex.affective import AffectState, Drives, PADState
+
+    bored = AffectState(
+        emotion=PADState(valence=0.0, arousal=0.1, dominance=0.0, intensity=0.05),
+        mood=PADState(valence=0.0, arousal=0.1, dominance=0.0),
+        drives=Drives(curiosity=0.05, bonding=0.05, coherence=0.05, competence=0.05),
+    )
+    lines = tone_guidance(bored, language="es")
+    assert any("aburr" in line.lower() for line in lines)
+    assert all(d <= TONE_DRIVE_BORED for d in (0.05,))
+
+
+def test_high_curiosity_is_not_boredom() -> None:
+    from api_server.cortex.affect_policy import tone_guidance
+    from api_server.cortex.affective import AffectState, Drives, PADState
+
+    curious = AffectState(
+        emotion=PADState(valence=0.0, arousal=0.1, dominance=0.0),
+        mood=PADState(valence=0.0, arousal=0.1, dominance=0.0),
+        drives=Drives(curiosity=0.9, bonding=0.05, coherence=0.05, competence=0.05),
+    )
+    lines = tone_guidance(curious, language="es")
+    assert not any("aburr" in line.lower() for line in lines)

@@ -40,6 +40,7 @@ import { ApiError } from "@/lib/api";
 import {
   CORTEX_LIMITS,
   cortexConversationLabel,
+  cortexFetch,
   getCortexConversations,
   getCortexTurns,
   postCortexTurn,
@@ -71,6 +72,18 @@ export default function CortexChatPage() {
   // córtex delibera (el POST es síncrono y puede tardar). Se oculta solo cuando
   // el refetch del hilo ya lo trae persistido (sin flicker ni duplicado).
   const [pendingEcho, setPendingEcho] = useState<string | null>(null);
+
+  // C12 (investigación 2026-07-11): el mood vivo también en el CHAT — en voz ya
+  // se materializa (prosodia + avatar) pero en texto el owner no lo veía. Solo
+  // lectura ligera del Panel de Mente, refrescada con calma.
+  const mindQuery = useQuery<{ mood_label?: string }, ApiError>({
+    queryKey: ["cortex-mind-chat"],
+    queryFn: () => cortexFetch<{ mood_label?: string }>("/mind"),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const moodLabel = mindQuery.data?.mood_label?.trim();
 
   const conversationsQuery = useQuery<CortexConversation[], ApiError>({
     queryKey: ["cortex", "conversations"],
@@ -172,14 +185,25 @@ export default function CortexChatPage() {
         title="Córtex"
         description="Tu córtex con hilo persistente, recall asociativo sobre tu memoria privada y deliberación profunda. Es una mente simulada y útil — sin afecto ni consciencia."
         actions={
-          <Button
-            variant={voiceMode ? "default" : "outline"}
-            onClick={() => setVoiceMode((v) => !v)}
-            data-testid="cortex-voice-toggle"
-          >
-            <Phone className="mr-2 h-4 w-4" />
-            {voiceMode ? "Cerrar voz" : "Modo voz"}
-          </Button>
+          <div className="flex items-center gap-2">
+            {moodLabel ? (
+              <span
+                className="text-muted-foreground rounded-full border px-2 py-0.5 text-xs"
+                title="Estado afectivo simulado (modelo computacional, ADR 0075)"
+                data-testid="cortex-chat-mood"
+              >
+                ánimo: {moodLabel} (simulado)
+              </span>
+            ) : null}
+            <Button
+              variant={voiceMode ? "default" : "outline"}
+              onClick={() => setVoiceMode((v) => !v)}
+              data-testid="cortex-voice-toggle"
+            >
+              <Phone className="mr-2 h-4 w-4" />
+              {voiceMode ? "Cerrar voz" : "Modo voz"}
+            </Button>
+          </div>
         }
         data-testid="cortex-chat-header"
       />

@@ -42,6 +42,8 @@ TONE_AROUSAL_HIGH: float = 0.5
 TONE_AROUSAL_LOW: float = 0.3
 TONE_DOMINANCE_BAND: float = 0.3
 TONE_DRIVE_HIGH: float = 0.7
+# C9: umbral de "todos los drives por los suelos" para el aburrimiento.
+TONE_DRIVE_BORED: float = 0.15
 
 
 @dataclass(frozen=True)
@@ -159,6 +161,22 @@ def tone_guidance(affect: AffectState, *, language: Language = "es") -> tuple[st
     if drives.bonding >= TONE_DRIVE_HIGH:
         lines.append(("Usa un tono cercano y personal.", "Use a close, personal tone."))
 
+    # C9 (investigación 2026-07-11): aburrimiento — arousal bajo Y todos los
+    # drives por los suelos. Un estado humano básico que faltaba; además es la
+    # señal latente que alimenta la iniciativa proactiva (C1).
+    if emotion.arousal < TONE_AROUSAL_LOW and all(
+        d <= TONE_DRIVE_BORED
+        for d in (drives.curiosity, drives.bonding, drives.coherence, drives.competence)
+    ):
+        lines.append(
+            (
+                "Estás algo aburrido: si encaja, propón un tema o pregunta algo "
+                "que te interese de verdad.",
+                "You are somewhat bored: if it fits, propose a topic or ask "
+                "about something you genuinely wonder about.",
+            )
+        )
+
     return tuple(pair[idx] for pair in lines)
 
 
@@ -171,6 +189,7 @@ __all__ = [
     "TONE_AROUSAL_HIGH",
     "TONE_AROUSAL_LOW",
     "TONE_DOMINANCE_BAND",
+    "TONE_DRIVE_BORED",
     "TONE_DRIVE_HIGH",
     "TONE_VALENCE_BAND",
     "EffortDecision",
