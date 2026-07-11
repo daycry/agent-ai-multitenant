@@ -339,4 +339,11 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
         "schedule": crontab(hour="4", minute="45"),  # mantenimiento/olvido diario
         "options": {"queue": "default"},
     }
+    # C2 (investigación 2026-07-11): el pulso de plataforma — el córtex siente
+    # lo que le pasa al sistema (runs/planes) sin LLM (mapeo determinista).
+    sched["cortex-platform-pulse"] = {
+        "task": "workers.cortex_platform_pulse",
+        "schedule": schedule(run_every=900.0),  # cada 15 min
+        "options": {"queue": "default"},
+    }
     return sched

@@ -83,6 +83,7 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             "workers.cortex_reflection",
             "workers.cortex_curiosity",
             "workers.cortex_maintenance",
+            "workers.cortex_platform",
             "workers.maintenance",
             "workers.ingestion",
             "workers.price_sync",
