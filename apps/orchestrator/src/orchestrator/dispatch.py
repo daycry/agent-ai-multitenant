@@ -1169,8 +1169,10 @@ class TaskDispatcher:
 
         Reuses ``PlanComment`` (no separate task store): the comments that apply to
         THIS task are the task-scoped ones (``target_kind='task'`` with ``target_ref``
-        = the task's plan-spec id) plus the plan-level ones (``target_kind='plan'``,
-        which apply to every task of the plan). Phase comments are out of scope here.
+        = the task's plan-spec id), the plan-level ones (``target_kind='plan'``) and —
+        P1-11a (investigación 2026-07-11) — the ones on the task's PHASE
+        (``target_kind='phase'`` with ``target_ref`` = the index of the spec phase
+        whose ``tasks`` list contains this task's spec id; before they were dropped).
         Newest first, capped. Empty → ``[]`` → no ``task_comments`` key
         (backward-compat). BYPASSRLS, so an explicit ``tenant_id`` predicate scopes it
         (same defence-in-depth as the prior-feedback read)."""
@@ -1186,6 +1188,15 @@ class TaskDispatcher:
                     PlanComment.target_ref == str(spec_id),
                 ),
             )
+            phase_index = await self._task_phase_index(session, task, str(spec_id))
+            if phase_index is not None:
+                scope_cond = or_(
+                    scope_cond,
+                    and_(
+                        PlanComment.target_kind == "phase",
+                        PlanComment.target_ref == str(phase_index),
+                    ),
+                )
         rows = list(
             (
                 await session.execute(
@@ -1254,6 +1265,29 @@ class TaskDispatcher:
     # desplazar la tarea del prompt (mismo orden de magnitud que el tail del
     # test-report, _TEST_REPORT_LOG_TAIL).
     _PRIOR_FAILURE_OUTPUT_TAIL = 1500
+
+    async def _task_phase_index(
+        self, session: AsyncSession, task: Task, spec_id: str
+    ) -> int | None:
+        """El índice de la fase del spec que contiene ``spec_id`` (P1-11a).
+
+        Best-effort: sin plan/spec/fase que lo contenga → ``None`` (los
+        comentarios de fase simplemente no aplican)."""
+        plan_spec = (
+            await session.execute(
+                select(Plan.specification).where(
+                    Plan.id == task.plan_id, Plan.tenant_id == task.tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+        phases = (plan_spec or {}).get("phases")
+        if not isinstance(phases, list):
+            return None
+        for index, phase in enumerate(phases):
+            tasks = phase.get("tasks") if isinstance(phase, dict) else None
+            if isinstance(tasks, list) and spec_id in [str(t) for t in tasks]:
+                return index
+        return None
 
     async def _read_prior_failure(self, session: AsyncSession, task: Task) -> dict[str, str] | None:
         """The LATEST execution's failure payload, or ``None`` (P0-7).

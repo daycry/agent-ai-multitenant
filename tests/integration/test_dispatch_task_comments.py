@@ -76,7 +76,22 @@ async def _seed(sm: async_sessionmaker) -> dict[str, UUID]:
             )
         )
         await s.flush()
-        s.add(Plan(id=ids["plan"], tenant_id=ids["tenant"], project_id=ids["project"], title="Pl"))
+        s.add(
+            Plan(
+                id=ids["plan"],
+                tenant_id=ids["tenant"],
+                project_id=ids["project"],
+                title="Pl",
+                # P1-11a: la fase 0 contiene t1 (los comentarios de fase aplican
+                # a las tareas de SU fase); la fase 1 no.
+                specification={
+                    "phases": [
+                        {"title": "F0", "tasks": ["t1"]},
+                        {"title": "F1", "tasks": ["t2"]},
+                    ]
+                },
+            )
+        )
         await s.flush()
         s.add(
             Task(
@@ -105,7 +120,8 @@ async def _seed(sm: async_sessionmaker) -> dict[str, UUID]:
             [
                 _c("task", spec_id, "comentario de TAREA"),
                 _c("plan", None, "comentario de PLAN"),
-                _c("phase", "0", "comentario de FASE"),  # excluido
+                _c("phase", "0", "comentario de MI FASE"),  # P1-11a: incluido
+                _c("phase", "1", "comentario de OTRA fase"),  # excluido
                 _c("task", "otra", "comentario de OTRA tarea"),  # excluido
             ]
         )
@@ -122,8 +138,10 @@ async def test_reads_task_and_plan_comments_excludes_others(
         task = (await s.execute(select(Task).where(Task.id == ids["task"]))).scalar_one()
         comments = await dispatcher._read_relevant_comments(s, task)
     contents = {c["content"] for c in comments}
-    assert contents == {"comentario de TAREA", "comentario de PLAN"}
-    assert {c["scope"] for c in comments} == {"task", "plan"}
+    # P1-11a (investigación 2026-07-11): los comentarios de la FASE de la tarea
+    # también entran (antes se descartaban todos los de fase).
+    assert contents == {"comentario de TAREA", "comentario de PLAN", "comentario de MI FASE"}
+    assert {c["scope"] for c in comments} == {"task", "plan", "phase"}
 
 
 @pytest.mark.asyncio
