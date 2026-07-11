@@ -13,6 +13,7 @@ mensaje al agente y necesita ``docker.errors.APIError`` en un ``except``.
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 from uuid import UUID
 
@@ -21,6 +22,43 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+
+# P1-4 (investigación 2026-07-11): destilado de logs. El tail crudo de 8000
+# chars podía CORTAR la traza útil (el assert que falló al principio, ruido
+# después). Se anteponen las líneas-señal de fallo, acotadas, al tail.
+_LOG_TAIL_CHARS = 8000
+_SIGNAL_MAX_LINES = 20
+_SIGNAL_MAX_CHARS = 2500
+_SIGNAL_RE = re.compile(r"(?i)\b(error|exception|fail(ed|ure|ures)?|fatal|assert)\b")
+
+
+def distill_stack_logs(logs: str, *, tail_chars: int = _LOG_TAIL_CHARS) -> str:
+    """Logs de stack_exec destilados: señales de fallo + tail (puro).
+
+    Logs cortos pasan VERBATIM. Largos: se extraen las primeras líneas que
+    parecen señal de fallo (error/exception/fail/fatal/assert, cap de líneas y
+    chars) y se anteponen etiquetadas al tail — el agente siempre ve QUÉ falló
+    aunque el final sea puro ruido. Sin señales → tail de siempre."""
+    if len(logs) <= tail_chars:
+        return logs
+    signals: list[str] = []
+    used = 0
+    for line in logs.splitlines():
+        if not _SIGNAL_RE.search(line):
+            continue
+        chunk = line.strip()[:400]
+        if used + len(chunk) > _SIGNAL_MAX_CHARS:
+            break
+        signals.append(chunk)
+        used += len(chunk)
+        if len(signals) >= _SIGNAL_MAX_LINES:
+            break
+    tail = logs[-tail_chars:]
+    if not signals:
+        return tail
+    header = "[señales de fallo detectadas antes del tail]"
+    return header + "\n" + "\n".join(signals) + "\n[...tail...]\n" + tail
+
 
 _log = structlog.get_logger("workers.tasks")
 
@@ -212,4 +250,4 @@ async def _run_stack_command(  # noqa: PLR0911
             "logs": f"docker API error al lanzar el runtime del stack: {detail}",
             "timed_out": False,
         }
-    return {"exit_code": rc, "logs": logs[-8000:], "timed_out": rc == 124}
+    return {"exit_code": rc, "logs": distill_stack_logs(logs), "timed_out": rc == 124}
