@@ -346,4 +346,12 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
         "schedule": schedule(run_every=900.0),  # cada 15 min
         "options": {"queue": "default"},
     }
+    # C1 (investigación 2026-07-11): iniciativa proactiva — el córtex escribe
+    # primero cuando hay aprendizajes pendientes + silencio largo (lógica pura
+    # anti-acoso en api_server.cortex.initiative).
+    sched["cortex-initiative"] = {
+        "task": "workers.cortex_initiative",
+        "schedule": schedule(run_every=1800.0),  # cada 30 min
+        "options": {"queue": "default"},
+    }
     return sched

@@ -233,6 +233,11 @@ NOTIFICATION_EVENT_CATALOG: tuple[dict[str, str], ...] = (
         "label_es": "Alerta de infraestructura",
         "label_en": "Infrastructure alert",
     },
+    {
+        "event_type": "cortex_message",
+        "label_es": "Mensaje del córtex",
+        "label_en": "Cortex message",
+    },
 )
 
 

@@ -266,6 +266,13 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.PRIORITY,
         default_channel_types=("in_app", "telegram"),
     ),
+    # C1 (córtex, 2026-07-12) — el córtex escribió primero (iniciativa
+    # proactiva). Platform-scoped (el owner es el System Admin).
+    "cortex_message": EventSpec(
+        "cortex_message",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app", "telegram"),
+    ),
 }
 
 

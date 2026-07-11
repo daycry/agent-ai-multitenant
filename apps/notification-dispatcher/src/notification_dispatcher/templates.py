@@ -504,6 +504,21 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "{{ summary | default('') }} {{ description | default('') }}"
         ),
     ),
+    # --- cortex_message (C1, iniciativa proactiva del córtex) ---------------
+    ("cortex_message", "es"): TemplateSource(
+        subject="El córtex te ha escrito",
+        body=(
+            "Tu córtex tomó la iniciativa y te dejó un mensaje: "
+            "{{ preview | default('(abre el chat para leerlo)') }}"
+        ),
+    ),
+    ("cortex_message", "en"): TemplateSource(
+        subject="Your cortex reached out",
+        body=(
+            "Your cortex took the initiative and left you a message: "
+            "{{ preview | default('(open the chat to read it)') }}"
+        ),
+    ),
 }
 
 # Public, read-only view of the builtin catalogue keyed by
