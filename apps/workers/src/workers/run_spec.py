@@ -71,6 +71,7 @@ def _agent_spec(  # noqa: PLR0912, PLR0915 - secuencia lineal de claves opcional
     max_iterations_budget: int | None = None,
     max_tokens_budget: int | None = None,
     guardrails: dict[str, Any] | None = None,
+    conversation_thread: bool = False,
 ) -> dict[str, Any]:
     """The `AGENT_TASK_SPEC` payload for the container.
 
@@ -88,7 +89,11 @@ def _agent_spec(  # noqa: PLR0912, PLR0915 - secuencia lineal de claves opcional
         if acceptance_criteria
         else request.task
     )
-    spec: dict[str, Any] = {"task": task_payload, "model": model_spec or request.model}
+    effective_model = dict(model_spec or request.model)
+    # ADR 0110 (mitad HTTP, flag OFF): hilo conversacional en memoria por run.
+    if conversation_thread:
+        effective_model["conversation_thread"] = True
+    spec: dict[str, Any] = {"task": task_payload, "model": effective_model}
     # Agent-loop safeguard budgets. Align the internal wall-clock with the
     # per-provider container budget so a slow claude_sdk run isn't aborted early
     # by the 600s default (max_wall_clock_exceeded). An operator-supplied value in

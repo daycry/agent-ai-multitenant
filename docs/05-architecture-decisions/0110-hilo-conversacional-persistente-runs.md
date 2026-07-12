@@ -44,3 +44,7 @@ estabilizados (condensado P1-5, stickies, scratchpad P1-6, batch read-only
 ADR 0111 — que ya recorta iteraciones de research). Abordarlo requiere una
 tanda dedicada con QA e2e propio, idealmente junto al ADR 0097 (sesión SDK
 persistente) que es su mitad claude_sdk.
+
+## Estado de implementación (2026-07-13)
+
+MITAD HTTP IMPLEMENTADA como EXPERIMENTAL flag-OFF: `_ProviderModelClient` acumula el hilo en memoria por run (el cliente vive todo el run) — primer turno = rebuild historico; siguientes = [system] + hilo real (assistant con sus tool calls renderizados) + un TURN UPDATE compacto (observacion + stickies); compactacion honesta "EARLIER TURNS" al superar `_THREAD_MAX_MESSAGES` (20). Se activa con `WORKERS_RUNTIME_CONVERSATION_THREAD` (worker) -> `spec.model.conversation_thread` -> `_with_thread_flag` en el builder; solo providers HTTP (claude_sdk guarda ademas por \_advertises_submit_result). OFF por defecto: byte-a-byte el comportamiento historico, pineado por tests. PENDIENTE para ratificar: validacion e2e con runs reales (coste/convergencia antes-despues) y la mitad claude_sdk (ADR 0097, spike deny-sin-interrupt obligatorio).

@@ -986,6 +986,11 @@ class _ProviderModelClient:
 
     _advertises_submit_result: bool = True
     _forces_verdict_choice: bool = True
+    # ADR 0110 (mitad HTTP): tope del hilo en memoria — más allá, los turnos
+    # viejos se compactan en un resumen honesto (EARLIER TURNS). El cap acota
+    # el input creciente frente a los budgets de tokens del run.
+    _THREAD_MAX_MESSAGES: int = 20
+    _THREAD_SUMMARY_CHARS: int = 120
 
     def __init__(
         self,
@@ -994,6 +999,7 @@ class _ProviderModelClient:
         model: str,
         tools: list[dict[str, Any]] | None = None,
         extra_call_kwargs: dict[str, Any] | None = None,
+        conversation_thread: bool = False,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -1001,6 +1007,75 @@ class _ProviderModelClient:
         # ADR 0070: extra params del proveedor (p.ej. reasoning_effort/think) que
         # se vuelcan al body de /chat/completions vía el **kwargs del provider.
         self._extra_call_kwargs = extra_call_kwargs or {}
+        # ADR 0110 (mitad HTTP, flag OFF): hilo conversacional acumulado por
+        # run. El cliente vive todo el run (model_from_spec se llama una vez),
+        # así que el hilo es memoria local — sin persistencia cruzada. OFF por
+        # defecto: byte-a-byte el comportamiento histórico.
+        self._conversation_thread = conversation_thread
+        self._thread: list[Message] = []
+
+    # ----- ADR 0110: hilo conversacional (solo con el flag activo) ---------
+    def _thread_turn_update(self, state: dict[str, Any]) -> str:
+        """El user message COMPACTO de un turno con hilo: la observación del
+        turno anterior + los stickies vivos (progreso, plan, feedback, nudges)
+        — el historial ya viaja como mensajes reales, no se re-pega."""
+        lines: list[str] = []
+        observation = state.get("last_observation")
+        if observation:
+            lines.append(f"Observation: {json.dumps(observation, default=str)}")
+        progress = state.get("progress_summary")
+        if progress:
+            lines.append(f"PROGRESS: {progress}")
+        agent_plan = state.get("agent_plan")
+        if agent_plan:
+            lines.append(f"YOUR PLAN: {str(agent_plan)[:_STICKY_FEEDBACK_MAX_CHARS]}")
+        feedback = state.get("last_review_feedback")
+        if feedback:
+            lines.append(
+                f"REVIEW FEEDBACK (fix this): {str(feedback)[:_STICKY_FEEDBACK_MAX_CHARS]}"
+            )
+        nudge = state.get("guidance_nudge")
+        if nudge:
+            lines.append(f"GUIDANCE: {str(nudge)[:_STICKY_FEEDBACK_MAX_CHARS]}")
+        self_check = state.get("self_check_nudge")
+        if self_check:
+            lines.append(f"SELF-CHECK: {str(self_check)[:_STICKY_FEEDBACK_MAX_CHARS]}")
+        warning = state.get("repetition_warning")
+        if warning:
+            lines.append(f"REPETITION WARNING: {str(warning)[:_STICKY_FEEDBACK_MAX_CHARS]}")
+        lines.append("Continue with your next single action (or finish via submit_result).")
+        return "\n".join(lines)
+
+    def _record_thread_turn(self, sent_user: Message, resp: CompletionResponse) -> None:
+        """Anexa el turno al hilo y compacta si supera el cap."""
+        assistant_parts: list[str] = []
+        if resp.content:
+            assistant_parts.append(str(resp.content))
+        for call in resp.tool_calls or []:
+            try:
+                rendered_args = json.dumps(dict(call.arguments), default=str)[:400]
+            except Exception:
+                rendered_args = "{}"
+            assistant_parts.append(f"[called {call.name}({rendered_args})]")
+        self._thread.append(sent_user)
+        self._thread.append(
+            Message(role="assistant", content="\n".join(assistant_parts) or "[no output]")
+        )
+        if len(self._thread) > self._THREAD_MAX_MESSAGES:
+            # Compactación: la mitad más vieja colapsa a un resumen de una
+            # línea por mensaje — rastro honesto, presupuesto acotado.
+            keep = self._THREAD_MAX_MESSAGES // 2
+            evicted, kept = self._thread[:-keep], self._thread[-keep:]
+            summary_lines = [
+                f"- {m.role}: {' '.join(str(m.content).split())[: self._THREAD_SUMMARY_CHARS]}"
+                for m in evicted
+            ]
+            summary = Message(
+                role="user",
+                content="[EARLIER TURNS — condensed, no longer shown in full]\n"
+                + "\n".join(summary_lines),
+            )
+            self._thread = [summary, *kept]
 
     def decide(self, state: dict[str, Any]) -> ModelResponse:
         # ADR 0087: advertise `submit_result` ALONGSIDE the agent's tools so the
@@ -1011,6 +1086,28 @@ class _ProviderModelClient:
             if self._advertises_submit_result
             else self._tools
         )
+        # ADR 0110 (mitad HTTP): con el flag activo, el primer turno manda el
+        # rebuild histórico y los siguientes [system] + hilo real + turn update
+        # compacto — el proveedor puede reusar su KV-cache y el modelo ve su
+        # propio razonamiento previo. Flag OFF (default) = camino histórico.
+        if self._conversation_thread and self._advertises_submit_result:
+            historical = _decide_messages(state)
+            if not self._thread:
+                sent_user = historical[1]
+                messages = historical
+            else:
+                sent_user = Message(role="user", content=self._thread_turn_update(state))
+                messages = [historical[0], *self._thread, sent_user]
+            resp = _run_with_retry(
+                lambda: self.provider.complete(
+                    messages,
+                    model=self.model,
+                    tools=tools,
+                    **self._extra_call_kwargs,
+                )
+            )
+            self._record_thread_turn(sent_user, resp)
+            return _decision_from(resp, model=self.model)
         resp = _run_with_retry(
             lambda: self.provider.complete(
                 _decide_messages(state),
@@ -1277,6 +1374,17 @@ def _overlay_resolved(
 # ---------------------------------------------------------------------------
 # Factory — model_from_spec delegates here for non-scripted kinds
 # ---------------------------------------------------------------------------
+def _with_thread_flag(client: _ProviderModelClient, spec: dict[str, Any]) -> ModelClient:
+    """ADR 0110 (mitad HTTP): activa el hilo conversacional si el spec lo pide.
+
+    Post-construccion para no tocar la firma de los 3 adapters HTTP; claude_sdk
+    nunca pasa por aqui (su decide guarda ademas con _advertises_submit_result).
+    Flag OFF por defecto — el worker solo lo emite con
+    WORKERS_RUNTIME_CONVERSATION_THREAD activo."""
+    client._conversation_thread = bool(spec.get("conversation_thread"))
+    return client
+
+
 def build_provider_client(
     spec: dict[str, Any],
     *,
@@ -1321,24 +1429,30 @@ def build_provider_client(
     # HTTP la pliegan al body; claude_sdk la ignora (el SDK no la expone).
     temperature = spec.get("temperature")
     if kind == "azure_foundry":
-        return AzureFoundryModelClient(
-            model=model,
-            apim_base_url=spec["apim_base_url"],
-            deployment=spec.get("deployment", model),
-            subscription_key=spec.get("subscription_key"),
-            bearer_token=spec.get("bearer_token"),
-            api_version=spec.get("api_version", "2024-10-21"),
-            tools=tools,
-            reasoning_effort=reasoning,
-            temperature=temperature,
+        return _with_thread_flag(
+            AzureFoundryModelClient(
+                model=model,
+                apim_base_url=spec["apim_base_url"],
+                deployment=spec.get("deployment", model),
+                subscription_key=spec.get("subscription_key"),
+                bearer_token=spec.get("bearer_token"),
+                api_version=spec.get("api_version", "2024-10-21"),
+                tools=tools,
+                reasoning_effort=reasoning,
+                temperature=temperature,
+            ),
+            spec,
         )
     if kind == "copilot":
-        return CopilotModelClient(
-            model=model,
-            github_token=spec["github_token"],
-            tools=tools,
-            reasoning_effort=reasoning,
-            temperature=temperature,
+        return _with_thread_flag(
+            CopilotModelClient(
+                model=model,
+                github_token=spec["github_token"],
+                tools=tools,
+                reasoning_effort=reasoning,
+                temperature=temperature,
+            ),
+            spec,
         )
     if kind in ("claude_sdk", "claude"):
         return ClaudeSDKModelClient(
@@ -1350,13 +1464,16 @@ def build_provider_client(
             reasoning_effort=reasoning,
         )
     if kind == "ollama":
-        return OllamaModelClient(
-            model=model,
-            base_url=spec.get("base_url", "http://localhost:11434/v1"),
-            api_key=spec.get("api_key"),
-            tools=tools,
-            reasoning_effort=reasoning,
-            temperature=temperature,
+        return _with_thread_flag(
+            OllamaModelClient(
+                model=model,
+                base_url=spec.get("base_url", "http://localhost:11434/v1"),
+                api_key=spec.get("api_key"),
+                tools=tools,
+                reasoning_effort=reasoning,
+                temperature=temperature,
+            ),
+            spec,
         )
     if kind == "litellm":
         raise ValueError(

@@ -131,6 +131,7 @@ def _build_runtime_env(
     max_iterations_budget: int | None = None,
     max_tokens_budget: int | None = None,
     guardrails: dict[str, Any] | None = None,
+    conversation_thread: bool = False,
 ) -> dict[str, str]:
     """El env del contenedor `agent-runtime` para una ejecución (función PURA).
 
@@ -166,6 +167,7 @@ def _build_runtime_env(
                 max_iterations_budget=max_iterations_budget,
                 max_tokens_budget=max_tokens_budget,
                 guardrails=guardrails,
+                conversation_thread=conversation_thread,
             )
         ),
     }
@@ -1159,6 +1161,8 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
             acceptance_criteria=prepared.task_acceptance_criteria,
             # ADR 0102 D3: config de guardrails resuelta (o None → baseline).
             guardrails=prepared.guardrails,
+            # ADR 0110 (mitad HTTP, EXPERIMENTAL, default OFF).
+            conversation_thread=settings.runtime_conversation_thread,
             # Budget interno del loop = el del contenedor MENOS el grace (F19):
             # el aborto limpio del loop gana al kill duro del contenedor.
             wall_clock_budget_s=wall_clock_budget_s,

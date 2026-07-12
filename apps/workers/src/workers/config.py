@@ -471,6 +471,15 @@ class Settings(BaseSettings):
     # setting `git_fetch_sweep_enabled` (default OFF) que un System Admin flipa
     # desde el panel; este cron solo fija CUANDO se evalua. Conservador (cada
     # 30 min): el coste crece con el numero de proyectos con remoto.
+    # ADR 0110 (mitad HTTP, EXPERIMENTAL): hilo conversacional en memoria por
+    # run en los providers HTTP (azure_foundry/copilot/ollama). OFF por defecto
+    # — encenderlo cambia el shape del prompt por turno (KV-cache reutilizable,
+    # historial real) y debe validarse con runs e2e antes de generalizarlo.
+    runtime_conversation_thread: bool = Field(
+        default=False,
+        description="EXPERIMENTAL (ADR 0110): per-run in-memory conversation "
+        "thread for HTTP providers in the agent runtime. OFF by default.",
+    )
     git_fetch_cron: str = Field(
         default="*/30 * * * *",
         description="Cron (minute hour day-of-month month day-of-week) for the "
