@@ -61,7 +61,7 @@ _SDK_BASE_SHELL_COMMANDS: frozenset[str] = frozenset(
 )
 
 
-def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del spec
+def _agent_spec(  # noqa: PLR0912, PLR0915 - secuencia lineal de claves opcionales del spec
     request: ExecutionRequest,
     approval_policy: dict[str, Any] | None,
     *,
@@ -70,6 +70,7 @@ def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del sp
     wall_clock_budget_s: float | None = None,
     max_iterations_budget: int | None = None,
     max_tokens_budget: int | None = None,
+    guardrails: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The `AGENT_TASK_SPEC` payload for the container.
 
@@ -107,6 +108,10 @@ def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del sp
     # With a policy the loop gates sensitive tool calls (task_02_33).
     if approval_policy:
         spec["approval_policy"] = approval_policy
+    # ADR 0102 D3: la config de guardrails RESUELTA (plataforma+proyecto,
+    # locked gana) — build_pipeline del runtime la consume; ausente = baseline.
+    if guardrails:
+        spec["guardrails"] = guardrails
     # Forward the chat mode's tool allowlist (task_06_14_07). Only emit the
     # key when set — `None` means "no key", which the runtime reads as "no
     # restriction". An empty list IS emitted (block every tool).

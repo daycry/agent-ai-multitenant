@@ -1,7 +1,7 @@
 ---
 adr: "0102"
 title: Cableado del motor de guardrails en la ejecución de agentes (4 hooks) con slice mínimo post_tool en modo LOG, transporte por task spec/result envelope y política de fallo por check
-status: proposed
+status: accepted
 date: 2026-07-05
 deciders: operador (pendiente)
 phase: auditoria-plataforma-2026-07-03
@@ -268,3 +268,7 @@ post_tool`, el run termina `done` (no se bloquea), y el worker escribe la fila
 7. Todos los tests con el `.venv` del repo en verde; entrada de changelog y
    `docs/04-reference/guardrails.md` actualizada (hooks cableados + política de
    fallo) al cierre de prod-03.
+
+## Estado de implementación (2026-07-13)
+
+COMPLETO salvo los hooks pre_llm/post_llm (sin checks que los necesiten hoy; la costura run_hook ya los acepta). Implementado: D1 post_tool LOG (2026-07-04) + extension a recall/KB; D4 persistencia RLS; D7 inyeccion AgentDeps; y cerrado 2026-07-13: **D3** transporte completo (to_dict en shared-guardrails, capa PLATAFORMA en platform_settings.guardrails_config con tipo/validacion/editor JSON en el panel, capa PROYECTO en projects.guardrails_config (migracion 0110), fusion resolve_config con locked-gana en \_resolve_effective_guardrails del worker, cap 64KB con degradacion a plataforma-sola, spec["guardrails"] -> build_pipeline); **D5** on_error por check (warn=fail-open, block=fail-closed); **D6** truncado 50k del input escaneado con marca en metadata; **D2 enforce de block**: \_screened_tool_call envuelve cada tool call (principal y lote 0111) — block en pre_tool RECHAZA la llamada (deny visible), block en post_tool SUSTITUYE el output. El baseline sigue warn/LOG: enforce solo actua si el operador configura action:block (calibrar en warn antes de subir a block, como pedia el ADR).

@@ -33,7 +33,7 @@ import { CortexModelSection } from "./cortex-model-section";
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.platform_settings_registry.platform_registry_to_dict.
 // ---------------------------------------------------------------------------
-type SettingType = "bool" | "int" | "decimal" | "model_config";
+type SettingType = "bool" | "int" | "decimal" | "model_config" | "guardrails_config";
 
 interface SettingDef {
   type: SettingType;
@@ -246,9 +246,53 @@ function SettingControl({
           onSave={() => save.mutate(value)}
           pending={save.isPending}
         />
+      ) : def.type === "guardrails_config" ? (
+        <JsonConfigControl
+          value={value}
+          onSave={(parsed) => save.mutate(parsed)}
+          pending={save.isPending}
+        />
       ) : null}
 
       {msg ? <p className="text-muted-foreground text-xs">{msg}</p> : null}
+    </div>
+  );
+}
+
+// ADR 0102 D3: editor JSON crudo para la config declarativa de guardrails —
+// el backend valida shape (parse_config) y cap 64KB; aqui solo se parsea.
+function JsonConfigControl({
+  value,
+  onSave,
+  pending,
+}: {
+  value: unknown;
+  onSave: (parsed: unknown) => void;
+  pending: boolean;
+}) {
+  const [text, setText] = useState(() => JSON.stringify(value ?? {}, null, 2));
+  const [parseError, setParseError] = useState<string | null>(null);
+  return (
+    <div className="space-y-2">
+      <textarea
+        className="border-input bg-background h-48 w-full rounded-md border p-2 font-mono text-xs"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        data-testid="guardrails-config-editor"
+      />
+      {parseError ? <p className="text-destructive text-xs">{parseError}</p> : null}
+      <SaveButton
+        pending={pending}
+        onClick={() => {
+          try {
+            const parsed = JSON.parse(text);
+            setParseError(null);
+            onSave(parsed);
+          } catch (e) {
+            setParseError(String(e));
+          }
+        }}
+      />
     </div>
   );
 }

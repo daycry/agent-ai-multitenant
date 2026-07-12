@@ -32,7 +32,7 @@ from api_server.db.platform_settings import (
 
 # ``model_config`` is the structured agent-default spec (provider/model/temperature);
 # the rest are scalars. The UI renders a control per type.
-PlatformSettingType = Literal["bool", "int", "decimal", "model_config"]
+PlatformSettingType = Literal["bool", "int", "decimal", "model_config", "guardrails_config"]
 
 
 @dataclass(frozen=True)
@@ -149,6 +149,25 @@ PLATFORM_KNOWN_SETTINGS: dict[str, PlatformCategoryDef] = {
             ),
         },
     ),
+    "seguridad": PlatformCategoryDef(
+        label_es="Seguridad",
+        icon="Shield",
+        description_es="Guardrails declarativos de la plataforma (ADR 0102).",
+        settings={
+            # Capa PLATAFORMA de los guardrails (principio 10): config
+            # declarativa {guardrails: {hook: [checks...]}} que el orquestador
+            # fusiona con la capa proyecto y transporta al runtime. Vacia =
+            # baseline del runtime (post_tool prompt_injection en LOG).
+            "guardrails_config": PlatformSettingDef(
+                type="guardrails_config",
+                default={},
+                label_es="Guardrails de plataforma",
+                description_es="Config declarativa por hook (pre_llm/post_llm/"
+                "pre_tool/post_tool). Los checks con locked:true no pueden "
+                "relajarse por proyecto. action:block aplica enforce real.",
+            ),
+        },
+    ),
     "mantenimiento": PlatformCategoryDef(
         label_es="Mantenimiento",
         icon="Wrench",
@@ -226,6 +245,20 @@ def validate_platform_setting_value(key: str, value: Any) -> Any:
             return dict(validate_chat_model_config(value))
         except InvalidModelConfigError as exc:
             raise ValueError(str(exc)) from exc
+    if sdef.type == "guardrails_config":
+        if not isinstance(value, dict):
+            raise ValueError(f"{key}: expected a guardrails config object")
+        import json as _json
+
+        if len(_json.dumps(value)) > 64_000:
+            raise ValueError(f"{key}: config exceeds the 64KB cap (ADR 0102 D3)")
+        try:
+            from shared_guardrails.config import parse_config
+
+            parse_config(dict(value))
+        except Exception as exc:
+            raise ValueError(f"{key}: invalid guardrails config: {exc}") from exc
+        return dict(value)
     raise ValueError(f"unknown setting type {sdef.type!r}")  # pragma: no cover
 
 

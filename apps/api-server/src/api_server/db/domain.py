@@ -820,6 +820,10 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     # (PAT/clave SSH) NO va aquí — vive en Vault (projects/{id}/git).
     git_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     human_approval_policy: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # ADR 0102 D3: capa PROYECTO de los guardrails declarativos. El worker la
+    # fusiona con la capa plataforma (resolve_config, locked gana) y transporta
+    # el resultado al runtime en spec["guardrails"]. NULL = sin capa proyecto.
+    guardrails_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     # Plan 06.16 task_06_16_01: polyglot tool catalog. `allowed_commands`
     # is the per-project deny-by-default allowlist of program *basenames*

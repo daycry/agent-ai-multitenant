@@ -130,6 +130,7 @@ def _build_runtime_env(
     wall_clock_budget_s: float | None = None,
     max_iterations_budget: int | None = None,
     max_tokens_budget: int | None = None,
+    guardrails: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """El env del contenedor `agent-runtime` para una ejecución (función PURA).
 
@@ -164,6 +165,7 @@ def _build_runtime_env(
                 wall_clock_budget_s=wall_clock_budget_s,
                 max_iterations_budget=max_iterations_budget,
                 max_tokens_budget=max_tokens_budget,
+                guardrails=guardrails,
             )
         ),
     }
@@ -177,6 +179,51 @@ def _build_runtime_env(
         )
         env["AGENTIC_API_URL"] = agent_internal_api_url
     return env
+
+
+async def _resolve_effective_guardrails(
+    session: AsyncSession, project: Project | None
+) -> dict[str, Any] | None:
+    """La config de guardrails EFECTIVA del run (ADR 0102 D3).
+
+    Fusiona la capa PLATAFORMA (platform_settings.guardrails_config) con la
+    capa PROYECTO (projects.guardrails_config) via resolve_config — los checks
+    ``locked`` de plataforma no pueden relajarse. ``None`` cuando no hay capas
+    (el runtime cae a su baseline LOG). Best-effort: un error aqui degrada a
+    None (baseline), jamas rompe el dispatch. Cap 64KB (D3): si el resultado
+    excede, se degrada a la capa plataforma sola con warning."""
+    try:
+        import json as _json
+
+        from api_server.db import platform_settings
+        from shared_guardrails.layers import LayerConfig, resolve_config
+
+        platform_raw = await platform_settings.get_guardrails_config(session)
+        project_raw = (
+            dict(project.guardrails_config)
+            if project is not None and project.guardrails_config
+            else None
+        )
+        if not platform_raw and not project_raw:
+            return None
+        resolved = resolve_config(
+            LayerConfig.from_dict("platform", platform_raw or None),
+            None,
+            LayerConfig.from_dict("project", project_raw) if project_raw else None,
+        )
+        if resolved.config.is_empty:
+            return None
+        out = resolved.config.to_dict()
+        if len(_json.dumps(out)) > 64_000:
+            _log.warning("workers.guardrails_config_over_cap", dropped_layer="project")
+            platform_only = resolve_config(LayerConfig.from_dict("platform", platform_raw or None))
+            out = platform_only.config.to_dict()
+            if len(_json.dumps(out)) > 64_000:
+                return None
+        return out
+    except Exception as exc:  # baseline del runtime como red de seguridad
+        _log.warning("workers.guardrails_resolve_failed", error=str(exc))
+        return None
 
 
 async def _load_project(session: AsyncSession, task_id: UUID) -> Project | None:
@@ -824,6 +871,8 @@ class _PreparedRun:
 
     execution_id: UUID
     approval_policy: dict[str, Any] | None
+    # ADR 0102 D3: config de guardrails resuelta (plataforma+proyecto) o None.
+    guardrails: dict[str, Any] | None
     # (tenant_slug, project_slug, project_id, plan_id, plan_slug) del worktree RW
     # del implementador; None = sin worktree (tmpfs legacy / review / sin plan).
     worktree_inputs: tuple[str, str, str, str, str] | None
@@ -899,6 +948,7 @@ async def _prepare_run(
     )
     project = await session.get(Project, task.project_id)
     approval_policy = await _resolve_effective_approval_policy(session, project)
+    guardrails_config = await _resolve_effective_guardrails(session, project)
     # prod-18 task_prod18_provision_01: gather the (stable) slugs needed to
     # materialise the task's git worktree. An IMPLEMENTER run gets a fresh RW
     # worktree; a REVIEW run mounts the implementer's existing worktree READ-ONLY
@@ -954,6 +1004,7 @@ async def _prepare_run(
     return _PreparedRun(
         execution_id=execution.id,
         approval_policy=approval_policy,
+        guardrails=guardrails_config,
         worktree_inputs=worktree_inputs,
         review_worktree=review_worktree,
         task_acceptance_criteria=list(task.acceptance_criteria or []),
@@ -1106,6 +1157,8 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
             # La definición de "hecho" de la tarea → al prompt de decisión,
             # para que el comportamiento (leer/escribir/test) lo dicte la tarea.
             acceptance_criteria=prepared.task_acceptance_criteria,
+            # ADR 0102 D3: config de guardrails resuelta (o None → baseline).
+            guardrails=prepared.guardrails,
             # Budget interno del loop = el del contenedor MENOS el grace (F19):
             # el aborto limpio del loop gana al kill duro del contenedor.
             wall_clock_budget_s=wall_clock_budget_s,

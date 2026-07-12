@@ -1029,6 +1029,22 @@ FX_SOURCES = ("ecb",)
 # todos los proyectos es una decisión consciente del System Admin (coste de red
 # + credenciales), no un default; el botón manual «Sincronizar» siempre está.
 # La CADENCIA es el knob aparte WORKERS_GIT_FETCH_CRON (leído por beat al boot).
+# ADR 0102 D3: capa PLATAFORMA de los guardrails declarativos (principio 10).
+# El orquestador la lee en cada dispatch, la fusiona con la capa proyecto
+# (resolve_config de shared-guardrails, locked gana) y la transporta al runtime
+# en spec["guardrails"]. Vacia -> el runtime usa su baseline LOG.
+GUARDRAILS_CONFIG_KEY = "guardrails_config"
+DEFAULT_GUARDRAILS_CONFIG: dict[str, Any] = {}
+
+
+async def get_guardrails_config(session: AsyncSession) -> dict[str, Any]:
+    """La capa plataforma de guardrails (dict declarativo, {} = baseline)."""
+    value = await get_platform_setting(
+        session, GUARDRAILS_CONFIG_KEY, default=DEFAULT_GUARDRAILS_CONFIG
+    )
+    return dict(value) if isinstance(value, dict) else {}
+
+
 GIT_FETCH_SWEEP_ENABLED_KEY = "git_fetch_sweep_enabled"
 DEFAULT_GIT_FETCH_SWEEP_ENABLED = False
 
