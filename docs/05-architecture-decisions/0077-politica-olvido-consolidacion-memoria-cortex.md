@@ -1,7 +1,7 @@
 ---
 adr_id: "0077"
 title: "Política de olvido y consolidación de la memoria del Córtex"
-status: proposed
+status: accepted
 date: 2026-06-22
 authors: [claude-opus, workflow-diseno-cortex]
 plan_referenced: cortex-system-owner
@@ -41,3 +41,7 @@ protege el long-tail nuevo (calibración conservadora de este ADR; ver
 [cortex-identidad-real](../roadmap/cortex-identidad-real.md)). La protección de
 `kind='owner_model'` tiene por fin PRODUCTOR: la reflexión escribe esas
 memorias (antes era protección sin datos).
+
+## Estado de implementación (2026-07-12)
+
+OLVIDO IMPLEMENTADO (verificado 2026-07-12): `api_server/cortex/forgetting.py` (retention*score = importance x recency(half-life 30d) x recall_frequency con suelo 0.5; PROTECTED_KINDS identity/owner_model/reflection/learning; umbral decide_forget 0.1) aplicado por `workers/cortex_maintenance.py::_forget_low_retention` como SOFT-DELETE auditable (deleted_at + metadata*.forgotten con reason/score), beat diario 04:45 gated por el kill-switch `cortex.autonomy_enabled` (OFF: encenderlo es decision del operador). PENDIENTE: la CONSOLIDACION merge-into (fusionar memorias similares en una resumida que las referencie) y una vista de inspeccion/restauracion de lo olvidado para el owner.

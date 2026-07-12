@@ -1,7 +1,7 @@
 ---
 adr_id: "0063"
 title: "Autoarranque del review-runtime al completar un plan"
-status: proposed
+status: accepted
 date: 2026-06-18
 decided_at: null
 decided_by: null
@@ -124,3 +124,7 @@ human_checklist}` (best-effort, con revert/relog como el path de run AI).
 - **Transicionar desde el worker** (al terminar la última ejecución): el worker
   no tiene visión del plan completo sin recomputar; mantenerlo en el orchestrator
   centraliza la lógica de plan y reusa su sesión BYPASSRLS multi-tenant.
+
+## Estado de implementación (2026-07-12)
+
+IMPLEMENTADO ENTERO (partes A y B), verificado 2026-07-12. El orquestador encola `workers.compose_review_runtime` al ganar la transicion del plan (`orchestrator/dispatch.py:509-534`) y el reconciler cubre el evento perdido (`maintenance/reconciler.py:581-620`); fuente unica idempotente en `api_server/review_autostart.py` (no duplica sesion activa). Las dos decisiones que bloqueaban la parte B quedaron resueltas en codigo: B1 como opcion (c) operador-configurable (`resolve_review_main_image`: repository*config.review_image -> main_image -> worker_config; sin imagen -> sesion sin contenedor preview pero con fila+URLs) y B2 con worktree a nivel de plan (`review_runtime_task.py:254-303`). El contenedor preview se lanza endurecido desde el main_image del proyecto (no existe imagen `review-runtime` dedicada). `aux_services` (sidecars) sigue diferido deliberadamente. Tests: test_review_autostart_wiring, test_reconciler_review_autostart y unit test_review_autostart*\*.
