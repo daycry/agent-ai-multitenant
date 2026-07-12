@@ -95,6 +95,8 @@ def test_system_tools_advertised_for_unassigned_agent_when_requested() -> None:
         "agent_invoke",
         "rag_search",
         "update_plan",
+        # ADR 0114: la pregunta no terminal a humano es capacidad universal.
+        "ask_human",
     }
 
 

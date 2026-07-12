@@ -582,6 +582,40 @@ def build_prior_failure_preamble(failure: Any) -> str:
     return "\n".join(lines)
 
 
+# ADR 0114: answers a human gave to this task's previous `ask_human` questions.
+# They re-enter the NEXT run (the answered task goes back to backlog and is
+# re-dispatched) as an authoritative preamble block — the whole point of the
+# non-terminal question is that the answer actually guides the retry.
+_HUMAN_ANSWERS_INSTRUCTION = (
+    "A HUMAN ANSWERED QUESTIONS a previous attempt at this task asked via "
+    "ask_human. These answers are AUTHORITATIVE guidance from the human "
+    "operator — follow them; do not re-ask what is already answered:"
+)
+
+
+def build_human_answers_preamble(answers: Any) -> str:
+    """The Q&A preamble for previously answered ``ask_human`` questions (ADR 0114).
+
+    ``answers`` is the orchestrator-threaded list of ``{question, answer}``
+    dicts. Entries missing either side are skipped (an unanswered question
+    guides nothing); empty result yields ``""`` (prompt untouched). Both sides
+    are human-typed free text → fenced as data."""
+    if not isinstance(answers, list):
+        return ""
+    blocks: list[str] = []
+    for entry in answers:
+        if not isinstance(entry, dict):
+            continue
+        question = str(entry.get("question") or "").strip()
+        answer = str(entry.get("answer") or "").strip()
+        if not question or not answer:
+            continue
+        blocks.append(f"Q: {question}\nA: {answer}")
+    if not blocks:
+        return ""
+    return "\n".join([_HUMAN_ANSWERS_INSTRUCTION, _fence_untrusted("\n\n".join(blocks))])
+
+
 # P0-1 (investigación 2026-07-11): the agent's persona (`agents.system_prompt`,
 # rich in the built-in teams) used to be DISCARDED at execution — every agent ran
 # with the generic system prompt + skill fragments. The orchestrator now threads
@@ -662,6 +696,13 @@ def assemble_system_preamble(spec: dict[str, Any]) -> str | None:
         feedback_preamble = build_prior_feedback_preamble(prior_feedback)
         if feedback_preamble:
             preamble = f"{feedback_preamble}\n\n{preamble}" if preamble else feedback_preamble
+
+    # ADR 0114: respuestas humanas a ask_human de intentos previos — van justo
+    # tras los comentarios (el contexto humano general primero, la resolución
+    # puntual después) y antes que feedback/failure.
+    human_answers_preamble = build_human_answers_preamble(spec.get("human_answers"))
+    if human_answers_preamble:
+        preamble = f"{human_answers_preamble}\n\n{preamble}" if preamble else human_answers_preamble
 
     # Feature C: human comments on this task/plan.
     task_comments = spec.get("task_comments")

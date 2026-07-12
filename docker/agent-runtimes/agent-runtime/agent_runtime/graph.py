@@ -35,7 +35,7 @@ from shared_llm import LLMError
 from agent_runtime.approval import ApprovalGate
 from agent_runtime.guardrails import run_hook
 from agent_runtime.loop_detection import DEFAULT_LOOP_THRESHOLD, LoopDetector
-from agent_runtime.model import DecisionKind, ModelClient
+from agent_runtime.model import DecisionKind, ModelClient, ModelDecision
 from agent_runtime.nudges import (
     _PATH_CHURN_THRESHOLD,
     _REREAD_CHURN_NUDGE_LIMIT,
@@ -80,6 +80,13 @@ from agent_runtime.tool_classification import (
 from agent_runtime.tools import ToolRegistry, default_registry
 
 _log = logging.getLogger("agent_runtime.graph")
+
+# ADR 0114: la categoría del ApprovalRequest que crea un `ask_human` — el
+# worker la trata como SIEMPRE-humana (bypasa la política por categorías del
+# proyecto: preguntar a un humano es, por definición, para un humano).
+HUMAN_QUESTION_CATEGORY = "human_question"
+_ASK_HUMAN_QUESTION_MAX = 2000
+_ASK_HUMAN_OPTIONS_MAX = 8
 
 # ADR 0112 (fase 1): cadencia del self-check semántico. Cada K iteraciones el
 # reflect inyecta un sticky que hace que el modelo se auto-evalúe contra los
@@ -559,6 +566,10 @@ class _AgentLoop:
             )
         )
 
+        decision, park = self._maybe_park_ask_human(decision, steps, base)
+        if park is not None:
+            return park
+
         if decision.kind == DecisionKind.ACT:
             # ADR 0111: el gate de aprobación aplica POR ELEMENTO también al lote
             # read-only — un elemento con categoría sensible se EXPULSA del lote
@@ -642,6 +653,61 @@ class _AgentLoop:
                 }
 
         return {
+            "last_decision": decision.as_dict(),
+            "iteration": self.tracker.usage.iterations,
+            "steps": steps,
+        }
+
+    def _maybe_park_ask_human(
+        self, decision: ModelDecision, steps: list[dict[str, Any]], base: int
+    ) -> tuple[ModelDecision, dict[str, Any] | None]:
+        """ADR 0114: pregunta a humano NO terminal — capacidad del LOOP (patrón
+        update_plan, no del registry).
+
+        No-op para cualquier decisión que no sea un ACT de ``ask_human``. Con
+        pregunta: el run PARQUEA por la maquinaria de aprobaciones (category
+        ``human_question`` → ApprovalRequest → task a awaiting_human_approval);
+        la respuesta re-dispatcha la task y llega al siguiente run como preámbulo
+        ``human_answers``. Devuelve ``(decision, delta_de_park)``. Sin pregunta
+        no hay nada que preguntar: devuelve ``(noop con razón visible, None)`` —
+        reintento dirigido, nunca un park vacío."""
+        if decision.kind != DecisionKind.ACT or decision.tool != "ask_human":
+            return decision, None
+        question = str((decision.tool_args or {}).get("question") or "").strip()
+        if not question:
+            rewritten = replace(
+                decision,
+                tool="noop",
+                tool_args={
+                    "reason": (
+                        "ask_human requires a non-empty 'question'. Re-emit it "
+                        "with the exact question you need answered, or continue "
+                        "working if you can decide yourself."
+                    )
+                },
+                batch_calls=(),
+            )
+            return rewritten, None
+        ask_action: dict[str, Any] = {
+            "tool": "ask_human",
+            "args": {"question": question[:_ASK_HUMAN_QUESTION_MAX]},
+        }
+        raw_options = (decision.tool_args or {}).get("options")
+        if isinstance(raw_options, list) and raw_options:
+            ask_action["args"]["options"] = [
+                str(opt)[:200] for opt in raw_options[:_ASK_HUMAN_OPTIONS_MAX]
+            ]
+        steps.append(
+            node_step(
+                base + len(steps),
+                "plan",
+                f"Awaiting human answer: {question[:120]}",
+                status="awaiting_human_approval",
+            )
+        )
+        return decision, {
+            "status": STATUS_AWAITING_APPROVAL,
+            "approval": {"category": HUMAN_QUESTION_CATEGORY, "action": ask_action},
             "last_decision": decision.as_dict(),
             "iteration": self.tracker.usage.iterations,
             "steps": steps,

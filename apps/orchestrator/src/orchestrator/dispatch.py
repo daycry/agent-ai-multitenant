@@ -1196,6 +1196,11 @@ class TaskDispatcher:
         prior_failure = await self._read_prior_failure(session, task)
         if prior_failure:
             request["prior_failure"] = prior_failure
+        # ADR 0114: respuestas humanas a ask_human de intentos previos → el
+        # runtime las pliega como preámbulo autoritativo (human_answers).
+        human_answers = await self._read_prior_human_answers(session, task)
+        if human_answers:
+            request["human_answers"] = human_answers
         # Feature C: human comments on this task/plan → the runtime folds them into a
         # contextual preamble so the agent takes them into account.
         comments = await self._read_relevant_comments(session, task)
@@ -1357,6 +1362,50 @@ class TaskDispatcher:
             "abort_code": str(latest.abort_code or ""),
             "output_tail": output_tail,
         }
+
+    # ADR 0114: cuántas Q&A respondidas viajan al siguiente run (las más
+    # recientes primero) y tope defensivo del texto de cada lado.
+    _HUMAN_ANSWERS_MAX = 3
+    _HUMAN_ANSWER_TEXT_MAX = 2000
+
+    async def _read_prior_human_answers(
+        self, session: AsyncSession, task: Task
+    ) -> list[dict[str, str]]:
+        """Respuestas humanas a ``ask_human`` de intentos previos (ADR 0114).
+
+        Lee los ``ApprovalRequest`` RESUELTOS-aprobados con categoría
+        ``human_question`` de ESTA task (los rechazados no llevan guía; los
+        pendientes aún no tienen respuesta) — la pregunta vive en
+        ``action.args.question`` y la respuesta del humano en ``reason``.
+        Más recientes primero, cap ``_HUMAN_ANSWERS_MAX``. BYPASSRLS →
+        predicado ``tenant_id`` explícito (defensa en profundidad)."""
+        from api_server.db.domain import ApprovalRequest, ApprovalRequestStatus
+
+        rows = (
+            await session.execute(
+                select(ApprovalRequest.action, ApprovalRequest.reason)
+                .where(
+                    ApprovalRequest.task_id == task.id,
+                    ApprovalRequest.tenant_id == task.tenant_id,
+                    ApprovalRequest.category == "human_question",
+                    ApprovalRequest.status == ApprovalRequestStatus.APPROVED,
+                )
+                .order_by(ApprovalRequest.resolved_at.desc())
+                .limit(self._HUMAN_ANSWERS_MAX)
+            )
+        ).all()
+        answers: list[dict[str, str]] = []
+        for action, reason in rows:
+            question = str(((action or {}).get("args") or {}).get("question") or "").strip()
+            answer = str(reason or "").strip()
+            if question and answer:
+                answers.append(
+                    {
+                        "question": question[: self._HUMAN_ANSWER_TEXT_MAX],
+                        "answer": answer[: self._HUMAN_ANSWER_TEXT_MAX],
+                    }
+                )
+        return answers
 
     async def _resolve_model_spec(
         self, session: AsyncSession, agent: Agent, project: Project | None

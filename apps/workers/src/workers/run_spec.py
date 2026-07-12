@@ -186,6 +186,10 @@ def _agent_spec(  # noqa: PLR0912 - secuencia lineal de claves opcionales del sp
     # preamble (build_prior_failure_preamble). Only emit when present.
     if request.prior_failure is not None:
         spec["prior_failure"] = request.prior_failure
+    # ADR 0114: respuestas humanas a ask_human de intentos previos -> preamble
+    # human_answers (build_human_answers_preamble). Only emit when present.
+    if request.human_answers:
+        spec["human_answers"] = request.human_answers
     # P0-1 (investigación 2026-07-11): the agent's persona → the runtime prepends
     # it as the FIRST system-preamble block (`build_persona_preamble`), so the run
     # carries the agent's domain identity (role, conventions, expertise). Only

@@ -27,6 +27,32 @@ from typing import Any
 # they are not in BUILTIN_TOOLS). Schemas mirror the executors' validated args
 # (agent_runtime.memory_tools.MemoryTools). Keyed by canonical runtime name.
 _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
+    "ask_human": {
+        "name": "ask_human",
+        "description": (
+            "Pregunta a un humano y ESPERA su respuesta (ADR 0114). Usalo SOLO "
+            "cuando una ambiguedad real te impida avanzar y no puedas decidirla "
+            "tu (requisito contradictorio, eleccion de producto). El run se "
+            "pausa; la respuesta llegara al siguiente intento como guia "
+            "autoritativa. No lo uses para confirmar trabajo ya hecho."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "La pregunta concreta que necesitas respondida.",
+                },
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Opciones sugeridas (opcional, max 8).",
+                },
+            },
+            "required": ["question"],
+            "additionalProperties": False,
+        },
+    },
     "update_plan": {
         "name": "update_plan",
         "description": (
@@ -181,6 +207,9 @@ SYSTEM_TOOL_NAMES: tuple[str, ...] = (
     "rag_search",
     # P1-6: el scratchpad del loop (capacidad del grafo, no del registry).
     "update_plan",
+    # ADR 0114: pregunta no terminal a humano (capacidad del grafo - el nodo
+    # plan la intercepta y parquea el run por la maquinaria de aprobaciones).
+    "ask_human",
 )
 
 
