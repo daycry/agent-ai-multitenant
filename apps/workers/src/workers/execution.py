@@ -534,7 +534,7 @@ async def _commit_and_push_worktree(
     task_id: str,
     execution_id: str,
     escalated: bool = False,
-) -> str | None:
+) -> tuple[str, dict[str, Any] | None] | None:
     """Commit the agent's worktree output (with the mandatory trailers) and push it
     to the plan branch on the local bare repo (prod-18 task_prod18_commit_01 / ADR 0085).
 
@@ -627,13 +627,53 @@ async def _commit_and_push_worktree(
             abort_code=abort_code,
             error=str(exc),
         )
-        return abort_code
+        # Anticipo ADR 0099: el contexto estructurado del conflicto (si la capa
+        # git lo capturó antes del abort) viaja adherido a la excepción.
+        return abort_code, getattr(exc, "conflict_context", None)
+
+
+def _conflict_note(
+    abort_code: str,
+    conflict_context: dict[str, Any] | None,
+    *,
+    steps_len: int,
+) -> tuple[str, dict[str, Any] | None]:
+    """La nota humana + el step ESTRUCTURADO del marcador de commit fallido
+    (anticipo ADR 0099). Puro (testeable): con contexto de conflicto devuelve
+    ademas un step para steps_log con {plan_branch, files, worktree_sha,
+    branch_sha} — los datos que el visor de diffs futuro necesita para mostrar
+    ambos lados; sin contexto, la nota de texto historica y step None."""
+    if abort_code == "rebase_conflict":
+        note = (
+            "worktree rebase conflicted with a sibling task — deliverable not "
+            "persisted to the plan branch; needs human resolution"
+        )
+        if conflict_context:
+            files = [str(f) for f in conflict_context.get("files") or []]
+            if files:
+                listed = "\n".join(f"- {f}" for f in files)
+                note += f"\nconflicting files:\n{listed}"
+            step = {
+                "index": steps_len,
+                "kind": "node",
+                "node": "commit",
+                "status": "error",
+                "summary": f"Rebase conflict: {len(files)} file(s) in dispute",
+                "conflict_context": dict(conflict_context),
+            }
+            return note, step
+        return note, None
+    return (
+        "worktree commit/push failed — deliverable not persisted to the plan branch",
+        None,
+    )
 
 
 async def _mark_commit_failed(
     sessionmaker: async_sessionmaker[AsyncSession],
     execution_id: UUID,
     abort_code: str = "commit_failed",
+    conflict_context: dict[str, Any] | None = None,
 ) -> None:
     """Stamp a visible ``abort_code`` marker on a finalised execution whose
     worktree commit/push hit a real git error (P2.3(b)/F13, P7).
@@ -651,13 +691,14 @@ async def _mark_commit_failed(
             if execution is None:
                 return
             execution.abort_code = abort_code
-            note = (
-                "worktree rebase conflicted with a sibling task — deliverable not "
-                "persisted to the plan branch; needs human resolution"
-                if abort_code == "rebase_conflict"
-                else "worktree commit/push failed — deliverable not persisted to the plan branch"
+            note, conflict_step = _conflict_note(
+                abort_code, conflict_context, steps_len=len(execution.steps_log or [])
             )
             execution.output = f"{execution.output}\n{note}" if execution.output else note
+            if conflict_step is not None:
+                # Anticipo ADR 0099: el contexto estructurado viaja en steps_log
+                # (JSONB ya renderizado por el visor y consultable por SQL).
+                execution.steps_log = [*(execution.steps_log or []), conflict_step]
     except Exception as exc:  # pragma: no cover - defensive best-effort
         _log.warning(
             "workers.commit_failed_marker_error", execution_id=str(execution_id), error=str(exc)
@@ -1277,8 +1318,15 @@ async def _implementer_post_process(
         if commit_abort_code:
             # P2.3(b)/F13 + P7: a real git failure — surface it (with its
             # specific abort_code) on the execution row instead of reporting a
-            # deliverable with an empty diff.
-            await _mark_commit_failed(sessionmaker, prepared.execution_id, commit_abort_code)
+            # deliverable with an empty diff. Anticipo ADR 0099: el contexto
+            # estructurado del conflicto viaja junto al código.
+            code, conflict_context = commit_abort_code
+            await _mark_commit_failed(
+                sessionmaker,
+                prepared.execution_id,
+                code,
+                conflict_context=conflict_context,
+            )
     # The deferred state-change event is NOT published here (H1): it travels on
     # the ExecutionOutcome so the caller publishes it after releasing the
     # run-lock. The prod-18 ordering still holds — the commit above exists

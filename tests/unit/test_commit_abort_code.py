@@ -29,3 +29,38 @@ def test_rebase_conflict_is_on_the_escalation_panel() -> None:
     from api_server.routers.plans import _REVIEW_ESCALATION_ABORT_CODES
 
     assert "rebase_conflict" in _REVIEW_ESCALATION_ABORT_CODES
+
+
+def test_conflict_note_lists_files_and_branch() -> None:
+    # Anticipo ADR 0099: el contexto ESTRUCTURADO del conflicto (ficheros +
+    # branch + shas) se persiste con el marcador — antes solo había una nota de
+    # texto y el visor futuro no podia mostrar «ambos lados».
+    from workers.execution import _conflict_note
+
+    note, step = _conflict_note(
+        "rebase_conflict",
+        {
+            "plan_branch": "plan/019f-x",
+            "files": ["app/a.php", "app/b.php"],
+            "worktree_sha": "abc1234",
+            "branch_sha": "def5678",
+        },
+        steps_len=3,
+    )
+    assert "app/a.php" in note and "app/b.php" in note
+    assert step is not None
+    assert step["index"] == 3
+    assert step["kind"] == "node"
+    assert step["status"] == "error"
+    assert step["conflict_context"]["plan_branch"] == "plan/019f-x"
+
+
+def test_conflict_note_without_context_keeps_plain_note() -> None:
+    from workers.execution import _conflict_note
+
+    note, step = _conflict_note("rebase_conflict", None, steps_len=0)
+    assert "conflict" in note.lower()
+    assert step is None
+    note2, step2 = _conflict_note("commit_failed", None, steps_len=0)
+    assert "commit/push failed" in note2
+    assert step2 is None

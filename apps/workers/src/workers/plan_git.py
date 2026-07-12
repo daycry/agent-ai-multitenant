@@ -391,12 +391,36 @@ class PlanGitWorkflow:
                 try:
                     _run_git("rebase", "FETCH_HEAD", cwd=worktree_path, env_extra=committer_env)
                 except GitCommandError as rebase_exc:
+                    # Anticipo ADR 0099: capturar el contexto ESTRUCTURADO del
+                    # conflicto (ficheros en disputa + shas de ambos lados)
+                    # ANTES del abort — despues ya no existe. Best-effort: si
+                    # git falla aqui, el contexto queda parcial pero el error
+                    # original se propaga igual.
+                    context: dict[str, Any] = {"plan_branch": self._plan_branch}
+                    with contextlib.suppress(GitCommandError):
+                        context["files"] = [
+                            line.strip()
+                            for line in _run_git(
+                                "diff", "--name-only", "--diff-filter=U", cwd=worktree_path
+                            ).splitlines()
+                            if line.strip()
+                        ][:50]
+                    with contextlib.suppress(GitCommandError):
+                        context["worktree_sha"] = _run_git(
+                            "rev-parse", "HEAD", cwd=worktree_path
+                        ).strip()
+                    with contextlib.suppress(GitCommandError):
+                        context["branch_sha"] = _run_git(
+                            "rev-parse", "FETCH_HEAD", cwd=worktree_path
+                        ).strip()
                     with contextlib.suppress(GitCommandError):
                         _run_git("rebase", "--abort", cwd=worktree_path)
-                    raise GitCommandError(
+                    conflict_error = GitCommandError(
                         f"push_review_to_bare: rebase onto {self._plan_branch} conflicted "
                         f"(another task changed the same lines): {rebase_exc}"
-                    ) from rebase_exc
+                    )
+                    conflict_error.conflict_context = context  # type: ignore[attr-defined]
+                    raise conflict_error from rebase_exc
         # Exhausted retries — persistent contention; surface the last push error.
         assert last_exc is not None  # the loop only exits here via a non-ff push
         raise last_exc
