@@ -28,6 +28,7 @@ from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from api_server.auth.deps import (
     AuthPrincipal,
@@ -265,6 +266,68 @@ async def list_plans(
     stmt = apply_pagination(stmt, limit=limit, offset=offset)
     result = await session.execute(stmt)
     return [to_plan_response(p) for p in result.scalars().all()]
+
+
+# ===========================================================================
+# ADR 0099: diff de CODIGO de la rama del plan (read-only)
+# ===========================================================================
+@project_plans_router.get("/{plan_id}/code-diff")
+async def get_plan_code_diff(
+    project_id: UUID,
+    plan_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, Any]:
+    """Que cambio la rama del plan respecto a su merge-base con la default.
+
+    Read-only sobre el BARE real del proyecto (misma identidad de coordenadas
+    que provision/commit/review: worktree_coordinates). Cuerpo acotado
+    (MAX_DIFF_CHARS, truncado honesto) + resumen numstat completo + lineas
+    clasificadas para el renderer del visor de docs. Tenant-safe via RLS; un
+    plan sin rama material (aun sin commits) responde 404 con detalle neutro.
+    """
+    from api_server.code_diff import PlanCodeDiffError, plan_code_diff
+    from api_server.config import get_settings
+
+    tenant_id = require_tenant_id(principal)
+    await _verify_project_visible(session, project_id)
+    plan = await _load_plan(session, plan_id)
+    if plan.project_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="plan not found")
+    project = await session.get(Project, project_id)
+    org = (
+        await session.execute(select(Organization).where(Organization.id == tenant_id))
+    ).scalar_one_or_none()
+    if project is None or not project.slug or org is None or not org.slug or not plan.slug:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="plan has no materialised branch yet",
+        )
+    try:
+        diff = await run_in_threadpool(
+            plan_code_diff,
+            get_settings().data_root,
+            tenant_slug=org.slug,
+            project_slug=project.slug,
+            plan_id=str(plan.id),
+            plan_slug=plan.slug,
+        )
+    except PlanCodeDiffError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="no diff available for this plan (branch or repo not materialised)",
+        ) from exc
+    return {
+        "plan_id": str(plan.id),
+        "plan_branch": diff.plan_branch,
+        "default_branch": diff.default_branch,
+        "base_sha": diff.base_sha,
+        "head_sha": diff.head_sha,
+        "unchanged": diff.unchanged,
+        "truncated": diff.truncated,
+        "files": diff.files,
+        "lines": [{"kind": ln.kind, "content": ln.content} for ln in diff.lines],
+    }
 
 
 # ===========================================================================

@@ -40,6 +40,7 @@ import {
 import { CommentsSection } from "./plan-comments-section";
 import { CorrectionsSection } from "./plan-corrections-section";
 import { CostBreakdownSection } from "./plan-cost-section";
+import { PlanCodeDiffSection } from "./plan-code-diff-section";
 import { PlanDeepLinksSection } from "./plan-deep-links-section";
 import { PlanLifecycleSection } from "./plan-lifecycle-section";
 import { SyncToKanbanSection } from "./plan-sync-section";
@@ -113,6 +114,7 @@ export default function PlanDetailPage() {
       <HumanValidationSection planId={plan.id} status={plan.status} />
       <CorrectionsSection planId={plan.id} status={plan.status} spec={spec} />
       <PlanDeepLinksSection planId={plan.id} status={plan.status} />
+      <PlanCodeDiffSection projectId={projectId} planId={plan.id} />
       <SummarySection summary={spec.summary} />
       <EstimatesSection estimates={spec.estimates} />
       <CostBreakdownSection planId={plan.id} />

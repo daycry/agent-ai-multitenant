@@ -1,7 +1,7 @@
 ---
 adr: "0099"
 title: Visor de diffs de código y flujo de resolución de conflictos
-status: proposed
+status: accepted
 date: 2026-07-03
 deciders: operador (pendiente)
 phase: auditoria-plataforma-2026-07-03
@@ -194,3 +194,7 @@ la tasa real de `rebase_conflict` una vez la cadena de PR esté viva.
 6. **Delimitación clara:** el editor 3-vías in-app (opción B) **no** se implementa aquí y queda como candidato
    de ADR futuro condicionado a la tasa real de `rebase_conflict`; los conflictos rama-vs-base se resuelven en
    el PR del proveedor (ADR 0072), documentado como tal.
+
+## Estado de implementación (2026-07-13)
+
+OPCION A COMPLETA. (1) Contexto estructurado del conflicto persistido (2026-07-12): plan_git captura {plan_branch, files, worktree_sha, branch_sha} antes del abort y \_mark_commit_failed lo guarda como step en steps_log + ficheros en la nota (visible en el panel de escaladas). (2) Servicio read-only `api_server/code_diff.py::plan_code_diff` sobre el bare REAL (coordenadas via worktree_coordinates — identidad #10a), diff merge-base(default, rama)..rama, resumen numstat completo + cuerpo capped 400k chars con truncado honesto, refs validados (\_safe_git_ref) y stderr de git nunca filtrado. (3) Endpoint `GET /projects/{pid}/plans/{plan_id}/code-diff` (RLS, 404 neutro sin rama). (4) Vista FE: seccion plegable "Diff de codigo de la rama" en el detalle del plan (carga perezosa, resumen por fichero + DocDiffRenderer reutilizado del visor de docs). El editor de merge in-app (opcion B) sigue fuera de alcance por diseno.
