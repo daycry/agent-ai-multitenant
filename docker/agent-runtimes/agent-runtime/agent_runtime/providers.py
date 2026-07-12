@@ -63,6 +63,7 @@ from agent_runtime.model import (
 )
 from agent_runtime.review_contract import VERDICT_APPROVE, VERDICT_REJECT
 from agent_runtime.state import ReviewState
+from agent_runtime.tool_classification import _is_readonly_tool
 
 _log = logging.getLogger(__name__)
 
@@ -93,7 +94,11 @@ _DECIDE_SYSTEM = (
     "them and stop once they are met. Use the research tools (memory_recall, "
     "rag_search, list_files, read_file) only to gather what you genuinely need, "
     "then act; never repeat a search or re-read a file you have already seen, and "
-    "ignore files unrelated to the task.\n"
+    "ignore files unrelated to the task. Exception to the ONE-tool rule: you MAY "
+    "emit up to 4 READ-ONLY tool calls (read_file/list_files/search_code/"
+    "rag_search/memory_recall) together in a single turn to gather related "
+    "context at once — they all run this turn and you see every result; any "
+    "writing/executing tool must still go alone.\n"
     "You do NOT run git in ANY form — not commit/push, and not even read-only checks "
     "like `git status`/`git diff`, and NOT via `stack_exec` or a shell: the platform "
     "persists your file changes and handles version control automatically when you "
@@ -623,6 +628,26 @@ def _completion_signals(resp: CompletionResponse) -> CompletionSignals:
     return base
 
 
+# ADR 0111: máximo de tool calls read-only ejecutados en un mismo turno
+# (el principal + hasta 3 extras). Acota el coste por iteración y el tamaño
+# de la observación agregada.
+_BATCH_READONLY_CAP = 4
+
+
+def _readonly_batch_prefix(calls: list[Any]) -> list[dict[str, Any]]:
+    """ADR 0111: el prefijo consecutivo de calls read-only DESPUÉS del primero,
+    cap ``_BATCH_READONLY_CAP`` en total. Vacío si el primer call es un mutador
+    (semántica de una-acción intacta); se corta en el primer no-read-only."""
+    if not calls or not _is_readonly_tool(calls[0].name):
+        return []
+    batch: list[dict[str, Any]] = []
+    for call in calls[1:]:
+        if len(batch) >= _BATCH_READONLY_CAP - 1 or not _is_readonly_tool(call.name):
+            break
+        batch.append({"tool": call.name, "args": dict(call.arguments)})
+    return batch
+
+
 def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
     """Turn one `CompletionResponse` into a `ModelResponse`, routing BY TOOL NAME.
 
@@ -697,14 +722,29 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
             )
     elif calls:
         first = calls[0]
-        discarded = [call.name for call in calls[1:]]
-        if discarded:
+        # ADR 0111: when the FIRST call is read-only, the consecutive read-only
+        # PREFIX (cap _BATCH_READONLY_CAP total) rides the decision as a batch —
+        # `act` runs them all in one iteration instead of burning one turn per
+        # read. The prefix STOPS at the first mutator (one-action semantics for
+        # anything that can change the deliverable); the remainder is discarded
+        # and logged, exactly as F36 always did.
+        batch = _readonly_batch_prefix(calls)
+        discarded = [call.name for call in calls[1 + len(batch) :]]
+        if batch:
+            _log.info(
+                "ACT via %s with read-only batch of %d extra call(s)%s",
+                first.name,
+                len(batch),
+                f"; discarded: {discarded}" if discarded else "",
+            )
+        elif discarded:
             _log.info("ACT via %s; discarded extra tool call(s): %s", first.name, discarded)
         decision = ModelDecision(
             kind=DecisionKind.ACT,
             tool=first.name,
             tool_args=dict(first.arguments),
             rationale=resp.content or "",
+            batch_calls=tuple(batch),
         )
     else:
         # Prosa sin tool call (el FINISH de claude_sdk): F1.5 — parsear el tag

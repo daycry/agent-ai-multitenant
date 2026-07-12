@@ -22,9 +22,10 @@ so the loop is exercised offline and deterministically by the tests.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
@@ -76,6 +77,8 @@ from agent_runtime.tool_classification import (
     _read_target,
 )
 from agent_runtime.tools import ToolRegistry, default_registry
+
+_log = logging.getLogger("agent_runtime.graph")
 
 # The eight nodes of the loop, in declaration order.
 NODE_NAMES: tuple[str, ...] = (
@@ -534,7 +537,27 @@ class _AgentLoop:
         )
 
         if decision.kind == DecisionKind.ACT:
-            action = {"tool": decision.tool, "args": decision.tool_args}
+            # ADR 0111: el gate de aprobación aplica POR ELEMENTO también al lote
+            # read-only — un elemento con categoría sensible se EXPULSA del lote
+            # (nunca se ejecuta sin aprobación); el call principal sigue el gate
+            # histórico de más abajo intacto.
+            if decision.batch_calls and self.deps.approval is not None:
+                kept = tuple(
+                    extra
+                    for extra in decision.batch_calls
+                    if self.deps.approval.review(str(extra.get("tool") or "")) is None
+                )
+                if len(kept) != len(decision.batch_calls):
+                    _log.info(
+                        "batch: dropped %d call(s) requiring approval",
+                        len(decision.batch_calls) - len(kept),
+                    )
+                    decision = replace(decision, batch_calls=kept)
+            action: dict[str, Any] = {"tool": decision.tool, "args": decision.tool_args}
+            if decision.batch_calls:
+                # ADR 0111: la fingerprint del detector incluye el LOTE — repetir
+                # exactamente el mismo batch cuenta como la misma acción.
+                action["batch"] = [dict(extra) for extra in decision.batch_calls]
             # ALWAYS record (the count feeds count_of/the B1 nudge), but only a
             # MUTATING tool trips the hard repetitive-loop guard (Tema C): a read-only
             # tool repeated identically wastes turns but cannot corrupt the deliverable,
@@ -641,24 +664,69 @@ class _AgentLoop:
         guardrail_events = run_hook(
             self.deps.guardrails, hook="post_tool", tool_name=tool, tool_result=result.output
         )
-        step = tool_call_step(
-            len(state["steps"]),
-            "act",
-            tool=tool,
-            args=args,
-            result=result.as_dict(),
-            status="ok" if result.ok else "error",
-            summary=f"Tool '{tool}' → {'ok' if result.ok else 'error'}",
-        )
+        steps = [
+            tool_call_step(
+                len(state["steps"]),
+                "act",
+                tool=tool,
+                args=args,
+                result=result.as_dict(),
+                status="ok" if result.ok else "error",
+                summary=f"Tool '{tool}' → {'ok' if result.ok else 'error'}",
+            )
+        ]
         observation = {
             "tool": tool,
             "ok": result.ok,
             "output": result.output,
             "error": result.error,
         }
+        # ADR 0111: el lote read-only del mismo turno — cada elemento se ejecuta,
+        # cuenta contra el presupuesto de tool_calls y pasa por el hook post_tool;
+        # sus resultados viajan agregados en la MISMA observación (un error por
+        # elemento no tumba el turno). Solo la capa de decisión puebla el lote y
+        # solo con tools read-only, así que ningún mutador puede colarse aquí.
+        batch_calls = decision.get("batch_calls") or []
+        if batch_calls:
+            batch_observations: list[dict[str, Any]] = []
+            for extra in batch_calls:
+                extra_tool = str(extra.get("tool") or "")
+                extra_args = extra.get("args") or {}
+                extra_result = self.deps.tools.call(extra_tool, extra_args)
+                self.tracker.record_tool_call()
+                guardrail_events += run_hook(
+                    self.deps.guardrails,
+                    hook="post_tool",
+                    tool_name=extra_tool,
+                    tool_result=extra_result.output,
+                )
+                steps.append(
+                    tool_call_step(
+                        len(state["steps"]) + len(steps),
+                        "act",
+                        tool=extra_tool,
+                        args=extra_args,
+                        result=extra_result.as_dict(),
+                        status="ok" if extra_result.ok else "error",
+                        summary=(
+                            f"Tool '{extra_tool}' (batch) → "
+                            f"{'ok' if extra_result.ok else 'error'}"
+                        ),
+                    )
+                )
+                batch_observations.append(
+                    {
+                        "tool": extra_tool,
+                        "args": dict(extra_args),
+                        "ok": extra_result.ok,
+                        "output": extra_result.output,
+                        "error": extra_result.error,
+                    }
+                )
+            observation["batch"] = batch_observations
         return {
             "last_observation": observation,
-            "steps": [step],
+            "steps": steps,
             "guardrail_events": guardrail_events,
         }
 
@@ -767,6 +835,15 @@ class _AgentLoop:
         tool = observation.get("tool")
         decision = state["last_decision"] or {}
         target, turn_productive = self._track_research(tool, decision, observation)
+        # ADR 0111: las guardas de novedad se aplican POR ELEMENTO del lote
+        # read-only — cada lectura del batch registra su propio target (nuevo =
+        # exploración; re-read = churn), igual que si hubiera ido en su turno.
+        for sub in observation.get("batch") or []:
+            sub_tool = sub.get("tool")
+            _, sub_productive = self._track_research(
+                sub_tool, {"tool": sub_tool, "tool_args": sub.get("args") or {}}, sub
+            )
+            turn_productive = turn_productive or sub_productive
         # G8-B (ADR 0103, ratificado opción B): un turno productivo cuya acción DIFIERE
         # de la última productiva es PROGRESO INTERMEDIO → resetea los contadores de
         # repetición para que un build idempotente en un ciclo edit→build→edit→build no

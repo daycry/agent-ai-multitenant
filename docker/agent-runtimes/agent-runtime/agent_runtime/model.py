@@ -41,6 +41,11 @@ class ModelDecision:
     # `submit_result` tool, else None (prose finish / ACT). It is a HINT shown in
     # the UI and given to the reviewer — NOT the authoritative verdict.
     finish_status: str | None = None
+    # ADR 0111: extra READ-ONLY tool calls the model emitted in the same turn
+    # (the consecutive read-only prefix beyond `tool`, cap enforced at the
+    # decision layer). `act` runs them all in ONE iteration; mutators never
+    # ride here (one-action semantics preserved). Each item: {"tool", "args"}.
+    batch_calls: tuple[dict[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +55,7 @@ class ModelDecision:
             "output": self.output,
             "rationale": self.rationale,
             "finish_status": self.finish_status,
+            "batch_calls": [dict(call) for call in self.batch_calls],
         }
 
 

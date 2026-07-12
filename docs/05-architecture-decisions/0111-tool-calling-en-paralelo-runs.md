@@ -1,6 +1,6 @@
 ---
 title: "ADR 0111: Tool-calling en paralelo (batch read-only) en el agent-runtime"
-status: proposed
+status: accepted
 date: 2026-07-12
 ---
 
