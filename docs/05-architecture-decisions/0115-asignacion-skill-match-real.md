@@ -1,10 +1,14 @@
 ---
 title: "ADR 0115: Asignación skill_match real (rol + skills + proficiency)"
-status: proposed
+status: accepted
 date: 2026-07-12
 ---
 
 # ADR 0115: skill_match real
+
+> **Resolución 2026-07-12**: fase 1 IMPLEMENTADA (matching por rol del spec vs
+> rol del agente; sin señal cae a load-balanced — la política deja de ser un
+> no-op). Fase 2 (skills declaradas por tarea) queda como extensión futura.
 
 ## Contexto
 

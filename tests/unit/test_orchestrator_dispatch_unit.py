@@ -221,3 +221,51 @@ def test_empty_outputs_render_empty() -> None:
     from orchestrator.dispatch import _format_prior_outputs
 
     assert _format_prior_outputs(["", "   "]) == ""
+
+
+# ---------------------------------------------------------------------------
+# ADR 0115 fase 1: skill_match deja de ser un no-op — matching por ROL.
+# ---------------------------------------------------------------------------
+def _dispatcher_for_pick() -> TaskDispatcher:
+    return TaskDispatcher(
+        sessionmaker=None,  # _pick no toca la BD
+        celery_app=None,
+        settings=Settings(redis_url="redis://localhost:6379/15"),
+    )
+
+
+def _fake_task(assigned=None):
+    return SimpleNamespace(id=uuid4(), assigned_agent_id=assigned)
+
+
+def _fake_project(policy: str):
+    return SimpleNamespace(worker_config={"assignment_policy": policy})
+
+
+def test_skill_match_picks_role_matching_agent_over_lighter_load() -> None:
+    from orchestrator.assignment import Candidate
+
+    dispatcher = _dispatcher_for_pick()
+    backend = Candidate(
+        agent_id="b-backend", active_task_count=3, skills=frozenset({"backend_dev"})
+    )
+    idle_qa = Candidate(agent_id="a-qa", active_task_count=0, skills=frozenset({"qa"}))
+    chosen = dispatcher._pick(
+        _fake_project("skill_match"),
+        _fake_task(),
+        [idle_qa, backend],
+        required_skills=frozenset({"backend_dev"}),
+    )
+    assert chosen == "b-backend"
+
+
+def test_skill_match_without_signal_falls_back_to_load_balanced() -> None:
+    from orchestrator.assignment import Candidate
+
+    dispatcher = _dispatcher_for_pick()
+    c1 = Candidate(agent_id="x", active_task_count=2, skills=frozenset({"qa"}))
+    c2 = Candidate(agent_id="y", active_task_count=0, skills=frozenset({"frontend_dev"}))
+    chosen = dispatcher._pick(
+        _fake_project("skill_match"), _fake_task(), [c1, c2], required_skills=frozenset()
+    )
+    assert chosen == "y"  # el menos cargado, comportamiento previo

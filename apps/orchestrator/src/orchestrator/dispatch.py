@@ -1104,7 +1104,8 @@ class TaskDispatcher:
             )
             return None
         candidates = await self._candidates(session, task)
-        agent_id = self._pick(project, task, candidates)
+        required_skills = await self._task_required_skills(session, task)
+        agent_id = self._pick(project, task, candidates, required_skills=required_skills)
         if agent_id is None:
             _log.warning("orchestrator.no_agent_for_task", task_id=str(task.id))
             return None
@@ -1489,10 +1490,48 @@ class TaskDispatcher:
                     )
                 )
             ).scalar_one()
-            candidates.append(Candidate(agent_id=str(agent.id), active_task_count=int(active)))
+            candidates.append(
+                Candidate(
+                    agent_id=str(agent.id),
+                    active_task_count=int(active),
+                    # ADR 0115 fase 1: el rol del agente es su "skill" de matching.
+                    skills=frozenset({str(agent.role)}) if agent.role else frozenset(),
+                )
+            )
         return candidates
 
-    def _pick(self, project: Project | None, task: Task, candidates: list[Candidate]) -> str | None:
+    async def _task_required_skills(self, session: AsyncSession, task: Task) -> frozenset[str]:
+        """El rol del spec de la tarea como requisito de matching (ADR 0115 f1).
+
+        Best-effort: sin plan/spec/rol → vacío (skill_match cae a load-balanced,
+        el comportamiento previo). Fase 2 (skills declaradas por tarea) queda en
+        el ADR."""
+        if task.plan_id is None:
+            return frozenset()
+        spec_id = (task.inputs or {}).get(PLAN_TASK_SPEC_ID_KEY)
+        if not spec_id:
+            return frozenset()
+        plan_spec = (
+            await session.execute(
+                select(Plan.specification).where(
+                    Plan.id == task.plan_id, Plan.tenant_id == task.tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+        for entry in (plan_spec or {}).get("tasks") or []:
+            if isinstance(entry, dict) and str(entry.get("id")) == str(spec_id):
+                role = str(entry.get("role") or "").strip()
+                return frozenset({role}) if role else frozenset()
+        return frozenset()
+
+    def _pick(
+        self,
+        project: Project | None,
+        task: Task,
+        candidates: list[Candidate],
+        *,
+        required_skills: frozenset[str] = frozenset(),
+    ) -> str | None:
         """Apply the project's assignment policy to the candidate pool.
 
         A preset ``assigned_agent_id`` (the plan's per-task assignment, resolved
@@ -1516,9 +1555,14 @@ class TaskDispatcher:
         if policy is AssignmentPolicy.ROUND_ROBIN:
             return self._round_robin.pick(candidates)
         if policy is AssignmentPolicy.SKILL_MATCH:
-            # Task-level skill data lands with RAG in Plan 04; until then
-            # skill_match has nothing to match on and falls through.
-            return assign_skill_match(TaskRequirement(task_id=str(task.id)), candidates)
+            # ADR 0115 fase 1: matching por ROL (spec de la tarea vs rol del
+            # agente). Sin señal (score 0 / sin rol) → load-balanced, el
+            # comportamiento previo — la política ya no es un no-op.
+            matched = assign_skill_match(
+                TaskRequirement(task_id=str(task.id), required_skills=required_skills),
+                candidates,
+            )
+            return matched if matched is not None else assign_load_balanced(candidates)
         return assign_load_balanced(candidates)
 
 
