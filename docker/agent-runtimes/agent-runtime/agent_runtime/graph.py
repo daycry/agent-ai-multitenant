@@ -161,6 +161,10 @@ def _loop_trip_outcome(
     )
 
 
+# P1-6: techo del scratchpad (sticky, entra al prompt cada turno).
+_AGENT_PLAN_MAX_CHARS = 1500
+
+
 def _no_recall(_task: AgentTask) -> list[dict[str, Any]]:
     """Recall stub para bare runs sin API interno — el boot de producción
     cablea el recall real (``__main__._build_auto_recall``, D1 2026-07-03)."""
@@ -602,6 +606,33 @@ class _AgentLoop:
         decision = state["last_decision"] or {}
         tool = decision.get("tool") or "noop"
         args = decision.get("tool_args") or {}
+        # P1-6 (investigación 2026-07-11): scratchpad del agente. `update_plan`
+        # es una capacidad del LOOP, no del registry: guarda la estrategia como
+        # sticky (`agent_plan`) que el modelo VE todos los turnos — compensa la
+        # reconstrucción single-turn (el agente no tenía memoria de su propio
+        # plan salvo lo que cupiera en la ventana de 8 items).
+        if tool == "update_plan":
+            plan_text = str(args.get("plan") or "").strip()[:_AGENT_PLAN_MAX_CHARS]
+            step = tool_call_step(
+                len(state["steps"]),
+                "act",
+                tool=tool,
+                args={"plan": plan_text[:200]},
+                result={"ok": bool(plan_text)},
+                status="ok" if plan_text else "error",
+                summary="Plan actualizado" if plan_text else "update_plan sin contenido",
+            )
+            observation = {
+                "tool": tool,
+                "ok": bool(plan_text),
+                "output": "plan stored" if plan_text else None,
+                "error": None if plan_text else "empty plan",
+            }
+            return {
+                "agent_plan": plan_text or state.get("agent_plan"),
+                "last_observation": observation,
+                "steps": [step],
+            }
         result = self.deps.tools.call(tool, args)
         self.tracker.record_tool_call()
         # g1 (ADR 0102): scan the tool OUTPUT for prompt injection BEFORE it folds

@@ -336,6 +336,13 @@ def _decide_messages(state: dict[str, Any]) -> list[Message]:
     # never evict them — the agent always sees the open review feedback / repetition
     # warning until it acts on them. Provider-agnostic: every adapter (HTTP and
     # claude_sdk) builds its decide() messages here.
+    # P1-6: el scratchpad del agente (autoescrito con update_plan) — sticky.
+    agent_plan = state.get("agent_plan")
+    if agent_plan:
+        lines.append(
+            f"YOUR PLAN (self-maintained; update with update_plan): "
+            f"{str(agent_plan)[:_STICKY_FEEDBACK_MAX_CHARS]}"
+        )
     feedback = state.get("last_review_feedback")
     if feedback:
         lines.append(f"REVIEW FEEDBACK (fix this): {str(feedback)[:_STICKY_FEEDBACK_MAX_CHARS]}")

@@ -94,6 +94,7 @@ def test_system_tools_advertised_for_unassigned_agent_when_requested() -> None:
         "task_comment",
         "agent_invoke",
         "rag_search",
+        "update_plan",
     }
 
 

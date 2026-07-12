@@ -96,6 +96,10 @@ class AgentState(TypedDict):
     # items de `context` evictables por esa misma ventana.
     progress_summary: str | None
     guidance_nudge: str | None
+    # P1-6 (investigación 2026-07-11): el scratchpad del agente — la estrategia
+    # que ÉL mantiene con la tool `update_plan`. Sticky escalar: el modelo la ve
+    # todos los turnos (compensa la reconstrucción single-turn del prompt).
+    agent_plan: str | None
 
     output: str | None
     review_retries: int
@@ -150,6 +154,7 @@ def initial_state(
         repetition_warning=None,
         progress_summary=None,
         guidance_nudge=None,
+        agent_plan=None,
         output=None,
         review_retries=0,
         review_passed=None,

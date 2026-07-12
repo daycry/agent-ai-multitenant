@@ -27,6 +27,23 @@ from typing import Any
 # they are not in BUILTIN_TOOLS). Schemas mirror the executors' validated args
 # (agent_runtime.memory_tools.MemoryTools). Keyed by canonical runtime name.
 _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
+    "update_plan": {
+        "name": "update_plan",
+        "description": (
+            "Guarda/actualiza TU plan de trabajo (visible cada turno). Uselo al "
+            "empezar para trazar la estrategia y al cambiar de rumbo."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "plan": {
+                    "type": "string",
+                    "description": "El plan/estrategia actual, conciso (pasos).",
+                }
+            },
+            "required": ["plan"],
+        },
+    },
     "memory_recall": {
         "name": "memory_recall",
         "description": (
@@ -162,6 +179,8 @@ SYSTEM_TOOL_NAMES: tuple[str, ...] = (
     "task_comment",
     "agent_invoke",
     "rag_search",
+    # P1-6: el scratchpad del loop (capacidad del grafo, no del registry).
+    "update_plan",
 )
 
 
