@@ -126,3 +126,21 @@ def test_recall_caps_hits_and_content_size(
     step = _recall_step(_run(_spec(), capsys))
 
     assert step["hits"] == 5
+
+
+def test_recall_query_includes_role_and_acceptance_criteria(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """P1-3: la query del recall lleva rol + criterios, no solo el título."""
+    api = _FakeAPI([])
+    monkeypatch.setattr("agent_runtime.__main__._build_internal_api", lambda: api)
+
+    spec = _spec()
+    spec["agent_persona"] = {"prompt": "x", "role": "backend_dev"}
+    spec["task"]["acceptance_criteria"] = ["endpoint devuelve 200", "cobertura > 70%"]
+    _run(spec, capsys)
+
+    assert api.queries, "no hubo query de recall"
+    query = api.queries[0]
+    assert "backend_dev" in query
+    assert "endpoint devuelve 200" in query

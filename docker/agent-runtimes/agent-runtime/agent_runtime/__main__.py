@@ -120,10 +120,14 @@ def _build_internal_api() -> Any | None:
 # Recall automático (revisión memorias 2026-07-03, D1): caps para no inflar el
 # prompt — máx 5 memorias, contenido truncado.
 _AUTO_RECALL_LIMIT = 5
-_AUTO_RECALL_CONTENT_CAP = 700
+# P1-3 (investigación 2026-07-11): cap por memoria subido 700→900 — la query
+# enriquecida (rol + criterios) recupera memorias más largas y útiles.
+_AUTO_RECALL_CONTENT_CAP = 900
+# Criterios de aceptación que entran a la query del recall (señal, no ruido).
+_AUTO_RECALL_CRITERIA = 3
 
 
-def _build_auto_recall(api: Any | None) -> Any | None:
+def _build_auto_recall(api: Any | None, *, role: str | None = None) -> Any | None:
     """Recall automático de memorias para el nodo ``recall`` del grafo (D1).
 
     Devuelve el callable que ``AgentDeps.recall`` invoca al arrancar el run:
@@ -135,7 +139,17 @@ def _build_auto_recall(api: Any | None) -> Any | None:
         return None
 
     def _recall(task: dict[str, Any]) -> list[dict[str, Any]]:
-        parts = [str(task.get("title") or "").strip(), str(task.get("description") or "").strip()]
+        # P1-3: la query era solo título+descripción — una tarea mal titulada
+        # recuperaba poco. Se añaden el ROL del agente y los primeros criterios
+        # de aceptación (la definición real de hecho).
+        parts = [
+            str(role or "").strip(),
+            str(task.get("title") or "").strip(),
+            str(task.get("description") or "").strip(),
+        ]
+        criteria = task.get("acceptance_criteria")
+        if isinstance(criteria, list):
+            parts.extend(str(c).strip() for c in criteria[:_AUTO_RECALL_CRITERIA])
         query = " — ".join(p for p in parts if p)[:2000]
         if not query:
             return []
@@ -755,7 +769,8 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
         # grafo deja de ser un stub; consulta el endpoint scope-safe con la task
         # como query (best-effort). Sin API interno (bare run) queda el stub.
         recall_api = _build_internal_api()
-        auto_recall = _build_auto_recall(recall_api)
+        persona_role = str((spec.get("agent_persona") or {}).get("role") or "") or None
+        auto_recall = _build_auto_recall(recall_api, role=persona_role)
         # P0-2: pre-fetch de pasajes de KB con la task como query — la KB deja
         # de depender de que el LLM invoque la tool rag_search por su cuenta.
         auto_rag = _build_auto_rag(recall_api)
