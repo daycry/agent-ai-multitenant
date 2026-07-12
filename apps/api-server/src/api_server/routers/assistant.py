@@ -27,9 +27,11 @@ rather than fabricating answers.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from shared_llm.exceptions import AuthError, LLMError, RateLimitError
 from shared_llm.reasoning import reasoning_call_kwargs
 from sqlalchemy import select
@@ -292,6 +294,107 @@ async def _persist_turns(
     )
     conversation.updated_at = datetime.now(UTC)
     await session.flush()
+
+
+@router.post("/chat/stream")
+async def assistant_chat_stream(
+    payload: AssistantChatRequest,
+    principal: AuthPrincipal = Depends(require_assistant_access),
+    session: AsyncSession = Depends(get_tenant_session),
+    model: AssistantModelClient = Depends(get_assistant_model),
+) -> StreamingResponse:
+    """El mismo turno que /chat pero con PROGRESO en vivo (SSE) — A2 fase 1.
+
+    Antes el usuario miraba «Pensando…» hasta la respuesta completa (hasta 6
+    rondas de tools, cada una un complete() entero). Frames:
+      * ``progress`` {rounds, tools_called} por paso del grafo;
+      * ``answer``  {answer, tools_called, rounds, conversation_id} al final;
+      * ``error``   {detail} si el proveedor falla (el stream cierra limpio).
+    El streaming token-a-token queda para ADR 0073 F2 (decide_stream)."""
+    import asyncio as _asyncio
+    import json as _json
+
+    tenant_id = require_tenant_id(principal)
+    identity = await get_assistant_identity(session, tenant_id)
+    tool_ctx = AssistantToolContext(session=session, tenant_id=tenant_id, user_id=principal.user_id)
+    enabled_tools = identity.effective_tools()
+    known_facts = await recall_user_memories(
+        session, tenant_id=tenant_id, user_id=principal.user_id
+    )
+    system_prompt = augment_system_prompt(
+        identity.system_prompt(),
+        known_facts=known_facts,
+        remember_enabled="remember_about_me" in enabled_tools,
+    )
+    conversation = await _resolve_conversation(
+        session,
+        tenant_id=tenant_id,
+        user_id=principal.user_id,
+        conversation_id=payload.conversation_id,
+        first_message=payload.message,
+    )
+    history = await _conversation_history(session, conversation_id=conversation.id)
+
+    queue: _asyncio.Queue[tuple[str, dict[str, Any]]] = _asyncio.Queue()
+
+    async def _on_progress(frame: dict[str, Any]) -> None:
+        await queue.put(("progress", frame))
+
+    async def _run() -> None:
+        try:
+            result = await run_assistant_turn(
+                model,
+                system_prompt=system_prompt,
+                enabled_tools=enabled_tools,
+                tool_ctx=tool_ctx,
+                chat_history=[*history, {"role": "user", "content": payload.message}],
+                on_progress=_on_progress,
+            )
+            await _persist_turns(
+                session,
+                conversation=conversation,
+                user_id=principal.user_id,
+                user_message=payload.message,
+                answer=result.content,
+                tools_called=list(result.tools_called),
+                rounds=result.rounds,
+            )
+            await session.commit()
+            await queue.put(
+                (
+                    "answer",
+                    {
+                        "answer": result.content,
+                        "tools_called": list(result.tools_called),
+                        "rounds": result.rounds,
+                        "conversation_id": str(conversation.id),
+                    },
+                )
+            )
+        except (AuthError, RateLimitError, LLMError) as exc:
+            await queue.put(("error", {"detail": f"el proveedor LLM falló: {exc}"}))
+        except Exception as exc:  # el stream cierra limpio, nunca cuelga
+            await queue.put(("error", {"detail": str(exc)}))
+        finally:
+            await queue.put(("end", {}))
+
+    async def _events() -> Any:
+        task = _asyncio.create_task(_run())
+        try:
+            while True:
+                kind, data = await queue.get()
+                if kind == "end":
+                    break
+                yield f"event: {kind}\ndata: {_json.dumps(data)}\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/conversations", response_model=list[AssistantConversationItem])

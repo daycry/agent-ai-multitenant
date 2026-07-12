@@ -16,7 +16,7 @@
  * rest stays framework-free: pure data + functions.
  */
 
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // Endpoint contract (the three endpoints in routers/assistant.py)
@@ -273,6 +273,71 @@ export interface AssistantToggleState {
 }
 
 /** Read the per-tenant assistant on/off toggle. Tenant-Admin-only (403 else). */
+// A2 fase 1: consume POST /assistant/chat/stream (SSE) — progreso vivo por
+// ronda de tools + respuesta final. onProgress recibe {rounds, tools_called}.
+export async function streamAssistantChat(
+  message: string,
+  conversationId: string | null,
+  onProgress: (frame: { rounds: number; tools_called: string[] }) => void,
+): Promise<AssistantChatResponse> {
+  const { apiUrl } = await import("@/lib/api");
+  const { getToken } = await import("@/lib/auth");
+  const { getTenantId } = await import("@/lib/tenant-storage");
+  const headers = new Headers({ "Content-Type": "application/json" });
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const tenantId = getTenantId();
+  if (tenantId) headers.set("X-Tenant-Id", tenantId);
+
+  const response = await fetch(apiUrl("/assistant/chat/stream"), {
+    method: "POST",
+    headers,
+    body: JSON.stringify(
+      conversationId ? { message, conversation_id: conversationId } : { message },
+    ),
+  });
+  if (!response.ok || !response.body) {
+    throw new ApiError(response.status, await response.text());
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let answer: AssistantChatResponse | null = null;
+  let errorDetail: string | null = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep = buffer.indexOf("\n\n");
+    while (sep !== -1) {
+      const frame = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      sep = buffer.indexOf("\n\n");
+      const eventLine = frame.split("\n").find((l) => l.startsWith("event:"));
+      const dataLine = frame.split("\n").find((l) => l.startsWith("data:"));
+      if (!eventLine || !dataLine) continue;
+      const kind = eventLine.slice(6).trim();
+      let data: unknown;
+      try {
+        data = JSON.parse(dataLine.slice(5).trim());
+      } catch {
+        continue;
+      }
+      if (kind === "progress") {
+        onProgress(data as { rounds: number; tools_called: string[] });
+      } else if (kind === "answer") {
+        answer = data as AssistantChatResponse;
+      } else if (kind === "error") {
+        errorDetail = String((data as { detail?: string }).detail ?? "stream error");
+      }
+    }
+  }
+  if (errorDetail) throw new ApiError(502, errorDetail);
+  if (!answer) throw new ApiError(502, "el stream terminó sin respuesta");
+  return answer;
+}
+
 export function getAssistantEnabled(): Promise<AssistantToggleState> {
   return apiFetch<AssistantToggleState>("/tenant-settings/personal-assistant");
 }

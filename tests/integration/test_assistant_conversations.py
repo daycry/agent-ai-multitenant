@@ -156,3 +156,48 @@ async def test_search_knowledge_reads_tenant_kbs(configured_app, migrations_pg_d
 
     assert result["hits"], result
     assert any("asyncpg" in h["snippet"] for h in result["hits"])
+
+
+# ===========================================================================
+# A2 fase 1: POST /assistant/chat/stream — progreso vivo por SSE. El usuario
+# miraba «Pensando…» hasta la respuesta completa; ahora ve frames progress por
+# paso del grafo y el frame answer final (que además persiste el hilo).
+# Token-a-token queda para ADR 0073 F2.
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_chat_stream_emits_progress_and_final_answer(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    _install_capturing_model(configured_app)
+    token = await _mint_token(seeded["admin_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        async with client.stream(
+            "POST", "/assistant/chat/stream", json={"message": "hola"}, headers=headers
+        ) as resp:
+            assert resp.status_code == 200
+            assert resp.headers["content-type"].startswith("text/event-stream")
+            body = ""
+            async for chunk in resp.aiter_text():
+                body += chunk
+
+        assert "event: progress" in body
+        assert "event: answer" in body
+        assert "respuesta-1" in body
+
+        # El frame answer trae el conversation_id y el hilo quedó persistido.
+        import json as _json
+
+        answer_line = next(
+            line for line in body.splitlines() if line.startswith("data:") and "answer" in line
+        )
+        payload = _json.loads(answer_line.removeprefix("data:").strip())
+        conv_id = payload["conversation_id"]
+        turns = (
+            await client.get(f"/assistant/conversations/{conv_id}/turns", headers=headers)
+        ).json()
+        assert [t["role"] for t in turns] == ["user", "assistant"]

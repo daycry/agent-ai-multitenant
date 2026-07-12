@@ -18,6 +18,7 @@ RLS-bound session, so tenant isolation is enforced by the database.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -340,12 +341,19 @@ async def run_assistant_turn(
     enabled_tools: tuple[str, ...],
     tool_ctx: AssistantToolContext,
     chat_history: Sequence[dict[str, Any]] | None = None,
+    on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> AssistantTurnResult:
     """Build the graph, run one full turn, return the synthesised answer.
 
     The answer is what the endpoint persists as an ``agent`` message in
     the conversation. ``tools_called`` lets the caller assert the read
     tools were exercised.
+
+    A2 fase 1 (investigación 2026-07-11): ``on_progress`` (opcional) recibe un
+    frame por paso del grafo — {"rounds", "tools_called"} — para que el endpoint
+    SSE muestre progreso vivo (las rondas de tools SON la latencia real). Sin
+    callback, byte-a-byte el comportamiento previo. El streaming token-a-token
+    queda para ADR 0073 F2 (decide_stream + provider.stream).
     """
     initial = AssistantState(
         system_prompt=system_prompt,
@@ -354,7 +362,17 @@ async def run_assistant_turn(
         tool_ctx=tool_ctx,
     )
     compiled = build_assistant_graph(model)
-    final = await compiled.ainvoke(initial)
+    if on_progress is None:
+        final = await compiled.ainvoke(initial)
+    else:
+        final = None
+        async for chunk in compiled.astream(initial, stream_mode="values"):
+            final = chunk
+            state = AssistantState(**chunk) if isinstance(chunk, dict) else chunk
+            with contextlib.suppress(Exception):  # el progreso jamás rompe el turno
+                await on_progress(
+                    {"rounds": state.rounds, "tools_called": list(state.tools_called)}
+                )
     final_state = AssistantState(**final) if isinstance(final, dict) else final
     return AssistantTurnResult(
         content=final_state.answer or "",

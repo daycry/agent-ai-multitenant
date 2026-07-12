@@ -40,6 +40,7 @@ import {
   type AssistantToggleState,
   type AssistantConversationItem,
   type AssistantTurnItem,
+  streamAssistantChat,
 } from "@/lib/assistant";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/use-current-user";
@@ -110,13 +111,19 @@ export default function AssistantChatPage() {
     );
   }, [conversationId, turnsQuery.data]);
 
+  // A2 fase 1: el turno va por SSE — el «Pensando…» muestra progreso real
+  // (ronda + tools) en vez de silencio hasta la respuesta completa.
+  const [progressNote, setProgressNote] = useState<string | null>(null);
   const mutation = useMutation<AssistantChatResponse, ApiError, string>({
     mutationFn: (message) =>
-      apiFetch<AssistantChatResponse>("/assistant/chat", {
-        method: "POST",
-        body: conversationId ? { message, conversation_id: conversationId } : { message },
+      streamAssistantChat(message, conversationId, (frame) => {
+        const tools = frame.tools_called.length
+          ? ` — ${frame.tools_called[frame.tools_called.length - 1]}`
+          : "";
+        setProgressNote(frame.rounds > 0 ? `ronda ${frame.rounds}${tools}` : null);
       }),
     onSuccess: (data) => {
+      setProgressNote(null);
       if (data.conversation_id) setConversationId(data.conversation_id);
       setTurns((prev) => [
         ...prev,
@@ -130,6 +137,7 @@ export default function AssistantChatPage() {
       ]);
     },
     onError: (error) => {
+      setProgressNote(null);
       // A 403 here means the toggle was flipped off (or the role changed)
       // after load: reflect the backend's gate rather than showing a chat
       // surface we know is denied.
@@ -252,7 +260,7 @@ export default function AssistantChatPage() {
                 data-testid="assistant-thinking"
               >
                 <Spinner />
-                Pensando…
+                {progressNote ? `Pensando… (${progressNote})` : "Pensando…"}
               </p>
             ) : null}
           </div>
