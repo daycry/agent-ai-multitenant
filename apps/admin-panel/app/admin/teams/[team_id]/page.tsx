@@ -299,6 +299,19 @@ export default function TeamDetailPage() {
           </div>
           {/* Modelo de EJECUCIÓN del equipo (ADR 0065): proveedor concreto por nombre,
               uniforme con chat y asistente. Read-only en built-in (se personaliza adoptando). */}
+          {isReadOnly ? (
+            /* P1-9 (investigación 2026-07-11): la palanca EXISTE pero era
+               indescubrible — nada decía CÓMO cambiar el modelo/effort de un
+               equipo built-in. La vía es adoptarlo (fork del tenant, ADR 0066). */
+            <p
+              className="text-muted-foreground mb-3 rounded-md border border-dashed px-3 py-2 text-sm"
+              data-testid="team-model-adopt-hint"
+            >
+              Este equipo es una plantilla de la plataforma (solo lectura). Para fijar su modelo,
+              effort o cualquier otra configuración, <strong>adóptalo</strong>: la copia de tu
+              organización es totalmente editable y sus agentes la heredan.
+            </p>
+          ) : null}
           <div className="mb-6">
             <ChatModelSection
               value={team.model_config}
