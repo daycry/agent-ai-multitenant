@@ -230,3 +230,80 @@ def test_keyword_guardrail_requires_keywords() -> None:
     cfg = parse_config({"guardrails": {"pre_llm": [{"type": "keyword", "config": {}}]}})
     with pytest.raises(GuardrailConfigError):
         GuardrailPipeline(cfg)
+
+
+# ---------------------------------------------------------------------------
+# ADR 0102 cierre: to_dict (D3), on_error (D5)
+# ---------------------------------------------------------------------------
+def test_pipeline_config_roundtrips_via_to_dict() -> None:
+    from shared_guardrails.config import parse_config
+
+    source = {
+        "guardrails": {
+            "pre_tool": [
+                {
+                    "type": "keyword",
+                    "action": "block",
+                    "locked": True,
+                    "id": "kw-1",
+                    "on_error": "block",
+                    "config": {"keywords": ["rm -rf"]},
+                }
+            ],
+            "post_tool": [{"type": "prompt_injection", "action": "warn"}],
+        }
+    }
+    config = parse_config(source)
+    rebuilt = parse_config(config.to_dict())
+    assert rebuilt.to_dict() == config.to_dict()
+    spec = rebuilt.specs_for("pre_tool")[0]
+    assert spec.type == "keyword"
+    assert spec.locked is True
+    assert spec.on_error == "block"
+    assert spec.config == {"keywords": ["rm -rf"]}
+
+
+def test_check_crash_fail_open_by_default() -> None:
+    # D5: un check que revienta NO tumba el pipeline — por defecto (warn) el
+    # error se registra como outcome no disparado con detalle.
+    from shared_guardrails.config import parse_config
+    from shared_guardrails.pipeline import GuardrailPipeline
+    from shared_guardrails.registry import GuardrailRegistry
+    from shared_guardrails.types import GuardrailContext
+
+    registry = GuardrailRegistry()
+
+    class _Boom:
+        def check(self, context):
+            raise RuntimeError("modelo caído")
+
+    registry.register("boom", lambda config: _Boom())
+    pipeline = GuardrailPipeline(parse_config({"pre_tool": [{"type": "boom"}]}), registry=registry)
+    decision = pipeline.run(GuardrailContext(hook="pre_tool", tool_name="x"))
+    assert decision.triggered is False
+    assert decision.outcomes[0].triggered is False
+    assert "modelo caído" in str(decision.outcomes[0].detail)
+
+
+def test_check_crash_fail_closed_when_on_error_block() -> None:
+    # D5: on_error=block → el fallo del check DISPARA con acción block
+    # (fail-closed para los checks que el operador marque críticos).
+    from shared_guardrails.config import parse_config
+    from shared_guardrails.pipeline import GuardrailPipeline
+    from shared_guardrails.registry import GuardrailRegistry
+    from shared_guardrails.types import Action, GuardrailContext
+
+    registry = GuardrailRegistry()
+
+    class _Boom:
+        def check(self, context):
+            raise RuntimeError("caído")
+
+    registry.register("boom", lambda config: _Boom())
+    pipeline = GuardrailPipeline(
+        parse_config({"pre_tool": [{"type": "boom", "on_error": "block"}]}),
+        registry=registry,
+    )
+    decision = pipeline.run(GuardrailContext(hook="pre_tool", tool_name="x"))
+    assert decision.triggered is True
+    assert decision.action == Action.BLOCK

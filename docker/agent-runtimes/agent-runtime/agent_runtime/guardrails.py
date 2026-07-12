@@ -38,6 +38,11 @@ _BASELINE_CONFIG: dict[str, Any] = {
 
 _MAX_STR = 40  # keep short labels; drop anything long enough to be a raw span
 
+# ADR 0102 D6: tope del INPUT que un hook escanea — un output de MB no puede
+# costar un escaneo de MB (regex/heurísticas son O(n)). El truncado se marca
+# en metadata para que el evento sea honesto sobre lo que vio.
+_HOOK_INPUT_MAX = 50_000
+
 
 def build_pipeline(spec: dict[str, Any] | None) -> Any | None:
     """A GuardrailPipeline for this run, or None when guardrails are unavailable.
@@ -76,23 +81,30 @@ def run_hook(
     *,
     hook: str,
     tool_name: str | None = None,
+    tool_args: dict[str, Any] | None = None,
     tool_result: Any = None,
     metadata: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Run ``pipeline`` at ``hook`` and return JSON-safe events for the guardrails
     that TRIGGERED (never the raw span). Best-effort — ``[]`` on any error / when
-    the pipeline is None. In the minimal slice actions are advisory (LOG); the
-    caller records the events but does not block."""
+    the pipeline is None. Las acciones viajan en el evento: el caller decide si
+    aplica un ``block`` (ADR 0102 D2, `act`) o lo registra advisory (LOG)."""
     if pipeline is None:
         return []
     try:
         from shared_guardrails.types import GuardrailContext
 
+        meta = dict(metadata or {})
+        # ADR 0102 D6: truncado del input escaneado, marcado en metadata.
+        if isinstance(tool_result, str) and len(tool_result) > _HOOK_INPUT_MAX:
+            tool_result = tool_result[:_HOOK_INPUT_MAX]
+            meta["truncated"] = True
         ctx = GuardrailContext(
             hook=hook,  # type: ignore[arg-type]
             tool_name=tool_name,
+            tool_args=tool_args or {},
             tool_result=tool_result,
-            metadata=metadata or {},
+            metadata=meta,
         )
         decision = pipeline.run(ctx)
         events: list[dict[str, Any]] = []

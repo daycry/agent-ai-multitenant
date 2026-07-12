@@ -713,6 +713,53 @@ class _AgentLoop:
             "steps": steps,
         }
 
+    def _screened_tool_call(
+        self, tool: str, args: dict[str, Any]
+    ) -> tuple[Any, list[dict[str, Any]]]:
+        """Ejecuta una tool ENTRE los hooks pre_tool/post_tool (ADR 0102 D2).
+
+        Un ``block`` configurado en pre_tool RECHAZA la llamada (la tool no
+        corre; el error explica el guardrail — deny visible, reintento
+        dirigido); un ``block`` en post_tool SUSTITUYE el output antes de que
+        re-entre al contexto del modelo. El baseline warn/LOG no cambia nada:
+        los eventos son advisory y viajan al envelope (D4). Best-effort — un
+        engine roto degrada a la llamada sin escudo, jamás rompe el run."""
+        from agent_runtime.tools import ToolResult
+
+        pre_events = run_hook(self.deps.guardrails, hook="pre_tool", tool_name=tool, tool_args=args)
+        blocked_types = [
+            str(e.get("guardrail_type") or "?") for e in pre_events if e.get("action") == "block"
+        ]
+        if blocked_types:
+            return (
+                ToolResult(
+                    ok=False,
+                    error=(
+                        f"call blocked by guardrail ({', '.join(blocked_types)}) — "
+                        "this action is not permitted by the project's policy; "
+                        "take a different route"
+                    ),
+                ),
+                pre_events,
+            )
+        result = self.deps.tools.call(tool, args)
+        self.tracker.record_tool_call()
+        # g1 (ADR 0102): scan the tool OUTPUT for prompt injection BEFORE it folds
+        # into the model context (observe) — closes indirect injection.
+        post_events = run_hook(
+            self.deps.guardrails, hook="post_tool", tool_name=tool, tool_result=result.output
+        )
+        post_blocked = [
+            str(e.get("guardrail_type") or "?") for e in post_events if e.get("action") == "block"
+        ]
+        if post_blocked:
+            result = ToolResult(
+                ok=result.ok,
+                output=f"[tool output blocked by guardrail ({', '.join(post_blocked)})]",
+                error=result.error,
+            )
+        return result, pre_events + post_events
+
     def act(self, state: AgentState) -> dict[str, Any]:
         """Run the tool the model chose."""
         decision = state["last_decision"] or {}
@@ -745,14 +792,7 @@ class _AgentLoop:
                 "last_observation": observation,
                 "steps": [step],
             }
-        result = self.deps.tools.call(tool, args)
-        self.tracker.record_tool_call()
-        # g1 (ADR 0102): scan the tool OUTPUT for prompt injection BEFORE it folds
-        # into the model context (observe) — closes indirect injection. LOG mode:
-        # records events, never blocks. Best-effort (run_hook returns [] on error).
-        guardrail_events = run_hook(
-            self.deps.guardrails, hook="post_tool", tool_name=tool, tool_result=result.output
-        )
+        result, guardrail_events = self._screened_tool_call(tool, args)
         steps = [
             tool_call_step(
                 len(state["steps"]),
@@ -781,14 +821,8 @@ class _AgentLoop:
             for extra in batch_calls:
                 extra_tool = str(extra.get("tool") or "")
                 extra_args = extra.get("args") or {}
-                extra_result = self.deps.tools.call(extra_tool, extra_args)
-                self.tracker.record_tool_call()
-                guardrail_events += run_hook(
-                    self.deps.guardrails,
-                    hook="post_tool",
-                    tool_name=extra_tool,
-                    tool_result=extra_result.output,
-                )
+                extra_result, extra_events = self._screened_tool_call(extra_tool, extra_args)
+                guardrail_events += extra_events
                 steps.append(
                     tool_call_step(
                         len(state["steps"]) + len(steps),
