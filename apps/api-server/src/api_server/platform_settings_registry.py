@@ -166,6 +166,16 @@ PLATFORM_KNOWN_SETTINGS: dict[str, PlatformCategoryDef] = {
                 label_es="Escalado de tareas humanas",
                 description_es="Sweep que reasigna/bloquea tareas humanas vencidas por timeout.",
             ),
+            # ADR 0098: barrido periódico de fetch de los remotos git de los
+            # proyectos. OFF por defecto — sondear remotos de terceros es una
+            # decisión consciente; el botón manual «Sincronizar» siempre está.
+            "git_fetch_sweep_enabled": PlatformSettingDef(
+                type="bool",
+                default=False,
+                label_es="Fetch periódico de remotos git",
+                description_es="Sweep que hace fetch autenticado del remoto de cada "
+                "proyecto con git configurado (cadencia WORKERS_GIT_FETCH_CRON).",
+            ),
         },
     ),
 }

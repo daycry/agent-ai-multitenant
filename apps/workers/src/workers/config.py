@@ -466,6 +466,18 @@ class Settings(BaseSettings):
         "scheduled exchange-rates fetch. Default daily at 06:00 UTC (Plan 11.1). "
         "Operator-tunable; the beat process reads it at boot.",
     )
+    # ADR 0098 (eje 3): cadencia del barrido periodico de fetch de remotos git
+    # (`workers.sweep_project_git_remotes`). El interruptor vivo es el platform
+    # setting `git_fetch_sweep_enabled` (default OFF) que un System Admin flipa
+    # desde el panel; este cron solo fija CUANDO se evalua. Conservador (cada
+    # 30 min): el coste crece con el numero de proyectos con remoto.
+    git_fetch_cron: str = Field(
+        default="*/30 * * * *",
+        description="Cron (minute hour day-of-month month day-of-week) for the "
+        "periodic git-remote fetch sweep (ADR 0098). Default every 30 minutes; "
+        "the live ON/OFF lever is the `git_fetch_sweep_enabled` platform setting "
+        "(default OFF). The beat process reads this at boot.",
+    )
     ecb_fx_feed_url: str = Field(
         default="https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml",
         description="URL of the ECB daily reference-rates XML feed (the default "

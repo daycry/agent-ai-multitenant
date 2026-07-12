@@ -1024,6 +1024,27 @@ DEFAULT_FX_SOURCE = "ecb"
 FX_SOURCES = ("ecb",)
 
 
+# ADR 0098 (eje 3): interruptor vivo del BARRIDO periódico de fetch de remotos
+# git (`workers.sweep_project_git_remotes`). Default OFF: sondear los remotos de
+# todos los proyectos es una decisión consciente del System Admin (coste de red
+# + credenciales), no un default; el botón manual «Sincronizar» siempre está.
+# La CADENCIA es el knob aparte WORKERS_GIT_FETCH_CRON (leído por beat al boot).
+GIT_FETCH_SWEEP_ENABLED_KEY = "git_fetch_sweep_enabled"
+DEFAULT_GIT_FETCH_SWEEP_ENABLED = False
+
+
+async def get_git_fetch_sweep_enabled(session: AsyncSession) -> bool:
+    """Whether the periodic git-remote fetch sweep is currently enabled.
+
+    Read by ``workers.sweep_project_git_remotes`` before doing any work; when
+    False the run is a no-op (no remote is contacted). Default OFF (ADR 0098).
+    """
+    value = await get_platform_setting(
+        session, GIT_FETCH_SWEEP_ENABLED_KEY, default=DEFAULT_GIT_FETCH_SWEEP_ENABLED
+    )
+    return bool(value)
+
+
 async def get_fx_fetch_enabled(session: AsyncSession) -> bool:
     """Whether the scheduled exchange-rates fetch is currently enabled.
 

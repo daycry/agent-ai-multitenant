@@ -1,7 +1,7 @@
 ---
 adr: "0098"
 title: Política de push/PR y re-sync del ciclo de plan
-status: proposed
+status: accepted
 date: 2026-07-03
 deciders: operador (pendiente)
 phase: auditoria-plataforma-2026-07-03
@@ -83,3 +83,7 @@ Si se acepta, **`cadena-pr-plan` lo implementa** así (este ADR fija la polític
 2. **Merge directo (eje 2):** la opción `direct_to_default_allowed` **no aparece** en la UI; test de que `apply_push_policy` no es código muerto (tiene caller o se ha retirado); una fila persistida con ese valor se comporta como `branch_only_pr_required`.
 3. **Re-sync (eje 3):** `POST /projects/{id}/git/sync` encola el fetch y actualiza el bare; el docstring de `fetch_remote` ya no menciona beat/webhook inexistentes; si se activa el beat, existe la entrada en `build_beat_schedule` con su cron configurable + kill-switch y un test de cadencia (patrón `price_sync`); el webhook receiver de push queda **documentado como gated** (no implementado).
 4. El ADR es coherente con los principios de `CLAUDE.md` (multi-tenancy en el sweep, el worker —no el sandbox— hace git, single-machine, catálogo de providers ADR 0021 intacto) y no contradice ningún ADR `accepted` (0072, 0085).
+
+## Estado de implementación (2026-07-12)
+
+COMPLETO en sus tres ejes no-gated: (1) push incremental cableado de verdad (best-effort tras el commit worktree->bare, execution.py:602-616, gated por modo en plan_pr.py); (2) merge directo retirado de la UI (git-config-section.tsx, enum conservado por compat); (3) re-sync: boton manual `POST /projects/{id}/git/sync` + **beat periodico NUEVO** `workers.sweep_project_git_remotes` (git_remote_sweep.py) que recorre los proyectos con git_config.remote_url y reutiliza el fetch autenticado de ADR 0072 por proyecto, best-effort; gated por el platform setting `git_fetch_sweep_enabled` (default OFF) con cadencia WORKERS_GIT_FETCH_CRON (default \*/30). Siguen GATED por diseno (decision de producto): el merge directo real y el webhook receiver de push.

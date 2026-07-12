@@ -92,6 +92,7 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             "workers.restore_task",
             "workers.credential_rotation_task",
             "workers.fx_fetcher",
+            "workers.git_remote_sweep",
             "workers.human_escalation",
             "workers.repo_clone",
             "workers.plan_pr",

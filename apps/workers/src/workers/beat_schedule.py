@@ -165,6 +165,7 @@ CRED_ROTATION_BEAT_ENTRY = "rotate-credentials"
 # Plan 11.1 task_11_1_02: the scheduled exchange-rates-fetcher entry name. Same
 # constant-not-hardcoded-string discipline as the price-sync / backup entries.
 FX_FETCH_BEAT_ENTRY = "fetch-exchange-rates"
+GIT_FETCH_BEAT_ENTRY = "sweep-project-git-remotes"
 
 # Plan 16 task_16_06: the scheduled acceptance-timeout escalation sweep entry
 # name. Same constant-not-hardcoded-string discipline as the entries above.
@@ -306,6 +307,21 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
             cfg.fx_fetch_cron,
             env_var="WORKERS_FX_FETCH_CRON",
             default=_cron_default("fx_fetch_cron"),
+            environment=cfg.environment,
+        ),
+        "options": {"queue": "default"},
+    }
+    # ADR 0098 (eje 3): barrido periodico de fetch de remotos git en cadencia
+    # CONFIGURABLE (WORKERS_GIT_FETCH_CRON, default cada 30 min). Cola `default`
+    # (fetch autenticado best-effort por proyecto, sin side-effects de infra).
+    # El interruptor vivo es el platform setting `git_fetch_sweep_enabled`
+    # (default OFF) que el task consulta antes de tocar ningun remoto.
+    sched[GIT_FETCH_BEAT_ENTRY] = {
+        "task": "workers.sweep_project_git_remotes",
+        "schedule": _parse_cron(
+            cfg.git_fetch_cron,
+            env_var="WORKERS_GIT_FETCH_CRON",
+            default=_cron_default("git_fetch_cron"),
             environment=cfg.environment,
         ),
         "options": {"queue": "default"},
