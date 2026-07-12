@@ -385,6 +385,15 @@ DEFAULT_MEMORY_BACKFILL_ENABLED = True
 
 MEMORY_BACKFILL_BATCH_SIZE_KEY = "memory.backfill_batch_size"
 DEFAULT_MEMORY_BACKFILL_BATCH_SIZE = 50
+
+# ADR 0113: multiplicador del techo de presupuestos de ejecucion. 1.0 = el
+# techo historico (espejo de los budgets por-kind del worker); subirlo es una
+# decision explicita de coste del System Admin. Acotado para que un typo no
+# multiplique el gasto x1000.
+EXECUTION_BUDGET_CEILING_MULTIPLIER_KEY = "execution.budget_ceiling_multiplier"
+DEFAULT_EXECUTION_BUDGET_CEILING_MULTIPLIER = 1.0
+EXECUTION_BUDGET_CEILING_MULTIPLIER_MIN = 1.0
+EXECUTION_BUDGET_CEILING_MULTIPLIER_MAX = 4.0
 # Cotas de cordura: al menos 1 fila por lote; un techo generoso evita que un
 # typo cargue miles de contenidos en una sola petición al embedder.
 MEMORY_BACKFILL_BATCH_SIZE_MIN = 1
@@ -408,6 +417,28 @@ async def get_memory_backfill_enabled(session: AsyncSession) -> bool:
         session, MEMORY_BACKFILL_ENABLED_KEY, default=DEFAULT_MEMORY_BACKFILL_ENABLED
     )
     return bool(value)
+
+
+async def get_execution_budget_ceiling_multiplier(session: AsyncSession) -> float:
+    """Multiplicador del techo de presupuestos (ADR 0113), acotado [1.0, 4.0].
+
+    1.0 = comportamiento historico. Un proyecto pesado puede entonces pedir en
+    ``execution_budgets`` hasta techo x multiplicador (nunca por encima). El
+    wall-clock NO se multiplica: lo mata el timeout del contenedor del worker
+    (env), y superarlo solo produciria kills externos."""
+    value = await get_platform_setting(
+        session,
+        EXECUTION_BUDGET_CEILING_MULTIPLIER_KEY,
+        default=DEFAULT_EXECUTION_BUDGET_CEILING_MULTIPLIER,
+    )
+    try:
+        multiplier = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_EXECUTION_BUDGET_CEILING_MULTIPLIER
+    return max(
+        EXECUTION_BUDGET_CEILING_MULTIPLIER_MIN,
+        min(EXECUTION_BUDGET_CEILING_MULTIPLIER_MAX, multiplier),
+    )
 
 
 async def get_memory_backfill_batch_size(session: AsyncSession) -> int:

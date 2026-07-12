@@ -54,6 +54,7 @@ from api_server.db.platform_settings import (
     config_needs_default_model,
     get_default_execution_budgets,
     get_default_model_config,
+    get_execution_budget_ceiling_multiplier,
     resolve_model_config_chain,
 )
 from api_server.events import publish_task_status_changed
@@ -720,9 +721,13 @@ class TaskDispatcher:
         # Per-run budget envelope (prod-06 budget_02): plataforma ← proyecto,
         # clampado al techo del runtime. `None` = defaults compilados del runtime.
         platform_budgets = await get_default_execution_budgets(session)
+        # ADR 0113: el System Admin puede ampliar el techo (x1..x4); el override
+        # de proyecto puede entonces pedir mas margen sin tocar el default global.
+        ceiling_multiplier = await get_execution_budget_ceiling_multiplier(session)
         budgets = resolve_execution_budgets(
             platform_default=platform_budgets,
             project_override=getattr(project, "execution_budgets", None) if project else None,
+            ceiling_multiplier=ceiling_multiplier,
         )
 
         request: dict[str, Any] = {

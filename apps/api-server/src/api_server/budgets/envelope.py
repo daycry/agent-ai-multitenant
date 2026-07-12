@@ -46,10 +46,16 @@ EXECUTION_BUDGET_CEILING: dict[str, float] = {
 _INT_KEYS = frozenset({"max_iterations", "max_tokens", "max_tool_calls"})
 
 
+# ADR 0113: el wall-clock NO se multiplica — lo mata el timeout del contenedor
+# del worker (env), y un techo por encima solo produciria kills externos.
+_MULTIPLIER_EXEMPT_KEYS = frozenset({"max_wall_clock_s"})
+
+
 def resolve_execution_budgets(
     *,
     platform_default: dict[str, Any] | None,
     project_override: dict[str, Any] | None,
+    ceiling_multiplier: float = 1.0,
 ) -> dict[str, float] | None:
     """Resolve the per-run budget envelope.
 
@@ -68,6 +74,7 @@ def resolve_execution_budgets(
         if isinstance(src, dict):
             merged.update(src)
 
+    multiplier = max(1.0, float(ceiling_multiplier or 1.0))
     out: dict[str, float] = {}
     for key, ceiling in EXECUTION_BUDGET_CEILING.items():
         if key not in merged:
@@ -78,7 +85,10 @@ def resolve_execution_budgets(
             continue
         if raw <= 0:
             continue
-        value = min(float(raw), float(ceiling))
+        effective_ceiling = (
+            float(ceiling) if key in _MULTIPLIER_EXEMPT_KEYS else float(ceiling) * multiplier
+        )
+        value = min(float(raw), effective_ceiling)
         out[key] = int(value) if key in _INT_KEYS else value
 
     return out or None

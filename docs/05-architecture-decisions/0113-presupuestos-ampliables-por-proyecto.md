@@ -1,10 +1,15 @@
 ---
 title: "ADR 0113: Presupuestos de ejecución ampliables por proyecto (techo configurable)"
-status: proposed
+status: accepted
 date: 2026-07-12
 ---
 
 # ADR 0113: Presupuestos ampliables por proyecto
+
+> **Resolución 2026-07-12**: IMPLEMENTADO como multiplicador de techo por
+> plataforma (`execution.budget_ceiling_multiplier`, 1.0–4.0, System Admin);
+> el override de proyecto puede pedir hasta techo×multiplicador. El wall-clock
+> queda exento (lo mata el timeout del contenedor del worker).
 
 ## Contexto
 

@@ -269,3 +269,40 @@ def test_skill_match_without_signal_falls_back_to_load_balanced() -> None:
         _fake_project("skill_match"), _fake_task(), [c1, c2], required_skills=frozenset()
     )
     assert chosen == "y"  # el menos cargado, comportamiento previo
+
+
+# ---------------------------------------------------------------------------
+# ADR 0113: el techo de presupuestos es ampliable via multiplicador (1..4).
+# ---------------------------------------------------------------------------
+def test_ceiling_multiplier_lets_a_heavy_project_exceed_the_base_ceiling() -> None:
+    from api_server.budgets import resolve_execution_budgets
+
+    budgets = resolve_execution_budgets(
+        platform_default=None,
+        project_override={"max_iterations": 120, "max_tokens": 900_000},
+        ceiling_multiplier=2.0,
+    )
+    assert budgets == {"max_iterations": 100, "max_tokens": 900_000}
+
+
+def test_wall_clock_is_exempt_from_the_multiplier() -> None:
+    from api_server.budgets import resolve_execution_budgets
+
+    budgets = resolve_execution_budgets(
+        platform_default=None,
+        project_override={"max_wall_clock_s": 999_999},
+        ceiling_multiplier=4.0,
+    )
+    # Clampeado al techo BASE: el timeout del contenedor del worker mataria
+    # cualquier run mas largo (kills externos, no mas margen real).
+    assert budgets == {"max_wall_clock_s": 7200.0}
+
+
+def test_multiplier_one_is_byte_for_byte_the_previous_behaviour() -> None:
+    from api_server.budgets import resolve_execution_budgets
+
+    assert resolve_execution_budgets(
+        platform_default=None,
+        project_override={"max_iterations": 80},
+        ceiling_multiplier=1.0,
+    ) == {"max_iterations": 50}
