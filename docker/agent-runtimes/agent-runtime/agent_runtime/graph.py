@@ -80,6 +80,20 @@ from agent_runtime.tools import ToolRegistry, default_registry
 
 _log = logging.getLogger("agent_runtime.graph")
 
+# ADR 0112 (fase 1): cadencia del self-check semántico. Cada K iteraciones el
+# reflect inyecta un sticky que hace que el modelo se auto-evalúe contra los
+# criterios EN SU TURNO NORMAL (cero llamadas LLM extra — la llamada dedicada
+# queda como fase 2 si la telemetría lo pide).
+_SELF_CHECK_EVERY = 10
+_SELF_CHECK_NUDGE = (
+    "Pause and self-assess before acting: score your progress toward the "
+    "acceptance criteria (0-10) in one line, then update your plan with "
+    "update_plan (what is DONE, what remains, the next concrete step). If this "
+    "is your second consecutive self-check without real progress, stop looping: "
+    "call submit_result with status='failed' explaining exactly what is blocking "
+    "you, so a human can unblock it early instead of burning the budget."
+)
+
 # The eight nodes of the loop, in declaration order.
 NODE_NAMES: tuple[str, ...] = (
     "perceive",
@@ -901,6 +915,16 @@ class _AgentLoop:
         # la causa raíz del read-churn: el modelo no podía recordar qué escribió
         # hace >8 pasos y re-leía para reconstruirlo.
         updates["progress_summary"] = self._progress_summary()
+        # ADR 0112 (fase 1): self-check semántico periódico — a la iteración K,
+        # 2K, … el sticky pide al modelo puntuar su progreso contra los criterios
+        # y refrescar su scratchpad; fuera de cadencia se LIMPIA (None) para que
+        # no presione todos los turnos.
+        iterations = self.tracker.usage.iterations
+        if iterations and iterations % _SELF_CHECK_EVERY == 0:
+            updates["self_check_nudge"] = _SELF_CHECK_NUDGE
+            self._count_safeguard("nudge:self_check")
+        else:
+            updates["self_check_nudge"] = None
         # B1: the repetition warning fires one turn before the detector would abort
         # (count >= threshold). It rides the SCALAR `repetition_warning` field — NOT
         # `context` (operator.add): appending to context would reorder context[0] and

@@ -356,6 +356,11 @@ def _decide_messages(state: dict[str, Any]) -> list[Message]:
     nudge = state.get("guidance_nudge")
     if nudge:
         lines.append(f"GUIDANCE: {str(nudge)[:_STICKY_FEEDBACK_MAX_CHARS]}")
+    # ADR 0112 (fase 1): el self-check periódico — presente solo en el turno de
+    # cadencia (reflect lo limpia fuera de ella).
+    self_check = state.get("self_check_nudge")
+    if self_check:
+        lines.append(f"SELF-CHECK: {str(self_check)[:_STICKY_FEEDBACK_MAX_CHARS]}")
     warning = state.get("repetition_warning")
     if warning:
         lines.append(f"REPETITION WARNING: {str(warning)[:_STICKY_FEEDBACK_MAX_CHARS]}")

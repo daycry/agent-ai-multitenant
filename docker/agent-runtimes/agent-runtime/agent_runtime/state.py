@@ -100,6 +100,10 @@ class AgentState(TypedDict):
     # que ÉL mantiene con la tool `update_plan`. Sticky escalar: el modelo la ve
     # todos los turnos (compensa la reconstrucción single-turn del prompt).
     agent_plan: str | None
+    # ADR 0112 (fase 1): self-check semántico periódico — cada K iteraciones el
+    # reflect lo puebla y el modelo se auto-evalúa contra los criterios en su
+    # turno normal; fuera de cadencia vuelve a None (no presiona cada turno).
+    self_check_nudge: str | None
 
     output: str | None
     review_retries: int
@@ -155,6 +159,7 @@ def initial_state(
         progress_summary=None,
         guidance_nudge=None,
         agent_plan=None,
+        self_check_nudge=None,
         output=None,
         review_retries=0,
         review_passed=None,
