@@ -35,6 +35,9 @@ from workers.textfile_collector import write_textfile_metric
 # scrape rules / dashboards reference these; keep in sync.
 METRIC_QUEUE_DEPTH = "agentic_celery_queue_depth"
 METRIC_TASKS_BY_STATUS = "agentic_tasks_by_status"
+# prod-08 núcleo (2026-07-12): profundidad de los streams DLQ (XLEN) — un
+# mensaje dead-lettered es trabajo PERDIDO hasta que un humano lo mira.
+METRIC_DLQ_DEPTH = "agentic_dlq_depth"
 
 
 def _escape_label(value: str) -> str:
@@ -46,6 +49,7 @@ def render_queue_metrics(
     *,
     queue_depths: dict[str, int],
     status_counts: dict[str, int],
+    dlq_depths: dict[str, int] | None = None,
 ) -> str:
     """Render the Prometheus text-exposition body. Pure (no I/O) so it is
     unit-testable. Keys are emitted in sorted order for a noise-free file diff."""
@@ -65,6 +69,13 @@ def render_queue_metrics(
         lines.append(
             f'{METRIC_TASKS_BY_STATUS}{{status="{_escape_label(status)}"}} {status_counts[status]}'
         )
+    if dlq_depths:
+        lines.append(f"# HELP {METRIC_DLQ_DEPTH} Entries in each dead-letter stream (Redis XLEN).")
+        lines.append(f"# TYPE {METRIC_DLQ_DEPTH} gauge")
+        for stream in sorted(dlq_depths):
+            lines.append(
+                f'{METRIC_DLQ_DEPTH}{{stream="{_escape_label(stream)}"}} {dlq_depths[stream]}'
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -73,6 +84,7 @@ def write_queue_metrics(
     *,
     queue_depths: dict[str, int],
     status_counts: dict[str, int],
+    dlq_depths: dict[str, int] | None = None,
 ) -> bool:
     """Atomically write the queue-metrics file. Returns ``True`` on success,
     ``False`` otherwise — best-effort, never breaks the worker. Delegates the
@@ -80,6 +92,8 @@ def write_queue_metrics(
     :func:`workers.textfile_collector.write_textfile_metric`."""
     return write_textfile_metric(
         path,
-        lambda: render_queue_metrics(queue_depths=queue_depths, status_counts=status_counts),
+        lambda: render_queue_metrics(
+            queue_depths=queue_depths, status_counts=status_counts, dlq_depths=dlq_depths
+        ),
         event_prefix="queue_metrics",
     )

@@ -183,6 +183,16 @@ async def create_kb(
             detail="kb name already exists in tenant",
         ) from exc
     await session.refresh(kb)
+
+    # KB Q1: auto-grant al proyecto de origen (un grant NORMAL de kb_projects —
+    # auditable y revocable; nada pasa a ser visible "mágicamente"). El
+    # proyecto debe ser del tenant (la sesión RLS ya lo garantiza al leerlo).
+    if payload.project_id is not None:
+        project = await session.get(Project, payload.project_id)
+        if project is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
+        session.add(KnowledgeBaseProject(kb_id=kb.id, project_id=project.id, tenant_id=tenant_id))
+        await session.flush()
     return to_kb_response(kb, await _load_category_for_kb(session, kb))
 
 

@@ -652,3 +652,40 @@ async def test_tenant_b_cannot_delete_tenant_a_kb(configured_app, migrations_pg_
         )
         assert a_get.status_code == 200, a_get.text
         assert a_get.json()["name"] == "A Undeletable KB"
+
+
+# ===========================================================================
+# KB Q1 (propuesta simplificación 2026-07-12): crear la KB DESDE un proyecto
+# la grantea a ese proyecto automáticamente — antes ningún proyecto la veía
+# hasta el grant manual en otra pantalla (el papercut nº1).
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_create_kb_with_project_id_auto_grants(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    import asyncpg as _asyncpg
+
+    app, _ = configured_app
+    ids = await _seed(migrations_pg_dsn)
+    token = await _mint_token(ids["user_id"], ids["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/knowledge-bases",
+            json={"name": "KB desde proyecto", "project_id": str(ids["project_id"])},
+            headers=headers,
+        )
+    assert resp.status_code in (200, 201), resp.text
+    kb_id = resp.json()["id"]
+
+    conn = await _asyncpg.connect(migrations_pg_dsn)
+    try:
+        n = await conn.fetchval(
+            "SELECT count(*) FROM kb_projects WHERE kb_id = $1 AND project_id = $2",
+            UUID(kb_id),
+            ids["project_id"],
+        )
+    finally:
+        await conn.close()
+    assert n == 1

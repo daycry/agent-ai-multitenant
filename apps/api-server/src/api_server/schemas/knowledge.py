@@ -24,6 +24,10 @@ class KnowledgeBaseCreateRequest(BaseModel):
     # Plan 06.10: opcional al crear. Si se omite la KB queda sin
     # categoría hasta que el tenant la asigne en Editar.
     category_id: UUID | None = None
+    # KB Q1 (propuesta simplificación 2026-07-12): crear DESDE un proyecto
+    # grantea la KB a ese proyecto automáticamente — el papercut nº1 era crear
+    # la KB y que ningún proyecto la viera hasta ir a otra pantalla.
+    project_id: UUID | None = None
 
 
 class KnowledgeBaseUpdateRequest(BaseModel):

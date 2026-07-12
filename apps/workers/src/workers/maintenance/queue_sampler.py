@@ -43,6 +43,19 @@ async def _collect_queue_depths(redis: Any, queue_names: tuple[str, ...]) -> dic
     return depths
 
 
+# Streams DLQ conocidos (dispatcher de notificaciones), en el events redis.
+_DLQ_STREAMS: tuple[str, ...] = ("dlq:notifications",)
+
+
+async def _collect_dlq_depths(redis: Any, streams: tuple[str, ...]) -> dict[str, int]:
+    """Redis ``XLEN`` por stream DLQ (stream ausente = 0)."""
+    depths: dict[str, int] = {}
+    for name in streams:
+        with contextlib.suppress(Exception):
+            depths[name] = int(await redis.xlen(name))
+    return depths
+
+
 async def _collect_status_counts(session: Any) -> dict[str, int]:
     """Count ``tasks`` rows grouped by lifecycle status (all tenants — the worker
     engine is BYPASSRLS). ``tasks`` is not soft-deletable (no ``deleted_at``)."""
@@ -68,8 +81,15 @@ async def _sample_queue_metrics_async(
     engine = create_async_engine(settings.database_url)
     queue_depths: dict[str, int] = {}
     status_counts: dict[str, int] = {}
+    dlq_depths: dict[str, int] = {}
     try:
         queue_depths = await _collect_queue_depths(redis_client, QUEUE_NAMES)
+        events_redis = Redis.from_url(settings.events_redis_url)
+        try:
+            dlq_depths = await _collect_dlq_depths(events_redis, _DLQ_STREAMS)
+        finally:
+            with contextlib.suppress(Exception):
+                await events_redis.aclose()
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         async with sessionmaker() as db:
             status_counts = await _collect_status_counts(db)
@@ -85,6 +105,7 @@ async def _sample_queue_metrics_async(
         settings.queue_metrics_textfile_path,
         queue_depths=queue_depths,
         status_counts=status_counts,
+        dlq_depths=dlq_depths,
     )
     _log.info(
         "maintenance.sample_queue_metrics.done",

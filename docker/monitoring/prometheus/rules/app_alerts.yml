@@ -1,0 +1,48 @@
+# Alertas de APLICACIÓN (prod-08 núcleo, 2026-07-12) — consumen las métricas
+# que los workers ya publican vía el textfile collector de node-exporter
+# (workers/queue_metrics.py + backup_metrics.py). Fluyen por Alertmanager →
+# POST /internal/alerts/ingest (NOTIF-2) → notificación al System Admin.
+groups:
+  - name: agentic-app
+    rules:
+      # Una cola Celery creciendo = ningún worker la drena (worker caído,
+      # cola sin consumidor — el caso notifications.* muerto en dev de
+      # 2026-07-10) o backlog fuera de control.
+      - alert: CeleryQueueGrowing
+        expr: agentic_celery_queue_depth > 50
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cola Celery {{ $labels.queue }} con backlog sostenido"
+          description: >-
+            La cola {{ $labels.queue }} lleva 15 minutos con más de 50 mensajes
+            ({{ $value }}). Comprueba que su worker está vivo y consumiendo.
+
+      # Un mensaje en la DLQ es trabajo PERDIDO (notificación no entregada tras
+      # agotar reintentos) hasta que un humano lo revisa.
+      - alert: NotificationsDLQNotEmpty
+        expr: agentic_dlq_depth > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dead-letter {{ $labels.stream }} con {{ $value }} entrada(s)"
+          description: >-
+            El stream {{ $labels.stream }} tiene entradas dead-lettered desde
+            hace 10 minutos: notificaciones que agotaron reintentos. Revisa el
+            canal (credenciales/URL) y re-encola o descarta.
+
+      # Muchas tareas bloqueadas sostenidas = el pipeline autónomo está parado
+      # esperando humanos (o un bug de convergencia).
+      - alert: TasksBlockedHigh
+        expr: agentic_tasks_by_status{status="blocked"} > 10
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} tareas bloqueadas desde hace 30 minutos"
+          description: >-
+            Hay más de 10 tareas en estado blocked de forma sostenida. Revisa
+            el inbox humano y el visor de runs: o hay decisiones pendientes o
+            el pipeline no converge.
