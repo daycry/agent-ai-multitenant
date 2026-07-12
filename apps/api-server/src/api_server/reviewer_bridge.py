@@ -32,15 +32,18 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.db.domain import Task, TaskStatus
 from api_server.db.task_audit_repo import append_audit_event
 from api_server.task_state_machine import transition_task_status
+
+_log = structlog.get_logger("api_server.reviewer_bridge")
 
 VerdictLabel = Literal["approve", "reject", "unknown"]
 
@@ -209,6 +212,12 @@ async def apply_reviewer_verdict(
         },
     )
 
+    # P1-1 (investigación 2026-07-11): el juicio del reviewer se destila como
+    # memoria semántica project_shared — antes el «qué salió mal en review» no
+    # dejaba lección reutilizable (solo el audit event por-task). Determinista
+    # (sin LLM) y best-effort: jamás rompe el veredicto ya aplicado.
+    await _persist_rejection_memory(session, task=task_row, verdict=verdict)
+
     return {
         "action": "escalated" if exhausted else "rejected",
         "verdict": "reject",
@@ -217,6 +226,30 @@ async def apply_reviewer_verdict(
         "retry_count": task_row.retry_count,
         "event_id": str(event.id),
     }
+
+
+async def _persist_rejection_memory(session: Any, *, task: Any, verdict: ReviewerVerdict) -> None:
+    """Memoria semántica del rechazo (P1-1) — determinista y best-effort."""
+    try:
+        from api_server.memorizer.distillation import MemoryCandidate
+        from api_server.memorizer.persistence import persist_memory_candidates
+
+        parts = [f"Review rechazó «{task.title or task.id}»"]
+        if verdict.failed_criterion:
+            parts.append(f"criterio fallado: {verdict.failed_criterion}")
+        if verdict.what_to_fix:
+            parts.append(f"arreglo requerido: {verdict.what_to_fix}")
+        content = ". ".join(parts)[:2000]
+        candidate = MemoryCandidate(content=content, type="semantic", tags=("review",))
+        await persist_memory_candidates(
+            session,
+            [candidate],
+            tenant_id=task.tenant_id,
+            scope="project_shared",
+            project_id=task.project_id,
+        )
+    except Exception as exc:  # la memoria nunca rompe el veredicto
+        _log.warning("reviewer_bridge.rejection_memory_failed", error=str(exc))
 
 
 __all__ = [

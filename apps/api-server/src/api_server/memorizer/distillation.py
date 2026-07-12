@@ -78,7 +78,10 @@ _SYSTEM_PROMPT = (
     "(people, projects, components, technologies, files), e.g. "
     '["PostgreSQL", "RLS", "agent-runtime"]. Used to find this memory later.\n'
     "Return between 0 and 5 items. Return an empty array if the "
-    "execution produced nothing worth remembering."
+    "execution produced nothing worth remembering.\n"
+    "If the execution FAILED or was aborted, focus on the LESSON: the root "
+    "cause, the dead end to avoid, or the precondition that was missing — "
+    'prefer type "semantic" for those.'
 )
 
 

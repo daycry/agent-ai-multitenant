@@ -35,7 +35,18 @@ _MEMORISABLE_SCOPES: frozenset[str] = frozenset(s.value for s in MemoryScope)
 # `memory.memorizable_statuses` platform setting (Plan 06.17 task_06_17_04). Kept
 # here so the pure policy has a sensible default even when called without the
 # operator-resolved set (e.g. the human-session path / tests).
-_DEFAULT_ELIGIBLE_STATUSES: frozenset[str] = frozenset({ExecutionStatus.DONE.value})
+# P1-1 (investigación 2026-07-11): los FRACASOS también dejan lección por
+# defecto — un run failed/aborted/needs_human_review es de lo más informativo
+# (el callejón sin salida a evitar). Antes solo `done` aprendía; el operador
+# puede seguir estrechando el set vía la platform setting.
+_DEFAULT_ELIGIBLE_STATUSES: frozenset[str] = frozenset(
+    {
+        ExecutionStatus.DONE.value,
+        ExecutionStatus.FAILED.value,
+        ExecutionStatus.ABORTED.value,
+        "needs_human_review",
+    }
+)
 
 
 class MemorizeSkipReason(enum.StrEnum):
