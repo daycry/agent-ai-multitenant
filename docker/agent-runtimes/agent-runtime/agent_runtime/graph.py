@@ -23,6 +23,7 @@ so the loop is exercised offline and deterministically by the tests.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -113,8 +114,16 @@ NODE_NAMES: tuple[str, ...] = (
 _READ_DIGESTS_MAX = 20
 # G10 (ADR 0103): 100 chars barely held one line — too little for the model to reuse
 # a digest instead of re-reading. 300 gives a few useful lines; the LRU cap (20) still
-# bounds the PROGRESS block. (Symbol-signature extraction for code = deferred follow-up.)
+# bounds the PROGRESS block.
 _READ_DIGEST_CHARS = 300
+# G10 (ADR 0103, cierre 2026-07-12): la 1.ª FIRMA de símbolo del fichero leído
+# entra en el digest — def/class (Python), function/class/interface (JS/TS/PHP),
+# fn (Rust), func (Go). Deliberadamente simple: es una pista de memoria, no un
+# parser; una línea que empiece por uno de estos verbos basta.
+_SYMBOL_LINE_RE = re.compile(
+    r"^(?:export\s+|public\s+|abstract\s+|final\s+|async\s+)*"
+    r"(?:def|class|function|interface|trait|fn|func)\b"
+)
 # H5 (2026-07-07): caps de lo que el bloque PROGRESS muestra por-turno (antes un
 # `12` suelto repetido inline). Ficheros ya escritos / digests de lectura más
 # recientes — presupuesto de prompt, la lista completa vive en el estado.
@@ -968,7 +977,9 @@ class _AgentLoop:
         """Memoria de lecturas C1: digest por fichero leído para el bloque PROGRESS.
 
         Del ``last_observation`` (sin I/O extra): 1.ª línea significativa del
-        contenido (read_file) o nº de entradas (list_files). LRU acotado a
+        contenido + la 1.ª FIRMA de símbolo (def/class/function — G10, ADR
+        0103: el modelo recuerda QUÉ define el fichero sin re-leerlo) para
+        read_file, o nº de entradas (list_files). LRU acotado a
         ``_READ_DIGESTS_MAX`` — presupuesto de prompt, no de memoria."""
         if target is None:
             return
@@ -980,8 +991,14 @@ class _AgentLoop:
         if base == "read_file":
             content = output.get("content")
             if isinstance(content, str):
-                first = next((ln.strip() for ln in content.splitlines() if ln.strip()), "")
-                digest = f"{first[:_READ_DIGEST_CHARS]} · {len(content)}B"
+                lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
+                first = lines[0] if lines else ""
+                symbol = next(
+                    (ln for ln in lines if _SYMBOL_LINE_RE.match(ln) and ln != first),
+                    None,
+                )
+                head = f"{first} … {symbol}" if symbol else first
+                digest = f"{head[:_READ_DIGEST_CHARS]} · {len(content)}B"
         elif base == "list_files":
             files = output.get("files")
             if isinstance(files, list):

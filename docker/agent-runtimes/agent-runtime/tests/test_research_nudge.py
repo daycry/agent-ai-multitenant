@@ -274,6 +274,43 @@ def test_progress_includes_read_digests() -> None:
     assert "controlador A" in progress  # 1.ª línea significativa como digest
 
 
+def test_read_digest_includes_symbol_signature() -> None:
+    # G10 (ADR 0103): además de la 1.ª línea significativa, el digest lleva la
+    # 1.ª FIRMA de símbolo (def/class/function) — el modelo recuerda QUÉ define
+    # el fichero sin re-leerlo.
+    loop = _loop()
+    out = loop.reflect(
+        _state(
+            "read_file",
+            {"path": "app/service.py"},
+            output={
+                "content": (
+                    "# servicio de facturación\n"
+                    "import os\n\n"
+                    "class InvoiceService:\n"
+                    "    def issue(self) -> None: ...\n"
+                )
+            },
+        )
+    )
+    progress = out.get("progress_summary") or ""
+    assert "servicio de facturación" in progress  # 1.ª línea significativa
+    assert "class InvoiceService" in progress  # firma del primer símbolo
+
+
+def test_read_digest_without_symbol_keeps_first_line() -> None:
+    loop = _loop()
+    out = loop.reflect(
+        _state(
+            "read_file",
+            {"path": "README.md"},
+            output={"content": "# Título del proyecto\n\nTexto plano sin símbolos.\n"},
+        )
+    )
+    progress = out.get("progress_summary") or ""
+    assert "Título del proyecto" in progress
+
+
 def test_read_digests_are_lru_capped() -> None:
     loop = _loop()
     for i in range(25):

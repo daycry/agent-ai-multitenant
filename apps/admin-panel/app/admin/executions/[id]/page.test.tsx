@@ -77,4 +77,35 @@ describe("Timeline de ejecución — cabecera (runs-visor D1)", () => {
     mount();
     await waitFor(() => expect(screen.getByTestId("execution-cancel-button")).toBeTruthy());
   });
+
+  // G5 (ADR 0103): los safeguard_stats del step de finalize se exponen en la
+  // cabecera — antes solo vivían en steps_log y medían falsos positivos por SQL.
+  it("surfaces the finalize step's safeguard_stats in the header", async () => {
+    apiFetchMock.mockResolvedValue(
+      execution({
+        steps_log: [
+          {
+            index: 0,
+            kind: "node",
+            node: "finalize",
+            status: "ok",
+            summary: "Finalized",
+            safeguard_stats: { "nudge:self_check": 2, "trip:research_exhausted": 1 },
+          },
+        ],
+      }),
+    );
+    mount();
+    await waitFor(() => expect(screen.getByTestId("execution-safeguards")).toBeTruthy());
+    const text = screen.getByTestId("execution-safeguards").textContent ?? "";
+    expect(text).toContain("nudge:self_check ×2");
+    expect(text).toContain("trip:research_exhausted ×1");
+  });
+
+  it("omits the safeguards metric when no stats fired", async () => {
+    apiFetchMock.mockResolvedValue(execution());
+    mount();
+    await waitFor(() => expect(screen.getByTestId("execution-status")).toBeTruthy());
+    expect(screen.queryByTestId("execution-safeguards")).toBeNull();
+  });
 });

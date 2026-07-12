@@ -45,6 +45,8 @@ interface Step {
   tool?: string;
   args?: unknown;
   result?: unknown;
+  // G5 (ADR 0103): contadores de nudges/trips que el step de finalize adjunta.
+  safeguard_stats?: Record<string, number>;
   [key: string]: unknown;
 }
 
@@ -294,8 +296,31 @@ function ExecutionSummary({ execution, liveCount }: { execution: Execution; live
             </Badge>
           </Metric>
         )}
+        <SafeguardStats steps={execution.steps_log} />
       </CardContent>
     </Card>
+  );
+}
+
+// G5 (ADR 0103): expone en la cabecera los safeguard_stats que el step de
+// finalize adjunta — qué nudges/trips dispararon y cuántas veces. Antes solo
+// vivían en steps_log (consultables por SQL) y el visor no los mostraba.
+function SafeguardStats({ steps }: { steps: Step[] }) {
+  const stats = steps.find(
+    (s) => s.safeguard_stats && Object.keys(s.safeguard_stats).length > 0,
+  )?.safeguard_stats;
+  if (!stats) return null;
+  const entries = Object.entries(stats).sort(([a], [b]) => a.localeCompare(b));
+  return (
+    <Metric label="Salvaguardas">
+      <span data-testid="execution-safeguards" className="flex flex-wrap gap-1">
+        {entries.map(([kind, count]) => (
+          <Badge key={kind} variant={kind.startsWith("trip:") ? "danger" : "muted"}>
+            {kind} ×{count}
+          </Badge>
+        ))}
+      </span>
+    </Metric>
   );
 }
 

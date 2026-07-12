@@ -1,7 +1,7 @@
 ---
 adr: "0103"
 title: Recalibración de las guardas de research del runtime — exploración legítima sin fricción (Fase G auditoría 2026-07-03)
-status: proposed
+status: accepted
 date: 2026-07-05
 deciders: operador (pendiente)
 phase: auditoria-plataforma-2026-07-03
@@ -208,3 +208,9 @@ rompen tests que pinean ese diseño.
 4. El summary del step de un nudge «FINISH» NO dice «stop researching»; el visor muestra `safeguard_stats`.
 5. Las GATED registradas con su decisión (implementar opción X / rechazar) firmada por el operador antes de
    tocar `loop_detection.py` o la clave de `_read_target`.
+
+## Estado de implementación (2026-07-12)
+
+COMPLETO. Los items SAFE estan implementados y verificados: G2 (decay per-target tras turno productivo), G3b (fallos de plataforma no suman esterilidad), G4a (search_code como research con novedad), G5 runtime (summary del step con la variante real del nudge + safeguard_stats en steps_log) y, cerrados hoy, G10 con FIRMA DE SIMBOLOS (la 1.a def/class/function del fichero leido entra en el digest, `_SYMBOL_LINE_RE` en graph.py) y G5 frontend (los safeguard_stats del finalize se muestran en la cabecera del visor de ejecuciones, `execution-safeguards`).
+
+**G8 opcion B RATIFICADA por el operador el 2026-07-12** (mandato "implementa todo en orden" sobre el analisis de diferidos que pedia explicitamente esta ratificacion): `LoopDetector.note_progress` resetea contadores solo tras progreso intermedio con accion distinta; el pin de loop-detection se relajo, no se borro. G9 (cache de contenido) queda NO implementado segun la recomendacion del propio ADR; G1 (offset/limit en la clave del target) RECHAZADO — `_read_target` sigue ignorando paginado cosmetico.
