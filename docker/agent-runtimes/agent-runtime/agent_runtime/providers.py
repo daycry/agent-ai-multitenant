@@ -279,6 +279,29 @@ def _criterion_text(criterion: Any) -> str:
     return json.dumps(criterion, default=str)
 
 
+# P1-5 (investigación 2026-07-11): caps del bloque condensado de lo evictado.
+_EVICTED_MAX_LINES = 15
+_EVICTED_LINE_CHARS = 160
+
+
+def _condense_evicted(evicted: list[Any]) -> list[str]:
+    """Una línea por item evictado (rol + esencia truncada), acotado (P1-5).
+
+    La ventana de contexto evictaba SIN resumen: la cadena de razonamiento y
+    observaciones más antigua desaparecía por completo. Condensado determinista
+    (sin LLM); se conservan los MÁS RECIENTES de lo evictado si hay demasiados."""
+    lines: list[str] = []
+    for item in evicted[-_EVICTED_MAX_LINES:]:
+        if isinstance(item, dict):
+            role = str(item.get("role") or "?")
+            rest = {k: v for k, v in item.items() if k != "role"}
+            essence = " ".join(str(v) for v in rest.values() if isinstance(v, str | int | float))
+        else:
+            role, essence = "?", str(item)
+        lines.append(f"- [{role}] {essence}"[:_EVICTED_LINE_CHARS])
+    return lines
+
+
 def _decide_messages(state: dict[str, Any]) -> list[Message]:
     """Turn the agent-loop state into the chat messages for a decision."""
     task = state.get("task") or {}
@@ -296,6 +319,12 @@ def _decide_messages(state: dict[str, Any]) -> list[Message]:
     if progress:
         lines.append(f"PROGRESS: {progress}")
     context = state.get("context") or []
+    # P1-5: lo que sale de la ventana deja un rastro condensado (cronología:
+    # lo viejo, condensado, ANTES del contexto reciente completo).
+    evicted = context[:-_CONTEXT_WINDOW] if len(context) > _CONTEXT_WINDOW else []
+    if evicted:
+        lines.append("EARLIER (condensed) — older steps no longer shown in full:")
+        lines += _condense_evicted(evicted)
     if context:
         lines.append("Context so far:")
         lines += [f"- {json.dumps(item, default=str)}" for item in context[-_CONTEXT_WINDOW:]]
