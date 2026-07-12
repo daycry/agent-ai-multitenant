@@ -106,6 +106,55 @@ export function KbAssignmentsDialog({
   const agents = agentsQuery.data ?? [];
   const isEmpty = !isLoading && projects.length === 0 && agents.length === 0;
 
+  // KB Q4 (propuesta 2026-07-12): la EDICIÓN también vive aquí — antes añadir
+  // un grant obligaba a cazar por dos pantallas (proyecto vía KbGrantDialog,
+  // agente solo desde la ficha del agente). El alta de agente va plegada bajo
+  // «Avanzado» (el caso común es el grant a proyecto).
+  const [newProjectId, setNewProjectId] = useState("");
+  const [newAgentId, setNewAgentId] = useState("");
+  const allProjectsQuery = useQuery<{ id: string; name: string }[]>({
+    queryKey: ["projects-for-kb-grant"],
+    queryFn: () => apiFetch("/projects"),
+    enabled: open,
+  });
+  const allAgentsQuery = useQuery<{ id: string; name: string; role?: string }[]>({
+    queryKey: ["agents-for-kb-grant"],
+    queryFn: () => apiFetch("/agents"),
+    enabled: open,
+  });
+  const grantProject = useMutation({
+    mutationFn: (projectId: string) =>
+      apiFetch(`/knowledge-bases/${kbId}/projects`, {
+        method: "POST",
+        body: { project_id: projectId },
+      }),
+    onSuccess: () => {
+      setActionError(null);
+      setNewProjectId("");
+      void queryClient.invalidateQueries({ queryKey: ["kb-assignments", kbId] });
+    },
+    onError: (err) => setActionError(err instanceof ApiError ? err.body : String(err)),
+  });
+  const grantAgent = useMutation({
+    mutationFn: (agentId: string) =>
+      apiFetch(`/agents/${agentId}/knowledge-bases`, {
+        method: "POST",
+        body: { kb_id: kbId },
+      }),
+    onSuccess: () => {
+      setActionError(null);
+      setNewAgentId("");
+      void queryClient.invalidateQueries({ queryKey: ["kb-assignments", kbId] });
+    },
+    onError: (err) => setActionError(err instanceof ApiError ? err.body : String(err)),
+  });
+  const grantedProjectIds = new Set(projects.map((p) => p.project_id));
+  const grantedAgentIds = new Set(agents.map((a) => a.agent_id));
+  const grantableProjects = (allProjectsQuery.data ?? []).filter(
+    (p) => !grantedProjectIds.has(p.id),
+  );
+  const grantableAgents = (allAgentsQuery.data ?? []).filter((a) => !grantedAgentIds.has(a.id));
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange} size="lg">
       <DialogContent data-testid="kb-assignments-dialog">
@@ -123,9 +172,8 @@ export function KbAssignmentsDialog({
 
           {isEmpty && (
             <p className="text-muted-foreground text-sm" data-testid="kb-assignments-empty">
-              Esta KB no está granteada a ningún proyecto ni agente todavía. Concédela a un proyecto
-              con el botón <strong>Grant</strong> de esta misma lista; a un agente, desde su detalle
-              (pestaña Knowledge Bases → Grant KB).
+              Esta KB no está granteada a ningún proyecto ni agente todavía. Añade un grant aquí
+              debajo.
             </p>
           )}
 
@@ -188,6 +236,67 @@ export function KbAssignmentsDialog({
                   </li>
                 ))}
               </ul>
+            </section>
+          )}
+          {/* --- Q4: añadir grant a proyecto (el caso común) --- */}
+          {!isLoading && (
+            <section className="space-y-2" data-testid="kb-add-project-grant">
+              <h3 className="text-sm font-semibold uppercase tracking-wide">Conceder a proyecto</h3>
+              <div className="flex gap-2">
+                <select
+                  className="border-input bg-background w-full rounded-md border px-2 py-1.5 text-sm"
+                  value={newProjectId}
+                  onChange={(e) => setNewProjectId(e.target.value)}
+                  data-testid="kb-grant-project-select"
+                >
+                  <option value="">Elige un proyecto…</option>
+                  {grantableProjects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  size="sm"
+                  disabled={!newProjectId || grantProject.isPending}
+                  onClick={() => grantProject.mutate(newProjectId)}
+                  data-testid="kb-grant-project-submit"
+                >
+                  Conceder
+                </Button>
+              </div>
+
+              {/* --- Q4: grants de agente plegados bajo «Avanzado» --- */}
+              <details data-testid="kb-add-agent-grant">
+                <summary className="text-muted-foreground cursor-pointer text-xs">
+                  Avanzado: conceder a un agente concreto
+                </summary>
+                <div className="mt-2 flex gap-2">
+                  <select
+                    className="border-input bg-background w-full rounded-md border px-2 py-1.5 text-sm"
+                    value={newAgentId}
+                    onChange={(e) => setNewAgentId(e.target.value)}
+                    data-testid="kb-grant-agent-select"
+                  >
+                    <option value="">Elige un agente…</option>
+                    {grantableAgents.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                        {a.role ? ` (${a.role})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!newAgentId || grantAgent.isPending}
+                    onClick={() => grantAgent.mutate(newAgentId)}
+                    data-testid="kb-grant-agent-submit"
+                  >
+                    Conceder
+                  </Button>
+                </div>
+              </details>
             </section>
           )}
         </DialogBody>

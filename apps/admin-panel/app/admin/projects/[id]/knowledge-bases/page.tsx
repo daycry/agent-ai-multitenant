@@ -121,6 +121,18 @@ export default function ProjectKnowledgeBasesPage() {
         data-testid="project-kbs-header"
       />
 
+      {/* KB Q2 (propuesta 2026-07-12): «Añadir conocimiento» como flujo
+          primario — un solo paso: elige ficheros → se crea (lazy) la KB
+          implícita «Documentos de {proyecto}» ya granteada (Q1 project_id
+          auto-grant) → ingesta. La gestión avanzada queda intacta debajo. */}
+      <AddKnowledgeSection
+        projectId={projectId}
+        grantedKbs={kbsQuery.data ?? []}
+        onDone={() => {
+          void kbsQuery.refetch();
+        }}
+      />
+
       {kbsQuery.isLoading ? (
         <p className="text-muted-foreground mt-6 text-sm">Cargando…</p>
       ) : kbsQuery.isError ? (
@@ -157,6 +169,114 @@ export default function ProjectKnowledgeBasesPage() {
         granted={new Set((kbsQuery.data ?? []).map((kb) => kb.id))}
       />
     </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// KB Q2 — «Añadir conocimiento»: ficheros → KB implícita lazy → ingesta
+// --------------------------------------------------------------------------
+function AddKnowledgeSection({
+  projectId,
+  grantedKbs,
+  onDone,
+}: {
+  projectId: string;
+  grantedKbs: KnowledgeBase[];
+  onDone: () => void;
+}) {
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const projectQuery = useQuery({
+    queryKey: ["project", projectId],
+    queryFn: () => apiFetch<{ id: string; name: string }>(`/projects/${projectId}`),
+    enabled: Boolean(projectId),
+  });
+
+  const upload = useMutation({
+    mutationFn: async (files: File[]) => {
+      const projectName = projectQuery.data?.name ?? "proyecto";
+      const implicitName = `Documentos de ${projectName}`;
+      // find-or-create idempotente: si la KB implícita ya existe (por nombre,
+      // entre las granteadas al proyecto), se reutiliza; si no, se crea con
+      // project_id → auto-grant (Q1).
+      let kb = grantedKbs.find((k) => k.name === implicitName);
+      if (!kb) {
+        kb = await apiFetch<KnowledgeBase>("/knowledge-bases", {
+          method: "POST",
+          body: {
+            name: implicitName,
+            description: `Documentos añadidos desde el proyecto ${projectName}`,
+            project_id: projectId,
+          },
+        });
+      }
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
+      const token = localStorage.getItem("agentic.token");
+      for (const [index, file] of files.entries()) {
+        setStatus(`Subiendo ${index + 1}/${files.length}: ${file.name}`);
+        const formData = new FormData();
+        formData.append("file", file);
+        const response = await fetch(`${apiUrl}/knowledge-bases/${kb.id}/documents`, {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: formData,
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`${file.name}: ${text || `HTTP ${response.status}`}`);
+        }
+      }
+      return files.length;
+    },
+    onSuccess: (count) => {
+      setStatus(`${count} documento(s) en ingesta.`);
+      setError(null);
+      onDone();
+    },
+    onError: (err) => {
+      setStatus(null);
+      setError(err instanceof ApiError ? err.body : String(err));
+    },
+  });
+
+  return (
+    <Card className="mt-6" data-testid="add-knowledge-section">
+      <CardContent className="flex flex-wrap items-center gap-3 py-4">
+        <label
+          className="border-input hover:bg-muted/50 inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium"
+          data-testid="add-knowledge-button"
+        >
+          <Library className="h-4 w-4" />
+          Añadir conocimiento
+          <input
+            type="file"
+            multiple
+            className="hidden"
+            data-testid="add-knowledge-input"
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []);
+              if (files.length > 0) upload.mutate(files);
+              e.target.value = "";
+            }}
+            disabled={upload.isPending || projectQuery.isLoading}
+          />
+        </label>
+        <span className="text-muted-foreground text-xs">
+          Sube documentos en un paso: van a la KB «Documentos de {projectQuery.data?.name ?? "…"}»
+          (se crea sola la primera vez, ya activada para este proyecto).
+        </span>
+        {status && (
+          <span className="text-xs" data-testid="add-knowledge-status">
+            {status}
+          </span>
+        )}
+        {error && (
+          <span className="text-destructive text-xs" data-testid="add-knowledge-error">
+            {error}
+          </span>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
