@@ -1,7 +1,7 @@
 ---
 id: 0108
 title: Fusión (o no) de los dos canales de veredicto de review
-status: proposed
+status: accepted
 date: 2026-07-09
 deciders: [operador (pendiente), claude]
 related: [hallazgo #7 (hallazgos-pendientes-2026-07-07), ADR 0084, ADR 0086, ADR 0087, ADR 0095, ADR 0096]
@@ -38,6 +38,18 @@ distinto (tag `<rejection>` con 3 campos ricos vs `feedback` string).
 
 Este ADR **no decide la implementación**: enumera las opciones y sus riesgos para que el
 operador elija. Es una **decisión de producto**.
+
+## Resolución (2026-07-12)
+
+**Aceptada la Opción C** (statu quo documentado) por delegación del operador
+(«haz todas las implementaciones para que quede robusto/profesional» +
+delegación 2026-06-17 de implementar ADRs proposed eligiendo la mejor opción).
+Sus consecuencias YA están aplicadas: anclas cruzadas en ambos parsers
+(`agent_runtime/providers.py::_review_from` y
+`api_server/reviewer_bridge.py::parse_reviewer_output`), contrato de wire único
+(`review_contract.py` + `test_review_verdict_wire_contract`) y semánticas de
+tolerancia documentadas. Si en el futuro un canal diverge de verdad, reabrir
+con la Opción B como candidata.
 
 ## Opciones
 
