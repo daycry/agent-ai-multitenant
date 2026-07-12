@@ -172,6 +172,34 @@ _MAX_TASK_COMMENTS = 10
 _TEST_REPORT_LOG_TAIL = 1500
 
 
+# P1-7: cuántos outputs previos del implementador ve el reviewer y la cola por
+# output (el más reciente entra entero-ish; los anteriores, recortados).
+_REVIEW_PRIOR_OUTPUTS = 3
+_REVIEW_PRIOR_OUTPUT_TAIL = 4000
+
+
+def _format_prior_outputs(outputs: list[str]) -> str:
+    """Los outputs del implementador para el reviewer, etiquetados (P1-7).
+
+    ``outputs`` llega más reciente primero. Uno solo → verbatim (byte-a-byte el
+    comportamiento previo). Varios → el más reciente primero como «attempt N
+    (latest)» y los anteriores etiquetados y recortados, para que el reviewer
+    vea el histórico de intentos sin que el prompt crezca sin límite."""
+    non_empty = [o for o in outputs if o.strip()]
+    if not non_empty:
+        return ""
+    if len(non_empty) == 1:
+        return non_empty[0]
+    total = len(non_empty)
+    blocks: list[str] = []
+    for index, output in enumerate(non_empty):
+        attempt_number = total - index
+        label = f"[attempt {attempt_number}" + (" — latest]" if index == 0 else " — earlier]")
+        tail = output if index == 0 else output[-_REVIEW_PRIOR_OUTPUT_TAIL:]
+        blocks.append(f"{label}\n{tail}")
+    return "\n\n".join(blocks)
+
+
 def _format_test_report_block(outcomes: list[dict[str, Any]]) -> str:
     """Render persisted ``test_run_completed`` outcomes as the reviewer's
     ``<test-report>`` prompt block (prod-17 task_prod17_test_02).
@@ -759,15 +787,22 @@ class TaskDispatcher:
         # cambio futuro en la cadena solo se aplicara a una de las dos ramas.
         model_spec = await self._resolve_model_spec(session, reviewer, project)
 
-        # The implementer's most recent output for this task — what the reviewer judges.
-        prior_output = (
-            await session.execute(
-                select(Execution.output)
-                .where(Execution.task_id == task.id, Execution.tenant_id == task.tenant_id)
-                .order_by(Execution.created_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
+        # The implementer's recent outputs for this task — what the reviewer judges.
+        # P1-7 (investigación 2026-07-11): antes solo el ULTIMO (LIMIT 1) — en un
+        # ciclo con reintentos el reviewer perdía el histórico (qué se intentó ya
+        # y volvió a fallar). Ahora los últimos 3, más reciente primero y
+        # etiquetados; cada uno con cola acotada para no inflar el prompt.
+        prior_rows = list(
+            (
+                await session.execute(
+                    select(Execution.output)
+                    .where(Execution.task_id == task.id, Execution.tenant_id == task.tenant_id)
+                    .order_by(Execution.created_at.desc())
+                    .limit(_REVIEW_PRIOR_OUTPUTS)
+                )
+            ).scalars()
+        )
+        prior_output = _format_prior_outputs([str(o or "") for o in prior_rows])
 
         # prod-17 task_prod17_test_02: fold the latest test-runtime outcomes into a
         # `<test-report>` block the reviewer reads (ADR 0027 loop). The test-runtime

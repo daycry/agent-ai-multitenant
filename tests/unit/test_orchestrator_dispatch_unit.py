@@ -189,3 +189,35 @@ def test_pick_without_preset_falls_back_to_load_balanced() -> None:
         ],
     )
     assert chosen == least_loaded
+
+
+# ---------------------------------------------------------------------------
+# P1-7 (investigación 2026-07-11): el reviewer ve el histórico de intentos.
+# ---------------------------------------------------------------------------
+def test_single_output_passes_verbatim() -> None:
+    from orchestrator.dispatch import _format_prior_outputs
+
+    assert _format_prior_outputs(["único intento"]) == "único intento"
+
+
+def test_multiple_outputs_are_labelled_newest_first() -> None:
+    from orchestrator.dispatch import _format_prior_outputs
+
+    out = _format_prior_outputs(["tercero (último)", "segundo", "primero"])
+    assert out.index("latest") < out.index("earlier")
+    assert "attempt 3" in out and "attempt 1" in out
+    assert out.index("tercero (último)") < out.index("segundo") < out.index("primero")
+
+
+def test_earlier_outputs_are_tail_capped() -> None:
+    from orchestrator.dispatch import _REVIEW_PRIOR_OUTPUT_TAIL, _format_prior_outputs
+
+    huge = "x" * (_REVIEW_PRIOR_OUTPUT_TAIL * 3)
+    out = _format_prior_outputs(["reciente", huge])
+    assert len(out) < _REVIEW_PRIOR_OUTPUT_TAIL * 2
+
+
+def test_empty_outputs_render_empty() -> None:
+    from orchestrator.dispatch import _format_prior_outputs
+
+    assert _format_prior_outputs(["", "   "]) == ""
