@@ -201,3 +201,47 @@ async def test_chat_stream_emits_progress_and_final_answer(
             await client.get(f"/assistant/conversations/{conv_id}/turns", headers=headers)
         ).json()
         assert [t["role"] for t in turns] == ["user", "assistant"]
+
+
+# ===========================================================================
+# ADR 0116: el consumo LLM del asistente por fin se contabiliza.
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_assistant_usage_is_recorded(configured_app, migrations_pg_dsn: str) -> None:
+    import asyncpg as _asyncpg
+
+    seeded = await _seed(migrations_pg_dsn)
+    # El modelo capturador simula usage acumulado (como haria LLMAssistantModel).
+    from api_server.routers.assistant import get_assistant_model
+
+    class _ModelWithUsage(_CapturingModel):
+        usage_input_tokens = 120
+        usage_output_tokens = 45
+        usage_cost_usd = 0.0123
+        usage_calls = 2
+        provider_kind = "ollama"
+        model = "gpt-oss:20b"
+
+    configured_app.dependency_overrides[get_assistant_model] = lambda: _ModelWithUsage()
+    token = await _mint_token(seeded["admin_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        await _chat(client, headers, "hola")
+
+    conn = await _asyncpg.connect(migrations_pg_dsn)
+    try:
+        row = await conn.fetchrow(
+            "SELECT source, input_tokens, output_tokens, calls FROM llm_usage_events"
+            " WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1",
+            seeded["tenant_a"],
+        )
+    finally:
+        await conn.close()
+    assert row is not None
+    assert row["source"] == "assistant"
+    assert row["input_tokens"] == 120
+    assert row["output_tokens"] == 45
+    assert row["calls"] == 2

@@ -62,6 +62,7 @@ from api_server.db.cortex_curiosity import CortexCuriosityPursuit
 # Córtex F3 (ADR 0074/0077): import the identity models so they register on
 # ``Base.metadata`` (same reason as the F1/F2 models above).
 from api_server.db.cortex_identity import CortexIdentity, CortexIdentityHistory
+from api_server.db.llm_usage import LLMUsageEvent
 
 
 class UserRole(enum.StrEnum):
@@ -1128,6 +1129,7 @@ __all__ = [
     "AuditLog",
     "CortexAffectSnapshot",
     "AssistantConversation",
+    "LLMUsageEvent",
     "AssistantTurn",
     "CortexConversation",
     "CortexCuriosityPursuit",

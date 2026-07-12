@@ -62,6 +62,13 @@ class LLMAssistantModel:
     # pasa ``cortex_tool_schemas``. Es un field de INSTANCIA (no method), así que
     # ``dataclasses.replace`` en ``apply_effort_decision`` lo preserva sin binding.
     schema_fn: SchemaFn = field(default=tool_schemas)
+    # ADR 0116: acumuladores de usage del REQUEST (una instancia por request via
+    # get_assistant_model / build_cortex_model). El router los persiste
+    # best-effort en llm_usage_events al cerrar el turno.
+    usage_input_tokens: int = 0
+    usage_output_tokens: int = 0
+    usage_cost_usd: float = 0.0
+    usage_calls: int = 0
 
     async def decide(self, state: AssistantState) -> ModelTurn:
         messages = self._build_messages(state)
@@ -78,6 +85,12 @@ class LLMAssistantModel:
             tools=tools,
             **self.extra_call_kwargs,
         )
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            self.usage_input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
+            self.usage_output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
+            self.usage_cost_usd += float(getattr(usage, "cost_usd", 0.0) or 0.0)
+        self.usage_calls += 1
         if response.tool_calls:
             calls = tuple(
                 ToolInvocation(name=tc.name, arguments=dict(tc.arguments))

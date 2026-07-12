@@ -353,6 +353,18 @@ async def post_turn(
             now=now,
         )
 
+        # ADR 0116: el consumo del córtex por fin se contabiliza (best-effort;
+        # tenant_id=None — es consumo del owner de plataforma, no de un tenant).
+        from api_server.llm_usage import record_llm_usage
+
+        await record_llm_usage(
+            session,
+            source="cortex",
+            model_client=model,
+            tenant_id=None,
+            user_id=owner_id,
+        )
+
     # Córtex F2 (ADR 0075): tras COMMIT del turno, dispara el distilador afectivo
     # fuera del hot-path (fire-and-forget). El appraisal es ASÍNCRONO: el dial PAD
     # se actualiza ~1-2s después; NUNCA bloquea ni rompe la respuesta (un fallo del

@@ -1,10 +1,16 @@
 ---
 title: "ADR 0116: Contabilidad de consumo LLM de los consumidores no-run (asistente, córtex, planning)"
-status: proposed
+status: accepted
 date: 2026-07-12
 ---
 
 # ADR 0116: Contabilidad LLM de consumidores no-run
+
+> **Resolución 2026-07-12**: IMPLEMENTADO fase 1 — migración 0109
+> (`llm_usage_events`, RLS estándar, tenant_id nullable para el córtex),
+> acumuladores en `LLMAssistantModel` y registro best-effort en asistente
+> (chat + stream) y córtex. Planning + suma al budget del tenant = fase 2
+> (decisión de producto: si el chat cuenta contra el budget).
 
 ## Contexto
 

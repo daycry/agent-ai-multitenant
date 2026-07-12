@@ -73,6 +73,7 @@ from api_server.db.models import Organization, User
 from api_server.db.session import get_admin_sessionmaker
 from api_server.llm_providers.factory import build_llm_provider
 from api_server.llm_providers.vault import LLMProviderVaultStore
+from api_server.llm_usage import record_llm_usage
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers.llm_providers import get_provider_vault_store
 from api_server.schemas.assistant import (
@@ -359,6 +360,14 @@ async def assistant_chat_stream(
                 tools_called=list(result.tools_called),
                 rounds=result.rounds,
             )
+            # ADR 0116: contabilidad del consumo (best-effort).
+            await record_llm_usage(
+                session,
+                source="assistant",
+                model_client=model,
+                tenant_id=tenant_id,
+                user_id=principal.user_id,
+            )
             await session.commit()
             await queue.put(
                 (
@@ -544,6 +553,14 @@ async def assistant_chat(
         answer=result.content,
         tools_called=list(result.tools_called),
         rounds=result.rounds,
+    )
+    # ADR 0116: el consumo del asistente por fin se contabiliza (best-effort).
+    await record_llm_usage(
+        session,
+        source="assistant",
+        model_client=model,
+        tenant_id=tenant_id,
+        user_id=principal.user_id,
     )
     return AssistantChatResponse(
         answer=result.content,
