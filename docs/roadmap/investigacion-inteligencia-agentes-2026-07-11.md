@@ -3,7 +3,8 @@
 - **Fecha**: 2026-07-11
 - **Autor**: Claude (investigación multi-agente: 5 exploradores en paralelo sobre prompts, KB/RAG, memoria, configuración y bucle de ejecución)
 - **Estado**: investigación entregada — pendiente de priorización por el operador
-- **Alcance**: SOLO diagnóstico y propuestas. No se ha implementado nada.
+- **Alcance**: diagnóstico y propuestas.
+- **ESTADO 2026-07-12 — IMPLEMENTADO**: P0 completo (7/7) y P1 completo (11/11; P1-10 reranker = toggle del operador `rag.reranker_enabled`, recomendación: activarlo en dev y medir). P2 → ADRs 0110-0115 `proposed` (+0116 usage no-run). Todo TDD + commit atómico en `plan/runs-visor-trabajo`.
 
 ---
 

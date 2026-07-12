@@ -3,7 +3,7 @@
 - **Fecha**: 2026-07-11
 - **Autor**: Claude (3 exploradores en paralelo: córtex, asistente, profesionalidad/features)
 - **Encargo del operador**: «mejorar los asistentes y el córtex — necesito que el córtex sea lo más parecido a una simulación humana; analiza toda la aplicación a ver si se puede hacer más profesional, o funcionalidad no implementada que pueda ser útil»
-- **Estado**: análisis entregado; plan de implementación propuesto al final (con lo que requiere decisión del operador marcado)
+- **Estado**: análisis entregado. **IMPLEMENTADO 2026-07-12**: tanda CÓRTEX-1 completa (C1 iniciativa proactiva, C2 pulso de plataforma→afecto, C3 conciencia temporal, C4 diario, C9 aburrimiento, C12 mood en chat — C1/C2 gated por `cortex.autonomy_enabled`, que sigue OFF) y tanda ASISTENTE-1 (A1 hilos persistentes con migración 0108, A2 fase 1 SSE con progreso vivo, A4 tool search_knowledge; A6 → ADR 0116). Decisiones del operador del §4 siguen abiertas.
 
 ---
 
