@@ -62,12 +62,14 @@ const STATUS_VARIANT: Record<DocumentStatus, BadgeVariant> = {
   failed: "danger",
 };
 
+// KB Q6 (propuesta simplificación 2026-07-12): lenguaje de persona, no jerga
+// del pipeline. El estado técnico sigue disponible en data-status/tooltip.
 const STATUS_LABEL: Record<DocumentStatus, string> = {
-  pending: "Pendiente",
-  processing: "Procesando",
-  indexed: "Indexado",
-  indexed_empty: "Indexado vacío",
-  failed: "Fallido",
+  pending: "Procesando…",
+  processing: "Procesando…",
+  indexed: "Listo",
+  indexed_empty: "Sin contenido aprovechable",
+  failed: "Error",
 };
 
 function formatBytes(bytes: number): string {

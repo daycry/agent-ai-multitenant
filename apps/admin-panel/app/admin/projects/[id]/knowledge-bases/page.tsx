@@ -93,6 +93,14 @@ export default function ProjectKnowledgeBasesPage() {
   const params = useParams<{ id: string }>();
   const projectId = params.id;
 
+  // KB Q3 (propuesta simplificación 2026-07-12): el catálogo completo del
+  // tenant (incluye built-ins) para activar/desactivar con un clic — antes
+  // había que descubrirlas y grantearlas desde la pantalla global.
+  const catalogQuery = useQuery({
+    queryKey: ["kb-catalog"],
+    queryFn: () => apiFetch<KnowledgeBase[]>("/knowledge-bases"),
+    refetchOnWindowFocus: false,
+  });
   const kbsQuery = useQuery({
     queryKey: ["project-kbs", projectId],
     queryFn: () => apiFetch<KnowledgeBase[]>(`/projects/${projectId}/knowledge-bases`),
@@ -139,7 +147,93 @@ export default function ProjectKnowledgeBasesPage() {
           ))}
         </div>
       )}
+
+      {/* KB Q3: catálogo con toggle — activa cualquier KB del tenant (built-ins
+          incluidas) sin ir a la pantalla global. El toggle crea/borra un grant
+          NORMAL de kb_projects (auditable y revocable). */}
+      <KbCatalogSection
+        projectId={projectId}
+        catalog={catalogQuery.data ?? []}
+        granted={new Set((kbsQuery.data ?? []).map((kb) => kb.id))}
+      />
     </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// KB Q3 — catálogo del tenant con toggle de activación por proyecto
+// --------------------------------------------------------------------------
+function KbCatalogSection({
+  projectId,
+  catalog,
+  granted,
+}: {
+  projectId: string;
+  catalog: KnowledgeBase[];
+  granted: Set<string>;
+}) {
+  const queryClient = useQueryClient();
+  const toggle = useMutation({
+    mutationFn: async ({ kbId, enable }: { kbId: string; enable: boolean }) => {
+      if (enable) {
+        await apiFetch(`/knowledge-bases/${kbId}/projects`, {
+          method: "POST",
+          body: { project_id: projectId },
+        });
+      } else {
+        await apiFetch<void>(`/knowledge-bases/${kbId}/projects/${projectId}`, {
+          method: "DELETE",
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project-kbs", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["kb-catalog"] });
+    },
+  });
+
+  if (catalog.length === 0) return null;
+  return (
+    <Card className="mt-6" data-testid="kb-catalog-section">
+      <CardContent className="pt-5">
+        <h2 className="text-base font-semibold">Catálogo de conocimiento</h2>
+        <p className="text-muted-foreground mt-1 text-sm">
+          Activa una KB para que este proyecto (y sus agentes) puedan leerla; desactívala para
+          revocar el acceso.
+        </p>
+        {toggle.isError ? (
+          <p className="text-destructive mt-2 text-sm" data-testid="kb-catalog-error">
+            {toggle.error instanceof ApiError ? toggle.error.body : String(toggle.error)}
+          </p>
+        ) : null}
+        <ul className="mt-3 divide-y">
+          {catalog.map((kb) => {
+            const isGranted = granted.has(kb.id);
+            return (
+              <li key={kb.id} className="flex items-center justify-between gap-3 py-2">
+                <div className="min-w-0">
+                  <span className="block truncate text-sm">{kb.name}</span>
+                  {kb.description ? (
+                    <span className="text-muted-foreground block truncate text-xs">
+                      {kb.description}
+                    </span>
+                  ) : null}
+                </div>
+                <Button
+                  size="sm"
+                  variant={isGranted ? "outline" : "default"}
+                  disabled={toggle.isPending}
+                  onClick={() => toggle.mutate({ kbId: kb.id, enable: !isGranted })}
+                  data-testid={`kb-catalog-toggle-${kb.id}`}
+                >
+                  {isGranted ? "Desactivar" : "Activar"}
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      </CardContent>
+    </Card>
   );
 }
 
