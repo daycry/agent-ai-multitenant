@@ -169,3 +169,69 @@ async def test_embedder_enables_vector_path_in_planning_context(
 
     assert any(marker in d for d in with_embedder.get("docs", []))
     assert not any(marker in d for d in without_embedder.get("docs", []))
+
+
+# ===========================================================================
+# P1-11b: backfill de embeddings de CHUNKS — la ingesta deja embedding=NULL si
+# Ollama falla al crear, y el re-embed nunca existió (solo el de memorias).
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_chunk_embedding_backfill_fills_nulls(schema_at_head, migrations_pg_dsn: str) -> None:
+    import asyncpg as _asyncpg
+    from workers.config import Settings as WorkerSettings
+    from workers.maintenance import _backfill_chunk_embeddings_async
+
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seeded = await seed_rag_corpus(migrations_pg_dsn)
+
+    # Un chunk SIN embedding (la ingesta con Ollama caído).
+    conn = await _asyncpg.connect(migrations_pg_dsn)
+    doc_id, chunk_id = uuid4(), uuid4()
+    try:
+        await conn.execute(
+            "INSERT INTO documents"
+            " (id, tenant_id, kb_id, title, source_filename, source_mime_type,"
+            "  source_storage_key, source_size_bytes, status)"
+            " VALUES ($1, $2, $3, 'Null doc', 'n.md', 'text/markdown', 'kb/n', 10, 'indexed')",
+            doc_id,
+            seeded["tenant_id"],
+            seeded["kb_id"],
+        )
+        await conn.execute(
+            "INSERT INTO chunks (id, tenant_id, document_id, ordinal, content)"
+            " VALUES ($1, $2, $3, 0, 'contenido sin vector')",
+            chunk_id,
+            seeded["tenant_id"],
+            doc_id,
+        )
+    finally:
+        await conn.close()
+
+    import os
+
+    result = await _backfill_chunk_embeddings_async(
+        settings=(
+            WorkerSettings(database_url=os.environ["WORKERS_TEST_ADMIN_URL"])
+            if os.environ.get("WORKERS_TEST_ADMIN_URL")
+            else WorkerSettings(
+                database_url=os.environ.get(
+                    "API_SERVER_ADMIN_DATABASE_URL",
+                    "postgresql+asyncpg://migrations_user:changeme-migrations-dev-only"
+                    "@localhost:15432/agentic_platform_test",
+                )
+            )
+        ),
+        embedder_factory=lambda _s: HashEmbedder(),
+    )
+
+    assert result["updated"] >= 1
+    conn = await _asyncpg.connect(migrations_pg_dsn)
+    try:
+        remaining = await conn.fetchval(
+            "SELECT count(*) FROM chunks WHERE id = $1 AND embedding IS NULL", chunk_id
+        )
+    finally:
+        await conn.close()
+    assert remaining == 0

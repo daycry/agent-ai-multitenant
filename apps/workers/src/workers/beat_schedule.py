@@ -136,6 +136,13 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     # una pasada solo toca filas NULL, así que con todo rellenado es un no-op
     # barato. Su enable/batch/throttle son platform settings (memory.backfill_*)
     # que un System Admin posee. Pinned a `ingestion` (donde vive el embedder).
+    # P1-11b (investigación 2026-07-11): el espejo para chunks de KB — la
+    # ingesta deja embedding=NULL si Ollama falla y el re-embed nunca existió.
+    "backfill-chunk-embeddings-every-5m": {
+        "task": "workers.backfill_chunk_embeddings",
+        "schedule": schedule(run_every=300.0),
+        "options": {"queue": "default"},
+    },
     "backfill-memory-embeddings-every-5m": {
         "task": "workers.backfill_memory_embeddings",
         "schedule": schedule(run_every=300.0),

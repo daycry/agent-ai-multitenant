@@ -29,6 +29,10 @@ submodule's own global.
 from __future__ import annotations
 
 from workers.maintenance.budget_sweep import _refresh_budgets_async, refresh_budgets
+from workers.maintenance.chunk_backfill import (
+    _backfill_chunk_embeddings_async,
+    backfill_chunk_embeddings,
+)
 from workers.maintenance.cleanup import idle_sweep_pools, prune_worktrees, purge_dep_cache
 from workers.maintenance.dag_promotion_beat import _promote_ready_plans_async, promote_ready_plans
 from workers.maintenance.memory_backfill import (
@@ -88,7 +92,9 @@ __all__ = [
     "_RECONCILE_REVIEW_MIN_AGE",
     "_RECONCILE_STUCK_TASK_MIN_AGE",
     "_autostart_review_runtime",
+    "_backfill_chunk_embeddings_async",
     "_backfill_memory_embeddings_async",
+    "backfill_chunk_embeddings",
     "_backfill_worktree_to_bare",
     "_default_embedder_factory",
     "_expire_review_runtimes",
