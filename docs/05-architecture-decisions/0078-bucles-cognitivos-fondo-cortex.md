@@ -1,7 +1,7 @@
 ---
 adr_id: "0078"
 title: "Bucles cognitivos de fondo del Córtex: reflexión, curiosidad autónoma y gobierno de coste/egress"
-status: proposed
+status: accepted
 date: 2026-06-22
 authors: [claude-opus, workflow-diseno-cortex]
 plan_referenced: cortex-system-owner
@@ -50,3 +50,7 @@ memoria `learning`) y lo marca `surfaced` en la MISMA transacción del turno
 el Panel de Mente. La reflexión produce además el `owner_model`
 (`relationship_model` + memorias `kind='owner_model'`), cerrando el "aprender
 DE MÍ". Ver [cortex-identidad-real](../roadmap/cortex-identidad-real.md).
+
+## Estado de implementación (2026-07-12)
+
+IMPLEMENTADO (fase F4 del cortex + tandas posteriores): los tres bucles beat existen y son idempotentes — `workers/cortex_reflection.py` (sintesis de insights + narrativa versionada + baseline clampeado), `workers/cortex_curiosity.py` (pursuits con kill-switch, budget caps en Redis, circuit-breaker `is_circuit_open` y gate de drive), `workers/cortex_maintenance.py` (decay, retention, snapshots). Ademas se anadieron `cortex_platform.py` (pulso de plataforma, 2026-07-12) y `cortex_initiative.py` (proactividad gated). La autonomia global sigue OFF (`cortex.autonomy_enabled`, decision del operador).

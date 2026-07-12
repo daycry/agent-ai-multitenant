@@ -31,3 +31,7 @@ La visión pide **razonamiento profundo** y **búsqueda en Internet**. El catál
 - ✅ Cumple ADR 0021; obtiene búsqueda web con anti-SSRF sin tocar el aislamiento del sandbox.
 - ⚠️ Depende de que la imagen del api-server traiga `WITH_CLAUDE`. Sin él, no hay búsqueda web (camino degradado gated).
 - ⚠️ **Prerequisito de seguridad:** arreglar antes el hallazgo "credencial en `os.environ` global" de `ClaudeAgentProvider` (auditoría, zona LLM providers).
+
+## Estado de implementación (2026-07-12)
+
+PARCIAL y con divergencia deliberada — se mantiene `proposed` como registro fiel. Lo implementado: transporte claude_sdk del cortex pineado por test (`test_cortex_claude_sdk_transport`), dependencia opcional (extra `claude`) y degradacion limpia. La via de web elegida en la practica fue el CAMINO DEGRADADO del punto 4 — tool web propia desde el api-server con anti-SSRF obligatorio (`ssrf_guard`, searxng, `cortex.web_enabled`) — porque el owner del stack dev usa gpt-oss/Ollama, sin claude_sdk. El punto 3 (WebSearch nativa del SDK) sigue siendo lo recomendado cuando el owner tenga claude_sdk.

@@ -1,7 +1,7 @@
 ---
 adr_id: "0075"
 title: "Modelo afectivo computacional del Córtex (PAD + appraisal OCC + drives homeostáticos)"
-status: proposed
+status: accepted
 date: 2026-06-22
 authors: [claude-opus, workflow-diseno-cortex]
 plan_referenced: cortex-system-owner
@@ -44,3 +44,7 @@ paso acotada, suelo `low`, nunca `off`) cableado al self-context de chat y voz;
 la decisión queda auditada en `cortex_turns.metadata_.self_context`. Además, el
 decay del motor converge ahora al `mood_baseline` EVOLUTIVO de la identidad
 (antes un PAD hardcodeado), con fallback de arousal "sin calibrar" → 0.3.
+
+## Estado de implementación (2026-07-12)
+
+IMPLEMENTADO (fases F2/F3 del cortex + tanda 2026-07-11/12): PAD continuo con decay lazy y clamps (`api_server/cortex/affect.py`), drives homeostaticos, appraisal asincrono por Celery con destilador Ollama fail-open (`workers/cortex_affect.py`), mood EMA con snapshots, baseline conectado a conducta, modulacion de tono (`tone_guidance`, incl. aburrimiento C9) y pulso de plataforma determinista (`cortex/platform_affect.py`, beat 15min). La UI del Panel de Mente muestra el estado afectivo como modelo computacional.
