@@ -34,3 +34,13 @@ Es EL cambio de mayor retorno del bucle y también el más invasivo — de ahí 
 
 Mantener single-turn + más stickies: es el statu quo ya mejorado (P0/P1); no
 recupera el caching ni la continuidad fina.
+
+## Nota de planificación (2026-07-12)
+
+Evaluado para implementación y DIFERIDO deliberadamente: exige tocar el
+contrato de los 4 adaptadores, compactación propia y revisar el modelo de
+presupuestos, y solaparía con los mecanismos de continuidad recién
+estabilizados (condensado P1-5, stickies, scratchpad P1-6, batch read-only
+ADR 0111 — que ya recorta iteraciones de research). Abordarlo requiere una
+tanda dedicada con QA e2e propio, idealmente junto al ADR 0097 (sesión SDK
+persistente) que es su mitad claude_sdk.
