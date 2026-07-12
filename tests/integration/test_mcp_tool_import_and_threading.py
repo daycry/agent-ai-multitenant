@@ -185,12 +185,40 @@ async def _mint_token(user_id: UUID, tenant_id: UUID) -> str:
 _IMPORT_BODY = {"tool_names": ["read_file", "write_file"]}
 
 
+def _patch_discovery(monkeypatch: pytest.MonkeyPatch, schema: dict | None = None) -> None:
+    """ADR 0101: el import re-descubre server-side (fail-closed). Los tests
+    no tienen un MCP server vivo, así que se pincha el discovery con una
+    respuesta canónica (read_file con schema, write_file sin args)."""
+    from shared_mcp.discovery import DiscoveryResult
+    from shared_mcp.types import MCPTool
+
+    effective = schema if schema is not None else _SCHEMA_V1
+
+    async def _discover(config, *, vault_resolver=None):
+        return DiscoveryResult(
+            tools=[
+                MCPTool(
+                    name="read_file",
+                    description="Read a file from disk",
+                    input_schema=effective,
+                ),
+                MCPTool(name="write_file", description=None, input_schema={}),
+            ],
+            server_name="filesystem",
+        )
+
+    monkeypatch.setattr("api_server.routers.mcp.discover_tools", _discover)
+
+
 # ===========================================================================
 # Importación: namespacing + category=mcp + security sandboxed por defecto
 # ===========================================================================
 @pytest.mark.asyncio
-async def test_import_creates_namespaced_mcp_tools(configured_app, migrations_pg_dsn: str) -> None:
+async def test_import_creates_namespaced_mcp_tools(
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     seeded = await _seed(migrations_pg_dsn)
+    _patch_discovery(monkeypatch)
     token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
     headers = {"Authorization": f"Bearer {token}"}
     project_id = seeded["project_a"]
@@ -223,8 +251,11 @@ async def test_import_creates_namespaced_mcp_tools(configured_app, migrations_pg
 
 
 @pytest.mark.asyncio
-async def test_reimport_is_idempotent_no_duplicates(configured_app, migrations_pg_dsn: str) -> None:
+async def test_reimport_is_idempotent_no_duplicates(
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     seeded = await _seed(migrations_pg_dsn)
+    _patch_discovery(monkeypatch)
     token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
     headers = {"Authorization": f"Bearer {token}"}
     project_id = seeded["project_a"]
@@ -285,9 +316,10 @@ async def test_tenant_b_cannot_import_into_tenant_a_project(
 
 @pytest.mark.asyncio
 async def test_imported_mcp_tools_not_visible_to_other_tenant(
-    configured_app, migrations_pg_dsn: str
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seeded = await _seed(migrations_pg_dsn)
+    _patch_discovery(monkeypatch)
     token_a = await _mint_token(seeded["user_a"], seeded["tenant_a"])
     token_b = await _mint_token(seeded["user_b"], seeded["tenant_b"])
     project_a = seeded["project_a"]
@@ -329,6 +361,110 @@ async def test_import_unknown_server_is_404(configured_app, migrations_pg_dsn: s
         )
         # El server no está declarado en el proyecto → 404.
         assert resp.status_code == 404, resp.text
+
+
+# ===========================================================================
+# ADR 0101: el import persiste el input_schema RE-DESCUBIERTO server-side
+# ===========================================================================
+_SCHEMA_V1 = {
+    "type": "object",
+    "properties": {"path": {"type": "string"}},
+    "required": ["path"],
+}
+_SCHEMA_V2 = {
+    "type": "object",
+    "properties": {"path": {"type": "string"}, "encoding": {"type": "string"}},
+    "required": ["path"],
+}
+
+
+def _fake_discovery(schema: dict, description: str = "Read a file from disk"):
+    from shared_mcp.discovery import DiscoveryResult
+    from shared_mcp.types import MCPTool
+
+    async def _discover(config, *, vault_resolver=None):
+        return DiscoveryResult(
+            tools=[
+                MCPTool(name="read_file", description=description, input_schema=schema),
+                MCPTool(name="write_file", description=None, input_schema={}),
+            ],
+            server_name="filesystem",
+        )
+
+    return _discover
+
+
+@pytest.mark.asyncio
+async def test_import_persists_discovered_schema(
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0101: sin esto, una tool MCP con args se anuncia al LLM con
+    ``parameters: {}`` y el pre-guard del runtime la rechaza (inservible)."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    project_id = seeded["project_a"]
+    monkeypatch.setattr("api_server.routers.mcp.discover_tools", _fake_discovery(_SCHEMA_V1))
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            f"/projects/{project_id}/mcp/servers/filesystem/import-tools",
+            json=_IMPORT_BODY,
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        imported = {t["name"]: t for t in resp.json()["tools"]}
+        # El schema descubierto se PERSISTE (antes quedaba '{}'::jsonb).
+        assert imported["filesystem.read_file"]["input_schema"] == _SCHEMA_V1
+        # La descripción real del server también (mejor que el placeholder).
+        assert imported["filesystem.read_file"]["description"] == "Read a file from disk"
+        # Una tool sin schema/descripción degrada al comportamiento histórico.
+        assert imported["filesystem.write_file"]["input_schema"] == {}
+
+        # Re-import con schema evolucionado → el upsert REFRESCA el schema.
+        monkeypatch.setattr("api_server.routers.mcp.discover_tools", _fake_discovery(_SCHEMA_V2))
+        second = await client.post(
+            f"/projects/{project_id}/mcp/servers/filesystem/import-tools",
+            json=_IMPORT_BODY,
+            headers=headers,
+        )
+        assert second.status_code == 200, second.text
+        refreshed = {t["name"]: t for t in second.json()["tools"]}
+        assert refreshed["filesystem.read_file"]["input_schema"] == _SCHEMA_V2
+
+
+@pytest.mark.asyncio
+async def test_import_fails_closed_when_discovery_unreachable(
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Un server inalcanzable en el import → 502 tipado, NO una tool rota con
+    schema vacío que recrearía el bug (fail-closed, ADR 0101)."""
+    from shared_mcp.exceptions import MCPTransportError
+
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    project_id = seeded["project_a"]
+
+    async def _boom(config, *, vault_resolver=None):
+        raise MCPTransportError("connection refused")
+
+    monkeypatch.setattr("api_server.routers.mcp.discover_tools", _boom)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            f"/projects/{project_id}/mcp/servers/filesystem/import-tools",
+            json=_IMPORT_BODY,
+            headers=headers,
+        )
+        assert resp.status_code == 502, resp.text
+        # Y no quedó ninguna fila a medias en el catálogo.
+        listed = await client.get("/tools?category=mcp", headers=headers)
+        assert listed.json() == []
 
 
 # ===========================================================================

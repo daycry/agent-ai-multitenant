@@ -1,7 +1,7 @@
 ---
 adr: "0101"
 title: Discovery de tools MCP en runtime vs importación manual
-status: proposed
+status: accepted
 date: 2026-07-03
 deciders: operador (pendiente)
 phase: auditoria-plataforma-2026-07-03
