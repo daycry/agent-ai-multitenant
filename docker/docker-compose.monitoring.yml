@@ -106,6 +106,39 @@ services:
     <<: [*default-restart, *default-logging]
 
   # ---------------------------------------------------------------------------
+  # workers (override) — FASE 2b monitorización (2026-07-12): monta el drop-dir
+  # del textfile collector RW en el worker que consume la cola `default`, donde
+  # corre workers.sample_queue_metrics (cada 30s). Sin este mount el sampler
+  # escribía en su default /host/textfile/ INEXISTENTE dentro del contenedor y
+  # agentic_celery_queue_depth / agentic_tasks_by_status / agentic_dlq_depth /
+  # agentic_executions_24h jamás llegaban a Prometheus (las reglas de
+  # app_alerts.yml no podían disparar). El default del código ya apunta aquí,
+  # así que no hace falta env; las listas de volumes se FUSIONAN entre ficheros
+  # compose, no se reemplazan. Solo aplica si este overlay está desplegado —
+  # sin monitorización el writer trata el sink ausente como esperado (no-op).
+  # ---------------------------------------------------------------------------
+  workers:
+    volumes:
+      - node_exporter_textfile:/host/textfile
+    depends_on:
+      textfile-init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # textfile-init — one-shot: el drop-dir del textfile collector es
+  # MULTI-ESCRITOR (workers escribe como uid 1000; workers-backup como root) y
+  # el volumen nace root:root 0755 → EACCES para el sampler. Modo 1777 (sticky,
+  # como /tmp): cualquier escritor deja su .prom, nadie borra los de otros.
+  # ---------------------------------------------------------------------------
+  textfile-init:
+    image: busybox:1.36
+    command: ["chmod", "1777", "/host/textfile"]
+    volumes:
+      - node_exporter_textfile:/host/textfile
+    network_mode: none
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
   # Alertmanager — receives firing alerts from Prometheus, dedups/groups/
   # throttles them, and delivers to the platform notifier via a webhook
   # receiver (task_12_14). Config + routing live in

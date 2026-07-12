@@ -38,6 +38,9 @@ METRIC_TASKS_BY_STATUS = "agentic_tasks_by_status"
 # prod-08 núcleo (2026-07-12): profundidad de los streams DLQ (XLEN) — un
 # mensaje dead-lettered es trabajo PERDIDO hasta que un humano lo mira.
 METRIC_DLQ_DEPTH = "agentic_dlq_depth"
+# FASE 2b monitorización (2026-07-12): actividad real de runs — ejecuciones por
+# estado en las últimas 24h (el pulso del sistema agéntico para el dashboard).
+METRIC_EXECUTIONS_24H = "agentic_executions_24h"
 
 
 def _escape_label(value: str) -> str:
@@ -50,6 +53,7 @@ def render_queue_metrics(
     queue_depths: dict[str, int],
     status_counts: dict[str, int],
     dlq_depths: dict[str, int] | None = None,
+    execution_counts: dict[str, int] | None = None,
 ) -> str:
     """Render the Prometheus text-exposition body. Pure (no I/O) so it is
     unit-testable. Keys are emitted in sorted order for a noise-free file diff."""
@@ -76,6 +80,16 @@ def render_queue_metrics(
             lines.append(
                 f'{METRIC_DLQ_DEPTH}{{stream="{_escape_label(stream)}"}} {dlq_depths[stream]}'
             )
+    if execution_counts:
+        lines.append(
+            f"# HELP {METRIC_EXECUTIONS_24H} Executions per terminal status, last 24 hours."
+        )
+        lines.append(f"# TYPE {METRIC_EXECUTIONS_24H} gauge")
+        for exec_status in sorted(execution_counts):
+            lines.append(
+                f'{METRIC_EXECUTIONS_24H}{{status="{_escape_label(exec_status)}"}} '
+                f"{execution_counts[exec_status]}"
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -85,6 +99,7 @@ def write_queue_metrics(
     queue_depths: dict[str, int],
     status_counts: dict[str, int],
     dlq_depths: dict[str, int] | None = None,
+    execution_counts: dict[str, int] | None = None,
 ) -> bool:
     """Atomically write the queue-metrics file. Returns ``True`` on success,
     ``False`` otherwise — best-effort, never breaks the worker. Delegates the
@@ -93,7 +108,10 @@ def write_queue_metrics(
     return write_textfile_metric(
         path,
         lambda: render_queue_metrics(
-            queue_depths=queue_depths, status_counts=status_counts, dlq_depths=dlq_depths
+            queue_depths=queue_depths,
+            status_counts=status_counts,
+            dlq_depths=dlq_depths,
+            execution_counts=execution_counts,
         ),
         event_prefix="queue_metrics",
     )

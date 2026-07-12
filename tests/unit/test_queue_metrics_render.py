@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 from workers.queue_metrics import (
+    METRIC_EXECUTIONS_24H,
     METRIC_QUEUE_DEPTH,
     METRIC_TASKS_BY_STATUS,
     render_queue_metrics,
@@ -51,6 +52,49 @@ def test_render_handles_empty() -> None:
     assert f"# TYPE {METRIC_QUEUE_DEPTH} gauge" in body
     assert f"# TYPE {METRIC_TASKS_BY_STATUS} gauge" in body
     assert body.endswith("\n")
+
+
+def test_render_emits_executions_24h_when_present() -> None:
+    body = render_queue_metrics(
+        queue_depths={},
+        status_counts={},
+        execution_counts={"completed": 4, "failed": 1},
+    )
+    assert f"# TYPE {METRIC_EXECUTIONS_24H} gauge" in body
+    assert f'{METRIC_EXECUTIONS_24H}{{status="completed"}} 4' in body
+    assert f'{METRIC_EXECUTIONS_24H}{{status="failed"}} 1' in body
+
+
+def test_render_omits_executions_24h_when_absent() -> None:
+    # Sin muestra (colector falló o no hay ejecuciones) → la métrica no aparece,
+    # igual que dlq_depths: ausencia ≠ cero.
+    body = render_queue_metrics(queue_depths={}, status_counts={})
+    assert METRIC_EXECUTIONS_24H not in body
+
+
+@pytest.mark.asyncio
+async def test_collect_execution_counts_groups_by_status() -> None:
+    from workers.maintenance.queue_sampler import _collect_execution_counts
+
+    class _Rows:
+        @staticmethod
+        def all() -> list[tuple[str, int]]:
+            return [("completed", 7), ("failed", 2)]
+
+    class _Session:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        async def execute(self, stmt: object) -> _Rows:
+            self.queries.append(str(stmt))
+            return _Rows()
+
+    session = _Session()
+    counts = await _collect_execution_counts(session)
+    assert counts == {"completed": 7, "failed": 2}
+    # La ventana de 24h y el GROUP BY viajan en la propia query.
+    assert "24 hours" in session.queries[0]
+    assert "executions" in session.queries[0]
 
 
 def test_render_escapes_label_values() -> None:

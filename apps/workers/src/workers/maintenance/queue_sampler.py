@@ -56,6 +56,18 @@ async def _collect_dlq_depths(redis: Any, streams: tuple[str, ...]) -> dict[str,
     return depths
 
 
+async def _collect_execution_counts(session: Any) -> dict[str, int]:
+    """Ejecuciones por estado en las últimas 24h — la actividad real de runs
+    que el dashboard «Plataforma Agéntica» muestra como pulso del sistema."""
+    rows = await session.execute(
+        sa_text(
+            "SELECT status, count(*) FROM executions"
+            " WHERE created_at > now() - interval '24 hours' GROUP BY status"
+        )
+    )
+    return {str(status): int(count) for status, count in rows.all()}
+
+
 async def _collect_status_counts(session: Any) -> dict[str, int]:
     """Count ``tasks`` rows grouped by lifecycle status (all tenants — the worker
     engine is BYPASSRLS). ``tasks`` is not soft-deletable (no ``deleted_at``)."""
@@ -82,6 +94,7 @@ async def _sample_queue_metrics_async(
     queue_depths: dict[str, int] = {}
     status_counts: dict[str, int] = {}
     dlq_depths: dict[str, int] = {}
+    execution_counts: dict[str, int] = {}
     try:
         queue_depths = await _collect_queue_depths(redis_client, QUEUE_NAMES)
         events_redis = Redis.from_url(settings.events_redis_url)
@@ -93,6 +106,7 @@ async def _sample_queue_metrics_async(
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         async with sessionmaker() as db:
             status_counts = await _collect_status_counts(db)
+            execution_counts = await _collect_execution_counts(db)
     except Exception as exc:  # pragma: no cover — best-effort: never crash beat
         _log.warning("maintenance.sample_queue_metrics.error", error=str(exc))
     finally:
@@ -106,6 +120,7 @@ async def _sample_queue_metrics_async(
         queue_depths=queue_depths,
         status_counts=status_counts,
         dlq_depths=dlq_depths,
+        execution_counts=execution_counts,
     )
     _log.info(
         "maintenance.sample_queue_metrics.done",
