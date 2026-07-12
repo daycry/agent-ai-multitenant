@@ -99,6 +99,30 @@ class LLMAssistantModel:
             return ModelTurn(content=response.content or None, tool_calls=calls)
         return ModelTurn(content=response.content or "", tool_calls=())
 
+    async def decide_stream(self, state: AssistantState) -> Any:
+        """Sintesis final SIN tools en streaming (A2 fase 2 / ADR 0073 F2).
+
+        Async generator de deltas de texto via ``provider.stream()`` (los 4
+        kinds lo implementan; sin tools no aplica el caveat de claude_sdk).
+        Acumula usage del chunk final. Solo lo invoca el nodo ``finish`` en el
+        camino FINISH_NUDGE cuando el caller pidio deltas (``on_delta``)."""
+        messages = self._build_messages(state)
+        async for chunk in self.provider.stream(
+            messages,
+            model=self.model,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            **self.extra_call_kwargs,
+        ):
+            if chunk.delta:
+                yield chunk.delta
+            if chunk.done and chunk.usage is not None:
+                usage = chunk.usage
+                self.usage_input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
+                self.usage_output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
+                self.usage_cost_usd += float(getattr(usage, "cost_usd", 0.0) or 0.0)
+        self.usage_calls += 1
+
     def _build_messages(self, state: AssistantState) -> list[LLMMessage]:
         messages: list[LLMMessage] = [LLMMessage(role="system", content=state.system_prompt)]
         for entry in state.chat_history:

@@ -279,6 +279,7 @@ export async function streamAssistantChat(
   message: string,
   conversationId: string | null,
   onProgress: (frame: { rounds: number; tools_called: string[] }) => void,
+  onDelta?: (text: string) => void,
 ): Promise<AssistantChatResponse> {
   const { apiUrl } = await import("@/lib/api");
   const { getToken } = await import("@/lib/auth");
@@ -326,6 +327,9 @@ export async function streamAssistantChat(
       }
       if (kind === "progress") {
         onProgress(data as { rounds: number; tools_called: string[] });
+      } else if (kind === "answer_delta") {
+        // A2 fase 2 (ADR 0073 F2): la redaccion final llega token-a-token.
+        onDelta?.(String((data as { text?: string }).text ?? ""));
       } else if (kind === "answer") {
         answer = data as AssistantChatResponse;
       } else if (kind === "error") {

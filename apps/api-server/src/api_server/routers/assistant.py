@@ -311,7 +311,7 @@ async def assistant_chat_stream(
       * ``progress`` {rounds, tools_called} por paso del grafo;
       * ``answer``  {answer, tools_called, rounds, conversation_id} al final;
       * ``error``   {detail} si el proveedor falla (el stream cierra limpio).
-    El streaming token-a-token queda para ADR 0073 F2 (decide_stream)."""
+    Fase 2: frames ``answer_delta`` {text} con la redaccion final token-a-token."""
     import asyncio as _asyncio
     import json as _json
 
@@ -341,6 +341,11 @@ async def assistant_chat_stream(
     async def _on_progress(frame: dict[str, Any]) -> None:
         await queue.put(("progress", frame))
 
+    # A2 fase 2 (ADR 0073 F2): deltas token-a-token de la redaccion final
+    # (camino FINISH_NUDGE del grafo) como frames `answer_delta`.
+    async def _on_delta(text: str) -> None:
+        await queue.put(("answer_delta", {"text": text}))
+
     async def _run() -> None:
         try:
             result = await run_assistant_turn(
@@ -350,6 +355,7 @@ async def assistant_chat_stream(
                 tool_ctx=tool_ctx,
                 chat_history=[*history, {"role": "user", "content": payload.message}],
                 on_progress=_on_progress,
+                on_delta=_on_delta,
             )
             await _persist_turns(
                 session,

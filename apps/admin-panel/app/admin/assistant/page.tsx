@@ -113,17 +113,28 @@ export default function AssistantChatPage() {
 
   // A2 fase 1: el turno va por SSE — el «Pensando…» muestra progreso real
   // (ronda + tools) en vez de silencio hasta la respuesta completa.
+  // A2 fase 2 (ADR 0073 F2): la redaccion final llega token-a-token en
+  // `draftAnswer` y se pinta mientras crece; el frame `answer` final la fija.
   const [progressNote, setProgressNote] = useState<string | null>(null);
+  const [draftAnswer, setDraftAnswer] = useState<string>("");
   const mutation = useMutation<AssistantChatResponse, ApiError, string>({
-    mutationFn: (message) =>
-      streamAssistantChat(message, conversationId, (frame) => {
-        const tools = frame.tools_called.length
-          ? ` — ${frame.tools_called[frame.tools_called.length - 1]}`
-          : "";
-        setProgressNote(frame.rounds > 0 ? `ronda ${frame.rounds}${tools}` : null);
-      }),
+    mutationFn: (message) => {
+      setDraftAnswer("");
+      return streamAssistantChat(
+        message,
+        conversationId,
+        (frame) => {
+          const tools = frame.tools_called.length
+            ? ` — ${frame.tools_called[frame.tools_called.length - 1]}`
+            : "";
+          setProgressNote(frame.rounds > 0 ? `ronda ${frame.rounds}${tools}` : null);
+        },
+        (delta) => setDraftAnswer((prev) => prev + delta),
+      );
+    },
     onSuccess: (data) => {
       setProgressNote(null);
+      setDraftAnswer("");
       if (data.conversation_id) setConversationId(data.conversation_id);
       setTurns((prev) => [
         ...prev,
@@ -138,6 +149,7 @@ export default function AssistantChatPage() {
     },
     onError: (error) => {
       setProgressNote(null);
+      setDraftAnswer("");
       // A 403 here means the toggle was flipped off (or the role changed)
       // after load: reflect the backend's gate rather than showing a chat
       // surface we know is denied.
@@ -254,7 +266,11 @@ export default function AssistantChatPage() {
             ) : (
               turns.map((turn) => <ChatBubble key={turn.id} turn={turn} />)
             )}
-            {mutation.isPending ? (
+            {mutation.isPending && draftAnswer ? (
+              // A2 fase 2: la respuesta se pinta mientras llega (token-a-token).
+              <ChatBubble turn={{ id: "draft", role: "assistant", content: draftAnswer }} />
+            ) : null}
+            {mutation.isPending && !draftAnswer ? (
               <p
                 className="text-muted-foreground flex items-center gap-2 text-sm"
                 data-testid="assistant-thinking"

@@ -281,7 +281,10 @@ def _route_after_decide(state: AssistantState) -> str:
     return "finish"
 
 
-def _node_finish(model: AssistantModelClient) -> AssistantNode:
+def _node_finish(
+    model: AssistantModelClient,
+    on_delta: Callable[[str], Awaitable[None]] | None = None,
+) -> AssistantNode:
     async def _run(state: AssistantState) -> AssistantState:
         if state.answer:
             return state
@@ -294,6 +297,18 @@ def _node_finish(model: AssistantModelClient) -> AssistantNode:
         # far. Sin la orden, un modelo de razonamiento se quedaba pidiendo tools
         # (deduplicadas) y devolvía content vacío → answer="" (silencio).
         final = replace(state, enabled_tools=(), pending=None, final_instruction=FINISH_NUDGE)
+        # A2 fase 2 (ADR 0073 F2): con `on_delta` y un modelo que sepa streamear,
+        # la redacción final llega token-a-token; los deltas jamás rompen el
+        # turno (best-effort) y la respuesta es su concatenación.
+        decide_stream = getattr(model, "decide_stream", None)
+        if on_delta is not None and decide_stream is not None:
+            parts: list[str] = []
+            async for delta in decide_stream(final):
+                parts.append(delta)
+                with contextlib.suppress(Exception):
+                    await on_delta(delta)
+            state.answer = "".join(parts)
+            return state
         turn = await model.decide(final)
         state.answer = turn.content or ""
         return state
@@ -309,6 +324,7 @@ def build_assistant_graph(
     *,
     state_type: type = AssistantState,
     tool_runner: ToolRunner = run_assistant_tool,
+    on_delta: Callable[[str], Awaitable[None]] | None = None,
 ) -> Any:
     """Compile the one-turn tool-use loop.
 
@@ -319,7 +335,7 @@ def build_assistant_graph(
     graph: StateGraph[Any] = StateGraph(state_type)
     graph.add_node("decide", _node_decide(model))
     graph.add_node("run_tools", _node_run_tools(tool_runner))
-    graph.add_node("finish", _node_finish(model))
+    graph.add_node("finish", _node_finish(model, on_delta))
 
     graph.add_edge(START, "decide")
     graph.add_conditional_edges(
@@ -342,6 +358,7 @@ async def run_assistant_turn(
     tool_ctx: AssistantToolContext,
     chat_history: Sequence[dict[str, Any]] | None = None,
     on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    on_delta: Callable[[str], Awaitable[None]] | None = None,
 ) -> AssistantTurnResult:
     """Build the graph, run one full turn, return the synthesised answer.
 
@@ -361,7 +378,7 @@ async def run_assistant_turn(
         enabled_tools=enabled_tools,
         tool_ctx=tool_ctx,
     )
-    compiled = build_assistant_graph(model)
+    compiled = build_assistant_graph(model, on_delta=on_delta)
     if on_progress is None:
         final = await compiled.ainvoke(initial)
     else:
