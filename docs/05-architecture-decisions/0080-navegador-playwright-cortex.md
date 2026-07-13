@@ -1,7 +1,7 @@
 ---
 adr_id: "0080"
 title: "Navegador real (Playwright) para el córtex: interacción/automatización en sandbox con egress controlado"
-status: proposed
+status: accepted
 date: 2026-06-24
 authors: [claude-opus]
 plan_referenced: cortex-system-owner
@@ -78,3 +78,12 @@ Ofrecer Playwright como una **tool de córtex de alto privilegio**, ejecutada en
   sandbox + egress-proxy + anti-SSRF + validación humana + budget/kill-switch, y por eso
   este ADR está `proposed`. Si no se aprueba, el córtex se queda con `web-search`/`web-fetch`
   (ADR 0067), que cubren la mayoría de necesidades de "consultar internet".
+
+## Ratificación del operador (2026-07-13)
+
+Las 4 preguntas abiertas quedaron respondidas por el operador:
+
+1. **Aprobado**: si al navegador real en runtime sandbox dedicado.
+2. **Self-host**: imagen `browser-runtime` propia (Playwright+Chromium headless), coherente con una-sola-maquina y privacidad.
+3. **Validacion humana POR SESION**: cada sesion de navegacion requiere aprobacion explicita del owner antes de ejecutarse.
+4. **Alcance: interaccion completa** (lectura JS + login/formularios/clicks con estado), bajo los controles del punto 3 + budgets + kill-switch + egress-proxy + anti-SSRF.
