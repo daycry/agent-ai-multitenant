@@ -3,12 +3,30 @@ import { describe, expect, it } from "vitest";
 import {
   affectFrameToMind,
   avatarStyleFromAffect,
+  browseStepSummary,
   driveToPercent,
   PAD_RANGES,
   padToPercent,
   parseVoiceAffectFrame,
   type PadDimension,
 } from "./cortex";
+
+describe("browseStepSummary (ADR 0080 — inbox de aprobación)", () => {
+  it("describe cada acción del catálogo cerrado en lenguaje del owner", () => {
+    expect(browseStepSummary({ action: "goto", url: "https://x.com" })).toBe("ir a https://x.com");
+    expect(browseStepSummary({ action: "click", selector: "#b" })).toBe("clicar #b");
+    expect(browseStepSummary({ action: "wait_for", selector: ".ok" })).toBe("esperar .ok");
+    expect(browseStepSummary({ action: "extract" })).toBe("extraer (página)");
+  });
+
+  it("muestra lo que se va a teclear en un fill (es lo que el owner autoriza)", () => {
+    // Esto se MUESTRA para decidir; el valor nunca vuelve del runtime (contrato
+    // del browser-runtime, no de esta vista).
+    expect(browseStepSummary({ action: "fill", selector: "#user", value: "owner" })).toContain(
+      "owner",
+    );
+  });
+});
 
 describe("padToPercent", () => {
   it("maps a bipolar dimension's neutral 0 to the centre (50%)", () => {

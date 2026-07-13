@@ -124,8 +124,36 @@ sesiones que el owner aprueba una a una.
   espejo exacto del gate web del ADR 0067. Al ser **host tools**, funcionan con
   CUALQUIER provider del catálogo (claude_sdk/copilot/azure/ollama), no solo el
   SDK.
-- **Kill-switch de plataforma** (`cortex.browser_enabled`, default OFF) +
-  toggle en el panel de la mente (junto a web y autonomía).
+- **Kill-switch de plataforma** (`cortex.browser_enabled`, default OFF) + toggle
+  en el panel de la mente (junto a web y autonomía).
+- **UI de aprobación** (`admin-panel/.../cortex/mind/page.tsx`,
+  `BrowseInboxPanel`): el inbox del owner lista las sesiones pendientes con su
+  guion legible (a qué URL va, qué clica, qué teclea) y botones aprobar/rechazar
+  sobre los endpoints owner-only. Sin esto la feature sería inerte (el gate humano
+  por sesión no tendría consumidor). El toggle del kill-switch y el inbox van
+  juntos en el mismo panel.
 
-Pendiente de fase 2 (no bloqueante): QA visual del inbox de aprobación y un e2e
-de navegación real contra un sitio de prueba tras el deploy.
+### Límite conocido del egress (defensa en profundidad)
+
+El navegador comparte el `egress-proxy` del córtex (ADR 0067), que es
+deny-by-default (`FilterDefaultDeny Yes`). Los servicios sensibles del stack
+(PostgreSQL, Redis, Vault, MinIO, api-server) NO están en la allowlist y el proxy
+los rechaza — inalcanzables. Los ÚNICOS hosts internos que la allowlist admite son
+`ollama` y `searxng` (que el córtex necesita), así que una sesión aprobada podría,
+en teoría, dirigirse a ellos; no hay ahí datos multi-tenant ni secretos, y toda
+sesión pasa antes por la aprobación humana del owner. Un egress-proxy dedicado al
+navegador (allowlist solo-Internet) sería la siguiente vuelta de tuerca si se
+quisiera aislar incluso de esos dos.
+
+### Verificado en CI
+
+Los controles de seguridad (catálogo cerrado de pasos, anti-SSRF, presupuestos,
+saneo) se prueban en CI: `ci.yml` construye `browser-runtime:v1` (igual que
+`agent-runtime`) y corre `docker/agent-runtimes/browser-runtime/tests`. El
+lanzamiento (kill-switch re-chequeado, sesión no aprobada nunca ejecutada, fallo
+del runtime → `failed` con causa) tiene tests de integración
+(`tests/integration/test_browse_task.py`); el ciclo de vida y el gate de
+aprobación, tests unit.
+
+Pendiente de fase 2 (no bloqueante): QA visual del inbox por el operador y un e2e
+de navegación real contra un sitio de prueba con el kill-switch encendido.

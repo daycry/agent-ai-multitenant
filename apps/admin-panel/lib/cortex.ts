@@ -295,6 +295,8 @@ export function getCortexPursuits(
 export interface CortexAutonomy {
   autonomy_enabled: boolean;
   web_enabled: boolean;
+  /** ADR 0080: kill-switch del navegador real (Playwright). OFF por defecto. */
+  browser_enabled: boolean;
   curiosity_drive_threshold: number;
   circuit_breaker_open: boolean;
   budget: { searches_today: number; searches_cap: number };
@@ -309,14 +311,79 @@ export function getCortexAutonomy(): Promise<CortexAutonomy> {
 
 /**
  * PUT /owner/cortex/autonomy — update PARCIAL de los gates del córtex:
- * `autonomy_enabled` (kill-switch de bucles autónomos) y/o `web_enabled`
- * (web del córtex, deny-by-default).
+ * `autonomy_enabled` (kill-switch de bucles autónomos), `web_enabled` (web del
+ * córtex) y/o `browser_enabled` (navegador real, ADR 0080) — todos deny-by-default.
  */
 export function setCortexAutonomy(update: {
   autonomy_enabled?: boolean;
   web_enabled?: boolean;
+  browser_enabled?: boolean;
 }): Promise<CortexAutonomy> {
   return cortexFetch<CortexAutonomy>("/autonomy", { method: "PUT", body: update });
+}
+
+// ---------------------------------------------------------------------------
+// Sesiones de navegación (ADR 0080) — el inbox de aprobación del owner.
+// ---------------------------------------------------------------------------
+
+/** Un paso del guion que el córtex quiere ejecutar en el navegador. */
+export interface BrowseStep {
+  action: "goto" | "click" | "fill" | "wait_for" | "extract";
+  url?: string;
+  selector?: string;
+  value?: string;
+}
+
+/** Una sesión de navegación pedida por el córtex, pendiente de decisión humana. */
+export interface BrowseSession {
+  id: string;
+  status: string;
+  goal: string;
+  steps: BrowseStep[];
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+  created_at?: string | null;
+}
+
+/** GET /owner/cortex/browse-sessions — las sesiones pendientes de aprobar. */
+export function getBrowseSessions(): Promise<BrowseSession[]> {
+  return cortexFetch<BrowseSession[]>("/browse-sessions");
+}
+
+/** POST /owner/cortex/browse-sessions/{id}/approve — aprueba y lanza la sesión. */
+export function approveBrowseSession(id: string): Promise<BrowseSession> {
+  return cortexFetch<BrowseSession>(`/browse-sessions/${id}/approve`, { method: "POST" });
+}
+
+/** POST /owner/cortex/browse-sessions/{id}/reject — rechaza la sesión (terminal). */
+export function rejectBrowseSession(id: string, reason = ""): Promise<BrowseSession> {
+  return cortexFetch<BrowseSession>(`/browse-sessions/${id}/reject`, {
+    method: "POST",
+    body: { reason },
+  });
+}
+
+/**
+ * Resumen legible de un paso del guion, para que el owner vea QUÉ va a hacer el
+ * navegador antes de aprobar. El `value` de un `fill` SÍ se muestra (es lo que
+ * autoriza teclear); nunca vuelve del runtime — ese contrato lo garantiza el
+ * browser-runtime, no esta vista. Helper puro (testeable sin React).
+ */
+export function browseStepSummary(step: BrowseStep): string {
+  switch (step.action) {
+    case "goto":
+      return `ir a ${step.url ?? "?"}`;
+    case "click":
+      return `clicar ${step.selector ?? "?"}`;
+    case "fill":
+      return `rellenar ${step.selector ?? "?"} = «${step.value ?? ""}»`;
+    case "wait_for":
+      return `esperar ${step.selector ?? "?"}`;
+    case "extract":
+      return `extraer ${step.selector ?? "(página)"}`;
+    default:
+      return step.action;
+  }
 }
 
 // ---------------------------------------------------------------------------
