@@ -816,6 +816,8 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
         # de depender de que el LLM invoque la tool rag_search por su cuenta.
         auto_rag = _build_auto_rag(recall_api)
         deps = AgentDeps(
+            # ADR 0112 fase 2: cadencia del assess dedicado (0 = OFF).
+            reflection_assess_every=int(spec.get("reflection_assess_every", 0) or 0),
             model=model_from_spec(spec["model"]),
             tools=registry,
             approval=ApprovalGate(policy) if policy else None,

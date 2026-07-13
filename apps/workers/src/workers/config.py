@@ -480,6 +480,14 @@ class Settings(BaseSettings):
         description="EXPERIMENTAL (ADR 0110): per-run in-memory conversation "
         "thread for HTTP providers in the agent runtime. OFF by default.",
     )
+    # ADR 0112 fase 2 (EXPERIMENTAL, OFF): mini-turno dedicado de reflexion en
+    # los providers HTTP cada 10 iteraciones + escalado determinista tras 2
+    # veredictos "stuck" consecutivos (abort_code reflection_stalled).
+    runtime_reflection_assess: bool = Field(
+        default=False,
+        description="EXPERIMENTAL (ADR 0112 fase 2): dedicated progress "
+        "self-assessment mini-turn for HTTP providers. OFF by default.",
+    )
     git_fetch_cron: str = Field(
         default="*/30 * * * *",
         description="Cron (minute hour day-of-month month day-of-week) for the "

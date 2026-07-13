@@ -35,3 +35,7 @@ circular — el modelo decide en su turno normal con la instrucción presente.
 (-) La fase 1 no puede FORZAR el escalado (depende de que el modelo obedezca
 la instrucción); los backstops existentes (racha estéril, presupuestos)
 siguen siendo el techo determinista.
+
+## Fase 2 implementada (2026-07-13, flag OFF)
+
+Mandato del operador (abordamos los gated). El mini-turno DEDICADO existe tras `WORKERS_RUNTIME_REFLECTION_ASSESS` (OFF por defecto — el gate de telemetria de fase 1 sigue vigente para ENCENDERLO): cada 10 iteraciones `assess_progress` (providers HTTP; tool_choice forzado a `submit_progress` {score 0-10, stuck, reason}, best-effort — un assess roto jamas rompe el run) y, tras 2 veredictos «stuck» CONSECUTIVOS, el plan escala DETERMINISTA con abort_code `reflection_stalled` (needs_human_review si produjo, aborted si esteril) — ya no depende de que el modelo obedezca la instruccion. Instrumentado: assess:call / assess:stuck / trip:reflection_stalled en safeguard_stats. claude_sdk devuelve None (sin tool_choice en el camino CLI).

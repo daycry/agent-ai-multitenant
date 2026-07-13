@@ -85,6 +85,8 @@ _log = logging.getLogger("agent_runtime.graph")
 # worker la trata como SIEMPRE-humana (bypasa la política por categorías del
 # proyecto: preguntar a un humano es, por definición, para un humano).
 HUMAN_QUESTION_CATEGORY = "human_question"
+# ADR 0112 fase 2: veredictos "stuck" consecutivos que arman el escalado.
+_ASSESS_STUCK_TRIP = 2
 _ASK_HUMAN_QUESTION_MAX = 2000
 _ASK_HUMAN_OPTIONS_MAX = 8
 
@@ -245,6 +247,11 @@ class AgentDeps:
     # ADR 0102 / g1: the resolved guardrail pipeline (or None). run_hook scans
     # tool OUTPUTS for prompt injection (post_tool) before they re-enter context.
     guardrails: Any = None
+    # ADR 0112 fase 2: cadencia del mini-turno DEDICADO de reflexion (0 = OFF,
+    # el default). Con K>0, cada K iteraciones reflect llama
+    # model.assess_progress (si el cliente lo expone) y dos veredictos "stuck"
+    # consecutivos escalan DETERMINISTA en el siguiente plan.
+    reflection_assess_every: int = 0
 
 
 @dataclass(frozen=True)
@@ -328,6 +335,8 @@ class _AgentLoop:
         # (caza el patrón intercalado A,A,B,A,A); `read_digests` = memoria de lo
         # leído para el bloque PROGRESS (LRU, cap _READ_DIGESTS_MAX).
         self.read_targets: set[str] = set()
+        # ADR 0112 fase 2: racha de self-assessments "stuck" consecutivos.
+        self._assess_stuck_streak = 0
         self.read_churn_streak = 0
         self.read_counts: dict[str, int] = {}
         self.read_digests: dict[str, str] = {}
@@ -438,7 +447,7 @@ class _AgentLoop:
         )
         return {"context": context, "steps": [step], "guardrail_events": guardrail_events}
 
-    def plan(self, state: AgentState) -> dict[str, Any]:  # noqa: PLR0911
+    def plan(self, state: AgentState) -> dict[str, Any]:  # noqa: PLR0911, PLR0912, PLR0915
         """Check safeguards, ask the model for the next move, detect loops."""
         base = len(state["steps"])
         steps: list[dict[str, Any]] = []
@@ -566,6 +575,10 @@ class _AgentLoop:
             )
         )
 
+        stall = self._reflection_stall_trip(steps, base)
+        if stall is not None:
+            return stall
+
         decision, park = self._maybe_park_ask_human(decision, steps, base)
         if park is not None:
             return park
@@ -654,6 +667,51 @@ class _AgentLoop:
 
         return {
             "last_decision": decision.as_dict(),
+            "iteration": self.tracker.usage.iterations,
+            "steps": steps,
+        }
+
+    def _run_reflection_assess(self, state: AgentState, iterations: int) -> None:
+        """ADR 0112 fase 2 (flag OFF): en cadencia, el mini-turno DEDICADO con
+        veredicto estructurado; dos "stuck" consecutivos arman el trip
+        determinista del siguiente plan. Best-effort: assess None no cuenta y
+        un veredicto sano resetea la racha."""
+        every = int(getattr(self.deps, "reflection_assess_every", 0) or 0)
+        assess_fn = getattr(self.deps.model, "assess_progress", None)
+        if every <= 0 or not callable(assess_fn) or not iterations or iterations % every:
+            return
+        verdict = assess_fn(dict(state))
+        if not isinstance(verdict, dict):
+            return
+        self._count_safeguard("assess:call")
+        if verdict.get("stuck"):
+            self._assess_stuck_streak += 1
+            self._count_safeguard("assess:stuck")
+        else:
+            self._assess_stuck_streak = 0
+
+    def _reflection_stall_trip(
+        self, steps: list[dict[str, Any]], base: int
+    ) -> dict[str, Any] | None:
+        """ADR 0112 fase 2: dos self-assessments "stuck" consecutivos → escalado
+        DETERMINISTA (no depende de que el modelo obedezca la instrucción):
+        needs_human_review si ya produjo trabajo, aborted si el run es estéril.
+        ``None`` mientras la racha no llegue al umbral."""
+        if self._assess_stuck_streak < _ASSESS_STUCK_TRIP:
+            return None
+        self._count_safeguard("trip:reflection_stalled")
+        trip_status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
+        steps.append(
+            node_step(
+                base + len(steps),
+                "plan",
+                "Safeguard tripped: reflection_stalled (model self-reported " "no progress twice)",
+                status="aborted" if trip_status == STATUS_ABORTED else trip_status,
+            )
+        )
+        return {
+            "status": trip_status,
+            "abort_code": "reflection_stalled",
             "iteration": self.tracker.usage.iterations,
             "steps": steps,
         }
@@ -1034,6 +1092,8 @@ class _AgentLoop:
             self._count_safeguard("nudge:self_check")
         else:
             updates["self_check_nudge"] = None
+        # ADR 0112 fase 2 (flag OFF por defecto): mini-turno dedicado.
+        self._run_reflection_assess(state, iterations)
         # B1: the repetition warning fires one turn before the detector would abort
         # (count >= threshold). It rides the SCALAR `repetition_warning` field — NOT
         # `context` (operator.add): appending to context would reorder context[0] and

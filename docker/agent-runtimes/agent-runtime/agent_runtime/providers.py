@@ -638,6 +638,44 @@ def _completion_signals(resp: CompletionResponse) -> CompletionSignals:
 # de la observación agregada.
 _BATCH_READONLY_CAP = 4
 
+# ADR 0112 fase 2: el veredicto ESTRUCTURADO del mini-turno de reflexion.
+_SUBMIT_PROGRESS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "submit_progress",
+        "description": (
+            "Report an honest self-assessment of your progress toward the " "acceptance criteria."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "score": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10,
+                    "description": "Progress toward the acceptance criteria (0-10).",
+                },
+                "stuck": {
+                    "type": "boolean",
+                    "description": "True if you are NOT making real progress.",
+                },
+                "reason": {"type": "string", "description": "One-line justification."},
+            },
+            "required": ["score", "stuck"],
+        },
+    },
+}
+_SUBMIT_PROGRESS_TOOL_CHOICE = {
+    "type": "function",
+    "function": {"name": "submit_progress"},
+}
+_ASSESS_SYSTEM = (
+    "You are auditing YOUR OWN progress on the task below. Look at what has "
+    "been done so far and answer HONESTLY via the submit_progress tool: are "
+    "you advancing toward the acceptance criteria, or are you stuck in a "
+    "loop/dead end? Do not perform any work now."
+)
+
 
 def _readonly_batch_prefix(calls: list[Any]) -> list[dict[str, Any]]:
     """ADR 0111: el prefijo consecutivo de calls read-only DESPUÉS del primero,
@@ -1117,6 +1155,39 @@ class _ProviderModelClient:
             )
         )
         return _decision_from(resp, model=self.model)
+
+    def assess_progress(self, state: dict[str, Any]) -> dict[str, Any] | None:
+        """ADR 0112 fase 2: mini-turno DEDICADO de reflexion (solo HTTP).
+
+        Fuerza el veredicto estructurado con tool_choice=submit_progress —
+        {score 0-10, stuck, reason}. Best-effort: cualquier fallo (provider
+        caido, args corruptos, transporte sin tool_choice) devuelve ``None``
+        y el loop sigue sin escalar — el assess jamas rompe un run."""
+        if not self._forces_verdict_choice:
+            return None  # camino CLI (claude_sdk): sin tool_choice forzable
+        try:
+            messages = _decide_messages(state)
+            resp = _run_with_retry(
+                lambda: self.provider.complete(
+                    [Message(role="system", content=_ASSESS_SYSTEM), messages[1]],
+                    model=self.model,
+                    tools=[_SUBMIT_PROGRESS_TOOL],
+                    tool_choice=_SUBMIT_PROGRESS_TOOL_CHOICE,
+                    **self._extra_call_kwargs,
+                )
+            )
+            call = next((c for c in (resp.tool_calls or []) if c.name == "submit_progress"), None)
+            if call is None:
+                return None
+            args = dict(call.arguments)
+            return {
+                "score": int(args.get("score", 0)),
+                "stuck": bool(args.get("stuck", False)),
+                "reason": str(args.get("reason", "") or "")[:300],
+            }
+        except Exception:
+            _log.warning("assess_progress failed; run continues unescalated", exc_info=True)
+            return None
 
     def review(self, state: ReviewState) -> ReviewResponse:
         # F34: force `submit_verdict` (tool_choice) so HTTP backends return the
