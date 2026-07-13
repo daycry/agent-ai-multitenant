@@ -242,6 +242,9 @@ services:
       WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
       WORKERS_AGENT_INTERNAL_API_URL: http://api-server:8000
       WORKERS_AGENT_RUNTIME_IMAGE: agent-runtime:v1
+      # ADR 0080: el navegador sandboxeado del córtex (imagen construida aparte,
+      # como agent-runtime); el worker lo lanza efímero por sesión aprobada.
+      WORKERS_BROWSER_RUNTIME_IMAGE: browser-runtime:v1
       WORKERS_DATA_ROOT: /var/lib/docker/volumes/agentic-platform-agent-data/_data
       WORKERS_EGRESS_PROXY_URL: http://egress-proxy:8888
       # ADR 0072: el worker resuelve la credencial git del proyecto desde Vault
@@ -331,6 +334,9 @@ services:
       WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
       WORKERS_AGENT_INTERNAL_API_URL: http://api-server:8000
       WORKERS_AGENT_RUNTIME_IMAGE: agent-runtime:v1
+      # ADR 0080: el navegador sandboxeado del córtex (imagen construida aparte,
+      # como agent-runtime); el worker lo lanza efímero por sesión aprobada.
+      WORKERS_BROWSER_RUNTIME_IMAGE: browser-runtime:v1
       WORKERS_DATA_ROOT: /var/lib/docker/volumes/agentic-platform-agent-data/_data
       WORKERS_EGRESS_PROXY_URL: http://egress-proxy:8888
       WORKERS_VAULT_URL: http://vault:8200

@@ -31,17 +31,20 @@ con ``chat_history=recent_history_for_prompt`` → persistir turno ``cortex``.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from shared_llm.exceptions import AuthError, LLMError, RateLimitError
 
 from api_server.assistant.graph import AssistantModelClient
 from api_server.assistant.model_config import to_provider_model_name
 from api_server.auth.deps import AuthPrincipal, get_redis, require_system_owner
-from api_server.celery_client import enqueue_cortex_distill_affect
+from api_server.celery_client import enqueue_browse_session, enqueue_cortex_distill_affect
 from api_server.cortex.affect_policy import modulate_reasoning_effort
+from api_server.cortex.browse import BrowseTransitionError
 from api_server.cortex.graph import run_cortex_turn
 from api_server.cortex.model_config import (
     CortexModelUnavailableError,
@@ -70,10 +73,17 @@ from api_server.cortex.threads import (
     resolve_cortex_tenant_id,
 )
 from api_server.cortex.tools import CortexToolContext, cortex_enabled_tool_names
+from api_server.db.browse_repo import (
+    approve_session,
+    get_browse_session,
+    list_pending,
+    reject_session,
+)
 from api_server.db.llm_providers import get_llm_provider
 from api_server.db.models import User
 from api_server.db.platform_settings import (
     PlatformSettingForbiddenError,
+    get_cortex_browser_enabled,
     get_cortex_web_enabled,
 )
 from api_server.db.session import get_admin_sessionmaker
@@ -248,7 +258,13 @@ async def post_turn(
         # desde el panel, las host tools web_search/web_fetch entran en el catálogo y el
         # ctx las permite (salida SIEMPRE por el egress-proxy + anti-SSRF).
         web_enabled = await get_cortex_web_enabled(session)
-        enabled_tools = cortex_enabled_tool_names(web_enabled=web_enabled)
+        # Navegador real (ADR 0080): kill-switch APARTE del de la web. Encendido,
+        # el córtex puede PEDIR sesiones de navegación; cada una necesita despues
+        # la aprobación explícita del owner (validación humana por sesión).
+        browser_enabled = await get_cortex_browser_enabled(session)
+        enabled_tools = cortex_enabled_tool_names(
+            web_enabled=web_enabled, browser_enabled=browser_enabled
+        )
 
         # Self-context unificado: identidad + afecto vivo + recall + temas
         # pendientes, cargados UNA vez y compuestos en UN solo prompt blindado.
@@ -287,6 +303,7 @@ async def post_turn(
             owner_user_id=owner_id,
             tenant_id=tenant_id,
             web_enabled=web_enabled,
+            browser_enabled=browser_enabled,
         )
 
         try:
@@ -540,6 +557,108 @@ async def put_model(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Sesiones de navegador: el inbox de aprobación del owner (ADR 0080)
+# ---------------------------------------------------------------------------
+class BrowseSessionItem(BaseModel):
+    """Una sesión que el córtex quiere navegar. El owner ve el guion EXACTO —
+    a qué URLs va, qué clica y qué teclea — porque eso es lo que autoriza."""
+
+    id: str
+    status: str
+    goal: str
+    steps: list[dict[str, Any]]
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    created_at: datetime | None = None
+
+
+class BrowseDecisionRequest(BaseModel):
+    reason: str = Field(default="", max_length=500)
+
+
+def _browse_item(row: Any) -> BrowseSessionItem:
+    return BrowseSessionItem(
+        id=str(row.id),
+        status=row.status,
+        goal=row.goal,
+        steps=list(row.steps or []),
+        result=row.result,
+        error=row.error,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/browse-sessions", response_model=list[BrowseSessionItem])
+async def list_browse_sessions(
+    principal: AuthPrincipal = Depends(require_system_owner),
+) -> list[BrowseSessionItem]:
+    """Lo que el córtex ha pedido navegar y espera decisión humana."""
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as admin_session:
+        rows = await list_pending(admin_session, owner_user_id=principal.user_id)
+        return [_browse_item(row) for row in rows]
+
+
+@router.post("/browse-sessions/{session_id}/approve", response_model=BrowseSessionItem)
+async def approve_browse_session(
+    session_id: UUID,
+    principal: AuthPrincipal = Depends(require_system_owner),
+) -> BrowseSessionItem:
+    """El owner aprueba ESTA sesión: solo ahora se lanza el navegador.
+
+    La aprobación es por sesión (nunca un permiso permanente) y se registra con
+    quién y cuándo. Si el kill-switch de plataforma está apagado no hay nada que
+    aprobar — y el worker lo vuelve a comprobar antes de abrir Chromium."""
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as admin_session:
+        if not await get_cortex_browser_enabled(admin_session):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="el navegador del córtex está deshabilitado (cortex.browser_enabled)",
+            )
+        owner_id = principal.user_id
+        row = await get_browse_session(admin_session, session_id, owner_user_id=owner_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
+        try:
+            await approve_session(admin_session, row, decided_by=owner_id)
+        except BrowseTransitionError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        await admin_session.commit()
+        item = _browse_item(row)
+
+    if not await enqueue_browse_session(session_id):
+        # La fila queda en `approved`: re-aprobar la relanza. Se lo decimos al
+        # owner en vez de dejarle creer que su navegación está en marcha.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="sesión aprobada pero no se pudo encolar (broker caído): reintenta",
+        )
+    return item
+
+
+@router.post("/browse-sessions/{session_id}/reject", response_model=BrowseSessionItem)
+async def reject_browse_session(
+    session_id: UUID,
+    payload: BrowseDecisionRequest,
+    principal: AuthPrincipal = Depends(require_system_owner),
+) -> BrowseSessionItem:
+    """El owner dice que no. Terminal: esa sesión no se navega nunca."""
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as admin_session:
+        owner_id = principal.user_id
+        row = await get_browse_session(admin_session, session_id, owner_user_id=owner_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
+        try:
+            await reject_session(admin_session, row, decided_by=owner_id, reason=payload.reason)
+        except BrowseTransitionError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        await admin_session.commit()
+        return _browse_item(row)
+
+
 def _cortex_base_prompt(*, web_enabled: bool = False) -> str:
     """El system prompt base del córtex (copy honesto — F1 no simula afecto).
 

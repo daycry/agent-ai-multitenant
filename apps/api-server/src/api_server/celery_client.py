@@ -490,3 +490,23 @@ __all__ = [
     "get_restore_job_status",
     "reset_celery_client_cache",
 ]
+
+
+async def enqueue_browse_session(session_id: UUID) -> bool:
+    """Lanza la sesión de navegación que el owner acaba de APROBAR (ADR 0080).
+
+    No es best-effort silencioso: si el broker falla, el llamador lo sabe y se
+    lo dice al owner — una sesión aprobada que nunca corre es peor que un error
+    (el córtex se quedaría esperando un resultado que no va a llegar). La fila
+    queda en ``approved``, así que re-aprobar/reintentar es seguro."""
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            "workers.browse_session",
+            args=[str(session_id)],
+            queue="default",
+        )
+    except Exception as exc:
+        _log.warning("browse.enqueue_failed", session_id=str(session_id), error=str(exc))
+        return False
+    return True

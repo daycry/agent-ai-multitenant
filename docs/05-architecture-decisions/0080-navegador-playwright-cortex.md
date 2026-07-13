@@ -87,3 +87,45 @@ Las 4 preguntas abiertas quedaron respondidas por el operador:
 2. **Self-host**: imagen `browser-runtime` propia (Playwright+Chromium headless), coherente con una-sola-maquina y privacidad.
 3. **Validacion humana POR SESION**: cada sesion de navegacion requiere aprobacion explicita del owner antes de ejecutarse.
 4. **Alcance: interaccion completa** (lectura JS + login/formularios/clicks con estado), bajo los controles del punto 3 + budgets + kill-switch + egress-proxy + anti-SSRF.
+
+## Estado de implementación (2026-07-13) — FASE 1
+
+Implementado bajo los 4 puntos que firmó el operador. Kill-switch OFF por
+defecto: encender el navegador no da vía libre, solo permite que el córtex PIDA
+sesiones que el owner aprueba una a una.
+
+- **Runtime `browser-runtime`** (`docker/agent-runtimes/browser-runtime/`):
+  imagen sobre `mcr.microsoft.com/playwright/python` (Chromium + deps ya
+  instalados), no-root (uid 1000). La lógica de la sesión es PURA y testeada sin
+  Chromium (`browser_runtime/session.py`): catálogo CERRADO de pasos
+  (`goto`/`click`/`fill`/`wait_for`/`extract` — no hay `eval_js`), anti-SSRF,
+  presupuestos DUROS (pasos/páginas/bytes/reloj, acotados a techos de
+  plataforma), y salida como DATO saneado (fuera scripts/estilos, texto visible
+  truncado). Lo tecleado en un `fill` NO vuelve. El entrypoint corre Chromium
+  headless SOLO por el `HTTPS_PROXY` (egress-proxy); sin proxy configurado, no
+  arranca.
+- **Lanzamiento efímero** (`workers/browse_runner.py` + `browse_task.py`): el
+  worker lanza el contenedor con el MISMO perfil hardened del agent-runtime
+  (`AgentContainerRunner`: cap-drop ALL, root read-only, no-new-privileges,
+  seccomp, uid 1000, SIN socket Docker) en la red interna del agente, cuya única
+  salida es el egress-proxy. El guion viaja en `BROWSE_SESSION_SPEC` (env), el
+  resultado vuelve en una línea JSON. Una sesión NO aprobada jamás llega al
+  contenedor; el kill-switch se RE-comprueba en la task antes de abrir Chromium.
+- **Validación humana POR SESIÓN** (`cortex/browse.py` + `db/browse_repo.py` +
+  migración 0112 `browse_sessions` con RLS): máquina de estados
+  `pending_approval → approved → running → done|failed` (+ `rejected`), sin
+  atajo a `running` sin aprobación, terminales inmutables. Endpoints owner-only
+  `GET/POST /owner/cortex/browse-sessions[/{id}/approve|reject]`: aprobar encola
+  la task; si el broker cae, el owner recibe un 503 honesto (nunca cree que su
+  navegación corre).
+- **Host tools del córtex** (`cortex/tools.py`): `browse_request` (PIDE, no
+  navega) + `browse_result` (consulta estado/resultado), categoría de red
+  owner-only con DOBLE gate (kill-switch de plataforma + aprobación por sesión),
+  espejo exacto del gate web del ADR 0067. Al ser **host tools**, funcionan con
+  CUALQUIER provider del catálogo (claude_sdk/copilot/azure/ollama), no solo el
+  SDK.
+- **Kill-switch de plataforma** (`cortex.browser_enabled`, default OFF) +
+  toggle en el panel de la mente (junto a web y autonomía).
+
+Pendiente de fase 2 (no bloqueante): QA visual del inbox de aprobación y un e2e
+de navegación real contra un sitio de prueba tras el deploy.

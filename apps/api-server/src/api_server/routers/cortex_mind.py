@@ -463,6 +463,7 @@ async def _autonomy_snapshot(owner_id: UUID) -> CortexAutonomyResponse:
     )
     from api_server.db.platform_settings import (
         get_cortex_autonomy_enabled,
+        get_cortex_browser_enabled,
         get_cortex_curiosity_daily_searches_cap,
         get_cortex_curiosity_drive_threshold,
         get_cortex_web_enabled,
@@ -472,6 +473,7 @@ async def _autonomy_snapshot(owner_id: UUID) -> CortexAutonomyResponse:
     async with sessionmaker() as session:
         autonomy = await get_cortex_autonomy_enabled(session)
         web = await get_cortex_web_enabled(session)
+        browser = await get_cortex_browser_enabled(session)
         cap = await get_cortex_curiosity_daily_searches_cap(session)
         threshold = await get_cortex_curiosity_drive_threshold(session)
 
@@ -490,6 +492,7 @@ async def _autonomy_snapshot(owner_id: UUID) -> CortexAutonomyResponse:
     return CortexAutonomyResponse(
         autonomy_enabled=autonomy,
         web_enabled=web,
+        browser_enabled=browser,
         curiosity_drive_threshold=threshold,
         circuit_breaker_open=breaker_open,
         budget=CortexAutonomyBudget(searches_today=searches_today, searches_cap=cap),
@@ -521,6 +524,7 @@ async def put_autonomy(
     la siguiente pasada de CADA bucle sale no-op."""
     from api_server.db.platform_settings import (
         CORTEX_AUTONOMY_ENABLED_KEY,
+        CORTEX_BROWSER_ENABLED_KEY,
         CORTEX_WEB_ENABLED_KEY,
         set_platform_setting,
     )
@@ -540,6 +544,12 @@ async def put_autonomy(
             if payload.web_enabled is not None:
                 await set_platform_setting(
                     session, CORTEX_WEB_ENABLED_KEY, payload.web_enabled, actor=actor
+                )
+            if payload.browser_enabled is not None:
+                # ADR 0080: encender el navegador NO da vía libre — solo permite
+                # que el córtex PIDA sesiones, que el owner aprueba una a una.
+                await set_platform_setting(
+                    session, CORTEX_BROWSER_ENABLED_KEY, payload.browser_enabled, actor=actor
                 )
         except PlatformSettingForbiddenError as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc

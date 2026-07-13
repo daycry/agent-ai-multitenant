@@ -67,6 +67,20 @@ class Settings(BaseSettings):
         default="agent-runtime:v1",
         description="Image the worker launches for each agent task.",
     )
+    browser_runtime_image: str = Field(
+        default="browser-runtime:v1",
+        description=(
+            "Imagen del navegador sandboxeado (ADR 0080). Se lanza EFÍMERA, una por "
+            "sesión de navegación, y solo tras la aprobación del owner."
+        ),
+    )
+    browse_session_timeout_s: int = Field(
+        default=240,
+        description=(
+            "Techo de reloj de una sesión de navegación cuando no pide el suyo "
+            "(el runtime acota además páginas y bytes)."
+        ),
+    )
     agent_network: str = Field(
         default="agentic-agents",
         description="Dedicated Docker network for agent containers — kept "

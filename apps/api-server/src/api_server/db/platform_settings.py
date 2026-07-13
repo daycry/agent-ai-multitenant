@@ -225,6 +225,23 @@ async def get_cortex_web_enabled(session: AsyncSession) -> bool:
     return bool(value)
 
 
+# KILL-SWITCH del NAVEGADOR real del córtex (ADR 0080). Es una capacidad muy por
+# encima de leer la web: navega, ejecuta JS, clica, teclea y mantiene sesión. Por
+# eso arranca APAGADO y, aun encendido, cada sesión necesita la aprobación del
+# owner. Apagarlo corta de raíz: las tools desaparecen del catálogo y el despacho
+# las trata como desconocidas.
+CORTEX_BROWSER_ENABLED_KEY = "cortex.browser_enabled"
+DEFAULT_CORTEX_BROWSER_ENABLED = False
+
+
+async def get_cortex_browser_enabled(session: AsyncSession) -> bool:
+    """Si el navegador real del córtex (ADR 0080) está habilitado. Default OFF."""
+    value = await get_platform_setting(
+        session, CORTEX_BROWSER_ENABLED_KEY, default=DEFAULT_CORTEX_BROWSER_ENABLED
+    )
+    return bool(value)
+
+
 # ---------------------------------------------------------------------------
 # Autonomía del córtex (Córtex F4, ADR 0078) — bucles cognitivos de fondo
 # ---------------------------------------------------------------------------

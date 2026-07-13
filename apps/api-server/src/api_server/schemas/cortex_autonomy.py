@@ -39,6 +39,9 @@ class CortexAutonomyResponse(BaseModel):
 
     autonomy_enabled: bool
     web_enabled: bool
+    # ADR 0080: el NAVEGADOR real (Playwright). Kill-switch aparte del de la web
+    # —leer no es navegar— y, aun encendido, cada sesión la aprueba el owner.
+    browser_enabled: bool = False
     curiosity_drive_threshold: float
     circuit_breaker_open: bool
     budget: CortexAutonomyBudget
@@ -58,11 +61,18 @@ class CortexAutonomyUpdateRequest(BaseModel):
 
     autonomy_enabled: bool | None = None
     web_enabled: bool | None = None
+    browser_enabled: bool | None = None
 
     @model_validator(mode="after")
     def _at_least_one_field(self) -> CortexAutonomyUpdateRequest:
-        if self.autonomy_enabled is None and self.web_enabled is None:
-            raise ValueError("provide at least one of autonomy_enabled / web_enabled")
+        if (
+            self.autonomy_enabled is None
+            and self.web_enabled is None
+            and self.browser_enabled is None
+        ):
+            raise ValueError(
+                "provide at least one of autonomy_enabled / web_enabled / browser_enabled"
+            )
         return self
 
 
