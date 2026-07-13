@@ -48,3 +48,17 @@ persistente) que es su mitad claude_sdk.
 ## Estado de implementación (2026-07-13)
 
 MITAD HTTP IMPLEMENTADA como EXPERIMENTAL flag-OFF: `_ProviderModelClient` acumula el hilo en memoria por run (el cliente vive todo el run) — primer turno = rebuild historico; siguientes = [system] + hilo real (assistant con sus tool calls renderizados) + un TURN UPDATE compacto (observacion + stickies); compactacion honesta "EARLIER TURNS" al superar `_THREAD_MAX_MESSAGES` (20). Se activa con `WORKERS_RUNTIME_CONVERSATION_THREAD` (worker) -> `spec.model.conversation_thread` -> `_with_thread_flag` en el builder; solo providers HTTP (claude_sdk guarda ademas por \_advertises_submit_result). OFF por defecto: byte-a-byte el comportamiento historico, pineado por tests. PENDIENTE para ratificar: validacion e2e con runs reales (coste/convergencia antes-despues) y la mitad claude_sdk (ADR 0097, spike deny-sin-interrupt obligatorio).
+
+## Estado de implementación — COMPLETO (2026-07-13)
+
+La otra mitad (claude_sdk) LANDED con el **ADR 0097**: su transporte no re-envía
+el hilo (sería inútil: el CLI tiene estado propio) sino que mantiene una **sesión
+SDK viva** por run, habilitada por un spike con credencial viva que confirmó el
+deny-sin-interrupt, la memoria multi-turno y el prompt caching intra-sesión.
+
+Con eso el hilo conversacional por run es **una sola capacidad con dos
+transportes**, igual para los 4 providers: misma flag
+(`WORKERS_RUNTIME_CONVERSATION_THREAD` → `spec.model.conversation_thread`), mismo
+contrato (`LLMProvider.complete()`, un ACT por turno) y mismo default (**OFF**).
+Sigue pendiente lo mismo que antes para ratificar el encendido: validación e2e
+con runs reales (coste/convergencia antes-después).

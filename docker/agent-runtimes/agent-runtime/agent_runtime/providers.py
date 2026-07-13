@@ -52,6 +52,7 @@ from shared_llm import (
     RateLimitError,
 )
 from shared_llm.providers._openai_compat import CompletionSignals, completion_signals
+from shared_llm.providers.claude_agent_session import ClaudeAgentSessionProvider
 from shared_llm.reasoning import reasoning_call_kwargs
 
 from agent_runtime.model import (
@@ -1084,6 +1085,14 @@ class _ProviderModelClient:
         lines.append("Continue with your next single action (or finish via submit_result).")
         return "\n".join(lines)
 
+    def _thread_call_kwargs(self) -> dict[str, Any]:
+        """Kwargs EXTRA del turno con hilo (vacíos para los transportes HTTP).
+
+        Seam del transporte: claude_sdk lo usa para pedir su sesión viva (ADR
+        0097). Solo se aplica en la rama del hilo — el review y el assess siguen
+        siendo one-shot y no tocan la sesión."""
+        return {}
+
     def _record_thread_turn(self, sent_user: Message, resp: CompletionResponse) -> None:
         """Anexa el turno al hilo y compacta si supera el cap."""
         assistant_parts: list[str] = []
@@ -1124,11 +1133,19 @@ class _ProviderModelClient:
             if self._advertises_submit_result
             else self._tools
         )
-        # ADR 0110 (mitad HTTP): con el flag activo, el primer turno manda el
-        # rebuild histórico y los siguientes [system] + hilo real + turn update
-        # compacto — el proveedor puede reusar su KV-cache y el modelo ve su
-        # propio razonamiento previo. Flag OFF (default) = camino histórico.
-        if self._conversation_thread and self._advertises_submit_result:
+        # Hilo conversacional por run (ADR 0110 + 0097): con el flag activo, el
+        # primer turno manda el rebuild histórico y los siguientes [system] +
+        # hilo real + turn update compacto — el modelo ve su propio razonamiento
+        # previo. UNA capacidad, DOS transportes (nada exclusivo del SDK):
+        #
+        #   * HTTP: el proveedor recibe el hilo entero y reusa su KV-cache.
+        #   * claude_sdk: el proveedor mantiene una SESIÓN SDK viva y, con la
+        #     sesión abierta, solo consume el ÚLTIMO mensaje (el historial ya
+        #     está dentro). Se le sigue pasando el hilo completo a propósito: si
+        #     la sesión muere, la reabre con todo el contexto (auto-sanado).
+        #
+        # Flag OFF (default) = camino histórico, byte a byte.
+        if self._conversation_thread:
             historical = _decide_messages(state)
             if not self._thread:
                 sent_user = historical[1]
@@ -1136,12 +1153,13 @@ class _ProviderModelClient:
             else:
                 sent_user = Message(role="user", content=self._thread_turn_update(state))
                 messages = [historical[0], *self._thread, sent_user]
+            call_kwargs = {**self._extra_call_kwargs, **self._thread_call_kwargs()}
             resp = _run_with_retry(
                 lambda: self.provider.complete(
                     messages,
                     model=self.model,
                     tools=tools,
-                    **self._extra_call_kwargs,
+                    **call_kwargs,
                 )
             )
             self._record_thread_turn(sent_user, resp)
@@ -1188,6 +1206,18 @@ class _ProviderModelClient:
         except Exception:
             _log.warning("assess_progress failed; run continues unescalated", exc_info=True)
             return None
+
+    def close(self) -> None:
+        """Cierra el proveedor al acabar el run (best-effort).
+
+        Con el hilo de claude_sdk hay una SESIÓN viva detrás (un CLI + su loop
+        de fondo, ADR 0097): si nadie la cierra queda colgando hasta que muere
+        el contenedor. Los proveedores HTTP cierran su cliente httpx. Nunca
+        rompe el cierre del run: un fallo aquí solo se registra."""
+        try:
+            _run(self.provider.aclose())
+        except Exception:  # pragma: no cover — el teardown jamás tumba un run
+            _log.warning("provider close failed", exc_info=True)
 
     def review(self, state: ReviewState) -> ReviewResponse:
         # F34: force `submit_verdict` (tool_choice) so HTTP backends return the
@@ -1324,6 +1354,12 @@ class ClaudeSDKModelClient(_ProviderModelClient):
     timeout+retry). Los flags desactivan lo que el camino CLI no tolera — un
     ``submit_result`` anunciado / un ``tool_choice`` forzado dejan ``content=""``
     y pierden la prosa; el FINISH del SDK es prosa + tag ``<finish>``.
+
+    ADR 0097 — hilo conversacional: con ``conversation_thread`` el proveedor es
+    el de SESIÓN VIVA (``ClaudeAgentSessionProvider``), el transporte nativo del
+    mismo contrato que los HTTP cubren re-enviando el hilo. El review/assess
+    siguen one-shot (no piden ``conversation_session``), así que la sesión del
+    hilo nunca se contamina.
     """
 
     _advertises_submit_result = False
@@ -1339,6 +1375,7 @@ class ClaudeSDKModelClient(_ProviderModelClient):
         tools: list[dict[str, Any]] | None = None,
         max_turns: int = 1,
         reasoning_effort: str | None = None,
+        conversation_thread: bool = False,
     ) -> None:
         self._max_turns = max_turns
         # ADR 0070: el SDK de Claude usa `effort` (low/medium/high/xhigh/max).
@@ -1347,8 +1384,9 @@ class ClaudeSDKModelClient(_ProviderModelClient):
         self._effort = reasoning_call_kwargs("claude_sdk", reasoning_effort).get("effort")
         # Feed the resolved credential to the SDK: api_key → ANTHROPIC_API_KEY,
         # oauth_token → CLAUDE_CODE_OAUTH_TOKEN (subscription Pro/Max, ADR 0063).
+        provider_cls = ClaudeAgentSessionProvider if conversation_thread else ClaudeAgentProvider
         super().__init__(
-            provider=ClaudeAgentProvider(
+            provider=provider_cls(
                 api_key=api_key,
                 oauth_token=oauth_token,
                 default_model=model,
@@ -1357,7 +1395,12 @@ class ClaudeSDKModelClient(_ProviderModelClient):
             model=model,
             tools=tools,
             extra_call_kwargs={"effort": self._effort},
+            conversation_thread=conversation_thread,
         )
+
+    def _thread_call_kwargs(self) -> dict[str, Any]:
+        """El turno del hilo viaja por la SESIÓN viva (ADR 0097)."""
+        return {"conversation_session": True}
 
 
 # ---------------------------------------------------------------------------
@@ -1446,12 +1489,12 @@ def _overlay_resolved(
 # Factory — model_from_spec delegates here for non-scripted kinds
 # ---------------------------------------------------------------------------
 def _with_thread_flag(client: _ProviderModelClient, spec: dict[str, Any]) -> ModelClient:
-    """ADR 0110 (mitad HTTP): activa el hilo conversacional si el spec lo pide.
+    """ADR 0110: activa el hilo conversacional de los transportes HTTP si el spec
+    lo pide (post-construccion, para no tocar la firma de los 3 adapters).
 
-    Post-construccion para no tocar la firma de los 3 adapters HTTP; claude_sdk
-    nunca pasa por aqui (su decide guarda ademas con _advertises_submit_result).
-    Flag OFF por defecto — el worker solo lo emite con
-    WORKERS_RUNTIME_CONVERSATION_THREAD activo."""
+    claude_sdk NO pasa por aqui: su transporte es una sesion viva y el flag debe
+    llegar al CONSTRUCTOR para elegir proveedor (ADR 0097). Flag OFF por defecto
+    — el worker solo lo emite con WORKERS_RUNTIME_CONVERSATION_THREAD activo."""
     client._conversation_thread = bool(spec.get("conversation_thread"))
     return client
 
@@ -1526,6 +1569,8 @@ def build_provider_client(
             spec,
         )
     if kind in ("claude_sdk", "claude"):
+        # ADR 0097: el hilo llega al CONSTRUCTOR (elige sesión viva vs one-shot),
+        # no post-construcción como en los HTTP.
         return ClaudeSDKModelClient(
             model=model,
             api_key=spec.get("api_key"),
@@ -1533,6 +1578,7 @@ def build_provider_client(
             tools=tools,
             max_turns=int(spec.get("max_turns", 1)),
             reasoning_effort=reasoning,
+            conversation_thread=bool(spec.get("conversation_thread")),
         )
     if kind == "ollama":
         return _with_thread_flag(

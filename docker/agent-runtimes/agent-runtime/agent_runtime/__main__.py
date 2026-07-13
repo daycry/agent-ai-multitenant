@@ -758,6 +758,11 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
     # other tool. The runner holds the live sessions and MUST be closed when the
     # run ends — kept here so the `finally` below tears it down.
     mcp_runner = _wire_mcp_servers(registry, spec)
+    # El proveedor del modelo tambien puede sostener recursos vivos (la sesion
+    # SDK de claude_sdk con el hilo: CLI + loop de fondo, ADR 0097). Se declara
+    # ANTES del try para que el `finally` pueda cerrarlo aunque el boot reviente
+    # antes de construirlo (mismo criterio que el runner MCP).
+    deps: AgentDeps | None = None
 
     # The MCP runner (when present) holds live sessions: a background event loop
     # and open transports/subprocesses. From the instant it is started it MUST be
@@ -859,6 +864,13 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
         # even when the run raised — leaking them would keep subprocesses alive.
         if mcp_runner is not None:
             mcp_runner.close()
+        # Idem el proveedor del modelo: con el hilo conversacional de claude_sdk
+        # hay una sesión SDK viva (CLI + loop de fondo, ADR 0097) que hay que
+        # cerrar. `close` solo existe en los adaptadores reales (el scripted de
+        # los tests no lo trae).
+        close_model = getattr(deps.model, "close", None) if deps is not None else None
+        if callable(close_model):
+            close_model()
     _emit({"event": "execution.finished", "result": result.as_dict()})
     return 0
 
