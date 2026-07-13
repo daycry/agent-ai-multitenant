@@ -253,9 +253,17 @@ class ClaudeAgentSessionProvider(ClaudeAgentProvider):
         collected: list[Any] = []
         try:
             collected = await self._in_session_loop(self._turn(self._session, prompt))
-        except Exception as exc:
+        except BaseException as exc:
+            # CUALQUIER interrupción (incl. CancelledError de un timeout del turno,
+            # que hereda de BaseException, NO de Exception) deja la sesión a
+            # medias: hay que DESCARTARLA o el turno siguiente la reusaría
+            # envenenada. Solo los Exception se tipan a LLMError; una cancelación
+            # / KeyboardInterrupt / SystemExit se re-propaga tal cual (envolverla
+            # rompería la semántica de asyncio y del apagado).
             await self._drop_session()  # sesión envenenada → se reabre en el turno siguiente
-            raise _run_error(exc, collected) from exc
+            if isinstance(exc, Exception):
+                raise _run_error(exc, collected) from exc
+            raise
 
         text_parts, usage = self._harvest(collected)
         tool_calls = _harvest_tool_calls(collected)

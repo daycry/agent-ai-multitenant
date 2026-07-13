@@ -21,6 +21,7 @@ Sin SDK real: la sesión se inyecta con un `client_factory` fake.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -77,7 +78,8 @@ class _FakeSession:
         self.prompts: list[str] = []
         self.connected = 0
         self.disconnected = 0
-        self.fail_on_query: Exception | None = None
+        # BaseException, no Exception: un turno puede cancelarse (CancelledError).
+        self.fail_on_query: BaseException | None = None
         _FakeSession.instances.append(self)
 
     async def connect(self) -> None:
@@ -215,6 +217,42 @@ async def test_a_broken_turn_resets_the_session_and_the_next_one_reopens() -> No
     assert len(sessions) == 2, "la sesión rota se descarta y se reabre"
     assert sessions[0].disconnected == 1
     assert "A" in sessions[1].prompts[0], "la sesión nueva recibe el historial entero"
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_turn_also_drops_the_poisoned_session() -> None:
+    """Un timeout del turno (asyncio.wait_for) CANCELA la coroutine: el
+    ``CancelledError` hereda de ``BaseException``, no de ``Exception``. Si no lo
+    capturamos, la sesión a medias queda viva y el turno siguiente la reusa
+    envenenada. Debe descartarse igual que un fallo normal, y el
+    ``CancelledError`` re-propagarse tal cual (no envolverse)."""
+    provider = _provider()
+    _FakeSession.instances.clear()
+    sessions: list[_FakeSession] = []
+
+    def _factory(options: Any) -> _FakeSession:
+        session = _FakeSession(
+            options=options, turns=[[_AssistantMessage([_TextBlock("ok")]), _ResultMessage()]]
+        )
+        if not sessions:  # el primer turno se cancela a mitad
+            session.fail_on_query = asyncio.CancelledError()
+        sessions.append(session)
+        return session
+
+    provider._client_factory = _factory
+    with pytest.raises(asyncio.CancelledError):
+        await provider.complete(
+            [Message(role="user", content="A")], tools=_TOOLS, conversation_session=True
+        )
+    assert sessions[0].disconnected == 1, "la sesión cancelada se descarta"
+    # El turno siguiente NO reusa la sesión envenenada: abre una nueva.
+    resp = await provider.complete(
+        [Message(role="user", content="A"), Message(role="user", content="B")],
+        tools=_TOOLS,
+        conversation_session=True,
+    )
+    assert resp.content == "ok"
+    assert len(sessions) == 2
 
 
 @pytest.mark.asyncio

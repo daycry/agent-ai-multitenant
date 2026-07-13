@@ -30,7 +30,10 @@ BROWSE_PENDING = "pending_approval"
 BROWSE_TERMINAL = ("done", "failed", "rejected")
 _ALLOWED: dict[str, tuple[str, ...]] = {
     BROWSE_PENDING: ("approved", "rejected"),
-    "approved": ("running", "rejected"),
+    # approved→failed: el worker re-comprueba el kill-switch (y puede fallar el
+    # arranque del runtime) ANTES de marcar `running`; una sesión aprobada que no
+    # llega a ejecutarse acaba en `failed` con su causa, no colgada en `approved`.
+    "approved": ("running", "failed", "rejected"),
     "running": ("done", "failed"),
     "done": (),
     "failed": (),

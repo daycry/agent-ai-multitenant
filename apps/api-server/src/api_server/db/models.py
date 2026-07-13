@@ -49,6 +49,7 @@ from api_server.db.base import (
     TimestampMixin,
     UUIDPrimaryKeyMixin,
 )
+from api_server.db.browse_repo import BrowseSession
 from api_server.db.cortex import CortexConversation, CortexTurn
 
 # Córtex F2 (ADR 0075): import the affect-snapshot model so it registers on
@@ -1127,6 +1128,7 @@ __all__ = [
     "ApiTokenScope",
     "AuditAction",
     "AuditLog",
+    "BrowseSession",
     "CortexAffectSnapshot",
     "AssistantConversation",
     "LLMUsageEvent",

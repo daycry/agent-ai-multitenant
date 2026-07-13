@@ -35,7 +35,9 @@ def browse_session(session_id: str) -> dict[str, Any]:
     return asyncio.run(_run_browse(get_settings(), session_id))
 
 
-async def _run_browse(settings: Settings, session_id: str) -> dict[str, Any]:
+async def _run_browse(
+    settings: Settings, session_id: str, *, sessionmaker: Any = None
+) -> dict[str, Any]:
     from api_server.db.browse_repo import (
         get_browse_session,
         mark_done,
@@ -44,8 +46,12 @@ async def _run_browse(settings: Settings, session_id: str) -> dict[str, Any]:
     )
     from api_server.db.platform_settings import get_cortex_browser_enabled
 
-    engine = create_async_engine(settings.database_url)
-    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    # BYPASSRLS: browse_sessions del córtex es tenant-less (tenant_id NULL), como
+    # la memoria del córtex — el worker accede sin `app.tenant_id`. `sessionmaker`
+    # inyectable es un seam de test; en producción es None y se abre el engine.
+    engine = None if sessionmaker is not None else create_async_engine(settings.database_url)
+    if sessionmaker is None:
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sessionmaker() as session, session.begin():
             row = await get_browse_session(session, UUID(session_id))
@@ -61,13 +67,18 @@ async def _run_browse(settings: Settings, session_id: str) -> dict[str, Any]:
             budgets = dict(row.budgets or {})
             await mark_running(session, row)
 
-        ok, payload = run_browse_container(
-            settings,
-            session_id=session_id,
-            status="approved",  # ya validado arriba; el runner lo re-exige igual
-            steps=steps,
-            budgets=budgets,
-        )
+        try:
+            ok, payload = run_browse_container(
+                settings,
+                session_id=session_id,
+                status="approved",  # ya validado arriba; el runner lo re-exige igual
+                steps=steps,
+                budgets=budgets,
+            )
+        except Exception as exc:  # el runtime petó (docker caído, imagen ausente…)
+            # La sesión está en `running`: NO puede quedar colgada. La bajamos a
+            # `failed` con la causa — el docstring lo promete.
+            ok, payload = False, {"error": f"fallo al ejecutar la sesión: {exc}"[:500]}
 
         async with sessionmaker() as session, session.begin():
             row = await get_browse_session(session, UUID(session_id))
@@ -80,7 +91,8 @@ async def _run_browse(settings: Settings, session_id: str) -> dict[str, Any]:
         _log.info("browse.session_finished", session=session_id, ok=ok)
         return {"session_id": session_id, "ok": ok}
     finally:
-        await engine.dispose()
+        if engine is not None:
+            await engine.dispose()
 
 
 __all__ = ["browse_session"]

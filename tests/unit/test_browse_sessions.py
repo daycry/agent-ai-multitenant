@@ -89,6 +89,16 @@ def test_a_failed_run_is_terminal_and_keeps_its_reason() -> None:
     assert failed.status in BROWSE_TERMINAL
 
 
+def test_an_approved_session_can_fail_without_running() -> None:
+    """El worker re-comprueba el kill-switch ANTES de arrancar: si el owner lo
+    apagó entre aprobar y ejecutar, la sesión aprobada acaba en `failed` con su
+    causa — NO debe reventar por transición ilegal (approved→failed), que dejaría
+    la sesión colgada en `approved` y crashearía la task en bucle."""
+    failed = fail(approve(_pending()), error="el navegador del córtex está deshabilitado")
+    assert failed.status == "failed"
+    assert "deshabilitado" in (failed.error or "")
+
+
 def test_the_request_is_validated_before_asking_a_human() -> None:
     """Un guion inadmisible se rechaza en la petición: no se molesta al owner
     con algo que el runtime tiraría de todas formas (mismo catálogo cerrado y

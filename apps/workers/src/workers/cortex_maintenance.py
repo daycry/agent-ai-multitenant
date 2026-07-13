@@ -290,30 +290,36 @@ async def _consolidate_similar(
                 .all()
             )
             by_id = {}
+            by_embedding: dict[str, list[float]] = {}
             candidates = []
             for row in rows:
                 meta = row.metadata_ or {}
                 if is_protected(meta) or meta.get("kind") == "consolidated":
                     continue
+                # pgvector devuelve el embedding como numpy.ndarray: NUNCA usar
+                # `arr or []` (evaluar un ndarray como bool es ambiguo y revienta).
+                # Se convierte explícitamente a lista de floats.
+                emb = row.embedding
+                emb_list = [float(x) for x in emb] if emb is not None else []
                 by_id[str(row.id)] = row
+                by_embedding[str(row.id)] = emb_list
                 candidates.append(
                     ConsolidationCandidate(
                         id=str(row.id),
                         content=str(row.content or ""),
                         created_at=row.created_at,
-                        embedding=list(row.embedding or []),
+                        embedding=emb_list,
                     )
                 )
             groups = select_consolidation_groups(candidates)
             for group in groups:
                 members = [by_id[c.id] for c in group]
-                # Centroide normalizado de los embeddings del grupo — la
-                # memoria consolidada sigue siendo recuperable por semántica.
-                dims = len(members[0].embedding or [])
-                centroid = [
-                    sum((m.embedding or [0.0] * dims)[i] for m in members) / len(members)
-                    for i in range(dims)
-                ]
+                # Centroide del grupo — la memoria consolidada sigue siendo
+                # recuperable por semántica. Se usa el embedding ya convertido a
+                # lista (by_embedding), nunca el ndarray crudo del row.
+                embs = [by_embedding[c.id] for c in group]
+                dims = len(embs[0]) if embs else 0
+                centroid = [sum(e[i] for e in embs) / len(embs) for i in range(dims)]
                 template = members[0]
                 merged = MemoryEntry(
                     tenant_id=template.tenant_id,
