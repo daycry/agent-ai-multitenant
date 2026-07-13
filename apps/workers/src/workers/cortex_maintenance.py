@@ -118,11 +118,13 @@ async def _maintain_owner(
     """Las tres acciones de mantenimiento para UN owner (aislado por owner_id)."""
     snapshotted = await _decay_snapshot(sessionmaker, owner_id, now=now)
     forgotten = await _forget_low_retention(sessionmaker, owner_id, now=now)
+    consolidated = await _consolidate_similar(sessionmaker, owner_id, now=now)
     pruned = await _prune_old_snapshots(sessionmaker, owner_id, now=now)
     return {
         "owner_user_id": str(owner_id),
         "decay_snapshot_written": snapshotted,
         "forgotten": forgotten,
+        "consolidated_groups": consolidated,
         "pruned_snapshots": pruned,
     }
 
@@ -234,6 +236,111 @@ async def _forget_low_retention(
         _log.warning("cortex_maintenance.forget_failed", owner=str(owner_id), error=str(exc))
         return forgotten
     return forgotten
+
+
+# ADR 0077 (consolidación): solo recuerdos con esta antigüedad mínima entran
+# al merge-into — lo reciente aún está "en uso" y no debe colapsarse.
+_CONSOLIDATE_MIN_AGE_DAYS = 14
+_CONSOLIDATE_SCAN_LIMIT = 200
+
+
+async def _consolidate_similar(
+    sessionmaker: async_sessionmaker[Any], owner_id: UUID, *, now: datetime
+) -> int:
+    """Merge-into de la episódica REPETIDA del córtex (ADR 0077).
+
+    Agrupa por similitud coseno de los embeddings YA calculados (lógica pura
+    ``api_server.cortex.consolidation``, determinista — sin LLM: el resumen
+    cita los originales, no inventa prosa). Cada grupo produce UNA memoria
+    consolidada (kind=consolidated, embedding = centroide normalizado) y los
+    originales se soft-borran con ``metadata_.consolidated_into`` (reversible,
+    mismo contrato que el olvido). Best-effort: jamás rompe el beat."""
+    from datetime import timedelta
+
+    from api_server.cortex.consolidation import (
+        ConsolidationCandidate,
+        merge_content,
+        select_consolidation_groups,
+    )
+    from api_server.cortex.forgetting import is_protected
+    from api_server.db.memory import MemoryEntry
+
+    consolidated = 0
+    cutoff = now - timedelta(days=_CONSOLIDATE_MIN_AGE_DAYS)
+    try:
+        async with sessionmaker() as session, session.begin():
+            rows = list(
+                (
+                    await session.execute(
+                        select(MemoryEntry)
+                        .where(
+                            MemoryEntry.user_id == owner_id,
+                            MemoryEntry.scope == "private",
+                            MemoryEntry.deleted_at.is_(None),
+                            MemoryEntry.metadata_["cortex"].astext == "true",
+                            MemoryEntry.type == "episodic",
+                            MemoryEntry.created_at < cutoff,
+                            MemoryEntry.embedding.is_not(None),
+                        )
+                        .order_by(MemoryEntry.created_at.asc())
+                        .limit(_CONSOLIDATE_SCAN_LIMIT)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            by_id = {}
+            candidates = []
+            for row in rows:
+                meta = row.metadata_ or {}
+                if is_protected(meta) or meta.get("kind") == "consolidated":
+                    continue
+                by_id[str(row.id)] = row
+                candidates.append(
+                    ConsolidationCandidate(
+                        id=str(row.id),
+                        content=str(row.content or ""),
+                        created_at=row.created_at,
+                        embedding=list(row.embedding or []),
+                    )
+                )
+            groups = select_consolidation_groups(candidates)
+            for group in groups:
+                members = [by_id[c.id] for c in group]
+                # Centroide normalizado de los embeddings del grupo — la
+                # memoria consolidada sigue siendo recuperable por semántica.
+                dims = len(members[0].embedding or [])
+                centroid = [
+                    sum((m.embedding or [0.0] * dims)[i] for m in members) / len(members)
+                    for i in range(dims)
+                ]
+                template = members[0]
+                merged = MemoryEntry(
+                    tenant_id=template.tenant_id,
+                    user_id=owner_id,
+                    scope="private",
+                    type="episodic",
+                    content=merge_content(group),
+                    embedding=centroid,
+                    metadata_={
+                        "cortex": "true",
+                        "kind": "consolidated",
+                        "consolidated_from": [c.id for c in group],
+                        "at": now.astimezone(UTC).isoformat(),
+                    },
+                )
+                session.add(merged)
+                await session.flush()
+                for member in members:
+                    member.deleted_at = now
+                    meta = dict(member.metadata_ or {})
+                    meta["consolidated_into"] = str(merged.id)
+                    member.metadata_ = meta
+                consolidated += 1
+    except Exception as exc:  # best-effort
+        _log.warning("cortex_maintenance.consolidate_failed", owner=str(owner_id), error=str(exc))
+        return consolidated
+    return consolidated
 
 
 async def _prune_old_snapshots(
