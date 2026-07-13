@@ -1,7 +1,7 @@
 ---
 adr: "0100"
 title: "Materialización del marketplace: puente install→catálogo, provenance y gates"
-status: proposed
+status: accepted
 date: 2026-07-03
 deciders: operador (pendiente)
 phase: auditoria-plataforma-2026-07-03
@@ -180,3 +180,7 @@ trazabilidad barata de la pieza 1 y el marketplace sigue sin ser un feature util
    A; el tenant B no ve la `Tool`/`Skill` resultante (test cross-tenant en CI, Principio 1).
 5. **No regresión**: con las piezas 2-3 desactivadas (gate del operador), el comportamiento es
    idéntico al de HEAD `3d22337` (sólo la pieza 1 de esquema presente).
+
+## Estado de implementación (2026-07-13)
+
+OPCION (c) IMPLEMENTADA (mandato del operador «abordamos estos puntos»). Pieza 1: migracion **0111** (tools+skills: source_listing_id/source_installation_id/source_version, FK SET NULL, indice parcial). Pieza 2: `marketplace/materialize.py` — al pasar a ENABLED (install fresco verified o flip de consent) upsert transaccional de la fila nativa: kind=skill -> Skill (prompt_fragment obligatorio, categoria del catalogo cerrado con fallback honesto); tool/mcp_server con implementation_type de RED (mcp_tool/http_endpoint) -> Tool (security_level sandboxed por defecto); python_function/docker_command -> DIFERIDO honesto sin fila (deferred_reason al audit) hasta el sandbox ADR 0081 B/C. Idempotente por source_installation_id (re-enable resucita); colision de nombre -> sufijo determinista -mkt-XXXXXX; manifest invalido -> 422 y el enable aborta entero. Des-materializacion en uninstall/revoke (\_revoke_installation) y al quedarse DISABLED tras consent — la capacidad no sobrevive a su permiso (tests de no-orfandad). Pieza 3: el gate de analisis estatico YA corria en el install fresco (task_prod12_mkt_01); el gate de FIRMA verified sigue pendiente de la clave MARKETPLACE_SIGNING_PUBLIC_KEY en Vault (prerequisito de despliegue, no de codigo). Integracion 4/4.

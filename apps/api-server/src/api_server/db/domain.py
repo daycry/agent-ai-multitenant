@@ -513,6 +513,21 @@ class Skill(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDe
     category: Mapped[str] = mapped_column(String(64), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     prompt_fragment: Mapped[str] = mapped_column(Text, nullable=False)
+    # ADR 0100 (pieza 1): provenance del marketplace — espejo de forked_from_*.
+    # NULL = fila nativa; poblado = materializada desde una instalación (la
+    # des-materialización de uninstall/revoke busca por source_installation_id).
+    source_listing_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("marketplace_listings.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_installation_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("marketplace_installations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # List of tool UUIDs. JSONB rather than a junction table -- the
     # association is a *recommendation*, not a hard FK, and tools may
     # come from outside this tenant's catalog (built-ins).
@@ -590,6 +605,21 @@ class Tool(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("60"))
     rate_limit_per_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Catalog marker -- see Skill.is_builtin.
+    # ADR 0100 (pieza 1): provenance del marketplace — espejo de forked_from_*.
+    # NULL = fila nativa; poblado = materializada desde una instalación (la
+    # des-materialización de uninstall/revoke busca por source_installation_id).
+    source_listing_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("marketplace_listings.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_installation_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("marketplace_installations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     is_builtin: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 
 

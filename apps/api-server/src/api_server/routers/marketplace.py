@@ -256,6 +256,11 @@ async def _revoke_installation(
     installation.status = InstallationStatus.REVOKED.value
     installation.revoked_at = now
     installation.revoked_by = principal.user_id
+    # ADR 0100 (pieza 2): la capacidad materializada cae CON su instalación,
+    # en la misma transacción (test de no-orfandad).
+    from api_server.marketplace.materialize import dematerialize_installation
+
+    await dematerialize_installation(session, installation_id=installation.id)
     installation.deleted_at = now
 
     # Mandatory append-only audit (plan decision): same transaction as the
@@ -969,6 +974,29 @@ async def install_listing(
             detail="listing already installed for this tenant/project",
         ) from exc
 
+    # ADR 0100 (pieza 2): una instalación que nace ENABLED (listing verified)
+    # MATERIALIZA su capacidad nativa en la misma transacción — skill o tool
+    # de red (mcp_tool/http_endpoint); python/docker quedan diferidos honestos
+    # hasta el sandbox out-of-process (ADR 0081 B/C). Un manifest inválido
+    # aborta el install entero (422): nunca un ENABLED a medias.
+    materialize_summary: dict[str, object] | None = None
+    if initial_status == InstallationStatus.ENABLED.value:
+        from api_server.marketplace.materialize import (
+            MaterializeError,
+            materialize_installation,
+        )
+
+        try:
+            materialize_summary = (
+                await materialize_installation(session, installation=installation, listing=listing)
+            ).as_dict()
+        except MaterializeError as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"install cannot materialise its capability: {exc}",
+            ) from exc
+
     # Append-only audit: who installed what. Mandatory — the install and
     # its audit row live in the same transaction so they commit atomically.
     session.add(
@@ -988,6 +1016,8 @@ async def install_listing(
                 # task_prod12_mkt_01: el informe del gate de análisis (o su
                 # skip honesto) viaja en el mismo audit row del install.
                 "gates": analysis_gates,
+                # ADR 0100: qué materializó (o por qué se difirió).
+                "materialization": materialize_summary,
             },
         )
     )
@@ -1086,6 +1116,29 @@ async def decide_consent(
     installation.status = (
         InstallationStatus.ENABLED.value if outcome.enable else InstallationStatus.DISABLED.value
     )
+
+    # ADR 0100 (pieza 2): el flip de consent decide la capacidad viva en la
+    # MISMA transacción — enable materializa (o re-materializa: re-enable
+    # resucita la fila soft-borrada); quedarse disabled la retira (una
+    # capacidad no sobrevive a su permiso). Manifest inválido → 422 y el
+    # enable entero aborta.
+    from api_server.marketplace.materialize import (
+        MaterializeError,
+        dematerialize_installation,
+        materialize_installation,
+    )
+
+    if outcome.enable:
+        try:
+            await materialize_installation(session, installation=installation, listing=listing)
+        except MaterializeError as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"enable cannot materialise its capability: {exc}",
+            ) from exc
+    else:
+        await dematerialize_installation(session, installation_id=installation.id)
 
     actor = _actor(principal)
     detail = {
