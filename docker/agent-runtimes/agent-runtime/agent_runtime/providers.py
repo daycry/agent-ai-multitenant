@@ -138,23 +138,30 @@ _REVIEW_RUN_SYSTEM = (
 # ADR 0086: the verdict travels as a TOOL CALL, not formatted text — the contract
 # every provider handles well (HTTP: tool_choice; claude_sdk: the host-tool path it
 # already uses reliably). `_review_from` reads this call; prose is the fallback.
+# AUD16-01: wrapped in the OpenAI `{"type":"function","function":…}` envelope —
+# the HTTP providers pass `tools` VERBATIM to the /chat/completions body, so a
+# bare dict is a 400 on strict endpoints (Azure/Copilot) and a nameless husk on
+# Ollama; claude_sdk's `_unwrap_tool_schemas` tolerates both forms.
 _SUBMIT_VERDICT_TOOL: dict[str, Any] = {
-    "name": "submit_verdict",
-    "description": "Submit the self-review verdict for the candidate output.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "passed": {
-                "type": "boolean",
-                "description": "True if the output satisfies the task's acceptance criteria.",
+    "type": "function",
+    "function": {
+        "name": "submit_verdict",
+        "description": "Submit the self-review verdict for the candidate output.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "passed": {
+                    "type": "boolean",
+                    "description": "True if the output satisfies the task's acceptance criteria.",
+                },
+                "feedback": {
+                    "type": "string",
+                    "description": "Short reason; if not passed, what is missing or wrong.",
+                },
             },
-            "feedback": {
-                "type": "string",
-                "description": "Short reason; if not passed, what is missing or wrong.",
-            },
+            "required": ["passed"],
+            "additionalProperties": False,
         },
-        "required": ["passed"],
-        "additionalProperties": False,
     },
 }
 
@@ -176,27 +183,34 @@ _SUBMIT_VERDICT_TOOL_CHOICE: dict[str, Any] = {
 # prose and `_decision_from` wraps it. `status` is a HINT for the UI + reviewer,
 # NOT the authoritative verdict (the self-review decides done/escalate).
 _FINISH_STATUSES = ("success", "failed", "partial")
+# AUD16-01: wrapped in the OpenAI envelope for the same reason as
+# `_SUBMIT_VERDICT_TOOL` above (verbatim pass-through on the HTTP providers).
 _SUBMIT_RESULT_TOOL: dict[str, Any] = {
-    "name": "submit_result",
-    "description": (
-        "Finish the task and report the outcome. Call this exactly once, when the "
-        "task is complete, instead of replying in plain text."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "status": {
-                "type": "string",
-                "enum": list(_FINISH_STATUSES),
-                "description": "success = done; failed = could not complete; partial = partly.",
+    "type": "function",
+    "function": {
+        "name": "submit_result",
+        "description": (
+            "Finish the task and report the outcome. Call this exactly once, when the "
+            "task is complete, instead of replying in plain text."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": list(_FINISH_STATUSES),
+                    "description": (
+                        "success = done; failed = could not complete; partial = partly."
+                    ),
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "A short summary of what was done (the task's final output).",
+                },
             },
-            "summary": {
-                "type": "string",
-                "description": "A short summary of what was done (the task's final output).",
-            },
+            "required": ["status", "summary"],
+            "additionalProperties": False,
         },
-        "required": ["status", "summary"],
-        "additionalProperties": False,
     },
 }
 

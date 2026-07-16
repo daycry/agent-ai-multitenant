@@ -76,9 +76,13 @@ def test_submit_result_failed_status_is_carried() -> None:
 
 
 def test_submit_result_tool_schema_shape() -> None:
-    # status enum closed to success|failed|partial; summary required.
-    params = _SUBMIT_RESULT_TOOL["parameters"]
-    assert _SUBMIT_RESULT_TOOL["name"] == "submit_result"
+    # AUD16-01: la tool viaja con el envelope OpenAI {"type":"function","function":…}
+    # (los providers HTTP la pasan VERBATIM al body; sin envelope, Azure/Copilot
+    # devuelven 400 y Ollama la degrada a una tool sin nombre).
+    assert _SUBMIT_RESULT_TOOL["type"] == "function"
+    fn = _SUBMIT_RESULT_TOOL["function"]
+    params = fn["parameters"]
+    assert fn["name"] == "submit_result"
     assert params["properties"]["status"]["enum"] == ["success", "failed", "partial"]
     assert set(params["required"]) == {"status", "summary"}
 

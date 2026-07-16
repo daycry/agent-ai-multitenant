@@ -54,7 +54,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_a1` — Envelope OpenAI de `submit_result`/`submit_verdict` + tests de wire-format
 
-- [ ] **Título**: Las tools de finalización viajan con el envelope `{"type":"function","function":…}` a los 3 kinds HTTP
+- [x] **Título**: Las tools de finalización viajan con el envelope `{"type":"function","function":…}` a los 3 kinds HTTP
 - **Descripción**: `_SUBMIT_RESULT_TOOL` y `_SUBMIT_VERDICT_TOOL`
   (`docker/agent-runtimes/agent-runtime/agent_runtime/providers.py:141-201`)
   son dicts planos; envolverlos como ya hace `_SUBMIT_PROGRESS_TOOL` y
