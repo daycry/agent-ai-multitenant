@@ -430,7 +430,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_f5` — `NOTIFY_EVENTS_REDIS_URL` coherente entre dev y el installer de prod
 
-- [ ] **Título**: El DLQ de notificaciones se lee de la misma DB que se escribe
+- [x] **Título**: El DLQ de notificaciones se lee de la misma DB que se escribe
 - **Descripción**: `compose_generator.py:872` genera DB 3 en prod vs DB 0 en
   dev. Verificar qué DB usan productor y consumidor del stream
   `dlq:notifications` y alinear (con test del generator).

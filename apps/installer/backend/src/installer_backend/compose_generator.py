@@ -869,7 +869,12 @@ def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dic
         {
             "NOTIFY_BROKER_URL": "redis://redis:6379/1",
             "NOTIFY_RESULT_BACKEND": "redis://redis:6379/2",
-            "NOTIFY_EVENTS_REDIS_URL": "redis://redis:6379/3",
+            # AUD16 (H10): la DB del bus de eventos/DLQ debe ser la MISMA que
+            # miran los consumidores (workers/api-server/orchestrator = DB 0).
+            # Con la antigua DB 3, el stream dlq:notifications era invisible
+            # para el sampler de métricas y NotificationsDLQNotEmpty no podía
+            # disparar jamás en prod (dev ya usaba DB 0).
+            "NOTIFY_EVENTS_REDIS_URL": "redis://redis:6379/0",
             "NOTIFY_NOTIFICATION_ENCRYPTION_KEY": _env_ref(
                 "NOTIFY_NOTIFICATION_ENCRYPTION_KEY", None, prod=prod
             ),

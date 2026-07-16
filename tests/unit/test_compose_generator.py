@@ -130,6 +130,28 @@ def test_minimal_config_has_all_core_services() -> None:
         assert name not in services
 
 
+def test_event_bus_redis_db_is_consistent_across_services() -> None:
+    """AUD16 menor C/H10: el dispatcher escribía su DLQ (dlq:notifications) en
+    la DB 3 de Redis mientras el sampler de métricas (workers, DB 0) y el resto
+    del bus de eventos miran la DB 0 — en prod agentic_dlq_depth habría sido
+    SIEMPRE 0 y la alerta NotificationsDLQNotEmpty no podría disparar jamás.
+    Productor y consumidores del bus/DLQ deben compartir la MISMA DB."""
+    compose = generate_compose(_config())
+    services = compose["services"]
+    assert isinstance(services, dict)
+
+    def _env(service: str, key: str) -> str:
+        env = services[service]["environment"]  # type: ignore[index]
+        assert isinstance(env, dict)
+        return str(env[key])
+
+    workers_events = _env("workers", "WORKERS_EVENTS_REDIS_URL")
+    notify_events = _env("notification-dispatcher", "NOTIFY_EVENTS_REDIS_URL")
+    assert (
+        notify_events == workers_events
+    ), f"DLQ writer ({notify_events}) y reader ({workers_events}) en DBs distintas"
+
+
 def test_minimal_compose_top_level_shape() -> None:
     compose = generate_compose(_config())
     assert compose["name"] == "agentic-platform"
