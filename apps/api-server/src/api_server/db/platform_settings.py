@@ -829,24 +829,36 @@ async def get_default_model_config(session: AsyncSession) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Estados de ejecución elegibles para memorización (Plan 06.17 task_06_17_04)
 # ---------------------------------------------------------------------------
-# El Memorizer solo destila ejecuciones "exitosas" — históricamente solo
-# ``done`` (``policy.py``). Este setting hace ese conjunto OPERATOR-CONFIGURABLE
-# (p.ej. añadir ``aborted`` para aprender de fallos): el worker lo lee en vivo y
-# se lo pasa a ``should_memorize``. Default ``["done"]`` (backward-compat). Solo
-# un System Admin lo escribe. Un valor que no sea una lista de
+# El Memorizer solo destila ejecuciones de estados elegibles. Este setting hace
+# ese conjunto OPERATOR-CONFIGURABLE (p.ej. estrecharlo a solo ``done``): el
+# worker lo lee en vivo y se lo pasa a ``should_memorize``. Solo un System
+# Admin lo escribe. Un valor que no sea una lista de
 # :class:`~api_server.db.domain.ExecutionStatus` válidos cae al default.
+#
+# AUD16-17 (auditoría 2026-07-16): el default incluye los FRACASOS — P1-1(a)
+# (investigación 2026-07-11) cambió el default de la política pura
+# (``policy._DEFAULT_ELIGIBLE_STATUSES``) pero este default operativo seguía en
+# ``("done",)``, y como el worker SIEMPRE pasa el resultado de
+# ``get_memorizable_statuses()``, el camino real nunca vio el default nuevo.
+# Ambos defaults deben ser EL MISMO conjunto (test_memorizable_statuses_default).
 MEMORY_MEMORIZABLE_STATUSES_KEY = "memory.memorizable_statuses"
-DEFAULT_MEMORY_MEMORIZABLE_STATUSES: tuple[str, ...] = ("done",)
+DEFAULT_MEMORY_MEMORIZABLE_STATUSES: tuple[str, ...] = (
+    "done",
+    "failed",
+    "aborted",
+    "needs_human_review",
+)
 
 
 async def get_memorizable_statuses(session: AsyncSession) -> frozenset[str]:
-    """Estados de ejecución que disparan memorización (default ``{"done"}``).
+    """Estados de ejecución que disparan memorización.
 
     Lo lee el worker del Memorizer en vivo y se lo pasa a ``should_memorize`` como
     conjunto elegible. Normaliza a un ``frozenset`` de estados
     :class:`~api_server.db.domain.ExecutionStatus` válidos; descarta entradas no
     reconocidas y, si la lista queda vacía o no es lista, cae al default
-    ``{"done"}`` (nunca deja al Memorizer sin ningún estado elegible)."""
+    ``DEFAULT_MEMORY_MEMORIZABLE_STATUSES`` (done + fracasos, AUD16-17 — nunca
+    deja al Memorizer sin ningún estado elegible)."""
     from api_server.db.domain import ExecutionStatus
 
     value = await get_platform_setting(

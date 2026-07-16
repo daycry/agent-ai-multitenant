@@ -195,7 +195,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_c3` — Default real de estados memorizables incluye fracasos
 
-- [ ] **Título**: P1-1(a) efectivo en el camino del worker
+- [x] **Título**: P1-1(a) efectivo en el camino del worker
 - **Descripción**: Sin fila en `platform_settings`,
   `get_memorizable_statuses()` devuelve `{'done'}` y el default nuevo de
   `policy.py` solo lo ven los tests. Alinear
