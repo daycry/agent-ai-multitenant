@@ -1,7 +1,7 @@
 ---
 plan_id: remediacion-auditoria-dirigida-2026-07-16
 title: Remediación de auditoría dirigida — tools por proveedor, notificaciones visibles, contabilidad, monitorización
-status: in_progress
+status: pending_human_validation
 blocking_plan: []
 started_at: 2026-07-16
 completed_at: null
