@@ -96,7 +96,10 @@ _DECIDE_SYSTEM = (
     "rag_search, list_files, read_file) only to gather what you genuinely need, "
     "then act; never repeat a search or re-read a file you have already seen, and "
     "ignore files unrelated to the task. Exception to the ONE-tool rule: you MAY "
-    "emit up to 4 READ-ONLY tool calls (read_file/list_files/search_code/"
+    # AUD16-04: search_code retirado del anuncio — no tiene executor en el
+    # runtime (g4 ya lo excluía de los schemas; nombrarlo aquí producía
+    # llamadas a pelo que morían en "unknown tool", 7/7 en 14 días).
+    "emit up to 4 READ-ONLY tool calls (read_file/list_files/"
     "rag_search/memory_recall) together in a single turn to gather related "
     "context at once — they all run this turn and you see every result; any "
     "writing/executing tool must still go alone.\n"
@@ -122,7 +125,7 @@ _REVIEW_RUN_SYSTEM = (
     "You are an autonomous REVIEWER judging ONE completed task inside a loop, "
     "working in the current directory (a READ-ONLY mount of the implementer's "
     "worktree). On each turn, either call exactly ONE tool to inspect what you "
-    "genuinely need (read_file, list_files, search_code — never re-read a file "
+    "genuinely need (read_file, list_files — never re-read a file "
     "you have already seen), or — once you can judge — FINISH with your review "
     "conclusion as prose that ENDS with exactly one verdict tag: "
     f"{VERDICT_APPROVE} or {VERDICT_REJECT} (a reject is "
@@ -132,7 +135,15 @@ _REVIEW_RUN_SYSTEM = (
     "criteria. Do NOT re-implement the task, do NOT write or modify files, and "
     "do NOT run git in any form. You may run the project's test suite via "
     "stack_exec when the provided test report is missing or inconclusive. Be "
-    "efficient: read only what the criteria require, then deliver the verdict."
+    "efficient: read only what the criteria require, then deliver the verdict.\n"
+    # AUD16-22: un reviewer exigió reintentar el commit (acción del WORKER,
+    # imposible en el sandbox) y la task bucleó hasta agotar retries — el
+    # what_to_fix debe pedir solo acciones ejecutables por el implementador.
+    "In a rejection, limit <what_to_fix> to concrete actions the implementer "
+    "can perform inside its sandbox: editing files in the worktree or running "
+    "the project toolchain via stack_exec. NEVER ask the implementer to run git "
+    "(commit/push), deploy, or any platform-side action — the platform persists "
+    "and versions the files automatically after the run."
 )
 
 # ADR 0086: the verdict travels as a TOOL CALL, not formatted text — the contract

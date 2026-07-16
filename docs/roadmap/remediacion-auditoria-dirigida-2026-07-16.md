@@ -73,7 +73,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_a2` — Retirar `search_code` de los system prompts del runtime
 
-- [ ] **Título**: Los prompts solo anuncian tools que existen
+- [x] **Título**: Los prompts solo anuncian tools que existen
 - **Descripción**: `providers.py:99` (`_DECIDE_SYSTEM`) y `:126-128`
   (`_REVIEW_RUN_SYSTEM`) nombran `search_code`, no cableada (7/7 llamadas
   fallidas en 14 días). Retirarla de ambos prompts y añadir test que cruce las
@@ -280,7 +280,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_d4` — El `what_to_fix` del reviewer se acota a acciones ejecutables por el agente
 
-- [ ] **Título**: El reviewer no puede exigir commit/push ni acciones worker-side
+- [x] **Título**: El reviewer no puede exigir commit/push ni acciones worker-side
 - **Descripción**: Histórico: un reviewer pidió reintentar el commit
   (imposible en sandbox) y la task bucleó. Añadir al prompt del reviewer la
   restricción explícita (ficheros del worktree, stack_exec) y un test del
