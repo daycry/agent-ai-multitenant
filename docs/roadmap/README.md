@@ -1,7 +1,7 @@
 ---
 title: Índice de Planes de Construcción del Sistema
 version: 1.0
-last_updated: 2026-05-20
+last_updated: 2026-07-14
 status: published
 ---
 
@@ -97,13 +97,15 @@ Planes con `plan_id` descriptivo que **corrigen** un comportamiento reportado po
 el operador sobre features ya construidas. No bloquean ni son bloqueados por las
 fases.
 
-| Plan                                                               | Qué corrige                                                                                                                                                                                                                                |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [price-sync-active-providers.md](./price-sync-active-providers.md) | El sync de precios LiteLLM ahora solo importa las familias de los `llm_providers` activos (ADR 0028); 0 activos ⇒ nada; fuera del allowlist cierra periodo (no borra).                                                                     |
-| [sso-global-user-admin.md](./sso-global-user-admin.md)             | Re-arquitectura de auth a **platform-global** (ADR 0047, supersede la parte per-tenant de 0031): login por provider, acceso por membership (0 ⇒ pantalla "sin acceso"), `/admin/users`, providers en `/login`; password/MFA/SCIM intactos. |
-| [cadena-pr-plan.md](./cadena-pr-plan.md)                           | Cadena auto-PR del cierre de plan: identidad git de fuente única (rama+bare), push incremental al remoto, persistencia del PR (P1-P8). `pending_approval` — auditoría 2026-07-03.                                                          |
-| [ciclo-vida-planes-fixes.md](./ciclo-vida-planes-fixes.md)         | Máquina de estados autoritativa (PUT/tasks + submit_verdict), tenancy del orquestador, durabilidad del planning, fidelidad del planner y board por plan_id (c1-c11). `pending_approval` — auditoría 2026-07-03.                            |
-| [tools-y-cierre-plan-fixes.md](./tools-y-cierre-plan-fixes.md)     | Guardrails de runtime + gate humano que no falle-abierto (P0), paridad catálogo↔executor, docling-mcp, changelog automático al cierre (g1-g6, c4). `pending_approval` — auditoría 2026-07-03.                                              |
+| Plan                                                                                           | Qué corrige                                                                                                                                                                                                                                |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [price-sync-active-providers.md](./price-sync-active-providers.md)                             | El sync de precios LiteLLM ahora solo importa las familias de los `llm_providers` activos (ADR 0028); 0 activos ⇒ nada; fuera del allowlist cierra periodo (no borra).                                                                     |
+| [sso-global-user-admin.md](./sso-global-user-admin.md)                                         | Re-arquitectura de auth a **platform-global** (ADR 0047, supersede la parte per-tenant de 0031): login por provider, acceso por membership (0 ⇒ pantalla "sin acceso"), `/admin/users`, providers en `/login`; password/MFA/SCIM intactos. |
+| [cadena-pr-plan.md](./cadena-pr-plan.md)                                                       | Cadena auto-PR del cierre de plan: identidad git de fuente única (rama+bare), push incremental al remoto, persistencia del PR (P1-P8). `pending_approval` — auditoría 2026-07-03.                                                          |
+| [ciclo-vida-planes-fixes.md](./ciclo-vida-planes-fixes.md)                                     | Máquina de estados autoritativa (PUT/tasks + submit_verdict), tenancy del orquestador, durabilidad del planning, fidelidad del planner y board por plan_id (c1-c11). `pending_approval` — auditoría 2026-07-03.                            |
+| [tools-y-cierre-plan-fixes.md](./tools-y-cierre-plan-fixes.md)                                 | Guardrails de runtime + gate humano que no falle-abierto (P0), paridad catálogo↔executor, docling-mcp, changelog automático al cierre (g1-g6, c4). `pending_approval` — auditoría 2026-07-03.                                              |
+| [remediacion-auditoria-integral-2026-07-14.md](./remediacion-auditoria-integral-2026-07-14.md) | Delta verificado de seguridad, córtex/RLS, embeddings, engines Celery, WebSocket y readiness. `pending_approval`; no duplica la serie prod.                                                                                                |
+| [remediacion-auditoria-dirigida-2026-07-16.md](./remediacion-auditoria-dirigida-2026-07-16.md) | AUD16: envelope OpenAI de tools de finalización (camino HTTP), notifs visibles (inbox plataforma + body), coste de catálogo + destilador de memorias, robustez de runs y monitorización del host. `in_progress` por orden del operador.    |
 
 ### Auditorías (no entran en el gate de fases)
 
@@ -117,6 +119,8 @@ procede, planes de remediación propios (listados arriba en «Planes correctivos
 | [auditoria-produccion-2026-06.md](./auditoria-produccion-2026-06.md)                               | Auditoría de producción (178 hallazgos → planes prod-01…18).                                                                                                                                                      |
 | [auditoria-2026-06-memoria-tools-marketplace.md](./auditoria-2026-06-memoria-tools-marketplace.md) | Memoria, tools y marketplace.                                                                                                                                                                                     |
 | [auditoria-zonas-2026-06.md](./auditoria-zonas-2026-06.md)                                         | Auditoría por zonas del sistema.                                                                                                                                                                                  |
+| [auditoria-integral-2026-07-14.md](./auditoria-integral-2026-07-14.md)                             | Auditoría actual contra el commit `ebee968`: implementación, lógica, seguridad, rendimiento, frontend, CI y gobernanza; incluye baseline ejecutable y candidatos refutados.                                       |
+| [auditoria-dirigida-2026-07-16.md](./auditoria-dirigida-2026-07-16.md)                             | Monitorización (data-flow real del stack Prometheus/Grafana), tools por proveedor LLM (envelope roto en el camino HTTP), notificaciones (invisibles para humanos) + barrido colateral verificado (27 hallazgos).  |
 
 ## MVP Funcional
 
