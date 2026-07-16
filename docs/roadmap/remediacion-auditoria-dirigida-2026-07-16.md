@@ -407,10 +407,14 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_f3` — Runtime-template sin fricción: HOME/.composer escribible
 
-- [ ] **Título**: composer deja de ruidear en cada invocación
+- [x] **Título**: composer deja de ruidear en cada invocación
 - **Descripción**: Ajustar la imagen del runtime-template (HOME escribible o
   COMPOSER_HOME a tmp) — el bloqueo de bash en stack_exec es política, se
   documenta y no se cambia.
+- **Resolución**: el HOME escribible ya lo daba prod-12 img_01; el ruido
+  venía de la imagen desplegada ANTIGUA. Añadido `COMPOSER_HOME` explícito
+  (inmune a overrides de HOME) + dir pre-creado; el rebuild del template va
+  en el deploy de este plan.
 - **Tiempo**: 0,25 d · **Complejidad**: s · **Hallazgo**: AUD16-26
 - **Tests automáticos**:
   ```yaml

@@ -7,8 +7,12 @@ LABEL org.opencontainers.image.title="agent-runtime-php-phpunit" \
       org.opencontainers.image.version="v1" \
       org.opencontainers.image.description="Test-runtime template: PHP 8.3 + Composer + PHPUnit."
 
+# AUD16-26: COMPOSER_HOME explícito bajo el HOME escribible de uid 1000 —
+# el ruido "no escribible" de los runs históricos venía de imágenes previas a
+# prod-12 img_01; el env explícito lo hace inmune a overrides de HOME.
 ENV COMPOSER_ALLOW_SUPERUSER=1 \
-    COMPOSER_NO_INTERACTION=1
+    COMPOSER_NO_INTERACTION=1 \
+    COMPOSER_HOME=/home/agent/.composer
 
 # Composer + the extensions Laravel / Symfony / CodeIgniter 4 projects expect
 # most often. `intl` (libicu) is REQUIRED by CodeIgniter 4 — its I18n/Time class
@@ -36,7 +40,7 @@ WORKDIR /workspace
 # composer/npm/...) funcionen, y arranca no-root tambien por defecto
 # (defensa en profundidad, como el agent-runtime). USER numerico: no
 # necesita entrada en /etc/passwd (uniforme en debian y alpine).
-RUN mkdir -p /home/agent && chown -R 1000:1000 /home/agent
+RUN mkdir -p /home/agent/.composer && chown -R 1000:1000 /home/agent
 ENV HOME=/home/agent
 USER 1000:1000
 
