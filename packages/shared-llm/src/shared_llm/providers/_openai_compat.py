@@ -130,6 +130,9 @@ def parse_sse_delta(line: str) -> tuple[str | None, bool]:
       - `(None, False)` for irrelevant lines (keep-alive, comment, ...).
       - `(text, False)` for a real content delta.
       - `(None, True)` for the terminator `[DONE]`.
+
+    Tool-call deltas are NOT surfaced here (text-only API, kept stable);
+    `iter_sse_chunks` accumulates them separately (AUD16-06).
     """
     if not line or not line.startswith("data: "):
         return None, False
@@ -146,6 +149,54 @@ def parse_sse_delta(line: str) -> tuple[str | None, bool]:
     return None, False
 
 
+def _sse_tool_call_deltas(line: str) -> list[dict[str, Any]]:
+    """The raw ``delta.tool_calls`` entries of one SSE line (``[]`` if none)."""
+    if not line or not line.startswith("data: "):
+        return []
+    payload = line[6:].strip()
+    if payload == "[DONE]":
+        return []
+    try:
+        chunk = json.loads(payload)
+    except json.JSONDecodeError:
+        return []
+    delta = chunk.get("choices", [{}])[0].get("delta", {})
+    raw = delta.get("tool_calls")
+    return [tc for tc in raw if isinstance(tc, dict)] if isinstance(raw, list) else []
+
+
+def _merge_tool_call_delta(acc: dict[int, dict[str, Any]], tc: dict[str, Any]) -> None:
+    """Fold one streamed tool-call delta into the per-index accumulator.
+
+    OpenAI streams a tool call as: first delta with ``index``/``id``/
+    ``function.name`` (+ an ``arguments`` fragment), then more deltas whose
+    ``function.arguments`` fragments concatenate into the JSON args string.
+    """
+    index = int(tc.get("index") or 0)
+    slot = acc.setdefault(index, {"id": "", "name": "", "arguments": ""})
+    if tc.get("id"):
+        slot["id"] = str(tc["id"])
+    fn = tc.get("function")
+    if isinstance(fn, dict):
+        if fn.get("name"):
+            slot["name"] = str(fn["name"])
+        fragment = fn.get("arguments")
+        if isinstance(fragment, str):
+            slot["arguments"] += fragment
+
+
+def _accumulated_tool_calls(acc: dict[int, dict[str, Any]]) -> list[ToolCall] | None:
+    """The finished `ToolCall`s from the accumulator (None when none arrived)."""
+    if not acc:
+        return None
+    calls = [
+        ToolCall(id=slot["id"], name=slot["name"], arguments=_loads_args(slot["arguments"]))
+        for _, slot in sorted(acc.items())
+        if slot["name"]
+    ]
+    return calls or None
+
+
 async def iter_sse_chunks(resp: httpx.Response, *, provider: str) -> AsyncIterator[StreamChunk]:
     """Yield `StreamChunk`s from an open streaming `/chat/completions` body.
 
@@ -159,12 +210,21 @@ async def iter_sse_chunks(resp: httpx.Response, *, provider: str) -> AsyncIterat
     the loop and convert such failures to `ProviderError`, matching the
     pattern in `claude_agent.ClaudeAgentProvider.stream()`. The terminal
     `done=True` chunk is emitted by this helper on the `[DONE]` marker.
+
+    AUD16-06: los deltas de `tool_calls` ya no se descartan en silencio — se
+    acumulan por índice y viajan parseados en el chunk final `done=True`
+    (`StreamChunk.tool_calls`); sin tool calls el campo queda en None.
     """
+    tool_call_acc: dict[int, dict[str, Any]] = {}
     try:
         async for line in resp.aiter_lines():
+            for tc_delta in _sse_tool_call_deltas(line):
+                _merge_tool_call_delta(tool_call_acc, tc_delta)
             delta, done = parse_sse_delta(line)
             if done:
-                yield StreamChunk(delta="", done=True)
+                yield StreamChunk(
+                    delta="", done=True, tool_calls=_accumulated_tool_calls(tool_call_acc)
+                )
                 return
             if delta:
                 yield StreamChunk(delta=delta)

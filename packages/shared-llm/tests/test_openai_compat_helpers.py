@@ -309,6 +309,47 @@ async def test_iter_sse_chunks_yields_deltas_then_done() -> None:
 
 
 @pytest.mark.asyncio
+async def test_iter_sse_chunks_accumulates_tool_call_deltas() -> None:
+    """AUD16-06: los deltas de `tool_calls` del stream ya no se descartan en
+    silencio — se acumulan por índice y viajan en el chunk final `done`."""
+    body = b"".join(
+        [
+            b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1",'
+            b'"type":"function","function":{"name":"echo","arguments":""}}]}}]}\n\n',
+            b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+            b'"function":{"arguments":"{\\"text\\": "}}]}}]}\n\n',
+            b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+            b'"function":{"arguments":"\\"hi\\"}"}}]}}]}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+    )
+    resp = httpx.Response(200, content=body, headers={"Content-Type": "text/event-stream"})
+    chunks = [c async for c in iter_sse_chunks(resp, provider="test")]
+
+    final = chunks[-1]
+    assert final.done is True
+    assert final.tool_calls is not None and len(final.tool_calls) == 1
+    call = final.tool_calls[0]
+    assert call.id == "call_1"
+    assert call.name == "echo"
+    assert call.arguments == {"text": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_iter_sse_chunks_without_tool_calls_leaves_field_none() -> None:
+    body = b"".join(
+        [
+            b'data: {"choices":[{"delta":{"content":"hola"}}]}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+    )
+    resp = httpx.Response(200, content=body, headers={"Content-Type": "text/event-stream"})
+    chunks = [c async for c in iter_sse_chunks(resp, provider="test")]
+    assert chunks[-1].done is True
+    assert chunks[-1].tool_calls is None
+
+
+@pytest.mark.asyncio
 async def test_iter_sse_chunks_wraps_midstream_httpx_error_as_provider_error() -> None:
     """A network error raised by aiter_lines() mid-stream is converted to
     ProviderError instead of escaping as a raw httpx error."""

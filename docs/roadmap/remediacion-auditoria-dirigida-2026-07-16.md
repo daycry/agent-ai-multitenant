@@ -104,7 +104,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_a4` — Streaming OpenAI-compat no pierde `tool_calls` en silencio
 
-- [ ] **Título**: `parse_sse_delta` acumula deltas de tool_calls (o falla explícito)
+- [x] **Título**: `parse_sse_delta` acumula deltas de tool_calls (o falla explícito)
 - **Descripción**: `_openai_compat.py:126-146` solo extrae `delta.content`.
   Acumular los deltas de `tool_calls` y exponerlos al final del stream;
   documentar la semántica en `base.py`. Hoy sin uso con tools (solo

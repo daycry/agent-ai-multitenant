@@ -95,11 +95,17 @@ class StreamChunk:
 
     `done=True` chunks carry the final `usage` if the provider reports
     it at the end of the stream (most OpenAI-compatible endpoints do).
+
+    AUD16-06: `tool_calls` viaja SOLO en el chunk final (`done=True`) cuando el
+    stream emitió deltas de tool calls — antes se descartaban en silencio y un
+    caller que streamease con tools perdía la llamada sin rastro. Los deltas se
+    acumulan por índice y llegan ya parseados (args dict, no fragmentos).
     """
 
     delta: str
     done: bool = False
     usage: Usage | None = None
+    tool_calls: list[ToolCall] | None = None
 
 
 @dataclass
