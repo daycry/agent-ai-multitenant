@@ -253,7 +253,7 @@ async def test_memorize_uses_agent_provider_when_available(
         content='[{"content": "Lección real del agente.", "type": "semantic", "tags": []}]'
     )
 
-    async def _fake_build(sessionmaker: Any, agent: Any) -> tuple[Any, str]:
+    async def _fake_build(sessionmaker: Any, agent: Any, **_kw: Any) -> tuple[Any, str]:
         return agent_llm, "claude-opus-4-8"
 
     monkeypatch.setattr("workers.memorizer._build_agent_llm", _fake_build)
@@ -295,8 +295,8 @@ async def test_memorize_falls_back_to_local_llm_when_agent_provider_unavailable(
     await _grant_app_user_existing_tables()
     seeded = await _seed(migrations_pg_dsn, memory_scope="team_shared")
 
-    async def _fake_build(sessionmaker: Any, agent: Any) -> None:
-        return None  # provider caído / sin model_config → fallback local
+    async def _fake_build(sessionmaker: Any, agent: Any, **_kw: Any) -> None:
+        return None  # provider caído / cadena irresoluble → fallback local
 
     monkeypatch.setattr("workers.memorizer._build_agent_llm", _fake_build)
     fake = _FakeLLM(content='[{"content": "Fallback ok.", "type": "semantic", "tags": []}]')
@@ -364,14 +364,27 @@ async def test_redelivery_does_not_re_memorize(
 
 
 @pytest.mark.asyncio
-async def test_memorize_aborted_does_not_persist(
+async def test_memorize_aborted_does_not_persist_when_operator_narrows_statuses(
     schema_at_head, migrations_pg_dsn: str, workers_settings
 ) -> None:
-    """An `aborted` execution short-circuits before the LLM call."""
+    """El gate de elegibilidad respeta el setting del operador.
+
+    AUD16-17: el DEFAULT ahora incluye los fracasos (aborted memoriza por
+    defecto — P1-1a), así que este test fija el otro lado del contrato: con el
+    setting estrechado a solo ``done``, un `aborted` corta ANTES del LLM."""
     from tests.integration.conftest import _grant_app_user_existing_tables
 
     await _grant_app_user_existing_tables()
     seeded = await _seed(migrations_pg_dsn, memory_scope="team_shared", status="aborted")
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO platform_settings (key, value) VALUES"
+            " ('memory.memorizable_statuses', '[\"done\"]'::jsonb)"
+            " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+        )
+    finally:
+        await conn.close()
 
     fake = _FakeLLM(content="[]")
     from workers.memorizer import _memorize_execution_async

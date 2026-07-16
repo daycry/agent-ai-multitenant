@@ -121,7 +121,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_b1` — `notification_logs` persiste subject/body para in_app
 
-- [ ] **Título**: Una notificación in-app dice QUÉ pasó, no solo que pasó algo
+- [x] **Título**: Una notificación in-app dice QUÉ pasó, no solo que pasó algo
 - **Descripción**: Migración reversible con columnas `subject`/`body`
   (truncadas, p. ej. 200/2000 chars) en `notification_logs`; el dispatcher
   (`apps/notification-dispatcher/.../tasks.py:450-460`) deja de descartar el
@@ -141,7 +141,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_b2` — Inbox de plataforma: el System Admin ve los envíos `tenant_id=NULL`
 
-- [ ] **Título**: Las notifs platform-scoped dejan de ser invisibles
+- [x] **Título**: Las notifs platform-scoped dejan de ser invisibles
 - **Descripción**: `GET /notifications/logs`
   (`routers/notifications.py:615-683`) excluye tenant NULL por diseño;
   añadir el camino de plataforma (endpoint admin o inclusión condicionada a
@@ -179,7 +179,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_c2` — El destilador de memorias usa el modelo REAL del agente (herencia ADR 0065/0082)
 
-- [ ] **Título**: `_build_agent_llm` resuelve plataforma→proyecto→agente en vez de devolver None
+- [x] **Título**: `_build_agent_llm` resuelve plataforma→proyecto→agente en vez de devolver None
 - **Descripción**: El camino primario de F2.1 lee `agent.model_config` crudo
   y con modelos heredados devuelve None en silencio → 100% de memorias
   destiladas por el fallback `llama3.2:1b` (~21% ruido). Usar el mismo
@@ -313,7 +313,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_e1` — cAdvisor ve los contenedores en Docker Desktop (o el fallo deja de ser silencioso)
 
-- [ ] **Título**: Paneles per-container y `ContainerOOMKilled` vivos, o alerta de cadvisor degradado
+- [x] **Título**: Paneles per-container y `ContainerOOMKilled` vivos, o alerta de cadvisor degradado
 - **Descripción**: cAdvisor v0.49.1 no resuelve la capa RW con el containerd
   snapshotter (0 contenedores visibles, healthcheck verde). Probar bump de
   imagen/flags; si no hay fix viable en Docker Desktop, añadir regla
@@ -329,7 +329,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_e2` — El sampler de métricas es distinguible de «no hay datos»
 
-- [ ] **Título**: Familias siempre emitidas + heartbeat del sampler + regla de staleness
+- [x] **Título**: Familias siempre emitidas + heartbeat del sampler + regla de staleness
 - **Descripción**: `queue_metrics.py:76,83` omite familias enteras con dict
   vacío. Emitir siempre HELP/TYPE con series a 0, añadir
   `agentic_sampler_last_run_timestamp_seconds` y regla Prometheus de
@@ -359,7 +359,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_e4` — Menores de monitorización
 
-- [ ] **Título**: Healthcheck de node-exporter, egress del update-checker de Grafana, runbook de disco en Windows-dev
+- [x] **Título**: Healthcheck de node-exporter, egress del update-checker de Grafana, runbook de disco en Windows-dev
 - **Descripción**: Añadir healthcheck a node-exporter (único del overlay sin
   él); cerrar el check de updates de plugins de Grafana
   (`GF_SECURITY_DISABLE_GRAVATAR`/`GF_PLUGINS_*` según corresponda);
