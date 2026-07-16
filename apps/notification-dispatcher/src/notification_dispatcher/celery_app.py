@@ -19,7 +19,7 @@ unrouted tasks fall through to the default queue.
 from __future__ import annotations
 
 from celery import Celery
-from kombu import Queue
+from kombu import Exchange, Queue
 
 from notification_dispatcher.config import Settings, get_settings
 
@@ -36,8 +36,12 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
     app.conf.update(
         broker_url=cfg.broker_url,
         result_backend=cfg.result_backend,
-        # The two notification lanes.
-        task_queues=tuple(Queue(name) for name in queue_names),
+        # The two notification lanes. AUD16 (H7): cada lane declara exchange y
+        # routing key PROPIOS — Queue(name) a secas ligaba la cola priority al
+        # exchange/rk de la default (kombu asigna el default-exchange del app),
+        # dejando el aislamiento de prioridad nominal. Imprescindible antes de
+        # separar workers por lane.
+        task_queues=tuple(Queue(name, Exchange(name), routing_key=name) for name in queue_names),
         task_default_queue=cfg.default_queue,
         # Task module a real worker imports on boot so the task is
         # registered (imported lazily — no circular import at config time).

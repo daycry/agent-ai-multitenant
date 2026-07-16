@@ -377,7 +377,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_f1` — Cola `notifications.priority` con exchange/routing propios
 
-- [ ] **Título**: `Queue(name, Exchange(name), routing_key=name)` antes de separar workers por lane
+- [x] **Título**: `Queue(name, Exchange(name), routing_key=name)` antes de separar workers por lane
 - **Tiempo**: 0,25 d · **Complejidad**: s · **Hallazgo**: menor C (H7)
 - **Tests automáticos**:
   ```yaml
