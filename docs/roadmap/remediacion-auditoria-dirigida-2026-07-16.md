@@ -248,7 +248,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_d2` — Fallos de transporte repetidos de `stack_exec` abortan el run
 
-- [ ] **Título**: `stack_exec_unavailable` en vez de quemar 50 iteraciones
+- [x] **Título**: `stack_exec_unavailable` en vez de quemar 50 iteraciones
 - **Descripción**: 8 fallos 5xx idénticos de infraestructura no cortaron el
   run 019f21be-e5c0 (las guardas por novedad no aplican: stack_exec es
   producing-tool, `tool_classification.py:20-27`). Contador de fallos de

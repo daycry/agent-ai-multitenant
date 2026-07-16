@@ -85,6 +85,29 @@ _log = logging.getLogger("agent_runtime.graph")
 # worker la trata como SIEMPRE-humana (bypasa la política por categorías del
 # proyecto: preguntar a un humano es, por definición, para un humano).
 HUMAN_QUESTION_CATEGORY = "human_question"
+
+# AUD16-20: fallos de TRANSPORTE consecutivos de stack_exec que abortan el run.
+# Un blip aislado no corta (reintento legítimo); una cascada 5xx/timeout del
+# worker/docker-socket-proxy sí — es infraestructura rota, no estrategia del
+# agente (el detector de bucle no salta con args distintos y stack_exec es
+# producing-tool, exento de las guardas de research).
+_STACK_EXEC_TRANSPORT_TRIP = 3
+
+
+def _is_stack_exec_transport_failure(tool: str | None, observation: Any) -> bool:
+    """Whether this observation is a stack_exec TRANSPORT failure (AUD16-20).
+
+    Solo cuenta el fallo de transporte (``failed to reach the worker``, el
+    marcador exacto de ``StackExecTool``): un rc!=0 del toolchain del usuario
+    es transporte SANO y resetea la racha. Namespace-stripped, como el resto
+    de clasificadores."""
+    if _base_tool_name(tool) != "stack_exec":
+        return False
+    if not isinstance(observation, dict) or observation.get("ok"):
+        return False
+    return "failed to reach the worker" in str(observation.get("error") or "")
+
+
 # ADR 0112 fase 2: veredictos "stuck" consecutivos que arman el escalado.
 _ASSESS_STUCK_TRIP = 2
 _ASK_HUMAN_QUESTION_MAX = 2000
@@ -340,6 +363,8 @@ class _AgentLoop:
         self.read_targets: set[str] = set()
         # ADR 0112 fase 2: racha de self-assessments "stuck" consecutivos.
         self._assess_stuck_streak = 0
+        # AUD16-20: racha de fallos de TRANSPORTE consecutivos de stack_exec.
+        self._stack_exec_transport_streak = 0
         self.read_churn_streak = 0
         self.read_counts: dict[str, int] = {}
         self.read_digests: dict[str, str] = {}
@@ -530,6 +555,30 @@ class _AgentLoop:
             return {
                 "status": status,
                 "abort_code": str(SafeguardCode.RESEARCH_EXHAUSTED),
+                "iteration": self.tracker.usage.iterations,
+                "steps": steps,
+            }
+
+        # AUD16-20: una cascada de fallos de TRANSPORTE de stack_exec es infra
+        # rota — cortar aquí en vez de quemar el presupuesto (el 07-02 un 502
+        # en cascada del docker-socket-proxy consumió las 50 iteraciones).
+        if self._stack_exec_transport_streak >= _STACK_EXEC_TRANSPORT_TRIP:
+            self._count_safeguard(f"trip:{SafeguardCode.STACK_EXEC_UNAVAILABLE}")
+            status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
+            steps.append(
+                node_step(
+                    base + len(steps),
+                    "plan",
+                    (
+                        f"Safeguard tripped: {SafeguardCode.STACK_EXEC_UNAVAILABLE} "
+                        f"({self._stack_exec_transport_streak} consecutive transport failures)"
+                    ),
+                    status="aborted" if status == STATUS_ABORTED else status,
+                )
+            )
+            return {
+                "status": status,
+                "abort_code": str(SafeguardCode.STACK_EXEC_UNAVAILABLE),
                 "iteration": self.tracker.usage.iterations,
                 "steps": steps,
             }
@@ -872,6 +921,13 @@ class _AgentLoop:
             "output": result.output,
             "error": result.error,
         }
+        # AUD16-20: la racha de transporte de stack_exec — cualquier stack_exec
+        # con transporte sano (incluso rc!=0 del toolchain) la resetea.
+        if _base_tool_name(tool) == "stack_exec":
+            if _is_stack_exec_transport_failure(tool, observation):
+                self._stack_exec_transport_streak += 1
+            else:
+                self._stack_exec_transport_streak = 0
         # ADR 0111: el lote read-only del mismo turno — cada elemento se ejecuta,
         # cuenta contra el presupuesto de tool_calls y pasa por el hook post_tool;
         # sus resultados viajan agregados en la MISMA observación (un error por

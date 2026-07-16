@@ -69,6 +69,12 @@ class SafeguardCode(enum.StrEnum):
     # ends cleanly aborted instead of crashing to execution.error.
     PROVIDER_ERROR = "provider_error"
     PROVIDER_TIMEOUT = "provider_timeout"
+    # AUD16-20: N fallos de TRANSPORTE consecutivos de stack_exec (el worker /
+    # docker-socket-proxy no responde — 5xx/timeout). Es infraestructura rota,
+    # no estrategia del agente: cortar en vez de quemar el presupuesto entero
+    # (el detector de bucle no salta con args distintos y stack_exec es
+    # producing-tool, exento de las guardas de research).
+    STACK_EXEC_UNAVAILABLE = "stack_exec_unavailable"
 
 
 @dataclass(frozen=True)
