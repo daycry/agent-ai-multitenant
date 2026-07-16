@@ -391,9 +391,10 @@ async def recall(
     if not fused:
         return []
 
-    # Load the top-`limit` rows in a single round-trip — we already
-    # have their ids ordered by RRF score.
-    top_ids = [mid for mid, _ in sorted(fused.items(), key=lambda kv: -kv[1][0])][:limit]
+    # AUD16-18: sobre-muestrear antes del corte — el dedup por contenido de
+    # abajo puede descartar filas idénticas y el slot liberado debe poder
+    # llenarlo la siguiente lección DISTINTA (no quedarse corto).
+    top_ids = [mid for mid, _ in sorted(fused.items(), key=lambda kv: -kv[1][0])][: limit * 4]
     if not top_ids:
         return []
     # Defence-in-depth: filter tenant_id + deleted_at explicitly here too, consistent with
@@ -412,9 +413,17 @@ async def recall(
         row[0]: {"content": row[1], "scope": row[2], "type": row[3]} for row in detail_rows.all()
     }
     hits: list[MemoryRecallHit] = []
+    # AUD16-18: dedup por contenido normalizado (cinturón sobre el dedup del
+    # persist, que no limpia duplicados preexistentes) — la fila mejor
+    # rankeada gana; con límite 5, dos filas idénticas quemaban dos slots.
+    seen_contents: set[str] = set()
     for mid in top_ids:
         if mid not in by_id:
             continue
+        normalized = " ".join(str(by_id[mid]["content"] or "").split()).casefold()
+        if normalized in seen_contents:
+            continue
+        seen_contents.add(normalized)
         s, bm25_r, vec_r, ent_r = fused[mid]
         hits.append(
             MemoryRecallHit(
@@ -428,6 +437,8 @@ async def recall(
                 entity_rank=ent_r,
             )
         )
+        if len(hits) >= limit:
+            break
     return hits
 
 

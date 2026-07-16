@@ -211,7 +211,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_c4` — Dedup de contenido en `recall()` + consolidación de duplicados preexistentes
 
-- [ ] **Título**: Un slot del recall no se gasta dos veces en la misma lección
+- [x] **Título**: Un slot del recall no se gasta dos veces en la misma lección
 - **Descripción**: Dedup por contenido normalizado en la fusión RRF de
   `recall()` (cinturón); tarea de mantenimiento idempotente que consolida
   (soft-delete conservando la más antigua) los duplicados exactos
