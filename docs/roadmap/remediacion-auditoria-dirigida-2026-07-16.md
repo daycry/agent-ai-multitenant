@@ -344,7 +344,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_e3` — El backup sin copia offsite se ve y alerta
 
-- [ ] **Título**: Métrica `agentic_backup_offsite_*` + alerta si no hay upload N días
+- [x] **Título**: Métrica `agentic_backup_offsite_*` + alerta si no hay upload N días
 - **Descripción**: `uploaded=[]` en todos los bundles. Emitir métrica de
   uploads (count + timestamp del último éxito) desde el task de backup y
   regla de alerta; documentar en el runbook cómo configurar el destino

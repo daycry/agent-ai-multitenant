@@ -112,10 +112,6 @@ async def _run_daily_backup(settings: Settings) -> dict[str, Any]:
     valid = _verify_after_backup(run_settings, result.bundle_dir)
 
     # Emit the Prometheus health metric (task_12_14): success ONLY when the
-    # bundle both wrote AND verified. A produced-but-invalid bundle is a failed
-    # backup for alerting purposes — it must not advance the success clock.
-    _emit_backup_metric(run_settings, success=valid)
-
     # Offsite upload (task_prod_04_12): ship ONLY a VERIFIED bundle to the
     # configured remote destinations, so a corrupt local bundle never becomes the
     # offsite copy. Best-effort: a destination failure is captured, never raised,
@@ -128,6 +124,12 @@ async def _run_daily_backup(settings: Settings) -> dict[str, Any]:
             uploaded, upload_failures = await _upload_bundle_to_destinations(result, destinations)
         except Exception as exc:  # pragma: no cover — defensive: beat must not die
             _log.warning("backup.upload.error", error=str(exc))
+
+    # The metric reflects the bundle both wrote AND verified. A
+    # produced-but-invalid bundle is a failed backup for alerting purposes — it
+    # must not advance the success clock. AUD16-19: emitted AFTER the upload so
+    # the offsite count/clock of THIS run travels in the same sample.
+    _emit_backup_metric(run_settings, success=valid, offsite_uploaded=len(uploaded))
 
     return {
         "enabled": True,
@@ -252,15 +254,20 @@ def _verify_after_backup(settings: Settings, bundle_dir: Any) -> bool:
     return report.valid
 
 
-def _emit_backup_metric(settings: Settings, *, success: bool) -> None:
+def _emit_backup_metric(settings: Settings, *, success: bool, offsite_uploaded: int = 0) -> None:
     """Write the node-exporter textfile metric for this run (task_12_14).
 
     Best-effort wrapper around :func:`workers.backup_metrics.write_backup_metrics`
-    — the metric feeds the BackupLastRunFailed / BackupTooOld alert rules but a
-    failure to write it (collector dir absent because the monitoring overlay is
-    not up, permission error, ...) must never affect the backup outcome.
+    — the metric feeds the BackupLastRunFailed / BackupTooOld / BackupOffsiteStale
+    alert rules but a failure to write it (collector dir absent because the
+    monitoring overlay is not up, permission error, ...) must never affect the
+    backup outcome.
     """
     try:
-        write_backup_metrics(settings.backup_metrics_textfile_path, success=success)
+        write_backup_metrics(
+            settings.backup_metrics_textfile_path,
+            success=success,
+            offsite_uploaded=offsite_uploaded,
+        )
     except Exception as exc:  # pragma: no cover — defensive: beat must not die
         _log.warning("backup.metrics.error", error=str(exc))

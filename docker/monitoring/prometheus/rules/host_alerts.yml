@@ -194,3 +194,25 @@ groups:
             {{ $value | humanizeDuration }} ago (threshold 26h). The daily
             03:00 backup job has not produced a good bundle — check Celery beat
             and the worker.
+
+      # 5c. OFFSITE STALE (AUD16-19, auditoría 2026-07-16) — los bundles se
+      #     verificaban en local pero uploaded=[] era invisible: cero copia
+      #     offsite y nada lo decía. Solo arma si ALGUNA vez hubo un upload
+      #     bueno (ts > 0): un host sin destino offsite configurado (decisión
+      #     del operador, gated) no alerta — lo documenta el runbook de backup.
+      #     Umbral 8 días: cadencia diaria + margen de fin de semana apagado.
+      - alert: BackupOffsiteStale
+        expr: |
+          agentic_backup_offsite_last_success_timestamp_seconds > 0
+          and (time() - agentic_backup_offsite_last_success_timestamp_seconds) > 691200
+        for: 0m
+        labels:
+          severity: warning
+          component: backup
+        annotations:
+          summary: "No offsite backup upload in over 8 days"
+          description: >-
+            The last successful OFFSITE upload was
+            {{ $value | humanizeDuration }} ago (threshold 8d) — local bundles
+            keep verifying but the offsite copy has stopped shipping. Check the
+            backup destinations config and the worker's backup.upload logs.
