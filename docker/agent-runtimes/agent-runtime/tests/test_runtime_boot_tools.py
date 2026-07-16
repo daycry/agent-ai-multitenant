@@ -168,35 +168,38 @@ def test_no_tool_specs_does_not_register_extra_families(
 def test_orchestration_tool_runs_without_tool_specs(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A tool-less agent (no agent_tools) can still call kanban_update — the
-    orchestration family is wired regardless of tool_specs (H0/H3 / L5)."""
+    """A tool-less agent (no agent_tools) can still call task_comment — the
+    orchestration family is wired regardless of tool_specs (H0/H3 / L5).
+    (AUD16-02: kanban_update ahora devuelve error honesto 'not wired', así que
+    el canario de la familia es task_comment, la que tiene consumidor real.)"""
     spec = {
         "task": {"id": "t-8", "title": "move", "description": ""},
-        "model": _scripted("kanban_update", {"task_id": "t-8", "status": "in_progress"}),
+        "model": _scripted("task_comment", {"task_id": "t-8", "body": "avanzando"}),
     }
     step = _act_step(_run(spec, capsys))
     assert step["result"]["ok"] is True
     assert "unknown tool" not in (step["result"].get("error") or "")
-    assert step["result"]["output"]["effect"] == "kanban_update"
+    assert step["result"]["output"]["effect"] == "task_comment"
 
 
 def test_orchestration_tool_allowed_despite_restrictive_allowlist(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """An agent restricted to read_file can STILL call kanban_update — system
+    """An agent restricted to read_file can STILL call task_comment — system
     family tools are exempt from the per-agent allowlist (H3): otherwise
-    assigning any tool silences the orchestrator's kanban/comment/invoke."""
+    assigning any tool silences the orchestrator's kanban/comment/invoke.
+    (AUD16-02: canario cambiado a task_comment, la tool con consumidor real.)"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
     spec = {
         "task": {"id": "t-9", "title": "move", "description": ""},
-        "model": _scripted("kanban_update", {"task_id": "t-9", "status": "done"}),
+        "model": _scripted("task_comment", {"task_id": "t-9", "body": "nota del agente"}),
         "allowed_tools": ["read_file"],
         "tool_specs": [{"name": "read_file", "implementation_type": "builtin", "config": {}}],
     }
     step = _act_step(_run(spec, capsys))
     assert step["result"]["ok"] is True
     assert "not allowed" not in (step["result"].get("error") or "")
-    assert step["result"]["output"]["effect"] == "kanban_update"
+    assert step["result"]["output"]["effect"] == "task_comment"
 
 
 def test_block_all_allowlist_still_blocks_system_tools(

@@ -86,13 +86,14 @@ def test_system_tools_off_by_default() -> None:
 def test_system_tools_advertised_for_unassigned_agent_when_requested() -> None:
     # The H0 regression: a tool-less agent (allowlist None) must still see the
     # memory + orchestration tools so it can recall/store and participate.
+    # AUD16-02: kanban_update/agent_invoke ya NO se anuncian — su drain
+    # worker-side no existe y anunciarlas producía llamadas con éxito falso
+    # (hoy, error honesto en el runtime). task_comment sí tiene consumidor.
     out = build_model_tool_schemas(None, None, include_system_tools=True)
     assert set(_names(out)) == {
         "memory_recall",
         "memory_store",
-        "kanban_update",
         "task_comment",
-        "agent_invoke",
         "rag_search",
         "update_plan",
         # ADR 0114: la pregunta no terminal a humano es capacidad universal.
@@ -105,8 +106,21 @@ def test_system_tools_advertised_alongside_assigned_tools() -> None:
     names = _names(out)
     # The assigned tool comes first; system tools follow, deduped.
     assert names[0] == "read_file"
-    assert {"memory_recall", "memory_store", "kanban_update"} <= set(names)
+    assert {"memory_recall", "memory_store", "task_comment"} <= set(names)
     assert names.count("read_file") == 1
+
+
+def test_unwired_orchestration_tools_never_advertised() -> None:
+    # AUD16-02: sin consumidor de sus efectos, kanban_update/agent_invoke no se
+    # ofrecen al modelo NI con allowlist explícita — la llamada solo quemaría
+    # un turno en el error honesto del runtime.
+    out = build_model_tool_schemas(
+        ["kanban_update", "agent_invoke", "task_comment"], None, include_system_tools=True
+    )
+    names = set(_names(out))
+    assert "kanban_update" not in names
+    assert "agent_invoke" not in names
+    assert "task_comment" in names
 
 
 def test_block_all_allowlist_suppresses_even_system_tools() -> None:
@@ -121,13 +135,9 @@ def test_assigned_tool_already_a_system_tool_is_not_duplicated() -> None:
 
 
 def test_orchestration_tools_have_schemas_mirroring_executors() -> None:
-    out = build_model_tool_schemas(
-        ["kanban_update", "task_comment", "agent_invoke"], None, include_system_tools=True
-    )
+    out = build_model_tool_schemas(["task_comment"], None, include_system_tools=True)
     by = {s["function"]["name"]: s["function"]["parameters"] for s in out}
-    assert by["kanban_update"]["required"] == ["task_id", "status"]
     assert by["task_comment"]["required"] == ["task_id", "body"]
-    assert by["agent_invoke"]["required"] == ["agent_id", "prompt"]
 
 
 def test_non_wired_builtins_are_never_advertised() -> None:

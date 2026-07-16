@@ -229,7 +229,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_d1` — Tools de orquestación honestas: efectos drenados o error explícito, nunca `ok=true` falso
 
-- [ ] **Título**: Fin del éxito falso de kanban_update/task_comment/agent_invoke/notify_user
+- [x] **Título**: Fin del éxito falso de kanban_update/task_comment/agent_invoke/notify_user
 - **Descripción**: Los effects van a un `OrchestrationSink` que nadie drena
   (`orchestration_tools.py:29-41`; el worker solo procesa
   step/finished/error en `workers/execution.py:1113-1130`). Drenar en el

@@ -130,36 +130,19 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     # Orchestration family — also runtime-only (no catalog row; wired by
     # builtin_families). Schemas mirror agent_runtime.orchestration_tools.
-    "kanban_update": {
-        "name": "kanban_update",
-        "description": (
-            "Move the task on the Kanban to a new status (backlog/ready/"
-            "in_progress/in_review/blocked/done/cancelled)."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string", "description": "ID of the task to move."},
-                "status": {
-                    "type": "string",
-                    "enum": [
-                        "backlog",
-                        "ready",
-                        "in_progress",
-                        "in_review",
-                        "blocked",
-                        "done",
-                        "cancelled",
-                    ],
-                },
-            },
-            "required": ["task_id", "status"],
-            "additionalProperties": False,
-        },
-    },
+    # AUD16-02 (auditoría 2026-07-16): kanban_update/agent_invoke YA NO se
+    # anuncian — su drain worker-side nunca aterrizó y el ok=true era un éxito
+    # falso (el efecto moría en el contenedor). El runtime las mantiene
+    # registradas con un error honesto ("not wired") para llamadas a pelo.
+    # task_comment SÍ tiene consumidor: el worker drena su efecto post-run a
+    # PlanComment (rail comentarios→prompt).
     "task_comment": {
         "name": "task_comment",
-        "description": "Add a comment to a task (progress, decisions, blockers).",
+        "description": (
+            "Add a comment to YOUR task (progress notes, decisions, blockers). The "
+            "platform persists it on the plan when the run finishes; humans and "
+            "later runs on this task will see it."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -167,22 +150,6 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
                 "body": {"type": "string", "description": "The comment text."},
             },
             "required": ["task_id", "body"],
-            "additionalProperties": False,
-        },
-    },
-    "agent_invoke": {
-        "name": "agent_invoke",
-        "description": (
-            "Request the execution of another agent with a prompt (subtask). Records "
-            "the intent; the worker applies it under its own authorization."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "agent_id": {"type": "string"},
-                "prompt": {"type": "string"},
-            },
-            "required": ["agent_id", "prompt"],
             "additionalProperties": False,
         },
     },
@@ -201,9 +168,10 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
 SYSTEM_TOOL_NAMES: tuple[str, ...] = (
     "memory_recall",
     "memory_store",
-    "kanban_update",
+    # AUD16-02: kanban_update/agent_invoke retiradas del anuncio (sin drain
+    # worker-side, su ok=true era éxito falso); el runtime las mantiene
+    # registradas con error honesto. Se re-añadirán cuando exista su consumidor.
     "task_comment",
-    "agent_invoke",
     "rag_search",
     # P1-6: el scratchpad del loop (capacidad del grafo, no del registry).
     "update_plan",

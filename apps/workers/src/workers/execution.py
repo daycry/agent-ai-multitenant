@@ -1348,6 +1348,17 @@ async def _implementer_post_process(
     credentials). P2.3/F26: commit for a clean `done` AND for an escalation
     (`needs_human_review`) so the human validator gets the diff. task_prod18_
     test_01: tests run over the worktree only for a `done` run. All best-effort."""
+    # AUD16-02: aplicar los task_comment que el agente emitió durante el run
+    # (efectos del sink → steps_log → PlanComment). Best-effort, para TODOS los
+    # estados terminales — una nota de un run fallido es a menudo la más útil.
+    from workers.orchestration_drain import drain_task_comment_effects
+
+    await drain_task_comment_effects(
+        sessionmaker,
+        steps=result.steps,
+        task_id=task_id,
+        tenant_id=tenant_id,
+    )
     if (
         result.status in ("done", "needs_human_review")
         and workspace.host_path is not None
