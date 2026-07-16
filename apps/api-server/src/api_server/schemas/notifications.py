@@ -243,6 +243,10 @@ class NotificationLogResponse(BaseModel):
     error: str | None
     sent_at: datetime | None
     created_at: datetime
+    # AUD16-11: el contenido persistido para in_app (None en filas históricas
+    # y en canales externos que no lo guardan).
+    subject: str | None = None
+    body: str | None = None
     read: bool
 
 

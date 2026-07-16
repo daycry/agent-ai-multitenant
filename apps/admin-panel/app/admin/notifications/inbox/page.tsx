@@ -20,6 +20,12 @@
  *   POST /notifications/logs/{id}/read
  *   POST /notifications/logs/read-all
  *   POST /notifications/logs/{id}/retry        (reutilizado de task_10_13)
+ *
+ * AUD16-10/11 (auditoría 2026-07-16): las filas muestran subject/body (el
+ * contenido persistido para in_app) y un System Admin puede cambiar al scope
+ * PLATAFORMA (GET/POST /notifications/platform/logs…) — los envíos
+ * tenant_id NULL (infra_alert, cortex_message…) eran invisibles para
+ * cualquier humano.
  */
 
 import { useMemo, useState } from "react";
@@ -47,8 +53,12 @@ interface NotificationLog {
   error: string | null;
   sent_at: string | null;
   created_at: string;
+  subject: string | null;
+  body: string | null;
   read: boolean;
 }
+
+type InboxScope = "tenant" | "platform";
 
 interface NotificationInbox {
   items: NotificationLog[];
@@ -99,9 +109,14 @@ function formatTimestamp(iso: string): string {
 export default function NotificationInboxPage() {
   const queryClient = useQueryClient();
 
+  const [scope, setScope] = useState<InboxScope>("tenant");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [offset, setOffset] = useState(0);
+
+  // AUD16-10: el scope de plataforma habla con los endpoints /platform/logs
+  // (System Admin only; el backend hace 403 si no lo eres).
+  const basePath = scope === "platform" ? "/notifications/platform/logs" : "/notifications/logs";
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams();
@@ -113,8 +128,8 @@ export default function NotificationInboxPage() {
   }, [statusFilter, unreadOnly, offset]);
 
   const inboxQuery = useQuery({
-    queryKey: ["notification-inbox", queryString],
-    queryFn: () => apiFetch<NotificationInbox>(`/notifications/logs?${queryString}`),
+    queryKey: ["notification-inbox", scope, queryString],
+    queryFn: () => apiFetch<NotificationInbox>(`${basePath}?${queryString}`),
     refetchOnWindowFocus: false,
   });
 
@@ -124,12 +139,12 @@ export default function NotificationInboxPage() {
 
   const markReadMutation = useMutation({
     mutationFn: (id: string) =>
-      apiFetch<MarkReadResult>(`/notifications/logs/${id}/read`, { method: "POST" }),
+      apiFetch<MarkReadResult>(`${basePath}/${id}/read`, { method: "POST" }),
     onSuccess: invalidateInbox,
   });
 
   const markAllMutation = useMutation({
-    mutationFn: () => apiFetch<MarkReadResult>("/notifications/logs/read-all", { method: "POST" }),
+    mutationFn: () => apiFetch<MarkReadResult>(`${basePath}/read-all`, { method: "POST" }),
     onSuccess: invalidateInbox,
   });
 
@@ -155,6 +170,11 @@ export default function NotificationInboxPage() {
     setOffset(0);
   }
 
+  function changeScope(next: InboxScope) {
+    setScope(next);
+    setOffset(0);
+  }
+
   return (
     <div
       className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8"
@@ -169,6 +189,27 @@ export default function NotificationInboxPage() {
 
       {/* Toolbar: filtros + marcar todo como leído */}
       <div className="mt-6 flex flex-wrap items-center gap-3">
+        {/* AUD16-10: scope de PLATAFORMA (tenant NULL) — solo System Admin. */}
+        <RoleGuard min="system_admin">
+          <div className="flex rounded-md border" role="group" aria-label="Ámbito del inbox">
+            <Button
+              variant={scope === "tenant" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => changeScope("tenant")}
+              data-testid="inbox-scope-tenant"
+            >
+              Tenant
+            </Button>
+            <Button
+              variant={scope === "platform" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => changeScope("platform")}
+              data-testid="inbox-scope-platform"
+            >
+              Plataforma
+            </Button>
+          </div>
+        </RoleGuard>
         <Badge variant={unread > 0 ? "info" : "muted"} data-testid="inbox-unread-badge">
           {unread} sin leer
         </Badge>
@@ -241,6 +282,7 @@ export default function NotificationInboxPage() {
               onRetry={() => retryMutation.mutate(log.id)}
               markBusy={markReadMutation.isPending}
               retryBusy={retryMutation.isPending}
+              showRetry={scope === "tenant"}
             />
           ))}
         </div>
@@ -291,14 +333,16 @@ function InboxRow({
   onRetry,
   markBusy,
   retryBusy,
+  showRetry = true,
 }: {
   log: NotificationLog;
   onMarkRead: () => void;
   onRetry: () => void;
   markBusy: boolean;
   retryBusy: boolean;
+  showRetry?: boolean;
 }) {
-  const isDeadLetter = log.status === "dead_letter";
+  const isDeadLetter = log.status === "dead_letter" && showRetry;
   return (
     <Card
       data-testid={`inbox-row-${log.id}`}
@@ -333,6 +377,20 @@ function InboxRow({
               <span className="text-muted-foreground text-xs">intento {log.attempt}</span>
             ) : null}
           </div>
+          {/* AUD16-11: el CONTENIDO persistido (in_app) — antes solo se veía el event_type. */}
+          {log.subject ? (
+            <p className="mt-1 text-sm font-medium" data-testid={`inbox-subject-${log.id}`}>
+              {log.subject}
+            </p>
+          ) : null}
+          {log.body ? (
+            <p
+              className="text-muted-foreground mt-0.5 line-clamp-3 text-sm whitespace-pre-line"
+              data-testid={`inbox-body-${log.id}`}
+            >
+              {log.body}
+            </p>
+          ) : null}
           {log.error ? (
             <p
               className="text-destructive mt-1 truncate text-xs"

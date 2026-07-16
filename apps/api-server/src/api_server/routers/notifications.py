@@ -57,7 +57,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import CursorResult, func, literal, select
+from sqlalchemy import ColumnElement, CursorResult, func, literal, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -586,6 +586,8 @@ def _log_to_response(log: NotificationLog, *, read: bool) -> NotificationLogResp
         error=log.error,
         sent_at=log.sent_at,
         created_at=log.created_at,
+        subject=log.subject,
+        body=log.body,
         read=read,
     )
 
@@ -752,6 +754,147 @@ async def mark_all_logs_read(
     res = cast("CursorResult[Any]", await session.execute(stmt))
     marked = int(res.rowcount or 0)
 
+    return MarkReadResponse(marked=marked, unread=0)
+
+
+# ===========================================================================
+# Inbox de PLATAFORMA (AUD16-10) — System Admin, sesión admin BYPASSRLS.
+#
+# TODOS los envíos reales del sistema (infra_alert, cortex_message,
+# credential_rotation_failed, fx_fetch_failed…) son platform-scoped
+# (tenant_id IS NULL) y el inbox de tenant los excluye por diseño: sin este
+# camino, NINGUNA notificación llegaba de facto a un ojo humano
+# (notification_log_reads llevaba 0 filas en toda la historia). El read-marker
+# reusa notification_log_reads con tenant_id NULL (migración 0113).
+# ===========================================================================
+async def _platform_unread_count(session: AsyncSession, *, user_id: UUID) -> int:
+    read_subq = (
+        select(NotificationLogRead.log_id)
+        .where(NotificationLogRead.user_id == user_id)
+        .scalar_subquery()
+    )
+    stmt = (
+        select(func.count())
+        .select_from(NotificationLog)
+        .where(
+            NotificationLog.tenant_id.is_(None),
+            NotificationLog.id.not_in(read_subq),
+        )
+    )
+    return int((await session.execute(stmt)).scalar_one())
+
+
+@router.get("/platform/logs", response_model=NotificationInboxResponse)
+async def list_platform_notification_logs(
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    status_filter: str | None = Query(default=None, alias="status", max_length=16),
+    channel_type: str | None = Query(default=None, max_length=16),
+    event_type: str | None = Query(default=None, max_length=64),
+    unread_only: bool = Query(default=False),
+) -> NotificationInboxResponse:
+    """El inbox de plataforma: SOLO los envíos ``tenant_id IS NULL``, newest
+    first, paginado, con read-marker por usuario — la contrapartida System
+    Admin del inbox de tenant (misma forma de respuesta, mismos filtros)."""
+    read_marker = (
+        select(NotificationLogRead.id)
+        .where(
+            NotificationLogRead.log_id == NotificationLog.id,
+            NotificationLogRead.user_id == principal.user_id,
+        )
+        .exists()
+    )
+    conditions: list[ColumnElement[bool]] = [NotificationLog.tenant_id.is_(None)]
+    if status_filter is not None:
+        conditions.append(NotificationLog.status == status_filter)
+    if channel_type is not None:
+        conditions.append(NotificationLog.channel_type == channel_type)
+    if event_type is not None:
+        conditions.append(NotificationLog.event_type == event_type)
+    if unread_only:
+        conditions.append(~read_marker)
+
+    total = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(NotificationLog).where(*conditions)
+            )
+        ).scalar_one()
+    )
+    result = await session.execute(
+        select(NotificationLog, read_marker.label("is_read"))
+        .where(*conditions)
+        .order_by(NotificationLog.created_at.desc(), NotificationLog.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    items = [_log_to_response(row[0], read=bool(row[1])) for row in result.all()]
+    unread = await _platform_unread_count(session, user_id=principal.user_id)
+    return NotificationInboxResponse(
+        items=items, total=total, unread=unread, limit=limit, offset=offset
+    )
+
+
+@router.post("/platform/logs/{log_id}/read", response_model=MarkReadResponse)
+async def mark_platform_log_read(
+    log_id: UUID,
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> MarkReadResponse:
+    """Marca leída una notificación de PLATAFORMA (idempotente).
+
+    Solo aplica a filas ``tenant_id IS NULL`` — una fila de tenant se marca por
+    su endpoint de tenant (404 aquí, sin filtrar la existencia cruzada)."""
+    log = (
+        await session.execute(
+            select(NotificationLog).where(
+                NotificationLog.id == log_id, NotificationLog.tenant_id.is_(None)
+            )
+        )
+    ).scalar_one_or_none()
+    if log is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="notification log not found"
+        )
+    stmt = (
+        pg_insert(NotificationLogRead)
+        .values(tenant_id=None, user_id=principal.user_id, log_id=log_id)
+        .on_conflict_do_nothing(constraint="uq_notification_log_reads_user_log")
+    )
+    res = cast("CursorResult[Any]", await session.execute(stmt))
+    marked = int(res.rowcount or 0)
+    unread = await _platform_unread_count(session, user_id=principal.user_id)
+    return MarkReadResponse(marked=marked, unread=unread)
+
+
+@router.post("/platform/logs/read-all", response_model=MarkReadResponse)
+async def mark_all_platform_logs_read(
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> MarkReadResponse:
+    """Marca leídas TODAS las notificaciones de plataforma pendientes del
+    System Admin llamante (idempotente, un solo INSERT…SELECT)."""
+    already_read = (
+        select(NotificationLogRead.log_id)
+        .where(NotificationLogRead.user_id == principal.user_id)
+        .scalar_subquery()
+    )
+    unread_logs = select(
+        func.gen_random_uuid().label("id"),
+        NotificationLog.tenant_id.label("tenant_id"),
+        literal(principal.user_id).label("user_id"),
+        NotificationLog.id.label("log_id"),
+    ).where(
+        NotificationLog.tenant_id.is_(None),
+        NotificationLog.id.not_in(already_read),
+    )
+    stmt = pg_insert(NotificationLogRead).from_select(
+        ["id", "tenant_id", "user_id", "log_id"], unread_logs
+    )
+    res = cast("CursorResult[Any]", await session.execute(stmt))
+    marked = int(res.rowcount or 0)
     return MarkReadResponse(marked=marked, unread=0)
 
 

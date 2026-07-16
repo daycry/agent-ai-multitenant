@@ -228,6 +228,46 @@ async def test_dispatch_logs_sent(schema_at_head) -> None:
 
 
 # ===========================================================================
+# AUD16-11 (auditoría 2026-07-16): una notif in_app debe persistir QUÉ pasó.
+# El body renderizado se descartaba tras la entrega y una fila in_app solo
+# decía "pasó un infra_alert" — subject/body (truncados) viajan ahora a la
+# fila de notification_logs para que el inbox muestre el contenido.
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_dispatch_persists_subject_and_body_for_in_app(schema_at_head) -> None:
+    settings = _test_settings()
+    tenant_a, _tenant_b, channel_a, _channel_b = await _seed_two_tenants_with_channels(_sync_dsn())
+
+    register_adapter(_RecordingAdapter())
+
+    engine = create_async_engine(settings.database_url)
+    try:
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        request = SendRequest(
+            channel_id=str(channel_a),
+            event_type="infra_alert",
+            tenant_id=str(tenant_a),
+            body="HostSwapActive: el host lleva 5 minutos con swap activo.",
+            structured={"subject": "[warning] HostSwapActive", "severity": "warning"},
+        )
+        await _dispatch(request, settings=settings, sessionmaker=sessionmaker)
+    finally:
+        await engine.dispose()
+
+    conn = await asyncpg.connect(_sync_dsn())
+    try:
+        row = await conn.fetchrow(
+            "SELECT subject, body FROM notification_logs WHERE channel_id = $1",
+            channel_a,
+        )
+    finally:
+        await conn.close()
+    assert row is not None
+    assert row["subject"] == "[warning] HostSwapActive"
+    assert row["body"] is not None and row["body"].startswith("HostSwapActive")
+
+
+# ===========================================================================
 # Failure path — a failing send logs failed + dead-letters.
 #
 # NOTE: this test is SYNC (no @pytest.mark.asyncio). The celery task body

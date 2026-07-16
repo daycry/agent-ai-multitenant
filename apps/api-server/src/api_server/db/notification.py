@@ -390,6 +390,13 @@ class NotificationLog(Base, UUIDPrimaryKeyMixin):
     # Where the message was addressed (chat id, email, phone, webhook URL).
     # Non-secret; the channel secret never appears here.
     target: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    # AUD16-11 (auditoría 2026-07-16): el CONTENIDO del mensaje para el inbox.
+    # El dispatcher lo persiste TRUNCADO (200/2000) para channel_type=in_app —
+    # sin esto una notif in-app solo decía "pasó un infra_alert" y el qué/cuál
+    # se perdía con el render. Nullable: filas históricas y canales externos.
+    subject: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    body: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     # 1-based attempt number; a retry writes a new row with attempt+1.
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     # Last error for a failed/retrying attempt (provider message, truncated).
@@ -500,9 +507,12 @@ class NotificationLogRead(Base, UUIDPrimaryKeyMixin):
     A row's *existence* means "``user_id`` has read ``log_id``"; "unread" is
     the absence of a row. ``UNIQUE (user_id, log_id)`` makes the mark
     idempotent (a second "mark read" is a no-op via ON CONFLICT DO NOTHING).
-    ``tenant_id`` NOT NULL + RLS isolate receipts per tenant exactly like every
-    other tenant table — the inbox is a Tenant-Admin surface, so a NULL-tenant
-    platform send is never inboxed per user.
+    RLS isolates the tenant-scoped receipts exactly like every other tenant
+    table. ``tenant_id`` is NULLABLE (AUD16-10, migración 0113): el inbox de
+    PLATAFORMA del System Admin marca leídos envíos ``tenant_id IS NULL`` y su
+    receipt es igualmente platform-scoped — espejo de
+    ``notification_logs.tenant_id``; esas filas solo las ve la sesión admin
+    BYPASSRLS del endpoint de plataforma.
     """
 
     __tablename__ = "notification_log_reads"
@@ -515,7 +525,7 @@ class NotificationLogRead(Base, UUIDPrimaryKeyMixin):
         Index("ix_notification_log_reads_user_log", "user_id", "log_id"),
     )
 
-    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    tenant_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True, index=True)
     user_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
