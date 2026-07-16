@@ -519,6 +519,30 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "{{ preview | default('(open the chat to read it)') }}"
         ),
     ),
+    # --- provider_credential_invalid (AUD16-23) ------------------------------
+    # Credencial/cuota del provider LLM fallando: hasta renovarla, todos los
+    # runs de ese provider morirán igual. El detail es el fragmento del abort
+    # con el marcador (sin secretos).
+    ("provider_credential_invalid", "es"): TemplateSource(
+        subject="Credencial del proveedor LLM fallando",
+        body=(
+            "Un run abortó por credencial o cuota del proveedor LLM "
+            "({{ abort_code | default('provider_error') }}) en la tarea "
+            "«{{ task_title | default('(sin título)') }}». Hasta renovar la "
+            "credencial, los siguientes runs fallarán igual. Detalle: "
+            "{{ detail | default('(sin detalle)') }}"
+        ),
+    ),
+    ("provider_credential_invalid", "en"): TemplateSource(
+        subject="LLM provider credential failing",
+        body=(
+            "A run aborted on an LLM provider credential/quota failure "
+            "({{ abort_code | default('provider_error') }}) on task "
+            "'{{ task_title | default('(untitled)') }}'. Until the credential "
+            "is renewed, subsequent runs will fail the same way. Detail: "
+            "{{ detail | default('(no detail)') }}"
+        ),
+    ),
 }
 
 # Public, read-only view of the builtin catalogue keyed by

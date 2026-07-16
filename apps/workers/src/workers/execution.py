@@ -1409,11 +1409,48 @@ async def _implementer_post_process(
 # emite execution_finished (opt-in: sin default de canal para no inundar).
 _EXECUTION_FAILED_STATUSES = frozenset({"failed", "aborted"})
 
+# AUD16-23: marcadores de fallo de CREDENCIAL/cuota del provider en la salida
+# de un abort provider_error/provider_timeout. El probe manual de claude_sdk
+# solo verifica PRESENCIA de la credencial — la caducidad (oauth) y la cuota
+# solo se manifiestan en el primer run que las pisa; ese run debe avisar YA.
+_CREDENTIAL_FAILURE_MARKERS: tuple[str, ...] = (
+    "not logged in",
+    "auth failed",
+    "(401)",
+    "401 unauthorized",
+    "invalid api key",
+    "credential",
+    "session limit",
+    "rate-limited",
+    "http 429",
+)
+_PROVIDER_ABORT_CODES = frozenset({"provider_error", "provider_timeout"})
+
+
+def _is_credential_failure_output(output: str | None) -> bool:
+    """Whether an aborted run's output smells like a credential/quota failure."""
+    if not output:
+        return False
+    lowered = output.lower()
+    return any(marker in lowered for marker in _CREDENTIAL_FAILURE_MARKERS)
+
 
 async def _notify_execution_outcome(
-    *, tenant_id: str, task_id: str, task_title: str, status: str, abort_code: str | None
+    *,
+    tenant_id: str,
+    task_id: str,
+    task_title: str,
+    status: str,
+    abort_code: str | None,
+    output: str | None = None,
 ) -> None:
     """Encola execution_failed/execution_finished al dispatcher (NOTIF-3).
+
+    AUD16-23: un abort de provider con marcadores de credencial/cuota emite
+    ADEMÁS ``provider_credential_invalid`` platform-scoped (tenant NULL — la
+    credencial del provider es de plataforma y la resuelve el System Admin;
+    en el ciclo 07-02→07-08 hubo 17 aborts así y nadie se enteró hasta la
+    forense).
 
     Best-effort (mismo contrato que el _notify_plan_unblocked del reconciler):
     un fallo de broker se loguea y JAMÁS rompe el run ya terminado."""
@@ -1438,6 +1475,25 @@ async def _notify_execution_outcome(
                 },
             }
         )
+        if (
+            event_type == "execution_failed"
+            and abort_code in _PROVIDER_ABORT_CODES
+            and _is_credential_failure_output(output)
+        ):
+            await enqueue_event_dispatch(
+                {
+                    "event_type": "provider_credential_invalid",
+                    "tenant_id": None,
+                    "context": {
+                        "task_title": task_title,
+                        "task_id": task_id,
+                        "abort_code": abort_code or "",
+                        # Fragmento acotado con el marcador — la salida de un
+                        # abort de auth no lleva credenciales.
+                        "detail": (output or "")[:300],
+                    },
+                }
+            )
     except Exception as exc:  # la notificación nunca rompe el run
         _log.warning("workers.execution_outcome_notify_failed", task_id=task_id, error=str(exc))
 
@@ -1622,6 +1678,8 @@ async def conduct_execution(
         task_title=str((request.task or {}).get("title") or ""),
         status=result.status,
         abort_code=result.abort_code,
+        # AUD16-23: la salida del abort lleva los marcadores de credencial.
+        output=result.output,
     )
 
     _log.info("workers.execution_finished", execution_id=exec_id, status=result.status)

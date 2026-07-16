@@ -296,7 +296,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_d5` — Chequeo proactivo de la credencial claude_sdk
 
-- [ ] **Título**: La caducidad del OAuth se detecta ANTES de quemar runs
+- [x] **Título**: La caducidad del OAuth se detecta ANTES de quemar runs
 - **Descripción**: `provider_error` ×17 (07-02→07-08) por oauth caducado y
   cuota. Extender el diagnóstico del provider (camino ADR 0082) con un check
   de sesión barato y exponer el estado en el panel admin de providers;

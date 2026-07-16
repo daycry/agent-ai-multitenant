@@ -273,6 +273,16 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.DEFAULT,
         default_channel_types=("in_app", "telegram"),
     ),
+    # AUD16-23 (auditoría 2026-07-16) — un run abortó por credencial/cuota del
+    # provider LLM (oauth caducado, 401, session limit). Platform-scoped: la
+    # credencial es de plataforma y la renueva el System Admin. Prioritaria —
+    # hasta que se renueve, TODOS los runs de ese provider van a morir igual
+    # (el ciclo 07-02→07-08 acumuló 17 aborts sin que nadie se enterara).
+    "provider_credential_invalid": EventSpec(
+        "provider_credential_invalid",
+        lane=NotificationLane.PRIORITY,
+        default_channel_types=("in_app", "telegram"),
+    ),
 }
 
 

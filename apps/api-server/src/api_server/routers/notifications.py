@@ -238,6 +238,11 @@ NOTIFICATION_EVENT_CATALOG: tuple[dict[str, str], ...] = (
         "label_es": "Mensaje del córtex",
         "label_en": "Cortex message",
     },
+    {
+        "event_type": "provider_credential_invalid",
+        "label_es": "Credencial del proveedor LLM fallando",
+        "label_en": "LLM provider credential failing",
+    },
 )
 
 
