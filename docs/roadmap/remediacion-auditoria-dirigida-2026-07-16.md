@@ -415,7 +415,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_f4` — Timeouts del córtex tipados: nunca un 500 crudo al usuario
 
-- [ ] **Título**: `httpx.ReadTimeout` → respuesta de error controlada del asistente
+- [x] **Título**: `httpx.ReadTimeout` → respuesta de error controlada del asistente
 - **Descripción**: `routers/cortex.py:310` deja escapar el ReadTimeout de
   ollama → `api.unhandled_exception`. Capturar errores de transporte del
   provider en el router/servicio y devolver error tipado (retryable) al

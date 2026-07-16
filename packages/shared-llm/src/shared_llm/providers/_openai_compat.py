@@ -12,6 +12,7 @@ focused on the auth + endpoint layout that actually differs.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
@@ -31,6 +32,24 @@ from shared_llm.types import CompletionResponse, Message, StreamChunk, ToolCall,
 # narrow tuple keeps `KeyboardInterrupt` / `asyncio.CancelledError` from
 # being swallowed.
 _STREAM_ERRORS: tuple[type[BaseException], ...] = (httpx.HTTPError, OSError)
+
+
+@contextlib.asynccontextmanager
+async def typed_transport_errors(*, provider: str) -> AsyncIterator[None]:
+    """Convert raw httpx/OS transport errors into the layer's typed error.
+
+    AUD16 (2026-07-16): ``stream()`` ya envolvía los errores de red mid-stream
+    (``iter_sse_chunks``), pero un ``httpx.ReadTimeout``/``ConnectError`` en
+    ``complete()`` escapaba CRUDO hasta el caller (el córtex lo convirtió en un
+    500 sin manejar el 07-13). Los errores YA tipados del layer (``AuthError``,
+    ``RateLimitError``, ``ProviderError`` de ``check_status``) pasan intactos.
+    """
+    try:
+        yield
+    except (AuthError, RateLimitError, ProviderError):
+        raise
+    except (httpx.HTTPError, OSError) as exc:
+        raise ProviderError(f"{provider}: transport error — {exc}") from exc
 
 
 def to_openai_messages(messages: Sequence[Message]) -> list[dict[str, Any]]:
@@ -322,4 +341,5 @@ __all__ = [
     "parse_chat_completion",
     "parse_sse_delta",
     "to_openai_messages",
+    "typed_transport_errors",
 ]

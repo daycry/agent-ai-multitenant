@@ -29,6 +29,7 @@ from shared_llm.providers._openai_compat import (
     iter_sse_chunks,
     parse_chat_completion,
     to_openai_messages,
+    typed_transport_errors,
 )
 from shared_llm.types import CompletionResponse, Message, StreamChunk
 
@@ -122,7 +123,7 @@ class AzureFoundryAPIMProvider:
         }
         if tools:
             body["tools"] = tools
-        async with self._acquire() as client:
+        async with self._acquire() as client, typed_transport_errors(provider=self.name):
             resp = await client.post(self._url(), json=body, headers=self._headers())
             check_status(resp, provider=self.name)
             return parse_chat_completion(
