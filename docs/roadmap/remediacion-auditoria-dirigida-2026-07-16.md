@@ -163,7 +163,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_c1` — `claude-opus-4-8` (y familia) en `model_prices`: coste facturable deja de estar ciego
 
-- [ ] **Título**: `price_snapshot` resuelve el modelo real en uso
+- [x] **Título**: `price_snapshot` resuelve el modelo real en uso
 - **Descripción**: 128/128 executions con `price_snapshot_cost_usd` NULL
   («no current price in catalog»). Añadir el precio del modelo al catálogo
   (seed/migración con fuente y fecha) y/o matching de alias en el snapshot;

@@ -831,6 +831,9 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
             guardrails=build_pipeline(spec),
             # ADR 0095: make the loop's convergence safeguards reviewer-aware.
             is_review=bool(spec.get("review")),
+            # AUD16-15: el kind resuelto viaja a cada step model_call para que
+            # el price-snapshot del api-server resuelva el catálogo de precios.
+            provider_kind=str((spec.get("model") or {}).get("kind") or "") or None,
             **({"recall": auto_recall} if auto_recall is not None else {}),
             **({"knowledge": auto_rag} if auto_rag is not None else {}),
         )

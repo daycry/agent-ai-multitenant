@@ -252,6 +252,9 @@ class AgentDeps:
     # model.assess_progress (si el cliente lo expone) y dos veredictos "stuck"
     # consecutivos escalan DETERMINISTA en el siguiente plan.
     reflection_assess_every: int = 0
+    # AUD16-15: el KIND del proveedor del run (claude_sdk/ollama/...) — viaja
+    # en cada step model_call para que el price-snapshot resuelva el catálogo.
+    provider_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -572,6 +575,7 @@ class _AgentLoop:
                 tokens_out=response.tokens_out,
                 cost_usd=response.cost_usd,
                 summary=decision.rationale or f"decision: {decision.kind}",
+                provider=self.deps.provider_kind,
             )
         )
 
@@ -1402,6 +1406,7 @@ class _AgentLoop:
                 tokens_in=review.tokens_in,
                 tokens_out=review.tokens_out,
                 cost_usd=review.cost_usd,
+                provider=self.deps.provider_kind,
                 # Surface the verdict reason in the step so a failing review is
                 # debuggable from steps_log (instrument, ADR 0086 / 2026-06-27).
                 summary=(

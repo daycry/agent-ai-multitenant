@@ -59,8 +59,15 @@ def model_call_step(
     cost_usd: float,
     summary: str,
     status: str = "ok",
+    provider: str | None = None,
 ) -> dict[str, Any]:
-    """An LLM call step — token counts and cost are captured here."""
+    """An LLM call step — token counts and cost are captured here.
+
+    ``provider`` (AUD16-15) es el KIND del proveedor del run (claude_sdk/
+    ollama/azure_foundry/copilot): sin él, el price-snapshot del api-server
+    buscaba en el catálogo con provider="" y el coste facturable quedó NULL
+    en el 100% de las executions.
+    """
     step = _base(index, StepKind.MODEL_CALL, node, summary, status)
     step.update(
         model=model,
@@ -69,6 +76,8 @@ def model_call_step(
         total_tokens=tokens_in + tokens_out,
         cost_usd=round(cost_usd, 6),
     )
+    if provider:
+        step["provider"] = provider
     return step
 
 

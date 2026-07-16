@@ -223,6 +223,58 @@ async def lookup_current_price(
     return result.scalar_one_or_none()
 
 
+# AUD16-15 (auditoría 2026-07-16): los steps del runtime registran el KIND del
+# proveedor (claude_sdk/ollama/azure_foundry/copilot) — o nada, en los steps
+# históricos — mientras el catálogo (feed LiteLLM + manual) nombra por FAMILIA
+# (anthropic, azure, ollama con ids 'ollama/<m>'…). Sin este puente, la clave
+# (provider, model_id) no casaba jamás y price_snapshot_cost_usd quedó NULL en
+# el 100% de las executions pese a estar el modelo en el catálogo.
+_CATALOG_PROVIDER_ALIASES: dict[str, tuple[str, ...]] = {
+    "claude_sdk": ("anthropic",),
+    "claude": ("anthropic",),
+    "azure_foundry": ("azure", "azure_ai"),
+    "copilot": ("github_copilot", "openai"),
+    "ollama": ("ollama",),
+}
+
+
+async def lookup_current_price_for_call(
+    session: AsyncSession,
+    *,
+    provider: str,
+    model_id: str,
+    modality: str | PriceModality = PriceModality.TEXT,
+) -> ModelPrice | None:
+    """Resolve the catalog row for a RUNTIME call key (kind + native model).
+
+    Order: exact ``(provider, model_id)``; the kind's catalog-family aliases
+    (also trying the LiteLLM-prefixed id ``'<alias>/<model>'``); and — for
+    steps with an empty/unknown provider — the ``model_id`` alone IF exactly
+    one current row matches (never guesses among several: billing integrity
+    beats coverage).
+    """
+    candidates: list[tuple[str, str]] = []
+    kind = (provider or "").strip()
+    if kind:
+        candidates.append((kind, model_id))
+        for alias in _CATALOG_PROVIDER_ALIASES.get(kind, ()):
+            candidates.append((alias, model_id))
+            candidates.append((alias, f"{alias}/{model_id}"))
+    for prov, mid in candidates:
+        row = await lookup_current_price(session, provider=prov, model_id=mid, modality=modality)
+        if row is not None:
+            return row
+    result = await session.execute(
+        select(ModelPrice).where(
+            ModelPrice.model_id == model_id,
+            ModelPrice.modality == str(modality),
+            ModelPrice.effective_to.is_(None),
+        )
+    )
+    rows = list(result.scalars())
+    return rows[0] if len(rows) == 1 else None
+
+
 async def snapshot_model_call(
     session: AsyncSession,
     *,
@@ -236,13 +288,14 @@ async def snapshot_model_call(
 ) -> PriceSnapshot:
     """Look up the current catalog price for a call and freeze the snapshot.
 
-    Convenience over :func:`lookup_current_price` +
+    Convenience over :func:`lookup_current_price_for_call` +
     :func:`compute_price_snapshot`: resolves the live catalog price for the
-    call's key, then freezes it. A missing price yields a typed *unknown*
-    snapshot (never a fake zero). Used by the execution-recording seam so
-    each ``model_call`` step persists its price snapshot.
+    RUNTIME call key (kind-aware, AUD16-15), then freezes it. A missing price
+    yields a typed *unknown* snapshot (never a fake zero). Used by the
+    execution-recording seam so each ``model_call`` step persists its price
+    snapshot.
     """
-    price = await lookup_current_price(
+    price = await lookup_current_price_for_call(
         session, provider=provider, model_id=model_id, modality=modality
     )
     return compute_price_snapshot(
@@ -258,5 +311,6 @@ __all__ = [
     "PriceSnapshot",
     "compute_price_snapshot",
     "lookup_current_price",
+    "lookup_current_price_for_call",
     "snapshot_model_call",
 ]
