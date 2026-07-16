@@ -88,7 +88,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_a3` — claude_sdk recibe el JSON Schema completo de cada tool
 
-- [ ] **Título**: Sin degradar `required`/`enum`/descriptions/anidados
+- [x] **Título**: Sin degradar `required`/`enum`/descriptions/anidados
 - **Descripción**: `_json_schema_to_tool_schema`
   (`packages/shared-llm/src/shared_llm/providers/claude_agent.py:745-764`)
   mapea a `{campo: tipo}`; pasar el JSON Schema crudo al `@tool` del SDK

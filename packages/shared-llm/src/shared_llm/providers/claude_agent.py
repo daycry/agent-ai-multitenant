@@ -743,25 +743,22 @@ def _unwrap_tool_schemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _json_schema_to_tool_schema(parameters: dict[str, Any] | None) -> dict[str, Any]:
-    """Map a JSON-Schema ``parameters`` object to the ``@tool`` decorator's simple
-    ``{field: python_type}`` form. The stub tool is never executed (the host runs
-    the real one), so this only needs to advertise field names/types to the model.
+    """The ``input_schema`` the ``@tool`` decorator advertises for a host tool.
+
+    AUD16-05 (auditoría 2026-07-16): el decorador del SDK acepta un JSON Schema
+    crudo, así que el schema viaja ÍNTEGRO — el mapa simplificado
+    ``{campo: tipo}`` que se generaba antes descartaba ``required``, ``enum``,
+    las descriptions por campo y los objetos anidados, y el modelo en
+    claude_sdk adivinaba valores que en los providers HTTP veía especificados
+    (p. ej. los scopes de ``memory_recall``). El stub nunca se ejecuta (el host
+    corre la tool real); esto solo informa al modelo.
+
+    Una spec sin ``properties`` utilizables cae al mínimo genérico de siempre.
     """
-    props = (parameters or {}).get("properties") or {}
-    typemap: dict[str, type] = {
-        "string": str,
-        "integer": int,
-        "number": float,
-        "boolean": bool,
-        "array": list,
-        "object": dict,
-    }
-    schema = {
-        name: typemap.get(str((spec or {}).get("type")), str)
-        for name, spec in props.items()
-        if isinstance(name, str)
-    }
-    return schema or {"input": str}
+    params = parameters or {}
+    if isinstance(params, dict) and params.get("properties"):
+        return dict(params)
+    return {"type": "object", "properties": {"input": {"type": "string"}}}
 
 
 def _strip_mcp_prefix(name: str) -> str:
