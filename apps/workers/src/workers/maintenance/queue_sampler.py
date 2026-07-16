@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import Any
 
 import structlog
@@ -82,7 +83,12 @@ async def _sample_queue_metrics_async(
 ) -> dict[str, Any]:
     """Async core — owns the redis + engine lifecycle. ``redis`` is injectable for
     tests. Always writes the textfile (even if a collector fails → that dimension
-    is simply absent), so the file reflects the freshest successful sample."""
+    is simply absent), so the file reflects the freshest successful sample.
+
+    AUD16-09: cada colector falla POR SEPARADO (un DB caído ya no arrastra a los
+    de Redis) y el fichero lleva heartbeat + ``collector_up`` 1/0 por colector,
+    para que «No data» en un panel sea distinguible de «sampler/colector muerto»
+    (regla MetricsSamplerStale + gauge agentic_sampler_collector_up)."""
     from redis.asyncio import Redis
 
     from workers.celery_app import QUEUE_NAMES
@@ -95,19 +101,39 @@ async def _sample_queue_metrics_async(
     status_counts: dict[str, int] = {}
     dlq_depths: dict[str, int] = {}
     execution_counts: dict[str, int] = {}
+    failures: set[str] = set()
     try:
+        # Los colectores de Redis tragan errores POR CLAVE (contextlib.suppress):
+        # con el broker sano, cada cola/stream conocido produce SIEMPRE una
+        # entrada (LLEN/XLEN de clave ausente = 0) — un dict vacío solo puede
+        # significar que el colector no pudo hablar con Redis.
         queue_depths = await _collect_queue_depths(redis_client, QUEUE_NAMES)
+        if not queue_depths and QUEUE_NAMES:
+            failures.add("queue_depths")
         events_redis = Redis.from_url(settings.events_redis_url)
         try:
             dlq_depths = await _collect_dlq_depths(events_redis, _DLQ_STREAMS)
+            if not dlq_depths and _DLQ_STREAMS:
+                failures.add("dlq_depth")
         finally:
             with contextlib.suppress(Exception):
                 await events_redis.aclose()
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         async with sessionmaker() as db:
-            status_counts = await _collect_status_counts(db)
-            execution_counts = await _collect_execution_counts(db)
+            try:
+                status_counts = await _collect_status_counts(db)
+            except Exception as exc:
+                failures.add("tasks_by_status")
+                _log.warning("maintenance.sample_queue_metrics.error", error=str(exc))
+            try:
+                execution_counts = await _collect_execution_counts(db)
+            except Exception as exc:
+                failures.add("executions_24h")
+                _log.warning("maintenance.sample_queue_metrics.error", error=str(exc))
     except Exception as exc:  # pragma: no cover — best-effort: never crash beat
+        # Fallo de infraestructura fuera de los colectores (p.ej. la sesión DB
+        # no abre): los colectores DB no corrieron.
+        failures.update({"tasks_by_status", "executions_24h"})
         _log.warning("maintenance.sample_queue_metrics.error", error=str(exc))
     finally:
         await engine.dispose()
@@ -121,11 +147,14 @@ async def _sample_queue_metrics_async(
         status_counts=status_counts,
         dlq_depths=dlq_depths,
         execution_counts=execution_counts,
+        sampled_at=time.time(),
+        collector_failures=frozenset(failures),
     )
     _log.info(
         "maintenance.sample_queue_metrics.done",
         queues=len(queue_depths),
         statuses=len(status_counts),
+        collector_failures=sorted(failures),
         written=written,
     )
     return {"queue_depths": queue_depths, "status_counts": status_counts, "written": written}

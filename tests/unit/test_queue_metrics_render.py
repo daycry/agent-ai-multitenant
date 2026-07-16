@@ -102,3 +102,45 @@ def test_render_escapes_label_values() -> None:
     # exposition format.
     body = render_queue_metrics(queue_depths={'we"ird': 1}, status_counts={})
     assert r'queue="we\"ird"' in body
+
+
+# ---------------------------------------------------------------------------
+# AUD16-09 (auditoría 2026-07-16): «No data» era indistinguible de «sampler
+# muerto». El sampler emite ahora un heartbeat (timestamp del último muestreo,
+# para una regla de staleness en Prometheus) y un gauge up 1/0 por colector —
+# un colector que falló esta pasada se ve como up=0, no como ausencia muda.
+# ---------------------------------------------------------------------------
+def test_render_emits_sampler_heartbeat() -> None:
+    from workers.queue_metrics import METRIC_SAMPLER_LAST_RUN
+
+    body = render_queue_metrics(
+        queue_depths={},
+        status_counts={},
+        sampled_at=1_752_000_000.0,
+    )
+    assert f"# TYPE {METRIC_SAMPLER_LAST_RUN} gauge" in body
+    assert f"{METRIC_SAMPLER_LAST_RUN} 1752000000" in body
+
+
+def test_render_emits_collector_up_per_known_collector() -> None:
+    from workers.queue_metrics import KNOWN_COLLECTORS, METRIC_COLLECTOR_UP
+
+    body = render_queue_metrics(
+        queue_depths={},
+        status_counts={},
+        sampled_at=1_752_000_000.0,
+        collector_failures=frozenset({"executions_24h"}),
+    )
+    assert f"# TYPE {METRIC_COLLECTOR_UP} gauge" in body
+    assert f'{METRIC_COLLECTOR_UP}{{collector="executions_24h"}} 0' in body
+    for collector in KNOWN_COLLECTORS:
+        if collector != "executions_24h":
+            assert f'{METRIC_COLLECTOR_UP}{{collector="{collector}"}} 1' in body
+
+
+def test_render_without_heartbeat_keeps_legacy_shape() -> None:
+    from workers.queue_metrics import METRIC_COLLECTOR_UP, METRIC_SAMPLER_LAST_RUN
+
+    body = render_queue_metrics(queue_depths={}, status_counts={})
+    assert METRIC_SAMPLER_LAST_RUN not in body
+    assert METRIC_COLLECTOR_UP not in body

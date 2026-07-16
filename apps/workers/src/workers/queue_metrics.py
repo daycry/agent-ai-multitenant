@@ -41,6 +41,18 @@ METRIC_DLQ_DEPTH = "agentic_dlq_depth"
 # FASE 2b monitorización (2026-07-12): actividad real de runs — ejecuciones por
 # estado en las últimas 24h (el pulso del sistema agéntico para el dashboard).
 METRIC_EXECUTIONS_24H = "agentic_executions_24h"
+# AUD16-09 (auditoría 2026-07-16): «No data» era indistinguible de «sampler
+# muerto». El heartbeat alimenta la regla de staleness (MetricsSamplerStale) y
+# el gauge up 1/0 por colector hace visible un colector que falló ESTA pasada
+# — la ausencia de una familia deja de ser muda.
+METRIC_SAMPLER_LAST_RUN = "agentic_sampler_last_run_timestamp_seconds"
+METRIC_COLLECTOR_UP = "agentic_sampler_collector_up"
+KNOWN_COLLECTORS: tuple[str, ...] = (
+    "queue_depths",
+    "tasks_by_status",
+    "dlq_depth",
+    "executions_24h",
+)
 
 
 def _escape_label(value: str) -> str:
@@ -54,9 +66,17 @@ def render_queue_metrics(
     status_counts: dict[str, int],
     dlq_depths: dict[str, int] | None = None,
     execution_counts: dict[str, int] | None = None,
+    sampled_at: float | None = None,
+    collector_failures: frozenset[str] | set[str] | None = None,
 ) -> str:
     """Render the Prometheus text-exposition body. Pure (no I/O) so it is
-    unit-testable. Keys are emitted in sorted order for a noise-free file diff."""
+    unit-testable. Keys are emitted in sorted order for a noise-free file diff.
+
+    AUD16-09: con ``sampled_at`` (unix seconds, lo pasa el sampler) se emiten
+    además el heartbeat ``agentic_sampler_last_run_timestamp_seconds`` y un
+    ``agentic_sampler_collector_up{collector}`` 1/0 por colector conocido
+    (0 = ese colector falló en esta pasada). Sin ``sampled_at`` la salida es
+    byte a byte la histórica (callers/tests legacy intactos)."""
     lines = [
         f"# HELP {METRIC_QUEUE_DEPTH} Messages waiting in each Celery queue (Redis LLEN).",
         f"# TYPE {METRIC_QUEUE_DEPTH} gauge",
@@ -90,6 +110,16 @@ def render_queue_metrics(
                 f'{METRIC_EXECUTIONS_24H}{{status="{_escape_label(exec_status)}"}} '
                 f"{execution_counts[exec_status]}"
             )
+    if sampled_at is not None:
+        failures = collector_failures or frozenset()
+        lines.append(f"# HELP {METRIC_SAMPLER_LAST_RUN} Unix timestamp of the last sampler run.")
+        lines.append(f"# TYPE {METRIC_SAMPLER_LAST_RUN} gauge")
+        lines.append(f"{METRIC_SAMPLER_LAST_RUN} {int(sampled_at)}")
+        lines.append(f"# HELP {METRIC_COLLECTOR_UP} 1 if the collector succeeded on the last run.")
+        lines.append(f"# TYPE {METRIC_COLLECTOR_UP} gauge")
+        for collector in KNOWN_COLLECTORS:
+            up = 0 if collector in failures else 1
+            lines.append(f'{METRIC_COLLECTOR_UP}{{collector="{_escape_label(collector)}"}} {up}')
     return "\n".join(lines) + "\n"
 
 
@@ -100,6 +130,8 @@ def write_queue_metrics(
     status_counts: dict[str, int],
     dlq_depths: dict[str, int] | None = None,
     execution_counts: dict[str, int] | None = None,
+    sampled_at: float | None = None,
+    collector_failures: frozenset[str] | set[str] | None = None,
 ) -> bool:
     """Atomically write the queue-metrics file. Returns ``True`` on success,
     ``False`` otherwise — best-effort, never breaks the worker. Delegates the
@@ -112,6 +144,8 @@ def write_queue_metrics(
             status_counts=status_counts,
             dlq_depths=dlq_depths,
             execution_counts=execution_counts,
+            sampled_at=sampled_at,
+            collector_failures=collector_failures,
         ),
         event_prefix="queue_metrics",
     )
