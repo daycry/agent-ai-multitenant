@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
 
+from api_server.auth.audit import write_audit_log
 from api_server.auth.deps import (
     AuthPrincipal,
     get_client_ip,
@@ -218,6 +219,31 @@ async def register(payload: RegisterRequest) -> UserResponse:
         return _to_user_response(user)
 
 
+async def _audit_login(action: str, *, user_id: UUID | None, email: str, ip: str | None) -> None:
+    """Rastro append-only del login en ``audit_log`` (AUD16-16 / F6).
+
+    Sesión admin PROPIA (BYPASSRLS, tenant NULL) fuera de la txn del lookup —
+    una excepción en el flujo de login no puede revertir el rastro, y un fallo
+    del rastro JAMÁS rompe el login (best-effort). El payload lleva el email y
+    la IP; nunca una contraseña."""
+    try:
+        sessionmaker = get_admin_sessionmaker()
+        async with sessionmaker() as db, db.begin():
+            await write_audit_log(
+                db,
+                action=action,
+                actor_user_id=user_id,
+                tenant_id=None,
+                resource_type="auth_session",
+                changes={"email": email},
+                ip_address=ip,
+            )
+    except Exception:  # pragma: no cover — el rastro nunca tumba el login
+        import logging
+
+        logging.getLogger(__name__).warning("auth.login_audit_failed", exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # POST /auth/login
 # ---------------------------------------------------------------------------
@@ -262,6 +288,8 @@ async def login(
         )
 
     sessionmaker = get_sessionmaker()
+    failed_user_id: UUID | None = None
+    login_failed = False
     async with sessionmaker() as db, db.begin():
         user = await _fetch_user_by_email(db, email)
 
@@ -273,20 +301,24 @@ async def login(
         # it to verify_password (which would raise on the bad hash). The
         # user logs in through their IdP instead.
         if not user or not user.is_active or user.is_sso_provisioned:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="invalid email or password",
-            )
-
-        if not verify_password(payload.password, user.password_hash):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="invalid email or password",
-            )
-
-        user_id = user.id
-        is_system_admin = user.is_system_admin
-        is_system_owner = user.is_system_owner
+            login_failed = True
+            failed_user_id = user.id if user else None
+        elif not verify_password(payload.password, user.password_hash):
+            login_failed = True
+            failed_user_id = user.id
+        else:
+            user_id = user.id
+            is_system_admin = user.is_system_admin
+            is_system_owner = user.is_system_owner
+    if login_failed:
+        # AUD16-16 (F6): el rastro se escribe FUERA de la txn del lookup (una
+        # excepción dentro la habría revertido) y antes del 401 genérico. El
+        # user_id viaja cuando el email era conocido; la contraseña, jamás.
+        await _audit_login("auth.login.failure", user_id=failed_user_id, email=email, ip=ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid email or password",
+        )
 
     # First factor passed. If the user has ANY confirmed second factor
     # (TOTP or WebAuthn), do NOT mint a session here — return an interim
@@ -302,6 +334,7 @@ async def login(
             MfaChallenge(user_id=user_id, tenant_id=None, is_system_admin=is_system_admin),
             ttl_seconds=settings.mfa_challenge_ttl_seconds,
         )
+        await _audit_login("auth.login.mfa_challenge", user_id=user_id, email=email, ip=ip)
         return MfaRequiredResponse(mfa_token=mfa_token, mfa_methods=methods)
 
     # Issue a session id and persist it in Redis with the same
@@ -322,6 +355,10 @@ async def login(
         is_system_admin=is_system_admin,
         is_system_owner=is_system_owner,
     )
+
+    # AUD16-16 (F6): rastro del login bueno — audit_log llevaba 0 filas en toda
+    # la historia y el docstring de write_audit_log afirmaba 'called from login'.
+    await _audit_login("auth.login.success", user_id=user_id, email=email, ip=ip)
 
     return LoginResponse(
         access_token=token,

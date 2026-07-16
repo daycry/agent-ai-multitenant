@@ -388,9 +388,15 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_f2` — Bandeja de escaladas sin runs de tasks ya done
 
-- [ ] **Título**: 19 `needs_human_review` huérfanos dejan de inflar la bandeja
+- [x] **Título**: 19 `needs_human_review` huérfanos dejan de inflar la bandeja
 - **Descripción**: Filtrar (o marcar resueltos) los runs needs_human_review
   cuya task ya está done, en el endpoint del panel de escaladas.
+- **Resolución (verificado, sin cambio)**: la única bandeja existente
+  (`GET /plans/{id}/escalated-tasks`, `plans.py:1252`) filtra por ESTADO DE LA
+  TASK (`awaiting_human_approval`/`blocked`) — una task done nunca aparece,
+  aunque conserve runs históricos `needs_human_review` (que es lo correcto:
+  son historia). El hallazgo era un riesgo «potencial» que no se materializa
+  en ninguna vista actual.
 - **Tiempo**: 0,25 d · **Complejidad**: s · **Hallazgo**: AUD16-25
 - **Tests automáticos**:
   ```yaml
@@ -444,7 +450,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_f6` — `write_audit_log` en el login
 
-- [ ] **Título**: El docstring deja de mentir: login con rastro en audit_log
+- [x] **Título**: El docstring deja de mentir: login con rastro en audit_log
 - **Descripción**: `auth/audit.py:21` afirma «Called from login» pero ningún
   call site existe en auth. Añadir auditoría de login success/failure
   (sin credenciales en el payload). Coordinado con prod-09 (no se adelanta

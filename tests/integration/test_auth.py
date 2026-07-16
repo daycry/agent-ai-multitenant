@@ -239,6 +239,55 @@ async def test_login_unknown_email_is_401(configured_app) -> None:
     assert "invalid email or password" in resp.text.lower()
 
 
+@pytest.mark.asyncio
+async def test_login_writes_an_audit_trail(configured_app, migrations_pg_dsn: str) -> None:
+    """AUD16-16 (F6): el login deja rastro en audit_log — el docstring de
+    write_audit_log afirmaba 'called from login' pero ningún call site existía
+    en auth (audit_log llevaba 0 filas en toda la historia). success y failure
+    quedan registrados con ip y sin credenciales en el payload."""
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute("DELETE FROM audit_log")
+    finally:
+        await conn.close()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        await client.post(
+            "/auth/register",
+            json={"email": "audit-trail@example.com", "password": "rightpassword"},
+        )
+        ok = await client.post(
+            "/auth/login",
+            json={"email": "audit-trail@example.com", "password": "rightpassword"},
+        )
+        bad = await client.post(
+            "/auth/login",
+            json={"email": "audit-trail@example.com", "password": "wrongpassword"},
+        )
+    assert ok.status_code == 200 and bad.status_code == 401
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        rows = await conn.fetch(
+            "SELECT action, user_id, ip_address, changes::text AS changes FROM audit_log"
+            " WHERE action LIKE 'auth.login.%' ORDER BY id"
+        )
+    finally:
+        await conn.close()
+
+    successes = [r for r in rows if r["action"] == "auth.login.success"]
+    failures = [r for r in rows if r["action"] == "auth.login.failure"]
+    assert len(successes) == 1, rows
+    assert successes[0]["user_id"] is not None
+    assert successes[0]["ip_address"]
+    assert len(failures) == 1, rows
+    # El fallo referencia al usuario conocido pero JAMÁS lleva la contraseña.
+    assert "password" not in (failures[0]["changes"] or "").lower()
+
+
 # ---------------------------------------------------------------------------
 # /auth/me
 # ---------------------------------------------------------------------------
