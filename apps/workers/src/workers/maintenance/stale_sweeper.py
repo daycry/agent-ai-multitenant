@@ -156,6 +156,21 @@ async def _sweep_stale_executions_async(
                 stale_ids.append(str(execution.id))
                 # Move the orphaned task off in_progress (dag_01 policy → blocked).
                 await transition_task_after_run(db, execution.task_id, ExecutionStatus.FAILED.value)
+                # AUD16-21: rastro reconstruible desde BD — quién selló y por qué.
+                from api_server.db.task_audit_repo import append_audit_event
+
+                await append_audit_event(
+                    db,
+                    tenant_id=execution.tenant_id,
+                    task_id=execution.task_id,
+                    kind="execution_sealed_by_sweeper",
+                    actor="system:stale_sweeper",
+                    payload={
+                        "execution_id": str(execution.id),
+                        "abort_code": "stale_after_worker_loss",
+                        "reason": "stale_by_age" if stale_by_age else "orphaned_container",
+                    },
+                )
                 swept += 1
         # Reap lingering containers OUTSIDE the txn — Docker I/O must never hold
         # the DB transaction open. Best-effort per execution.

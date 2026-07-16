@@ -155,6 +155,22 @@ async def test_sweep_stale_executions(
         assert runner.killed == [str(ids["exec_stale"])]
         assert result["swept"] == 1
         assert result["reaped"] == 1
+
+        # AUD16-21: el sello administrativo deja rastro reconstruible desde BD —
+        # un task_audit_event con actor/motivo, y el skip_reason del memorizer.
+        assert exec_stale.memorize_skip_reason == "administrative_finalize"
+        conn = await asyncpg.connect(migrations_pg_dsn)
+        try:
+            events = await conn.fetch(
+                "SELECT kind, actor, payload FROM task_audit_events WHERE task_id = $1",
+                ids["task_stale"],
+            )
+        finally:
+            await conn.close()
+        sweeper_events = [e for e in events if e["kind"] == "execution_sealed_by_sweeper"]
+        assert len(sweeper_events) == 1
+        assert sweeper_events[0]["actor"] == "system:stale_sweeper"
+        assert str(ids["exec_stale"]) in str(sweeper_events[0]["payload"])
     finally:
         await engine.dispose()
 

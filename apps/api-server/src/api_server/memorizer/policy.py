@@ -71,6 +71,11 @@ class MemorizeSkipReason(enum.StrEnum):
     LLM_EMPTY = "llm_empty"  # el LLM decidió que no hay nada que recordar (legítimo)
     LLM_ERROR = "llm_error"  # la llamada al LLM falló (provider caído/timeout)
     LLM_UNPARSEABLE = "llm_unparseable"  # el LLM respondió pero sin JSON parseable
+    # AUD16-21: el run lo cerró un finalizador ADMINISTRATIVO (sweeper de
+    # zombis, supersede por re-entrega, cancel, soft-timeout) — ese camino no
+    # pasa por el memorizer y antes dejaba la columna NULL (indistinguible de
+    # un bug del trigger).
+    ADMINISTRATIVE_FINALIZE = "administrative_finalize"
 
 
 @dataclass(frozen=True)

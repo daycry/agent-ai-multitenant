@@ -21,7 +21,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
-from api_server.db.domain import ExecutionStatus, Project, Task
+from api_server.db.domain import Execution, ExecutionStatus, Project, Task
 from api_server.db.execution_repo import (
     create_running_execution,
     list_executions_for_task,
@@ -113,6 +113,41 @@ async def test_supersede_closes_running_rows_only(_migrated: None, admin_databas
         assert all(r.abort_code == "superseded" for r in superseded)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_supersede_leaves_an_audit_trail(_migrated: None, admin_database_url: str) -> None:
+    """AUD16-21: los relanzamientos por re-entrega dejan task_audit_events —
+    la cronología de una task debe ser reconstruible SOLO desde BD."""
+    engine = create_async_engine(admin_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed_task(sm)
+        async with sm() as s, s.begin():
+            stale = await create_running_execution(s, tenant_id=ids["tenant"], task_id=ids["task"])
+            stale_id = stale.id
+        async with sm() as s, s.begin():
+            await supersede_running_executions(s, tenant_id=ids["tenant"], task_id=ids["task"])
+
+        async with sm() as s:
+            rows = (
+                await s.execute(
+                    text(
+                        "SELECT kind, actor, payload::text AS payload FROM task_audit_events"
+                        " WHERE task_id = :t"
+                    ),
+                    {"t": ids["task"]},
+                )
+            ).all()
+            sealed = await s.get(Execution, stale_id)
+    finally:
+        await engine.dispose()
+
+    superseded_events = [r for r in rows if r.kind == "execution_superseded"]
+    assert len(superseded_events) == 1
+    assert superseded_events[0].actor == "system:redelivery_guard"
+    assert str(stale_id) in superseded_events[0].payload
+    assert sealed is not None and sealed.memorize_skip_reason == "administrative_finalize"
 
 
 @pytest.mark.asyncio

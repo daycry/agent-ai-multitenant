@@ -264,7 +264,7 @@ Loki/OTLP/exporters (prod-08), decisión ADR 0108.
 
 #### `task_aud16_d3` — Todo redispatch/reapertura deja `task_audit_events`; reaper/supersede dejan skip_reason
 
-- [ ] **Título**: La cronología de una task es reconstruible desde BD
+- [x] **Título**: La cronología de una task es reconstruible desde BD
 - **Descripción**: Los relanzamientos (sweeper, reconciler,
   promote_ready_plans) y las reaperturas de task done no generan
   task_audit_events; 8 runs finalizados por reaper/supersede quedaron sin

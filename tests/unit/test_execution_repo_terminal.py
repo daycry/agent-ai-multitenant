@@ -112,6 +112,8 @@ class _FakeExecution:
         self.tool_call_count = 9
         self.model_call_count = 9
         self.price_snapshot_at: datetime | None = None
+        # AUD16-21: el sello administrativo estampa el motivo del skip.
+        self.memorize_skip_reason: str | None = None
 
 
 class _FakeResult:

@@ -406,13 +406,15 @@ async def supersede_running_executions(
     stale = list(result.scalars().all())
     if not stale:
         return 0
+    from api_server.db.task_audit_repo import append_audit_event
+
     now = datetime.now(UTC)
     for execution in stale:
         # A row already flagged for cancellation that gets re-delivered (revoke +
         # task_acks_late) must close as CANCELLED, not FAILED/superseded — otherwise
         # the supersede would mask the operator's explicit cancel.
         if execution.cancel_requested_at is not None:
-            seal_terminal_execution(
+            sealed = seal_terminal_execution(
                 execution,
                 status=ExecutionStatus.CANCELLED.value,
                 abort_code="cancelled",
@@ -420,12 +422,26 @@ async def supersede_running_executions(
                 now=now,
             )
         else:
-            seal_terminal_execution(
+            sealed = seal_terminal_execution(
                 execution,
                 status=ExecutionStatus.FAILED.value,
                 abort_code="superseded",
                 output="superseded by a re-delivered execution (worker retry)",
                 now=now,
+            )
+        # AUD16-21: la cronología de una task debe ser reconstruible desde BD —
+        # cada sello por re-entrega deja su rastro con actor y motivo.
+        if sealed:
+            await append_audit_event(
+                session,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                kind="execution_superseded",
+                actor="system:redelivery_guard",
+                payload={
+                    "execution_id": str(execution.id),
+                    "abort_code": execution.abort_code,
+                },
             )
     await session.flush()
     return len(stale)
@@ -458,6 +474,12 @@ def seal_terminal_execution(
     if output is not None:
         execution.output = output
     execution.completed_at = now or datetime.now(UTC)
+    # AUD16-21: un cierre administrativo no pasa por el memorizer — sellar el
+    # motivo canónico (si nadie lo puso antes) para que la UI pueda explicar
+    # por qué este run no dejó memoria, en vez de un NULL indistinguible de
+    # un bug del trigger.
+    if execution.memorize_skip_reason is None:
+        execution.memorize_skip_reason = "administrative_finalize"
     return True
 
 
