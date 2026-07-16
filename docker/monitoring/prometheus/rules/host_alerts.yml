@@ -124,6 +124,32 @@ groups:
             {{ $value }} time(s) in the last 5 minutes. Raise its memory
             limit or fix the leak.
 
+      # 4c. CADVISOR DEGRADED (AUD16-07, auditoría 2026-07-16) — en Docker
+      #     Desktop con el containerd snapshotter, cAdvisor no resuelve la capa
+      #     RW de ningún contenedor ("failed to identify the read-write layer
+      #     ID") y solo exporta el cgroup raíz {id="/"}: los paneles
+      #     per-container quedan vacíos y ContainerOOMKilled (4b) NO PUEDE
+      #     disparar jamás — con el healthcheck en verde enmascarándolo. Esta
+      #     regla hace visible esa ceguera: un cAdvisor sano en este stack ve
+      #     SIEMPRE >1 serie container_last_seen (los ~20 contenedores de la
+      #     plataforma). Gotcha:
+      #     docs/03-guides/gotchas/cadvisor-containerd-snapshotter.md
+      - alert: CadvisorDegraded
+        expr: |
+          count(container_last_seen) <= 1
+        for: 15m
+        labels:
+          severity: warning
+          component: monitoring
+        annotations:
+          summary: "cAdvisor no ve contenedores — métricas per-container ciegas"
+          description: >-
+            cAdvisor lleva 15 minutos exportando {{ $value }} serie(s) de
+            container_last_seen: no está resolviendo los contenedores del host
+            (típico en Docker Desktop con containerd snapshotter). Los paneles
+            per-container y la alerta ContainerOOMKilled están ciegos. Ver la
+            gotcha cadvisor-containerd-snapshotter.md.
+
   # ---------------------------------------------------------------------------
   # Backup health — fed by the node-exporter textfile collector that the
   # backup engine writes after every run (workers.backup_metrics).

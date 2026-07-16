@@ -102,6 +102,15 @@ services:
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
+    # AUD16 menor (2026-07-16): era el único servicio del overlay sin
+    # healthcheck. La imagen es busybox-based (wget disponible); la landing
+    # page responde GET/HEAD en 9100.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9100/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     networks: [agentic-net]
     <<: [*default-restart, *default-logging]
 
@@ -233,6 +242,9 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      # AUD16 menor (2026-07-16): el checker de updates de PLUGINS es un flag
+      # separado y seguía llamando fuera pese a CHECK_FOR_UPDATES=false.
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
     volumes:
       # Datasource + dashboard providers (read-only).
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
