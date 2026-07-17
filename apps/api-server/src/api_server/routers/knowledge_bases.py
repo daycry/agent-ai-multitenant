@@ -387,6 +387,11 @@ async def delete_kb(
 ) -> None:
     require_tenant_id(principal)
     kb = await _load_kb(session, kb_id)
+    # G-03: soft-borra en cascada los documentos de la KB para que el GC recupere
+    # sus chunks + blobs; antes quedaban vivos bajo una KB muerta, eternos.
+    from api_server.db.knowledge_gc import soft_delete_kb_cascade
+
+    await soft_delete_kb_cascade(session, kb_id=kb_id)
     await soft_delete(session, kb)
 
 

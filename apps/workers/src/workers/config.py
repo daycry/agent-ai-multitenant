@@ -542,6 +542,11 @@ class Settings(BaseSettings):
         "7 días'). Bundles whose timestamp is older than now-this are pruned "
         "after a successful run. Operator-tunable.",
     )
+    knowledge_gc_retention_days: int = Field(
+        default=30,
+        description="G-03: gracia antes de que el GC de conocimiento hard-borre "
+        "un documento soft-borrado (chunks + blob + fila). Operator-tunable.",
+    )
     backup_volumes: list[str] = Field(
         default_factory=lambda: ["minio_data", "redis_data", "vault_data"],
         description="Docker named volumes captured in the tar+gzip step: MinIO "

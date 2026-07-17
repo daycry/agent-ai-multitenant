@@ -148,6 +148,15 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": schedule(run_every=300.0),
         "options": {"queue": "ingestion"},
     },
+    # G-03 (auditoría proyecto 2026-07-17): GC físico del conocimiento —
+    # hard-purga documentos soft-borrados vencidos (chunks+blob+fila) y barre
+    # blobs kb/** sin fila documents. Diario 04:00. Pinned a `ingestion` (donde
+    # vive el cliente MinIO). Idempotente; una pasada sin basura es no-op barato.
+    "collect-knowledge-garbage-daily": {
+        "task": "workers.collect_knowledge_garbage",
+        "schedule": crontab(hour="4", minute="0"),
+        "options": {"queue": "ingestion"},
+    },
 }
 
 # Plan 11 task_11_18: the scheduled price-catalog sync entry name. Kept as a

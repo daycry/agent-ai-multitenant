@@ -117,5 +117,19 @@ class MinIOObjectStorage:
                 return False
             raise ObjectStorageError(f"stat_object {key!r} failed: {exc}") from exc
 
+    async def list_objects(self, *, prefix: str) -> list[str]:
+        client = await self._get_client()
+
+        def _list() -> list[str]:
+            return [
+                obj.object_name
+                for obj in client.list_objects(self._bucket, prefix=prefix, recursive=True)
+            ]
+
+        try:
+            return await asyncio.to_thread(_list)
+        except Exception as exc:
+            raise ObjectStorageError(f"list_objects {prefix!r} failed: {exc}") from exc
+
 
 __all__ = ["MinIOObjectStorage"]

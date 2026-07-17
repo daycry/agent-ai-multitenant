@@ -63,7 +63,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_a3` — GC físico del conocimiento
 
-- [ ] **Título**: beat de GC — blobs `kb/**` sin fila `documents` viva →
+- [x] **Título**: beat de GC — blobs `kb/**` sin fila `documents` viva →
       borrar; documents soft-deleted > N días → purgar chunks + blob;
       `delete_kb` encola la purga. Limpiar los 8 huérfanos actuales en el
       deploy. Métrica `agentic_kb_gc_*` (patrón textfile existente).
