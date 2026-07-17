@@ -49,7 +49,12 @@ async def _promote_ready_plans_async(settings: Settings) -> dict[str, Any]:
             plan_ids = list(
                 (
                     await db.execute(
-                        select(Plan.id).where(Plan.status == PlanStatus.IN_PROGRESS.value)
+                        select(Plan.id).where(
+                            Plan.status == PlanStatus.IN_PROGRESS.value,
+                            # PROY2-13: el beat corre BYPASSRLS y sin filtro de
+                            # soft-delete promovía tareas de planes borrados.
+                            Plan.deleted_at.is_(None),
+                        )
                     )
                 ).scalars()
             )

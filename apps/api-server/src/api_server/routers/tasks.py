@@ -39,7 +39,7 @@ from api_server.chat.dag_enforcement import (
 )
 from api_server.chat.planning_llm import _clean_acceptance_criteria
 from api_server.chat.responder import _resolve_chat_provider, resolve_chat_model_config
-from api_server.db.domain import Project, Task, TaskDependency, TaskStatus
+from api_server.db.domain import Plan, Project, Task, TaskDependency, TaskStatus
 from api_server.db.execution_repo import cancel_running_executions_for_task
 from api_server.events import publish_task_created, publish_task_status_changed
 from api_server.llm_providers.vault import LLMProviderVaultStore
@@ -277,6 +277,32 @@ async def create_task(
 ) -> TaskResponse:
     tenant_id = require_tenant_id(principal)
     await _verify_project_visible(session, project_id)
+
+    # PROY2-03: una tarea solo puede NACER backlog o ready (no in_progress/done/
+    # in_review/blocked, que saltarían el DAG y su máquina de estados).
+    if payload.status not in (TaskStatus.BACKLOG, TaskStatus.READY):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "error": "invalid_initial_task_status",
+                "allowed": [TaskStatus.BACKLOG.value, TaskStatus.READY.value],
+            },
+        )
+    # P1-06: si la tarea cuelga de un plan, el plan debe ser VISIBLE (RLS) y del
+    # MISMO proyecto — el FK de Postgres bypassea RLS, así que sin esto una
+    # tarea podría colgar de un plan de otro proyecto (o tenant) y contaminar
+    # el cierre de aquel plan.
+    if payload.plan_id is not None:
+        plan = (
+            await session.execute(
+                select(Plan).where(Plan.id == payload.plan_id, Plan.deleted_at.is_(None))
+            )
+        ).scalar_one_or_none()
+        if plan is None or plan.project_id != project_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"error": "plan_not_in_project", "plan_id": str(payload.plan_id)},
+            )
 
     task = Task(
         tenant_id=tenant_id,

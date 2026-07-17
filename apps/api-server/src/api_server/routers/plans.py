@@ -127,6 +127,13 @@ async def _verify_project_visible(session: AsyncSession, project_id: UUID) -> Pr
 # puede entrar en pending_human_validation. Espejo de plan_progress._OPEN_TASK_STATUSES.
 _OPEN_TASK_STATUSES = ("backlog", "ready", "in_progress", "in_review", "blocked")
 
+# PROY2-13: estados de plan CERRADO que no aceptan tareas nuevas.
+_CLOSED_PLAN_STATUSES = (
+    PlanStatus.COMPLETED.value,
+    PlanStatus.CANCELLED.value,
+    PlanStatus.ARCHIVED.value,
+)
+
 
 async def _plan_has_open_tasks(session: AsyncSession, plan_id: UUID) -> bool:
     """¿Le queda al plan alguna tarea no terminal (ni done ni cancelled)?"""
@@ -597,6 +604,13 @@ async def delete_plan(
     plan = await get_writable_or_404(
         session, Plan, plan_id, principal, not_found_detail="plan not found"
     )
+    # PROY2-13: borrar el plan sin cancelar su trabajo dejaba tareas/runs en
+    # vuelo colgando de un plan soft-deleted — el dispatch los seguía
+    # despachando invisibles. Espejo de la cascada de cancelación (PUT
+    # →cancelled) y del soft-delete de proyecto.
+    for execution in await cancel_tasks_and_executions(session, plan_id=plan.id):
+        if execution.celery_task_id:
+            schedule_after_commit(session, revoke_job_callback(execution.celery_task_id))
     await soft_delete(session, plan)
 
 
@@ -1254,6 +1268,16 @@ async def create_free_task(
     """
     tenant_id = require_tenant_id(principal)
     plan = await _load_plan(session, plan_id)
+
+    # PROY2-13: no colgar una tarea de un plan CERRADO — quedaría backlog
+    # eterna bajo un plan completed/cancelled/archived, invisible al dispatch
+    # pero contada por los boards. (rejected se permite: puede reactivarse por
+    # la vía de correcciones, ADR 0107.)
+    if plan.status in _CLOSED_PLAN_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "plan_is_closed", "status": plan.status},
+        )
 
     task = Task(
         tenant_id=tenant_id,
