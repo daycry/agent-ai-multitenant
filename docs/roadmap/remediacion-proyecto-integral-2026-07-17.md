@@ -1,9 +1,9 @@
 ---
 plan_id: remediacion-proyecto-integral-2026-07-17
 title: Remediación del dominio Proyecto — conocimiento, ciclo de vida de planes, controles de proyecto y equipo
-status: pending_approval
+status: in_progress
 blocking_plan: []
-started_at: null
+started_at: 2026-07-17
 completed_at: null
 estimated_duration_calendar: 1-2 semanas
 estimated_effort_person_days: 11
@@ -39,7 +39,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_a1` — Ingesta KB viva contra el docling-serve real
 
-- [ ] **Título**: `docling.py` habla con rutas que EXISTEN (`/v1/convert/file`
+- [x] **Título**: `docling.py` habla con rutas que EXISTEN (`/v1/convert/file`
       o `/v1/chunk/hybrid/file`) + contract-test contra el openapi de la
       imagen pineada (1.20.0) para que un bump de docling-serve rompa en CI,
       no en producción. Re-implantación con TDD del hot-fix perdido del 06-25.
