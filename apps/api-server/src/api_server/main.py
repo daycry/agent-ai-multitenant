@@ -283,6 +283,22 @@ def create_app() -> FastAPI:
     instrument_fastapi(app)
 
     @app.on_event("startup")
+    async def _ensure_builtin_catalog() -> None:
+        # G-02 (auditoría proyecto 2026-07-17): garantiza las filas del catálogo
+        # builtin de KBs si un wipe/reset las dejó a 0 (sin ellas los grants de
+        # plantilla apuntan a KBs inexistentes y el auto-RAG queda estéril).
+        # Idempotente + advisory lock; best-effort (nunca impide arrancar).
+        try:
+            from api_server.db.session import get_admin_sessionmaker
+            from api_server.seeds.startup import ensure_builtin_catalog
+
+            result = await ensure_builtin_catalog(get_admin_sessionmaker())
+            if result["seeded"]:
+                _logger.warning("startup.builtin_catalog_reseeded", **result)
+        except Exception:
+            _logger.warning("startup.builtin_catalog_check_failed", exc_info=True)
+
+    @app.on_event("startup")
     async def _resume_chat_replies() -> None:
         # c9 (audit 2026-07-03): the team chat reply runs as an in-process detached
         # task, so a restart mid-turn drops it while the user's message stays durable.

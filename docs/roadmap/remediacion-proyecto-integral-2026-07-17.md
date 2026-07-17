@@ -49,11 +49,15 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_a2` — Catálogo builtin de KBs sembrado y garantizado
 
-- [ ] **Título**: re-correr el seed de ~14 KBs builtin (+ ingesta de catálogo)
+- [x] **Título**: re-correr el seed de ~14 KBs builtin (+ ingesta de catálogo)
       en dev; mover el seed al arranque del api-server o al instalador
       (idempotente); smoke-check «builtin KBs > 0» en tests/docs o startup
       warning. Verificar que los `default_kb_grants` de las 6 plantillas
       vuelven a apuntar a KBs existentes.
+      Hecho: red de seguridad `ensure_builtin_catalog` (tenant+categorías+KBs,
+      advisory lock, idempotente) en el arranque del api-server con WARNING si
+      re-siembra; corpus (embeddings) sigue en el CLI. Re-seed del corpus va
+      en el deploy.
 - **Tiempo**: 0,5 d · **Hallazgo**: G-02
 - **Tests**: seed idempotente ×2 + SELECT de slugs concedidos por plantillas.
 
