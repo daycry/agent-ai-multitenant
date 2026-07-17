@@ -177,3 +177,16 @@ tenants no se tocan.
 - **Sincronización a destino remoto aún no auto-cableada** (ver
   [dr-manual-backup.md](./dr-manual-backup.md)): si el bundle solo vive en
   remoto, descárgalo antes a `WORKERS_BACKUP_ROOT`.
+- **Huérfanos referenciales post-restore (PROJ-03, auditoría 2026-07-17).**
+  El copiado filtrado corre con `session_replication_role = replica` (los
+  triggers de FK quedan apagados dentro de la transacción): si el bundle y
+  la base viva divergen (catálogo builtin distinto, filas que referencian
+  otro tenant, restores parciales) pueden quedar filas huérfanas que
+  ninguna FK volverá a validar. El motor ejecuta automáticamente un **sweep
+  de integridad post-restore** (`workers.maintenance.integrity.
+sweep_fk_orphans`) que detecta y borra los huérfanos (transitivamente) y
+  deja el informe en el log (`restore_per_tenant.integrity_sweep`) y en el
+  resultado (`fk_orphans_deleted`). Si el sweep borra algo, revisa el log:
+  indica divergencia entre bundle y base viva. El reconciler además vigila
+  (solo WARNING, cada 90s) hijos de tenants inexistentes
+  (`maintenance.tenant_integrity`).

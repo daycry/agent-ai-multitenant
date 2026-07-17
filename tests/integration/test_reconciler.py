@@ -183,6 +183,8 @@ async def test_reconcile_pipeline_state(
         "completed_plans": 1,
         "unblocked_plans": 0,
         "pushed_worktrees": 0,
+        # G-04/P1-08: pasada de vigilancia de tenants muertos (seed sano = 0).
+        "tenant_ghost_children": 0,
     }
 
     engine = create_async_engine(workers_settings.database_url)  # type: ignore[attr-defined]

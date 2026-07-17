@@ -659,6 +659,7 @@ async def _reconcile_pipeline_state_async(
         "completed_plans": 0,
         "unblocked_plans": 0,
         "pushed_worktrees": 0,
+        "tenant_ghost_children": 0,
     }
     try:
         try:
@@ -698,6 +699,20 @@ async def _reconcile_pipeline_state_async(
         except Exception as exc:
             _log.warning(
                 "maintenance.reconcile_pipeline_state.unpushed_worktrees_error", error=str(exc)
+            )
+        # G-04/P1-08: vigilancia (solo WARNING, nunca borra) de hijos de tenants
+        # inexistentes — divergencias que solo un restore/borrado manual crea.
+        try:
+            from workers.maintenance.integrity import check_tenant_children
+
+            async with sessionmaker() as session:
+                ghosts = await check_tenant_children(session)
+            result["tenant_ghost_children"] = sum(ghosts.values())
+            if ghosts:
+                _log.warning("maintenance.tenant_integrity.ghost_children", **ghosts)
+        except Exception as exc:
+            _log.warning(
+                "maintenance.reconcile_pipeline_state.tenant_integrity_error", error=str(exc)
             )
     finally:
         await engine.dispose()
