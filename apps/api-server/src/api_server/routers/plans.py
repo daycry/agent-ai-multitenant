@@ -55,8 +55,10 @@ from api_server.chat.plan_corrections import (
     mark_corrections_accepted,
 )
 from api_server.chat.plan_state_machine import (
+    PlanPutForbiddenError,
     PlanTransitionError,
     SameSignerError,
+    assert_generic_put_transition,
     transition_plan_status,
 )
 from api_server.chat.responder import _resolve_chat_provider, resolve_chat_model_config
@@ -119,6 +121,28 @@ async def _verify_project_visible(session: AsyncSession, project_id: UUID) -> Pr
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
     return project
+
+
+# PROY2-02: estados de tarea NO terminales — un plan con alguno de estos no
+# puede entrar en pending_human_validation. Espejo de plan_progress._OPEN_TASK_STATUSES.
+_OPEN_TASK_STATUSES = ("backlog", "ready", "in_progress", "in_review", "blocked")
+
+
+async def _plan_has_open_tasks(session: AsyncSession, plan_id: UUID) -> bool:
+    """¿Le queda al plan alguna tarea no terminal (ni done ni cancelled)?"""
+    # `tasks` no es soft-deletable (no tiene deleted_at); un plan cancelado ya
+    # cancela sus tareas, así que basta el filtro por estado abierto.
+    count = (
+        await session.execute(
+            select(func.count())
+            .select_from(Task)
+            .where(
+                Task.plan_id == plan_id,
+                Task.status.in_(_OPEN_TASK_STATUSES),
+            )
+        )
+    ).scalar_one()
+    return int(count) > 0
 
 
 async def _verify_conversation_in_project(
@@ -190,6 +214,19 @@ async def create_plan(
 ) -> PlanResponse:
     tenant_id = require_tenant_id(principal)
     await _verify_project_visible(session, project_id)
+
+    # PROY2-01: un plan solo puede NACER como borrador o pendiente de
+    # aprobación — no `approved`/`in_progress`/`completed` (esquivaría approve,
+    # RBAC y la doble firma). Los estados avanzados se alcanzan por sus
+    # transiciones con gate.
+    if payload.status not in (PlanStatus.DRAFT, PlanStatus.PENDING_APPROVAL):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "error": "invalid_initial_status",
+                "allowed": [PlanStatus.DRAFT.value, PlanStatus.PENDING_APPROVAL.value],
+            },
+        )
 
     if payload.conversation_id is not None:
         await _verify_conversation_in_project(session, payload.conversation_id, project_id)
@@ -475,6 +512,35 @@ async def update_plan(
 
     # Status moves go through the state machine, not a raw assignment.
     if payload.status is not None and payload.status.value != plan.status:
+        # PROY2-02: el PUT genérico (require_tenant_member) no puede ejecutar
+        # transiciones privilegiadas (aprobar/completar) — van por sus
+        # endpoints con gate (POST /approve, submit_verdict).
+        try:
+            assert_generic_put_transition(plan.status, payload.status.value)
+        except PlanPutForbiddenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "privileged_transition_requires_gated_endpoint",
+                    "from": exc.from_status,
+                    "to": exc.to_status,
+                    "use": exc.endpoint,
+                },
+            ) from exc
+        # PROY2-02: entrar en validación humana exige que TODAS las tareas
+        # estén hechas (mismo invariante que la transición del reconciler);
+        # si no, es un salto manual que dejaría un plan "listo para validar"
+        # con trabajo a medias.
+        if payload.status == PlanStatus.PENDING_HUMAN_VALIDATION and await _plan_has_open_tasks(
+            session, plan.id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "plan_has_open_tasks",
+                    "reason": "cannot enter pending_human_validation with unfinished tasks",
+                },
+            )
         try:
             transition_plan_status(plan, payload.status.value, actor=principal.user_id)
         except PlanTransitionError as exc:

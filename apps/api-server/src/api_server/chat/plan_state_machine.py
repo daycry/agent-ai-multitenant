@@ -110,6 +110,52 @@ class PlanTransitionError(ValueError):
         super().__init__(f"illegal plan transition: {from_status!r} -> {to_status!r}")
 
 
+# PROY2-02: transiciones que el PUT genérico (require_tenant_member) NO puede
+# ejecutar — pertenecen a endpoints con su propio gate: `approved`/
+# `pending_second_approval` a `POST /plans/{id}/approve` (require_can_approve_plan
+# + doble firma) y `completed` al veredicto humano (submit_verdict, que además
+# encola el auto-PR). Sin esto, cualquier miembro podía aprobar sin rol o
+# completar sin veredicto por la mera tabla de adyacencia.
+PRIVILEGED_PUT_TARGETS: frozenset[str] = frozenset(
+    {
+        PlanStatus.APPROVED.value,
+        PlanStatus.PENDING_SECOND_APPROVAL.value,
+        PlanStatus.COMPLETED.value,
+    }
+)
+
+_PRIVILEGED_TARGET_ENDPOINT: dict[str, str] = {
+    PlanStatus.APPROVED.value: "POST /plans/{id}/approve",
+    PlanStatus.PENDING_SECOND_APPROVAL.value: "POST /plans/{id}/approve",
+    PlanStatus.COMPLETED.value: "the human review verdict (submit_verdict)",
+}
+
+
+class PlanPutForbiddenError(ValueError):
+    """Un `PUT /plans/{id}` intentó una transición privilegiada que debe ir por
+    su endpoint con gate (PROY2-02)."""
+
+    def __init__(self, from_status: str, to_status: str, endpoint: str) -> None:
+        self.from_status = from_status
+        self.to_status = to_status
+        self.endpoint = endpoint
+        super().__init__(f"transition {from_status!r} -> {to_status!r} must go through {endpoint}")
+
+
+def assert_generic_put_transition(current: str, target: str) -> None:
+    """Rechaza en el PUT genérico las transiciones privilegiadas (PROY2-02).
+
+    No-op si no hay cambio de estado o el destino no es privilegiado; la
+    legalidad de la transición la sigue comprobando ``transition_plan_status``.
+    """
+    if current == target:
+        return
+    if target in PRIVILEGED_PUT_TARGETS:
+        raise PlanPutForbiddenError(
+            current, target, _PRIVILEGED_TARGET_ENDPOINT.get(target, "its dedicated endpoint")
+        )
+
+
 def allowed_transitions(from_status: str) -> frozenset[str]:
     """Return the set of legal next states from ``from_status``.
 
@@ -184,9 +230,12 @@ def transition_plan_status(plan: Plan, target: str, *, actor: UUID | None = None
 
 
 __all__ = [
+    "PRIVILEGED_PUT_TARGETS",
+    "PlanPutForbiddenError",
     "PlanTransitionError",
     "SameSignerError",
     "allowed_transitions",
+    "assert_generic_put_transition",
     "is_terminal",
     "transition_plan_status",
 ]

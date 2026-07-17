@@ -74,7 +74,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_b1` — Nacimiento y transiciones de plan con gates reales
 
-- [ ] **Título**: `POST /plans` restringe `status` inicial a
+- [x] **Título**: `POST /plans` restringe `status` inicial a
       `{draft, pending_approval}`; `PUT /plans/{id}`: transiciones
       privilegiadas con gate por rol (`approved` solo vía
       `require_can_approve_plan`/doble firma; `pending_human_validation` solo
