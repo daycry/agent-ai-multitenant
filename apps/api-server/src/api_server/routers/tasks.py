@@ -33,6 +33,7 @@ from api_server.chat.criteria_llm import (
     format_sibling_context,
     generate_task_acceptance_criteria,
 )
+from api_server.chat.dag import DAGCycleError, assert_acyclic_with_override
 from api_server.chat.dag_enforcement import (
     DependenciesNotDoneError,
     assert_dependencies_done,
@@ -110,20 +111,51 @@ async def _load_dependencies(session: AsyncSession, task_id: UUID) -> list[UUID]
     return [r[0] for r in result.all()]
 
 
+async def _assert_no_dependency_cycle(
+    session: AsyncSession, task_id: UUID, project_id: UUID, depends_on: list[UUID]
+) -> None:
+    """Rechaza (422 ``dag_cycle``) si sustituir las aristas de ``task_id`` por
+    ``depends_on`` cerrase un ciclo en el grafo de dependencias del proyecto."""
+    task_ids = list(
+        (await session.execute(select(Task.id).where(Task.project_id == project_id)))
+        .scalars()
+        .all()
+    )
+    edge_rows = (
+        await session.execute(
+            select(TaskDependency.task_id, TaskDependency.depends_on_task_id).where(
+                TaskDependency.task_id.in_(task_ids)
+            )
+        )
+    ).all()
+    edges: dict[str, list[str]] = {str(t): [] for t in task_ids}
+    for tid, dep in edge_rows:
+        edges.setdefault(str(tid), []).append(str(dep))
+    try:
+        assert_acyclic_with_override(edges, str(task_id), [str(d) for d in depends_on])
+    except DAGCycleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"error": "dag_cycle", "cycle": exc.cycle},
+        ) from exc
+
+
 async def _set_dependencies(
     session: AsyncSession, task_id: UUID, project_id: UUID, depends_on: list[UUID]
 ) -> None:
     """Replace the task's dependencies atomically. All referenced tasks
     must belong to the same project (cross-project deps don't make sense
-    in this MVP)."""
+    in this MVP) AND the same plan (PROY2-05), and the resulting graph must
+    stay acyclic across the whole project (PROY2-04)."""
     if depends_on:
         result = await session.execute(
-            select(Task.id).where(
+            select(Task.id, Task.plan_id).where(
                 Task.id.in_(depends_on),
                 Task.project_id == project_id,
             )
         )
-        present = {r[0] for r in result.all()}
+        rows = result.all()
+        present = {r[0] for r in rows}
         missing = set(depends_on) - present
         if missing:
             missing_ids = sorted(str(x) for x in missing)
@@ -131,6 +163,24 @@ async def _set_dependencies(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"dependency task(s) not found in this project: {missing_ids}",
             )
+
+        # PROY2-05: una tarea solo puede depender de tareas de SU MISMO plan
+        # (o ambas free-tasks: plan_id NULL). Una dependencia cross-plan
+        # crearía un DAG que ningún plan puede completar de forma coherente.
+        this_plan = (
+            await session.execute(select(Task.plan_id).where(Task.id == task_id))
+        ).scalar_one_or_none()
+        cross = sorted(str(tid) for tid, pid in rows if pid != this_plan)
+        if cross:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"error": "cross_plan_dependency", "task_ids": cross},
+            )
+
+        # PROY2-04: rechazar ciclos sobre el grafo de TODO el proyecto — un ciclo
+        # puede construirse en dos PUT (A→B, luego B→A) que el validador del spec
+        # por-request no ve.
+        await _assert_no_dependency_cycle(session, task_id, project_id, depends_on)
 
     await session.execute(sql_delete(TaskDependency).where(TaskDependency.task_id == task_id))
     for dep_id in depends_on:

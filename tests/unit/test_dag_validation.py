@@ -9,7 +9,12 @@ call before emitting a draft.
 from __future__ import annotations
 
 import pytest
-from api_server.chat.dag import DAGCycleError, TaskRef, validate_dag
+from api_server.chat.dag import (
+    DAGCycleError,
+    TaskRef,
+    assert_acyclic_with_override,
+    validate_dag,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -122,3 +127,27 @@ def test_unknown_dependency_does_not_raise_a_dag_error() -> None:
             TaskRef(id="a", depends_on=("does-not-exist",)),
         ]
     )
+
+
+# ---------------------------------------------------------------------------
+# PROY2-04: cycle detection across multiple PUTs (overlay one node's deps on
+# the existing project-wide edge set).
+# ---------------------------------------------------------------------------
+def test_override_that_closes_a_cycle_is_rejected() -> None:
+    # Existing: a -> b (a depends on b). Now set b -> a → cycle.
+    existing = {"a": ("b",), "b": ()}
+    with pytest.raises(DAGCycleError):
+        assert_acyclic_with_override(existing, "b", ["a"])
+
+
+def test_override_that_keeps_the_graph_acyclic_is_ok() -> None:
+    existing = {"a": (), "b": ("a",), "c": ()}
+    # c -> b keeps it a DAG (c depends on b depends on a).
+    assert_acyclic_with_override(existing, "c", ["b"])
+
+
+def test_override_replaces_the_nodes_previous_edges() -> None:
+    # a used to depend on b (cycle if kept), but the override drops that edge.
+    existing = {"a": ("b",), "b": ("a",)}  # already cyclic on paper
+    # Overriding a to depend on nothing breaks the cycle.
+    assert_acyclic_with_override(existing, "a", [])

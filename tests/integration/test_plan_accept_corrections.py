@@ -150,10 +150,12 @@ async def _mint_token(user_id: UUID, tenant_id: UUID) -> str:
     return encode_jwt(user_id=user_id, session_id=sid, tenant_id=tenant_id)
 
 
-async def _create_rejected_plan(client: AsyncClient, project_id: UUID, headers: dict) -> str:
+async def _create_rejected_plan(
+    client: AsyncClient, project_id: UUID, headers: dict, dsn: str
+) -> str:
     """Lleva un plan con el spec de arriba hasta `rejected` por el ciclo real:
     draft -> pending_approval -> approved (+ sync de las originales)
-    -> in_progress -> pending_human_validation -> rejected."""
+    -> in_progress -> (tareas done) -> pending_human_validation -> rejected."""
     create = await client.post(
         f"/projects/{project_id}/plans",
         json={"title": "Plan con correcciones", "specification": _PLAN_SPEC},
@@ -178,7 +180,18 @@ async def _create_rejected_plan(client: AsyncClient, project_id: UUID, headers: 
     )
     assert synced.status_code == 200, synced.text
 
-    for next_status in ("in_progress", "pending_human_validation", "rejected"):
+    upd = await client.put(f"/plans/{plan_id}", json={"status": "in_progress"}, headers=headers)
+    assert upd.status_code == 200, upd.text
+
+    # PROY2-02: pending_human_validation exige todas las tareas terminales — el
+    # ciclo real las completa antes del review; el test las marca done directo.
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute("UPDATE tasks SET status = 'done' WHERE plan_id = $1", UUID(plan_id))
+    finally:
+        await conn.close()
+
+    for next_status in ("pending_human_validation", "rejected"):
         upd = await client.put(f"/plans/{plan_id}", json={"status": next_status}, headers=headers)
         assert upd.status_code == 200, upd.text
     return plan_id
@@ -195,7 +208,9 @@ async def test_accept_corrections_materialises_tasks_and_reactivates_plan(
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://test"
     ) as client:
-        plan_id = await _create_rejected_plan(client, seeded["project_id"], headers)
+        plan_id = await _create_rejected_plan(
+            client, seeded["project_id"], headers, migrations_pg_dsn
+        )
 
         resp = await client.post(
             f"/plans/{plan_id}/accept-corrections",
@@ -280,7 +295,9 @@ async def test_accept_corrections_unknown_ids_return_422(
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://test"
     ) as client:
-        plan_id = await _create_rejected_plan(client, seeded["project_id"], headers)
+        plan_id = await _create_rejected_plan(
+            client, seeded["project_id"], headers, migrations_pg_dsn
+        )
 
         resp = await client.post(
             f"/plans/{plan_id}/accept-corrections",

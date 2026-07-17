@@ -171,6 +171,90 @@ async def test_create_task_accepts_valid_plan_in_same_project(
 
 
 @pytest.mark.asyncio
+async def test_dependency_cycle_across_two_puts_is_rejected(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """PROY2-04: un ciclo puede construirse en dos PUT (A→B, luego B→A); el
+    validador por-request del spec no lo ve, pero _set_dependencies sí."""
+    seeded = await _seed(migrations_pg_dsn)
+    headers = {"Authorization": f"Bearer {await _token(seeded['admin'], seeded['tenant'])}"}
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        a = await client.post(
+            f"/projects/{seeded['proj_b']}/tasks",
+            json={"title": "A", "plan_id": str(seeded["plan_b"])},
+            headers=headers,
+        )
+        b = await client.post(
+            f"/projects/{seeded['proj_b']}/tasks",
+            json={"title": "B", "plan_id": str(seeded["plan_b"])},
+            headers=headers,
+        )
+        a_id, b_id = a.json()["id"], b.json()["id"]
+        # A depende de B — OK.
+        r1 = await client.put(
+            f"/projects/{seeded['proj_b']}/tasks/{a_id}",
+            json={"depends_on": [b_id]},
+            headers=headers,
+        )
+        assert r1.status_code == 200, r1.text
+        # B depende de A — cerraría el ciclo → 422.
+        r2 = await client.put(
+            f"/projects/{seeded['proj_b']}/tasks/{b_id}",
+            json={"depends_on": [a_id]},
+            headers=headers,
+        )
+    assert r2.status_code == 422, r2.text
+    assert r2.json()["detail"]["error"] == "dag_cycle"
+
+
+@pytest.mark.asyncio
+async def test_cross_plan_dependency_is_rejected(configured_app, migrations_pg_dsn: str) -> None:
+    """PROY2-05: una tarea no puede depender de una tarea de OTRO plan."""
+    seeded = await _seed(migrations_pg_dsn)
+    # Un segundo plan en el MISMO proyecto B + una tarea suya.
+    plan_c, task_in_c = uuid4(), uuid4()
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO plans (id, tenant_id, project_id, title, status, specification)"
+            " VALUES ($1, $2, $3, 'PC', 'draft', '{}'::jsonb)",
+            plan_c,
+            seeded["tenant"],
+            seeded["proj_b"],
+        )
+        await conn.execute(
+            "INSERT INTO tasks (id, tenant_id, project_id, plan_id, title, status, priority)"
+            " VALUES ($1, $2, $3, $4, 'en C', 'backlog', 'medium')",
+            task_in_c,
+            seeded["tenant"],
+            seeded["proj_b"],
+            plan_c,
+        )
+    finally:
+        await conn.close()
+
+    headers = {"Authorization": f"Bearer {await _token(seeded['admin'], seeded['tenant'])}"}
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        a = await client.post(
+            f"/projects/{seeded['proj_b']}/tasks",
+            json={"title": "en B", "plan_id": str(seeded["plan_b"])},
+            headers=headers,
+        )
+        # Tarea de plan_b dependiendo de una tarea de plan_c → 422.
+        r = await client.put(
+            f"/projects/{seeded['proj_b']}/tasks/{a.json()['id']}",
+            json={"depends_on": [str(task_in_c)]},
+            headers=headers,
+        )
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["error"] == "cross_plan_dependency"
+
+
+@pytest.mark.asyncio
 async def test_delete_plan_cancels_open_tasks(configured_app, migrations_pg_dsn: str) -> None:
     """PROY2-13: borrar un plan no puede dejar sus tareas vivas — el dispatch
     las seguiría despachando contra un plan soft-deleted (invisible)."""

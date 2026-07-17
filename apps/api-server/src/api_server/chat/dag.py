@@ -15,7 +15,7 @@ client gets a useful 422 message.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 
@@ -64,6 +64,25 @@ def validate_dag(tasks: Iterable[TaskRef | dict[str, object]]) -> None:
         if colour[start] != _WHITE:
             continue
         _dfs_iterative(start, nodes, colour)
+
+
+def assert_acyclic_with_override(
+    edges: Mapping[str, Iterable[str]],
+    node: str,
+    new_deps: Iterable[str],
+) -> None:
+    """Validate the project's dependency graph stays acyclic after replacing
+    ``node``'s outgoing edges with ``new_deps`` (PROY2-04).
+
+    ``_set_dependencies`` persists one task's deps per request, so the
+    per-request spec validator can't see a cycle built across two PUTs
+    (``A -> B`` then ``B -> A``). This overlays the proposed edges on the
+    full existing edge set and runs the same cycle check. Raises
+    ``DAGCycleError`` on a cycle.
+    """
+    merged: dict[str, tuple[str, ...]] = {k: tuple(v) for k, v in edges.items()}
+    merged[node] = tuple(new_deps)
+    validate_dag([TaskRef(id=k, depends_on=v) for k, v in merged.items()])
 
 
 def _coerce(raw: TaskRef | dict[str, object]) -> TaskRef:
@@ -120,4 +139,4 @@ def _dfs_iterative(
         stack.append((nxt, list(nodes.get(nxt, ()))))
 
 
-__all__ = ["DAGCycleError", "TaskRef", "validate_dag"]
+__all__ = ["DAGCycleError", "TaskRef", "assert_acyclic_with_override", "validate_dag"]

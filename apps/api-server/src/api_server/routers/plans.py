@@ -812,6 +812,30 @@ async def get_plan_cost_breakdown(
 # ===========================================================================
 # Approve endpoint (task_03_25)
 # ===========================================================================
+async def _plan_has_any_tasks(session: AsyncSession, plan: Plan) -> bool:
+    """PROY2-11: ¿el plan declara al menos una tarea? Cuenta las del spec o, si
+    el spec está vacío, las tareas ya materializadas en el Kanban (un plan
+    hecho solo de free-tasks). Un plan de 0 tareas no debe aprobarse ni
+    arrancarse: el reconciler lo rebota a pending_human_validation al instante."""
+    spec_tasks = (plan.specification or {}).get("tasks") or []
+    if spec_tasks:
+        return True
+    count = (
+        await session.execute(select(func.count()).select_from(Task).where(Task.plan_id == plan.id))
+    ).scalar_one()
+    return bool(count)
+
+
+def _plan_has_no_tasks_error() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail={
+            "error": "plan_has_no_tasks",
+            "message": "Un plan sin tareas no puede aprobarse ni arrancarse.",
+        },
+    )
+
+
 @plans_router.post("/{plan_id}/approve", response_model=PlanResponse)
 async def approve_plan(
     plan_id: UUID,
@@ -857,6 +881,10 @@ async def approve_plan(
                 " or pending_second_approval",
             },
         )
+
+    # PROY2-11: tras validar el estado — un plan sin ninguna tarea no se firma.
+    if not await _plan_has_any_tasks(session, plan):
+        raise _plan_has_no_tasks_error()
 
     try:
         transition_plan_status(plan, target, actor=principal.user_id)
@@ -994,6 +1022,11 @@ async def start_plan_execution(
                 "message": "Solo un plan aprobado puede marcarse en curso.",
             },
         ) from exc
+    # PROY2-11: tras validar la transición — un plan vacío no arranca (el
+    # reconciler lo rebotaría a pending_human_validation al instante). El raise
+    # revierte la transacción, así que la transición de arriba no persiste.
+    if not await _plan_has_any_tasks(session, plan):
+        raise _plan_has_no_tasks_error()
 
     # Ensure the tasks are in the Kanban (creates any missing ones; idempotent).
     await sync_plan_to_kanban(session, plan, scope="total")
@@ -1161,6 +1194,19 @@ async def accept_plan_corrections(
                 "status": plan.status,
             },
         )
+
+    # PROY2-04: el LLM de correcciones (generate-corrections) puede emitir una
+    # tanda cíclica. Validar el DAG del spec RESULTANTE antes de materializar —
+    # si no, el plan queda in_progress con tareas que se bloquean entre sí.
+    spec_tasks = (plan.specification or {}).get("tasks") or []
+    if spec_tasks:
+        try:
+            validate_dag(spec_tasks)
+        except DAGCycleError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"error": "dag_cycle", "cycle": exc.cycle},
+            ) from exc
 
     try:
         await sync_plan_to_kanban(session, plan, scope="selection", task_ids=payload.task_ids)
