@@ -47,6 +47,7 @@ from api_server.db.domain import (
     TaskDependency,
     TaskStatus,
     Team,
+    TeamMember,
 )
 from api_server.db.models import TaskAuditEvent
 from api_server.db.plan_comment import PlanComment
@@ -1176,6 +1177,29 @@ class TaskDispatcher:
         if await self._mark_task_unassignable(session, task):
             unassignable_out.append(self._task_unassignable_event(task))
 
+    async def _clear_dead_preset(self, session: AsyncSession, task: Task) -> None:
+        """PROJ-05 (auto-reparación): el preset ``assigned_agent_id`` apunta a un
+        agente soft-borrado/inexistente y GANA siempre en ``_pick`` — sin esto la
+        tarea quedaba `ready` para siempre. Limpiar el preset (con testigo de
+        audit) deja que el siguiente dispatch caiga a la política del proyecto."""
+        from api_server.db.task_audit_repo import append_audit_event
+
+        dead_agent_id = str(task.assigned_agent_id)
+        task.assigned_agent_id = None
+        await append_audit_event(
+            session,
+            tenant_id=task.tenant_id,
+            task_id=task.id,
+            kind="assignment_preset_cleared",
+            actor="orchestrator",
+            payload={"reason": "agent_missing_or_deleted", "agent_id": dead_agent_id},
+        )
+        _log.warning(
+            "orchestrator.assignment_preset_cleared",
+            task_id=str(task.id),
+            agent_id=dead_agent_id,
+        )
+
     async def _route_ai(
         self,
         session: AsyncSession,
@@ -1205,7 +1229,7 @@ class TaskDispatcher:
                 project_id=str(task.project_id),
             )
             return None
-        candidates = await self._candidates(session, task)
+        candidates = await self._candidates(session, task, project)
         required_skills = await self._task_required_skills(session, task)
         agent_id = self._pick(project, task, candidates, required_skills=required_skills)
         if agent_id is None:
@@ -1230,7 +1254,10 @@ class TaskDispatcher:
         ).scalar_one_or_none()
         if agent is None:
             _log.warning("orchestrator.no_agent_for_task", task_id=str(task.id))
-            await self._surface_unassignable(session, task, unassignable_out)
+            if task.assigned_agent_id is not None:
+                await self._clear_dead_preset(session, task)
+            else:
+                await self._surface_unassignable(session, task, unassignable_out)
             return None
 
         # C3 F07: resolve the model spec BEFORE claiming the task. If the
@@ -1608,9 +1635,26 @@ class TaskDispatcher:
             assigned_to_user_id=(str(assigned_user_id) if assigned_user_id is not None else None),
         )
 
-    async def _candidates(self, session: AsyncSession, task: Task) -> list[Candidate]:
-        """Agents eligible to take `task` — project-local agents of its
-        project plus the tenant's global agents — with their load."""
+    async def _candidates(
+        self, session: AsyncSession, task: Task, project: Project | None = None
+    ) -> list[Candidate]:
+        """Agents eligible to take `task` — with their load.
+
+        PROJ-04: cuando el proyecto tiene equipo, el pool son sus
+        ``team_members`` más los agentes ``project_local`` del propio proyecto
+        (una elección deliberada del operador); los globales del tenant que no
+        son del equipo ya NO reciben sus tareas. Sin equipo, el pool clásico:
+        project-local del proyecto + globales del tenant."""
+        team_id = project.team_id if project is not None else None
+        project_local = and_(
+            Agent.scope == "project_local",
+            Agent.project_id == task.project_id,
+        )
+        if team_id is not None:
+            member_ids = select(TeamMember.agent_id).where(TeamMember.team_id == team_id)
+            pool_filter = or_(Agent.id.in_(member_ids), project_local)
+        else:
+            pool_filter = or_(project_local, Agent.scope.in_(_GLOBAL_SCOPES))
         agents = (
             (
                 await session.execute(
@@ -1618,13 +1662,7 @@ class TaskDispatcher:
                         Agent.tenant_id == task.tenant_id,
                         Agent.deleted_at.is_(None),
                         Agent.agent_type == "ai",
-                        or_(
-                            and_(
-                                Agent.scope == "project_local",
-                                Agent.project_id == task.project_id,
-                            ),
-                            Agent.scope.in_(_GLOBAL_SCOPES),
-                        ),
+                        pool_filter,
                     )
                 )
             )

@@ -144,11 +144,20 @@ def _event(ids: dict[str, UUID], *, new_status: str, old_status: str) -> TaskEve
 
 
 class _CountingCelery:
+    """Cuenta los enqueues de RUNS aparte de las notificaciones: desde NOTIF-3
+    (2026-07-12) el dispatch de review emite además `review_requested` por el
+    rail de notification_dispatcher — los pins de estos tests son sobre runs."""
+
     def __init__(self) -> None:
-        self.calls = 0
+        self.calls = 0  # runs (workers.run_execution)
+        self.event_calls = 0  # notification_dispatcher.dispatch_event
 
     def send_task(self, *args: object, **kwargs: object) -> None:
-        self.calls += 1
+        name = args[0] if args else kwargs.get("name")
+        if name == "notification_dispatcher.dispatch_event":
+            self.event_calls += 1
+        else:
+            self.calls += 1
 
 
 class _BrokerDownCelery:
@@ -247,6 +256,8 @@ async def test_in_review_dispatches_when_no_execution_running(
         )
 
         assert celery.calls == 1
+        # NOTIF-3: el dispatch de la review emite también `review_requested`.
+        assert celery.event_calls == 1
     finally:
         await redis.delete("default")
         await redis.aclose()
