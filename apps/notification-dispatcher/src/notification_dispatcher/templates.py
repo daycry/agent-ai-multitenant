@@ -231,6 +231,25 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "is blocked. Reason: {{ reason | default('unknown') }}."
         ),
     ),
+    # --- task_unassignable (PROJ-05, auditoría 2026-07-17) -------------------
+    ("task_unassignable", "es"): TemplateSource(
+        subject="Tarea sin agente: {{ task_title | default('(sin título)') }}",
+        body=(
+            "La tarea «{{ task_title | default('(sin título)') }}» está lista "
+            "pero ningún agente puede tomarla: el proyecto no tiene equipo "
+            "asignado o ningún agente cubre el rol requerido. Asigna un equipo "
+            "o un agente al proyecto para que el despacho continúe."
+        ),
+    ),
+    ("task_unassignable", "en"): TemplateSource(
+        subject="Task has no agent: {{ task_title | default('(untitled)') }}",
+        body=(
+            "Task \"{{ task_title | default('(untitled)') }}\" is ready but no "
+            "agent can take it: the project has no team assigned or no agent "
+            "covers the required role. Assign a team or an agent to the "
+            "project so dispatch can continue."
+        ),
+    ),
     # --- plan_rejected -----------------------------------------------------
     ("plan_rejected", "es"): TemplateSource(
         subject="Plan rechazado: {{ plan_name | default('(sin nombre)') }}",

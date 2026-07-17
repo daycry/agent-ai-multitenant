@@ -1026,6 +1026,11 @@ class TaskDispatcher:
         None if the task is no longer ready, is budget-paused, or no AI agent
         is available. The orchestrator runs BYPASSRLS, so the initial task load
         carries an explicit ``tenant_id`` predicate (regla dura #1, audit c5)."""
+        # PROJ-05: eventos de notificación producidos DENTRO de la txn (con su
+        # testigo de dedupe) pero enviados al broker DESPUÉS del commit — el
+        # broker I/O nunca sostiene la transacción abierta.
+        notifications: list[dict[str, Any]] = []
+        result: _AiDispatch | _HumanDispatch | None = None
         async with self._sessionmaker() as session, session.begin():
             task = (
                 await session.execute(
@@ -1078,9 +1083,22 @@ class TaskDispatcher:
                         **block.as_log_fields(),
                     )
                     return None
-                return await self._route_ai(session, task)
+                result = await self._route_ai(session, task, unassignable_out=notifications)
+            else:
+                result = await self._route_human(session, task, human_agent)
 
-            return await self._route_human(session, task, human_agent)
+        # Broker I/O fuera de la txn; best-effort (la tarea sigue `ready` y el
+        # audit event ya está commiteado — un fallo aquí solo pierde el aviso).
+        for event in notifications:
+            try:
+                await asyncio.to_thread(self._send_dispatch_event, event)
+            except Exception as exc:
+                _log.warning(
+                    "orchestrator.task_unassignable_notify_failed",
+                    task_id=str(task_id),
+                    error=str(exc),
+                )
+        return result
 
     async def _human_assignee(self, session: AsyncSession, task: Task) -> Agent | None:
         """Return the task's assignee Agent iff it is a Human Agent, else None.
@@ -1105,7 +1123,66 @@ class TaskDispatcher:
             return None
         return agent
 
-    async def _route_ai(self, session: AsyncSession, task: Task) -> _AiDispatch | None:
+    async def _mark_task_unassignable(self, session: AsyncSession, task: Task) -> bool:
+        """PROJ-05: deja el testigo ``task_unassignable`` en task_audit_events la
+        PRIMERA vez y devuelve True; False si ya estaba marcado. El testigo es el
+        dedupe de la notificación: el beat re-anuncia la tarea cada 30s y sin
+        esto el operador recibiría una inundación."""
+        from api_server.db.models import TaskAuditEvent
+        from api_server.db.task_audit_repo import append_audit_event
+
+        already = (
+            await session.execute(
+                select(TaskAuditEvent.id)
+                .where(
+                    TaskAuditEvent.task_id == task.id,
+                    TaskAuditEvent.kind == "task_unassignable",
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if already is not None:
+            return False
+        await append_audit_event(
+            session,
+            tenant_id=task.tenant_id,
+            task_id=task.id,
+            kind="task_unassignable",
+            actor="orchestrator",
+            payload={"reason": "no_agent_for_task"},
+        )
+        return True
+
+    def _task_unassignable_event(self, task: Task) -> dict[str, Any]:
+        return {
+            "event_type": "task_unassignable",
+            "tenant_id": str(task.tenant_id),
+            "context": {
+                "task_title": task.title or "",
+                "task_id": str(task.id),
+                "project_id": str(task.project_id),
+            },
+        }
+
+    async def _surface_unassignable(
+        self,
+        session: AsyncSession,
+        task: Task,
+        unassignable_out: list[dict[str, Any]] | None,
+    ) -> None:
+        """Marca + encola (vía out-param) el aviso de tarea sin candidatos."""
+        if unassignable_out is None:
+            return
+        if await self._mark_task_unassignable(session, task):
+            unassignable_out.append(self._task_unassignable_event(task))
+
+    async def _route_ai(
+        self,
+        session: AsyncSession,
+        task: Task,
+        *,
+        unassignable_out: list[dict[str, Any]] | None = None,
+    ) -> _AiDispatch | None:
         """The existing AI route: pick an agent, move to ``in_progress``,
         build the worker payload. Untouched behaviour for AI tasks."""
         # prod-06 task_prod06_budget_03 (db-5): never start an execution for a
@@ -1133,6 +1210,7 @@ class TaskDispatcher:
         agent_id = self._pick(project, task, candidates, required_skills=required_skills)
         if agent_id is None:
             _log.warning("orchestrator.no_agent_for_task", task_id=str(task.id))
+            await self._surface_unassignable(session, task, unassignable_out)
             return None
 
         # C3 F08: reload the picked agent SCOPED to the task's tenant (and not
@@ -1152,6 +1230,7 @@ class TaskDispatcher:
         ).scalar_one_or_none()
         if agent is None:
             _log.warning("orchestrator.no_agent_for_task", task_id=str(task.id))
+            await self._surface_unassignable(session, task, unassignable_out)
             return None
 
         # C3 F07: resolve the model spec BEFORE claiming the task. If the

@@ -9,6 +9,8 @@ exist -- a project is always created by a tenant.
 
 from __future__ import annotations
 
+from copy import deepcopy
+from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -83,7 +85,7 @@ async def _verify_team_visible(session: AsyncSession, team_id: UUID) -> None:
 
 async def _verify_template_visible(
     session: AsyncSession, template_id: UUID, tenant_id: UUID
-) -> None:
+) -> Project:
     """Resolve `template_id` to a usable project template or raise 404.
 
     The `projects_template_read` RLS policy (FOR SELECT USING
@@ -94,19 +96,62 @@ async def _verify_template_visible(
     platform tenant (the built-in catalog). A template owned by a
     *different* tenant surfaces as a clean 404 and grants nothing,
     preventing cross-tenant leakage of `default_kb_grants`.
+
+    Returns the full template row — PROJ-01: la adopción es server-side y
+    hereda de aquí toda la forma del proyecto.
     """
     result = await session.execute(
-        select(Project.id).where(
+        select(Project).where(
             Project.id == template_id,
             Project.is_template.is_(True),
             Project.deleted_at.is_(None),
             Project.tenant_id.in_([tenant_id, PLATFORM_TENANT_ID]),
         )
     )
-    if result.scalar_one_or_none() is None:
+    template = result.scalar_one_or_none()
+    if template is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="project template not found"
         )
+    return template
+
+
+# PROJ-01: campos de forma que la adopción hereda del template cuando el caller
+# no los fija explícitamente (payload.model_fields_set). `team_id` se trata
+# aparte (fork por defecto).
+_TEMPLATE_INHERITED_FIELDS: tuple[str, ...] = (
+    "mcp_servers",
+    "worker_config",
+    "repository_config",
+    "human_approval_policy",
+    "allowed_commands",
+    "default_runtime_template",
+    "allowed_domains",
+)
+
+
+def _resolve_template_adoption(
+    payload: ProjectCreateRequest, template: Project | None
+) -> tuple[dict[str, Any], UUID | None, bool]:
+    """Forma efectiva de la adopción (PROJ-01): campos heredados del template
+    que el caller no envió, equipo efectivo, y si se forkea el equipo.
+
+    `fork_team` por defecto al adoptar plantilla: el proyecto recibe SU copia
+    editable del equipo builtin (agentes project_local despachables). Un
+    `fork_team: false` explícito referencia el equipo tal cual (linked)."""
+    sent = payload.model_fields_set
+    inherited: dict[str, Any] = {}
+    effective_team_id = payload.team_id
+    if template is not None:
+        for field_name in _TEMPLATE_INHERITED_FIELDS:
+            if field_name not in sent:
+                value = getattr(template, field_name)
+                if value is not None:
+                    inherited[field_name] = deepcopy(value)
+        if effective_team_id is None and "team_id" not in sent:
+            effective_team_id = template.team_id
+    fork_team = payload.fork_team if "fork_team" in sent else template is not None
+    return inherited, effective_team_id, fork_team
 
 
 # ---------------------------------------------------------------------------
@@ -199,8 +244,14 @@ async def create_project(
     if payload.team_id is not None:
         await _verify_team_visible(session, payload.team_id)
 
+    # PROJ-01: adopción SERVER-SIDE. El wizard era quien copiaba la forma de la
+    # plantilla (equipo, allowlist, runtime, …); la API directa creaba proyectos
+    # inertes. Ahora el servidor hereda del template todo campo que el caller no
+    # fije explícitamente; el wizard pasa a ser un consumidor más.
+    template: Project | None = None
     if payload.template_id is not None:
-        await _verify_template_visible(session, payload.template_id, tenant_id)
+        template = await _verify_template_visible(session, payload.template_id, tenant_id)
+    inherited, effective_team_id, fork_team = _resolve_template_adoption(payload, template)
 
     # P1-02: el slug identifica el bare repo del proyecto en disco — dos
     # proyectos vivos del mismo tenant no pueden compartirlo. En colisión se
@@ -228,7 +279,7 @@ async def create_project(
         slug=slug,
         description=payload.description,
         status=payload.status.value,
-        team_id=payload.team_id,
+        team_id=effective_team_id,
         mcp_servers=payload.mcp_servers,
         rag_knowledge_bases=payload.rag_knowledge_bases,
         worker_config=payload.worker_config,
@@ -247,6 +298,10 @@ async def create_project(
         # paused_by_budget stays False on create -- it's flipped only by
         # the budget evaluator (Plan 11+).
     )
+    # PROJ-01: aplicar la forma heredada de la plantilla (solo campos que el
+    # caller no envió). Copias profundas ya hechas arriba.
+    for field_name, value in inherited.items():
+        setattr(project, field_name, value)
     session.add(project)
     try:
         await session.flush()
@@ -259,7 +314,7 @@ async def create_project(
     # plantilla, normalmente) a una copia editable del tenant con agentes
     # `project_local`, y repuntamos `project.team_id` al fork. El equipo original
     # queda intacto. `fork_team=False` (default) referencia el equipo tal cual.
-    if payload.fork_team and project.team_id is not None:
+    if fork_team and project.team_id is not None:
         from api_server.db.domain import AgentScope
         from api_server.routers.teams import fork_team_into
 

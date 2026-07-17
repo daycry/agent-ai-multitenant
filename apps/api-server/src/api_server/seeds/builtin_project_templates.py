@@ -45,6 +45,12 @@ class BuiltinProjectTemplate:
     # se grantean automáticamente al adoptar esta plantilla. Vacío =
     # ningún grant por defecto.
     default_kb_grants: tuple[str, ...] = ()
+    # PROJ-01/P1-05 (auditoría 2026-07-17): toolchain del stack. Sin esto,
+    # adoptar la plantilla producía proyectos con stack_exec deny-all (el
+    # agente no podía correr ni su test runner) y sin runtime por defecto.
+    allowed_commands: tuple[str, ...] = ()
+    default_runtime_template: str | None = None
+    allowed_domains: tuple[str, ...] = ()
 
     @property
     def id(self) -> UUID:
@@ -86,6 +92,9 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "api-rest-guidelines",
             "postgresql-best-practices",
         ),
+        allowed_commands=("python", "pip", "pytest", "ruff", "black", "alembic"),
+        default_runtime_template="python-pytest",
+        allowed_domains=("pypi.org", "files.pythonhosted.org"),
     ),
     BuiltinProjectTemplate(
         slug="webapp",
@@ -113,6 +122,9 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "api-rest-guidelines",
             "postgresql-best-practices",
         ),
+        allowed_commands=("python", "pip", "pytest", "node", "npm", "npx"),
+        default_runtime_template="python-pytest",
+        allowed_domains=("pypi.org", "files.pythonhosted.org", "registry.npmjs.org"),
     ),
     BuiltinProjectTemplate(
         slug="data-pipeline",
@@ -131,6 +143,9 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
         repository_config={"language": "python", "framework": "prefect"},
         human_approval_policy=_POLICY_DEV_SKELETON,
         default_kb_grants=("postgresql-best-practices",),
+        allowed_commands=("python", "pip", "pytest"),
+        default_runtime_template="python-pytest",
+        allowed_domains=("pypi.org", "files.pythonhosted.org"),
     ),
     BuiltinProjectTemplate(
         slug="legacy-migration",
@@ -165,6 +180,9 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "php-symfony-conventions",
             "postgresql-best-practices",
         ),
+        allowed_commands=("python", "pip", "pytest", "php", "composer", "phpunit"),
+        default_runtime_template="python-pytest",
+        allowed_domains=("pypi.org", "files.pythonhosted.org", "packagist.org"),
     ),
     BuiltinProjectTemplate(
         slug="research-spec",
@@ -202,6 +220,9 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
                 "secret_rotation": "human_required",
             },
         },
+        allowed_commands=("python", "pip", "pytest", "docker", "terraform", "ansible"),
+        default_runtime_template="python-pytest",
+        allowed_domains=("pypi.org", "files.pythonhosted.org"),
     ),
     BuiltinProjectTemplate(
         slug="e2e-test-suite",
@@ -215,6 +236,9 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
         repository_config={"language": "typescript", "framework": "playwright"},
         human_approval_policy=_POLICY_DEV_SKELETON,
         default_kb_grants=("react-nextjs-conventions", "node-express-conventions"),
+        allowed_commands=("node", "npm", "npx", "playwright"),
+        default_runtime_template="node-playwright",
+        allowed_domains=("registry.npmjs.org", "playwright.azureedge.net"),
     ),
     BuiltinProjectTemplate(
         slug="doc-modernization",
@@ -241,6 +265,7 @@ _UPSERT_SQL = text(
         mcp_servers, rag_knowledge_bases, worker_config,
         repository_config, human_approval_policy,
         default_kb_grants,
+        allowed_commands, default_runtime_template, allowed_domains,
         is_template
     )
     VALUES (
@@ -249,6 +274,7 @@ _UPSERT_SQL = text(
         CAST(:repository_config AS jsonb),
         CAST(:human_approval_policy AS jsonb),
         :default_kb_grants,
+        :allowed_commands, :default_runtime_template, :allowed_domains,
         true
     )
     ON CONFLICT (id) DO UPDATE SET
@@ -259,6 +285,9 @@ _UPSERT_SQL = text(
         repository_config = EXCLUDED.repository_config,
         human_approval_policy = EXCLUDED.human_approval_policy,
         default_kb_grants = EXCLUDED.default_kb_grants,
+        allowed_commands = EXCLUDED.allowed_commands,
+        default_runtime_template = EXCLUDED.default_runtime_template,
+        allowed_domains = EXCLUDED.allowed_domains,
         updated_at = now()
     """
 )
@@ -293,6 +322,9 @@ async def upsert_project_template(session: AsyncSession, tpl: BuiltinProjectTemp
             # PostgreSQL TEXT[] — asyncpg encodes Python list as
             # the SQL array literal natively.
             "default_kb_grants": list(tpl.default_kb_grants),
+            "allowed_commands": list(tpl.allowed_commands),
+            "default_runtime_template": tpl.default_runtime_template,
+            "allowed_domains": list(tpl.allowed_domains),
         },
     )
 

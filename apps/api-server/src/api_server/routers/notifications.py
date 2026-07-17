@@ -163,6 +163,11 @@ def _preference_to_response(pref: NotificationPreference) -> NotificationPrefere
 # importar ambos paquetes).
 NOTIFICATION_EVENT_CATALOG: tuple[dict[str, str], ...] = (
     {"event_type": "task_blocked", "label_es": "Tarea bloqueada", "label_en": "Task blocked"},
+    {
+        "event_type": "task_unassignable",
+        "label_es": "Tarea sin agente",
+        "label_en": "Task has no agent",
+    },
     {"event_type": "plan_approved", "label_es": "Plan aprobado", "label_en": "Plan approved"},
     {"event_type": "plan_rejected", "label_es": "Plan rechazado", "label_en": "Plan rejected"},
     {"event_type": "plan_blocked", "label_es": "Plan bloqueado", "label_en": "Plan blocked"},

@@ -828,6 +828,16 @@ CI4_PROJECT_TEMPLATE: BuiltinProjectTemplate = BuiltinProjectTemplate(
     repository_config={"language": "php", "framework": "codeigniter4", "orm": "doctrine"},
     human_approval_policy=_POLICY_DEV_SKELETON,
     default_kb_grants=CI4_KB_SLUGS,
+    # PROJ-01/P1-05: toolchain PHP del stack — sin esto, adoptar la plantilla
+    # dejaba stack_exec deny-all (ni composer ni phpunit ejecutables).
+    allowed_commands=("php", "composer", "phpunit", "spark"),
+    default_runtime_template="php-phpunit",
+    allowed_domains=(
+        "packagist.org",
+        "repo.packagist.org",
+        "api.github.com",
+        "codeload.github.com",
+    ),
 )
 
 

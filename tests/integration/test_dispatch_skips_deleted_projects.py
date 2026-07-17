@@ -155,6 +155,49 @@ async def test_dispatch_skips_task_of_paused_project(
 
 
 @pytest.mark.asyncio
+async def test_no_candidates_surfaces_task_unassignable(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """PROJ-05: una tarea `ready` sin ningún agente candidato dejaba solo un
+    WARNING en el log del orchestrator — invisible para el operador. Ahora
+    emite `task_unassignable` por el rail de notificaciones (una sola vez por
+    tarea: el beat re-anuncia cada 30s y sería una inundación) y deja un
+    task_audit_event."""
+    engine = create_async_engine(admin_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm, project_deleted=False)
+        # Sin agentes: borra el agente sembrado.
+        async with sm() as s, s.begin():
+            await s.execute(text("DELETE FROM agents"))
+
+        dispatcher = _dispatcher(sm)
+        sent: list[dict] = []
+        dispatcher._send_dispatch_event = sent.append  # type: ignore[method-assign]
+
+        await dispatcher.handle(_ready_event(ids))
+        # Segundo intento (beat re-anuncia): NO duplica la notificación.
+        await dispatcher.handle(_ready_event(ids))
+
+        async with sm() as s:
+            task = (await s.execute(select(Task).where(Task.id == ids["task"]))).scalar_one()
+            audit_kinds = list(
+                (
+                    await s.execute(
+                        text("SELECT kind FROM task_audit_events WHERE task_id = :t"),
+                        {"t": ids["task"]},
+                    )
+                ).scalars()
+            )
+        assert task.status == "ready"
+        assert [e["event_type"] for e in sent] == ["task_unassignable"]
+        assert sent[0]["tenant_id"] == str(ids["tenant"])
+        assert audit_kinds.count("task_unassignable") == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_dispatch_proceeds_for_live_project(_migrated: None, admin_database_url: str) -> None:
     engine = create_async_engine(admin_database_url)
     try:

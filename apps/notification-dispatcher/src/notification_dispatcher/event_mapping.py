@@ -117,6 +117,16 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.DEFAULT,
         default_channel_types=("in_app", "telegram"),
     ),
+    # PROJ-05 (auditoría proyecto 2026-07-17): una tarea `ready` sin ningún
+    # agente candidato (proyecto sin equipo, rol sin agente) quedaba invisible
+    # — solo un WARNING en el log del orchestrator. Accionable: el operador
+    # debe asignar equipo/agente. El orchestrator dedupea por tarea (audit
+    # event testigo), así que no hay inundación del beat.
+    "task_unassignable": EventSpec(
+        "task_unassignable",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app", "telegram"),
+    ),
     "plan_approved": EventSpec(
         "plan_approved",
         lane=NotificationLane.DEFAULT,
