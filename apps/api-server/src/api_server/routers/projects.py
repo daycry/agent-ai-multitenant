@@ -9,7 +9,7 @@ exist -- a project is always created by a tenant.
 
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -56,6 +56,18 @@ from api_server.seeds.template_adoption import apply_template_kb_grants
 from api_server.slug import slugify
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+# P1-01: transiciones legales del estado del proyecto. `archived` es terminal
+# salvo el unarchive del admin (todo update_project ya exige tenant_admin).
+_PROJECT_TRANSITIONS: dict[str, frozenset[str]] = {
+    ProjectStatus.ACTIVE.value: frozenset(
+        {ProjectStatus.PAUSED.value, ProjectStatus.ARCHIVED.value}
+    ),
+    ProjectStatus.PAUSED.value: frozenset(
+        {ProjectStatus.ACTIVE.value, ProjectStatus.ARCHIVED.value}
+    ),
+    ProjectStatus.ARCHIVED.value: frozenset({ProjectStatus.ACTIVE.value}),
+}
 
 
 async def _verify_team_visible(session: AsyncSession, team_id: UUID) -> None:
@@ -190,11 +202,30 @@ async def create_project(
     if payload.template_id is not None:
         await _verify_template_visible(session, payload.template_id, tenant_id)
 
+    # P1-02: el slug identifica el bare repo del proyecto en disco — dos
+    # proyectos vivos del mismo tenant no pueden compartirlo. En colisión se
+    # añade -{id8} del proyecto nuevo; el índice único parcial (migración
+    # 0114) es el backstop contra carreras.
+    project_id = uuid4()
+    slug = slugify(payload.name)
+    collision = (
+        await session.execute(
+            select(Project.id).where(
+                Project.tenant_id == tenant_id,
+                Project.slug == slug,
+                Project.deleted_at.is_(None),
+            )
+        )
+    ).first()
+    if collision is not None:
+        slug = f"{slug}-{project_id.hex[:8]}"
+
     project = Project(
+        id=project_id,
         tenant_id=tenant_id,
         name=payload.name,
         # prod-18 / ADR 0085: stable worktree slug, generated once at creation.
-        slug=slugify(payload.name),
+        slug=slug,
         description=payload.description,
         status=payload.status.value,
         team_id=payload.team_id,
@@ -292,6 +323,21 @@ async def update_project(
     if "team_id" in payload.model_fields_set and payload.team_id is not None:
         await _verify_team_visible(session, payload.team_id)
 
+    # P1-01: máquina mínima de estados del proyecto. active<->paused->archived;
+    # archived es terminal salvo el unarchive del admin (->active).
+    old_status = project.status
+    if payload.status is not None and payload.status.value != old_status:
+        allowed = _PROJECT_TRANSITIONS.get(old_status, frozenset())
+        if payload.status.value not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "invalid_project_transition",
+                    "from": old_status,
+                    "to": payload.status.value,
+                },
+            )
+
     apply_partial_update(
         project,
         payload,
@@ -300,6 +346,16 @@ async def update_project(
         # `chat_llm_config` (JSON `chat_model_config`) → columna `chat_model_config`.
         rename={"llm_config": "model_config", "chat_llm_config": "chat_model_config"},
     )
+
+    # P1-01: archivar cancela el trabajo en vuelo (tareas + runs) — espejo de la
+    # cascada del soft-delete, sin el soft-delete.
+    if (
+        old_status != ProjectStatus.ARCHIVED.value
+        and project.status == ProjectStatus.ARCHIVED.value
+    ):
+        for execution in await cancel_tasks_and_executions(session, project_id=project.id):
+            if execution.celery_task_id:
+                schedule_after_commit(session, revoke_job_callback(execution.celery_task_id))
 
     await session.flush()
     await session.refresh(project)

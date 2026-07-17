@@ -75,6 +75,7 @@ from api_server.events import publish_task_status_changed
 from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._helpers import (
     get_writable_or_404,
+    require_project_active,
     require_tenant_id,
     soft_delete,
 )
@@ -220,7 +221,9 @@ async def create_plan(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanResponse:
     tenant_id = require_tenant_id(principal)
-    await _verify_project_visible(session, project_id)
+    project = await _verify_project_visible(session, project_id)
+    # P1-01: un proyecto pausado/archivado no acepta planes nuevos.
+    require_project_active(project)
 
     # PROY2-01: un plan solo puede NACER como borrador o pendiente de
     # aprobación — no `approved`/`in_progress`/`completed` (esquivaría approve,
@@ -1010,6 +1013,8 @@ async def start_plan_execution(
     plan = await get_writable_or_404(
         session, Plan, plan_id, principal, not_found_detail="plan not found"
     )
+    # P1-01: un proyecto pausado/archivado no arranca ejecuciones.
+    require_project_active(await _verify_project_visible(session, plan.project_id))
     try:
         transition_plan_status(plan, PlanStatus.IN_PROGRESS.value, actor=principal.user_id)
     except PlanTransitionError as exc:

@@ -35,7 +35,7 @@ def promote_ready_plans() -> dict[str, Any]:
 async def _promote_ready_plans_async(settings: Settings) -> dict[str, Any]:
     """Async core — owns the engine + redis lifecycle."""
     from api_server.dag_promotion import announce_ready_tasks, promote_ready_tasks
-    from api_server.db.domain import Plan, PlanStatus
+    from api_server.db.domain import Plan, PlanStatus, Project, ProjectStatus
     from redis.asyncio import Redis
     from sqlalchemy import select
 
@@ -49,11 +49,17 @@ async def _promote_ready_plans_async(settings: Settings) -> dict[str, Any]:
             plan_ids = list(
                 (
                     await db.execute(
-                        select(Plan.id).where(
+                        select(Plan.id)
+                        .join(Project, Plan.project_id == Project.id)
+                        .where(
                             Plan.status == PlanStatus.IN_PROGRESS.value,
                             # PROY2-13: el beat corre BYPASSRLS y sin filtro de
                             # soft-delete promovía tareas de planes borrados.
                             Plan.deleted_at.is_(None),
+                            # P1-01: un proyecto pausado/archivado/borrado no
+                            # promueve tareas.
+                            Project.status == ProjectStatus.ACTIVE.value,
+                            Project.deleted_at.is_(None),
                         )
                     )
                 ).scalars()

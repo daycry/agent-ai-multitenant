@@ -1037,6 +1037,26 @@ class TaskDispatcher:
             if task is None or task.status != _READY:
                 return None
 
+            # P1-01: un proyecto pausado/archivado no despacha (ni ruta AI ni
+            # humana) — la tarea queda `ready` y se re-despacha cuando el
+            # proyecto vuelva a `active`. Cubre también el soft-delete.
+            project_status = (
+                await session.execute(
+                    select(Project.status).where(
+                        Project.id == task.project_id,
+                        Project.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if project_status != "active":
+                _log.info(
+                    "orchestrator.skip_inactive_project",
+                    task_id=str(task_id),
+                    project_id=str(task.project_id),
+                    project_status=project_status,
+                )
+                return None
+
             # Budget auto-pause (Plan 11.1 task_11_1_06): if the task's tenant
             # or project has hit 100% of its budget for the active period, the
             # START of a NEW execution is refused — the task stays `ready` (it

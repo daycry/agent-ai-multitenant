@@ -42,6 +42,24 @@ def require_tenant_id(principal: AuthPrincipal) -> UUID:
 
 
 # ---------------------------------------------------------------------------
+# Project state guard (P1-01)
+# ---------------------------------------------------------------------------
+def require_project_active(project: Any) -> None:
+    """Las operaciones que CREAN o ARRANCAN trabajo (planes, tareas, chat,
+    start-execution) exigen `project.status == active` — pausar/archivar un
+    proyecto dejó de ser decorativo. Las lecturas no pasan por aquí."""
+    if project.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "project_not_active",
+                "status": project.status,
+                "message": "El proyecto no está activo; reanúdalo para operar sobre él.",
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
 # Writable lookup
 # ---------------------------------------------------------------------------
 async def get_writable_or_404(

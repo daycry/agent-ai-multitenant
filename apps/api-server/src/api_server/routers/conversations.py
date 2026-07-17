@@ -55,6 +55,7 @@ from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
+    require_project_active,
     require_tenant_id,
     soft_delete,
 )
@@ -331,6 +332,14 @@ async def post_message(
         )
 
     conv = await _load_conversation(session, conversation_id)
+
+    # P1-01: el chat del equipo se detiene con el proyecto — cada mensaje de
+    # usuario dispara una respuesta LLM (coste) y puede materializar un plan.
+    project = (
+        await session.execute(select(Project).where(Project.id == conv.project_id))
+    ).scalar_one_or_none()
+    if project is not None:
+        require_project_active(project)
 
     # Resolve author_user_id from the principal when the caller is a
     # human user and didn't pass it explicitly.

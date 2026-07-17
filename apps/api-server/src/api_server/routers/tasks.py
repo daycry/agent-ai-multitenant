@@ -47,6 +47,7 @@ from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
+    require_project_active,
     require_tenant_id,
 )
 from api_server.routers._pagination import (
@@ -326,7 +327,8 @@ async def create_task(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TaskResponse:
     tenant_id = require_tenant_id(principal)
-    await _verify_project_visible(session, project_id)
+    # P1-01: un proyecto pausado/archivado no acepta tareas nuevas.
+    require_project_active(await _verify_project_visible(session, project_id))
 
     # PROY2-03: una tarea solo puede NACER backlog o ready (no in_progress/done/
     # in_review/blocked, que saltarían el DAG y su máquina de estados).

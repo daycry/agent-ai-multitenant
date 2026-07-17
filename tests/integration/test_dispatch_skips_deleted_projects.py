@@ -38,7 +38,9 @@ def _migrated(alembic_config: object) -> None:
     command.upgrade(alembic_config, "head")
 
 
-async def _seed(sm: async_sessionmaker, *, project_deleted: bool) -> dict[str, UUID]:
+async def _seed(
+    sm: async_sessionmaker, *, project_deleted: bool, project_status: str = "active"
+) -> dict[str, UUID]:
     ids = {"tenant": uuid4(), "project": uuid4(), "agent": uuid4(), "task": uuid4()}
     async with sm() as s, s.begin():
         await s.execute(
@@ -54,7 +56,7 @@ async def _seed(sm: async_sessionmaker, *, project_deleted: bool) -> dict[str, U
                 id=ids["project"],
                 tenant_id=ids["tenant"],
                 name="P",
-                status="active",
+                status=project_status,
                 is_template=False,
                 worker_config={"assignment_policy": "load_balanced"},
                 deleted_at=datetime.now(UTC) if project_deleted else None,
@@ -127,6 +129,27 @@ async def test_dispatch_skips_task_of_soft_deleted_project(
         assert task.status == "ready"
         assert task.assigned_agent_id is None
         assert task.started_at is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_task_of_paused_project(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """P1-01: un proyecto `paused` no despacha — la tarea queda `ready` y se
+    re-despacha cuando el proyecto vuelva a `active`."""
+    engine = create_async_engine(admin_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm, project_deleted=False, project_status="paused")
+
+        await _dispatcher(sm).handle(_ready_event(ids))
+
+        async with sm() as s:
+            task = (await s.execute(select(Task).where(Task.id == ids["task"]))).scalar_one()
+        assert task.status == "ready"
+        assert task.assigned_agent_id is None
     finally:
         await engine.dispose()
 
