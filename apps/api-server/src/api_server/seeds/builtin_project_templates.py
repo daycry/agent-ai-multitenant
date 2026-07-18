@@ -79,12 +79,7 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "tests pytest, contenedor base y plantilla de OpenAPI."
         ),
         team_slug="backend-api",
-        worker_config={
-            "min_workers": 1,
-            "max_workers": 4,
-            "cpu_per_worker": 1.0,
-            "ram_per_worker_mb": 1024,
-        },
+        worker_config={"assignment_policy": "skill_match"},
         repository_config={"language": "python", "framework": "fastapi", "license": "MIT"},
         human_approval_policy=_POLICY_DEV_SKELETON,
         default_kb_grants=(
@@ -104,12 +99,7 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "básica, dashboard inicial y pipeline de despliegue."
         ),
         team_slug="full-stack-web",
-        worker_config={
-            "min_workers": 2,
-            "max_workers": 6,
-            "cpu_per_worker": 1.0,
-            "ram_per_worker_mb": 1536,
-        },
+        worker_config={"assignment_policy": "skill_match"},
         repository_config={
             "language": "python+typescript",
             "frontend": "next.js",
@@ -134,12 +124,7 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "intermedio y tests de calidad de datos."
         ),
         team_slug="data",
-        worker_config={
-            "min_workers": 1,
-            "max_workers": 3,
-            "cpu_per_worker": 2.0,
-            "ram_per_worker_mb": 4096,
-        },
+        worker_config={"assignment_policy": "skill_match"},
         repository_config={"language": "python", "framework": "prefect"},
         human_approval_policy=_POLICY_DEV_SKELETON,
         default_kb_grants=("postgresql-best-practices",),
@@ -155,12 +140,7 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "tests de regresión y plan de switchover."
         ),
         team_slug="backend-api",
-        worker_config={
-            "min_workers": 1,
-            "max_workers": 4,
-            "cpu_per_worker": 1.0,
-            "ram_per_worker_mb": 1024,
-        },
+        worker_config={"assignment_policy": "skill_match"},
         repository_config={"language": "polyglot", "notes": "legacy + target stacks"},
         human_approval_policy={
             **_POLICY_DEV_SKELETON,
@@ -192,7 +172,7 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "de opciones, redacción de ADR/RFC y prototipo mínimo."
         ),
         team_slug="research-spec",
-        worker_config={"min_workers": 1, "max_workers": 2},
+        worker_config={"assignment_policy": "skill_match"},
         repository_config=None,
         human_approval_policy={"preset": "sandbox", "categories": {"all": "auto"}},
     ),
@@ -204,12 +184,7 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "Prometheus + Grafana), secretos en Vault, runbooks iniciales."
         ),
         team_slug="devops-platform",
-        worker_config={
-            "min_workers": 1,
-            "max_workers": 3,
-            "cpu_per_worker": 1.0,
-            "ram_per_worker_mb": 1024,
-        },
+        worker_config={"assignment_policy": "skill_match"},
         repository_config={"language": "polyglot", "iac": "terraform+ansible"},
         human_approval_policy={
             **_POLICY_DEV_SKELETON,
@@ -232,7 +207,7 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "reporting y pipeline de regresión por PR."
         ),
         team_slug="full-stack-web",
-        worker_config={"min_workers": 1, "max_workers": 3},
+        worker_config={"assignment_policy": "skill_match"},
         repository_config={"language": "typescript", "framework": "playwright"},
         human_approval_policy=_POLICY_DEV_SKELETON,
         default_kb_grants=("react-nextjs-conventions", "node-express-conventions"),
@@ -248,7 +223,7 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "carpetas, ADRs, runbooks, diagramas Mermaid."
         ),
         team_slug="research-spec",
-        worker_config={"min_workers": 1, "max_workers": 2},
+        worker_config={"assignment_policy": "skill_match"},
         repository_config={"language": "markdown", "diagrams": "mermaid"},
         human_approval_policy={"preset": "sandbox", "categories": {"all": "auto"}},
     ),

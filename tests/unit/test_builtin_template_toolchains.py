@@ -45,6 +45,16 @@ def test_e2e_template_carries_node_toolchain() -> None:
     assert tpl.default_runtime_template == "node-playwright"
 
 
+def test_templates_seed_only_worker_config_keys_with_readers() -> None:
+    """P1-04: `worker_config.{min,max}_workers/cpu/ram` no tiene NINGÚN lector
+    (solo assignment_policy y git_policies se leen) — sembrarlo vendía una
+    configuración que no hace nada. Las plantillas solo siembran claves vivas."""
+    read_keys = {"assignment_policy", "git_policies"}
+    for tpl in (*BUILTIN_PROJECT_TEMPLATES, CI4_PROJECT_TEMPLATE):
+        dead = set(tpl.worker_config) - read_keys
+        assert not dead, f"{tpl.slug} siembra claves muertas de worker_config: {sorted(dead)}"
+
+
 def test_every_code_template_has_a_runtime() -> None:
     """Toda plantilla con repositorio de código declara runtime + comandos.
     (research-spec y doc-modernization no ejecutan stacks: quedan exentas.)"""

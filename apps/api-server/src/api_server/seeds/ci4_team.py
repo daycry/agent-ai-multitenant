@@ -819,12 +819,7 @@ CI4_PROJECT_TEMPLATE: BuiltinProjectTemplate = BuiltinProjectTemplate(
         "ecosistema."
     ),
     team_slug="codeigniter-4",
-    worker_config={
-        "min_workers": 1,
-        "max_workers": 4,
-        "cpu_per_worker": 1.0,
-        "ram_per_worker_mb": 1536,
-    },
+    worker_config={"assignment_policy": "skill_match"},
     repository_config={"language": "php", "framework": "codeigniter4", "orm": "doctrine"},
     human_approval_policy=_POLICY_DEV_SKELETON,
     default_kb_grants=CI4_KB_SLUGS,

@@ -59,6 +59,10 @@ from api_server.slug import slugify
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
+# P1-10: claves de `repository_config` que escribe la PLATAFORMA (no el
+# cliente) — un PUT del cliente no puede pisarlas.
+_REPOSITORY_CONFIG_PLATFORM_KEYS: tuple[str, ...] = ("last_git_sync", "review_image")
+
 # P1-01: transiciones legales del estado del proyecto. `archived` es terminal
 # salvo el unarchive del admin (todo update_project ya exige tenant_admin).
 _PROJECT_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -392,6 +396,22 @@ async def update_project(
                     "to": payload.status.value,
                 },
             )
+
+    # P1-10: `repository_config` mezcla claves del CLIENTE (language,
+    # framework, …) con claves de PLATAFORMA que escribe el sistema
+    # (last_git_sync, review_image). Un PUT del cliente las pisaba — merge
+    # server-side: las claves de plataforma presentes se preservan salvo que
+    # el payload las traiga explícitamente.
+    if (
+        "repository_config" in payload.model_fields_set
+        and payload.repository_config is not None
+        and isinstance(project.repository_config, dict)
+    ):
+        for platform_key in _REPOSITORY_CONFIG_PLATFORM_KEYS:
+            if platform_key in project.repository_config and (
+                platform_key not in payload.repository_config
+            ):
+                payload.repository_config[platform_key] = project.repository_config[platform_key]
 
     apply_partial_update(
         project,

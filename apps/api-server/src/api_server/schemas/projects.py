@@ -329,11 +329,17 @@ class ProjectUpdateRequest(BaseModel):
     team_id: UUID | None = None
 
     mcp_servers: list[dict[str, Any]] | None = None
+    # DEPRECATED (P1-04): sin lectores (lo real es `kb_projects`).
     rag_knowledge_bases: list[dict[str, Any]] | None = None
     worker_config: dict[str, Any] | None = None
     repository_config: dict[str, Any] | None = None
     human_approval_policy: dict[str, Any] | None = None
+    # DEPRECATED (P1-04): sin lectores.
     secrets_vault_id: UUID | None = None
+    # P1-03: presupuestos de ejecución (clamp en dispatch) y guardrails del
+    # proyecto (merge en el worker) — el PUT exige tenant_admin.
+    execution_budgets: dict[str, Any] | None = None
+    guardrails_config: dict[str, Any] | None = None
 
     # Plan 06.16 task_06_16_01. None = unchanged (PATCH-style partial
     # update — `apply_partial_update` uses `exclude_unset`). An explicit
@@ -449,6 +455,8 @@ class ProjectResponse(BaseModel):
     team_id: UUID | None
 
     mcp_servers: list[dict[str, Any]]
+    # DEPRECATED (P1-04): nadie la lee — lo real es `kb_projects`. Se mantiene
+    # en la respuesta por compatibilidad; no configurar nada aquí.
     rag_knowledge_bases: list[dict[str, Any]]
     worker_config: dict[str, Any]
     # Modelo por defecto del proyecto (Ola A / ADR 0065). Alias JSON `model_config`.
@@ -460,7 +468,12 @@ class ProjectResponse(BaseModel):
     # auth_mode}. Sin secreto (vive en Vault). NULL = sin remoto.
     git_config: dict[str, Any] | None
     human_approval_policy: dict[str, Any] | None
+    # DEPRECATED (P1-04): sin lectores; las credenciales van por Vault paths.
     secrets_vault_id: UUID | None
+    # P1-03: settings APLICADOS (clamp de presupuestos en dispatch, merge de
+    # guardrails en el worker) que eran inconfigurables por API.
+    execution_budgets: dict[str, Any] | None
+    guardrails_config: dict[str, Any] | None
 
     # Plan 06.16 task_06_16_01.
     allowed_commands: list[str]
@@ -504,6 +517,8 @@ def to_project_response(p: Project) -> ProjectResponse:
         "git_config": p.git_config,
         "human_approval_policy": p.human_approval_policy,
         "secrets_vault_id": p.secrets_vault_id,
+        "execution_budgets": p.execution_budgets,
+        "guardrails_config": p.guardrails_config,
         "allowed_commands": p.allowed_commands,
         "default_runtime_template": p.default_runtime_template,
         "allowed_domains": p.allowed_domains,

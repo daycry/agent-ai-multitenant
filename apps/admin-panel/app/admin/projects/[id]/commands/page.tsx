@@ -51,11 +51,14 @@ interface Project {
   name: string;
   allowed_commands: string[];
   default_runtime_template: string | null;
+  // P1-03: FQDN allowlist de las tools HTTP del agente (deny-by-default).
+  allowed_domains: string[];
 }
 
 interface ProjectUpdate {
   allowed_commands?: string[];
   default_runtime_template?: string | null;
+  allowed_domains?: string[];
 }
 
 // Stack presets — pressing one fills the chips with the typical binaries
@@ -127,7 +130,9 @@ function CommandsEditor({ project }: { project: Project }) {
 
   const [commands, setCommands] = useState<string[]>(project.allowed_commands);
   const [runtime, setRuntime] = useState<string>(project.default_runtime_template ?? "");
+  const [domains, setDomains] = useState<string[]>(project.allowed_domains ?? []);
   const [draft, setDraft] = useState("");
+  const [domainDraft, setDomainDraft] = useState("");
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
   // Re-seed local state if the project query refetches with new server
@@ -135,7 +140,8 @@ function CommandsEditor({ project }: { project: Project }) {
   useEffect(() => {
     setCommands(project.allowed_commands);
     setRuntime(project.default_runtime_template ?? "");
-  }, [project.allowed_commands, project.default_runtime_template]);
+    setDomains(project.allowed_domains ?? []);
+  }, [project.allowed_commands, project.default_runtime_template, project.allowed_domains]);
 
   const mutation = useMutation<Project, ApiError, ProjectUpdate>({
     mutationFn: (payload) =>
@@ -162,8 +168,18 @@ function CommandsEditor({ project }: { project: Project }) {
       commands.length === project.allowed_commands.length &&
       commands.every((c, i) => c === project.allowed_commands[i]);
     const sameRuntime = (runtime || null) === (project.default_runtime_template ?? null);
-    return !sameCommands || !sameRuntime;
-  }, [commands, runtime, project.allowed_commands, project.default_runtime_template]);
+    const serverDomains = project.allowed_domains ?? [];
+    const sameDomains =
+      domains.length === serverDomains.length && domains.every((d, i) => d === serverDomains[i]);
+    return !sameCommands || !sameRuntime || !sameDomains;
+  }, [
+    commands,
+    runtime,
+    domains,
+    project.allowed_commands,
+    project.default_runtime_template,
+    project.allowed_domains,
+  ]);
 
   function addCommand(raw: string) {
     const cmd = raw.trim();
@@ -193,10 +209,23 @@ function CommandsEditor({ project }: { project: Project }) {
     setDraft("");
   }
 
+  function addDomain(raw: string) {
+    const domain = raw.trim().toLowerCase();
+    if (!domain) return;
+    setDomains((prev) => (prev.includes(domain) ? prev : [...prev, domain]));
+    setSavedAt(null);
+  }
+
+  function removeDomain(domain: string) {
+    setDomains((prev) => prev.filter((d) => d !== domain));
+    setSavedAt(null);
+  }
+
   function handleSave() {
     mutation.mutate({
       allowed_commands: commands,
       default_runtime_template: runtime || null,
+      allowed_domains: domains,
     });
   }
 
@@ -306,6 +335,88 @@ function CommandsEditor({ project }: { project: Project }) {
               <p className="text-muted-foreground text-xs">
                 Usa el basename del binario (<code>php</code>, <code>composer</code>) o una ruta
                 relativa al workspace (<code>vendor/bin/phpunit</code>).
+              </p>
+            </div>
+          </RoleGuard>
+        </CardContent>
+      </Card>
+
+      {/* ---- allowed_domains (P1-03) ---- */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Dominios de red autorizados</CardTitle>
+          <p className="text-muted-foreground text-sm" data-testid="domains-deny-by-default-hint">
+            <strong>Deny-by-default</strong>: las tools HTTP del agente (<code>http_request</code>,
+            descargas) solo alcanzan estos FQDN. Una lista vacía significa que el agente no puede
+            salir a la red.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Allowlist de dominios</Label>
+            {domains.length === 0 ? (
+              <p className="text-muted-foreground text-sm italic" data-testid="domains-empty">
+                Sin dominios autorizados: las tools HTTP no pueden salir a la red.
+              </p>
+            ) : (
+              <ul className="flex flex-wrap gap-2" data-testid="domains-chips">
+                {domains.map((domain) => (
+                  <li
+                    key={domain}
+                    className="bg-muted text-foreground inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm"
+                    data-testid={`domain-chip-${domain}`}
+                  >
+                    <code className="font-mono text-xs">{domain}</code>
+                    <RoleGuard min="tenant_admin">
+                      <button
+                        type="button"
+                        onClick={() => removeDomain(domain)}
+                        className="text-muted-foreground hover:text-destructive rounded-full transition-colors"
+                        aria-label={`Quitar ${domain}`}
+                        data-testid={`domain-chip-remove-${domain}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </RoleGuard>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <RoleGuard min="tenant_admin">
+            <div className="space-y-1.5">
+              <Label htmlFor="domains-add-input">Añadir dominio</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="domains-add-input"
+                  value={domainDraft}
+                  onChange={(e) => setDomainDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addDomain(domainDraft);
+                      setDomainDraft("");
+                    }
+                  }}
+                  placeholder="p. ej. api.github.com"
+                  data-testid="domains-add-input"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    addDomain(domainDraft);
+                    setDomainDraft("");
+                  }}
+                  disabled={!domainDraft.trim()}
+                  data-testid="domains-add-button"
+                >
+                  <Plus className="mr-1 h-4 w-4" />
+                  Añadir
+                </Button>
+              </div>
+              <p className="text-muted-foreground text-xs">
+                FQDN exacto (<code>api.github.com</code>), sin esquema ni ruta.
               </p>
             </div>
           </RoleGuard>
