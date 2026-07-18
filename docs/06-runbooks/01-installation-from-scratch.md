@@ -31,6 +31,11 @@ install.yaml`, la orquestación headless desde un fichero YAML. Aprovisiona
 > Alcance: **Docker Compose en una sola máquina** (CLAUDE.md). No
 > Kubernetes, no multi-máquina, no HA multi-instancia.
 
+> **¿Vas a producción?** Este runbook es la REFERENCIA del instalador
+> (caminos, fases, códigos). El paso a paso completo de una instalación de
+> producción con dominio propio está en
+> [08-instalacion-produccion.md](08-instalacion-produccion.md).
+
 ## Cuándo
 
 - Primera puesta en marcha del sistema en un host nuevo.
