@@ -254,7 +254,9 @@ async def create_plan(
         spec_dict = {}
 
     # Cycle check (task_03_15). The Pydantic validator handles unknown
-    # deps + duplicate ids; the cycle check needs the full graph.
+    # deps + duplicate ids for the INLINE spec; the conversation draft
+    # (PROY2-12) bypasses Pydantic, so validate_dag's ValueError (duplicate
+    # id, missing id) must land as 422, never a 500.
     if spec_dict.get("tasks"):
         try:
             validate_dag(spec_dict["tasks"])
@@ -262,6 +264,11 @@ async def create_plan(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={"error": "dag_cycle", "cycle": exc.cycle},
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"error": "invalid_spec", "message": str(exc)},
             ) from exc
 
     plan_title = payload.title or draft_title or "Borrador del plan"

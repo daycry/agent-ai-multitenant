@@ -30,7 +30,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.chat.planning_graph import PlanningRole
@@ -145,6 +145,15 @@ async def sync_plan_to_kanban(
     if not selected_ids:
         return SyncResult()
 
+    # PROY2-09: dos syncs CONCURRENTES del mismo plan (doble clic, evento
+    # duplicado) leían ambos `existing` vacío y materializaban duplicados
+    # (read-then-insert sin lock). El advisory lock transaccional por plan
+    # serializa: el segundo espera y ve las tareas del primero como existing.
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:plan_key, 0))"),
+        {"plan_key": f"sync_to_kanban:{plan.id}"},
+    )
+
     spec_by_id = {
         t["id"]: t
         for t in (spec.get("tasks") or [])
@@ -178,12 +187,26 @@ async def sync_plan_to_kanban(
         existing[spec_id] = task.id
         result.created_task_ids[spec_id] = task.id
 
-    # Wire dependencies for the newly-created tasks. We skip already-
-    # materialised tasks (idempotency: a previous sync persisted theirs).
+    # Wire dependencies for EVERY materialised spec task, not just the newly-
+    # created ones. PROY2-10: un re-sync con scope más ancho materializa la
+    # dependencia que antes quedó fuera — la tarea PREEXISTENTE debe recibir
+    # ahora su arista, o se pierde para siempre. Idempotente: se cargan las
+    # aristas ya persistidas y solo se insertan las que faltan.
+    existing_edges: set[tuple[UUID, UUID]] = set()
+    if existing:
+        edge_rows = await session.execute(
+            select(TaskDependency.task_id, TaskDependency.depends_on_task_id).where(
+                TaskDependency.task_id.in_(list(existing.values()))
+            )
+        )
+        existing_edges = set(edge_rows.tuples().all())
+
     deps_created = 0
-    for spec_id, new_task_id in result.created_task_ids.items():
-        spec_task = spec_by_id[spec_id]
-        depends_on = spec_task.get("depends_on") or []
+    for spec_id, task_id in existing.items():
+        spec_entry = spec_by_id.get(spec_id)
+        if spec_entry is None:
+            continue
+        depends_on = spec_entry.get("depends_on") or []
         if not isinstance(depends_on, list):
             continue
         for dep_spec_id in depends_on:
@@ -197,7 +220,9 @@ async def sync_plan_to_kanban(
                 # is brought in. The caller can re-run with a wider
                 # scope to wire it up.
                 continue
-            session.add(TaskDependency(task_id=new_task_id, depends_on_task_id=dep_task_id))
+            if (task_id, dep_task_id) in existing_edges:
+                continue
+            session.add(TaskDependency(task_id=task_id, depends_on_task_id=dep_task_id))
             deps_created += 1
 
     if deps_created:
