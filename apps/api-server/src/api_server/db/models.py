@@ -479,10 +479,11 @@ class SSOConfiguration(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixi
 
     __tablename__ = "sso_configurations"
     __table_args__ = (
-        # Global identity: one enabled config per provider/kind for the
-        # whole platform (ADR 0047). Replaces the per-tenant
-        # uq_sso_config_tenant_provider.
-        UniqueConstraint("provider", name="uq_sso_config_provider"),
+        # Multi-provider (2026-07-18, migración 0115): se retiró el
+        # uq_sso_config_provider — la plataforma admite N configs por kind
+        # (p.ej. Google Y Microsoft a la vez). El flujo es per-provider-id de
+        # punta a punta (login /{provider_id}/…, state con provider_id), así
+        # que el constraint era el único bloqueo.
         Index(
             "ix_sso_configurations_enabled",
             "provider",

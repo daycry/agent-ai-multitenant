@@ -230,25 +230,22 @@ def _callback_redirect_uri(base: str) -> str:
 
 
 async def _load_enabled_oidc_config() -> SSOConfiguration | None:
-    """Load the platform-global enabled, non-deleted OIDC config (ADR 0047).
-
-    Auth providers are platform-global: there is at most one enabled
-    ``oidc`` config for the whole platform (``uq_sso_config_provider``).
-    The read runs on the BYPASSRLS admin engine (System Admin surface) —
-    the table has no RLS policy and no ``tenant_id``; tenant access is
-    granted by membership AFTER login, not by which tenant owns the
-    provider.
-    """
+    """La config OIDC habilitada más antigua (multi-provider 0115: puede haber
+    N — los flujos reales resuelven por provider_id; este helper queda solo
+    como conveniencia y toma la primera por antigüedad, nunca revienta con
+    MultipleResultsFound). Read on the BYPASSRLS admin engine."""
     sessionmaker = get_admin_sessionmaker()
     async with sessionmaker() as session, session.begin():
         result = await session.execute(
-            select(SSOConfiguration).where(
+            select(SSOConfiguration)
+            .where(
                 SSOConfiguration.provider == SSOProvider.OIDC.value,
                 SSOConfiguration.enabled.is_(True),
                 SSOConfiguration.deleted_at.is_(None),
             )
+            .order_by(SSOConfiguration.created_at)
         )
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
 
 async def _load_enabled_provider_by_id(provider_id: UUID, *, kind: str) -> SSOConfiguration | None:
@@ -330,12 +327,13 @@ def _resolve_config(row: SSOConfiguration) -> ResolvedOIDCConfig:
 # SAML config loading + resolution (mirrors the OIDC helpers above)
 # ---------------------------------------------------------------------------
 async def _load_enabled_saml_config() -> SSOConfiguration | None:
-    """Load the platform-global enabled, non-deleted SAML config (ADR 0047).
+    """Load THE single enabled, non-deleted SAML config (IdP-initiated path).
 
-    Mirrors :func:`_load_enabled_oidc_config`: at most one enabled
-    ``saml`` config for the whole platform, read on the BYPASSRLS admin
-    engine (the table has no RLS / ``tenant_id``).
-    """
+    Multi-provider (0115): con VARIAS configs SAML habilitadas, un ACS sin
+    RelayState (IdP-initiated) es ambiguo — no sabemos contra qué IdP validar
+    la aserción. 400 explícito en vez del MultipleResultsFound→500; el flujo
+    SP-initiated (los botones del login) resuelve por RelayState y funciona
+    con N. Read on the BYPASSRLS admin engine (no RLS / ``tenant_id``)."""
     sessionmaker = get_admin_sessionmaker()
     async with sessionmaker() as session, session.begin():
         result = await session.execute(
@@ -345,7 +343,16 @@ async def _load_enabled_saml_config() -> SSOConfiguration | None:
                 SSOConfiguration.deleted_at.is_(None),
             )
         )
-        return result.scalar_one_or_none()
+        rows = list(result.scalars().all())
+    if len(rows) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "IdP-initiated SAML no está soportado con múltiples configuraciones "
+                "SAML habilitadas; inicia sesión desde la página de login (SP-initiated)"
+            ),
+        )
+    return rows[0] if rows else None
 
 
 def _sp_entity_id(base: str) -> str:
@@ -1147,26 +1154,27 @@ async def create_sso_config(
     _principal: AuthPrincipal = Depends(require_system_admin),
     session: AsyncSession = Depends(get_admin_session),
 ) -> SSOConfigResponse:
-    """Create the platform-global OIDC config (ADR 0047). system_admin only.
+    """Create a platform-global OIDC config (ADR 0047). system_admin only.
 
-    There is one OIDC config for the whole platform (DB unique constraint
-    on ``provider``); a second create returns 409.
+    Multi-provider (2026-07-18, migración 0115): la plataforma admite N
+    configs OIDC simultáneas (Google Y Microsoft, p.ej.) — el flujo es
+    per-provider-id de punta a punta. Única exigencia: a partir de la
+    segunda config del mismo kind, ``display_name`` es obligatorio para que
+    los botones del login sean distinguibles (422 si falta).
     """
-    # Block a duplicate before the DB raises, so the client gets a clean
-    # 409 instead of a 500 from the IntegrityError. A soft-deleted row
-    # still occupies the unique slot, so this also covers "re-create after
-    # delete" — the operator must hard-distinguish, which we keep simple
-    # by surfacing the conflict.
     existing = await session.execute(
         select(SSOConfiguration).where(
             SSOConfiguration.provider == SSOProvider.OIDC.value,
             SSOConfiguration.deleted_at.is_(None),
         )
     )
-    if existing.scalar_one_or_none() is not None:
+    if existing.scalars().first() is not None and not (payload.display_name or "").strip():
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="the platform already has an OIDC configuration; edit it instead",
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "ya existe otra configuración OIDC: display_name es obligatorio "
+                "para distinguir los botones del login"
+            ),
         )
 
     row = SSOConfiguration(
@@ -1186,11 +1194,9 @@ async def create_sso_config(
     try:
         await session.flush()
     except IntegrityError as exc:
-        # Race with a concurrent create, or a lingering soft-deleted row
-        # against the unique constraint.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="the platform already has an OIDC configuration",
+            detail="conflicting OIDC configuration write",
         ) from exc
     await session.refresh(row)
     return _to_response(row)
@@ -1431,10 +1437,12 @@ async def create_saml_config(
     _principal: AuthPrincipal = Depends(require_system_admin),
     session: AsyncSession = Depends(get_admin_session),
 ) -> SAMLConfigResponse:
-    """Create the platform-global SAML config (ADR 0047). system_admin only.
+    """Create a platform-global SAML config (ADR 0047). system_admin only.
 
-    One SAML config for the whole platform (DB unique constraint on
-    ``provider``); a second create returns 409.
+    Multi-provider (2026-07-18, migración 0115): N configs SAML simultáneas;
+    a partir de la segunda, ``display_name`` obligatorio (botones del login
+    distinguibles). El login SP-initiated resuelve por RelayState; el
+    IdP-initiated exige una única config habilitada (400 si hay varias).
     """
     existing = await session.execute(
         select(SSOConfiguration).where(
@@ -1442,10 +1450,13 @@ async def create_saml_config(
             SSOConfiguration.deleted_at.is_(None),
         )
     )
-    if existing.scalar_one_or_none() is not None:
+    if existing.scalars().first() is not None and not (payload.display_name or "").strip():
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="the platform already has a SAML configuration; edit it instead",
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "ya existe otra configuración SAML: display_name es obligatorio "
+                "para distinguir los botones del login"
+            ),
         )
 
     row = SSOConfiguration(

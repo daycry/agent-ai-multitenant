@@ -347,8 +347,11 @@ async def test_create_rejects_both_secret_forms(configured_app, migrations_pg_ds
 
 
 @pytest.mark.asyncio
-async def test_second_create_is_409(configured_app, migrations_pg_dsn: str) -> None:
-    """Global uniqueness per provider: a second OIDC config -> 409."""
+async def test_second_create_succeeds_with_display_name(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Multi-provider (0115): una SEGUNDA config OIDC con display_name -> 201
+    (Google Y Microsoft a la vez); ambas visibles en la lista de config."""
     await _truncate_all(migrations_pg_dsn)
     admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
     await _seed_global_oidc(migrations_pg_dsn)
@@ -357,8 +360,37 @@ async def test_second_create_is_409(configured_app, migrations_pg_dsn: str) -> N
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
     ) as client:
-        resp = await client.post("/auth/sso/config", json=_valid_payload(), headers=_auth(token))
-    assert resp.status_code == 409, resp.text
+        resp = await client.post(
+            "/auth/sso/config",
+            json=_valid_payload(display_name="Microsoft Entra"),
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.text
+        listing = await client.get("/auth/sso/config", headers=_auth(token))
+    assert listing.status_code == 200
+    assert len(listing.json()) == 2
+
+
+@pytest.mark.asyncio
+async def test_second_create_without_display_name_is_422(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Multi-provider: la 2a config sin display_name -> 422 (botones del login
+    indistinguibles)."""
+    await _truncate_all(migrations_pg_dsn)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    await _seed_global_oidc(migrations_pg_dsn)
+    token = await _mint_token(admin, is_system_admin=True)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://testserver"
+    ) as client:
+        resp = await client.post(
+            "/auth/sso/config",
+            json=_valid_payload(display_name=""),
+            headers=_auth(token),
+        )
+    assert resp.status_code == 422, resp.text
 
 
 # ---------------------------------------------------------------------------

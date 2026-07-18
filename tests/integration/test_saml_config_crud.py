@@ -430,8 +430,10 @@ async def test_create_signing_without_key_is_422(configured_app, migrations_pg_d
 
 
 @pytest.mark.asyncio
-async def test_second_create_is_409(configured_app, migrations_pg_dsn: str) -> None:
-    """Global uniqueness per provider: a second SAML config -> 409."""
+async def test_second_create_succeeds_with_display_name(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Multi-provider (0115): una SEGUNDA config SAML con display_name -> 201."""
     await _truncate_all(migrations_pg_dsn)
     admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
     await _seed_global_saml(migrations_pg_dsn)
@@ -441,9 +443,32 @@ async def test_second_create_is_409(configured_app, migrations_pg_dsn: str) -> N
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
     ) as client:
         resp = await client.post(
-            "/auth/sso/saml/config", json=_valid_payload(), headers=_auth(token)
+            "/auth/sso/saml/config",
+            json=_valid_payload(display_name="ADFS Corporativo"),
+            headers=_auth(token),
         )
-    assert resp.status_code == 409, resp.text
+    assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
+async def test_second_create_without_display_name_is_422(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Multi-provider: la 2a config SAML sin display_name -> 422."""
+    await _truncate_all(migrations_pg_dsn)
+    admin = await _seed_user(migrations_pg_dsn, slug="root", is_system_admin=True)
+    await _seed_global_saml(migrations_pg_dsn)
+    token = await _mint_token(admin, is_system_admin=True)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://testserver"
+    ) as client:
+        resp = await client.post(
+            "/auth/sso/saml/config",
+            json=_valid_payload(display_name=""),
+            headers=_auth(token),
+        )
+    assert resp.status_code == 422, resp.text
 
 
 # ---------------------------------------------------------------------------
