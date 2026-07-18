@@ -70,11 +70,24 @@ const steps: Step[] = [
       <li><b>Percepción</b>: qué tarea recibió el agente y con qué contexto
       (criterios de aceptación, feedback de reviews anteriores).</li>
       <li><b>Recuerdo</b>: qué memorias y conocimiento (RAG) recuperó.</li>
+      <li><b>Conexión MCP (<code>mcp_wire</code>)</b>: al arrancar el run, un
+      step por cada servidor MCP declarado en el proyecto registra si el server
+      <b>conectó</b> — con la lista de tools que quedaron registradas — o
+      <b>por qué falló</b> (estado <code>error</code> con el mensaje exacto:
+      credencial ausente en Vault, server inalcanzable…). Es el <b>primer sitio
+      donde mirar</b> cuando un agente «no ve» sus tools MCP: si el step dice
+      ok pero el modelo no las usa, faltan por asignar en la ficha del agente
+      (la allowlist las filtra); si el step no existe, el server no estaba
+      declarado en el proyecto al despachar el run.</li>
       <li><b>Llamadas al modelo</b>: cada invocación al LLM con tokens de
       entrada/salida y coste calculado con el precio vigente del modelo.</li>
-      <li><b>Acciones (tools)</b>: qué herramientas ejecutó — leer/escribir
+      <li><b>Acciones (tools)</b>: cada herramienta ejecutada — leer/escribir
       ficheros del worktree, <code>stack_exec</code> (composer/pytest/npm en el
-      runtime del stack), búsquedas, etc. — con sus resultados.</li>
+      runtime del stack), búsquedas, tools MCP, etc. — es un step
+      <code>tool_call</code> que muestra la invocación <b>con sus argumentos</b>
+      y su resultado. Esa traza no es solo para el humano: es la <b>evidencia
+      que también consume la auto-revisión</b> para validar los criterios de
+      aceptación (p. ej. «se invocó la tool X con el argumento Y»).</li>
       <li><b>Cierre</b>: el resultado estructurado que entrega
       (<code>submit_result</code>) y la <b>auto-revisión</b>.</li>
     </ul>

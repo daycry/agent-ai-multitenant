@@ -143,7 +143,8 @@ const manual: ManualDef = {
     Redis, MinIO, Vault), los servicios de dominio (Docling, ClamAV, Ollama, SearXNG, voz), la salida a internet
     controlada (egress-proxy y registry-proxy), las tres redes, la postura de seguridad de los contenedores, la
     pila de observabilidad (Prometheus, node-exporter, Alertmanager, cAdvisor, Grafana), el proxy firmado de la
-    validación humana (ADR 0062) y el subsistema de copias de seguridad.</p>
+    validación humana (ADR 0062) y el subsistema de copias de seguridad. Cierra con el camino de
+    <b>instalación en producción</b> bajo un dominio propio (runbook 08).</p>
     <p>Las capturas de este manual reflejan el <b>despliegue en ejecución</b> en el momento de generarlo: las tablas
     de servicios muestran la imagen y el estado REALES del snapshot de <code>docker compose ps</code>.</p>`,
   steps: [
@@ -828,6 +829,60 @@ const manual: ManualDef = {
                   para(
                     "Los bundles viven en un bind del host FUERA de los volúmenes de Docker; el data-root de agentes es un volumen externo que sobrevive a docker compose down -v. La restauración (completa o por tenant) se opera desde el panel con doble confirmación — ver manual 09.",
                   ),
+              ),
+          ),
+          { waitUntil: "load" },
+        );
+      },
+    },
+    {
+      title: "Instalación en producción con dominio propio (runbook 08)",
+      fullPage: true,
+      body: `<p>Todo lo anterior se pone en marcha en producción con el <b>CLI desatendido</b>
+        <code>scripts/install.sh</code>, gobernado por un único fichero <code>install.yaml</code> que partes del
+        perfil <code>recommended</code>: en él fijas el dominio público (<code>system.domain: example.com</code>),
+        <code>environment: production</code>, el modo TLS <code>acme</code> con un email real (Caddy emite y renueva
+        el certificado de Let's Encrypt en cuanto el DNS propaga), los recursos de los workers, el almacenamiento y
+        al menos un proveedor LLM del catálogo cerrado. El instalador valida los prerrequisitos <b>antes de tocar
+        nada</b>, genera la configuración (.env con secretos CSPRNG, Caddyfile, compose), levanta el stack esperando
+        los healthchecks, aplica las migraciones, inicializa Vault — las <b>unseal keys y el root token se muestran
+        UNA sola vez</b>; cópialos a tu gestor de secretos en ese momento — y siembra el primer tenant con su
+        administrador. Con eso, <code>https://example.com/</code> ya sirve la SPA y <code>https://example.com/api/*</code>
+        la API (single-origin); solo queda fijar en el panel la <b>URL base pública</b> y el <b>prefijo /api</b>, de
+        los que derivan las URLs de callback del SSO. La verificación posterior exige todos los servicios healthy,
+        el healthz público en 200 y una <b>prueba de fuego real</b>: un plan de una tarea recorriendo dispatch → run
+        → review → validación humana sin intervención. El primer día se endurece la operación: backups verificados
+        con un restore de prueba, rotación de claves agendada, alertas y cuentas reales. El paso a paso completo —
+        checklist previa, tabla de modos TLS, fases del instalador y problemas frecuentes — vive en el runbook
+        <code>docs/06-runbooks/08-instalacion-produccion.md</code>.</p>`,
+      action: async (p) => {
+        await p.setContent(
+          page(
+            "Instalación en producción",
+            "scripts/install.sh + install.yaml · TLS ACME · https://example.com",
+            tier(
+              "De cero a servicio publicado (camino feliz)",
+              `<div class="nodes">
+                <div class="node">1 · DNS<small>example.com → IP pública (propaga mientras instalas)</small></div>
+                <div class="node">2 · install.yaml<small>perfil recommended · tls_mode: acme · email TLS</small></div>
+                <div class="node proxy">3 · scripts/install.sh --config<small>CLI desatendido — el camino soportado</small></div>
+                <div class="node">4 · fases<small>prereqs → config → stack → migraciones → Vault → seed</small></div>
+                <div class="node">5 · URL base pública<small>https://example.com + prefijo /api (SSO)</small></div>
+                <div class="node">6 · verificación<small>healthz 200 · system-health ok · plan de prueba e2e</small></div>
+                <div class="node">7 · hardening día 1<small>backups + restore de prueba · rotación · alertas</small></div>
+              </div>`,
+            ) +
+              tier(
+                "Credenciales de un solo revelado",
+                para(
+                  "Las unseal keys de Vault, el root token y la contraseña inicial del administrador se muestran UNA sola vez durante la instalación. Sin las unseal keys no se desella Vault tras un reinicio; guárdalas fuera de la máquina, en un gestor de secretos.",
+                ),
+              ) +
+              tier(
+                "El runbook completo",
+                para(
+                  "docs/06-runbooks/08-instalacion-produccion.md — checklist previa, install.yaml de referencia comentado, tabla de modos TLS (acme / provided / internal), fases y códigos de salida del instalador, verificación post-instalación y problemas frecuentes. El dominio propio en detalle (topologías, nginx, SCIM, SSO) está en 07-custom-domain.md.",
+                ),
               ),
           ),
           { waitUntil: "load" },
