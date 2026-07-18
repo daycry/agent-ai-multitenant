@@ -122,6 +122,14 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": crontab(hour="3", minute="30"),
         "options": {"queue": "default"},
     },
+    # G-08 (auditoría proyecto 2026-07-17) — higiene mensual de los bare repos:
+    # worktree prune + gc ligero + locks huérfanos + poda de ramas plan/* de
+    # planes cerrados con PR abierto (con refs/rescue como red).
+    "git-housekeeping-monthly": {
+        "task": "workers.git_housekeeping",
+        "schedule": crontab(day_of_month="1", hour="3", minute="50"),
+        "options": {"queue": "default"},
+    },
     # Plan 06.11 — safety net: re-enqueue documents stuck in `pending`
     # (a missed enqueue, a worker crash mid-flight, or an upload while
     # the broker was down). Cheap query; runs every 2 minutes.

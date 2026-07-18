@@ -551,6 +551,75 @@ class WorktreeManager:
             removed.append(entry)
         return removed
 
+    def prune_by_policy(
+        self,
+        policy: dict[str, str],
+        *,
+        ttl_closed_s: int = 48 * 3600,
+        ttl_default_s: int = DEFAULT_WORKTREE_TTL_S,
+        now: float | None = None,
+    ) -> list[Path]:
+        """Poda por ESTADO (G-07): la poda ciega por mtime conservaba durante un
+        mes worktrees de planes ya cerrados y podía borrar el único resto de un
+        ``rebase_conflict`` (un commit fuera de rama).
+
+        ``policy`` mapea el nombre del worktree (task_id) a:
+          - ``"closed"``: el plan del worktree está cerrado → TTL 48h;
+          - ``"keep"``: la tarea está bloqueada → NUNCA se poda (es la escena
+            del crimen que el operador necesita inspeccionar);
+          - ``"default"`` (o sin entrada): TTL clásico de 30 días.
+
+        Red de rescate: antes de borrar, si el HEAD del worktree no está
+        contenido en NINGUNA rama del bare, se crea ``refs/rescue/{task_id}``
+        apuntándolo — el commit sobrevive al borrado y ``git gc`` no lo
+        recolecta. Tras la pasada corre ``git worktree prune`` (registros
+        stale del bare). Devuelve los paths borrados.
+        """
+        moment = now if now is not None else time.time()
+        removed: list[Path] = []
+        root = self._layout.worktrees_root
+        if not root.exists():
+            return removed
+
+        for entry in root.iterdir():
+            if not entry.is_dir():
+                continue
+            verdict = policy.get(entry.name, "default")
+            if verdict == "keep":
+                continue
+            ttl = ttl_closed_s if verdict == "closed" else ttl_default_s
+            try:
+                mtime = entry.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if mtime >= moment - ttl:
+                continue
+            self._rescue_unmerged_head(entry)
+            self._remove_worktree(entry)
+            removed.append(entry)
+
+        with contextlib.suppress(GitCommandError):
+            _run_git("worktree", "prune", cwd=self._repo_path)
+        return removed
+
+    def _rescue_unmerged_head(self, worktree: Path) -> None:
+        """Si el HEAD del worktree no está contenido en ninguna rama del bare,
+        créale ``refs/rescue/{task_id}`` para que sobreviva a la poda. Best-
+        effort: un worktree corrupto no debe frenar la limpieza del resto."""
+        try:
+            head = _run_git("rev-parse", "HEAD", cwd=worktree).strip()
+            containing = _run_git("branch", "--contains", head, cwd=self._repo_path).strip()
+            if not containing:
+                _run_git("update-ref", f"refs/rescue/{worktree.name}", head, cwd=self._repo_path)
+                _log.warning(
+                    "worktree.rescue_ref_created",
+                    worktree=worktree.name,
+                    head=head,
+                    repo=str(self._repo_path),
+                )
+        except GitCommandError as exc:
+            _log.warning("worktree.rescue_check_failed", worktree=worktree.name, error=str(exc))
+
     def _remove_worktree(self, path: Path) -> None:
         """Best-effort worktree removal.
 

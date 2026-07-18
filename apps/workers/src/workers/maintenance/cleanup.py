@@ -9,6 +9,8 @@ Best-effort cleanup jobs — a single failure must not crash beat itself.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from pathlib import Path
 from typing import Any
 
@@ -81,17 +83,175 @@ def purge_dep_cache() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+async def _prunable_plan_branches(settings: Any) -> set[str]:
+    """G-08: ramas ``plan/*`` de planes CERRADOS (completed/archived) cuyo PR ya
+    se abrió (``pr_url``) — su copia vive en el remoto; la local es podable."""
+    from api_server.db.domain import Plan
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from workers.plan_git import make_plan_branch_name
+
+    engine = create_async_engine(settings.database_url)
+    try:
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessionmaker() as db:
+            rows = (
+                await db.execute(
+                    select(Plan.id, Plan.slug).where(
+                        Plan.status.in_(("completed", "archived")),
+                        Plan.pr_url.is_not(None),
+                    )
+                )
+            ).all()
+    finally:
+        await engine.dispose()
+    return {make_plan_branch_name(str(plan_id), slug or "") for plan_id, slug in rows}
+
+
+_STALE_LOCK_AGE_S = 24 * 3600
+
+
+def _housekeep_bare(repo_path: Path, prunable_branches: set[str]) -> tuple[int, int]:
+    """Un bare: worktree prune + gc ligero + locks huérfanos + poda de ramas
+    de planes cerrados (con ref de rescate). Devuelve (locks, ramas)."""
+    import contextlib
+
+    from workers.git_repos import GitCommandError, _run_git
+
+    with contextlib.suppress(GitCommandError):
+        _run_git("worktree", "prune", cwd=repo_path)
+
+    # Locks huérfanos: los .lock legítimos de git son efímeros (ms); uno con
+    # >24h es el resto de una operación abortada y bloquea para siempre.
+    locks_removed = 0
+    threshold = time.time() - _STALE_LOCK_AGE_S
+    for lock in repo_path.rglob("*.lock"):
+        try:
+            if lock.is_file() and lock.stat().st_mtime < threshold:
+                lock.unlink()
+                locks_removed += 1
+                _log.warning("maintenance.git_housekeeping.stale_lock_removed", lock=str(lock))
+        except OSError:
+            continue
+
+    with contextlib.suppress(GitCommandError):
+        _run_git("gc", "--prune=30.days.ago", "--quiet", cwd=repo_path)
+
+    branches_pruned = 0
+    if prunable_branches:
+        try:
+            local = set(
+                _run_git(
+                    "for-each-ref", "--format=%(refname:short)", "refs/heads", cwd=repo_path
+                ).split()
+            )
+        except GitCommandError:
+            local = set()
+        for branch in sorted(prunable_branches & local):
+            try:
+                tip = _run_git("rev-parse", branch, cwd=repo_path).strip()
+                # Ref de rescate: el tip sobrevive aunque el PR remoto se
+                # descartara; gc lo respeta.
+                _run_git("update-ref", f"refs/rescue/{branch}", tip, cwd=repo_path)
+                _run_git("branch", "-D", branch, cwd=repo_path)
+                branches_pruned += 1
+            except GitCommandError as exc:
+                _log.warning(
+                    "maintenance.git_housekeeping.branch_prune_failed",
+                    branch=branch,
+                    error=str(exc),
+                )
+    return locks_removed, branches_pruned
+
+
+@app.task(name="workers.git_housekeeping")  # type: ignore[untyped-decorator]
+def git_housekeeping() -> dict[str, Any]:
+    """Higiene mensual de los bare repos (G-08): ``git worktree prune`` + gc
+    ligero (`--prune=30.days.ago`), borra locks huérfanos (>24h, restos de
+    operaciones abortadas — el `initializing` de dev llevaba desde el 03-07) y
+    poda ramas ``plan/*`` de planes completed/archived con PR abierto (su copia
+    vive en el remoto), dejando ``refs/rescue/{branch}`` como red."""
+    settings = get_settings()
+    projects_root = Path(settings.data_root) / "projects"
+    if not projects_root.exists():
+        return {"repos": 0, "locks_removed": 0, "branches_pruned": 0}
+
+    try:
+        prunable = asyncio.run(_prunable_plan_branches(settings))
+    except Exception as exc:
+        _log.warning("maintenance.git_housekeeping.branches_query_error", error=str(exc))
+        prunable = set()
+
+    repos = 0
+    locks_removed = 0
+    branches_pruned = 0
+    for repo_path in projects_root.glob("*/*/repos/*.git"):
+        if not repo_path.is_dir():
+            continue
+        repos += 1
+        try:
+            locks, branches = _housekeep_bare(repo_path, prunable)
+            locks_removed += locks
+            branches_pruned += branches
+        except Exception as exc:  # pragma: no cover — un repo malo no frena el resto
+            _log.warning(
+                "maintenance.git_housekeeping.repo_error", repo=str(repo_path), error=str(exc)
+            )
+
+    result = {"repos": repos, "locks_removed": locks_removed, "branches_pruned": branches_pruned}
+    _log.info("maintenance.git_housekeeping.done", **result)
+    return result
+
+
+async def _build_worktree_policy(settings: Any) -> dict[str, str]:
+    """G-07: política de poda por worktree (nombre = task id) leída de la DB.
+
+    - plan CERRADO (completed/cancelled/archived o soft-borrado) → ``closed``
+      (TTL 48h);
+    - task ``blocked`` → ``keep`` (la escena del crimen se conserva);
+    - resto → sin entrada (``default``, TTL 30d).
+    Best-effort: si la DB no responde, policy vacía = poda clásica por TTL.
+    """
+    from api_server.db.domain import Plan, Task
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    closed = ("completed", "cancelled", "archived")
+    engine = create_async_engine(settings.database_url)
+    try:
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessionmaker() as db:
+            rows = (
+                await db.execute(
+                    select(Task.id, Task.status, Plan.status, Plan.deleted_at).join(
+                        Plan, Task.plan_id == Plan.id, isouter=True
+                    )
+                )
+            ).all()
+    finally:
+        await engine.dispose()
+
+    policy: dict[str, str] = {}
+    for task_id, task_status, plan_status, plan_deleted in rows:
+        if plan_status in closed or plan_deleted is not None:
+            policy[str(task_id)] = "closed"
+        elif task_status == "blocked":
+            policy[str(task_id)] = "keep"
+    return policy
+
+
 @app.task(name="workers.prune_worktrees")  # type: ignore[untyped-decorator]
 def prune_worktrees() -> dict[str, Any]:
-    """Remove worktrees idle past the TTL (default 30d).
+    """Remove worktrees past their TTL, aware of plan/task state (G-07).
 
     Walks `<data_root>/projects/*/repos/*/worktrees/` and prunes per
-    repo. Each removed worktree is also unregistered from its bare via
-    `git worktree remove --force` so `git worktree list` stays clean.
+    repo via ``prune_by_policy``: plan cerrado → 48h, task blocked →
+    conservar, resto → 30d; con ref de rescate ``refs/rescue/{task}`` si
+    el HEAD no está en ninguna rama. Each removed worktree is also
+    unregistered from its bare so `git worktree list` stays clean.
 
     The walk picks up bare repos dynamically — we don't keep a registry.
-    A repo that's still active will have its worktrees touched recently
-    and survive the prune.
     """
     settings = get_settings()
     try:
@@ -107,6 +267,12 @@ def prune_worktrees() -> dict[str, Any]:
     projects_root = Path(settings.data_root) / "projects"
     if not projects_root.exists():
         return {"pruned": 0, "note": f"{projects_root} does not exist yet"}
+
+    try:
+        policy = asyncio.run(_build_worktree_policy(settings))
+    except Exception as exc:
+        _log.warning("maintenance.prune_worktrees.policy_error", error=str(exc))
+        policy = {}
 
     total = 0
     for tenant_dir in projects_root.iterdir():
@@ -130,7 +296,7 @@ def prune_worktrees() -> dict[str, Any]:
                 )
                 mgr = WorktreeManager(layout, repo_name)
                 try:
-                    removed = mgr.prune_idle()
+                    removed = mgr.prune_by_policy(policy)
                     total += len(removed)
                 except Exception as exc:  # pragma: no cover
                     _log.warning(
