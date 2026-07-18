@@ -20,6 +20,7 @@ y la tabla de NIVELES) vive en
 | [asignar-tools-a-agentes.md](./asignar-tools-a-agentes.md)                 | Asignar tools (y skills) a un agente y leer el set efectivo (HACER)           |
 | [comandos-y-runtime-por-proyecto.md](./comandos-y-runtime-por-proyecto.md) | Autorizar comandos del stack (PHP/Node/.NET) + runtime por proyecto           |
 | [configurar-mcp-server.md](./configurar-mcp-server.md)                     | Añadir un servidor MCP a un proyecto (catálogo o custom)                      |
+| [recetas-mcp-tools-skills.md](./recetas-mcp-tools-skills.md)               | Recetario e2e: MCP (Atlassian, Context7…), custom tools y skills con ejemplos |
 | [human-agents.md](./human-agents.md)                                       | Crear, configurar, asignar y operar tareas de Human Agents                    |
 
 ## Operar la plataforma

@@ -24,6 +24,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID
 
 import structlog
@@ -182,6 +183,26 @@ def _build_runtime_env(
             task_id=UUID(request.task_id),
         )
         env["AGENTIC_API_URL"] = agent_internal_api_url
+    # MCP servers INTERNOS del compose (hostname sin punto = nombre de servicio
+    # Docker, solo resoluble en la red de agentes): exentos del egress-proxy via
+    # NO_PROXY, o el transporte httpx del cliente MCP muere con `403 Filtered`
+    # (tinyproxy FilterDefaultDeny; cazado en vivo en la prueba Atlassian
+    # 2026-07-18). La declaracion del server en el proyecto ES la autorizacion
+    # (RBAC tenant_admin). Un MCP EXTERNO (FQDN con punto) sigue saliendo por el
+    # proxy y exige su host en la allowlist: deny-by-default intacto.
+    internal_mcp_hosts = sorted(
+        {
+            host
+            for server in (request.mcp_servers or [])
+            if (url := str(server.get("url") or ""))
+            and (host := urlparse(url).hostname)
+            and "." not in host
+        }
+    )
+    if internal_mcp_hosts:
+        joined = ",".join(internal_mcp_hosts)
+        env["NO_PROXY"] = joined
+        env["no_proxy"] = joined
     return env
 
 
