@@ -80,10 +80,15 @@ class AssistantToolContext:
 # Tool implementations
 # ---------------------------------------------------------------------------
 async def _tenant_projects_status(ctx: AssistantToolContext, **_: Any) -> dict[str, Any]:
-    """Consolidated count + per-project status of the tenant's projects."""
+    """Consolidated count + per-project status of the tenant's projects.
+
+    Excluye las PLANTILLAS (verificación en vivo 2026-07-18): la policy RLS
+    ``projects_template_read`` deja leer el catálogo builtin, así que sin el
+    filtro el asistente contaba 9 plantillas de la plataforma como «proyectos
+    activos» del tenant."""
     result = await ctx.session.execute(
         select(Project.id, Project.name, Project.status)
-        .where(Project.deleted_at.is_(None))
+        .where(Project.deleted_at.is_(None), Project.is_template.is_(False))
         .order_by(Project.created_at)
     )
     rows = result.all()

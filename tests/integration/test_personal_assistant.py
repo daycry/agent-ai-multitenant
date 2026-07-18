@@ -101,8 +101,11 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             "tenant_admin",
         )
         await conn.execute(
-            "INSERT INTO projects (id, tenant_id, name, status) VALUES"
-            " ($1, $2, $3, $4), ($5, $6, $7, $8)",
+            # La plantilla builtin NO debe contar como proyecto del tenant
+            # (fix 2026-07-18: la RLS projects_template_read la deja leer).
+            "INSERT INTO projects (id, tenant_id, name, status, is_template) VALUES"
+            " ($1, $2, $3, $4, false), ($5, $6, $7, $8, false),"
+            " (gen_random_uuid(), $2, 'Plantilla fantasma', 'active', true)",
             project_a,
             tenant_a,
             "Project A",

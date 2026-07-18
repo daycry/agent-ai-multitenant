@@ -508,10 +508,18 @@ async def _persist_emotional_episode(
 
 
 def _get_redis() -> Any:
-    """Cliente Redis del api-server (mismo DB que el WS tailea)."""
-    from api_server.auth.deps import get_redis
+    """Cliente Redis del bus de eventos del WORKER (la misma DB 0 que el WS del
+    api-server tailea — invariante H10/AUD16).
 
-    return get_redis()
+    Bug cazado en vivo (2026-07-18): esto usaba `api_server.auth.deps.get_redis`,
+    cuya env (API_SERVER_REDIS_URL) no existe en el contenedor del worker → caía
+    al default localhost:6379 y el caché vivo de afecto + la telemetría WS
+    fallaban SIEMPRE (best-effort, así que en silencio salvo el WARNING)."""
+    from redis.asyncio import Redis
+
+    from workers.config import get_settings
+
+    return Redis.from_url(get_settings().events_redis_url)
 
 
 def _result(turn_id: UUID, reason: str) -> dict[str, Any]:
