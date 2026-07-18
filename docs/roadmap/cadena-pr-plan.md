@@ -100,7 +100,7 @@ automático del remoto. Todo con test automático; e2e de cierre contra un remot
 project_slug) → PlanGitIdentity(project_slug, plan_branch)`, derivando SIEMPRE de `project.slug` (bare) y
       `plan.slug` (rama, vía `make_plan_branch_name`). El test pinea que coincide con la derivación de ejecución
       y diverge de la antigua del auto-PR (`_slugify("Plan: "+title)` / `basename(url)`), incl. no-ASCII/>60.
-- [ ] **T2 — Cablear los tres call-sites a T1**: `execution.py` (provision/commit), `plan_pr.py` (auto-PR) y
+- [x] **T2 — Cablear los tres call-sites a T1** (verificado 2026-07-18, F3 de remediacion-proyecto-integral: `plan_pr.py` usa `plan_git_identity` (x2), `execution.py` usa `worktree_coordinates` (I-2), `repo_clone.py` deriva el bare de `projects.slug` persistido; los helpers viejos `_slugify`/`_repo_name_from_url` se ELIMINARON de `repo_clone.py` — ya no pueden reaparecer; la derivación histórica queda documentada inline en `test_plan_git_identity`): `execution.py` (provision/commit), `plan_pr.py` (auto-PR) y
       `repo_clone.py` (clone) llaman a `plan_git_identity`; se elimina `_slugify(title)` de `plan_pr.py:65` y la
       derivación por `basename(url)` del bare. El bare de ejecución se crea **con `remote_url`** (hoy `ensure_repo`
       sin origin, `execution.py:886`). **Test:** grep-guard de CI que falla si `_slugify(`/`_repo_name_from_url(`
@@ -113,7 +113,7 @@ project_slug) → PlanGitIdentity(project_slug, plan_branch)`, derivando SIEMPRE
       tarea). Reusa la identidad de fuente única (P1/P2) + config/Vault del auto-PR; `ensure_repo` (re)apunta
       `origin`. Gated por `branch_push_mode`. **Test** (`tests/integration/test_incremental_remote_push.py`, 2
       casos verde con remoto `file://`): `incremental` → la rama existe en el remoto; `final_only` → difiere.
-- [ ] **T4 — Persistir el PR**: migración Alembic reversible `Plan.pr_url TEXT NULL` + `Plan.pr_branch VARCHAR
+- [x] **T4 — Persistir el PR** (verificado 2026-07-18, F3: migración `0102_plan_pr_url` en head; `pr_url`/`pr_branch`/`pr_error` viajan en `GET /plans` — visibles en los tests de integración — y T9 lo ata e2e): migración Alembic reversible `Plan.pr_url TEXT NULL` + `Plan.pr_branch VARCHAR
 NULL`; `_open_plan_pr_async` escribe ambos (y `pr_error` si falla, dejando de tragarse el fallo silencioso
       de `plan_pr.py:138-140`). Exponer en el schema de `GET /plans/{id}` y en la ficha de plan del admin-panel.
       **Test:** cierre de plan con remoto fake → `plan.pr_url` poblado y visible por API; con opener que

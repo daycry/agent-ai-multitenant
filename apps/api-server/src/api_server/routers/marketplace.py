@@ -34,9 +34,9 @@ install / uninstall are tenant-admin writes (:func:`require_tenant_admin`).
 This repo has no per-membership ``project_owner`` role — project-scoped
 writes are gated to ``tenant_admin`` exactly like ``/projects`` and the
 skills/tools routers, so we reuse that helper. The per-permission consent
-flow and the trust / static-analysis / sandbox gates are **Phase B-C**;
-in Phase A the install simply persists the row and records an audit entry
-(the ``# TODO(Plan 09 Fase B/C)`` markers point at where they hook in).
+flow (``api_server.marketplace.consent``) and the signature / trust /
+sandbox gates de las Fases B-C están CABLEADOS en el install/update de este
+router (N-17, auditoría 2026-07-17: este docstring decía que eran futuros).
 """
 
 from __future__ import annotations

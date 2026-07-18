@@ -10,7 +10,6 @@ loguea y se devuelve como estado, nunca propaga al worker.
 from __future__ import annotations
 
 import asyncio
-import re
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -23,17 +22,6 @@ from workers.git_auth import build_git_auth_env
 from workers.git_repos import BareRepoLayout, BareRepoManager
 
 _log = structlog.get_logger("workers.repo_clone")
-
-
-def _slugify(name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
-    return slug or "project"
-
-
-def _repo_name_from_url(url: str) -> str:
-    """Nombre del repo desde la URL del remoto (basename sin .git)."""
-    tail = url.rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
-    return (tail[:-4] if tail.endswith(".git") else tail) or "repo"
 
 
 def _vault_store(settings: Settings) -> Any | None:

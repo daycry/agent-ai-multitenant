@@ -98,18 +98,18 @@ requiere acción (deuda ADR 0081 ya planificada); se documenta como consciente.
 - [ ] **T4 — Test de CI de paridad catálogo↔executor (g4, P1)**: test que falla si un nombre de
       `_CATALOG_TOOL_NAMES` builtin **no** está en `RUNTIME_WIRED_TOOL_NAMES` **y** es asignable. **Test:**
       hoy falla nombrando `apply_patch`/`search_code`/`summarize_text`.
-- [ ] **T5 — Cablear-o-retirar los tools sin executor (g4)**: para cada uno, decidir: implementar el executor
+- [x] **T5 — Cablear-o-retirar los tools sin executor (g4)** (cerrado 2026-07-18, F3 de remediacion-proyecto-integral: RETIRADOS de `ROLE_DEFAULT_TOOLS` y `ci4_team._FILE_TOOLS` (`apply-patch`/`search-code`/`summarize-text`); el anuncio al LLM ya filtraba por `is_runtime_wired` (`agent_tool_schemas.py` g4); candado `tests/unit/test_seed_tools_runtime_wired.py`; la purga de las filas `agent_tools` vivas va en el deploy): para cada uno, decidir: implementar el executor
       (p.ej. `search_code` como grep del worktree) **o** retirarlo del catálogo asignable Y de
       `ROLE_DEFAULT_TOOLS`/`ci4_team._BASE_TOOLS` (los seeds que hoy los asignan esquivando el 422). El
       `dispatch` (`combine_tool_allowlists`) filtra por `is_runtime_wired` antes de anunciar al LLM. **Test:**
       ningún seed asigna un tool no cableado; el LLM nunca recibe un tool sin executor; regresión del run 019f27ff
       (search_code) imposible.
-- [ ] **T6 — Badge «requiere import» / no cableado en la UI (g4 + g2-UX)**: la UI de asignación
+- [x] **T6 — Badge «requiere import» / no cableado en la UI (g4 + g2-UX)** (parcial→hecho 2026-07-18, F3: la asignación (`agent-tools-section.tsx`) marca «No ejecutable» con tooltip vía `is_runtime_wired` del catálogo; el badge «requiere import» MCP sigue el comportamiento ADR 0052): la UI de asignación
       (`agent-tools-section.tsx`) marca visualmente los tools no cableados (deshabilitados o con aviso) y las
       tools MCP declaradas-no-importadas con un badge «requiere import» (comportamiento ADR 0052 preservado, solo
       señalizado). **Test:** un tool no cableado no es asignable desde la UI; una tool MCP no importada muestra el
       badge.
-- [ ] **T7 — docling-mcp: imagen-o-retirar (g5)**: retirar `DOCLING_MCP` del picker del catálogo MCP (o filtrarlo
+- [x] **T7 — docling-mcp: imagen-o-retirar (g5)** (constatado 2026-07-18, F3: el picker de templates ya no existe — el formulario MCP es entrada libre; la vía operativa de ingesta es docling-serve HTTP (`ingestion/docling.py`, ruta `/v1/chunk/hybrid/file`); el destino del catálogo MCP por proyecto queda en el ADR de PROJ-02): retirar `DOCLING_MCP` del picker del catálogo MCP (o filtrarlo
       como «no disponible») hasta que exista una imagen; documentar que la vía operativa es `docling-serve` HTTP.
       **Test:** el picker no ofrece un template que no puede arrancar (o lo marca no-disponible con motivo).
 

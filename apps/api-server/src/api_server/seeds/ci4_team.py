@@ -80,7 +80,9 @@ def _ci4_agent_id(slug: str) -> UUID:
 # fallaba, quemando iteraciones (mismo patrón que apply-patch/git). El toolchain
 # del stack (composer/phpunit/php spark) se ejecuta ahora vía `stack-exec`, que
 # lo lanza en el runtime-template del proyecto a través del worker.
-_FILE_TOOLS = ("read-file", "write-file", "delete-file", "list-files", "search-code")
+# PROJ-08/F3: `search-code` retirado — no está cableada en el runtime (el grep
+# vive dentro de shell-exec/stack_exec).
+_FILE_TOOLS = ("read-file", "write-file", "delete-file", "list-files")
 # Base que todo agente del equipo recibe: ejecutar comandos del stack
 # (deny-by-default por allowed_commands del proyecto), leer/editar el repo,
 # git vía shell-exec y la búsqueda semántica en las KBs concedidas al proyecto.

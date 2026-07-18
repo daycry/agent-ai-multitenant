@@ -58,28 +58,33 @@ ROLE_DEFAULT_SKILLS: dict[str, tuple[str, ...]] = {
 }
 
 
-# rol -> slugs de tool del catálogo `builtin_tools.py`. Todo rol lee (read/list/
-# search + semantic-search); los que producen código además escriben/ejecutan.
-_READ = ("read-file", "list-files", "search-code", "semantic-search")
+# rol -> slugs de tool del catálogo `builtin_tools.py`. Todo rol lee (read/list
+# + semantic-search); los que producen código además escriben/ejecutan.
+#
+# PROJ-08/F3 (auditoría 2026-07-17): `search-code`, `apply-patch` y
+# `summarize-text` se RETIRAN — no están cableadas en el runtime
+# (RUNTIME_WIRED_TOOL_NAMES): el agente las veía, las invocaba y fallaban
+# siempre, quemando iteraciones. El grep vive dentro de shell-exec/stack_exec;
+# el patching es write-file; resumir es el propio LLM.
+_READ = ("read-file", "list-files", "semantic-search")
 ROLE_DEFAULT_TOOLS: dict[str, tuple[str, ...]] = {
-    "project_manager": (*_READ, "summarize-text"),
-    "architect": (*_READ, "write-file", "apply-patch", "summarize-text"),
+    "project_manager": _READ,
+    "architect": (*_READ, "write-file"),
     "backend_dev": (
         *_READ,
         "write-file",
-        "apply-patch",
         "run-pytest",
         "run-lint",
         "run-typecheck",
     ),
-    "frontend_dev": (*_READ, "write-file", "apply-patch", "run-lint", "run-build"),
-    "qa": (*_READ, "write-file", "apply-patch", "run-pytest", "run-lint"),
+    "frontend_dev": (*_READ, "write-file", "run-lint", "run-build"),
+    "qa": (*_READ, "write-file", "run-pytest", "run-lint"),
     "reviewer": (*_READ, "run-lint", "run-typecheck"),
-    "devops": (*_READ, "write-file", "apply-patch", "run-build", "shell-exec"),
+    "devops": (*_READ, "write-file", "run-build", "shell-exec"),
     "security": (*_READ, "run-lint"),
-    "specialist": (*_READ, "write-file", "apply-patch", "http-get", "summarize-text"),
-    "researcher": (*_READ, "http-get", "summarize-text"),
-    "technical_writer": (*_READ, "write-file", "apply-patch", "summarize-text"),
+    "specialist": (*_READ, "write-file", "http-get"),
+    "researcher": (*_READ, "http-get"),
+    "technical_writer": (*_READ, "write-file"),
 }
 
 

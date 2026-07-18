@@ -9,7 +9,6 @@ the (``"Plan: "``-prefixed) title while execution used the persisted
 from __future__ import annotations
 
 from workers.plan_git import PlanGitIdentity, make_plan_branch_name, plan_git_identity
-from workers.repo_clone import _repo_name_from_url, _slugify
 
 PLAN_ID = "019f1397-afaf-7c31-9b2e-1a2b3c4d5e6f"
 PROJECT_SLUG = "api-ci"  # projects.slug, persisted at creation
@@ -40,8 +39,14 @@ def test_identity_diverges_from_old_buggy_autopr_derivation() -> None:
     title = "Api CodeIgniter 4 endpoints públicos v1 y comando de diagnóstico"
     remote_url = "https://github.com/daycry/test-mailchimp-agent-ai.git"
 
-    old_autopr_branch = make_plan_branch_name(PLAN_ID, _slugify(f"Plan: {title}"))
-    old_autopr_bare = _repo_name_from_url(remote_url)  # "test-mailchimp-agent-ai"
+    # La derivación ANTIGUA, reconstruida inline: los helpers _slugify /
+    # _repo_name_from_url se retiraron de repo_clone (F3 — código muerto).
+    import re
+
+    old_slug = re.sub(r"[^a-z0-9]+", "-", f"Plan: {title}".lower()).strip("-") or "project"
+    old_autopr_branch = make_plan_branch_name(PLAN_ID, old_slug)
+    tail = remote_url.rstrip("/").rsplit("/", 1)[-1]
+    old_autopr_bare = tail[:-4] if tail.endswith(".git") else tail
 
     ident = plan_git_identity(PLAN_ID, PLAN_SLUG, PROJECT_SLUG)
     # The old branch carried an extra "plan-" prefix (from the "Plan: " title) and

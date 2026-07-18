@@ -71,6 +71,9 @@ interface CatalogTool {
   implementation_type: string;
   security_level: string;
   is_builtin: boolean;
+  // ADR 0049 / F3: si el runtime puede EJECUTARLA de verdad. false = el agente
+  // la vería en su prompt pero moriría como `unknown tool`.
+  is_runtime_wired: boolean;
 }
 
 interface AgentToolRow {
@@ -631,6 +634,25 @@ function ToolRow({
               </Badge>
             </TooltipTrigger>
           </Tooltip>
+          {tool.is_runtime_wired === false && (
+            <Tooltip
+              content={
+                lang === "es"
+                  ? "El runtime aún no puede ejecutar esta tool: el agente la vería pero fallaría al invocarla."
+                  : "The runtime cannot execute this tool yet: the agent would see it but every call would fail."
+              }
+            >
+              <TooltipTrigger
+                aria-label={lang === "es" ? "No ejecutable en runtime" : "Not runtime-wired"}
+                data-testid={`agent-tool-not-wired-badge-${tool.id}`}
+              >
+                <Badge variant="warning" className="gap-1">
+                  <Info aria-hidden="true" className="h-3 w-3" />
+                  {lang === "es" ? "No ejecutable" : "Not wired"}
+                </Badge>
+              </TooltipTrigger>
+            </Tooltip>
+          )}
         </div>
       </div>
     </li>
