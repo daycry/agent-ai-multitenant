@@ -1,10 +1,10 @@
 ---
 plan_id: remediacion-proyecto-integral-2026-07-17
 title: Remediación del dominio Proyecto — conocimiento, ciclo de vida de planes, controles de proyecto y equipo
-status: in_progress
+status: pending_human_validation
 blocking_plan: []
 started_at: 2026-07-17
-completed_at: null
+completed_at: null # tareas 15/15 done 2026-07-18; esperando tests humanos
 estimated_duration_calendar: 1-2 semanas
 estimated_effort_person_days: 11
 created_by: claude-fable-5-audit-2026-07-17
@@ -88,7 +88,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_b2` — Nacimiento de tareas dentro del contrato
 
-- [ ] **Título**: `POST /tasks` restringe status inicial (backlog, o ready sin
+- [x] **Título**: `POST /tasks` restringe status inicial (backlog, o ready sin
       deps/plan), valida `plan_id` vía sesión tenant (visibilidad RLS) y exige
       `plan.project_id == project_id`; `create_free_task` exige plan no
       terminal. `DELETE /plans` cancela tasks+runs (reusar
@@ -99,7 +99,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_b3` — DAG sin agujeros: ciclos y cross-plan
 
-- [ ] **Título**: detección de ciclos en `_set_dependencies` (DFS sobre las
+- [x] **Título**: detección de ciclos en `_set_dependencies` (DFS sobre las
       aristas del proyecto, 422 con el ciclo nombrado) y en
       accept-corrections (`validate_dag` sobre el spec resultante); política
       cross-plan: rechazar deps hacia tareas de otro plan (422) — si producto
@@ -113,7 +113,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_c1` — `paused`/`archived` con efecto
 
-- [ ] **Título**: guard `project.status == active` en dispatch, promotor DAG,
+- [x] **Título**: guard `project.status == active` en dispatch, promotor DAG,
       `POST /plans`, `POST /tasks`, planning-chat y start-execution (409 con
       motivo); al archivar, cancelar tasks/runs en vuelo (reusar la cascada
       del delete sin el soft-delete). Máquina mínima de estados del proyecto
@@ -123,7 +123,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_c2` — Slug único por tenant
 
-- [ ] **Título**: dedupe al crear (`-{id8}` en colisión), índice único parcial
+- [x] **Título**: dedupe al crear (`-{id8}` en colisión), índice único parcial
       `(tenant_id, slug) WHERE deleted_at IS NULL` (migración con dedupe
       previo de existentes), y transliteración de tildes + corte en frontera
       de palabra (arregla también PROY2-14 en slugs de plan).
@@ -132,7 +132,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_c3` — El camino por defecto crea proyectos operativos
 
-- [ ] **Título**: adopción de plantilla SERVER-SIDE completa (equipo con
+- [x] **Título**: adopción de plantilla SERVER-SIDE completa (equipo con
       `fork_team=true` por defecto, `allowed_commands`,
       `default_runtime_template`, `allowed_domains`, `human_approval_policy`,
       `worker_config` útil, `repository_config`, `model_config`) — el wizard
@@ -148,7 +148,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_d1` — El dispatch respeta el equipo del proyecto
 
-- [ ] **Título**: `_candidates` restringe a `team_members` de
+- [x] **Título**: `_candidates` restringe a `team_members` de
       `project.team_id` cuando exista (fallback actual sin equipo); preset de
       agente soft-borrado → limpiar preset + WARNING con task_audit_event
       (auto-reparación PROJ-05).
@@ -157,7 +157,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_d2` — Integridad referencial: restore y tenants muertos
 
-- [ ] **Título**: sweep post-restore que re-valida FKs desactivadas por
+- [x] **Título**: sweep post-restore que re-valida FKs desactivadas por
       `session_replication_role` (reporta+borra huérfanos); limpiar las 10
       filas `agent_tools` vivas; purga puntual de los hijos de tenants
       inexistentes (5 proyectos, 21 agentes, 2 equipos) + check de integridad
@@ -169,7 +169,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_e1` — Fin de los «siempre-gris»
 
-- [ ] **Título**: healthcheck de workers ping al nodo propio
+- [x] **Título**: healthcheck de workers ping al nodo propio
       (`-d celery@$HOSTNAME`, como el fix del dispatcher del 07-10) o timeout
       30s; expiración de `review_sessions` `suspended` (sweep las vence por
       `expires_at` y el cierre del plan las termina; el reconciler no cuenta
@@ -179,7 +179,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_e2` — Higiene git programada
 
-- [ ] **Título**: en el beat de cleanup: `git worktree prune` + gc ligero
+- [x] **Título**: en el beat de cleanup: `git worktree prune` + gc ligero
       mensual del bare; poda por-estado de worktrees (plan cerrado → TTL 48h,
       task blocked → conservar) con ref de rescate `refs/rescue/{task}` si el
       HEAD no está contenido en la rama del plan; poda de rama `plan/*` al
@@ -189,7 +189,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_e3` — Boards sin truncado silencioso
 
-- [ ] **Título**: paginación real (o «cargar más» + contador total visible)
+- [x] **Título**: paginación real (o «cargar más» + contador total visible)
       en board de planes, board de tareas por plan y resolución de deps del
       task-detail; aviso visual cuando total > mostrado.
 - **Tiempo**: 1 d · **Hallazgo**: PROY2-08
@@ -199,7 +199,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_f1` — Robustez del sync y del planning
 
-- [ ] **Título**: `sync_to_kanban` bajo el advisory-lock por plan (o índice
+- [x] **Título**: `sync_to_kanban` bajo el advisory-lock por plan (o índice
       único parcial sobre spec_id) (PROY2-09); el re-sync cablea aristas de
       tareas preexistentes (PROY2-10); `create_plan` por conversación valida
       con `PlanSpecification` y los `ValueError` de `validate_dag` → 422
@@ -209,7 +209,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_f2` — Settings honestos
 
-- [ ] **Título**: exponer en API+UI lo aplicado (`allowed_domains` en la
+- [x] **Título**: exponer en API+UI lo aplicado (`allowed_domains` en la
       página del proyecto, `execution_budgets` y `guardrails_config` al menos
       por API con guard admin); retirar del schema/respuesta las columnas
       muertas (`rag_knowledge_bases`, `secrets_vault_id`,
@@ -221,7 +221,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_f3` — Ledgers y seeds sincronizados con la realidad
 
-- [ ] **Título**: marcar hechos T2/T4 en cadena-pr-plan y T7/T5-anuncio en
+- [x] **Título**: marcar hechos T2/T4 en cadena-pr-plan y T7/T5-anuncio en
       tools-y-cierre (con evidencia); limpiar helpers muertos
       (`_slugify`/`_repo_name_from_url` de repo_clone); seeds sin tools no
       cableadas (ROLE_DEFAULT_TOOLS y ci4_team sin apply-patch/search-code/
@@ -233,7 +233,7 @@ tools-y-cierre T5/T7 ya hechos), la fase F lo sincroniza en vez de rehacerlo.
 
 #### `task_proy_f4` — Decisiones menores de producto (preparar, no decidir)
 
-- [ ] **Título**: ADR breve con 3 decisiones para el operador: (a) MCP por
+- [x] **Título**: ADR breve con 3 decisiones para el operador: (a) MCP por
       proyecto — empaquetar servers vs retirar de la UI (PROJ-02); (b)
       `task.human_validation_required` — implementar el flag del principio 7
       o corregir CLAUDE.md (PROY2-06); (c) `apps/web-app` vacío — consolidar
