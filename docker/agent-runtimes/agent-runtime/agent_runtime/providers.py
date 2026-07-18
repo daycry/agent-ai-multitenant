@@ -279,6 +279,10 @@ _STICKY_FEEDBACK_MAX_CHARS = 2000
 # explicit marker so the cap is never mistaken for an incomplete file.
 _REVIEW_MAX_FILES = 15
 _REVIEW_MAX_FILE_CHARS = 12000
+# Digest de tool calls del transcript (evidencia de efectos externos — MCP /
+# custom tools — para criterios sobre invocaciones): últimas N, args acotados.
+_REVIEW_MAX_TOOL_CALLS = 30
+_REVIEW_MAX_CALL_ARG_CHARS = 300
 
 
 def _system_content(state: dict[str, Any]) -> str:
@@ -462,6 +466,29 @@ def _review_messages(state: ReviewState) -> list[Message]:
                 )
             else:
                 lines.append(content)
+    # Prueba MCP 2026-07-18 (run 019f7721): un criterio del tipo «se invocó
+    # <server>.<tool>» era INVERIFICABLE — la review veía tarea+ficheros pero no
+    # el transcript, así que rechazaba en bucle trabajo hecho («no evidence of
+    # calls»). El digest de tool calls del run es la evidencia verificable de
+    # los EFECTOS EXTERNOS (MCP/custom tools) que no dejan rastro en el worktree.
+    calls = [
+        step
+        for step in (data.get("steps") or [])
+        if isinstance(step, Mapping) and step.get("kind") == "tool_call"
+    ]
+    if calls:
+        lines.append(
+            "\nTool calls the agent made during this run (from the execution "
+            "transcript — verifiable evidence for criteria about invocations; "
+            "an 'ok' call DID reach its target):"
+        )
+        for step in calls[-_REVIEW_MAX_TOOL_CALLS:]:
+            tool = str(step.get("tool") or "?")
+            status = str(step.get("status") or "?")
+            args = json.dumps(step.get("args") or {}, ensure_ascii=False, default=str)
+            if len(args) > _REVIEW_MAX_CALL_ARG_CHARS:
+                args = args[:_REVIEW_MAX_CALL_ARG_CHARS] + "…"
+            lines.append(f"- {tool} [{status}] args={args}")
     lines.append(f"\nCandidate output (the agent's own summary):\n{state.get('output') or ''}")
     return [
         Message(role="system", content=_REVIEW_SYSTEM),
