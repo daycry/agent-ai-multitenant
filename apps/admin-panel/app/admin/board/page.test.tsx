@@ -50,9 +50,10 @@ const TASK = {
 };
 
 function wireApi() {
+  // PROY2-08: el board pagina (limit/offset); el mock matchea por prefijo.
   apiFetchMock.mockImplementation((path: string) => {
-    if (path === "/plans") return Promise.resolve([PLAN]);
-    if (path === "/projects") return Promise.resolve([PROJECT]);
+    if (path.startsWith("/plans?")) return Promise.resolve([PLAN]);
+    if (path.startsWith("/projects?")) return Promise.resolve([PROJECT]);
     if (path.includes("/tasks")) return Promise.resolve([TASK]);
     return Promise.resolve([]);
   });
@@ -81,7 +82,7 @@ describe("Board gerencial (T11 + C2)", () => {
     expect(card.textContent).toContain("Plan CI4");
     // El nombre del proyecto es una etiqueta DE la tarjeta del plan, no la tarjeta.
     expect(card.textContent).toContain("Proyecto Demo");
-    expect(apiFetchMock).toHaveBeenCalledWith("/plans");
+    expect(apiFetchMock).toHaveBeenCalledWith("/plans?limit=100&offset=0");
   });
 
   it("a clean click on a task card opens the detail panel (C2)", async () => {

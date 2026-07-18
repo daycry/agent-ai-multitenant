@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { cleanCriteria, criterionText, type CriterionDraft } from "@/lib/acceptance-criteria";
 import { ApiError, apiFetch } from "@/lib/api";
+import { fetchAllPages } from "@/lib/paginate";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { fmtRunDuration, fmtRunMoney, fmtRunTokens, fmtRunWhen, listRuns } from "@/lib/runs";
 
@@ -208,13 +209,15 @@ interface TaskLite {
  * (cheap, cached; only fetched when the task actually has dependencies); falls
  * back to a short id if a title can't be resolved. */
 function DependsOnSection({ projectId, dependsOn }: { projectId: string; dependsOn: string[] }) {
+  // PROY2-08: paginado exhaustivo — con >100 tareas en el proyecto, las deps
+  // más allá de la primera página se quedaban sin título (solo el UUID).
   const tasksQuery = useQuery({
     queryKey: ["project-task-titles", projectId],
-    queryFn: () => apiFetch<TaskLite[]>(`/projects/${projectId}/tasks`),
+    queryFn: () => fetchAllPages<TaskLite>(`/projects/${projectId}/tasks`),
     enabled: dependsOn.length > 0,
     refetchOnWindowFocus: false,
   });
-  const titleById = new Map((tasksQuery.data ?? []).map((t) => [t.id, t.title]));
+  const titleById = new Map((tasksQuery.data?.items ?? []).map((t) => [t.id, t.title]));
 
   return (
     <section className="mb-4" data-testid="task-detail-deps">

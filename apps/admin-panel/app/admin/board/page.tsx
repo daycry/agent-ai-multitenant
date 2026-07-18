@@ -30,6 +30,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
+import { fetchAllPages, type PaginatedResult } from "@/lib/paginate";
 import { computeDepState } from "@/lib/task-deps";
 import { useWebSocket, wsUrl } from "@/lib/ws";
 
@@ -146,20 +147,21 @@ export default function BoardPage() {
 
   const projectsQuery = useQuery({
     queryKey: ["projects", "tenant"],
-    queryFn: () => apiFetch<Project[]>("/projects"),
+    queryFn: () => fetchAllPages<Project>("/projects"),
     refetchOnWindowFocus: false,
   });
 
   // c8/T11: the top row is a Kanban of real PLANS across the tenant's projects
   // (GET /plans). projectsQuery stays only to label each plan with its project name.
+  // PROY2-08: fetchAllPages agota las páginas (>100 planes ya no desaparecen).
   const plansQuery = useQuery({
     queryKey: ["plans", "tenant"],
-    queryFn: () => apiFetch<Plan[]>("/plans"),
+    queryFn: () => fetchAllPages<Plan>("/plans"),
     refetchOnWindowFocus: false,
   });
-  const plans = useMemo(() => plansQuery.data ?? [], [plansQuery.data]);
+  const plans = useMemo(() => plansQuery.data?.items ?? [], [plansQuery.data]);
   const projectsById = useMemo(
-    () => new Map((projectsQuery.data ?? []).map((p) => [p.id, p] as const)),
+    () => new Map((projectsQuery.data?.items ?? []).map((p) => [p.id, p] as const)),
     [projectsQuery.data],
   );
 
@@ -170,20 +172,22 @@ export default function BoardPage() {
 
   // §6: the bottom board shows ONLY the selected plan's tasks (never a flat board
   // mixing tasks from several plans). Filter by plan_id within the plan's project.
+  // PROY2-08: paginado exhaustivo — un plan de 200 tareas pinta las 200.
   const tasksQuery = useQuery({
     queryKey: ["tasks", "by-plan", effectiveSelected],
     queryFn: () =>
-      apiFetch<Task[]>(`/projects/${selectedPlan?.project_id}/tasks?plan_id=${effectiveSelected}`),
+      fetchAllPages<Task>(
+        `/projects/${selectedPlan?.project_id}/tasks?plan_id=${effectiveSelected}`,
+      ),
     enabled: !!selectedPlan,
     refetchOnWindowFocus: false,
   });
+  const boardTruncated = Boolean(plansQuery.data?.truncated || tasksQuery.data?.truncated);
+  const tasks = useMemo(() => tasksQuery.data?.items ?? [], [tasksQuery.data]);
 
   // taskId -> status, for resolving each card's dependency state (the padlock)
   // and the "can't go ready while a dependency is pending" drag guard.
-  const statusById = useMemo(
-    () => new Map((tasksQuery.data ?? []).map((t) => [t.id, t.status] as const)),
-    [tasksQuery.data],
-  );
+  const statusById = useMemo(() => new Map(tasks.map((t) => [t.id, t.status] as const)), [tasks]);
 
   // hallazgo #3: desbloquear un plan desde su tarjeta (misma mutación que el
   // detalle y la página escalated — reactiva el plan y re-encola sus blocked).
@@ -207,11 +211,11 @@ export default function BoardPage() {
       // Optimistic cache update so the card jumps columns instantly.
       const key = ["tasks", "by-plan", effectiveSelected];
       await queryClient.cancelQueries({ queryKey: key });
-      const prev = queryClient.getQueryData<Task[]>(key);
-      queryClient.setQueryData<Task[]>(
-        key,
-        (prev ?? []).map((t) => (t.id === task.id ? { ...t, status: newStatus } : t)),
-      );
+      const prev = queryClient.getQueryData<PaginatedResult<Task>>(key);
+      queryClient.setQueryData<PaginatedResult<Task>>(key, {
+        truncated: prev?.truncated ?? false,
+        items: (prev?.items ?? []).map((t) => (t.id === task.id ? { ...t, status: newStatus } : t)),
+      });
       return { prev };
     },
     onError: (err, vars, context) => {
@@ -224,7 +228,7 @@ export default function BoardPage() {
   });
 
   function onDrop(newStatus: Task["status"], taskId: string) {
-    const task = (tasksQuery.data ?? []).find((t) => t.id === taskId);
+    const task = tasks.find((t) => t.id === taskId);
     if (!task || task.status === newStatus) return;
     // Mirror the server DAG guard in the UI: refuse to drag a card into `ready`
     // while an upstream dependency is still pending (the card shows a padlock).
@@ -262,9 +266,12 @@ export default function BoardPage() {
       const key = ["tasks", "by-plan", effectiveSelected];
       const newStatus = event.payload?.new_status;
       if (event.type === "task.status_changed" && event.task_id && newStatus) {
-        queryClient.setQueryData<Task[]>(key, (prev) =>
-          (prev ?? []).map((t) => (t.id === event.task_id ? { ...t, status: newStatus } : t)),
-        );
+        queryClient.setQueryData<PaginatedResult<Task>>(key, (prev) => ({
+          truncated: prev?.truncated ?? false,
+          items: (prev?.items ?? []).map((t) =>
+            t.id === event.task_id ? { ...t, status: newStatus } : t,
+          ),
+        }));
       } else if (event.type === "task.created") {
         void queryClient.invalidateQueries({ queryKey: key });
       }
@@ -281,6 +288,16 @@ export default function BoardPage() {
         title="Tablero"
         description="Planes (gerencial) arriba, tareas (operativa) abajo. Arrastra una tarea entre columnas para cambiar su estado."
       />
+
+      {/* PROY2-08: si se tocó el tope de paginación, decirlo en vez de callar. */}
+      {boardTruncated && (
+        <Card className="mb-4 border-amber-500 p-3" data-testid="board-truncated-warning">
+          <p className="text-sm text-amber-600 dark:text-amber-400">
+            El tablero muestra un máximo de 2000 filas por listado; hay más elementos que no se
+            están mostrando. Usa los filtros por proyecto/estado para acotar.
+          </p>
+        </Card>
+      )}
 
       {/* ============ Plans row ============ */}
       <section data-testid="plans-row" className="mb-8">
@@ -388,7 +405,7 @@ export default function BoardPage() {
             )}
             {tasksQuery.data && (
               <p className="text-muted-foreground text-xs">
-                {tasksQuery.data.length} {tasksQuery.data.length === 1 ? "tarea" : "tareas"}
+                {tasks.length} {tasks.length === 1 ? "tarea" : "tareas"}
               </p>
             )}
           </div>
@@ -413,7 +430,7 @@ export default function BoardPage() {
             data-testid="board-columns"
           >
             {COLUMNS.map((col) => {
-              const colTasks = (tasksQuery.data ?? []).filter((t) => t.status === col.id);
+              const colTasks = tasks.filter((t) => t.status === col.id);
               return (
                 <KanbanColumn
                   key={col.id}
