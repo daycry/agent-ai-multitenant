@@ -11,8 +11,11 @@ How it works:
   - :class:`MCPToolRunner` owns a **background thread** with its own
     asyncio loop. The thread starts at :meth:`MCPToolRunner.start`
     and dies at :meth:`MCPToolRunner.close`.
-  - :meth:`connect` opens one or more MCP sessions inside that loop
-    using an `AsyncExitStack`, so they all close together at shutdown.
+  - :meth:`connect` opens each MCP session inside that loop in a
+    DEDICATED owner task (`_ServerHandle`) that holds the transport's
+    ``async with`` from enter to exit — anyio cancel scopes must exit in
+    the task that entered them, so no other shape survives an HTTP
+    transport's teardown.
   - :meth:`call_tool` is sync from the caller's view: under the hood
     it submits the coroutine to the background loop via
     ``asyncio.run_coroutine_threadsafe`` and blocks until the
@@ -41,7 +44,7 @@ import json
 import logging
 import threading
 from concurrent.futures import Future
-from contextlib import AsyncExitStack
+from dataclasses import dataclass, field
 from typing import Any
 
 import jsonschema
@@ -118,6 +121,27 @@ def _validate_args(args: dict[str, Any], input_schema: dict[str, Any]) -> str | 
 # ---------------------------------------------------------------------------
 # Sync-over-async bridge
 # ---------------------------------------------------------------------------
+@dataclass
+class _ServerHandle:
+    """Una sesión MCP viva y la task del loop de fondo que la POSEE.
+
+    anyio exige que un cancel scope salga en la MISMA task que lo entró; los
+    transportes del SDK (`streamablehttp_client`, `sse_client`) crean task
+    groups en su ``__aenter__``, así que entrar el context manager en la task
+    de ``connect()`` y salirlo en la de ``close()`` (el patrón AsyncExitStack
+    anterior) reventaba con "Attempted to exit cancel scope in a different
+    task" en cada teardown HTTP. Ahora ``_serve()`` es la única dueña del
+    ``async with`` completo: entra, publica (session, tools), espera ``stop``
+    y sale — todo en una task. ``close()`` solo señala ``stop`` y espera el
+    join.
+    """
+
+    join: Future[Any]
+    stop: asyncio.Event
+    session: MCPSession
+    tools: list[MCPTool] = field(default_factory=list)
+
+
 class MCPToolRunner:
     """Holds N open MCP sessions and exposes them to sync callers.
 
@@ -152,13 +176,10 @@ class MCPToolRunner:
         """
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
-        # One AsyncExitStack PER connected server (F23). A shared stack meant a
-        # single server's half-open session (e.g. a connect that timed out
-        # mid-`enter_async_context`) lived in the same stack as everyone else, so
-        # the global teardown blocked ~10s on it. Isolating each session lets a
-        # timeout be treated as that server's failure without penalising the
-        # teardown of the servers that did connect cleanly.
-        self._session_stacks: dict[str, AsyncExitStack] = {}
+        # One owning task PER connected server (F23 kept the per-server
+        # isolation; the owner-task shape is what fixes the anyio cross-task
+        # cancel-scope violation — see _ServerHandle).
+        self._handles: dict[str, _ServerHandle] = {}
         self._sessions: dict[str, MCPSession] = {}
         self._tools: dict[str, list[MCPTool]] = {}
         self._started = False
@@ -196,17 +217,19 @@ class MCPToolRunner:
             if not self._started:
                 return
             try:
-                # Close each server's stack INDEPENDENTLY with its own timeout
-                # budget (F23): one server that hangs on teardown cannot starve
-                # the close of the others, and a server whose connect timed out
-                # is not in this dict at all, so it never penalises teardown.
-                for name, stack in list(self._session_stacks.items()):
+                # Close each server INDEPENDENTLY with its own timeout budget
+                # (F23): signal its owner task to unwind (the `async with` exits
+                # INSIDE that task — anyio-safe) and join it. One server that
+                # hangs on teardown cannot starve the close of the others.
+                for name, handle in list(self._handles.items()):
                     try:
-                        self._submit(stack.aclose()).result(timeout=10.0)
+                        if self._loop is not None:
+                            self._loop.call_soon_threadsafe(handle.stop.set)
+                        handle.join.result(timeout=10.0)
                     except Exception:
-                        logger.exception("error closing MCP session stack for %r", name)
+                        logger.exception("error closing MCP session for %r", name)
             finally:
-                self._session_stacks.clear()
+                self._handles.clear()
                 self._sessions.clear()
                 self._tools.clear()
                 # Drain any still-in-flight tasks (a cancelled connect coroutine,
@@ -255,32 +278,42 @@ class MCPToolRunner:
         if config.name in self._sessions:
             raise ValueError(f"server {config.name!r} is already connected")
 
-        # This server's own stack — the half-open session a timed-out connect
-        # leaves behind stays isolated here, never in the global teardown path.
-        stack = AsyncExitStack()
+        # `_serve` OWNS the whole `async with` (enter → publish → wait → exit)
+        # so every anyio cancel scope enters and exits in this one task. The
+        # thread-safe `started` future hands (session, tools, stop) back to the
+        # sync caller; on failure it carries the exception instead.
+        started: Future[tuple[MCPSession, list[MCPTool], asyncio.Event]] = Future()
 
-        async def _do() -> tuple[MCPSession, list[MCPTool]]:
-            session = await stack.enter_async_context(
-                MCPClient.connect(config, vault_resolver=self._vault_resolver)
-            )
-            tools = await session.list_tools()
-            return session, tools
+        async def _serve() -> None:
+            try:
+                async with MCPClient.connect(
+                    config, vault_resolver=self._vault_resolver
+                ) as session:
+                    tools = await session.list_tools()
+                    stop = asyncio.Event()
+                    started.set_result((session, tools, stop))
+                    await stop.wait()
+            except BaseException as exc:  # — must reach the sync caller
+                if not started.done():
+                    started.set_exception(exc)
+                    return
+                raise
 
-        future: Future[tuple[MCPSession, list[MCPTool]]] = self._submit(_do())
+        join: Future[Any] = self._submit(_serve())
         try:
-            session, tools = future.result(timeout=config.timeout_s * 2)
+            session, tools, stop = started.result(timeout=config.timeout_s * 2)
         except TimeoutError as exc:
-            # Cancel the coroutine so it stops mid-`enter_async_context` instead
-            # of leaking a subprocess/transport, then best-effort close whatever
-            # the partial entry registered — without blocking (F23). The global
-            # teardown is untouched: this server never made it into
-            # `_session_stacks`, so it cannot stall `close()`.
-            future.cancel()
-            self._discard_stack(config.name, stack)
+            # Cancelling `join` cancels the serve task; the `async with` then
+            # unwinds INSIDE that task (anyio-safe), closing whatever the
+            # partial connect opened. This server never reaches `_handles`, so
+            # it cannot stall `close()` (F23).
+            join.cancel()
             raise MCPTransportError(
                 f"server {config.name!r} connect timed out after {config.timeout_s * 2}s"
             ) from exc
-        self._session_stacks[config.name] = stack
+        self._handles[config.name] = _ServerHandle(
+            join=join, stop=stop, session=session, tools=tools
+        )
         self._sessions[config.name] = session
         self._tools[config.name] = tools
         return tools
@@ -332,30 +365,6 @@ class MCPToolRunner:
             ) from exc
 
     # -- internal ----------------------------------------------------------
-    def _discard_stack(self, server_name: str, stack: AsyncExitStack) -> None:
-        """Fire-and-forget teardown of a failed server's stack (F23).
-
-        Scheduled on the background loop after a connect timeout; we do NOT
-        block on it (the run must proceed) but attach a callback that drains any
-        exception so it never surfaces as an "exception never retrieved"
-        warning.
-        """
-        loop = self._loop
-        if loop is None:
-            return
-        try:
-            future = asyncio.run_coroutine_threadsafe(stack.aclose(), loop)
-        except RuntimeError:  # loop already stopping — nothing to clean up
-            return
-
-        def _drain(fut: Future[Any]) -> None:
-            try:
-                fut.result()
-            except Exception:
-                logger.warning("error discarding timed-out MCP stack for %r", server_name)
-
-        future.add_done_callback(_drain)
-
     def _submit(self, coro: Any) -> Future[Any]:
         """Submit a coroutine to the background loop. Returns a
         concurrent.futures.Future the caller blocks on."""
