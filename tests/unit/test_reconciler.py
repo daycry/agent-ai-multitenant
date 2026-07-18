@@ -222,4 +222,6 @@ async def test_core_isolates_a_failing_pass(monkeypatch: pytest.MonkeyPatch) -> 
         "unblocked_plans": 4,
         "completed_plans": 1,
         "pushed_worktrees": 2,
+        # G-04/P1-08: la pasada de vigilancia sin DB falla best-effort → 0.
+        "tenant_ghost_children": 0,
     }

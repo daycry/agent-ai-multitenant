@@ -756,9 +756,12 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
         "volumes": _workers_volumes(cfg),
         "healthcheck": _healthcheck(
             # G-06: ping a ESTE nodo — sin -d es un broadcast al broker
-            # compartido y contesta cualquier worker vivo (falso healthy).
+            # compartido y contesta cualquier worker vivo (falso healthy). El
+            # timeout de 30s cubre el arranque de celery bajo carga (el default
+            # de 10s producía unhealthy crónico sin fallo real).
             "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
             start_period="40s",
+            timeout="30s",
         ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
@@ -814,9 +817,12 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
         "volumes": volumes,
         "healthcheck": _healthcheck(
             # G-06: ping a ESTE nodo — sin -d es un broadcast al broker
-            # compartido y contesta cualquier worker vivo (falso healthy).
+            # compartido y contesta cualquier worker vivo (falso healthy). El
+            # timeout de 30s cubre el arranque de celery bajo carga (el default
+            # de 10s producía unhealthy crónico sin fallo real).
             "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
             start_period="40s",
+            timeout="30s",
         ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
@@ -899,6 +905,7 @@ def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dic
             "celery -A notification_dispatcher.celery_app:app inspect ping "
             "-d celery@$$HOSTNAME -t 5 || exit 1",
             start_period="40s",
+            timeout="30s",
         ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},

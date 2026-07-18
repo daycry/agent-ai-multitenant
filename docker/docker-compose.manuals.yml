@@ -300,7 +300,7 @@ services:
           "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
         ]
       interval: 30s
-      timeout: 10s
+      timeout: 30s
       retries: 5
       start_period: 60s
     networks: [agentic-net, agentic-agents, agentic-docker]
@@ -374,7 +374,7 @@ services:
           "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
         ]
       interval: 30s
-      timeout: 10s
+      timeout: 30s
       retries: 5
       start_period: 60s
     networks: [agentic-net, agentic-agents, agentic-docker]
@@ -447,7 +447,7 @@ services:
           "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
         ]
       interval: 30s
-      timeout: 10s
+      timeout: 30s
       retries: 5
       start_period: 60s
     networks: [agentic-net]
@@ -567,7 +567,7 @@ services:
           "celery -A notification_dispatcher.celery_app:app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
         ]
       interval: 30s
-      timeout: 10s
+      timeout: 30s
       retries: 3
       start_period: 40s
     depends_on:

@@ -803,12 +803,17 @@ def test_workers_healthchecks_ping_their_own_node() -> None:
     viceversa: se colgaba esperando a todos). El ping debe ir a SU nodo
     (``-d celery@$$HOSTNAME``), como el fix del dispatcher del 2026-07-10."""
     services = generate_compose(_config())["services"]
-    for name in ("workers", "workers-privileged"):
+    for name in ("workers", "workers-privileged", "notification-dispatcher"):
         flat = " ".join(services[name]["healthcheck"]["test"])
         assert "-d celery@$$HOSTNAME" in flat, (
             f"{name} healthcheck must ping its OWN node (-d celery@$$HOSTNAME), "
             "not broadcast to the shared broker"
         )
+        # La otra mitad de G-06: celery tarda >10s en arrancar bajo carga — el
+        # timeout corto producía unhealthy crónico sin fallo real.
+        assert (
+            services[name]["healthcheck"]["timeout"] == "30s"
+        ), f"{name} healthcheck timeout must be 30s (celery startup under load)"
 
 
 def test_workers_lanes_bind_data_root_and_seccomp_profiles() -> None:
