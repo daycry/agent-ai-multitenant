@@ -76,12 +76,15 @@ async def list_review_sessions_for_plan(
 async def list_running_overdue(
     session: AsyncSession, now: datetime | None = None
 ) -> list[ReviewSession]:
-    """`status='running' AND expires_at < now`. Driven by the
-    `expire_review_runtimes` beat schedule (Plan 06.5 task_06_5_13)."""
+    """Sesiones ACTIVAS (`running` O `suspended`) con `expires_at < now`.
+    Driven by the `expire_review_runtimes` beat schedule (Plan 06.5
+    task_06_5_13). PROY2-07: una `suspended` vencida también expira — antes
+    quedaba zombie para siempre y el autostart/reconciler la contaba como
+    activa (ACTIVE_REVIEW_STATUSES), bloqueando nuevas sesiones del plan."""
     when = now or datetime.now(UTC)
     result = await session.execute(
         select(ReviewSession).where(
-            ReviewSession.status == "running",
+            ReviewSession.status.in_(("running", "suspended")),
             ReviewSession.expires_at < when,
             ReviewSession.deleted_at.is_(None),
         )
@@ -128,6 +131,31 @@ async def mark_terminal(
         row.rejection_reason = rejection_reason
     await session.flush()
     return row
+
+
+async def mark_other_plan_sessions_terminal(
+    session: AsyncSession,
+    plan_id: UUID,
+    *,
+    exclude_session_id: UUID,
+) -> int:
+    """PROY2-07: al cerrar el plan (veredicto), las OTRAS sesiones activas
+    (`running`/`suspended`) del plan se marcan `expired` — quedaban zombies
+    contando como activas para el autostart/reconciler. Devuelve cuántas cerró."""
+    result = await session.execute(
+        select(ReviewSession).where(
+            ReviewSession.plan_id == plan_id,
+            ReviewSession.id != exclude_session_id,
+            ReviewSession.status.in_(("running", "suspended")),
+            ReviewSession.deleted_at.is_(None),
+        )
+    )
+    rows = list(result.scalars().all())
+    for row in rows:
+        row.status = "expired"
+    if rows:
+        await session.flush()
+    return len(rows)
 
 
 async def mark_rerun_requested(session: AsyncSession, session_id: UUID) -> ReviewSession | None:

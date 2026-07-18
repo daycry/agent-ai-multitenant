@@ -50,6 +50,7 @@ from api_server.config import get_settings
 from api_server.db.domain import Plan
 from api_server.db.models import ReviewSession as ReviewSessionRow
 from api_server.db.review_session_repo import (
+    mark_other_plan_sessions_terminal,
     mark_rerun_requested,
     mark_terminal,
     touch_activity,
@@ -492,6 +493,10 @@ async def submit_verdict(
         )
         if row is None:
             raise HTTPException(status_code=404, detail="review session not found")
+        # PROY2-07: el cierre del plan termina las OTRAS sesiones activas
+        # (running/suspended de tandas previas) — sin esto quedaban zombies
+        # que el autostart/reconciler contaba como activas.
+        await mark_other_plan_sessions_terminal(db, row.plan_id, exclude_session_id=row.id)
         plan = await db.get(Plan, row.plan_id)
         plan_status: str | None = None
         # ADR 0072 fase 2: contexto para el auto-PR si el plan pasa a completed.

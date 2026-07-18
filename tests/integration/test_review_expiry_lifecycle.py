@@ -58,6 +58,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
         "project": uuid4(),
         "plan": uuid4(),
         "overdue_session": uuid4(),
+        "suspended_overdue_session": uuid4(),
         "terminal_session": uuid4(),
     }
     now = datetime.now(UTC)
@@ -95,6 +96,19 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             spec,
             now - timedelta(hours=1),
         )
+        # PROY2-07: suspended session whose TTL passed — zombie without this fix
+        # (suspended never expired; the reconciler counted it as ACTIVE forever).
+        await conn.execute(
+            "INSERT INTO review_sessions"
+            " (id, tenant_id, plan_id, spec, status, container_ids, expires_at, suspended_at)"
+            " VALUES ($1, $2, $3, $4::jsonb, 'suspended', '[]'::jsonb, $5, $6)",
+            ids["suspended_overdue_session"],
+            ids["tenant"],
+            ids["plan"],
+            spec,
+            now - timedelta(hours=1),
+            now - timedelta(hours=30),
+        )
         # Terminal session with leftover containers — reap candidate.
         await conn.execute(
             "INSERT INTO review_sessions"
@@ -122,7 +136,8 @@ async def test_expiry_blocks_plan_and_soft_deletes_terminal(
 
     result = await _expire_review_runtimes(workers_settings)  # type: ignore[arg-type]
 
-    assert result["expired"] == 1
+    # PROY2-07: la running vencida Y la suspended vencida expiran (2).
+    assert result["expired"] == 2
     assert result["reaped"] == 1
     assert "error" not in result
 
@@ -136,6 +151,10 @@ async def test_expiry_blocks_plan_and_soft_deletes_terminal(
         # F40: the overdue session expired + the plan is now blocked.
         assert overdue is not None and overdue.status == "expired"
         assert plan is not None and plan.status == "blocked"
+        # PROY2-07: la suspended con TTL pasado también expira (era zombie).
+        async with sessionmaker() as session:
+            suspended = await session.get(ReviewSession, ids["suspended_overdue_session"])
+        assert suspended is not None and suspended.status == "expired"
         # F41 + ADR 0107: containers reaped (ids cleared) pero la fila SOBREVIVE
         # — el veredicto/motivo siguen visibles para el panel y para
         # generate-corrections.
@@ -151,5 +170,35 @@ async def test_expiry_blocks_plan_and_soft_deletes_terminal(
         async with sessionmaker() as session:
             plan2 = await session.get(Plan, ids["plan"])
         assert plan2 is not None and plan2.status == "blocked"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_verdict_terminates_other_active_sessions(
+    _migrated: None, workers_settings: object, migrations_pg_dsn: str
+) -> None:
+    """PROY2-07: al cerrar el plan (veredicto sobre la sesión A), las OTRAS
+    sesiones activas del plan (running/suspended de tandas previas) se marcan
+    terminales — no quedan zombies contando como activas."""
+    from api_server.db.review_session_repo import mark_other_plan_sessions_terminal
+
+    ids = await _seed(migrations_pg_dsn)
+
+    engine = create_async_engine(workers_settings.database_url)  # type: ignore[attr-defined]
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessionmaker() as session, session.begin():
+            closed = await mark_other_plan_sessions_terminal(
+                session, ids["plan"], exclude_session_id=ids["overdue_session"]
+            )
+        assert closed == 1  # la suspended; la terminal (approved) no se toca
+        async with sessionmaker() as session:
+            kept = await session.get(ReviewSession, ids["overdue_session"])
+            suspended = await session.get(ReviewSession, ids["suspended_overdue_session"])
+            terminal = await session.get(ReviewSession, ids["terminal_session"])
+        assert kept is not None and kept.status == "running"
+        assert suspended is not None and suspended.status == "expired"
+        assert terminal is not None and terminal.status == "approved"
     finally:
         await engine.dispose()

@@ -91,7 +91,14 @@ def make_plan_branch_name(plan_id: str, slug: str) -> str:
         'plan/abc123'
     """
     short = plan_id.replace("-", "").lower()[:_PLAN_ID_SHORT_LEN] or plan_id
-    norm = _SLUG_RE.sub("-", (slug or "").lower()).strip("-")
+    # PROY2-14: transliterar acentos/diéresis/ñ (NFKD) en vez de perder letras
+    # ("Búsqueda" → "busqueda", no "b-squeda") — espejo de api_server.slug.
+    import unicodedata
+
+    folded = (
+        unicodedata.normalize("NFKD", slug or "").encode("ascii", "ignore").decode("ascii").lower()
+    )
+    norm = _SLUG_RE.sub("-", folded).strip("-")
     if not norm:
         return f"plan/{short}"
     return f"plan/{short}-{norm}"

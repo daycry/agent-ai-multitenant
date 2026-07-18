@@ -796,6 +796,21 @@ def test_workers_celery_app_target_is_the_importable_module() -> None:
         ), f"{name} healthcheck 'celery inspect ping' must target -A workers.celery_app"
 
 
+def test_workers_healthchecks_ping_their_own_node() -> None:
+    """G-06 (auditoría proyecto 2026-07-17): ``celery inspect ping`` sin ``-d``
+    es un broadcast al broker COMPARTIDO — contesta cualquier worker vivo, así
+    que un contenedor roto seguía healthy mientras otra lane respondiera (y
+    viceversa: se colgaba esperando a todos). El ping debe ir a SU nodo
+    (``-d celery@$$HOSTNAME``), como el fix del dispatcher del 2026-07-10."""
+    services = generate_compose(_config())["services"]
+    for name in ("workers", "workers-privileged"):
+        flat = " ".join(services[name]["healthcheck"]["test"])
+        assert "-d celery@$$HOSTNAME" in flat, (
+            f"{name} healthcheck must ping its OWN node (-d celery@$$HOSTNAME), "
+            "not broadcast to the shared broker"
+        )
+
+
 def test_workers_lanes_bind_data_root_and_seccomp_profiles() -> None:
     services = generate_compose(_config(data_root="/data/agent-platform"))["services"]
     for name in ("workers", "workers-privileged"):

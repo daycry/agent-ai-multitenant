@@ -755,7 +755,10 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
         "environment": _workers_env(cfg, prod=prod),
         "volumes": _workers_volumes(cfg),
         "healthcheck": _healthcheck(
-            "celery -A workers.celery_app inspect ping -t 5 || exit 1", start_period="40s"
+            # G-06: ping a ESTE nodo — sin -d es un broadcast al broker
+            # compartido y contesta cualquier worker vivo (falso healthy).
+            "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
+            start_period="40s",
         ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
@@ -810,7 +813,10 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
         "environment": env,
         "volumes": volumes,
         "healthcheck": _healthcheck(
-            "celery -A workers.celery_app inspect ping -t 5 || exit 1", start_period="40s"
+            # G-06: ping a ESTE nodo — sin -d es un broadcast al broker
+            # compartido y contesta cualquier worker vivo (falso healthy).
+            "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
+            start_period="40s",
         ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
