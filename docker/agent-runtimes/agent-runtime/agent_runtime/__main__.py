@@ -382,12 +382,44 @@ def _wire_mcp_servers(registry: Any, spec: dict[str, Any]) -> Any | None:
                     "tools": registered,
                 }
             )
+            # También como STEP: el worker solo persiste `{"event": "step"}` en
+            # `executions.steps_log`, así que sin esto el wiring MCP era
+            # invisible en el visor de runs (prueba Atlassian 2026-07-18: el
+            # diagnóstico de un server que no conectaba exigió repros manuales).
+            _emit(
+                {
+                    "event": "step",
+                    "step": {
+                        "kind": "mcp_wire",
+                        "server": config.name,
+                        "status": "ok",
+                        "tools": registered,
+                        "summary": (
+                            f"MCP server '{config.name}' connected: "
+                            f"{len(registered)} tool(s) registered"
+                        ),
+                    },
+                }
+            )
         except Exception as exc:
+            name = str(raw.get("name", "?"))
+            error = f"{type(exc).__name__}: {exc}"
             _emit(
                 {
                     "event": "mcp.server_failed",
-                    "server": str(raw.get("name", "?")),
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "server": name,
+                    "error": error,
+                }
+            )
+            _emit(
+                {
+                    "event": "step",
+                    "step": {
+                        "kind": "mcp_wire",
+                        "server": name,
+                        "status": "error",
+                        "summary": f"MCP server '{name}' FAILED to connect: {error}",
+                    },
                 }
             )
     return runner
