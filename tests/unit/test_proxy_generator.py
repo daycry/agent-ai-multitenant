@@ -121,9 +121,14 @@ def test_caddyfile_routes_api_v1_intact_before_stripping_api() -> None:
     # The lone backend route that already starts with /api must be matched and
     # forwarded INTACT before the generic /api strip, or the public API breaks.
     out = generate_caddyfile(_config())
-    # The bare /api/v1 and /api/v1/* both match the no-strip rule.
-    assert "handle /api/v1 /api/v1/*" in out
-    idx_v1 = out.index("handle /api/v1")
+    # The bare /api/v1 and /api/v1/* both match the no-strip rule. Caddy's
+    # `handle` takes ONE matcher, so two paths need a NAMED matcher — the old
+    # `handle /api/v1 /api/v1/*` was a Caddyfile PARSE ERROR (caught live
+    # 2026-07-18 running `caddy validate` on the generated file: the proxy
+    # would never boot in production).
+    assert "@apiv1 path /api/v1 /api/v1/*" in out
+    assert "handle @apiv1" in out
+    idx_v1 = out.index("handle @apiv1")
     idx_api = out.index("handle_path /api/*")
     assert idx_v1 < idx_api, "the /api/v1 no-strip rule must precede the /api strip"
     assert "reverse_proxy api-server:8000" in out
@@ -196,3 +201,43 @@ def test_caddyfile_tls_acme_emits_acme_ca_when_given() -> None:
     )
     out = generate_caddyfile(_config(system=sys_cfg))
     assert "acme_ca https://acme.corp.internal/directory" in out
+
+
+def test_generated_caddyfile_is_parseable_by_caddy(tmp_path) -> None:
+    """Candado REAL: el Caddyfile generado debe pasar `caddy validate` (el pin
+    textual no basta — pinneó durante meses una sintaxis que Caddy rechaza).
+    Se usa el binario del contenedor caddy; skip limpio sin docker."""
+    import shutil
+    import subprocess
+
+    if shutil.which("docker") is None:
+        pytest.skip("docker no disponible")
+
+    out_dir = tmp_path / "caddy"
+    out_dir.mkdir()
+    (out_dir / "Caddyfile").write_text(generate_caddyfile(_config()), encoding="utf-8")
+    posix_dir = str(out_dir).replace("\\", "/").replace("C:", "//c")
+    proc = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{posix_dir}:/etc/caddy:ro",
+            "caddy:2.8-alpine",
+            "caddy",
+            "validate",
+            "--config",
+            "/etc/caddy/Caddyfile",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={**__import__("os").environ, "MSYS_NO_PATHCONV": "1"},
+        check=False,
+    )
+    if proc.returncode != 0 and "Unable to find image" in (proc.stderr or ""):
+        pytest.skip("imagen caddy no disponible offline")
+    assert proc.returncode == 0, (
+        "caddy validate rechazó el Caddyfile generado:\n" + proc.stderr[-800:]
+    )

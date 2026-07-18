@@ -131,8 +131,13 @@ def test_every_prod_compose_env_ref_is_written_to_the_dotenv() -> None:
     falls back to a dev default or fails (Plan prod-01 task_05, the
     config_generators ↔ builders cross-check)."""
     cfg = _prod_config()
-    compose = generate_compose(cfg)
-    dotenv = set(build_env_vars(cfg, generate_secrets()))
+    # monitoring=True EN AMBOS LADOS: el overlay también forma parte del
+    # contrato (grafana referencia ${GRAFANA_ADMIN_USER}/${..PASSWORD}, que el
+    # .env solo emite con el flag). El RealStepExecutor pasa el MISMO flag a
+    # compose y env — generarlos con flags distintos deja a Grafana con
+    # credenciales vacías (verificación del instalador, 2026-07-18).
+    compose = generate_compose(cfg, monitoring=True)
+    dotenv = set(build_env_vars(cfg, generate_secrets(), monitoring=True))
 
     referenced: set[str] = set()
     for service in compose["services"].values():
