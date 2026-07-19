@@ -1,0 +1,121 @@
+import { test } from "@playwright/test";
+import { login } from "../lib/auth";
+import { generateManual, ManualDef } from "../lib/manual";
+
+// Manual 14 — Tutorial completo: proyecto CodeIgniter 4 con GitHub, el
+// equipo de agentes CI4 y los MCP recomendados (Context7 + Atlassian).
+// Encargo del operador (2026-07-19): "muy detallado para que funcione a la
+// perfección". Cada pantalla capturada existe en la app real; los bloques de
+// configuración (YAML/Vault/campos) van en el cuerpo para copiar tal cual.
+const manual: ManualDef = {
+  order: "14",
+  slug: "14-tutorial-proyecto-ci4",
+  title: "Tutorial: proyecto CodeIgniter 4 con GitHub, agentes y MCP",
+  audience: "Tenant admin / project owner que arranca su primer proyecto real",
+  intro:
+    "<p>Este tutorial monta, de cero y de punta a punta, un proyecto <b>CodeIgniter 4</b> respaldado por un repositorio de <b>GitHub</b>, con el <b>equipo de agentes CI4</b> que la plataforma trae de serie, y conectado por MCP a <b>Context7</b> (documentación de frameworks al día — los agentes dejan de alucinar APIs de versiones viejas) y a <b>Atlassian</b> (publicar documentación en Confluence y sincronizar issues de Jira). Al final tendrás un plan ejecutándose, el trabajo llegando como Pull Request a tu GitHub y la documentación fluyendo a Confluence.</p><p>El flujo completo es: <b>requisitos → proyecto → equipo → MCPs → tools a agentes → skills → primer plan → seguimiento → PR</b>. Cada paso indica la pantalla exacta, los valores exactos y el porqué. Donde hay una trampa conocida (egress, composer, tareas mal definidas) se avisa en el propio paso — este tutorial incorpora todo lo aprendido en las pruebas e2e reales de la plataforma.</p><p>Convenciones: sustituye <code>tuorg/turepo</code> por tu organización y repositorio de GitHub, y <code>tuempresa.atlassian.net</code> por tu instancia de Atlassian. Los secretos van SIEMPRE en Vault — nunca en formularios de configuración ni en ficheros del repo.</p>",
+  steps: [
+    {
+      title: "Requisitos previos (una sola vez)",
+      goto: "/admin/dashboard",
+      body: "<p>Antes de crear el proyecto, deja listos estos cuatro requisitos:</p><ul><li><b>Un proveedor LLM activo.</b> En <b>Plataforma → Proveedores LLM</b> debe existir al menos un proveedor con el candado en verde (usa el botón <b>Probar</b>). Cualquiera de los cuatro caminos vale (Claude SDK, Copilot, Azure Foundry u Ollama local/cloud): los agentes, el asistente y el córtex pueden usar cualquier proveedor del catálogo en cualquier momento, y el <i>vigía de credenciales</i> te avisará al inbox si alguno caduca.</li><li><b>Un PAT de GitHub</b> (Settings → Developer settings → Personal access tokens) con permisos <code>repo</code> (contenido y pull requests) sobre <code>tuorg/turepo</code>. Lo guardarás en Vault en el paso del proyecto — el sistema lo usa para hacer push de las ramas de plan y abrir los PR automáticos.</li><li><b>Un API token de Atlassian</b> (id.atlassian.com → Security → API tokens) de una cuenta con permiso de escritura en el espacio de Confluence y el proyecto de Jira que quieras usar.</li><li><b>El repositorio GitHub creado</b> con la rama <code>main</code> inicializada (un README basta). El sistema clona/empuja contra ese remoto; la rama base debe existir para que el PR automático tenga contra qué abrirse.</li></ul><p>Con esto en su sitio, el resto del tutorial es todo dentro del panel.</p>",
+      fullPage: true,
+    },
+    {
+      title: "Crear el proyecto CodeIgniter 4",
+      goto: "/admin/projects",
+      body: "<p>En <b>Recursos → Proyectos</b>, pulsa <b>«Nuevo proyecto»</b> y rellena:</p><ul><li><b>Nombre</b>: p. ej. <code>Mi API CI4</code>. El slug se deriva solo.</li><li><b>Stack</b>: <code>php</code> — determina el runtime template por defecto y qué equipo built-in encaja.</li><li><b>Runtime template</b>: <code>php-phpunit</code>. Es el contenedor donde los agentes ejecutan el toolchain del proyecto (composer, phpunit, spark) vía <code>stack_exec</code> — los workers nunca ejecutan código de usuario (Principio 2), lo hace este runtime efímero con red restringida.</li><li><b>Git remoto</b>: <code>https://github.com/tuorg/turepo.git</code>, rama por defecto <code>main</code>. La credencial (el PAT) se referencia por Vault: guarda el token en la ruta que el formulario te indique (convención <code>vault:secret/data/git/&lt;proyecto&gt;</code>) — el formulario nunca almacena el token.</li><li><b>Comandos permitidos</b> (allowlist deny-by-default de <code>shell_exec</code>/<code>stack_exec</code>): <code>composer</code>, <code>php</code>, <code>vendor/bin/phpunit</code>. Sin esta lista los agentes no pueden ni instalar dependencias ni correr tests: añádela ahora.</li><li><b>Dominios permitidos</b>: déjalo vacío de momento; añadiremos <code>mcp.context7.com</code> en el paso de Context7.</li></ul><p>Guarda. Cada plan de este proyecto se materializará como una rama <code>plan/&lt;id&gt;-&lt;slug&gt;</code> en tu GitHub, con commits que llevan los trailers <code>Plan-Id</code>/<code>Task-Id</code>/<code>Execution-Id</code>, y un PR automático al completarse (Principio 5).</p>",
+      fullPage: true,
+    },
+    {
+      title: "Adoptar el equipo CodeIgniter 4 built-in",
+      goto: "/admin/teams",
+      body: "<p>La plataforma trae un <b>equipo CI4 de 10 agentes</b> mantenido de serie (PM líder, arquitecto, backend devs, frontend, QA, reviewer, DevOps, security y technical writer) con personas y prompts especializados en CodeIgniter 4. En <b>Recursos → Equipos</b>, localiza <b>«CodeIgniter 4»</b> en la pestaña de built-in y pulsa <b>«Adoptar»</b> (ADR 0066): la adopción crea TU copia del equipo — puedes ajustar personas, modelos o skills sin tocar el original, y el original puede evolucionar sin pisarte.</p><p>En el diálogo de adopción, asócialo a tu proyecto <code>Mi API CI4</code>. Desde ese momento la <b>asignación por rol</b> (ADR 0091) despachará cada tarea del plan al agente del rol correspondiente: las tareas <code>backend_dev</code> al Backend Dev del equipo, las <code>qa</code> al QA, etc.</p><p><b>Modelo LLM</b>: los agentes heredan el modelo por la cadena plataforma → proyecto → agente (ADR 0055/0082). Si quieres que este proyecto use un modelo concreto (p. ej. el que mejor salga en tu pantalla <b>Rendimiento</b>), fíjalo a nivel de proyecto y deja que los agentes hereden; sobrescribe por agente solo cuando tengas un motivo (p. ej. un reviewer con un modelo más potente).</p>",
+      fullPage: true,
+    },
+    {
+      title: "Revisar el Hub de Capacidad de los agentes",
+      goto: "/admin/agents",
+      body: "<p>Abre la ficha de un agente del equipo (p. ej. el <b>Backend Dev</b>). Su <b>Hub de Capacidad</b> resume las cuatro vías con su estado real:</p><ul><li><b>SER</b> — su persona CI4 (system prompt bilingüe, modelo heredado, temperatura).</li><li><b>SABER</b> — las knowledge bases de rol/stack asignadas (el corpus PHP/CI4 curado).</li><li><b>HACER</b> — sus tools: verás las builtin (ficheros, tests, red) y aquí añadiremos las MCP en unos pasos.</li><li><b>RECORDAR</b> — el scope de memoria (para un equipo, <code>team_shared</code> es lo razonable: lo aprendido lo comparte el equipo).</li></ul><p>No cambies nada aún — este paso es para que reconozcas la pantalla: volveremos aquí a asignar las tools MCP y una skill. Regla de oro del Hub: <i>lo que no está asignado aquí, el agente no lo ve en sus runs</i> — la allowlist efectiva de un run es la intersección de lo asignado al agente con el modo de ejecución.</p>",
+      fullPage: true,
+    },
+    {
+      title: "MCP 1/2 — Context7 (documentación de frameworks al día)",
+      goto: "/admin/projects",
+      body: "<p>Context7 es un MCP remoto público que sirve documentación ACTUALIZADA de frameworks — para un proyecto CI4 significa que los agentes consultan la API real de CodeIgniter 4.x en vez de recordarla (adiós a los métodos alucinados de versiones viejas). Entra en tu proyecto → pestaña <b>MCP servers</b> → <b>«Añadir MCP server»</b>:</p><ul><li><b>Nombre</b>: <code>context7</code></li><li><b>Transporte</b>: <code>streamable_http</code></li><li><b>URL</b>: <code>https://mcp.context7.com/mcp</code></li><li><b>Credencial</b>: opcional (funciona sin cuenta con rate limits). Con API key, guárdala en Vault como <code>CONTEXT7_API_KEY</code> en <code>vault:secret/data/mcp/context7/&lt;project_id&gt;</code> — viajará como cabecera.</li></ul><p><b>⚠️ Egress obligatorio</b>: los runs de agentes salen a internet por el proxy allowlisted (deny-by-default). Vuelve a la configuración del proyecto y añade <code>mcp.context7.com</code> a los <b>dominios permitidos</b>; sin esto el transporte devolverá <code>403 Filtered</code> y el server nunca conectará (verás el motivo exacto en el step <code>mcp_wire</code> del visor de runs).</p><p>Pulsa <b>«Probar»</b> — debe listar <code>resolve-library-id</code> y <code>get-library-docs</code> — y después <b>«Importar tools»</b>: quedan en el catálogo como <code>context7.resolve-library-id</code> y <code>context7.get-library-docs</code>.</p>",
+      fullPage: true,
+    },
+    {
+      title: "MCP 2/2 — Atlassian (Confluence + Jira)",
+      goto: "/admin/projects",
+      body: '<p>Para agentes autónomos usa el server MCP <b>self-hosted</b> de Atlassian con API token (el remoto oficial exige OAuth interactivo de un humano, que no encaja en runs). Despliega el sidecar junto al stack, conectado a la red de agentes:</p><p><code>docker-compose.override.yml</code>:</p><pre>services:\n  mcp-atlassian:\n    image: ghcr.io/sooperset/mcp-atlassian:latest\n    environment:\n      JIRA_URL: https://tuempresa.atlassian.net\n      CONFLUENCE_URL: https://tuempresa.atlassian.net/wiki\n      JIRA_USERNAME: bot@tuempresa.com\n      JIRA_API_TOKEN: ${ATLASSIAN_API_TOKEN}\n      CONFLUENCE_USERNAME: bot@tuempresa.com\n      CONFLUENCE_API_TOKEN: ${ATLASSIAN_API_TOKEN}\n    command: ["--transport", "streamable-http", "--port", "9000"]\n    networks: [agentic-agents]</pre><p>Levántalo (<code>docker compose up -d mcp-atlassian</code>) y declara el server en el proyecto:</p><ul><li><b>Nombre</b>: <code>atlassian</code> · <b>Transporte</b>: <code>streamable_http</code> · <b>URL</b>: <code>http://mcp-atlassian:9000/mcp</code></li></ul><p>Al ser un hostname INTERNO de la red de agentes, no pasa por el proxy de egress (la declaración del server en el proyecto es la autorización). <b>«Probar»</b> debe listar las tools de Confluence y Jira; <b>«Importar tools»</b> las materializa como <code>atlassian.confluence_create_page</code>, <code>atlassian.jira_transition_issue</code>, <code>atlassian.jira_search</code>… Este flujo exacto está validado e2e en esta plataforma: un run real publicó una página en Confluence y transicionó una issue de Jira encadenando la URL devuelta.</p>',
+      fullPage: true,
+    },
+    {
+      title: "Otros MCP recomendados (y cuáles evitar)",
+      goto: "/admin/tools",
+      body: "<p>Con el mismo flujo (declarar → probar → importar → asignar) puedes añadir más servers. Recomendaciones honestas para un proyecto CI4:</p><ul><li><b>GitHub</b> (plantilla del catálogo): tools de issues y PRs — útil si gestionas el backlog en GitHub Issues además del PR automático que ya tienes. Guarda el <code>GITHUB_TOKEN</code> en la ruta de Vault que la plantilla te indique.</li><li><b>Un MCP propio</b> de tu empresa (ERP, CRM, base de conocimiento interna): con FastMCP son ~30 líneas de Python; despliégalo como el sidecar de Atlassian (red <code>agentic-agents</code>, transporte <code>streamable-http</code>) y sigue el flujo universal. La receta completa está en <code>docs/03-guides/recetas-mcp-tools-skills.md</code>.</li><li><b>Docling</b> (interno): la conversión de documentos ya está integrada en la plataforma vía la tool <code>document_convert</code> — no necesitas declararlo por MCP.</li></ul><p><b>⚠️ Evita por ahora</b> las plantillas históricas con transporte <code>stdio</code> que referencian binarios (<code>npx …</code>, <code>uvx …</code>): esos ejecutables no están empaquetados en la imagen del runtime y el server no arrancará (decisión pendiente en el ADR 0117). Regla práctica: <b>prefiere siempre servers HTTP</b> (<code>streamable_http</code>/<code>sse</code>) — remotos o sidecars — que son los validados e2e.</p>",
+      fullPage: true,
+    },
+    {
+      title: "Asignar las tools MCP a los agentes correctos",
+      goto: "/admin/agents",
+      body: "<p>Importar las tools NO basta: cada agente solo ve las que tiene asignadas (la allowlist filtra el resto). Vuelve a la ficha de cada agente → sección <b>Tools</b> → pestaña <b>Avanzadas</b> y asigna con criterio de mínimo privilegio:</p><ul><li><b>Backend Dev / Frontend Dev / Arquitecto</b>: <code>context7.resolve-library-id</code> + <code>context7.get-library-docs</code> — son quienes escriben código y consultan APIs.</li><li><b>Technical Writer</b>: <code>atlassian.confluence_create_page</code> (+ <code>context7.*</code> si documenta APIs) — es quien publica documentación.</li><li><b>Project Manager</b>: <code>atlassian.jira_search</code> + <code>atlassian.jira_transition_issue</code> — es quien sincroniza el estado con Jira.</li></ul><p>No asignes todas las tools a todos: menos superficie es más seguridad Y mejor foco del modelo (menos tools anunciadas = elecciones más acertadas). Si un run intenta llamar una tool no asignada verás <code>unknown tool</code> en su timeline — la señal de que falta esta capa.</p>",
+      fullPage: true,
+    },
+    {
+      title: "Skills: convertir el uso de los MCP en hábito",
+      goto: "/admin/agents",
+      body: "<p>Las tools dan la CAPACIDAD; las <b>skills</b> (fragmentos de system prompt asignables, ADR 0050) fijan el HÁBITO de usarlas sin repetirlo en cada tarea. Crea estas dos vía <code>POST /api/skills</code> (rol tenant admin) y asígnalas en la sección <b>Skills</b> de la ficha de cada agente:</p><p><b>Skill «Docs al día con Context7»</b> (para los devs y el arquitecto):</p><pre>Antes de usar una API de CodeIgniter 4 (o de cualquier librería) de la\nque no estés 100% seguro, resuelve la librería con\ncontext7.resolve-library-id y consulta context7.get-library-docs con el\ntopic concreto. Prefiere SIEMPRE la firma devuelta por la documentación\na tu memoria.</pre><p><b>Skill «Sincronizar Jira al cerrar»</b> (para el PM):</p><pre>Cuando una tarea con issue de Jira asociada quede hecha, transiciónala\nal estado correspondiente con atlassian.jira_transition_issue e incluye\nen el comentario el enlace al resultado (PR, página de Confluence).</pre><p>Recuerda: una skill no otorga tools — el agente debe tener la tool asignada ADEMÁS de la skill (el campo <code>required_tools</code> documenta la dependencia). Este mecanismo está validado e2e: en las pruebas reales, un agente usó una custom tool que su tarea nunca mencionaba, inducido solo por el fragment de su skill.</p>",
+      fullPage: true,
+    },
+    {
+      title: "El primer plan: qué pedir y cómo",
+      goto: "/admin/board",
+      body: "<p>Con todo cableado, crea el primer plan. Dos caminos:</p><ul><li><b>Chat de planning</b> (recomendado): desde el proyecto, abre el chat de planificación y describe el objetivo en lenguaje natural — p. ej. <i>«Inicializa un proyecto CodeIgniter 4 con composer, configura el entorno base (.env, rutas, un controlador Health con test), documenta la instalación en Confluence (espacio DOCS) y deja la issue CI4-1 de Jira en Done»</i>. El planner genera las tareas con roles, dependencias y <b>criterios de aceptación</b>, y las inserta en el Kanban asignadas por rol.</li><li><b>Especificación manual</b>: crea el plan con sus tareas a mano si prefieres control total.</li></ul><p><b>Reglas de oro para que los runs converjan</b> (aprendidas en las pruebas e2e):</p><ul><li><b>Tareas autocontenidas</b>: si una tarea dice «publica el fichero X», X debe existir o la propia tarea debe crearlo antes — un insumo inexistente hace que el agente agote sus iteraciones buscándolo.</li><li><b>Nombra las tools MCP por su nombre exacto</b> con namespace (<code>atlassian.confluence_create_page</code>) cuando la acción sea puntual de esa tarea.</li><li><b>Criterios de aceptación verificables</b>: el reviewer y la self-review certifican contra ellos; «se invocó atlassian.X con space DOCS» es verificable (la self-review VE las tool calls del run), «que quede bonito» no.</li></ul>",
+      fullPage: true,
+    },
+    {
+      title: "Aprobar y ejecutar el plan",
+      goto: "/admin/board",
+      body: "<p>El plan nace en borrador/pendiente de aprobación. La transición a <b>aprobado</b> es un gate humano explícito (botón <b>Aprobar</b> — el PUT genérico la rechaza por diseño), y con la aprobación puedes <b>iniciar la ejecución</b>. A partir de ahí el ciclo es autónomo:</p><ul><li>El orchestrator despacha cada tarea <code>ready</code> al agente de su rol; el runtime abre el worktree del plan, conecta los MCP declarados (step <code>mcp_wire</code> en el timeline del run) y el agente trabaja: percibe → recuerda → planifica → actúa (tools) → observa → reflexiona.</li><li>Cada run pasa su <b>self-review</b> (que certifica contra los criterios de aceptación viendo el código real y las tool calls) y después el <b>AI reviewer</b> del equipo revisa el trabajo con su propio run.</li><li>Los commits van llegando a la rama <code>plan/…</code> de tu GitHub con sus trailers.</li></ul><p>Si algo exige decisión humana (una acción sensible con política de aprobación, un run que no converge), la tarea espera en los gates correspondientes — lo verás en el paso de seguimiento.</p>",
+      fullPage: true,
+    },
+    {
+      title: "Seguimiento en vivo: La Oficina",
+      goto: "/admin/office",
+      body: "<p><b>Trabajo → La Oficina</b> es el tenant en vivo como piso 2D donde TODO mapea a telemetría real: cada mesa es un plan con runs activos, cada personaje un agente con su estado verdadero (⌨️ trabajando, 🔍 revisando, 💫 dando vueltas en un bucle detectado, 🚪 esperando a un humano, 😴 sin trabajo), y la burbuja muestra su tarea. Clic en un personaje → su run real.</p><p>Durante tu primer plan CI4 verás al Backend Dev sentarse en la mesa del plan, al Reviewer acercarse cuando le toque revisar, y — si configuraste bien los MCP — nada de personajes mareados: un agente dando vueltas suele significar una tarea mal definida (insumo inexistente) o una tool que no conecta.</p>",
+      fullPage: true,
+    },
+    {
+      title: "El detalle de un run y su Replay",
+      goto: "/admin/runs",
+      body: "<p>En <b>Trabajo → Runs</b> tienes el historial completo; entra en cualquier ejecución para ver su <b>timeline</b>: cada paso del grafo (percepción, memoria, llamadas al modelo con tokens y coste, cada <code>tool_call</code> con argumentos y resultado, la conexión <code>mcp_wire</code> de cada server MCP, y el veredicto de la self-review). Es tu herramienta de diagnóstico número uno:</p><ul><li><code>mcp_wire</code> en error → el server MCP no conectó (el motivo exacto está en el step: egress, URL, credencial).</li><li><code>unknown tool</code> → la tool no está asignada al agente (paso de asignación).</li><li>Bucles de <code>read_file</code>/<code>list_files</code> → tarea no autocontenida.</li></ul><p>El botón <b>🎬 Replay</b> reproduce el run paso a paso (play/pausa/velocidad/scrubber) — perfecto para entender qué hizo el agente y para enseñar el sistema a tu equipo.</p>",
+      fullPage: true,
+    },
+    {
+      title: "«Esperan tu decisión» y la validación humana del plan",
+      goto: "/admin/human-queue",
+      body: "<p><b>Trabajo → Esperan tu decisión</b> reúne en una sola lista, por antigüedad, todo lo que está parado hasta que actúes: planes pendientes de validación humana, acciones sensibles por aprobar, y runs escalados o aparcados. Con más de 24 h de espera la edad se pinta en rojo. Cada fila te lleva a la pantalla real donde se resuelve.</p><p>Cuando todas las tareas del plan CI4 terminen, el plan pasa a <b>pendiente de validación humana</b> (los tests humanos son a nivel de PLAN — Principio 7): pruébalo (el controlador Health responde, los tests pasan, la página de Confluence existe, la issue de Jira está en Done) y valida. Con tu validación el plan se completa y…</p>",
+      fullPage: true,
+    },
+    {
+      title: "El Pull Request en tu GitHub",
+      goto: "/admin/board",
+      body: "<p>…al completarse, el sistema abre automáticamente el <b>Pull Request</b> en <code>tuorg/turepo</code>: rama <code>plan/&lt;id&gt;-&lt;slug&gt;</code> contra <code>main</code>, con el cuerpo autogenerado (resumen del plan y sus tareas) y todos los commits con sus trailers <code>Plan-Id</code>/<code>Task-Id</code>/<code>Execution-Id</code> — trazabilidad completa desde cada línea de código hasta el run que la escribió. La URL del PR queda visible en la ficha del plan (<code>pr_url</code>); si el PR no pudo abrirse, el motivo exacto queda en <code>pr_error</code> (p. ej. la rama base no existe en el remoto).</p><p>Revisa y mergea el PR en GitHub como con cualquier equipo humano. El ciclo queda cerrado: <b>idea → plan → agentes → PR → main</b>, con documentación en Confluence y Jira sincronizado por el camino.</p>",
+      fullPage: true,
+    },
+    {
+      title: "Troubleshooting específico de CI4 + MCP",
+      goto: "/admin/runs",
+      body: "<p>Los tropiezos más probables y su arreglo, por síntoma:</p><ul><li><b><code>403 Filtered</code> al conectar Context7</b> → falta <code>mcp.context7.com</code> en los dominios permitidos del proyecto (el egress es deny-by-default). El step <code>mcp_wire</code> del run lo dice literalmente.</li><li><b><code>mcp_wire</code> error contra <code>mcp-atlassian</code></b> → el sidecar no está en la red <code>agentic-agents</code>, no arrancó, o las credenciales de Atlassian son inválidas (revisa <code>docker logs mcp-atlassian</code>).</li><li><b><code>unknown tool: atlassian.…</code></b> → tools importadas pero no asignadas a ESE agente (Hub → Tools → Avanzadas).</li><li><b><code>composer install</code> falla en el runtime</b> → comprueba que <code>composer</code> está en los comandos permitidos del proyecto y que el proyecto usa el runtime <code>php-phpunit</code> (que ya incluye las extensiones PHP necesarias, <code>intl</code> incluida).</li><li><b>El agente se queda en bucle leyendo ficheros</b> → tarea no autocontenida: reescríbela para que cree sus insumos o garantízalos en el repo.</li><li><b>No llega el PR</b> → mira <code>pr_error</code> en la ficha del plan: casi siempre es la rama base inexistente en el remoto o el PAT sin permiso <code>repo</code>.</li><li><b>Nada se mueve</b> → <b>La Oficina</b> te dice en segundos si los agentes trabajan, esperan un humano (🚪 → resuélvelo en «Esperan tu decisión») o duermen (cola vacía: ¿el plan está aprobado y ejecutándose?).</li></ul><p>Para profundizar: <code>docs/03-guides/recetas-mcp-tools-skills.md</code> (recetario completo de MCP/tools/skills), <code>docs/03-guides/configurar-mcp-server.md</code> (la pantalla de MCP a fondo) y el manual 13 (runs y supervisión).</p>",
+      fullPage: true,
+    },
+  ],
+};
+
+test(manual.title, async ({ page }) => {
+  test.setTimeout(600_000);
+  await login(page);
+  await generateManual(page, manual);
+});
