@@ -16,6 +16,7 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, ArrowLeft, ChevronDown, ChevronRight } from "lucide-react";
 
+import { ReplayBar } from "@/components/executions/replay-bar";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -112,6 +113,8 @@ export default function ExecutionTimelinePage() {
   const params = useParams<{ id: string }>();
   const executionId = String(params.id);
   const [liveSteps, setLiveSteps] = useState<Step[]>([]);
+  // Replay (ADR 0119): null = timeline normal; un número = índice activo.
+  const [replayIndex, setReplayIndex] = useState<number | null>(null);
 
   const executionQuery = useQuery({
     queryKey: ["execution", executionId],
@@ -240,13 +243,31 @@ export default function ExecutionTimelinePage() {
             </Card>
           )}
 
-          <ol className="mt-6 space-y-2" data-testid="execution-timeline">
+          {/* Replay (ADR 0119): reproduce el steps_log en el tiempo — los
+              pasos van apareciendo hasta el índice activo del scrubber. */}
+          <div className="mt-6 flex items-center justify-between">
+            <Button
+              size="sm"
+              variant={replayIndex === null ? "outline" : "default"}
+              data-testid="replay-toggle"
+              onClick={() => setReplayIndex(replayIndex === null ? 0 : null)}
+              disabled={steps.length === 0}
+            >
+              🎬 {replayIndex === null ? "Replay" : "Salir del replay"}
+            </Button>
+          </div>
+          {replayIndex !== null && (
+            <div className="mt-2">
+              <ReplayBar total={steps.length} index={replayIndex} onIndexChange={setReplayIndex} />
+            </div>
+          )}
+          <ol className="mt-4 space-y-2" data-testid="execution-timeline">
             {steps.length === 0 && (
               <li className="text-muted-foreground text-sm italic" data-testid="timeline-empty">
                 Esta ejecución todavía no tiene pasos registrados.
               </li>
             )}
-            {steps.map((step) => (
+            {(replayIndex === null ? steps : steps.slice(0, replayIndex + 1)).map((step) => (
               <TimelineStep key={step.index} step={step} />
             ))}
           </ol>
