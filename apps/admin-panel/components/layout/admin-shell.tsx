@@ -129,6 +129,9 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/admin/dashboard", label: "Dashboard", Icon: LayoutDashboard },
       { href: "/admin/inbox", label: "Mis tareas", Icon: ListChecks },
+      // MFA (tanda 2026-07-19): ajuste PERSONAL (cualquier usuario) — la
+      // verificación en dos pasos de la propia cuenta, no del tenant.
+      { href: "/admin/settings/security", label: "Seguridad", Icon: ShieldCheck },
       { href: "/admin/board", label: "Tablero", Icon: LayoutGrid },
       { href: "/admin/runs", label: "Runs", Icon: Activity },
       { href: "/admin/approvals", label: "Aprobaciones", Icon: BellRing },
