@@ -103,6 +103,21 @@ class RenderedNotification:
 # ---------------------------------------------------------------------------
 _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
     # --- plan_approved -----------------------------------------------------
+    # ADR 0122 — vigía de credenciales: recuperación de un proveedor.
+    ("provider_recovered", "es"): TemplateSource(
+        subject="Proveedor recuperado: {{ provider_name | default('(sin nombre)') }}",
+        body=(
+            "El proveedor LLM «{{ provider_name | default('(sin nombre)') }}» "
+            "({{ provider_kind | default('?') }}) vuelve a responder."
+        ),
+    ),
+    ("provider_recovered", "en"): TemplateSource(
+        subject="Provider recovered: {{ provider_name | default('(unnamed)') }}",
+        body=(
+            "LLM provider \"{{ provider_name | default('(unnamed)') }}\" "
+            "({{ provider_kind | default('?') }}) is responding again."
+        ),
+    ),
     # ADR 0120 — standup diario: el cuerpo llega compuesto por el worker
     # (prosa del PM o versión estructurada fail-open); aquí solo se envuelve.
     ("daily_standup", "es"): TemplateSource(

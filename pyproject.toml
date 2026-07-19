@@ -264,6 +264,7 @@ module = [
     # helpers from api_server. Same cross-app lazy-import story as the rest.
     "api_server.assistant.model_config",
     "api_server.llm_providers.factory_resolver",
+    "api_server.llm_providers.liveness",
     "api_server.llm_providers.vault",
     "api_server.routers.llm_providers",
     # workers.repo_clone / plan_pr (ADR 0072 auto-PR) + the git-identity fix

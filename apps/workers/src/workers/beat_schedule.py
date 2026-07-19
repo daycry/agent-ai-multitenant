@@ -117,6 +117,13 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": crontab(hour="3", minute="0"),
         "options": {"queue": "test"},
     },
+    # ADR 0122: vigía de credenciales LLM — sondea los proveedores activos
+    # y avisa ANTES de que un run muera por credencial caducada.
+    "provider-watchdog-every-30m": {
+        "task": "workers.provider_watchdog",
+        "schedule": schedule(run_every=1800.0),
+        "options": {"queue": "default"},
+    },
     # ADR 0120: el standup del PM corre CADA HORA a los :05 — la task decide
     # qué tenants reciben el parte (los que tienen `standup.hour` == hora
     # actual UTC); la cadencia horaria hace de gate de idempotencia diaria.

@@ -135,6 +135,13 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
     # ADR 0120: el parte matinal del PM agente (workers.daily_standup). El
     # cuerpo llega YA compuesto en el context (prosa del LLM o la versión
     # estructurada fail-open) — la plantilla solo lo envuelve.
+    # ADR 0122: el vigía avisa también de la RECUPERACIÓN de un proveedor
+    # (la caída reusa provider_credential_invalid, ya registrado).
+    "provider_recovered": EventSpec(
+        "provider_recovered",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app",),
+    ),
     "daily_standup": EventSpec(
         "daily_standup",
         lane=NotificationLane.DEFAULT,
