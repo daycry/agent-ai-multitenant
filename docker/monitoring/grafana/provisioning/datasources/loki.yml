@@ -1,0 +1,9 @@
+# Datasource Loki (2ª tanda 2026-07-19) — logs centralizados en Grafana.
+apiVersion: 1
+datasources:
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      maxLines: 1000

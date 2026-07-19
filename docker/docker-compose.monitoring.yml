@@ -271,7 +271,49 @@ services:
       - prometheus
     <<: [*default-restart, *default-logging]
 
+  # ---------------------------------------------------------------------------
+  # Loki + Promtail — logs centralizados (2ª tanda 2026-07-19). Loki single-
+  # binary con retención 7d en volumen; Promtail lee los json-logs del daemon
+  # (v1: label por stream; el contexto rico ya viaja en las líneas structlog).
+  # Mismo hardening que el resto de servicios de monitorización.
+  # ---------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:3.1.1
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    security_opt:
+      - no-new-privileges:true
+      - apparmor=agentic-default
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
+  promtail:
+    image: grafana/promtail:3.1.1
+    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+    volumes:
+      - ./monitoring/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    security_opt:
+      - no-new-privileges:true
+      - apparmor=agentic-default
+    cap_drop: [ALL]
+    depends_on:
+      loki:
+        condition: service_healthy
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging]
+
 volumes:
+  loki_data:
   prometheus_data:
   alertmanager_data:
   grafana_data:
