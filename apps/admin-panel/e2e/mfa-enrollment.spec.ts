@@ -21,7 +21,9 @@ test("el enrolamiento TOTP muestra QR, clave manual y códigos de recuperación"
   await page.goto("/login");
   await page.getByLabel("Email").fill(ADMIN_EMAIL);
   await page.getByLabel("Password").fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: /sign in/i }).click();
+  // `exact`: en dev conviven el submit "Sign in" y los botones SSO
+  // "Sign in with …" (multi-provider) — el regex laxo resuelve a ambos.
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page).toHaveURL(/\/admin\/dashboard$/);
 
   await page.goto("/admin/settings/security");

@@ -87,15 +87,16 @@ async def _seed(dsn: str) -> dict[str, UUID]:
                 task,
                 agent,
                 status,
+                steps,
             )
-        # Una combinación con n=1 (otro agente NULL) que el umbral debe excluir.
+        # Una combinación con n=1 (otro agente NULL, sin model_call) que el
+        # umbral debe excluir.
         await conn.execute(
             "INSERT INTO executions (id, tenant_id, task_id, status, steps_log)"
-            " VALUES ($1, $2, $3, 'done', $4::jsonb)",
+            " VALUES ($1, $2, $3, 'done', '[]'::jsonb)",
             uuid4(),
             tenant_a,
             task,
-            steps,
         )
     finally:
         await conn.close()
@@ -176,5 +177,5 @@ async def test_leaderboard_aggregates_and_applies_min_runs(
     assert row["aborted"] == 1
     assert row["success_rate"] == pytest.approx(4 / 6)
     assert row["avg_iterations"] == pytest.approx(10.0)
-    # El modelo NULL agrupa aparte (los 6 runs no llevaban model_call en el log).
-    assert row["model"] is None
+    # El modelo sale del steps_log (último model_call) vía el LATERAL.
+    assert row["model"] == "gpt-oss:120b"
