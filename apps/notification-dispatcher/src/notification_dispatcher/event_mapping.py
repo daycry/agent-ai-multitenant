@@ -139,6 +139,12 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
     # (la caída reusa provider_credential_invalid, ya registrado).
     # ADR 0125: propuesta de mejora de configuración (gate humano — jamás
     # se auto-aplica; la decisión vive en la ficha del agente).
+    # ADR 0126: resultado del restore-drill mensual (ok o fallo, siempre).
+    "restore_drill_result": EventSpec(
+        "restore_drill_result",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app", "telegram"),
+    ),
     "config_proposal": EventSpec(
         "config_proposal",
         lane=NotificationLane.DEFAULT,

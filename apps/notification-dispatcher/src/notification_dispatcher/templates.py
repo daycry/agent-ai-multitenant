@@ -103,6 +103,15 @@ class RenderedNotification:
 # ---------------------------------------------------------------------------
 _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
     # --- plan_approved -----------------------------------------------------
+    # ADR 0126 — resultado del restore-drill mensual.
+    ("restore_drill_result", "es"): TemplateSource(
+        subject="{% if ok %}Restore-drill OK{% else %}Restore-drill FALLIDO{% endif %}",
+        body="{{ detail | default('(sin detalle)') }}",
+    ),
+    ("restore_drill_result", "en"): TemplateSource(
+        subject="{% if ok %}Restore drill OK{% else %}Restore drill FAILED{% endif %}",
+        body="{{ detail | default('(no detail)') }}",
+    ),
     # ADR 0125 — propuesta de configuración con los datos del leaderboard.
     ("config_proposal", "es"): TemplateSource(
         subject="Propuesta: cambiar el modelo de {{ agent_name | default('(agente)') }}",
