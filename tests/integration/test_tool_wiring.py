@@ -132,9 +132,15 @@ def test_docker_command_spec_registers_with_mocked_client(
     registered = register_tool_specs(registry, specs)
     assert registered == ["hello"]
 
+    # Contrato honesto (ADR 0093): dentro del sandbox NO hay Docker (principio
+    # 2: sin socket) — un docker_command no puede ejecutar y lo dice,
+    # redirigiendo a stack_exec (el worker corre el toolchain en el
+    # runtime-template). Antes fingía ejecutar vía un client inyectado que en
+    # producción jamás existe.
     result = registry.call("hello", {})
-    assert result.ok is True
-    assert result.output == "hello\n"
+    assert result.ok is False
+    assert "stack_exec" in (result.error or "")
+    fake_client.containers.run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

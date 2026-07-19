@@ -89,7 +89,24 @@ async def test_plan_close_opens_pr_against_branch_with_commits(
     data_root = tmp_path / "local"
     layout = BareRepoLayout(data_root=data_root, tenant_slug=_ORG_SLUG, project_slug="backend")
     bare = BareRepoManager(layout).ensure_repo("backend", remote_url=str(remote_bare))
-    seed_bare_repo(bare)  # give the local bare a `main` to branch the plan from
+    # La main local debe COMPARTIR HISTORIA con la del remoto: el guard de
+    # ancestro del auto-PR (P6) rechaza una base local sembrada sintética
+    # (era exactamente este fixture: dos seed_bare_repo independientes con
+    # commits iniciales distintos → merge-base imposible → PR skipped).
+    subprocess.run(
+        ["git", "fetch", str(remote_bare), "main:refs/heads/main"],
+        cwd=str(bare),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+        cwd=str(bare),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     commit_to_branch(bare, identity.plan_branch, filename="app.py", content="print('hi')\n")
 
     # A PAT project so the PR opener is built; stub the Vault secret + the opener

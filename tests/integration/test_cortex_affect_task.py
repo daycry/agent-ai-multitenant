@@ -146,9 +146,15 @@ def schema_at_head(alembic_config) -> None:
 
 
 @pytest.fixture()
-def workers_settings(monkeypatch: pytest.MonkeyPatch, migrations_pg_dsn: str):
+def workers_settings(monkeypatch: pytest.MonkeyPatch, migrations_pg_dsn: str, test_redis_url: str):
     async_dsn = migrations_pg_dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
     monkeypatch.setenv("WORKERS_DATABASE_URL", async_dsn)
+    # El destilador escribe el caché de afecto con el redis del PROPIO worker
+    # (WORKERS_EVENTS_REDIS_URL — fix 2026-07-18: antes usaba el deps del
+    # api-server y en el contenedor real caía a localhost). El test debe
+    # apuntar ese env al redis del fixture o el snapshot se escribe en otro
+    # sitio y el assert del caché falla.
+    monkeypatch.setenv("WORKERS_EVENTS_REDIS_URL", test_redis_url)
     from workers.config import reset_settings_cache
 
     reset_settings_cache()

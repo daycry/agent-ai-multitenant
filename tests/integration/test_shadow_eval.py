@@ -110,7 +110,7 @@ async def _seed_completed_task(dsn: str, *, tenant_id: UUID, project_id: UUID, t
     try:
         await conn.execute(
             "INSERT INTO tasks (id, tenant_id, project_id, title, status, priority, completed_at) "
-            "VALUES ($1, $2, $3, $4, 'completed', 'medium', now())",
+            "VALUES ($1, $2, $3, $4, 'done', 'medium', now())",
             task_id,
             tenant_id,
             project_id,
@@ -127,7 +127,7 @@ async def _seed_execution(dsn: str, *, tenant_id: UUID, task_id: UUID) -> UUID:
     try:
         await conn.execute(
             "INSERT INTO executions (id, tenant_id, task_id, status, completed_at) "
-            "VALUES ($1, $2, $3, 'completed', now())",
+            "VALUES ($1, $2, $3, 'done', now())",
             execution_id,
             tenant_id,
             task_id,

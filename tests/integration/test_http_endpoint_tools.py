@@ -71,6 +71,22 @@ def test_render_rejects_indexing_pattern() -> None:
 # ---------------------------------------------------------------------------
 # Allowlist enforcement
 # ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _pin_fake_public_ip(monkeypatch: pytest.MonkeyPatch):
+    """El guard anti-SSRF (remediación prod-12/AUD16) resuelve DNS de verdad y
+    los dominios ficticios de estos tests (api.weather.example) no resuelven.
+    Aquí el transporte es un MOCK: se pinnea la validación a una IP pública
+    para ejercitar el resto del flujo (render, allowlist, parseo, caps). El
+    guard tiene su suite dedicada en el runtime."""
+    import agent_runtime.http_endpoint_tool as mod
+    from agent_runtime.ssrf_guard import PinnedDestination
+
+    def _fake_validate(host: str, **_kw: object) -> PinnedDestination:
+        return PinnedDestination(host=host, ip="93.184.216.34", all_ips=("93.184.216.34",))
+
+    monkeypatch.setattr(mod, "validate_destination", _fake_validate)
+
+
 def _mock_client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.Client:
     """A long-lived httpx.Client backed by a MockTransport — wrapped
     by `_NoopExitClient` in the executor so the test owns its lifetime."""
@@ -115,7 +131,10 @@ def test_non_http_scheme_is_rejected() -> None:
 # ---------------------------------------------------------------------------
 def test_json_response_is_parsed_into_output() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
-        assert req.url.host == "api.weather.example"
+        # Anti-rebinding (prod-12): la URL del wire va a la IP PINNEADA y el
+        # hostname original viaja en la cabecera Host (virtual hosting/SNI).
+        assert req.url.host == "93.184.216.34"
+        assert req.headers["host"] == "api.weather.example"
         assert str(req.url).endswith("/v1?q=Madrid")
         return httpx.Response(200, json={"temperature": 22, "unit": "C"})
 

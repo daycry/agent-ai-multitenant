@@ -329,9 +329,11 @@ async def test_task_dependency_must_be_same_project(configured_app, migrations_p
 
 
 @pytest.mark.asyncio
-async def test_task_self_dependency_blocked_by_db(configured_app, migrations_pg_dsn: str) -> None:
-    """ck_task_dependencies_no_self_loop must fire even if the app would
-    let it through. We trigger this by PUTting depends_on=[<own id>]."""
+async def test_task_self_dependency_rejected(configured_app, migrations_pg_dsn: str) -> None:
+    """La autodependencia se rechaza en la capa API con 422 (validación
+    aguas arriba); el CHECK de BD ck_task_dependencies_no_self_loop queda
+    como candado de último recurso (antes este test forzaba el 409 de la
+    constraint porque la app la dejaba pasar)."""
     seeded = await _seed(migrations_pg_dsn)
     token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
     headers = {"Authorization": f"Bearer {token}"}
@@ -347,7 +349,7 @@ async def test_task_self_dependency_blocked_by_db(configured_app, migrations_pg_
             json={"depends_on": [task_id]},
             headers=headers,
         )
-    assert resp.status_code == 409
+    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio

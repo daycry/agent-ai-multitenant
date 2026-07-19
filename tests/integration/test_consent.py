@@ -98,17 +98,23 @@ async def _seed(dsn: str) -> dict[str, UUID]:
         )
         # Global community listing (consent required) requesting two perms,
         # plus a global verified listing (no consent) requesting one.
+        # Manifest materializable (remediación 2026-07-17): un tool listing sin
+        # implementation_type ya no instala (422 del materializador).
         await conn.execute(
             "INSERT INTO marketplace_listings"
             " (id, source_id, tenant_id, kind, name, version, trust_level,"
-            "  requested_permissions, signature)"
+            "  requested_permissions, signature, manifest)"
             " VALUES"
             " ($1, $2, NULL, 'tool', 'community-tool', '1.0.0', 'community',"
             '  \'[{"type": "allowed_domains", "value": ["api.x.com"]},'
-            '     {"type": "network_policy", "value": "restricted"}]\'::jsonb, NULL),'
+            '     {"type": "network_policy", "value": "restricted"}]\'::jsonb, NULL,'
+            '  \'{"implementation_type": "http_endpoint",'
+            '     "implementation_ref": "https://api.x.com/tool/{q}"}\'::jsonb),'
             " ($3, $2, NULL, 'tool', 'verified-tool', '1.0.0', 'verified',"
             '  \'[{"type": "allowed_domains", "value": ["api.y.com"]}]\'::jsonb,'
-            "  'sig')",
+            "  'sig',"
+            '  \'{"implementation_type": "http_endpoint",'
+            '     "implementation_ref": "https://api.y.com/tool/{q}"}\'::jsonb)',
             ids["community_listing"],
             ids["source"],
             ids["verified_listing"],
