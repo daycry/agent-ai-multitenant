@@ -34,6 +34,22 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 pytestmark = pytest.mark.integration
 
 
+@pytest.fixture(autouse=True)
+def _fresh_global_state_shield():
+    """Blindaje de orden (tanda 2, 2026-07-19): este fichero fallaba SOLO en
+    la suite completa (pasa aislado) — estado global heredado del fichero
+    anterior (engines/caches vivos). Reset al ENTRAR en cada test: barato,
+    idempotente y sin efecto cuando el estado ya está limpio."""
+    from api_server.auth.deps import reset_redis_cache
+    from api_server.config import get_settings
+    from api_server.db.session import reset_engine_cache
+
+    get_settings.cache_clear()
+    reset_engine_cache()
+    reset_redis_cache()
+    yield
+
+
 @pytest.fixture()
 def exporter():
     """Attach an InMemorySpanExporter to the live provider.
