@@ -153,6 +153,12 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     # G-08 (auditoría proyecto 2026-07-17) — higiene mensual de los bare repos:
     # worktree prune + gc ligero + locks huérfanos + poda de ramas plan/* de
     # planes cerrados con PR abierto (con refs/rescue como red).
+    # ADR 0126: restore-drill mensual — un backup no probado no existe.
+    "restore-drill-monthly": {
+        "task": "workers.restore_drill",
+        "schedule": crontab(day_of_month="2", hour="4", minute="30"),
+        "options": {"queue": "default"},
+    },
     "git-housekeeping-monthly": {
         "task": "workers.git_housekeeping",
         "schedule": crontab(day_of_month="1", hour="3", minute="50"),
