@@ -25,7 +25,12 @@ _HEAD = "0099_project_plan_slug"
 
 
 def test_backfill_populates_existing_rows(alembic_config: object, migrations_pg_dsn: str) -> None:
-    command.upgrade(alembic_config, _PREV)
+    # En la suite completa la DB llega YA en head desde el fichero anterior:
+    # `upgrade(_PREV)` era un no-op y el backfill de la migración nunca
+    # re-corría (slug quedaba NULL). Bajar explícitamente a _PREV garantiza
+    # que el INSERT ocurre pre-migración y el upgrade ejerce el backfill.
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, _PREV)
     project = uuid4()
     plan = uuid4()
 

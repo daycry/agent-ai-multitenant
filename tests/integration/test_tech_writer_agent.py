@@ -275,17 +275,43 @@ def test_tech_writer_visible_to_tenant_sessions(alembic_config, migrations_pg_ds
 
 def test_only_tech_writer_carries_docs_skills(alembic_config, migrations_pg_dsn: str) -> None:
     """Negative: no OTHER built-in agent got accidentally wired to the
-    curated docs skills, and the total agent_skills count equals exactly the
-    Technical Writer's link set (the only agent with skill_slugs today)."""
+    CURATED DOCS skills. (El candado antiguo pinneaba el total global de
+    agent_skills == las del writer; hoy otros equipos built-in — CI4 —
+    también seedean skills propias, así que el invariante real es que las
+    cinco skills de documentación pertenecen SOLO al Technical Writer.)"""
     command.upgrade(alembic_config, "head")
     asyncio.run(_truncate(migrations_pg_dsn))
     asyncio.run(_run_seed_via_async_sa(_as_async_dsn(migrations_pg_dsn)))
 
-    async def _total_links() -> int:
+    from api_server.seeds.builtin_role_capabilities import ROLE_DEFAULT_SKILLS
+    from api_server.seeds.builtin_skills import _skill_id
+
+    # Las capacidades por rol (tanda inteligencia) reparten a propósito
+    # algunas skills de docs (structured-writing→PM, adr-authoring y
+    # mermaid-diagrams→arquitecto). El invariante vigente: las skills de
+    # documentación que NINGÚN otro rol tiene mapeado siguen siendo
+    # EXCLUSIVAS del Technical Writer.
+    shared_elsewhere = {
+        slug
+        for role, slugs in ROLE_DEFAULT_SKILLS.items()
+        if role != "technical_writer"
+        for slug in slugs
+    }
+    exclusive = EXPECTED_SKILL_SLUGS - shared_elsewhere
+    assert exclusive, "el seed dejó de tener skills exclusivas del writer — revisar el reparto"
+    exclusive_ids = [_skill_id(slug) for slug in exclusive]
+
+    async def _owners() -> set[str]:
         conn = await asyncpg.connect(migrations_pg_dsn)
         try:
-            return int(await conn.fetchval("SELECT count(*) FROM agent_skills"))
+            rows = await conn.fetch(
+                "SELECT DISTINCT a.name FROM agent_skills ask"
+                " JOIN agents a ON a.id = ask.agent_id"
+                " WHERE ask.skill_id = ANY($1::uuid[])",
+                exclusive_ids,
+            )
+            return {r["name"] for r in rows}
         finally:
             await conn.close()
 
-    assert asyncio.run(_total_links()) == len(EXPECTED_SKILL_SLUGS)
+    assert asyncio.run(_owners()) == {TECH_WRITER_NAME}

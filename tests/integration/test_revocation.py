@@ -112,9 +112,13 @@ async def _seed(dsn: str) -> dict[str, UUID]:
         # A global VERIFIED listing so install lands ENABLED (no consent
         # gate) — revocation logic is what's under test, not consent.
         await conn.execute(
+            # Manifest materializable (remediación 2026-07-17): un tool listing
+            # sin implementation_type ya no instala (422 del materializador).
             "INSERT INTO marketplace_listings"
-            " (id, source_id, tenant_id, kind, name, version, trust_level, signature)"
-            " VALUES ($1, $2, NULL, 'tool', 'verified-tool', '1.0.0', 'verified', 'sig')",
+            " (id, source_id, tenant_id, kind, name, version, trust_level, signature, manifest)"
+            " VALUES ($1, $2, NULL, 'tool', 'verified-tool', '1.0.0', 'verified', 'sig',"
+            '  \'{"implementation_type": "http_endpoint",'
+            '     "implementation_ref": "https://api.x.com/tool/{q}"}\'::jsonb)',
             ids["listing"],
             ids["source"],
         )

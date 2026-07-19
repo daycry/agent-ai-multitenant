@@ -43,10 +43,16 @@ def _fresh_global_state_shield():
     from api_server.auth.deps import reset_redis_cache
     from api_server.config import get_settings
     from api_server.db.session import reset_engine_cache
+    from api_server.telemetry.setup import _reset_for_tests
 
     get_settings.cache_clear()
     reset_engine_cache()
     reset_redis_cache()
+    # El TracerProvider global de OTEL es set-once: si otro fichero de la
+    # suite lo configuró (con su instrumentación), los spans de ESTE test
+    # salen con otro trace y la propagación parece rota. El reset que el
+    # docstring del módulo siempre prometió — ahora de verdad.
+    _reset_for_tests()
     yield
 
 
