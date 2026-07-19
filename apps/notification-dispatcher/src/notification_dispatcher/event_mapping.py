@@ -137,6 +137,13 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
     # estructurada fail-open) — la plantilla solo lo envuelve.
     # ADR 0122: el vigía avisa también de la RECUPERACIÓN de un proveedor
     # (la caída reusa provider_credential_invalid, ya registrado).
+    # ADR 0125: propuesta de mejora de configuración (gate humano — jamás
+    # se auto-aplica; la decisión vive en la ficha del agente).
+    "config_proposal": EventSpec(
+        "config_proposal",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app",),
+    ),
     "provider_recovered": EventSpec(
         "provider_recovered",
         lane=NotificationLane.DEFAULT,

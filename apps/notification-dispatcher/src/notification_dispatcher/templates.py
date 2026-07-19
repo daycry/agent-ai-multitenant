@@ -103,6 +103,25 @@ class RenderedNotification:
 # ---------------------------------------------------------------------------
 _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
     # --- plan_approved -----------------------------------------------------
+    # ADR 0125 — propuesta de configuración con los datos del leaderboard.
+    ("config_proposal", "es"): TemplateSource(
+        subject="Propuesta: cambiar el modelo de {{ agent_name | default('(agente)') }}",
+        body=(
+            "Con tus datos reales, el agente «{{ agent_name | default('(agente)') }}» "
+            "rinde mejor con {{ to_model | default('?') }} que con "
+            "{{ from_model | default('?') }} ({{ evidence | default('') }}). "
+            "Si estás de acuerdo, cámbialo en la ficha del agente — nada se aplica solo."
+        ),
+    ),
+    ("config_proposal", "en"): TemplateSource(
+        subject="Proposal: change the model of {{ agent_name | default('(agent)') }}",
+        body=(
+            "On your real data, agent \"{{ agent_name | default('(agent)') }}\" "
+            "performs better with {{ to_model | default('?') }} than with "
+            "{{ from_model | default('?') }} ({{ evidence | default('') }}). "
+            "If you agree, change it on the agent page — nothing is applied automatically."
+        ),
+    ),
     # ADR 0122 — vigía de credenciales: recuperación de un proveedor.
     ("provider_recovered", "es"): TemplateSource(
         subject="Proveedor recuperado: {{ provider_name | default('(sin nombre)') }}",

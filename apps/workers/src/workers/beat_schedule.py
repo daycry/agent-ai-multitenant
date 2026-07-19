@@ -134,6 +134,12 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     },
     # ADR 0124: retro de planes cerrados → memoria project_shared (cada 15
     # min; idempotente por marker en Redis, ventana 48h).
+    # ADR 0125: asesor de configuración — lunes 07:00 UTC, solo PROPONE.
+    "config-advisor-weekly": {
+        "task": "workers.config_advisor",
+        "schedule": crontab(day_of_week="1", hour="7", minute="0"),
+        "options": {"queue": "default"},
+    },
     "plan-retro-every-15m": {
         "task": "workers.plan_retro",
         "schedule": schedule(run_every=900.0),

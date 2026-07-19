@@ -170,6 +170,11 @@ NOTIFICATION_EVENT_CATALOG: tuple[dict[str, str], ...] = (
     },
     {"event_type": "daily_standup", "label_es": "Standup diario", "label_en": "Daily standup"},
     {
+        "event_type": "config_proposal",
+        "label_es": "Propuesta de configuración",
+        "label_en": "Configuration proposal",
+    },
+    {
         "event_type": "provider_recovered",
         "label_es": "Proveedor LLM recuperado",
         "label_en": "LLM provider recovered",
