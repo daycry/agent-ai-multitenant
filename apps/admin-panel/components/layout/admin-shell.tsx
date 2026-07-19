@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
+  Building2,
   BarChart3,
   Bell,
   BellRing,
@@ -133,6 +134,8 @@ export const NAV_GROUPS: NavGroup[] = [
       // verificación en dos pasos de la propia cuenta, no del tenant.
       { href: "/admin/settings/security", label: "Seguridad", Icon: ShieldCheck },
       { href: "/admin/board", label: "Tablero", Icon: LayoutGrid },
+      // ADR 0118: el tenant en vivo como piso 2D sobre telemetría real.
+      { href: "/admin/office", label: "La Oficina", Icon: Building2 },
       { href: "/admin/runs", label: "Runs", Icon: Activity },
       { href: "/admin/approvals", label: "Aprobaciones", Icon: BellRing },
       { href: "/admin/notifications/inbox", label: "Bandeja", Icon: Inbox },
