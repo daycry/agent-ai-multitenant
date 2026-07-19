@@ -18,6 +18,7 @@ import {
   Coins,
   Cpu,
   DatabaseBackup,
+  DoorOpen,
   FileText,
   FolderKanban,
   Gauge,
@@ -131,6 +132,8 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/admin/dashboard", label: "Dashboard", Icon: LayoutDashboard },
       { href: "/admin/inbox", label: "Mis tareas", Icon: ListChecks },
+      // ADR 0123: todo lo que espera decisión humana, por antigüedad.
+      { href: "/admin/human-queue", label: "Esperan tu decisión", Icon: DoorOpen },
       // MFA (tanda 2026-07-19): ajuste PERSONAL (cualquier usuario) — la
       // verificación en dos pasos de la propia cuenta, no del tenant.
       { href: "/admin/settings/security", label: "Seguridad", Icon: ShieldCheck },
