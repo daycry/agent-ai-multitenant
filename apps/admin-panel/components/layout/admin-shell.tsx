@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   Activity,
   Building2,
+  Trophy,
   BarChart3,
   Bell,
   BellRing,
@@ -137,6 +138,8 @@ export const NAV_GROUPS: NavGroup[] = [
       // ADR 0118: el tenant en vivo como piso 2D sobre telemetría real.
       { href: "/admin/office", label: "La Oficina", Icon: Building2 },
       { href: "/admin/runs", label: "Runs", Icon: Activity },
+      // ADR 0121: ranking modelo×agente con la carga real del tenant.
+      { href: "/admin/leaderboard", label: "Rendimiento", Icon: Trophy },
       { href: "/admin/approvals", label: "Aprobaciones", Icon: BellRing },
       { href: "/admin/notifications/inbox", label: "Bandeja", Icon: Inbox },
       { href: "/admin/assistant", label: "Asistente", Icon: Bot, adminOnly: true },
