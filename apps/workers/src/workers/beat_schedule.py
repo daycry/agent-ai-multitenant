@@ -132,6 +132,13 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": crontab(minute="5"),
         "options": {"queue": "default"},
     },
+    # ADR 0124: retro de planes cerrados → memoria project_shared (cada 15
+    # min; idempotente por marker en Redis, ventana 48h).
+    "plan-retro-every-15m": {
+        "task": "workers.plan_retro",
+        "schedule": schedule(run_every=900.0),
+        "options": {"queue": "default"},
+    },
     "prune-worktrees-daily": {
         "task": "workers.prune_worktrees",
         "schedule": crontab(hour="3", minute="30"),
