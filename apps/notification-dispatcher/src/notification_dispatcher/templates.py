@@ -103,6 +103,16 @@ class RenderedNotification:
 # ---------------------------------------------------------------------------
 _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
     # --- plan_approved -----------------------------------------------------
+    # ADR 0120 — standup diario: el cuerpo llega compuesto por el worker
+    # (prosa del PM o versión estructurada fail-open); aquí solo se envuelve.
+    ("daily_standup", "es"): TemplateSource(
+        subject="Standup diario — {{ date | default('hoy') }}",
+        body="{{ standup_body | default('(sin datos)') }}",
+    ),
+    ("daily_standup", "en"): TemplateSource(
+        subject="Daily standup — {{ date | default('today') }}",
+        body="{{ standup_body | default('(no data)') }}",
+    ),
     ("plan_approved", "es"): TemplateSource(
         subject="Plan aprobado: {{ plan_name | default('(sin nombre)') }}",
         body=(

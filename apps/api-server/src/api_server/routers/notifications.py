@@ -168,6 +168,7 @@ NOTIFICATION_EVENT_CATALOG: tuple[dict[str, str], ...] = (
         "label_es": "Tarea sin agente",
         "label_en": "Task has no agent",
     },
+    {"event_type": "daily_standup", "label_es": "Standup diario", "label_en": "Daily standup"},
     {"event_type": "plan_approved", "label_es": "Plan aprobado", "label_en": "Plan approved"},
     {"event_type": "plan_rejected", "label_es": "Plan rechazado", "label_en": "Plan rejected"},
     {"event_type": "plan_blocked", "label_es": "Plan bloqueado", "label_en": "Plan blocked"},

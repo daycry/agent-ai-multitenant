@@ -117,6 +117,14 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": crontab(hour="3", minute="0"),
         "options": {"queue": "test"},
     },
+    # ADR 0120: el standup del PM corre CADA HORA a los :05 — la task decide
+    # qué tenants reciben el parte (los que tienen `standup.hour` == hora
+    # actual UTC); la cadencia horaria hace de gate de idempotencia diaria.
+    "daily-standup-hourly-gate": {
+        "task": "workers.daily_standup",
+        "schedule": crontab(minute="5"),
+        "options": {"queue": "default"},
+    },
     "prune-worktrees-daily": {
         "task": "workers.prune_worktrees",
         "schedule": crontab(hour="3", minute="30"),

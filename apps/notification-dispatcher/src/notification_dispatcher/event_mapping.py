@@ -132,6 +132,14 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.DEFAULT,
         default_channel_types=("in_app",),
     ),
+    # ADR 0120: el parte matinal del PM agente (workers.daily_standup). El
+    # cuerpo llega YA compuesto en el context (prosa del LLM o la versión
+    # estructurada fail-open) — la plantilla solo lo envuelve.
+    "daily_standup": EventSpec(
+        "daily_standup",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app", "telegram"),
+    ),
     "plan_rejected": EventSpec(
         "plan_rejected",
         lane=NotificationLane.DEFAULT,
