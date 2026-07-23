@@ -169,6 +169,97 @@ async def test_stream_planning_ask_user_does_not_draft_a_plan(
     assert all(att is None for _, _, att in published)  # no finish_planning attachment
 
 
+class _FlakyDraftModel(_FakePlanningModel):
+    """PM answers alone; the FIRST structured-draft attempt yields no tasks (an
+    intermittent/slow draft call), the retry yields a valid plan."""
+
+    def __init__(self) -> None:
+        super().__init__(intent=PMIntent.SPEAK_ALONE)
+
+    def pm_plan_draft(self, state: object, contributions: object) -> dict[str, Any]:
+        self.draft_calls += 1
+        if self.draft_calls == 1:
+            return {"title": "x", "summary": "", "tasks": []}  # empty → must retry
+        return {
+            "title": "Plan recuperado",
+            "summary": "s",
+            "tasks": [{"id": "t1", "title": "Tarea 1", "depends_on": []}],
+        }
+
+
+class _EmptyDraftModel(_FakePlanningModel):
+    """PM answers alone but the structured draft ALWAYS comes back empty."""
+
+    def __init__(self) -> None:
+        super().__init__(intent=PMIntent.SPEAK_ALONE)
+
+    def pm_plan_draft(self, state: object, contributions: object) -> dict[str, Any]:
+        self.draft_calls += 1
+        return {"title": "x", "summary": "", "tasks": []}
+
+
+async def _run_stream(model: Any, published: list[tuple[str, str, Any]]) -> bool:
+    async def _fake_persist(**kwargs: object) -> None:
+        published.append(
+            (str(kwargs["author_kind"]), str(kwargs["content"]), kwargs.get("attachments"))
+        )
+
+    import pytest as _pytest
+
+    mp = _pytest.MonkeyPatch()
+    mp.setattr(responder, "_persist_and_publish", _fake_persist)
+    try:
+        return await responder._stream_planning(
+            model=model,
+            state=PlanningState(team_roles=frozenset({PlanningRole.PROJECT_MANAGER})),
+            tenant_id=uuid4(),
+            conversation_id=uuid4(),
+            mode="planning",
+            redis=None,  # type: ignore[arg-type]
+            default_agent_id=uuid4(),
+            role_agents={},
+        )
+    finally:
+        mp.undo()
+
+
+@pytest.mark.asyncio
+async def test_stream_planning_retries_a_failed_draft() -> None:
+    """A first empty/flaky draft is retried once; the recovered plan still
+    reaches the user as a finish_planning attachment (so the button appears)."""
+    published: list[tuple[str, str, Any]] = []
+    model = _FlakyDraftModel()
+
+    ok = await _run_stream(model, published)
+
+    assert ok is True
+    assert model.draft_calls == 2  # retried once after the empty first attempt
+    synth = next((att for kind, _, att in published if kind == "agent"), None)
+    assert synth and synth[0]["kind"] == "planning_directive"
+    assert synth[0]["intent"] == "finish_planning"
+    assert synth[0]["specification"]["tasks"]
+
+
+@pytest.mark.asyncio
+async def test_stream_planning_notifies_when_draft_stays_empty() -> None:
+    """When even the retry yields no plan, the user is NOT left with a silent
+    "listo" message and no button — a system notice tells them to retry."""
+    published: list[tuple[str, str, Any]] = []
+    model = _EmptyDraftModel()
+
+    ok = await _run_stream(model, published)
+
+    assert ok is True
+    assert model.draft_calls == 2  # tried twice, both empty
+    # The synthesis went out with no attachment (no button)...
+    agent_msgs = [(c, att) for kind, c, att in published if kind == "agent"]
+    assert agent_msgs and all(att is None for _, att in agent_msgs)
+    # ...and a system notice was published so the user knows to retry.
+    system_msgs = [c for kind, c, _ in published if kind == "system"]
+    assert system_msgs, "expected a system notice when the draft stays empty"
+    assert any("Generar Plan" in c for c in system_msgs)
+
+
 def test_plan_summary_handles_dict_str_and_none() -> None:
     from api_server.chat.responder import _plan_summary
 

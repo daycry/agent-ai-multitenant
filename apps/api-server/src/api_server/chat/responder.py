@@ -510,6 +510,66 @@ def _pm_framing(directive: PMDirective, specialists: tuple[PlanningRole, ...]) -
     return f"{head}{body}_Consulto con: {who}_"
 
 
+# The structured plan-draft (pm_plan_draft) is a SEPARATE call from the prose
+# synthesis and can come back empty on a slow/flaky model (e.g. a local model
+# under load, or a step timeout) even when the synthesis is a complete plan.
+# Retry it once before giving up so a transient miss doesn't cost the user the
+# "Generar Plan" button.
+_DRAFT_ATTEMPTS = 2
+
+
+def _finish_planning_attachment(draft: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Build the finish_planning attachment — the UI's "Generar Plan" button
+    contract (``isFinishPlanningReady``) that lets ``create_plan`` materialise
+    the tasks — from a structured plan draft. ``None`` when the draft has no
+    usable tasks (self-gating: a clarifying/empty turn attaches nothing)."""
+    if not draft.get("tasks"):
+        return None
+    return [
+        {
+            "kind": "planning_directive",
+            "intent": "finish_planning",
+            "title": draft.get("title") or "Plan del proyecto",
+            "specification": {
+                "summary": draft.get("summary") or "",
+                "phases": draft.get("phases") or [],
+                "tasks": draft["tasks"],
+            },
+        }
+    ]
+
+
+async def _resolve_plan_attachment(
+    model: LLMPlanningModel,
+    state: PlanningState,
+    contributions: list[SpecialistContribution],
+    conversation_id: UUID,
+) -> list[dict[str, Any]] | None:
+    """Run ``pm_plan_draft`` (bounded by ``_STEP_TIMEOUT_S``) and turn it into the
+    finish_planning attachment, RETRYING once. The structured draft is a separate
+    call from the prose synthesis and can come back empty/time out on a slow or
+    flaky model; one retry recovers the button on a transient miss. Best-effort:
+    returns ``None`` (no button) if both attempts fail — never raises."""
+    for attempt in range(_DRAFT_ATTEMPTS):
+        try:
+            draft = await asyncio.wait_for(
+                asyncio.to_thread(model.pm_plan_draft, state, contributions),
+                timeout=_STEP_TIMEOUT_S,
+            )
+        except Exception as exc:  # best-effort (incl. timeout); retry then give up
+            _log.warning(
+                "chat.planning_draft_failed",
+                conversation_id=str(conversation_id),
+                attempt=attempt,
+                error_type=exc.__class__.__name__,
+            )
+            continue
+        attachments = _finish_planning_attachment(draft)
+        if attachments is not None:
+            return attachments
+    return None
+
+
 async def _stream_planning(
     *,
     model: LLMPlanningModel,
@@ -607,33 +667,27 @@ async def _stream_planning(
     # self-gates — it only yields tasks when a real plan exists, so a clarifying turn attaches
     # nothing. Best-effort: a failed/empty draft just means no button — the prose synthesis posts.
     attachments: list[dict[str, Any]] | None = None
-    if directive.intent != PMIntent.ASK_USER and synthesis.strip():
-        try:
-            draft = await _step(model.pm_plan_draft, state, contributions)
-            if draft.get("tasks"):
-                # kind/intent match the UI's "Generar Plan" button contract
-                # (isFinishPlanningReady); the spec lets create_plan materialise tasks.
-                attachments = [
-                    {
-                        "kind": "planning_directive",
-                        "intent": "finish_planning",
-                        "title": draft.get("title") or "Plan del proyecto",
-                        "specification": {
-                            "summary": draft.get("summary") or "",
-                            "phases": draft.get("phases") or [],
-                            "tasks": draft["tasks"],
-                        },
-                    }
-                ]
-        except Exception as exc:  # draft is best-effort; never sinks the synthesis
-            _log.warning(
-                "chat.planning_draft_failed",
-                conversation_id=str(conversation_id),
-                error_type=exc.__class__.__name__,
-            )
+    plan_presented = directive.intent != PMIntent.ASK_USER and bool(synthesis.strip())
+    if plan_presented:
+        attachments = await _resolve_plan_attachment(model, state, contributions, conversation_id)
     if synthesis.strip():
         await _emit(synthesis, default_agent_id, attachments)
         published = True
+    # The PM presented a plan in prose but the structured draft stayed empty even
+    # after the retry: don't leave the user with a "listo" message and no
+    # "Generar Plan" button — tell them so they can retry, instead of silence.
+    if plan_presented and attachments is None:
+        await _system_notice(
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            mode=mode,
+            content=(
+                "⚠️ El equipo preparó el plan, pero no pude estructurarlo automáticamente "
+                "para el botón «Generar Plan». Reintenta enviando el mensaje de nuevo "
+                "(o escribe «genera el plan»)."
+            ),
+            redis=redis,
+        )
     return published
 
 
