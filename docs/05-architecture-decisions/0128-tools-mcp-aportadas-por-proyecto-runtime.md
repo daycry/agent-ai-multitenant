@@ -130,3 +130,25 @@ agentes se quedan **compartidos** (tenant-local, adoptados una vez); cada proyec
   como `global_tenant_template`. Context7 queda **declarado + importado a nivel de
   proyecto** pero, hasta que aterrice este modelo, los agentes tenant-template no lo
   usan en runs (o requeriría forkear, que se difiere a propósito).
+
+## Estado de implementación
+
+- **Fase 1 — HECHA (2026-07-23):** núcleo aditivo y unit-testeado.
+  `agent_tools_enforcement.resolve_project_mcp_tool_names(session, project)`
+  (nombres `<server>.<tool>` importados de los servers declarados del proyecto) +
+  `extend_allowlist_with_project_mcp(base, project_mcp)` (unión; `None`→`None` para
+  no restringir a un agente sin restricción). Cableado en
+  `orchestrator/dispatch._build_request` tras `combine_tool_allowlists`. Es
+  **aditivo**: no puede romper runs (peor caso = la tool MCP no callable, estado
+  pre-0128). Tests: `tests/unit/test_project_mcp_allowlist.py`.
+- **Pendiente:**
+  - **Fase 2 — granularidad por rol** (política de proyecto rol→tool; filtro en el
+    resolver por el rol de la tarea). Data-model nuevo (columna/tabla) + UI.
+  - **Fase 3 — deprecar el gate por-agente de MCP** (`agents.py:1064-1081` +
+    simplificar el PUT `/agents/{id}/tools` y el effective-tools/diagnóstico) +
+    **migración** de los `agent_tools` MCP existentes.
+  - **Fase 4 — UI**: quitar/atenuar la asignación MCP por-agente; sección MCP del
+    proyecto como sitio (+ editor de política de rol opcional).
+  - **Verificación e2e**: run real usando una tool MCP del proyecto, confirmando que
+    el nombre del allowlist casa con el que el agent-runtime registra
+    (`<server>.<tool>`, guion vs guion_bajo). No verificable en sesión headless.

@@ -29,7 +29,9 @@ from api_server.agent_persona import resolve_agent_persona
 from api_server.agent_skills_enforcement import resolve_agent_skill_prompt_fragments
 from api_server.agent_tools_enforcement import (
     combine_tool_allowlists,
+    extend_allowlist_with_project_mcp,
     resolve_agent_tool_names,
+    resolve_project_mcp_tool_names,
     serialize_agent_tool_specs,
 )
 from api_server.budgets import budget_pause_block, resolve_execution_budgets
@@ -716,6 +718,13 @@ class TaskDispatcher:
         """
         agent_tool_names = await resolve_agent_tool_names(session, agent.id)
         allowed_tools = combine_tool_allowlists(agent_tool_names, None)
+        # ADR 0128: las tools MCP las aporta el PROYECTO (no se conceden por-agente).
+        # El runtime ya conecta los `project.mcp_servers` y registra sus
+        # `<server>.<tool>`; aquí extendemos (unión, aditivo) el allowlist de un
+        # agente restringido con esas tools para que pueda llamarlas sin un grant
+        # por-agente. Un agente sin restricción (allowed_tools None) se queda igual.
+        project_mcp_tool_names = await resolve_project_mcp_tool_names(session, project)
+        allowed_tools = extend_allowlist_with_project_mcp(allowed_tools, project_mcp_tool_names)
         tool_specs = await serialize_agent_tool_specs(session, agent.id)
         skill_prompt_fragments = await resolve_agent_skill_prompt_fragments(session, agent.id)
 

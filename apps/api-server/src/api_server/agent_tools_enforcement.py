@@ -224,6 +224,77 @@ def combine_tool_allowlists(
 
 
 # ---------------------------------------------------------------------------
+# ADR 0128 — MCP tools contributed by the PROJECT (not per-agent)
+# ---------------------------------------------------------------------------
+#
+# MCP servers are declared per-project (`projects.mcp_servers`); the runtime
+# connects them and registers their `<server>.<tool>` tools. Rather than grant
+# those tools per-agent (meaningless for a shared tenant-template agent used
+# across projects with different tool sets), the run's MCP allowlist is
+# CONTRIBUTED BY THE PROJECT it runs in: any agent running in project P may call
+# the tools of P's declared MCP servers. Builtins / role tools stay per-agent.
+
+
+async def resolve_project_mcp_tool_names(session: AsyncSession, project: Any) -> frozenset[str]:
+    """The MCP tool names available to any agent running in ``project`` (ADR 0128).
+
+    These are the imported (ADR 0052 supply-chain) ``<server>.<tool>`` catalog
+    tools whose server is declared in ``project.mcp_servers``. Empty when the
+    project is ``None`` or declares no MCP server. Optional per-role filtering is
+    a separate, project-level policy (ADR 0128 §granularidad opcional) applied by
+    the caller — this returns the project's full MCP surface.
+    """
+    if project is None:
+        return frozenset()
+    declared = {
+        s.get("name")
+        for s in (getattr(project, "mcp_servers", None) or [])
+        if isinstance(s, dict) and s.get("name")
+    }
+    if not declared:
+        return frozenset()
+    rows = await session.execute(
+        select(Tool.name).where(
+            Tool.tenant_id == project.tenant_id,
+            Tool.implementation_type == "mcp_tool",
+            Tool.deleted_at.is_(None),
+        )
+    )
+    names: set[str] = set()
+    for name in rows.scalars().all():
+        server = name.split(".", 1)[0] if "." in name else None
+        if server in declared:
+            names.add(name)
+    return frozenset(names)
+
+
+def extend_allowlist_with_project_mcp(
+    base_allowlist: list[str] | None,
+    project_mcp_tool_names: Iterable[str],
+) -> list[str] | None:
+    """Extend (UNION) an agent's allowlist with the project's MCP tools (ADR 0128).
+
+    Semantics:
+
+      * ``base_allowlist is None`` (agent has no per-agent restriction) → ``None``.
+        An unrestricted agent can already call every registered tool, including
+        the MCP tools the runtime registers from the project's servers; injecting
+        names would wrongly turn it into a RESTRICTED allowlist.
+      * ``base_allowlist`` is a list (agent restricted) → the UNION of the base
+        and the project MCP names (canonicalised, sorted), so the restricted agent
+        additionally may call the project's MCP tools without a per-agent grant.
+
+    Purely additive: it never removes a name the agent already had, so it cannot
+    break an existing run. If a contributed name does not match a tool the
+    runtime registered, that tool simply stays uncallable — the pre-0128 state.
+    """
+    if base_allowlist is None:
+        return None
+    extra = to_canonical_set(project_mcp_tool_names)
+    return sorted(set(base_allowlist) | extra)
+
+
+# ---------------------------------------------------------------------------
 # Effective-tools computation (Plan 06.18 task_06_18_07)
 # ---------------------------------------------------------------------------
 
@@ -453,6 +524,8 @@ __all__ = [
     "ToolWarning",
     "combine_tool_allowlists",
     "compute_effective_tools",
+    "extend_allowlist_with_project_mcp",
     "resolve_agent_tool_names",
+    "resolve_project_mcp_tool_names",
     "serialize_agent_tool_specs",
 ]
