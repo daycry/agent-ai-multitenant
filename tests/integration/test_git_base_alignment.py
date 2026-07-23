@@ -109,6 +109,58 @@ def test_align_never_rewrites_diverged_local(tmp_path: Path) -> None:
 
 
 # ===========================================================================
+# (a2) has_commits + seed nombrando la rama configurada (fix 2026-07-23):
+# el gate que evita sembrar una raíz sintética antes de alinear desde el remoto,
+# y el endurecimiento master-vs-main del seed.
+# ===========================================================================
+def test_has_commits_false_until_seeded(tmp_path: Path) -> None:
+    from workers.git_repos import BareRepoLayout, BareRepoManager
+
+    layout = BareRepoLayout(data_root=tmp_path / "data", tenant_slug="t", project_slug="p")
+    mgr = BareRepoManager(layout)
+    assert mgr.has_commits("backend") is False  # ni existe el bare
+    mgr.ensure_repo("backend")
+    assert mgr.has_commits("backend") is False  # bare vacío (HEAD sin nacer)
+    mgr.seed_initial_commit_if_empty("backend")
+    assert mgr.has_commits("backend") is True
+
+
+def test_seed_names_branch_from_configured_default(tmp_path: Path) -> None:
+    from workers.git_repos import BareRepoLayout, BareRepoManager
+
+    layout = BareRepoLayout(data_root=tmp_path / "data", tenant_slug="t", project_slug="p")
+    mgr = BareRepoManager(layout)
+    local = mgr.ensure_repo("backend")
+    assert mgr.seed_initial_commit_if_empty("backend", default_branch="main") is True
+    # El seed cayó en `main` (no en el `master` que `git init` pudo dejar en HEAD).
+    assert _rev(local, "refs/heads/main")
+    head = subprocess.run(
+        ["git", "symbolic-ref", "HEAD"], cwd=str(local), check=True, capture_output=True, text=True
+    ).stdout.strip()
+    assert head == "refs/heads/main"
+
+
+def test_aligned_base_makes_plan_branch_share_history_with_origin(tmp_path: Path) -> None:
+    # El caso real (GitHub «Add README» → el remoto tiene su PROPIA raíz): un bare
+    # local vacío alineado DESDE el remoto y una rama de plan creada sobre esa base
+    # SÍ comparte historia con origin → el PR final ya no da «no history in common».
+    mgr, local, _remote = _local_with_remote(tmp_path)
+    assert mgr.align_default_branch("backend", "main") == "created"
+    subprocess.run(
+        ["git", "branch", "plan/x-demo", "main"], cwd=str(local), check=True, capture_output=True
+    )
+    commit_to_branch(local, "plan/x-demo", filename="w.txt", content="x\n")
+    mb = subprocess.run(
+        ["git", "merge-base", "plan/x-demo", "refs/remotes/origin/main"],
+        cwd=str(local),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert mb.returncode == 0 and mb.stdout.strip()  # ancestro común ⇒ PR viable
+
+
+# ===========================================================================
 # (b) open_plan_pr con guard de ancestro
 # ===========================================================================
 def _workflow(local_bare: Path, plan_branch: str, *, base_branch: str | None, opener):

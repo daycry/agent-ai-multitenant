@@ -217,20 +217,51 @@ class BareRepoManager:
             f"bare repo at {path} exists but never became valid (init race?): {last_exc}"
         )
 
-    def seed_initial_commit_if_empty(self, repo_name: str) -> bool:
+    def has_commits(self, repo_name: str) -> bool:
+        """True iff the bare repo exists AND has at least one commit (born HEAD).
+
+        The gate the execution/review provisioning uses to decide whether the
+        base still needs rooting from the remote (ADR 0127-adjacent, CI4 «no
+        history in common» fix): an empty bare must be aligned to
+        ``origin/<default>`` BEFORE any synthetic seed, or the plan branch roots
+        on an orphan history the final PR can never merge."""
+        path = self._layout.bare_repo_path(repo_name)
+        if not path.exists():
+            return False
+        try:
+            _run_git("-C", str(path), "rev-parse", "--verify", "HEAD")
+            return True
+        except GitCommandError:
+            return False
+
+    def seed_initial_commit_if_empty(
+        self, repo_name: str, *, default_branch: str | None = None
+    ) -> bool:
         """Ensure the bare repo has a commit so worktrees can branch off it (prod-18).
 
         A fresh LOCAL bare (``git init --bare``, no remote/clone) is empty: HEAD is
         unborn and ``git worktree add … HEAD`` fails ("not a valid object name").
         Seed an empty ROOT commit (the well-known empty tree) on the bare's current
         HEAD branch, with a platform git identity. No-op if the repo already has
-        commits (e.g. it was cloned from a remote). Returns ``True`` iff it seeded."""
+        commits (e.g. it was cloned from a remote). Returns ``True`` iff it seeded.
+
+        ``default_branch`` (hardening, 2026-07-23): when given, the seed is placed
+        on ``refs/heads/<default_branch>`` instead of whatever ``git init --bare``
+        left in HEAD (host ``init.defaultBranch`` — often ``master``). Without
+        this, a bare seeded on ``master`` while the project's configured default
+        is ``main`` (or vice-versa) makes ``align_default_branch`` and the PR guard
+        look at a branch the seed never touched — the master-vs-main divergence
+        vector. Seeding on the CONFIGURED branch keeps all paths in lockstep."""
         path = self._layout.bare_repo_path(repo_name)
         try:
             _run_git("-C", str(path), "rev-parse", "--verify", "HEAD")
             return False  # already has at least one commit
         except GitCommandError:
             pass
+        # Name the seed branch from the configured default BEFORE committing, so
+        # the born ref matches what alignment + the PR guard target.
+        if default_branch:
+            _run_git("-C", str(path), "symbolic-ref", "HEAD", f"refs/heads/{default_branch}")
         ident = {
             "GIT_AUTHOR_NAME": _PLATFORM_GIT_NAME,
             "GIT_AUTHOR_EMAIL": _PLATFORM_GIT_EMAIL,

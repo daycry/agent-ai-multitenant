@@ -483,6 +483,59 @@ class RepoHistoryLostError(RuntimeError):
     segundos con ``abort_code=repo_history_lost`` y un motivo accionable."""
 
 
+async def _align_base_from_remote_if_empty(
+    settings: Settings,
+    *,
+    tenant_slug: str,
+    project_slug: str,
+    plan_id: str,
+    plan_slug: str,
+    project_id: str,
+) -> None:
+    """Root the project's bare from the REMOTE before any synthetic seed.
+
+    The «no history in common» fix (workflow diagnosis 2026-07-23): the bare is
+    created empty by ``git init --bare`` and, historically, this execution path
+    seeded a SYNTHETIC root commit if the clone/sync task had not run yet — so
+    the plan branch rooted on an orphan history that the final PR could never
+    merge (GitHub 422). Here we run the SAME proven sequence ``repo_clone`` uses
+    (``ensure_repo(remote) → fetch_remote → align_default_branch``) via
+    :func:`_clone_project_repo_async`, so the local default branch descends from
+    ``origin/<default>``. Gated on ``has_commits`` → only the FIRST provisioning
+    pays the network cost; later worktrees see a born base and skip. Best-effort:
+    a failure (offline/auth) leaves ``_git``'s seed as the fallback (i.e. the
+    pre-fix behaviour, which the PR guard still catches) — it never fails the run.
+    """
+    from uuid import UUID
+
+    from workers.git_repos import BareRepoManager
+    from workers.plan_git import worktree_coordinates
+    from workers.repo_clone import _clone_project_repo_async
+
+    layout, _branch = worktree_coordinates(
+        data_root=settings.data_root,
+        tenant_slug=tenant_slug,
+        project_slug=project_slug,
+        plan_id=plan_id,
+        plan_slug=plan_slug,
+    )
+    repo_name = project_slug
+    if BareRepoManager(layout).has_commits(repo_name):
+        return  # already provisioned — do NOT re-fetch on every worktree
+    try:
+        result = await _clone_project_repo_async(UUID(str(project_id)), settings=settings)
+        _log.info(
+            "workers.worktree_base_aligned_from_remote",
+            project_id=str(project_id),
+            status=result.get("status") if isinstance(result, dict) else None,
+            alignment=result.get("alignment") if isinstance(result, dict) else None,
+        )
+    except Exception as exc:  # pragma: no cover - defensive: seed fallback still runs
+        _log.warning(
+            "workers.worktree_base_align_failed", project_id=str(project_id), error=str(exc)
+        )
+
+
 async def _provision_worktree(
     settings: Settings,
     *,
@@ -491,6 +544,7 @@ async def _provision_worktree(
     plan_id: str,
     plan_slug: str,
     task_id: str,
+    project_id: str | None = None,
     expect_plan_history: bool = False,
 ) -> str | None:
     """Materialise the per-task git worktree and return its host path (prod-18
@@ -547,6 +601,18 @@ async def _provision_worktree(
                 "(historial perdido). No se lanza al agente sobre un workspace vacío."
             )
         return str(path)
+
+    # «no history in common» fix: root the base from origin BEFORE _git's seed,
+    # so the plan branch descends from the remote's history (not a synthetic root).
+    if project_id:
+        await _align_base_from_remote_if_empty(
+            settings,
+            tenant_slug=tenant_slug,
+            project_slug=project_slug,
+            plan_id=plan_id,
+            plan_slug=plan_slug,
+            project_id=project_id,
+        )
 
     try:
         return await asyncio.to_thread(_git)
@@ -1072,6 +1138,7 @@ async def _provision_workspace(
                 plan_id=plan_id_str,
                 plan_slug=plan_slug,
                 task_id=str(task_id),
+                project_id=str(_wt_project_id) if _wt_project_id else None,
                 expect_plan_history=prepared.plan_has_prior_work,
             )
         except RepoHistoryLostError as exc:
