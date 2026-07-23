@@ -35,9 +35,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError, apiFetch } from "@/lib/api";
 
+import { McpOAuthConnect } from "./mcp-oauth-connect";
 import {
   AGENT_ROLES,
   CATEGORY_LABEL,
+  OAUTH_AUTH_KIND,
   ROLE_LABEL,
   TRANSPORT_BADGE,
   TRANSPORT_LABEL,
@@ -59,12 +61,22 @@ export function McpServerCard({
   onEdit,
   onDelete,
   busy,
+  projectId,
+  authKind,
+  providerLabel,
 }: {
   server: McpServerConfig;
   onEdit: () => void;
   onDelete: () => void;
   busy: boolean;
+  // ADR 0127: cuando el server usa OAuth (`authKind === "oauth"`, resuelto por
+  // page.tsx casando la url contra el catálogo) la ficha muestra el botón
+  // «Conectar» en vez de una credencial en Vault.
+  projectId?: string;
+  authKind?: string;
+  providerLabel?: string;
 }) {
+  const isOAuth = authKind === OAUTH_AUTH_KIND;
   return (
     <Card data-testid={`mcp-server-card-${server.name}`}>
       <CardHeader className="flex flex-row items-start justify-between gap-4">
@@ -74,7 +86,11 @@ export function McpServerCard({
             <Badge variant={TRANSPORT_BADGE[server.transport]}>
               {TRANSPORT_LABEL[server.transport]}
             </Badge>
-            {server.auth_ref ? (
+            {isOAuth ? (
+              <Badge variant="info" data-testid={`mcp-server-oauth-${server.name}`}>
+                OAuth
+              </Badge>
+            ) : server.auth_ref ? (
               <Badge variant="muted" data-testid={`mcp-server-auth-${server.name}`}>
                 vault
               </Badge>
@@ -109,6 +125,15 @@ export function McpServerCard({
           </Button>
         </div>
       </CardHeader>
+      {isOAuth && projectId ? (
+        <CardContent className="pt-0">
+          <McpOAuthConnect
+            projectId={projectId}
+            serverName={server.name}
+            providerLabel={providerLabel}
+          />
+        </CardContent>
+      ) : null}
     </Card>
   );
 }
@@ -430,6 +455,23 @@ export function McpServerDialog({
                 />
               </>
             )}
+
+            {/* ADR 0127 — plantilla OAuth: no hay token que pegar. Se guarda el
+                server y se conecta desde su ficha con «Conectar». */}
+            {appliedTemplate?.auth_kind === OAUTH_AUTH_KIND ? (
+              <div
+                className="bg-info-soft text-info-soft-foreground rounded-md border border-info/30 p-3"
+                data-testid="mcp-form-oauth-note"
+              >
+                <p className="text-sm font-medium">🔗 Este servidor se conecta por OAuth</p>
+                <p className="mt-1 text-xs">
+                  No necesitas pegar ningún token. <strong>Guarda</strong> el server y pulsa{" "}
+                  <strong>«Conectar»</strong> en su ficha: te llevará a{" "}
+                  {appliedTemplate.display_name} para autorizar una vez, y la plataforma refrescará
+                  el token sola.
+                </p>
+              </div>
+            ) : null}
 
             {/* Opciones avanzadas — colapsa auth + timeout */}
             <div className="border-t pt-3">

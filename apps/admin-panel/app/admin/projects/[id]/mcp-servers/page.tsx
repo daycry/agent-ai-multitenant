@@ -20,8 +20,8 @@
  * Playwright que un JSON textarea.
  */
 
-import { useState } from "react";
-import { useParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plug, Plus } from "lucide-react";
 
@@ -32,7 +32,13 @@ import { Card, CardContent } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
 
 import { McpServerCard, McpServerDialog, McpToolRolePolicySection } from "./mcp-server-sections";
-import { emptyServer, type McpServerConfig, type ProjectResponse } from "./mcp-server-types";
+import {
+  authKindByUrl,
+  emptyServer,
+  type McpCatalogEntry,
+  type McpServerConfig,
+  type ProjectResponse,
+} from "./mcp-server-types";
 
 // --------------------------------------------------------------------------
 // Page
@@ -48,6 +54,43 @@ export default function ProjectMcpServersPage() {
     refetchOnWindowFocus: false,
     enabled: Boolean(projectId),
   });
+
+  // Catálogo → para saber, por la `url` de un server ya guardado, si usa OAuth
+  // (el server config no persiste `auth_kind`) y su nombre de proveedor.
+  const catalogQuery = useQuery({
+    queryKey: ["mcp-catalog"],
+    queryFn: () => apiFetch<McpCatalogEntry[]>("/mcp-catalog"),
+    refetchOnWindowFocus: false,
+    staleTime: 5 * 60_000,
+    enabled: Boolean(projectId),
+  });
+  const catalog = useMemo(() => catalogQuery.data ?? [], [catalogQuery.data]);
+  const kindByUrl = useMemo(() => authKindByUrl(catalog), [catalog]);
+  const nameByUrl = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const e of catalog) if (e.url) out[e.url] = e.display_name;
+    return out;
+  }, [catalog]);
+
+  // ADR 0127 — retorno del callback OAuth: el backend redirige aquí con
+  // `?oauth_result=connected|error&server={name}[&reason=...]`. Mostramos un
+  // banner, refrescamos el estado de conexión de ese server y limpiamos la URL.
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const oauthResult = searchParams.get("oauth_result");
+  const oauthServer = searchParams.get("server");
+  const oauthReason = searchParams.get("reason");
+  useEffect(() => {
+    if (!oauthResult) return;
+    if (oauthServer) {
+      void queryClient.invalidateQueries({
+        queryKey: ["mcp-oauth-status", projectId, oauthServer],
+      });
+    }
+    // Quita los params para que un refresco no re-muestre el banner.
+    router.replace(`/admin/projects/${projectId}/mcp-servers`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [oauthResult, oauthServer, projectId]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<McpServerConfig | null>(null);
@@ -115,6 +158,25 @@ export default function ProjectMcpServersPage() {
         }
       />
 
+      {/* ADR 0127 — resultado del flujo OAuth «Conectar» al volver del proveedor. */}
+      {oauthResult === "connected" ? (
+        <div
+          className="bg-success-soft text-success-soft-foreground mt-6 rounded-md border border-success/30 p-3 text-sm"
+          data-testid="mcp-oauth-banner-connected"
+        >
+          ✓ Conexión OAuth completada{oauthServer ? ` para «${oauthServer}»` : ""}. El token quedó
+          guardado y se refrescará automáticamente.
+        </div>
+      ) : oauthResult === "error" ? (
+        <div
+          className="bg-danger-soft text-danger-soft-foreground mt-6 rounded-md border border-danger/30 p-3 text-sm"
+          data-testid="mcp-oauth-banner-error"
+        >
+          No se pudo completar la conexión OAuth{oauthServer ? ` de «${oauthServer}»` : ""}.
+          {oauthReason ? ` (${oauthReason})` : ""} Vuelve a intentarlo con «Conectar».
+        </div>
+      ) : null}
+
       {projectQuery.isLoading ? (
         <p className="text-muted-foreground mt-6 text-sm">Cargando…</p>
       ) : projectQuery.isError ? (
@@ -141,6 +203,9 @@ export default function ProjectMcpServersPage() {
               onEdit={() => handleEdit(server, index)}
               onDelete={() => handleDelete(index)}
               busy={saveMutation.isPending}
+              projectId={projectId}
+              authKind={server.url ? kindByUrl[server.url] : undefined}
+              providerLabel={server.url ? nameByUrl[server.url] : undefined}
             />
           ))}
         </div>

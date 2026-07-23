@@ -16,6 +16,9 @@ vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "proj-1" }),
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
   usePathname: () => "/admin/projects/proj-1/mcp-servers",
+  // ADR 0127: la página lee `?oauth_result` del callback OAuth. Sin params por
+  // defecto → no banner (los tests existentes no lo esperan).
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 const apiFetchMock = vi.fn();

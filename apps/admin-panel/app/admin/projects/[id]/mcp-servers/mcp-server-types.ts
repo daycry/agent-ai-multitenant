@@ -152,6 +152,29 @@ export interface McpCatalogEntry {
   docs_url: string;
   category: string;
   requires_auth: boolean;
+  // ADR 0127: cómo autentica la plantilla — "static" (token en Vault), "oauth"
+  // (botón «Conectar», consentimiento interactivo + refresco), "sidecar" (un
+  // sidecar self-hosted se autentica solo) o "none" (público). Ausente en
+  // catálogos antiguos → se trata como "" (equivale a static/none por
+  // `requires_auth`). Solo "oauth" cambia la UX (muestra «Conectar»).
+  auth_kind?: string;
+}
+
+/** El `auth_kind` que dispara el flujo OAuth «Conectar» (ADR 0127). */
+export const OAUTH_AUTH_KIND = "oauth";
+
+/**
+ * Construye un mapa `url → auth_kind` a partir del catálogo, para que la ficha
+ * de un server YA guardado (que no persiste `auth_kind`) pueda saber si usa
+ * OAuth casando su `url` contra la plantilla del catálogo. Solo entran las
+ * entradas HTTP con `url`.
+ */
+export function authKindByUrl(catalog: McpCatalogEntry[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const entry of catalog) {
+    if (entry.url) out[entry.url] = entry.auth_kind ?? "";
+  }
+  return out;
 }
 
 export const CATEGORY_LABEL: Record<string, string> = {
