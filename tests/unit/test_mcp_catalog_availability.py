@@ -9,7 +9,10 @@ separate docling-serve HTTP path) but is withheld from the assignable list
 
 from __future__ import annotations
 
-from api_server.routers.mcp_catalog import _UNAVAILABLE_TEMPLATE_IDS
+from api_server.routers.mcp_catalog import (
+    _UNAVAILABLE_TEMPLATE_IDS,
+    offered_catalog,
+)
 from shared_mcp.catalog import CATALOG
 
 
@@ -29,3 +32,44 @@ def test_offered_templates_exclude_unavailable_ones() -> None:
 def test_unavailable_ids_are_real_catalog_entries() -> None:
     # A guard against a typo silently withholding nothing (or drifting).
     assert set(CATALOG) >= _UNAVAILABLE_TEMPLATE_IDS
+
+
+# ---------------------------------------------------------------------------
+# ADR 0117: the agent-runtime cannot spawn stdio binaries (none are packaged
+# in the image), so the picker offers ONLY HTTP-transport templates. The stdio
+# templates stay CATALOGUED (conduct-time validation + audit trail) but are
+# never offered. Atlassian ships as an HTTP sidecar, Context7/GitHub as remote.
+# ---------------------------------------------------------------------------
+def test_catalog_offers_only_http_transports() -> None:
+    offered = offered_catalog()
+    assert offered, "the picker must not be empty"
+    assert all(t.transport in ("sse", "streamable_http") for t in offered)
+
+
+def test_stdio_templates_are_never_offered() -> None:
+    offered_ids = {t.id for t in offered_catalog()}
+    stdio_ids = {tid for tid, t in CATALOG.items() if t.transport == "stdio"}
+    assert stdio_ids  # sanity: the stdio templates are still catalogued…
+    assert offered_ids.isdisjoint(stdio_ids)  # …but none are offered
+
+
+def test_working_http_templates_are_offered() -> None:
+    offered_ids = {t.id for t in offered_catalog()}
+    assert {"context7", "atlassian", "github-remote"} <= offered_ids
+
+
+# ---------------------------------------------------------------------------
+# ADR 0127 foundation: every template declares HOW its requests authenticate,
+# so the picker knows whether to show a token field ("static"), a "Connect"
+# button ("oauth"), or nothing ("none"). The OAuth runtime (token store +
+# connect flow) is a separate, interactively-verified phase.
+# ---------------------------------------------------------------------------
+def test_templates_declare_a_valid_auth_kind() -> None:
+    assert all(t.auth_kind in ("none", "static", "oauth") for t in CATALOG.values())
+
+
+def test_offered_http_templates_have_expected_auth_kind() -> None:
+    kinds = {t.id: t.auth_kind for t in offered_catalog()}
+    assert kinds["context7"] == "none"  # optional key; no required per-request auth
+    assert kinds["atlassian"] == "none"  # sidecar authenticates via its own env
+    assert kinds["github-remote"] == "static"  # PAT bearer from Vault per request

@@ -322,5 +322,7 @@ def test_extended_catalog_introduces_new_categories() -> None:
 
 def test_catalog_size_matches_documented_count() -> None:
     """The catalog grows by code change + ADR; the docs are the
-    contract. 12 roadmap entries + 12 stretch = 24."""
-    assert len(CATALOG) == 24
+    contract. 12 roadmap + 12 stretch (all stdio, withheld from the picker)
+    + 3 HTTP templates offered in the picker (Context7, Atlassian, GitHub
+    remote — ADR 0117) = 27."""
+    assert len(CATALOG) == 27

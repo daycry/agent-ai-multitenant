@@ -45,6 +45,10 @@ class McpTemplateDto(BaseModel):
     docs_url: str
     category: str
     requires_auth: bool = Field(description="True when the template declares a secret_keys list.")
+    auth_kind: str = Field(
+        description="How requests authenticate: 'static' (token field), 'oauth' "
+        "(Connect button), or 'none' (public / sidecar self-auth). ADR 0127."
+    )
 
 
 def _to_dto(template: McpServerTemplate) -> McpTemplateDto:
@@ -66,26 +70,44 @@ def _to_dto(template: McpServerTemplate) -> McpTemplateDto:
         docs_url=template.docs_url,
         category=template.category,
         requires_auth=bool(template.secret_keys),
+        auth_kind=template.auth_kind,
     )
 
 
-# Templates the platform KNOWS about but must NOT offer as assignable MCP
-# servers because they cannot start out-of-the-box (g5, audit 2026-07-03).
-# `docling-mcp` is stdio `command="docling-mcp"`, a binary upstream does not
-# publish an image for (docs/03-guides/gotchas/docling-mcp-no-public-image.md);
-# the service is commented out in docker-compose. The operative Docling path is
-# `docling-serve` HTTP used by KB ingestion — a different code path — so the
-# template stays in CATALOG (referenced there) but is filtered from the picker.
+# Explicit deny-list for HTTP templates that must NOT be offered (e.g. a server
+# retired by a security advisory). stdio templates are withheld WHOLESALE by
+# transport (see ``offered_catalog``), so they don't need listing here.
+# ``docling-mcp`` stays here for the historical g5 guarantee/test, though the
+# transport rule below would withhold it anyway.
 _UNAVAILABLE_TEMPLATE_IDS: frozenset[str] = frozenset({"docling-mcp"})
+
+
+def offered_catalog() -> list[McpServerTemplate]:
+    """The MCP templates the picker OFFERS as assignable, in stable insertion
+    order (the admin-panel groups by category without re-sorting).
+
+    Two filters (ADR 0117):
+
+    * **Transport** — only HTTP transports (``sse`` / ``streamable_http``) are
+      offered. The agent-runtime image packages NO stdio binaries, so every
+      ``stdio`` template would fail at ``mcp_wire`` (the agent loops looking for
+      a binary and escalates). They stay in ``CATALOG`` for conduct-time
+      validation + audit, but are never offered.
+    * **Explicit deny-list** — ``_UNAVAILABLE_TEMPLATE_IDS`` withholds specific
+      HTTP templates if one is ever retired.
+    """
+    return [
+        t
+        for t in CATALOG.values()
+        if t.transport != "stdio" and t.id not in _UNAVAILABLE_TEMPLATE_IDS
+    ]
 
 
 @router.get("", response_model=list[McpTemplateDto])
 async def list_mcp_catalog(
     _principal: AuthPrincipal = Depends(require_tenant_member),
 ) -> list[McpTemplateDto]:
-    """Return every ASSIGNABLE MCP template the platform knows about, in stable
-    insertion order so the admin-panel can group by category without a second
-    sort step. Templates with no runnable image (``_UNAVAILABLE_TEMPLATE_IDS``)
-    are withheld so the picker never offers a server that cannot start.
+    """Return every ASSIGNABLE MCP template (HTTP-only; see ``offered_catalog``)
+    so the picker never offers a server that cannot start in the runtime.
     """
-    return [_to_dto(t) for t in CATALOG.values() if t.id not in _UNAVAILABLE_TEMPLATE_IDS]
+    return [_to_dto(t) for t in offered_catalog()]

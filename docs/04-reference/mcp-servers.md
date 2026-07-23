@@ -2,7 +2,7 @@
 title: Catálogo de MCP servers verificados (Plan 05)
 audience: backend-dev, devops, technical-writer, system-admin
 phase: 05-mcp-tools-avanzadas
-updated: 2026-05-28
+updated: 2026-07-23
 ---
 
 # Catálogo de MCP servers verificados
@@ -17,6 +17,28 @@ shape del `auth_ref` apuntando a Vault.
 > Convención: el campo `auth_ref` es siempre un puntero `vault:...` (CLAUDE.md
 > regla dura). Los tokens nunca viajan en JSON ni se quedan en la BD; Vault
 > es el único almacén de credenciales del platform.
+
+---
+
+## Qué se OFRECE en el picker (ADR 0117)
+
+> **Importante.** El agent-runtime **no empaqueta binarios stdio**, así que una
+> plantilla `stdio` (`command=...`) **nunca arrancaría** (el agente daría vueltas
+> buscando el binario y escalaría a un humano). Por eso el picker
+> (`GET /mcp-catalog` → `offered_catalog()`) **ofrece SOLO plantillas de transporte
+> HTTP** (`streamable_http`/`sse`). Todas las plantillas `stdio` históricas siguen
+> en `CATALOG` (validación en tiempo de ejecución + auditoría) pero **están ocultas**
+> del picker. Regla de oro: **usa siempre servers HTTP** — remotos o sidecars.
+
+Las tres plantillas **ofrecibles** hoy:
+
+| id              | transporte        | URL                                  | auth                                    | notas                                                                                                                        |
+| --------------- | ----------------- | ------------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `context7`      | `streamable_http` | `https://mcp.context7.com/mcp`       | opcional (key en cabecera)              | docs de librerías al día. Abrir `mcp.context7.com` en dominios permitidos (egress).                                          |
+| `atlassian`     | `streamable_http` | `http://mcp-atlassian:9000/mcp`      | en el ENV del sidecar                   | Jira+Confluence en un sidecar (`ghcr.io/sooperset/mcp-atlassian`) en la red `agentic-agents`; hostname interno → sin egress. |
+| `github-remote` | `streamable_http` | `https://api.githubcopilot.com/mcp/` | PAT en cabecera `Authorization` (Vault) | MCP remoto oficial de GitHub. Abrir `api.githubcopilot.com` en dominios permitidos (egress).                                 |
+
+Sustituyen a las plantillas stdio equivalentes (jira-mcp/confluence-mcp → `atlassian`; github-mcp → `github-remote`), que quedan ocultas.
 
 ---
 

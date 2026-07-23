@@ -45,6 +45,36 @@ configura un server MCP en su proyecto obtiene silencio.
 **(2) ahora, con (3) como siguiente paso si hay demanda.** (1) solo con un
 caso de uso concreto que lo pague.
 
+### Resolución (a) — 2026-07-23: **Opción 3 (Híbrida), aceptada e implementada**
+
+Elegida la **Opción 3**: el catálogo **ofrece SOLO servers MCP de transporte
+HTTP** (`streamable_http`/`sse`); las plantillas `stdio` se **ocultan** del
+picker (siguen en `CATALOG` para validación en tiempo de ejecución + auditoría,
+no se borran). Motivación reforzada por un caso real (2026-07-23): sin poder
+arrancar, un agente daba vueltas y escalaba a humano.
+
+Implementación:
+
+- `api_server.routers.mcp_catalog.offered_catalog()` filtra por transporte
+  (`transport != "stdio"`) + deny-list `_UNAVAILABLE_TEMPLATE_IDS`; `GET
+/mcp-catalog` solo devuelve HTTP.
+- Tres plantillas HTTP nuevas en `shared_mcp.catalog`: `context7` (remoto),
+  `atlassian` (sidecar `ghcr.io/sooperset/mcp-atlassian` sobre `streamable-http`)
+  y `github-remote` (MCP remoto oficial de GitHub, PAT en cabecera vía Vault).
+  Sustituyen a las stdio `jira-mcp`/`confluence-mcp`/`github-mcp` (ocultas).
+- Tests: `tests/unit/test_mcp_catalog_availability.py` (solo-HTTP ofrecidas,
+  stdio nunca ofrecidas, las 3 presentes) + ajuste de la familia scm en
+  `tests/integration/test_github_mcp.py` y del recuento en
+  `tests/integration/test_mcp_integrations.py` (24 → 27).
+- Egress: los remotos exigen abrir su dominio en `projects.allowed_domains`
+  (`mcp.context7.com`, `api.githubcopilot.com`); el sidecar Atlassian es
+  hostname interno de `agentic-agents` (sin egress).
+- Empaquetar binarios stdio (Opción 1) queda descartado salvo caso de uso que
+  lo pague. Las decisiones (b) y (c) de este ADR siguen `proposed`.
+
+Doc de referencia actualizado: `docs/04-reference/mcp-servers.md`
+(sección «Qué se OFRECE en el picker (ADR 0117)»).
+
 ## (b) `task.human_validation_required`: implementar el flag o corregir CLAUDE.md (PROY2-06)
 
 ### Contexto
