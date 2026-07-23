@@ -65,6 +65,20 @@ from api_server.db.cortex_curiosity import CortexCuriosityPursuit
 from api_server.db.cortex_identity import CortexIdentity, CortexIdentityHistory
 from api_server.db.llm_usage import LLMUsageEvent
 
+# Marketplace (ADR 0100): import the marketplace models so they register on
+# ``Base.metadata``. ``Tool.source_installation_id`` (and ``Skill``'s) FK-reference
+# ``marketplace_installations``; the Tool/Skill mappers cannot configure unless
+# these are registered. Keeping them in this aggregator makes it COMPLETE, so any
+# context that imports ``db.models`` (tests, Alembic env) gets a resolvable mapper
+# — without it, importing db.models in isolation raised NoReferencedTableError.
+from api_server.db.marketplace import (
+    MarketplaceAuditEntry,
+    MarketplaceInstallation,
+    MarketplaceListing,
+    MarketplaceShare,
+    MarketplaceSource,
+)
+
 
 class UserRole(enum.StrEnum):
     """Per-membership role inside an organization.
@@ -1133,6 +1147,11 @@ __all__ = [
     "CortexAffectSnapshot",
     "AssistantConversation",
     "LLMUsageEvent",
+    "MarketplaceAuditEntry",
+    "MarketplaceInstallation",
+    "MarketplaceListing",
+    "MarketplaceShare",
+    "MarketplaceSource",
     "AssistantTurn",
     "CortexConversation",
     "CortexCuriosityPursuit",
