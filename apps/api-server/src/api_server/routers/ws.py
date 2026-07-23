@@ -92,13 +92,26 @@ def _to_event(entry_id: object, fields: dict[Any, Any]) -> dict[str, Any]:
     return event
 
 
-async def _resolve_principal(token: str | None, sessions: SessionStore) -> AuthPrincipal | None:
+async def _resolve_principal(
+    token: str | None,
+    sessions: SessionStore,
+    tenant_id_override: str | None = None,
+) -> AuthPrincipal | None:
     """Decode the query-param JWT and confirm its session is still live.
 
     Returns the principal, or None if the token is missing/invalid or the
     server-side session has been revoked (logout). Mirrors the REST
     `get_principal` checks; WebSocket can't use it directly because it
     reads the bearer from a Header dependency.
+
+    ``tenant_id_override`` is the WebSocket mirror of the REST ``X-Tenant-Id``
+    header: for a ``is_system_admin`` principal it overrides the JWT's ``tid``
+    so a superadmin can tail the streams of the tenant they are ACTING AS (the
+    admin-panel tenant picker). The browser WebSocket API can't set headers, so
+    this travels as the ``?tenant_id=`` query param instead. Non-admins can't
+    escape their JWT scope — the override is ignored for them (same rule as
+    ``get_principal``). A malformed override for an admin rejects the socket
+    rather than silently acting on the home tenant.
     """
     if not token:
         return None
@@ -111,10 +124,19 @@ async def _resolve_principal(token: str | None, sessions: SessionStore) -> AuthP
         session_id = UUID(claims["sid"])
     except (KeyError, ValueError, TypeError):
         return None
+    is_system_admin = bool(claims.get("sys", False))
+    # Effective tenant: a System Admin's ?tenant_id override (the WS mirror of
+    # the REST X-Tenant-Id header) wins over the JWT tid so a superadmin can
+    # tail the streams of the tenant they are ACTING AS. Non-admins can't
+    # override — they always fall back to their own JWT tid, so the query param
+    # can never be used to escape a tenant's own scope.
+    raw_tenant = (
+        tenant_id_override if (is_system_admin and tenant_id_override) else claims.get("tid")
+    )
     tenant_id: UUID | None = None
-    if claims.get("tid") is not None:
+    if raw_tenant is not None:
         try:
-            tenant_id = UUID(claims["tid"])
+            tenant_id = UUID(raw_tenant)
         except (ValueError, TypeError):
             return None
     # Revoked session → reject (immediate logout for live sockets too).
@@ -124,7 +146,7 @@ async def _resolve_principal(token: str | None, sessions: SessionStore) -> AuthP
         user_id=user_id,
         session_id=session_id,
         tenant_id=tenant_id,
-        is_system_admin=bool(claims.get("sys", False)),
+        is_system_admin=is_system_admin,
     )
 
 
@@ -223,12 +245,13 @@ async def execution_stream(
     ws: WebSocket,
     execution_id: str,
     token: str | None = Query(default=None),
+    tenant_id: str | None = Query(default=None),
     redis: Redis = Depends(get_redis),
     sessions: SessionStore = Depends(get_session_store),
 ) -> None:
     """Stream one execution's step events — only to a member of its tenant."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions)
+    principal = await _resolve_principal(token, sessions, tenant_id)
     if principal is None:
         await _reject(ws, "unauthenticated")
         return
@@ -243,6 +266,7 @@ async def kanban_stream(
     ws: WebSocket,
     project_id: str,
     token: str | None = Query(default=None),
+    tenant_id: str | None = Query(default=None),
     redis: Redis = Depends(get_redis),
     sessions: SessionStore = Depends(get_session_store),
 ) -> None:
@@ -253,7 +277,7 @@ async def kanban_stream(
     project ids are globally-unique UUIDs already).
     """
     await ws.accept()
-    principal = await _resolve_principal(token, sessions)
+    principal = await _resolve_principal(token, sessions, tenant_id)
     if principal is None:
         await _reject(ws, "unauthenticated")
         return
@@ -278,6 +302,7 @@ async def conversation_stream(
     ws: WebSocket,
     conversation_id: str,
     token: str | None = Query(default=None),
+    tenant_id: str | None = Query(default=None),
     redis: Redis = Depends(get_redis),
     sessions: SessionStore = Depends(get_session_store),
 ) -> None:
@@ -285,7 +310,7 @@ async def conversation_stream(
     only to a member of its tenant. The REST endpoint
     POST /conversations/{id}/messages is the sole producer."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions)
+    principal = await _resolve_principal(token, sessions, tenant_id)
     if principal is None:
         await _reject(ws, "unauthenticated")
         return
@@ -300,6 +325,7 @@ async def document_stream(
     ws: WebSocket,
     document_id: str,
     token: str | None = Query(default=None),
+    tenant_id: str | None = Query(default=None),
     redis: Redis = Depends(get_redis),
     sessions: SessionStore = Depends(get_session_store),
 ) -> None:
@@ -309,7 +335,7 @@ async def document_stream(
     events to the per-document Redis stream as it walks scan → parse →
     embed → persist."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions)
+    principal = await _resolve_principal(token, sessions, tenant_id)
     if principal is None:
         await _reject(ws, "unauthenticated")
         return

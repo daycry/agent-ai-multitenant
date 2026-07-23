@@ -11,6 +11,7 @@
 import { useEffect, useRef } from "react";
 
 import { getToken } from "@/lib/auth";
+import { getTenantId } from "@/lib/tenant-storage";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
 
@@ -38,13 +39,28 @@ export function resolveWsBase(apiUrl: string, loc?: WsLoc): string {
   return apiUrl.replace(/^http/i, "ws");
 }
 
-/** Build a `ws(s)://` URL for an api-server WebSocket path, token attached. */
+/**
+ * Build a `ws(s)://` URL for an api-server WebSocket path, with the token and
+ * — for a superadmin acting on behalf of a tenant — the selected `tenant_id`
+ * attached as query params.
+ *
+ * The tenant_id is the WebSocket mirror of the `X-Tenant-Id` REST header
+ * (`lib/api`): the browser WebSocket API can't set headers, so the tenant the
+ * admin is acting as travels in the query string instead. Without it, an admin
+ * viewing a tenant that isn't their JWT `tid` had every stream rejected under
+ * RLS and the socket reconnected forever. Non-admins have it ignored server-side.
+ */
 export function wsUrl(path: string): string {
   const base = resolveWsBase(API_URL);
+  const params = new URLSearchParams();
   const token = getToken();
-  if (!token) return `${base}${path}`;
+  if (token) params.set("token", token);
+  const tenantId = getTenantId();
+  if (tenantId) params.set("tenant_id", tenantId);
+  const query = params.toString();
+  if (!query) return `${base}${path}`;
   const sep = path.includes("?") ? "&" : "?";
-  return `${base}${path}${sep}token=${encodeURIComponent(token)}`;
+  return `${base}${path}${sep}${query}`;
 }
 
 const RECONNECT_BASE_MS = 500;
