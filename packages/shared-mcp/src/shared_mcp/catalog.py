@@ -96,11 +96,12 @@ class McpServerTemplate:
 
     # How a project's REQUESTS to this server authenticate (ADR 0127) — drives
     # the picker UX: "static" → token field (bearer/env from Vault), "oauth" →
-    # a "Connect" button (interactive consent once, tokens refreshed), "none" →
-    # no per-request auth (public server, or a sidecar that authenticates itself
-    # via its own env). Left blank → derived in ``__post_init__`` from
-    # ``secret_keys`` (present → "static", absent → "none"); "oauth" is always
-    # set explicitly since an OAuth template also carries secret_keys.
+    # a "Connect" button (interactive consent once, tokens auto-refreshed),
+    # "sidecar" → nothing per-request (a self-hosted sidecar authenticates via
+    # its OWN env; the operator deploys + configures the sidecar, not a token
+    # here), "none" → genuinely no auth (public server). Left blank → derived in
+    # ``__post_init__`` from ``secret_keys`` (present → "static", absent →
+    # "none"); "oauth"/"sidecar" are always set explicitly.
     auth_kind: str = ""
 
     def __post_init__(self) -> None:
@@ -126,9 +127,10 @@ class McpServerTemplate:
         # whether the template declares any secret.
         if not self.auth_kind:
             object.__setattr__(self, "auth_kind", "static" if self.secret_keys else "none")
-        elif self.auth_kind not in ("none", "static", "oauth"):
+        elif self.auth_kind not in ("none", "static", "oauth", "sidecar"):
             raise ValueError(
-                f"template {self.id!r}: auth_kind must be none|static|oauth, got {self.auth_kind!r}"
+                f"template {self.id!r}: auth_kind must be none|static|oauth|sidecar, "
+                f"got {self.auth_kind!r}"
             )
 
 
@@ -653,9 +655,36 @@ ATLASSIAN_MCP = McpServerTemplate(
     transport="streamable_http",
     url="http://mcp-atlassian:9000/mcp",
     default_timeout_s=60.0,
+    # A sidecar authenticates itself via its OWN env (the Atlassian API
+    # token lives in the sidecar container, not in the request). So there
+    # is no per-request auth to configure here — but it is NOT "none"
+    # either (the picker must tell the operator "deploy the sidecar",
+    # not "this is a public server"). See ADR 0127.
+    auth_kind="sidecar",
     maintainer="sooperset (community)",
     repo_url="https://github.com/sooperset/mcp-atlassian",
     docs_url="https://github.com/sooperset/mcp-atlassian#readme",
+    category="issues",
+)
+
+ATLASSIAN_REMOTE_MCP = McpServerTemplate(
+    id="atlassian-remote",
+    display_name="Atlassian (MCP remoto oficial · OAuth)",
+    description=(
+        "Servidor MCP OFICIAL y HOSPEDADO por Atlassian (`mcp.atlassian.com`) para Jira + "
+        "Confluence, autenticado con OAuth 2.1 (ADR 0127): el operador pulsa «Conectar» UNA "
+        "vez, consiente en Atlassian, y la plataforma refresca el token sola. Multi-tenant "
+        "limpio (cada tenant autoriza SU cuenta; sin sidecar ni bot compartido). Alternativa "
+        "al sidecar `atlassian` para quien no quiera desplegar infra. ⚠️ Requiere abrir "
+        "`mcp.atlassian.com` en los dominios permitidos del proyecto (egress)."
+    ),
+    transport="sse",
+    url="https://mcp.atlassian.com/v1/sse",
+    default_timeout_s=60.0,
+    auth_kind="oauth",
+    maintainer="Atlassian",
+    repo_url="https://www.atlassian.com/platform/remote-mcp-server",
+    docs_url="https://support.atlassian.com/rovo/docs/setting-up-ides/",
     category="issues",
 )
 
@@ -718,6 +747,10 @@ CATALOG: dict[str, McpServerTemplate] = {
         CONTEXT7_MCP,
         ATLASSIAN_MCP,
         GITHUB_REMOTE_MCP,
+        # OAuth remote (ADR 0127) — catalogued but WITHHELD from the picker
+        # until the interactive consent flow is verified against the live
+        # provider (see mcp_catalog._UNAVAILABLE_TEMPLATE_IDS).
+        ATLASSIAN_REMOTE_MCP,
     )
 }
 
@@ -736,6 +769,7 @@ def render_vault_path(template: McpServerTemplate, *, project_id: str) -> str | 
 
 __all__ = [
     "ATLASSIAN_MCP",
+    "ATLASSIAN_REMOTE_MCP",
     "AZURE_DEVOPS_MCP",
     "BITBUCKET_MCP",
     "BRAVE_SEARCH_MCP",

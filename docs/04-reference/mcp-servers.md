@@ -32,13 +32,22 @@ shape del `auth_ref` apuntando a Vault.
 
 Las tres plantillas **ofrecibles** hoy:
 
-| id              | transporte        | URL                                  | auth                                    | notas                                                                                                                        |
-| --------------- | ----------------- | ------------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `context7`      | `streamable_http` | `https://mcp.context7.com/mcp`       | opcional (key en cabecera)              | docs de librerías al día. Abrir `mcp.context7.com` en dominios permitidos (egress).                                          |
-| `atlassian`     | `streamable_http` | `http://mcp-atlassian:9000/mcp`      | en el ENV del sidecar                   | Jira+Confluence en un sidecar (`ghcr.io/sooperset/mcp-atlassian`) en la red `agentic-agents`; hostname interno → sin egress. |
-| `github-remote` | `streamable_http` | `https://api.githubcopilot.com/mcp/` | PAT en cabecera `Authorization` (Vault) | MCP remoto oficial de GitHub. Abrir `api.githubcopilot.com` en dominios permitidos (egress).                                 |
+| id              | transporte        | URL                                  | `auth_kind` | auth                                    | notas                                                                                                                        |
+| --------------- | ----------------- | ------------------------------------ | ----------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `context7`      | `streamable_http` | `https://mcp.context7.com/mcp`       | `none`      | opcional (key en cabecera)              | docs de librerías al día. Abrir `mcp.context7.com` en dominios permitidos (egress).                                          |
+| `atlassian`     | `streamable_http` | `http://mcp-atlassian:9000/mcp`      | `sidecar`   | en el ENV del sidecar                   | Jira+Confluence en un sidecar (`ghcr.io/sooperset/mcp-atlassian`) en la red `agentic-agents`; hostname interno → sin egress. |
+| `github-remote` | `streamable_http` | `https://api.githubcopilot.com/mcp/` | `static`    | PAT en cabecera `Authorization` (Vault) | MCP remoto oficial de GitHub. Abrir `api.githubcopilot.com` en dominios permitidos (egress).                                 |
 
 Sustituyen a las plantillas stdio equivalentes (jira-mcp/confluence-mcp → `atlassian`; github-mcp → `github-remote`), que quedan ocultas.
+
+### `auth_kind` — cómo autentica cada plantilla (ADR 0127)
+
+Cada plantilla declara **cómo** se autentican sus peticiones, y eso dirige la UX del picker:
+
+- **`none`** — servidor público, sin auth por petición (p.ej. `context7`).
+- **`static`** — token de larga vida (bearer/env) leído de Vault en cada petición (p.ej. `github-remote` con un PAT). No caduca en horas → sirve para runs autónomos.
+- **`sidecar`** — un sidecar self-hosted se autentica con **su propio** ENV; no hay token por petición que configurar aquí, pero **no es `none`** (el operador debe desplegar y configurar el sidecar). Es el caso de `atlassian`.
+- **`oauth`** — OAuth 2.1: el operador pulsa **«Conectar» una vez**, consiente en el proveedor y la plataforma **refresca el token sola** (multi-tenant limpio: cada tenant autoriza su cuenta). El núcleo (token store en Vault + `OAuthClientProvider` del SDK) está implementado en `shared_mcp.oauth`; el **flujo interactivo de consentimiento** se verifica en sesión con navegador. La primera plantilla `oauth` es `atlassian-remote` (remoto OFICIAL `mcp.atlassian.com`, alternativa al sidecar), **catalogada pero aún NO ofrecida** en el picker hasta esa verificación (`_UNAVAILABLE_TEMPLATE_IDS`).
 
 ---
 

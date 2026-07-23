@@ -47,7 +47,8 @@ class McpTemplateDto(BaseModel):
     requires_auth: bool = Field(description="True when the template declares a secret_keys list.")
     auth_kind: str = Field(
         description="How requests authenticate: 'static' (token field), 'oauth' "
-        "(Connect button), or 'none' (public / sidecar self-auth). ADR 0127."
+        "(Connect button), 'sidecar' (deploy a self-hosted sidecar; no per-request "
+        "token), or 'none' (public server). ADR 0127."
     )
 
 
@@ -79,7 +80,11 @@ def _to_dto(template: McpServerTemplate) -> McpTemplateDto:
 # transport (see ``offered_catalog``), so they don't need listing here.
 # ``docling-mcp`` stays here for the historical g5 guarantee/test, though the
 # transport rule below would withhold it anyway.
-_UNAVAILABLE_TEMPLATE_IDS: frozenset[str] = frozenset({"docling-mcp"})
+# ``atlassian-remote`` (ADR 0127, auth_kind="oauth") is withheld until the
+# interactive OAuth consent flow is verified against the live Atlassian
+# authorization server — a headless session cannot exercise the browser
+# handshake. Remove from this set once verified in an interactive session.
+_UNAVAILABLE_TEMPLATE_IDS: frozenset[str] = frozenset({"docling-mcp", "atlassian-remote"})
 
 
 def offered_catalog() -> list[McpServerTemplate]:

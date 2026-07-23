@@ -1,6 +1,6 @@
 ---
 title: "ADR 0127: Conector OAuth genérico para servidores MCP remotos"
-status: proposed
+status: accepted
 date: 2026-07-23
 deciders: [operador]
 relates_to: [0021, 0052, 0117]
@@ -114,3 +114,32 @@ Media. Núcleo: `VaultTokenStorage` + `OAuthClientProvider` en `shared_mcp`
 (reutilizan patrón OIDC), campo `auth_kind` + botón «Conectar» en el picker, y
 tests (flujo connect con proveedor fake + refresh). Los siguientes consumidores
 (Notion, Google…) son solo una fila de catálogo `auth_kind="oauth"` cada uno.
+
+## Estado de implementación
+
+- **Núcleo — HECHO (2026-07-23), TDD, verificable headless:**
+  - **Vault read+write**: `shared_mcp.auth.VaultResolver` gana `write()` (Static +
+    Hvac vía KV-v2 `create_or_update_secret`). Era el hueco que hacía que un bearer
+    estático caducara sin refresco — un store de solo-lectura no puede rotar tokens.
+  - **`shared_mcp.oauth`**: `VaultTokenStorage` (implementa el `TokenStorage` del SDK
+    —conformidad estructural verificada por mypy—, un blob JSON por token/client_info
+    en una entrada Vault por `(tenant, project, server)`; el refresh de tokens conserva
+    el registro DCR), `build_oauth_provider` (arma el `OAuthClientProvider` del SDK con
+    handlers que **fallan ruidosamente** en runtime autónomo en vez de colgar el run),
+    `build_client_metadata` (cliente público PKCE) y `oauth_vault_path`.
+  - **Runtime**: `MCPClient.connect(..., auth=)` reenvía un `httpx.Auth` a los
+    transportes sse/streamable_http (el `OAuthClientProvider` **es** un `httpx.Auth`).
+  - **Catálogo**: `auth_kind` gana el valor `sidecar` (atlassian sidecar deja de
+    mentir como `none`); nueva plantilla `atlassian-remote` (`auth_kind="oauth"`,
+    remoto oficial `mcp.atlassian.com`), **catalogada pero retenida** del picker
+    (`_UNAVAILABLE_TEMPLATE_IDS`) hasta verificar el consentimiento real.
+  - Tests: `tests/unit/test_shared_mcp_oauth.py` (20) + ajustes de recuento/`auth_kind`
+    en `test_mcp_catalog_availability` y `test_mcp_integrations`. mypy/ruff/black limpios.
+- **Diferido a sesión INTERACTIVA (no verificable headless):**
+  - Endpoints `connect`/`callback` en api-server (arranque OAuth + intercambio del
+    código → persistir tokens vía `VaultTokenStorage`) y botón «Conectar» en el picker.
+  - El **handshake real** contra el authorization server de Atlassian/GitHub (DCR,
+    discovery, consentimiento en navegador, refresh en vivo) — riesgo residual (c).
+  - **Cableado Vault en api-server**: `get_vault_resolver()` hoy devuelve `None` salvo
+    `API_SERVER_VAULT_TOKEN`; el flujo OAuth exige Vault operativo en api-server.
+  - Al verificar: quitar `atlassian-remote` de `_UNAVAILABLE_TEMPLATE_IDS`.

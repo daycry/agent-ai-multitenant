@@ -59,17 +59,26 @@ def test_working_http_templates_are_offered() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ADR 0127 foundation: every template declares HOW its requests authenticate,
-# so the picker knows whether to show a token field ("static"), a "Connect"
-# button ("oauth"), or nothing ("none"). The OAuth runtime (token store +
-# connect flow) is a separate, interactively-verified phase.
+# ADR 0127: every template declares HOW its requests authenticate, so the
+# picker knows whether to show a token field ("static"), a "Connect" button
+# ("oauth"), a "deploy the sidecar" hint ("sidecar"), or nothing ("none").
+# The OAuth runtime (token store + connect flow) is a separate, interactively-
+# verified phase.
 # ---------------------------------------------------------------------------
 def test_templates_declare_a_valid_auth_kind() -> None:
-    assert all(t.auth_kind in ("none", "static", "oauth") for t in CATALOG.values())
+    assert all(t.auth_kind in ("none", "static", "oauth", "sidecar") for t in CATALOG.values())
 
 
 def test_offered_http_templates_have_expected_auth_kind() -> None:
     kinds = {t.id: t.auth_kind for t in offered_catalog()}
     assert kinds["context7"] == "none"  # optional key; no required per-request auth
-    assert kinds["atlassian"] == "none"  # sidecar authenticates via its own env
+    assert kinds["atlassian"] == "sidecar"  # self-hosted sidecar authenticates via its own env
     assert kinds["github-remote"] == "static"  # PAT bearer from Vault per request
+
+
+def test_oauth_remote_is_catalogued_but_withheld() -> None:
+    # ADR 0127: the official OAuth remote exists in the catalog (auth_kind
+    # "oauth") but is NOT offered until the interactive consent flow is
+    # verified against the live provider.
+    assert CATALOG["atlassian-remote"].auth_kind == "oauth"
+    assert "atlassian-remote" not in {t.id for t in offered_catalog()}
