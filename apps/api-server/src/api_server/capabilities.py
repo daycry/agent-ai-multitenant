@@ -31,7 +31,11 @@ from shared_domain.tool_names import to_canonical_set
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.agent_tools_enforcement import ToolWarning, compute_effective_tools
+from api_server.agent_tools_enforcement import (
+    ToolWarning,
+    compute_effective_tools,
+    resolve_project_mcp_tool_names,
+)
 from api_server.db.domain import Agent, AgentTool, Project, Tool
 from api_server.db.knowledge import AgentKnowledgeBase, KnowledgeBase, KnowledgeBaseProject
 from api_server.db.memory import MemoryEntry
@@ -346,16 +350,23 @@ async def hacer_for_agent(
         if tool_is_runtime_wired(tool.name, tool.implementation_type):
             wired_canonical_names |= to_canonical_set([tool.name])
 
+    # ADR 0128: load the full project once — it feeds both the shell_exec cross
+    # (allowed_commands) and the MCP tools the project contributes to the run
+    # allowlist, so the Hub's effective set stays consistent with
+    # `GET /agents/{id}/effective-tools`.
     allowed_commands_non_empty = False
+    project_mcp_tool_names: frozenset[str] = frozenset()
     if agent.project_id is not None:
-        commands = (
+        project = (
             await session.execute(
-                select(Project.allowed_commands).where(
-                    Project.id == agent.project_id, Project.deleted_at.is_(None)
-                )
+                select(Project).where(Project.id == agent.project_id, Project.deleted_at.is_(None))
             )
         ).scalar_one_or_none()
-        allowed_commands_non_empty = bool(commands)
+        if project is not None:
+            allowed_commands_non_empty = bool(project.allowed_commands)
+            project_mcp_tool_names = await resolve_project_mcp_tool_names(
+                session, project, role=agent.role
+            )
 
     result = compute_effective_tools(
         assigned_names,
@@ -364,6 +375,7 @@ async def hacer_for_agent(
         shell_exec_assigned=shell_exec_assigned,
         allowed_commands_non_empty=allowed_commands_non_empty,
         wired_canonical_names=wired_canonical_names,
+        project_mcp_tool_names=project_mcp_tool_names,
     )
     return (
         CapabilityHacer(

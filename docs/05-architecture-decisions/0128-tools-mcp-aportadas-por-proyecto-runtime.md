@@ -150,12 +150,26 @@ agentes se quedan **compartidos** (tenant-local, adoptados una vez); cada proyec
   (create/update/response + builder) expone `mcp_tool_roles`. La **UI editora** de la
   política se pliega en la Fase 4. Tests: `test_project_mcp_allowlist.py` + contrato
   `test_project_settings_contract.py`.
+- **Fase 3 — HECHA (2026-07-23):** deprecado el gate MCP por-agente. Eliminado el
+  bloque de `routers/agents.py` PUT `/agents/{id}/tools` que rechazaba (422) una tool
+  MCP salvo que el proyecto declarara el server (+ helpers `_mcp_server_name` e import
+  `ToolImplementationType` sin uso). Post-0128 el runtime solo registra los servers
+  declarados del proyecto, así que quitar el gate no abre ninguna vía. Además,
+  `compute_effective_tools` acepta `project_mcp_tool_names` y el Hub HACER
+  (`capabilities.hacer_for_agent`) las inyecta (`resolve_project_mcp_tool_names` con
+  `role=agent.role`), para que el set efectivo sea honesto. Tests: el 422 invertido a
+  200 (`test_agent_tools_assignment`) + 3 tests de effective con project MCP
+  (`test_project_mcp_allowlist`). NO se migran/borran los `agent_tools` MCP existentes
+  (son inertes post-0128; borrarlos sería lossy) — queda como limpieza opcional.
+- **Fase 4 — HECHA (2026-07-23):** UI. Sección de política rol→tool a nivel de
+  proyecto (`McpToolRolePolicySection` en `mcp-servers/`, edita `project.mcp_tool_roles`
+  vía PUT); la ficha del agente (`agent-tools-section.tsx`) ya NO ofrece tools MCP como
+  asignables (nota "se configuran a nivel de proyecto — ADR 0128"); las custom no-MCP
+  siguen asignables. Tests vitest nuevos (11 en los ficheros tocados; suite 262 verde;
+  tsc 0). **QA visual pendiente** (no verificable headless).
 - **Pendiente:**
-  - **Fase 3 — deprecar el gate por-agente de MCP** (`agents.py:1064-1081` +
-    simplificar el PUT `/agents/{id}/tools` y el effective-tools/diagnóstico) +
-    **migración** de los `agent_tools` MCP existentes.
-  - **Fase 4 — UI**: quitar/atenuar la asignación MCP por-agente; sección MCP del
-    proyecto como sitio (+ editor de política de rol opcional).
   - **Verificación e2e**: run real usando una tool MCP del proyecto, confirmando que
     el nombre del allowlist casa con el que el agent-runtime registra
     (`<server>.<tool>`, guion vs guion_bajo). No verificable en sesión headless.
+  - **Limpieza opcional** de filas `agent_tools` MCP inertes (migración lossy → diferida).
+  - **Deploy**: fases 1-4 commiteadas; rebuild orchestrator/api-server/admin-panel pendiente.

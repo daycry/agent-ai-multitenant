@@ -397,6 +397,7 @@ def compute_effective_tools(
     shell_exec_assigned: bool,
     allowed_commands_non_empty: bool,
     wired_canonical_names: set[str] | None = None,
+    project_mcp_tool_names: Iterable[str] | None = None,
 ) -> EffectiveTools:
     """Pure computation of the agent's effective tool set + warnings.
 
@@ -427,6 +428,15 @@ def compute_effective_tools(
         wired regardless of name, via ``schemas.catalog.tool_is_runtime_wired``).
         ``None`` falls back to the name-only :func:`is_runtime_wired`, which is
         correct for builtins but treats every typed custom tool as not-wired.
+      * ``project_mcp_tool_names`` — ADR 0128: the MCP tools the agent's PROJECT
+        contributes at runtime (:func:`resolve_project_mcp_tool_names`). These
+        are NOT in ``agent_tools`` (post-0128 they are project-level, not granted
+        per-agent), yet the runtime registers them and the dispatch allowlist is
+        UNIONed with them (:func:`extend_allowlist_with_project_mcp`). So an
+        honest effective set for a RESTRICTED agent includes them. Ignored for an
+        unrestricted agent (``assigned_names is None``): its ``effective`` is
+        empty by design and the runtime already exposes every registered tool,
+        mirroring ``extend_allowlist_with_project_mcp(None, …) -> None``.
 
     ``shell_exec`` is handled specially: ``combine_tool_allowlists`` treats it
     like any other name (so it survives the agent∩mode intersection), but it is
@@ -485,6 +495,13 @@ def compute_effective_tools(
 
     # Effective = combined ∩ runtime-wired, minus shell_exec (handled below).
     effective_set = {name for name in combined_set if name != _SHELL_EXEC and _wired(name)}
+
+    # ADR 0128: the agent's PROJECT contributes its declared MCP tools to the
+    # run allowlist (UNION, via extend_allowlist_with_project_mcp in dispatch),
+    # so a RESTRICTED agent can call them without a per-agent grant. Mirror that
+    # here so the effective set is honest instead of hiding the project MCP tools.
+    if project_mcp_tool_names:
+        effective_set |= to_canonical_set(project_mcp_tool_names)
 
     # shell_exec: effective only if assigned, surviving the mode intersection,
     # AND the project authorises at least one command.

@@ -31,7 +31,10 @@ from shared_domain.tool_names import to_canonical_set
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.agent_tools_enforcement import compute_effective_tools
+from api_server.agent_tools_enforcement import (
+    compute_effective_tools,
+    resolve_project_mcp_tool_names,
+)
 from api_server.auth.deps import (
     AuthPrincipal,
     get_tenant_session,
@@ -63,7 +66,6 @@ from api_server.db.domain import (
     Team,
     TeamMember,
     Tool,
-    ToolImplementationType,
 )
 from api_server.db.knowledge import AgentKnowledgeBase, KnowledgeBase
 from api_server.routers._helpers import (
@@ -941,18 +943,6 @@ async def _load_writable_agent_for_tools(
     return agent
 
 
-def _mcp_server_name(implementation_ref: str | None) -> str | None:
-    """Extract the MCP server name from a tool's `implementation_ref`.
-
-    MCP tools are namespaced `<server>.<tool>` (see the MCP server-name
-    pattern in `mcp.config`). The server name is the prefix before the
-    first dot; a ref with no dot is treated as the server name itself.
-    """
-    if not implementation_ref:
-        return None
-    return implementation_ref.split(".", 1)[0]
-
-
 @router.get("/{agent_id}/tools", response_model=list[AgentToolResponse])
 async def list_agent_tools(
     agent_id: UUID,
@@ -1012,7 +1002,9 @@ async def set_agent_tools(
     request transaction. Returns the resulting assignments.
     """
     require_tenant_id(principal)
-    agent = await _load_writable_agent_for_tools(session, agent_id, principal)
+    # Enforces the 404 (hidden/missing) and 403 (global_builtin) contract; the
+    # returned agent is otherwise unused now that the MCP gate is gone (ADR 0128).
+    await _load_writable_agent_for_tools(session, agent_id, principal)
 
     requested = {entry.tool_id: entry.config_override for entry in payload.tools}
 
@@ -1061,24 +1053,7 @@ async def set_agent_tools(
             ),
         )
 
-    # MCP tools require the agent's project to declare the matching server.
-    mcp_tools = [
-        tool
-        for tool in tools_by_id.values()
-        if tool.implementation_type == ToolImplementationType.MCP_TOOL.value
-    ]
-    if mcp_tools:
-        project_server_names = await _agent_project_mcp_server_names(session, agent)
-        for tool in mcp_tools:
-            server = _mcp_server_name(tool.implementation_ref)
-            if server is None or server not in project_server_names:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail=(
-                        f"MCP tool {tool.name!r} requires MCP server {server!r} "
-                        "on the agent's project; not declared"
-                    ),
-                )
+    # ADR 0128: las tools MCP se aportan a nivel de proyecto en runtime; sin gate por-agente.
 
     # Replace the set transactionally: delete the old rows, insert new.
     await session.execute(delete(AgentTool).where(AgentTool.agent_id == agent_id))
@@ -1105,32 +1080,6 @@ async def set_agent_tools(
         )
         for tool in sorted(tools_by_id.values(), key=lambda t: (t.name, str(t.id)))
     ]
-
-
-async def _agent_project_mcp_server_names(
-    session: AsyncSession,
-    agent: Agent,
-) -> set[str]:
-    """Return the set of MCP server names declared on the agent's project.
-
-    A non-`project_local` agent (template) has no project, hence no MCP
-    servers — returns an empty set, which makes every MCP tool fail the
-    scope check (you cannot assign MCP tools to a template agent).
-    """
-    if agent.project_id is None:
-        return set()
-    project_q = await session.execute(
-        select(Project).where(Project.id == agent.project_id, Project.deleted_at.is_(None))
-    )
-    project = project_q.scalar_one_or_none()
-    if project is None:
-        return set()
-    names: set[str] = set()
-    for entry in project.mcp_servers or []:
-        name = entry.get("name")
-        if isinstance(name, str):
-            names.add(name)
-    return names
 
 
 # ---------------------------------------------------------------------------
@@ -1405,17 +1354,23 @@ async def get_agent_effective_tools(
         if tool_is_runtime_wired(tool.name, tool.implementation_type):
             wired_canonical_names |= to_canonical_set([tool.name])
 
-    # Whether the agent's project authorises any shell command (the cross that
-    # makes shell_exec truly effective).
+    # Load the agent's project once: it feeds both the shell_exec cross
+    # (allowed_commands) and, post-ADR 0128, the MCP tools the project
+    # contributes to the run allowlist (so the effective set is honest about
+    # them even though they are not per-agent grants).
     allowed_commands_non_empty = False
+    project_mcp_tool_names: frozenset[str] = frozenset()
     if agent.project_id is not None:
-        project_q = await session.execute(
-            select(Project.allowed_commands).where(
-                Project.id == agent.project_id, Project.deleted_at.is_(None)
+        project = (
+            await session.execute(
+                select(Project).where(Project.id == agent.project_id, Project.deleted_at.is_(None))
             )
-        )
-        commands = project_q.scalar_one_or_none()
-        allowed_commands_non_empty = bool(commands)
+        ).scalar_one_or_none()
+        if project is not None:
+            allowed_commands_non_empty = bool(project.allowed_commands)
+            project_mcp_tool_names = await resolve_project_mcp_tool_names(
+                session, project, role=agent.role
+            )
 
     result = compute_effective_tools(
         assigned_names,
@@ -1424,6 +1379,7 @@ async def get_agent_effective_tools(
         shell_exec_assigned=shell_exec_assigned,
         allowed_commands_non_empty=allowed_commands_non_empty,
         wired_canonical_names=wired_canonical_names,
+        project_mcp_tool_names=project_mcp_tool_names,
     )
 
     return EffectiveToolsResponse(

@@ -12,8 +12,9 @@ Plus the scope rules from the plan's Decisiones Clave:
   * tenant_admin required for the write (tenant_user -> 403).
   * cannot assign another tenant's custom tool (RLS hides it -> 422).
   * built-in tools are assignable to any agent.
-  * MCP tool requires the agent's project to declare that MCP server
-    (otherwise 422).
+  * an MCP tool is assignable regardless of the agent's project MCP servers
+    (ADR 0128: MCP tools are contributed by the project at runtime, not gated
+    per-agent).
   * global_builtin agent rejects the write (403, fork first).
 """
 
@@ -350,14 +351,18 @@ async def test_mcp_tool_assignable_when_project_has_server(
 
 
 # ---------------------------------------------------------------------------
-# MCP tool rejected when the project does NOT declare the server.
+# ADR 0128: an MCP tool is assignable even when the project does NOT declare the
+# server. The old per-agent gate (422 "requires MCP server … on the project")
+# is gone — MCP tools are contributed by the project at runtime, so assigning
+# one to the agent opens no new path (the runtime only registers the project's
+# declared servers regardless of the assignment).
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_mcp_tool_rejected_without_project_server(
+async def test_mcp_tool_assignable_without_project_server_after_0128(
     configured_app, migrations_pg_dsn: str
 ) -> None:
     seed = await _seed(migrations_pg_dsn)
-    # Remove the MCP server from the project so the tool no longer matches.
+    # Remove the MCP server from the project so the old gate would have fired.
     conn = await asyncpg.connect(migrations_pg_dsn)
     try:
         await conn.execute(
@@ -377,8 +382,8 @@ async def test_mcp_tool_rejected_without_project_server(
             headers={"Authorization": f"Bearer {token}"},
             json={"tools": [{"tool_id": str(seed["mcp_tool"])}]},
         )
-        assert r.status_code == 422, r.text
-        assert "docling" in r.json()["detail"]
+        assert r.status_code == 200, r.text
+        assert r.json()[0]["tool_id"] == str(seed["mcp_tool"])
 
 
 # ---------------------------------------------------------------------------
