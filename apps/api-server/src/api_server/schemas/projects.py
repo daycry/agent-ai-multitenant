@@ -270,6 +270,12 @@ class ProjectCreateRequest(BaseModel):
     # (task_prod12_ssrf_03) además del ssrf_guard por-resolución del runtime.
     allowed_domains: list[str] = Field(default_factory=list)
 
+    # ADR 0128 fase 2: política OPCIONAL rol→tool de las MCP del proyecto. Mapea
+    # nombre de tool MCP (`<server>.<tool>`) → roles de agente autorizados. `{}`
+    # (default) = sin política: todo agente del proyecto ve toda tool MCP del
+    # proyecto. Un tool con entrada se restringe a esos roles.
+    mcp_tool_roles: dict[str, list[str]] = Field(default_factory=dict)
+
     # Plan 16 task_16_11: how a human task's deliverable is reviewed once
     # submitted. Default auto_approve (submit -> done, no extra review step).
     human_task_review_mode: HumanTaskReviewMode = HumanTaskReviewMode.AUTO_APPROVE
@@ -329,6 +335,9 @@ class ProjectUpdateRequest(BaseModel):
     team_id: UUID | None = None
 
     mcp_servers: list[dict[str, Any]] | None = None
+    # ADR 0128 fase 2: política rol→tool de las MCP del proyecto. None = sin
+    # cambio (PATCH); `{}` la borra (vuelve a "todos los agentes, todas las MCP").
+    mcp_tool_roles: dict[str, list[str]] | None = None
     # DEPRECATED (P1-04): sin lectores (lo real es `kb_projects`).
     rag_knowledge_bases: list[dict[str, Any]] | None = None
     worker_config: dict[str, Any] | None = None
@@ -480,6 +489,8 @@ class ProjectResponse(BaseModel):
     default_runtime_template: str | None
     # prod-12 Fase B: FQDN allowlist de las tools HTTP del agente.
     allowed_domains: list[str]
+    # ADR 0128 fase 2: política rol→tool de las MCP del proyecto (`{}` = sin política).
+    mcp_tool_roles: dict[str, list[str]]
 
     # Plan 16 task_16_11.
     human_task_review_mode: str
@@ -522,6 +533,7 @@ def to_project_response(p: Project) -> ProjectResponse:
         "allowed_commands": p.allowed_commands,
         "default_runtime_template": p.default_runtime_template,
         "allowed_domains": p.allowed_domains,
+        "mcp_tool_roles": p.mcp_tool_roles,
         "human_task_review_mode": p.human_task_review_mode,
         "budget_amount": p.budget_amount,
         "budget_currency": p.budget_currency,

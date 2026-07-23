@@ -40,7 +40,7 @@ to the empty set by mere name mismatch (the silent "unknown tool" failure).
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
@@ -235,14 +235,19 @@ def combine_tool_allowlists(
 # the tools of P's declared MCP servers. Builtins / role tools stay per-agent.
 
 
-async def resolve_project_mcp_tool_names(session: AsyncSession, project: Any) -> frozenset[str]:
-    """The MCP tool names available to any agent running in ``project`` (ADR 0128).
+async def resolve_project_mcp_tool_names(
+    session: AsyncSession, project: Any, *, role: str | None = None
+) -> frozenset[str]:
+    """The MCP tool names available to an agent (of ``role``) running in ``project``.
 
     These are the imported (ADR 0052 supply-chain) ``<server>.<tool>`` catalog
     tools whose server is declared in ``project.mcp_servers``. Empty when the
-    project is ``None`` or declares no MCP server. Optional per-role filtering is
-    a separate, project-level policy (ADR 0128 §granularidad opcional) applied by
-    the caller — this returns the project's full MCP surface.
+    project is ``None`` or declares no MCP server.
+
+    ADR 0128 fase 2: an OPTIONAL project-level role policy
+    (``project.mcp_tool_roles``: tool name → allowed roles) narrows the surface
+    per role. Without a policy (or ``role is None``) every declared MCP tool is
+    returned — the default "all project agents get all project MCP tools".
     """
     if project is None:
         return frozenset()
@@ -265,7 +270,27 @@ async def resolve_project_mcp_tool_names(session: AsyncSession, project: Any) ->
         server = name.split(".", 1)[0] if "." in name else None
         if server in declared:
             names.add(name)
-    return frozenset(names)
+    return filter_mcp_tools_by_role_policy(names, getattr(project, "mcp_tool_roles", None), role)
+
+
+def filter_mcp_tools_by_role_policy(
+    tool_names: Iterable[str],
+    role_policy: Mapping[str, Sequence[str]] | None,
+    role: str | None,
+) -> frozenset[str]:
+    """Apply the project's OPTIONAL MCP role policy (ADR 0128 fase 2).
+
+    ``role_policy`` maps an MCP tool name → the roles allowed to use it. A tool
+    WITHOUT an entry is open to every role (default); a tool WITH an entry is
+    restricted to the listed roles. ``role is None`` or an empty/absent policy →
+    no filtering (every tool passes), the pre-policy default.
+    """
+    names = frozenset(tool_names)
+    if not role_policy or role is None:
+        return names
+    return frozenset(
+        name for name in names if role_policy.get(name) is None or role in role_policy[name]
+    )
 
 
 def extend_allowlist_with_project_mcp(
@@ -525,6 +550,7 @@ __all__ = [
     "combine_tool_allowlists",
     "compute_effective_tools",
     "extend_allowlist_with_project_mcp",
+    "filter_mcp_tools_by_role_policy",
     "resolve_agent_tool_names",
     "resolve_project_mcp_tool_names",
     "serialize_agent_tool_specs",

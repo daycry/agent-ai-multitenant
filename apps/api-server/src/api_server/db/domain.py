@@ -879,6 +879,15 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
         ARRAY(String), nullable=False, server_default=text("'{}'::text[]")
     )
 
+    # ADR 0128 fase 2: política OPCIONAL rol→tool de las tools MCP del proyecto.
+    # Mapea el nombre de una tool MCP (`<server>.<tool>`) → los roles de agente
+    # autorizados a usarla. Un tool SIN entrada queda abierto a todos los roles
+    # (default). `{}` = sin política (todo agente del proyecto ve toda tool MCP del
+    # proyecto). No afecta a builtins/tools de rol (siguen por-agente).
+    mcp_tool_roles: Mapped[dict[str, list[str]]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
     # Soft-FK to the Vault entry that holds the project's secrets. Vault
     # is an external system so no DB-level FK.
     secrets_vault_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)

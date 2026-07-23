@@ -141,9 +141,16 @@ agentes se quedan **compartidos** (tenant-local, adoptados una vez); cada proyec
   `orchestrator/dispatch._build_request` tras `combine_tool_allowlists`. Es
   **aditivo**: no puede romper runs (peor caso = la tool MCP no callable, estado
   pre-0128). Tests: `tests/unit/test_project_mcp_allowlist.py`.
+- **Fase 2 — HECHA (2026-07-23):** granularidad por rol OPCIONAL a nivel de
+  proyecto. Columna `projects.mcp_tool_roles` (JSONB `{}`, migración `0116`
+  reversible verificada) mapea tool MCP → roles autorizados; `filter_mcp_tools_by_role_policy`
+  (puro, unit-testeado) aplica la política (tool sin entrada = abierto; con entrada
+  = solo esos roles; `role`/política vacía = sin filtro). `resolve_project_mcp_tool_names`
+  acepta `role` y filtra; dispatch pasa `role=agent.role`. Schema de proyecto
+  (create/update/response + builder) expone `mcp_tool_roles`. La **UI editora** de la
+  política se pliega en la Fase 4. Tests: `test_project_mcp_allowlist.py` + contrato
+  `test_project_settings_contract.py`.
 - **Pendiente:**
-  - **Fase 2 — granularidad por rol** (política de proyecto rol→tool; filtro en el
-    resolver por el rol de la tarea). Data-model nuevo (columna/tabla) + UI.
   - **Fase 3 — deprecar el gate por-agente de MCP** (`agents.py:1064-1081` +
     simplificar el PUT `/agents/{id}/tools` y el effective-tools/diagnóstico) +
     **migración** de los `agent_tools` MCP existentes.

@@ -723,7 +723,9 @@ class TaskDispatcher:
         # `<server>.<tool>`; aquí extendemos (unión, aditivo) el allowlist de un
         # agente restringido con esas tools para que pueda llamarlas sin un grant
         # por-agente. Un agente sin restricción (allowed_tools None) se queda igual.
-        project_mcp_tool_names = await resolve_project_mcp_tool_names(session, project)
+        project_mcp_tool_names = await resolve_project_mcp_tool_names(
+            session, project, role=agent.role
+        )
         allowed_tools = extend_allowlist_with_project_mcp(allowed_tools, project_mcp_tool_names)
         tool_specs = await serialize_agent_tool_specs(session, agent.id)
         skill_prompt_fragments = await resolve_agent_skill_prompt_fragments(session, agent.id)
