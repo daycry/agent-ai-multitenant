@@ -152,12 +152,16 @@ class MemoryType(enum.StrEnum):
 class SkillCategory(enum.StrEnum):
     """Cerrada *categoría* de skill (ADR 0050, task_06_18_13).
 
-    Los seis valores son EXACTAMENTE las categorías que usan las 33 skills
-    seedeadas (``api_server.seeds.builtin_skills``). Antes este enum tenía nueve
-    valores divergentes (``coding``/``review``/``planning``/``data``/
-    ``security``…) que no coincidían con el seed y nunca se validaban; ADR 0050
-    los alinea y aplica un ``CHECK`` en BD (migración 0078) construido desde este
-    mismo conjunto, de modo que base de datos y aplicación concuerdan.
+    Los valores son EXACTAMENTE las categorías que usan las skills seedeadas
+    (``api_server.seeds.builtin_skills``). Antes este enum tenía nueve valores
+    divergentes (``coding``/``review``/``planning``/``data``/``security``…) que
+    no coincidían con el seed y nunca se validaban; ADR 0050 los alinea y aplica
+    un ``CHECK`` en BD (migración 0078, reconstruido por 0117) construido desde
+    este mismo conjunto, de modo que base de datos y aplicación concuerdan.
+
+    ``atlassian`` (2026-07-23) es un bucket de INTEGRACIÓN, no un dominio de
+    trabajo como los otros seis: agrupa las skills que enseñan a los agentes a
+    usar Jira/Confluence vía el MCP de Atlassian del proyecto (ADR 0127/0128).
     """
 
     BACKEND = "backend"
@@ -166,6 +170,7 @@ class SkillCategory(enum.StrEnum):
     QA = "qa"
     RESEARCH = "research"
     DOCS = "docs"
+    ATLASSIAN = "atlassian"
 
 
 class ToolCategory(enum.StrEnum):

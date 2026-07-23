@@ -1,13 +1,16 @@
 """Built-in skill catalog (task_01_10).
 
-Thirty-three skills across six categories. Each skill ships with a
-short `prompt_fragment` that gets injected into the system prompt of
-any agent that has it. Skills are NOT executable code -- they're
-narrative cues that nudge the agent toward a particular shape of work.
+55 skills across seven categories. Each skill ships with a short
+`prompt_fragment` that gets injected into the system prompt of any agent
+that has it. Skills are NOT executable code -- they're narrative cues
+that nudge the agent toward a particular shape of work.
 
 Seeded under the platform tenant with stable uuid5 IDs. `required_tools`
 ships empty for now; tools land in task_01_11 and a later task may
-wire cross-references via slug.
+wire cross-references via slug. The `atlassian` category (2026-07-23,
+ADR 0127/0128) teaches agents to drive the project's Atlassian MCP
+(Jira + Confluence) — those skills carry no `required_tools` either;
+the tools arrive as a project capability at runtime (ADR 0128).
 """
 
 from __future__ import annotations
@@ -39,7 +42,7 @@ class BuiltinSkill:
 
 
 # ---------------------------------------------------------------------------
-# Catalog -- 51 skills across 6 categories (33 base + 18 de la Ola B0.1)
+# Catalog -- 55 skills across 7 categories (33 base + 18 Ola B0.1 + 4 Atlassian)
 # ---------------------------------------------------------------------------
 BUILTIN_SKILLS: tuple[BuiltinSkill, ...] = (
     # ------ Backend ------
@@ -556,6 +559,104 @@ BUILTIN_SKILLS: tuple[BuiltinSkill, ...] = (
         "ejemplos por respuesta y códigos de error documentados con su forma. El "
         "spec es la fuente de verdad del contrato; lo mantienes sincronizado con "
         "el código (generado del código cuando se puede).",
+    ),
+    # ------ Atlassian (integración Jira + Confluence vía MCP, ADR 0127/0128) ------
+    # Enseñan a los agentes a USAR el MCP de Atlassian del proyecto. No cablean
+    # nombres de tool namespaced (el operador elige el nombre del server) ni ids
+    # (llegan por el plan). Idempotentes y degradan con gracia si el MCP no está.
+    BuiltinSkill(
+        "atlassian-jira-task-tracking",
+        "Jira — seguimiento de tareas",
+        "atlassian",
+        "Refleja cada tarea de la plataforma en Jira: crea o localiza su issue bajo "
+        "el epic del plan y transiciona su estado al empezar y al cerrarla; útil para "
+        "backend_dev, frontend_dev y project_manager.",
+        "Cuando empiezas una tarea, la reflejas en Jira con tus herramientas de Jira del "
+        "proyecto: primero buscas si ya existe su issue —por el título de la tarea o por una "
+        "clave que el plan haya registrado— y solo la creas si no aparece, normalmente como "
+        "subtarea del epic del plan, volcando el título y la descripción de la tarea, de modo "
+        "que nunca duplicas. Tomas la clave del epic y los demás identificadores del contexto "
+        "del plan (su descripción, la de la tarea o un comentario del plan); si no están, los "
+        "pides en un comentario del plan o creas la issue sin colgarla del epic en lugar de "
+        "inventarlos, y trabajas siempre contra el proyecto Jira de este plan, nunca contra "
+        "otros. Nada más localizarla o crearla la transicionas a «en curso», y al cerrar la "
+        "tarea la llevas a «hecho», eligiendo siempre entre las transiciones que la herramienta "
+        "te ofrezca en vez de asumir nombres de estado. Conforme avanzas, enlazas en la issue "
+        "la rama, los commits o el PR en cuanto existan, para que Jira y el trabajo real queden "
+        "conectados. Si en este run no dispones de tus herramientas de Jira, no fallas la tarea "
+        "por ello: anotas el motivo en tu PROGRESS y sigues con el trabajo real.",
+    ),
+    BuiltinSkill(
+        "atlassian-jira-review-notes",
+        "Jira — notas de revisión",
+        "atlassian",
+        "Publica tu veredicto y hallazgos de revisión como comentario en la issue de "
+        "Jira y transiciónala según apruebes o rechaces (reviewer, qa).",
+        "Cuando cierras la revisión de una tarea, reflejas tu veredicto en Jira: localizas la "
+        "issue por la clave que venga en el contexto del plan —descripción del plan o de la "
+        "tarea, o un comentario del plan— y, si no la tienes clara, la buscas con tus "
+        "herramientas de Jira por el título de la tarea antes de comentar o transicionar sobre "
+        "la issue equivocada, operando siempre sobre issues del proyecto actual y nunca sobre "
+        "otras aunque las veas listadas. Antes de escribir relees los comentarios existentes de "
+        "esa issue para no duplicar un informe que ya dejaste en una iteración previa —si ya "
+        "hay una nota equivalente la amplías en lugar de crear otra— y publicas tus hallazgos "
+        "como comentario, nunca como una issue nueva, redactando de forma concreta qué apruebas "
+        "o exactamente qué falta y enlazando al trabajo revisado (rama, PR o id de ejecución) "
+        "para que la trazabilidad Jira↔código quede explícita. Después transicionas la issue "
+        "consultando primero las transiciones disponibles y eligiendo por nombre la que "
+        "corresponda al flujo del proyecto, sin asumir estados fijos: si apruebas la llevas al "
+        "estado de revisión o cierre disponible, y si rechazas la devuelves a en curso o la "
+        "reabres dejando escrito en el comentario el trabajo pendiente para que quien la retome "
+        "sepa qué corregir. Si no encuentras la clave de la issue en el contexto, la pides en "
+        "un comentario del plan o lo omites con gracia en vez de adivinarla; y si tus "
+        "herramientas de Atlassian no están disponibles en este run, no fallas la tarea por "
+        "ello: anotas en tu PROGRESS el veredicto, los hallazgos y el motivo por el que no "
+        "pudiste reflejarlo en Jira, y sigues con el trabajo real de la revisión.",
+    ),
+    BuiltinSkill(
+        "atlassian-confluence-docs",
+        "Confluence — documentación",
+        "atlassian",
+        "Publica y mantén en sync la documentación del plan como páginas hijas de "
+        "Confluence, sin duplicar y enlazando a las issues de Jira relacionadas.",
+        "Cuando el trabajo documentable está listo —normalmente al cerrar el plan o al "
+        "completar tu tarea de documentación— reflejas el resultado en Confluence con tus "
+        "herramientas de crear y actualizar páginas, sin cablear nombres de servidor ni "
+        "identificadores fijos. Tomas del contexto del plan (su descripción, la de la tarea o "
+        "un comentario del plan) el espacio y la página padre bajo la que debes anclar; si ese "
+        "dato no viene, lo pides o lo omites con gracia en vez de inventarlo. Antes de crear "
+        "nada, buscas con tu herramienta de búsqueda si ya existe una página equivalente bajo "
+        "ese padre y, de existir, la actualizas en lugar de duplicarla, de modo que la "
+        "documentación quede sincronizada con el estado real al cierre. Creas y actualizas "
+        "siempre como páginas HIJAS de esa página padre, dentro del espacio y el árbol del "
+        "proyecto actual sin tocar páginas de otros proyectos ni tenants, y enlazas hacia las "
+        "issues de Jira relacionadas cuyas claves tomas del propio plan para dejar trazabilidad "
+        "en ambos sentidos entre el trabajo y sus tickets. Si en este run no dispones de la "
+        "herramienta de Confluence, no das la tarea por fallida: anotas el motivo en tu PROGRESS "
+        "y sigues adelante con el trabajo real, dejando la publicación pendiente para cuando el "
+        "conector esté presente.",
+    ),
+    BuiltinSkill(
+        "atlassian-jira-planning-context",
+        "Jira — contexto de planificación",
+        "atlassian",
+        "Busca en Jira issues y epics relacionados antes de planificar o diseñar, para "
+        "no duplicar trabajo y referenciar sus claves en el plan y en sus tareas.",
+        "Cuando arrancas a planificar o diseñar, antes de proponer tareas nuevas usas tus "
+        "herramientas de búsqueda de Jira para localizar issues y epics ya existentes "
+        "relacionados con el objetivo, de modo que no dupliques trabajo ya registrado y alinees "
+        "el plan con lo que hay. Tomas la clave del epic o los identificadores de proyecto del "
+        "contexto del plan —su descripción, la de la tarea o un comentario del plan— y acotas "
+        "la búsqueda al proyecto Jira actual sin cruzar a espacios de otros; si no vienen, "
+        "buscas por los términos del objetivo y, si aún dudas, los pides en un comentario del "
+        "plan en lugar de inventarlos. Este paso de consulta va siempre primero: solo tras "
+        "verificar que un issue existe anotas su clave en la descripción del plan y en las "
+        "tareas que dependan de él, dejando claro qué relación guarda cada una (amplía, depende "
+        "de o solapa con lo ya existente) para que la trazabilidad sea real y no duplicada. "
+        "Reflejas en tu PROGRESS qué issues encontraste y cuáles reutilizas frente a los que "
+        "faltan. Si tus herramientas de Jira no están disponibles en este run, no fallas la "
+        "tarea por ello: registras el motivo en tu PROGRESS y continúas la planificación con la "
+        "información que ya tengas.",
     ),
 )
 

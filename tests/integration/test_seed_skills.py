@@ -28,7 +28,7 @@ def _fresh_global_state_shield():
     yield
 
 
-EXPECTED_CATEGORIES = {"backend", "frontend", "devops", "qa", "research", "docs"}
+EXPECTED_CATEGORIES = {"backend", "frontend", "devops", "qa", "research", "docs", "atlassian"}
 
 
 async def _run_seed(dsn: str) -> int:
@@ -69,9 +69,9 @@ def _as_async_dsn(dsn: str) -> str:
 def test_seed_creates_builtin_skills_in_expected_range(
     alembic_config, migrations_pg_dsn: str
 ) -> None:
-    """45-70 skills per spec (we ship 51 tras la Ola B0.1: PHP/CI4 + security +
-    data + LLM + web-research). El rango deja margen para crecer sin tocar el
-    test en cada skill nueva, pero acota que el catálogo no se vacíe ni explote."""
+    """45-70 skills per spec (we ship 55: 33 base + 18 Ola B0.1 + 4 Atlassian).
+    El rango deja margen para crecer sin tocar el test en cada skill nueva, pero
+    acota que el catálogo no se vacíe ni explote."""
     command.upgrade(alembic_config, "head")
     asyncio.run(_truncate(migrations_pg_dsn))
 
@@ -79,7 +79,7 @@ def test_seed_creates_builtin_skills_in_expected_range(
     assert 45 <= n <= 70, f"expected 45-70 skills, got {n}"
 
 
-def test_seed_covers_all_six_categories(alembic_config, migrations_pg_dsn: str) -> None:
+def test_seed_covers_all_expected_categories(alembic_config, migrations_pg_dsn: str) -> None:
     command.upgrade(alembic_config, "head")
     asyncio.run(_truncate(migrations_pg_dsn))
     asyncio.run(_run_seed(_as_async_dsn(migrations_pg_dsn)))

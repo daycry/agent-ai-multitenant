@@ -49,6 +49,25 @@ Cada plantilla declara **cómo** se autentican sus peticiones, y eso dirige la U
 - **`sidecar`** — un sidecar self-hosted se autentica con **su propio** ENV; no hay token por petición que configurar aquí, pero **no es `none`** (el operador debe desplegar y configurar el sidecar). Es el caso de `atlassian`.
 - **`oauth`** — OAuth 2.1: el operador pulsa **«Conectar» una vez**, consiente en el proveedor y la plataforma **refresca el token sola** (multi-tenant limpio: cada tenant autoriza su cuenta). El núcleo (token store en Vault + `OAuthClientProvider` del SDK) está implementado en `shared_mcp.oauth`; el **flujo interactivo de consentimiento** se verifica en sesión con navegador. La primera plantilla `oauth` es `atlassian-remote` (remoto OFICIAL `mcp.atlassian.com`, alternativa al sidecar), **catalogada pero aún NO ofrecida** en el picker hasta esa verificación (`_UNAVAILABLE_TEMPLATE_IDS`).
 
+### Skills builtin que acompañan a Atlassian (ADR 0050 · categoría `atlassian`)
+
+Declarar el server no basta: el agente necesita saber **cómo** usarlo. Hay 4 skills
+builtin (categoría `atlassian`, visibles en el selector de skills de cualquier agente)
+que enseñan el comportamiento, sin cablear nombres de tool ni IDs (los IDs concretos —
+epic de Jira, página padre de Confluence — llegan por la descripción/comentarios del plan):
+
+| skill                             | para (roles sugeridos)                     | qué hace                                                                        |
+| --------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------- |
+| `atlassian-jira-task-tracking`    | backend_dev, frontend_dev, project_manager | crea/localiza la issue bajo el epic del plan y la transiciona al empezar/cerrar |
+| `atlassian-jira-review-notes`     | reviewer, qa                               | publica el veredicto como comentario y transiciona según apruebe/rechace        |
+| `atlassian-confluence-docs`       | technical_writer                           | crea/actualiza páginas hijas bajo la página padre del plan, sin duplicar        |
+| `atlassian-jira-planning-context` | project_manager, architect                 | busca issues/epics existentes antes de planificar, para no duplicar             |
+
+Todas son idempotentes (buscan antes de crear) y **degradan con gracia**: si el MCP de
+Atlassian no está en el run, no fallan la tarea — lo anotan en su PROGRESS y siguen.
+Asígnalas al agente desde su ficha (**Skills**); combínalas con la política rol→tool del
+proyecto (ADR 0128) para que solo el rol adecuado vea cada tool.
+
 ---
 
 ## Cómo se valida el catálogo

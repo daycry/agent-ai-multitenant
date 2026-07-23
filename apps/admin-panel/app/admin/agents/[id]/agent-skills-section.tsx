@@ -28,6 +28,7 @@ import {
   Microscope,
   Search,
   Server,
+  Ticket,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -68,7 +69,8 @@ interface AgentSkillsSectionProps {
 }
 
 // ---------------------------------------------------------------------------
-// Etiquetas humanas — sin enums crudos (las seis categorías del seed, ADR 0050)
+// Etiquetas humanas — sin enums crudos (categorías del seed, ADR 0050; +atlassian
+// como bucket de integración, ADR 0127/0128)
 // ---------------------------------------------------------------------------
 const CATEGORY_LABEL: Record<string, string> = {
   backend: "Backend",
@@ -77,6 +79,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   qa: "QA / Testing",
   research: "Investigación",
   docs: "Documentación",
+  atlassian: "Atlassian (Jira/Confluence)",
 };
 
 const CATEGORY_ICON: Record<string, LucideIcon> = {
@@ -86,9 +89,10 @@ const CATEGORY_ICON: Record<string, LucideIcon> = {
   qa: FlaskConical,
   research: Microscope,
   docs: BookOpen,
+  atlassian: Ticket,
 };
 
-const CATEGORY_ORDER = ["backend", "frontend", "devops", "qa", "research", "docs"];
+const CATEGORY_ORDER = ["backend", "frontend", "devops", "qa", "research", "docs", "atlassian"];
 
 function categoryLabel(cat: string): string {
   return CATEGORY_LABEL[cat] ?? cat.charAt(0).toUpperCase() + cat.slice(1);
