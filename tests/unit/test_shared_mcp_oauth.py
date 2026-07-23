@@ -255,7 +255,9 @@ def test_atlassian_sidecar_is_auth_kind_sidecar() -> None:
 
 def test_atlassian_remote_is_oauth() -> None:
     assert CATALOG["atlassian-remote"].auth_kind == "oauth"
-    assert CATALOG["atlassian-remote"].transport == "sse"
+    # Endpoint oficial streamable-HTTP (`/v1/sse` deprecado).
+    assert CATALOG["atlassian-remote"].transport == "streamable_http"
+    assert CATALOG["atlassian-remote"].url == "https://mcp.atlassian.com/v1/mcp"
 
 
 def test_context7_is_none_and_github_remote_is_static() -> None:
@@ -264,11 +266,11 @@ def test_context7_is_none_and_github_remote_is_static() -> None:
     assert CATALOG["github-remote"].auth_kind == "static"
 
 
-def test_atlassian_remote_withheld_from_picker() -> None:
-    # Not offered until the interactive flow is verified against the live provider.
+def test_atlassian_remote_offered_now_that_connect_is_wired() -> None:
+    # ADR 0127: the OAuth remote is now OFFERED (the «Connect» flow is wired
+    # end-to-end); the sidecar is offered too.
     from api_server.routers.mcp_catalog import offered_catalog
 
     offered_ids = {t.id for t in offered_catalog()}
-    assert "atlassian-remote" not in offered_ids
-    # the sidecar + the other HTTP templates ARE offered
+    assert "atlassian-remote" in offered_ids
     assert "atlassian" in offered_ids

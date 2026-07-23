@@ -80,11 +80,11 @@ def _to_dto(template: McpServerTemplate) -> McpTemplateDto:
 # transport (see ``offered_catalog``), so they don't need listing here.
 # ``docling-mcp`` stays here for the historical g5 guarantee/test, though the
 # transport rule below would withhold it anyway.
-# ``atlassian-remote`` (ADR 0127, auth_kind="oauth") is withheld until the
-# interactive OAuth consent flow is verified against the live Atlassian
-# authorization server — a headless session cannot exercise the browser
-# handshake. Remove from this set once verified in an interactive session.
-_UNAVAILABLE_TEMPLATE_IDS: frozenset[str] = frozenset({"docling-mcp", "atlassian-remote"})
+# ``atlassian-remote`` (ADR 0127, auth_kind="oauth") is now OFFERED: the
+# interactive «Connect» flow (routers/mcp_oauth.py + frontend McpOAuthConnect)
+# is wired end-to-end. The final consent still happens in the operator's
+# browser against the live Atlassian authorization server.
+_UNAVAILABLE_TEMPLATE_IDS: frozenset[str] = frozenset({"docling-mcp"})
 
 
 def offered_catalog() -> list[McpServerTemplate]:

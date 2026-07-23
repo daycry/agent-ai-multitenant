@@ -77,6 +77,7 @@ from api_server.routers.marketplace import admin_router as marketplace_admin_rou
 from api_server.routers.marketplace import router as marketplace_router
 from api_server.routers.mcp import router as mcp_router
 from api_server.routers.mcp_catalog import router as mcp_catalog_router
+from api_server.routers.mcp_oauth import router as mcp_oauth_router
 from api_server.routers.memories import router as memories_router
 from api_server.routers.mfa import router as mfa_router
 from api_server.routers.model_prices import admin_router as model_prices_admin_router
@@ -228,6 +229,7 @@ def _register_routers(app: FastAPI) -> None:
         copilot_device_flow_admin_router,
         mcp_router,
         mcp_catalog_router,
+        mcp_oauth_router,
         runtime_templates_router,
         tools_diagnostic_router,
         dep_cache_router,

@@ -678,8 +678,9 @@ ATLASSIAN_REMOTE_MCP = McpServerTemplate(
         "al sidecar `atlassian` para quien no quiera desplegar infra. ⚠️ Requiere abrir "
         "`mcp.atlassian.com` en los dominios permitidos del proyecto (egress)."
     ),
-    transport="sse",
-    url="https://mcp.atlassian.com/v1/sse",
+    # Endpoint OFICIAL streamable-HTTP (`/v1/sse` está deprecado, retirada jun-2026).
+    transport="streamable_http",
+    url="https://mcp.atlassian.com/v1/mcp",
     default_timeout_s=60.0,
     auth_kind="oauth",
     maintainer="Atlassian",

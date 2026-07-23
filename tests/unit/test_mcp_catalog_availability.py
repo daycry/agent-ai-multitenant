@@ -76,9 +76,8 @@ def test_offered_http_templates_have_expected_auth_kind() -> None:
     assert kinds["github-remote"] == "static"  # PAT bearer from Vault per request
 
 
-def test_oauth_remote_is_catalogued_but_withheld() -> None:
-    # ADR 0127: the official OAuth remote exists in the catalog (auth_kind
-    # "oauth") but is NOT offered until the interactive consent flow is
-    # verified against the live provider.
+def test_oauth_remote_is_catalogued_and_offered() -> None:
+    # ADR 0127: the official OAuth remote (auth_kind "oauth") is now OFFERED —
+    # the interactive «Connect» flow is wired (routers/mcp_oauth.py + frontend).
     assert CATALOG["atlassian-remote"].auth_kind == "oauth"
-    assert "atlassian-remote" not in {t.id for t in offered_catalog()}
+    assert "atlassian-remote" in {t.id for t in offered_catalog()}
