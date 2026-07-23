@@ -26,7 +26,75 @@ export interface ProjectResponse {
   id: string;
   name: string;
   mcp_servers: McpServerConfig[];
+  // ADR 0128 fase 2/4: política OPCIONAL rol→tool de las MCP del proyecto.
+  // Mapea nombre de tool MCP (`<server>.<tool>`) → roles de agente autorizados.
+  // `{}` (default) = sin política: todo agente del proyecto ve toda tool MCP.
+  // Ausente en respuestas antiguas → se trata como `{}`.
+  mcp_tool_roles?: Record<string, string[]>;
   // ...other Project fields exist; we don't touch them
+}
+
+// ---------------------------------------------------------------------------
+// ADR 0128 fase 4 — editor de política rol→tool de las MCP del proyecto
+// ---------------------------------------------------------------------------
+//
+// Las tools MCP las aporta el PROYECTO en runtime (no se conceden por-agente).
+// El operador puede opcionalmente restringir CADA tool MCP a un subconjunto de
+// roles de agente; sin entrada, la tool queda abierta a todos los roles.
+
+/** Roles de agente elegibles en la política (espeja ROLE_OPTIONS del Hub de agente). */
+export const AGENT_ROLES = [
+  "project_manager",
+  "architect",
+  "backend_dev",
+  "frontend_dev",
+  "qa",
+  "reviewer",
+  "devops",
+  "security",
+  "technical_writer",
+  "specialist",
+] as const;
+
+export type AgentRole = (typeof AGENT_ROLES)[number];
+
+/** Etiqueta humana (ES) de cada rol para el multi-select. */
+export const ROLE_LABEL: Record<AgentRole, string> = {
+  project_manager: "Project Manager",
+  architect: "Arquitecto",
+  backend_dev: "Backend Dev",
+  frontend_dev: "Frontend Dev",
+  qa: "QA",
+  reviewer: "Reviewer",
+  devops: "DevOps",
+  security: "Security",
+  technical_writer: "Technical Writer",
+  specialist: "Especialista",
+};
+
+/**
+ * Forma mínima de una tool del catálogo (`GET /tools`) que el editor de
+ * política necesita. Espeja `api_server.schemas.catalog.ToolResponse` en lo
+ * imprescindible: identificamos las tools MCP del proyecto por
+ * `implementation_type === "mcp_tool"` (o `category === "mcp"`) cuyo prefijo de
+ * namespacing `<server>` coincida con un server declarado en el proyecto.
+ */
+export interface CatalogToolLite {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string;
+  implementation_type: string;
+}
+
+/** True si la tool del catálogo es una tool MCP (aportada por un server MCP). */
+export function isMcpTool(tool: { implementation_type: string; category: string }): boolean {
+  return tool.implementation_type === "mcp_tool" || tool.category === "mcp";
+}
+
+/** El prefijo `<server>` de un nombre MCP namespaced `<server>.<tool>`, o null. */
+export function mcpServerPrefix(toolName: string): string | null {
+  return toolName.includes(".") ? toolName.split(".", 1)[0] : null;
 }
 
 export const TRANSPORT_LABEL: Record<Transport, string> = {

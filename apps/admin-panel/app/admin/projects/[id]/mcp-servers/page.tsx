@@ -31,7 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
 
-import { McpServerCard, McpServerDialog } from "./mcp-server-sections";
+import { McpServerCard, McpServerDialog, McpToolRolePolicySection } from "./mcp-server-sections";
 import { emptyServer, type McpServerConfig, type ProjectResponse } from "./mcp-server-types";
 
 // --------------------------------------------------------------------------
@@ -152,6 +152,11 @@ export default function ProjectMcpServersPage() {
             ? saveMutation.error.body
             : String(saveMutation.error)}
         </p>
+      ) : null}
+
+      {/* ADR 0128 fase 4: política OPCIONAL rol→tool de las MCP del proyecto. */}
+      {!projectQuery.isLoading && !projectQuery.isError ? (
+        <McpToolRolePolicySection projectId={projectId} />
       ) : null}
 
       {editing ? (
