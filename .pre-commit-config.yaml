@@ -86,5 +86,6 @@ repos:
             .*\.min\.(js|css)|
             packages/sdk-python/openapi-v1\.json|
             packages/sdk-typescript/openapi-v1\.json|
-            packages/sdk-typescript/src/generated/.*
+            packages/sdk-typescript/src/generated/.*|
+            apps/admin-panel/vendor/.*
           )$

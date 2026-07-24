@@ -1,0 +1,11 @@
+{
+  "name": "miniverse-core",
+  "version": "0.2.5",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "module": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "comment": "Vendored build of @miniverse/core (github.com/ianscott313/miniverse, MIT). See LICENSE."
+}
