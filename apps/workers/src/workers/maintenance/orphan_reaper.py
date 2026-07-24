@@ -45,6 +45,11 @@ _EXECUTION_LABEL = "com.agentic-platform.execution-id"
 _REVIEW_LABEL = "com.agentic-platform.review-session-id"
 _MANAGED_FILTER = {"label": "com.agentic-platform.managed=true"}
 _TEST_NETWORK_FILTER = {"label": "com.agentic-platform.component=test-runtime"}
+# ADR 0129 fase 2: the per-session review bridges (aux sidecars for the app
+# -preview) get their own component label; the reaper sweeps them empty the same
+# way it sweeps the per-task test bridges.
+_REVIEW_NETWORK_FILTER = {"label": "com.agentic-platform.component=review-runtime"}
+_EMPTY_NETWORK_FILTERS = (_TEST_NETWORK_FILTER, _REVIEW_NETWORK_FILTER)
 
 #: Estados de review-session que mantienen su contenedor VIVO.
 _LIVE_REVIEW_STATUSES = ("running", "suspended")
@@ -129,6 +134,34 @@ def _classify(
     return by_exec, by_review, untagged
 
 
+def _reap_empty_networks(client: Any, moment: datetime) -> int:
+    """Remove empty, aged-out per-task/per-session bridges (test-runtime + review).
+
+    Sweeps every component filter, deduping by network id so a network never
+    falls twice; an occupied or fresh (within the anti-race grace) network is
+    left alone. Best-effort per network — a single failure never aborts the
+    sweep."""
+    removed = 0
+    seen_networks: set[str] = set()
+    for net_filter in _EMPTY_NETWORK_FILTERS:
+        for network in list(client.networks.list(filters=net_filter)):
+            net_id = str(getattr(network, "id", None) or getattr(network, "name", ""))
+            if net_id in seen_networks:
+                continue
+            seen_networks.add(net_id)
+            with contextlib.suppress(Exception):
+                network.reload()
+                attrs = getattr(network, "attrs", None) or {}
+                if attrs.get("Containers"):
+                    continue
+                created = _parse_docker_time(attrs.get("Created"))
+                if created is not None and (moment - created) < _REAP_GRACE:
+                    continue
+                network.remove()
+                removed += 1
+    return removed
+
+
 async def _reap_orphans_async(
     settings: Settings,
     *,
@@ -170,19 +203,11 @@ async def _reap_orphans_async(
                 container.remove(force=True)
                 containers_removed += 1
 
-        # Redes bridge per-task de test-runtime que quedaron vacías (el runner
-        # las borra al terminar, salvo kill -9 del worker a mitad de run).
-        for network in list(client.networks.list(filters=_TEST_NETWORK_FILTER)):
-            with contextlib.suppress(Exception):
-                network.reload()
-                attrs = getattr(network, "attrs", None) or {}
-                if attrs.get("Containers"):
-                    continue
-                created = _parse_docker_time(attrs.get("Created"))
-                if created is not None and (moment - created) < _REAP_GRACE:
-                    continue
-                network.remove()
-                networks_removed += 1
+        # Redes bridge per-task de test-runtime + per-session de review que
+        # quedaron vacías (el runner/spawn las borra al terminar, salvo kill -9
+        # del worker a mitad de run, o la sesión de review ya reapeada de sus
+        # contenedores).
+        networks_removed = _reap_empty_networks(client, moment)
     except Exception as exc:  # pragma: no cover — defensive logging
         _log.warning("maintenance.reap_orphans.error", error=str(exc))
         return {

@@ -62,6 +62,7 @@ import {
   type LastGitSync,
 } from "@/components/projects/git-config-section";
 import { ReviewPreviewSection } from "@/components/projects/review-preview-section";
+import { RuntimeServicesSection } from "@/components/projects/runtime-services-section";
 import { ApiError, apiFetch } from "@/lib/api";
 
 type ProjectStatus = "active" | "paused" | "archived";
@@ -338,6 +339,14 @@ export default function ProjectHubPage() {
           {/* hallazgo #4: imagen/puerto del app-preview de validación humana (ADR 0063). */}
           <div className="mb-6">
             <ReviewPreviewSection projectId={projectId} value={project.repository_config ?? null} />
+          </div>
+
+          {/* ADR 0129: servicios de respaldo + env + imagen de runtime custom. */}
+          <div className="mb-6">
+            <RuntimeServicesSection
+              projectId={projectId}
+              value={project.repository_config ?? null}
+            />
           </div>
 
           {/* Sub-sections grid */}

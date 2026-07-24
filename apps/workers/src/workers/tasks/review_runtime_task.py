@@ -10,6 +10,7 @@ inerte).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
 from uuid import UUID
 
@@ -341,25 +342,122 @@ async def _notify_review_ready(request: dict[str, Any], session_id: Any, expires
     await enqueue_event_dispatch(event)
 
 
+# ADR 0129 fase 2: the review/preview bridge + aux sidecars carry these labels so
+# both reapers own them — orphan_reaper reaps aux containers by
+# ``review-session-id`` and the empty bridge by ``component=review-runtime``, and
+# expire_review_runtimes reaps every container id recorded on the session row.
+_REVIEW_COMPONENT = "review-runtime"
+
+
+def _review_labels(session_id: str, request: dict[str, Any]) -> dict[str, str]:
+    """Association labels shared by the review main container, its aux sidecars
+    and the per-session bridge (so the reapers clean the whole set)."""
+    return {
+        "com.agentic-platform.component": _REVIEW_COMPONENT,
+        "com.agentic-platform.managed": "true",
+        "com.agentic-platform.review-session-id": session_id,
+        "com.agentic-platform.plan-id": str(request.get("plan_id", "")),
+        "com.agentic-platform.tenant-id": str(request.get("tenant_id", "")),
+    }
+
+
+def _wait_aux_healthy(container: Any, aux: Any) -> None:
+    """Poll an aux sidecar's ``healthcheck_cmd`` until green or timeout.
+
+    Mirrors ``TestRuntimeRunner._wait_healthy`` — kept local so the review
+    spawn does not depend on instantiating the whole runner."""
+    import time
+
+    if aux.healthcheck_cmd is None:
+        return
+    cmd = list(aux.healthcheck_cmd)
+    deadline = time.monotonic() + aux.healthcheck_timeout_s
+    last_rc: int | None = None
+    while time.monotonic() < deadline:
+        result = container.exec_run(cmd)
+        last_rc = getattr(result, "exit_code", None)
+        if last_rc == 0:
+            return
+        time.sleep(0.5)
+    raise RuntimeError(
+        f"review aux {aux.name!r} not healthy within {aux.healthcheck_timeout_s}s (rc={last_rc})"
+    )
+
+
+def _start_review_aux_services(
+    client: Any,
+    settings: Settings,
+    session_id: str,
+    request: dict[str, Any],
+    services: Any,
+) -> tuple[Any, list[str]]:
+    """Bring up the project's declared services on a per-session internal bridge.
+
+    A DEDICATED bridge per session (never the shared ``agentic-agents``) keeps a
+    tenant's aux services unreachable from another tenant's review container —
+    aliases like ``mysql``/``redis`` would otherwise collide on the shared net.
+    Each sidecar uses the same hardened envelope the test-runtime uses
+    (:func:`build_aux_run_kwargs`) but relabeled to the review session so the
+    reapers own it. Returns ``(bridge, aux_container_ids)``; on any failure it
+    tears down whatever it created and returns ``(None, [])`` so the review still
+    spawns main-only (a preview without its DB beats no preview)."""
+    from workers.test_runtime import build_aux_run_kwargs
+
+    aux_specs = services.aux_services
+    if not aux_specs:
+        return None, []
+
+    labels = _review_labels(session_id, request)
+    bridge = client.networks.create(
+        f"review-aux-{session_id}",
+        driver="bridge",
+        internal=True,
+        labels=labels,
+    )
+    started: list[Any] = []
+    try:
+        for aux in aux_specs:
+            run_kwargs = build_aux_run_kwargs(settings, aux, bridge.name)
+            # Relabel from the test-runtime component to this review session so
+            # the reapers associate + clean the sidecar with the session.
+            run_kwargs["labels"] = {**labels, "com.agentic-platform.role": "aux-service"}
+            container = client.containers.run(aux.image, **run_kwargs)
+            started.append(container)
+            _wait_aux_healthy(container, aux)
+        return bridge, [c.id for c in started]
+    except Exception as exc:  # best-effort: never strand the review on aux trouble
+        _log.warning(
+            "review_runtime.aux_start_failed",
+            session_id=session_id,
+            error=str(exc)[:300],
+        )
+        for c in started:
+            with contextlib.suppress(Exception):
+                c.remove(force=True)
+        with contextlib.suppress(Exception):
+            bridge.remove()
+        return None, []
+
+
 def _spawn_review_runtime(
     request: dict[str, Any], session_id: str, settings: Settings
 ) -> tuple[str, ...]:
-    """Spawn the `main_image` container for one review session.
+    """Spawn the `main_image` container (+ project services) for one review session.
 
-    Plan 06.5 Fase F task_06_5_17. Returns a tuple of container IDs.
-    Empty tuple = Docker unreachable; the DB row still persists, and
-    the admin-panel will show the session as "pending spawn".
+    Plan 06.5 Fase F task_06_5_17 / ADR 0129 fase 2. Returns a tuple of container
+    IDs (main first, then any aux sidecars). Empty tuple = Docker unreachable; the
+    DB row still persists, and the admin-panel shows the session as "pending spawn".
 
-    Spawns ONLY ``main_image`` for now; ``aux_services`` (postgres-test,
-    redis-test sidecars) are intentionally deferred — most first-pass
-    reviews don't need them, and each aux requires its own bridge
-    network. Adding them is a body change to this helper, not a
-    contract change to the celery task.
+    When the project declares services in ``repository_config`` (ADR 0129) the
+    worker brings them up on a per-session internal bridge, connects the main
+    container to that bridge (so it resolves the services by hostname) and injects
+    the derived connection env (``DATABASE_URL``/``REDIS_URL``/…) — otherwise a DB
+    app can't be previewed. Invalid service config never strands the review: it
+    falls back to spawning main only.
 
     Hardening mirrors the agent-runtime envelope: cap-drop ALL,
     no-new-privileges, read-only root, non-root uid, mem/pids capped,
-    Docker socket tripwire. The worktree is bind-mounted at
-    ``/workspace``.
+    Docker socket tripwire. The worktree is bind-mounted at ``/workspace``.
     """
     # hallazgo #4: sin imagen configurada no hay nada que lanzar — el caller ya
     # persistió la sesión con `app_configured=false`. Guard defensivo aquí
@@ -373,12 +471,30 @@ def _spawn_review_runtime(
             assert_no_docker_socket,
             build_hardened_run_kwargs,
         )
+        from workers.runtime_services import (
+            RuntimeServicesConfigError,
+            build_project_runtime_services,
+        )
     except ImportError:
         return ()
 
     client = get_docker_client()
     if client is None:
         return ()
+
+    # ADR 0129: resolve the project's declared services (sidecars + connection
+    # env). Invalid config must NOT strand the review — fall back to main only.
+    try:
+        services = build_project_runtime_services(request.get("repository_config"))
+    except RuntimeServicesConfigError as exc:
+        _log.warning(
+            "review_runtime.services_config_invalid",
+            session_id=session_id,
+            error=str(exc)[:300],
+        )
+        services = build_project_runtime_services(None)
+
+    bridge, aux_ids = _start_review_aux_services(client, settings, session_id, request, services)
 
     worktree_host_path = str(request["worktree_host_path"])
 
@@ -389,13 +505,16 @@ def _spawn_review_runtime(
     # host egress); the app is reachable ONLY via the api-server's signed proxy.
     kwargs["name"] = f"agentic-review-{session_id}"
     kwargs["network"] = "agentic-agents"
-    kwargs["labels"] = {
-        "com.agentic-platform.component": "review-runtime",
-        "com.agentic-platform.managed": "true",
-        "com.agentic-platform.review-session-id": session_id,
-        "com.agentic-platform.plan-id": str(request["plan_id"]),
-        "com.agentic-platform.tenant-id": str(request["tenant_id"]),
-    }
+    kwargs["labels"] = _review_labels(session_id, request)
+    # ADR 0129: inject the derived connection env + the project's own env so the
+    # previewed app finds its DB/cache/queue. Never clobber HOME (the envelope
+    # owns it and the toolchain caches hang off it).
+    if services.main_env:
+        env = dict(kwargs.get("environment") or {})
+        for k, v in services.main_env.items():
+            if k != "HOME":
+                env[str(k)] = str(v)
+        kwargs["environment"] = env
 
     assert_no_docker_socket(kwargs)
 
@@ -403,8 +522,33 @@ def _spawn_review_runtime(
         container = client.containers.run(main_image, **kwargs)
     except Exception:
         # Daemon reachable but launch failed (image missing, OOM at
-        # create, etc.). Surface as empty tuple — the orchestrator
-        # treats this the same as "daemon unavailable" for now.
+        # create, etc.). Tear down any aux we brought up so they don't leak,
+        # then surface as empty tuple (treated as "daemon unavailable").
+        _teardown_review_aux(client, bridge, aux_ids)
         return ()
 
-    return (container.id,)
+    # Connect the main container to the per-session bridge so it reaches the aux
+    # services by their hostname/alias (it stays on agentic-agents for the proxy).
+    if bridge is not None:
+        try:
+            bridge.connect(container)
+        except Exception as exc:  # pragma: no cover - defensive
+            _log.warning(
+                "review_runtime.bridge_connect_failed",
+                session_id=session_id,
+                error=str(exc)[:300],
+            )
+
+    return (container.id, *aux_ids)
+
+
+def _teardown_review_aux(client: Any, bridge: Any, aux_ids: list[str]) -> None:
+    """Best-effort teardown of the aux sidecars + bridge (used when the main
+    spawn fails after the aux came up). The reapers are the steady-state path;
+    this just avoids an obvious immediate leak."""
+    for cid in aux_ids:
+        with contextlib.suppress(Exception):
+            client.containers.get(cid).remove(force=True)
+    if bridge is not None:
+        with contextlib.suppress(Exception):
+            bridge.remove()

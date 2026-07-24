@@ -221,6 +221,68 @@ async def test_reaps_empty_test_runtime_networks_only(
     assert not n_fresh.removed
 
 
+class _LabelledNetwork:
+    """Network fake carrying a component label + distinct id, so the reaper's
+    per-filter sweep + dedup can be exercised realistically (ADR 0129 fase 2)."""
+
+    def __init__(self, net_id: str, component: str, *, age: timedelta, occupied: bool = False):
+        self.id = net_id
+        self._component = component
+        self.attrs = {
+            "Created": _iso(age),
+            "Containers": {"c": {}} if occupied else {},
+        }
+        self.removed = False
+
+    def reload(self) -> None: ...
+
+    def remove(self) -> None:
+        self.removed = True
+
+
+class _LabelAwareClient:
+    """Docker fake whose ``networks.list`` honours the component label filter."""
+
+    def __init__(self, networks: list[_LabelledNetwork]) -> None:
+        self._networks = networks
+        self.containers = self
+        self.networks = self
+
+    def list(self, *args: Any, **kwargs: Any) -> list[Any]:
+        label = str((kwargs.get("filters") or {}).get("label", ""))
+        if "managed" in label:
+            return []
+        if label.startswith("com.agentic-platform.component="):
+            want = label.split("=", 1)[1]
+            return [n for n in self._networks if n._component == want]
+        return list(self._networks)
+
+
+@pytest.mark.asyncio
+async def test_reaps_empty_review_bridges_too(
+    _migrated: None, workers_settings: Any, migrations_pg_dsn: str
+) -> None:
+    from workers.maintenance import _reap_orphans_async
+
+    await _seed(migrations_pg_dsn)
+    review_empty = _LabelledNetwork("net-r1", "review-runtime", age=timedelta(hours=1))
+    review_busy = _LabelledNetwork(
+        "net-r2", "review-runtime", age=timedelta(hours=1), occupied=True
+    )
+    review_fresh = _LabelledNetwork("net-r3", "review-runtime", age=timedelta(minutes=1))
+    test_empty = _LabelledNetwork("net-t1", "test-runtime", age=timedelta(hours=1))
+    client = _LabelAwareClient([review_empty, review_busy, review_fresh, test_empty])
+
+    result = await _reap_orphans_async(workers_settings, client=client, now=_NOW)
+
+    # both an empty review bridge and an empty test bridge are reaped
+    assert result["networks_removed"] == 2
+    assert review_empty.removed
+    assert test_empty.removed
+    assert not review_busy.removed
+    assert not review_fresh.removed
+
+
 @pytest.mark.asyncio
 async def test_daemon_unavailable_is_a_clean_noop(
     workers_settings: Any, monkeypatch: pytest.MonkeyPatch

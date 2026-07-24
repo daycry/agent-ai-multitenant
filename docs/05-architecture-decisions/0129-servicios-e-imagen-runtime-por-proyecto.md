@@ -119,7 +119,23 @@ runtime_image_override)`): catálogo de servicios allowlisted + servicio de
   `_build_test_kwargs`. Cableado en `stack_exec_task` + `test_runtime_task`
   (leen `project.repository_config`). Override de imagen `runtime_image` en la
   resolución de `stack_exec`. Tests `tests/unit/test_runtime_services.py`.
-- **PENDIENTE (fase 2):** montar servicios en el review/preview
-  (`review_runtime_task`); UI de configuración (sección de servicios + env +
-  imagen) en el panel; validación de procedencia/escaneo de la imagen custom;
-  tope de recursos por proyecto; deploy + e2e real.
+- **HECHO (2026-07-24, fase 2), TDD:** el review/preview monta los servicios del
+  proyecto. `_spawn_review_runtime` traduce `repository_config` a sidecars
+  endurecidos sobre un **bridge interno per-sesión** (aislado — nunca en la red
+  compartida `agentic-agents`, para no filtrar entre tenants), conecta el
+  contenedor principal a ese bridge (resuelve los aux por alias) y le inyecta la
+  connection-env. Los aux + el bridge llevan labels de la sesión de review para
+  que los reapers los limpien: `expire_review_runtimes` reap por `container_ids`,
+  `orphan_reaper` reap los contenedores aux por `review-session-id` y el bridge
+  vacío por `component=review-runtime`. `review_autostart` hila
+  `repository_config` en la request. Config inválida NO deja huérfana la review
+  (cae a main-only). UI: sección **«Servicios e imagen de runtime»** en el hub de
+  proyecto (servicios del catálogo / imagen arbitraria + env + `runtime_image`),
+  con validación cliente espejo de la del backend. Tests
+  `tests/unit/test_review_aux_services.py` + `test_orphan_container_reaper.py`
+  (bridge de review). El override de imagen `runtime_image` NO aplica al review
+  (usa `main_image`, la imagen de app del proyecto); solo a stack_exec/tests.
+- **PENDIENTE (diferido, gated):** validación de procedencia/escaneo de la
+  imagen custom (misma postura que `review_image`); tope de recursos por
+  proyecto (caps de mem/pids por sidecar ya aplican; falta el agregado por
+  proyecto).

@@ -230,6 +230,10 @@ async def build_review_autostart_request(
         "plan_slug": plan.slug,
         "main_image": resolve_review_main_image(repo_cfg, worker_cfg),
         "main_port": resolve_review_main_port(repo_cfg, worker_cfg),
+        # ADR 0129 fase 2: the worker translates the project's declared services
+        # (repository_config.services/env) into hardened aux sidecars + connection
+        # env so a DB/cache/queue-backed app can actually be previewed.
+        "repository_config": dict(repo_cfg) if isinstance(repo_cfg, dict) else {},
         "expires_in_seconds": REVIEW_VERDICT_TIMEOUT_S,
         "human_checklist": build_review_human_checklist(getattr(plan, "specification", None)),
         # Carried into the session spec so the worker can notify the owner and the
