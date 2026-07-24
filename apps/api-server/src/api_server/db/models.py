@@ -923,9 +923,17 @@ class WebauthnCredential(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, Timestamp
 class ReviewSession(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
     __tablename__ = "review_sessions"
 
-    plan_id: Mapped[UUID] = mapped_column(
-        ForeignKey("plans.id", ondelete="CASCADE"), nullable=False
+    # NULLABLE since ADR 0130: an on-demand PROJECT preview has no plan (a plan
+    # preview / human-validation session still carries one). Invariant enforced
+    # by ck_review_sessions_plan_or_preview: plan_id NULL ⇒ kind='preview'.
+    plan_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("plans.id", ondelete="CASCADE"), nullable=True
     )
+    # ADR 0130 discriminator: 'plan' = human-validation review (verdict writes
+    # back to the plan); 'preview' = on-demand app-preview (24h, no verdict).
+    # Plan-scoped review queries filter kind='plan' so previews never masquerade
+    # as the validation session.
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'plan'"))
     # Serialized `ReviewRuntimeSpec` — full enough to re-hydrate the
     # session and re-issue signed URLs after a worker restart.
     spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)

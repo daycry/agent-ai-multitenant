@@ -112,7 +112,10 @@ async def _compose_review_runtime(request: dict[str, Any], settings: Settings) -
     from workers.review_runtime import DEFAULT_TENANT_CAP
 
     tenant_id = UUID(str(request["tenant_id"]))
-    plan_id = UUID(str(request["plan_id"]))
+    # ADR 0130: a PROJECT preview has no plan (plan_id absent/None); a plan
+    # review or a plan preview carries one. ``kind`` discriminates them.
+    plan_id = UUID(str(request["plan_id"])) if request.get("plan_id") else None
+    kind = str(request.get("kind") or "plan")
     expires_in_seconds = int(request.get("expires_in_seconds", 48 * 3600))
     expires_at = datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
 
@@ -128,12 +131,13 @@ async def _compose_review_runtime(request: dict[str, Any], settings: Settings) -
             _log.warning(
                 "review_runtime.tenant_cap_exceeded",
                 tenant_id=str(tenant_id),
-                plan_id=str(plan_id),
+                plan_id=str(plan_id) if plan_id else None,
+                kind=kind,
                 active=active,
                 cap=DEFAULT_TENANT_CAP,
             )
             return {
-                "plan_id": str(plan_id),
+                "plan_id": str(plan_id) if plan_id else None,
                 "status": "tenant_cap_exceeded",
                 "active": active,
                 "cap": DEFAULT_TENANT_CAP,
@@ -141,9 +145,14 @@ async def _compose_review_runtime(request: dict[str, Any], settings: Settings) -
 
         # C8 F39: the orchestrator passes worktree IDENTIFIERS, not the host path
         # (only the worker owns data_root + the git libs). Resolve/provision the
-        # plan-level worktree here; absent or unresolvable falls back to "" — the
-        # row + signed URLs still work, only the live app-preview is inert.
-        worktree_host_path = _resolve_review_worktree_host_path(request, settings)
+        # worktree here; absent or unresolvable falls back to "" — the row +
+        # signed URLs still work, only the live app-preview is inert. ADR 0130:
+        # a PROJECT preview (no plan) provisions the project's DEFAULT branch;
+        # everything else (plan review + plan preview) the plan branch.
+        if plan_id is None:
+            worktree_host_path = _resolve_preview_worktree_host_path(request, settings)
+        else:
+            worktree_host_path = _resolve_review_worktree_host_path(request, settings)
         request = {**request, "worktree_host_path": worktree_host_path}
         # hallazgo #4 (QA 2026-07-07): sin imagen pineada por el proyecto NO se
         # lanza contenedor (el placeholder alpine:3.20 está retirado). La fila +
@@ -162,6 +171,7 @@ async def _compose_review_runtime(request: dict[str, Any], settings: Settings) -
                 plan_id=plan_id,
                 spec=spec_payload,
                 expires_at=expires_at,
+                kind=kind,
             )
             session_id = row.id
             if app_configured:
@@ -189,11 +199,15 @@ async def _compose_review_runtime(request: dict[str, Any], settings: Settings) -
 
     # C8 F39: notify the owner with the signed reviewer URLs (the worker owns the
     # session id, so URL minting lives here, not in the orchestrator). Best-effort.
-    await _notify_review_ready(request, session_id, expires_at)
+    # ADR 0130: on-demand previews DON'T notify — there's no pending validation to
+    # escalate; the operator who launched it polls for the app URL instead.
+    if kind == "plan":
+        await _notify_review_ready(request, session_id, expires_at)
 
     result: dict[str, Any] = {
         "session_id": str(session_id),
-        "plan_id": str(plan_id),
+        "plan_id": str(plan_id) if plan_id else None,
+        "kind": kind,
         "status": "running",
         "expires_at_unix": expires_at.timestamp(),
         "container_ids": list(container_ids) if container_ids else [],
@@ -291,7 +305,10 @@ def _resolve_review_worktree_host_path(request: dict[str, Any], settings: Settin
         mgr.ensure_repo(repo_name)
         mgr.seed_initial_commit_if_empty(repo_name)
         wt = WorktreeManager(layout, repo_name)
-        key = f"review-{str(request['plan_id'])[:8]}"
+        # ADR 0130: a plan PREVIEW gets a DISTINCT worktree key from the plan's
+        # human-validation review so the two never RW-bind-mount the same dir.
+        prefix = "preview" if request.get("kind") == "preview" else "review"
+        key = f"{prefix}-{str(request['plan_id'])[:8]}"
         path = wt.add(key, branch=branch)
         wt.sync_to_head(key, branch=branch)
         return str(path)
@@ -299,6 +316,56 @@ def _resolve_review_worktree_host_path(request: dict[str, Any], settings: Settin
         _log.warning(
             "review_runtime.worktree_provision_failed",
             plan_id=str(request.get("plan_id", "")),
+            error=str(exc),
+        )
+        return ""
+
+
+def _resolve_preview_worktree_host_path(request: dict[str, Any], settings: Settings) -> str:
+    """Provision a worktree on the PROJECT's default branch for an on-demand
+    preview (ADR 0130) — the project-level counterpart of
+    :func:`_resolve_review_worktree_host_path`, which needs a plan.
+
+    Uses ``preview_ref`` (the git_config default branch, ``main`` fallback). Best
+    -effort: aligns the local default branch to ``origin`` first (so the preview
+    shows the merged code, not a stale/synthetic root), seeds an empty repo, and
+    materialises a detached worktree keyed by the project slug (reused +
+    resynced on a later preview). Any failure returns ``""`` → the session +
+    signed URLs still work, only the live app is inert."""
+    tenant_slug = request.get("tenant_slug")
+    project_slug = request.get("project_slug")
+    if not tenant_slug or not project_slug:
+        return ""
+    branch = str(request.get("preview_ref") or "main")
+    try:
+        from pathlib import Path
+
+        from workers.git_repos import BareRepoLayout, BareRepoManager, WorktreeManager
+    except ImportError:
+        return ""
+    try:
+        layout = BareRepoLayout(
+            data_root=Path(settings.data_root),
+            tenant_slug=str(tenant_slug),
+            project_slug=str(project_slug),
+        )
+        repo_name = str(request.get("repo_name") or project_slug)
+        mgr = BareRepoManager(layout)
+        mgr.ensure_repo(repo_name)
+        mgr.seed_initial_commit_if_empty(repo_name, default_branch=branch)
+        # Bring the local default branch to origin's tip when a remote exists —
+        # a diverged/empty remote is a no-op (the caller-seeded branch stands).
+        with contextlib.suppress(Exception):
+            mgr.align_default_branch(repo_name, branch)
+        wt = WorktreeManager(layout, repo_name)
+        key = f"preview-{project_slug}"[:60]
+        path = wt.add(key, branch=branch)
+        wt.sync_to_head(key, branch=branch)
+        return str(path)
+    except Exception as exc:  # pragma: no cover - requires a live git tree
+        _log.warning(
+            "review_runtime.preview_worktree_provision_failed",
+            project_slug=str(project_slug),
             error=str(exc),
         )
         return ""

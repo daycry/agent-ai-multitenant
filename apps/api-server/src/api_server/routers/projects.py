@@ -33,11 +33,18 @@ from api_server.capabilities import (
     kbs_for_project,
     memory_counts,
 )
-from api_server.celery_client import enqueue_clone_project_repo, revoke_job_callback
+from api_server.celery_client import (
+    enqueue_clone_project_repo,
+    enqueue_compose_review_runtime,
+    revoke_job_callback,
+)
 from api_server.db.domain import Project, ProjectStatus, Team
 from api_server.db.execution_repo import cancel_tasks_and_executions
+from api_server.db.models import Organization
+from api_server.db.review_session_repo import list_active_preview_sessions
 from api_server.git_integration import project_git_secret_path
 from api_server.llm_providers.vault import LLMProviderVaultStore
+from api_server.preview_launch import build_preview_request
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -232,6 +239,83 @@ async def get_project(
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
     return to_project_response(project)
+
+
+# ---------------------------------------------------------------------------
+# App-preview on-demand (ADR 0130) — levantar la app del proyecto (rama por
+# defecto) durante 24h, reutilizando la maquinaria de review-runtime. Sin
+# veredicto: es solo la app en vivo.
+# ---------------------------------------------------------------------------
+async def _load_project_or_404(session: AsyncSession, project_id: UUID) -> Project:
+    row = (
+        await session.execute(
+            select(Project).where(Project.id == project_id, Project.deleted_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
+    return row
+
+
+def _preview_session_payload(row: Any) -> dict[str, Any]:
+    """Signed app URL + metadata for a live preview session (ADR 0130)."""
+    from api_server.routers.review import build_review_urls
+
+    urls = build_review_urls(row.id, row.expires_at.timestamp())
+    return {
+        "session_id": str(row.id),
+        "status": row.status,
+        "app_url": urls["app_url"],
+        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+        "app_configured": bool((row.spec or {}).get("app_configured", True)),
+    }
+
+
+@router.post("/{project_id}/preview", status_code=status.HTTP_202_ACCEPTED)
+async def launch_project_preview(
+    project_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, Any]:
+    """Launch an on-demand app-preview of the project's DEFAULT branch (ADR 0130).
+
+    Reuses the review-runtime machinery (24h, no verdict). Idempotent: if a
+    preview is already live for this project, returns it instead of spawning a
+    second. 409 when the project pins no app-preview image."""
+    tenant_id = require_tenant_id(principal)
+    project = await _load_project_or_404(session, project_id)
+    existing = await list_active_preview_sessions(session, project_id=project_id)
+    if existing:
+        return {"status": "running", **_preview_session_payload(existing[0])}
+    org = await session.get(Organization, tenant_id)
+    request = build_preview_request(tenant_id=tenant_id, project=project, org=org, plan=None)
+    if request is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "El proyecto no tiene imagen de app-preview configurada. Configúra "
+                "'repository_config.review_image' en Servicios/App-preview primero."
+            ),
+        )
+    await enqueue_compose_review_runtime(request)
+    return {"status": "provisioning"}
+
+
+@router.get("/{project_id}/preview-session")
+async def get_project_preview_session(
+    project_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, Any]:
+    """Latest live on-demand preview of a project + a freshly-signed app URL
+    (ADR 0130). 404 while none is live (the UI polls this after launching)."""
+    await _load_project_or_404(session, project_id)
+    sessions = await list_active_preview_sessions(session, project_id=project_id)
+    if not sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="no live preview for this project"
+        )
+    return _preview_session_payload(sessions[0])
 
 
 # ---------------------------------------------------------------------------

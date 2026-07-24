@@ -192,6 +192,10 @@ async def build_review_autostart_request(
             .where(
                 ReviewSession.plan_id == plan.id,
                 ReviewSession.tenant_id == tenant_id,
+                # ADR 0130: an on-demand PREVIEW for this plan must NOT satisfy
+                # the idempotency guard — the human-validation review still needs
+                # to autostart when the plan reaches pending_human_validation.
+                ReviewSession.kind == "plan",
                 ReviewSession.status.in_(ACTIVE_REVIEW_STATUSES),
                 ReviewSession.deleted_at.is_(None),
             )

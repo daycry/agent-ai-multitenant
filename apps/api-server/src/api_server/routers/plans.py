@@ -39,7 +39,7 @@ from api_server.auth.deps import (
     require_tenant_member,
     schedule_after_commit,
 )
-from api_server.celery_client import revoke_job_callback
+from api_server.celery_client import enqueue_compose_review_runtime, revoke_job_callback
 from api_server.chat.corrections_llm import generate_corrective_tasks
 from api_server.chat.cost import (
     DEFAULT_HOURLY_RATE_EUR,
@@ -70,9 +70,13 @@ from api_server.db.execution_repo import cancel_tasks_and_executions
 from api_server.db.models import Organization
 from api_server.db.plan_comment import PlanComment
 from api_server.db.platform_settings import get_double_signature_threshold
-from api_server.db.review_session_repo import list_review_sessions_for_plan
+from api_server.db.review_session_repo import (
+    list_active_preview_sessions,
+    list_review_sessions_for_plan,
+)
 from api_server.events import publish_task_status_changed
 from api_server.llm_providers.vault import LLMProviderVaultStore
+from api_server.preview_launch import build_preview_request
 from api_server.routers._helpers import (
     get_writable_or_404,
     require_project_active,
@@ -513,6 +517,76 @@ async def get_plan_review_session(
         "app_url": urls["app_url"],
         "verdict_url": urls["verdict_url"],
     }
+
+
+# ---------------------------------------------------------------------------
+# App-preview on-demand de un PLAN (ADR 0130) — levantar la app de la rama del
+# plan durante 24h, sin veredicto. Útil para re-inspeccionar el resultado de un
+# plan cuya validación humana (48h) ya caducó.
+# ---------------------------------------------------------------------------
+def _plan_preview_payload(row: object) -> dict[str, object]:
+    urls = build_review_urls(row.id, row.expires_at.timestamp())  # type: ignore[attr-defined]
+    return {
+        "session_id": str(row.id),  # type: ignore[attr-defined]
+        "status": row.status,  # type: ignore[attr-defined]
+        "app_url": urls["app_url"],
+        "expires_at": (
+            row.expires_at.isoformat() if row.expires_at else None  # type: ignore[attr-defined]
+        ),
+        "app_configured": bool((row.spec or {}).get("app_configured", True)),  # type: ignore[attr-defined]
+    }
+
+
+@plans_router.post("/{plan_id}/preview", status_code=status.HTTP_202_ACCEPTED)
+async def launch_plan_preview(
+    plan_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, object]:
+    """Launch an on-demand app-preview of a PLAN's branch (ADR 0130, 24h, no
+    verdict). Idempotent per plan; 409 when the project pins no app-preview
+    image; 404 if the plan (or its project) isn't visible."""
+    tenant_id = require_tenant_id(principal)
+    plan = await _load_plan(session, plan_id)
+    existing = await list_active_preview_sessions(session, plan_id=plan_id)
+    if existing:
+        return {"status": "running", **_plan_preview_payload(existing[0])}
+    project = (
+        await session.execute(
+            select(Project).where(Project.id == plan.project_id, Project.deleted_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
+    org = await session.get(Organization, tenant_id)
+    request = build_preview_request(tenant_id=tenant_id, project=project, org=org, plan=plan)
+    if request is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "El proyecto no tiene imagen de app-preview configurada. Configúra "
+                "'repository_config.review_image' en el proyecto primero."
+            ),
+        )
+    await enqueue_compose_review_runtime(request)
+    return {"status": "provisioning"}
+
+
+@plans_router.get("/{plan_id}/preview-session")
+async def get_plan_preview_session(
+    plan_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, object]:
+    """Latest live on-demand preview of a plan + a freshly-signed app URL (ADR
+    0130). 404 while none is live (the UI polls this after launching)."""
+    await _load_plan(session, plan_id)
+    sessions = await list_active_preview_sessions(session, plan_id=plan_id)
+    if not sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="no live preview for this plan"
+        )
+    return _plan_preview_payload(sessions[0])
 
 
 @plans_router.put("/{plan_id}", response_model=PlanResponse)

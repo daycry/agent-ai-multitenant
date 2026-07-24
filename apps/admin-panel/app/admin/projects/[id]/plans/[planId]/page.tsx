@@ -24,6 +24,7 @@ import { ClipboardList } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
+import { PreviewLauncher } from "@/components/projects/preview-launcher";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -112,6 +113,11 @@ export default function PlanDetailPage() {
 
       <PlanLifecycleSection planId={plan.id} status={plan.status} />
       <HumanValidationSection planId={plan.id} status={plan.status} />
+      {/* ADR 0130: preview on-demand de la rama del plan (24h, sin veredicto) —
+          útil para re-inspeccionar un plan cuya validación humana ya caducó. */}
+      <div className="mt-2">
+        <PreviewLauncher scope="plans" id={plan.id} title="Preview de la app (este plan)" />
+      </div>
       <CorrectionsSection planId={plan.id} status={plan.status} spec={spec} />
       <PlanDeepLinksSection planId={plan.id} status={plan.status} />
       <PlanCodeDiffSection projectId={projectId} planId={plan.id} />

@@ -69,6 +69,10 @@ async def _block_plan_for_expired_session(db: AsyncSession, row: Any) -> dict[st
     from api_server.chat.plan_state_machine import transition_plan_status
     from api_server.db.domain import Plan
 
+    # ADR 0130: an on-demand PROJECT preview has no plan — nothing to block or
+    # escalate when it expires (it just gets reaped).
+    if row.plan_id is None:
+        return None
     plan = await db.get(Plan, row.plan_id)
     if plan is None:
         return None

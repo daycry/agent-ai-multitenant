@@ -61,6 +61,7 @@ import {
   type GitPolicies,
   type LastGitSync,
 } from "@/components/projects/git-config-section";
+import { PreviewLauncher } from "@/components/projects/preview-launcher";
 import { ReviewPreviewSection } from "@/components/projects/review-preview-section";
 import { RuntimeServicesSection } from "@/components/projects/runtime-services-section";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -347,6 +348,11 @@ export default function ProjectHubPage() {
               projectId={projectId}
               value={project.repository_config ?? null}
             />
+          </div>
+
+          {/* ADR 0130: levantar la app del proyecto (rama por defecto) en preview 24h. */}
+          <div className="mb-6">
+            <PreviewLauncher scope="projects" id={projectId} title="Preview de la app (proyecto)" />
           </div>
 
           {/* Sub-sections grid */}

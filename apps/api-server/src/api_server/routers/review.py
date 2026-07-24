@@ -493,14 +493,18 @@ async def submit_verdict(
         )
         if row is None:
             raise HTTPException(status_code=404, detail="review session not found")
-        # PROY2-07: el cierre del plan termina las OTRAS sesiones activas
-        # (running/suspended de tandas previas) — sin esto quedaban zombies
-        # que el autostart/reconciler contaba como activas.
-        await mark_other_plan_sessions_terminal(db, row.plan_id, exclude_session_id=row.id)
-        plan = await db.get(Plan, row.plan_id)
+        plan = None
         plan_status: str | None = None
         # ADR 0072 fase 2: contexto para el auto-PR si el plan pasa a completed.
         pr_ctx: tuple[UUID, UUID, str] | None = None
+        # ADR 0130: un preview on-demand no tiene plan (plan_id NULL) — se marca
+        # terminal (arriba) pero NO hay write-back al plan ni barrido de hermanas.
+        if row.plan_id is not None:
+            # PROY2-07: el cierre del plan termina las OTRAS sesiones activas
+            # (running/suspended de tandas previas) — sin esto quedaban zombies
+            # que el autostart/reconciler contaba como activas.
+            await mark_other_plan_sessions_terminal(db, row.plan_id, exclude_session_id=row.id)
+            plan = await db.get(Plan, row.plan_id)
         if plan is not None:
             if plan.status == "pending_human_validation":
                 # c2/T3 (audit 2026-07-03): encaminar el cierre por la máquina de

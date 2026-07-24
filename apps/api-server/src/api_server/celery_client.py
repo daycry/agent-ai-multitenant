@@ -194,6 +194,27 @@ async def enqueue_open_plan_pr(project_id: UUID, plan_id: UUID, *, title: str, b
     return True
 
 
+async def enqueue_compose_review_runtime(request: dict[str, Any]) -> bool:
+    """Encola el spawn de un review-runtime / app-preview (ADR 0062/0130).
+
+    Reutiliza la task ``workers.compose_review_runtime`` (cola ``review``): crea
+    la fila ``review_sessions``, resuelve el worktree y lanza el contenedor. El
+    ``request`` lleva ``kind`` ('plan'|'preview'), ``plan_id`` opcional,
+    ``preview_ref`` (rama a previsualizar) y ``expires_in_seconds``. Best-effort:
+    un fallo del broker no rompe el endpoint (el operador reintenta)."""
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            "workers.compose_review_runtime",
+            kwargs={"request": request},
+            queue="review",
+        )
+    except Exception as exc:
+        _log.warning("review_runtime.enqueue_failed", error=str(exc))
+        return False
+    return True
+
+
 async def revoke_execution_job(job_id: str) -> bool:
     """Revoke a *queued* execution Celery job (cooperative cancellation).
 
