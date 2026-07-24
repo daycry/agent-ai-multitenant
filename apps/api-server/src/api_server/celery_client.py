@@ -177,6 +177,43 @@ async def run_stack_command_and_wait(
     return await asyncio.to_thread(_send_and_wait)
 
 
+async def compute_plan_code_diff_and_wait(
+    *,
+    tenant_slug: str,
+    project_slug: str,
+    plan_id: str,
+    plan_slug: str,
+    timeout_s: int = 60,
+) -> dict[str, Any]:
+    """Delegar el diff de código de un plan al WORKER y BLOQUEAR por su resultado.
+
+    El git corre sobre el bare real, que solo el worker ve (posee el volumen
+    ``agent-data`` y el ``data_root`` correcto; la api-server no lo monta → si lo
+    calculara en proceso daría ``FileNotFoundError`` → 500). Mismo patrón síncrono
+    que :func:`run_stack_command_and_wait`. Devuelve el dict del worker
+    (``{ok: True, ...}`` / ``{ok: False, error}``); un fallo de broker/timeout se
+    traduce a ``{ok: False, error}`` para que el endpoint responda 404, nunca 500."""
+    request = {
+        "tenant_slug": tenant_slug,
+        "project_slug": project_slug,
+        "plan_id": plan_id,
+        "plan_slug": plan_slug,
+    }
+
+    def _send_and_wait() -> dict[str, Any]:
+        async_result = get_celery_client().send_task(
+            "workers.compute_plan_code_diff", args=[request], queue="default"
+        )
+        result = async_result.get(timeout=timeout_s)
+        return dict(result) if isinstance(result, dict) else {"ok": False, "error": "empty result"}
+
+    try:
+        return await asyncio.to_thread(_send_and_wait)
+    except Exception as exc:
+        _log.warning("code_diff.enqueue_failed", plan_id=plan_id, error=str(exc))
+        return {"ok": False, "error": "diff worker unavailable"}
+
+
 async def enqueue_open_plan_pr(project_id: UUID, plan_id: UUID, *, title: str, body: str) -> bool:
     """Encola el auto-PR de un plan (ADR 0072 fase 2): push autenticado de la rama
     + apertura del PR/MR por proveedor. La rama se deriva en el worker de

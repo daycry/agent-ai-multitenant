@@ -18,6 +18,7 @@ para tests: ``monkeypatch`` sobre el SUBMÓDULO que resuelve el nombre (p.ej.
 
 from __future__ import annotations
 
+from workers.tasks.code_diff_task import compute_plan_code_diff
 from workers.tasks.review_runtime_task import (
     _compose_review_runtime,
     _count_active_review_sessions,
@@ -51,6 +52,7 @@ from workers.tasks.test_runtime_task import (
 
 __all__ = [
     "compose_review_runtime",
+    "compute_plan_code_diff",
     "run_agent_container",
     "run_execution",
     "run_stack_command",

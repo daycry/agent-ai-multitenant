@@ -113,3 +113,20 @@ def test_missing_branch_is_a_clean_error(tmp_path: Path) -> None:
             plan_id="019f9999-0000-7000-8000-000000000000",
             plan_slug="no-existe",
         )
+
+
+def test_missing_bare_is_a_clean_error_not_500(tmp_path: Path) -> None:
+    """Regresión del 500 «siempre» del visor de diff (2026-07-24): un bare que
+    NO existe hace que ``_run_git(cwd=bare)`` lance ``FileNotFoundError`` (OSError,
+    cwd ausente). Antes caía FUERA del ``except GitCommandError`` → 500. Debe ser
+    un ``PlanCodeDiffError`` neutro (→ 404), no una excepción cruda."""
+    empty_root = tmp_path / "no-data"  # sin ningún projects/.../repos/*.git
+    empty_root.mkdir()
+    with pytest.raises(PlanCodeDiffError):
+        plan_code_diff(
+            empty_root,
+            tenant_slug=_TENANT,
+            project_slug=_PROJECT,
+            plan_id=_PLAN_ID,
+            plan_slug=_PLAN_SLUG,
+        )

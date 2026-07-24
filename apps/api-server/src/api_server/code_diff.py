@@ -99,8 +99,14 @@ def plan_code_diff(
         plan_slug=plan_slug,
     )
     bare = layout.bare_repo_path(project_slug)
-    safe_branch = _safe_git_ref(branch)
     try:
+        # `_safe_git_ref` (ValueError on a malformed ref) y `_run_git` (cwd
+        # inexistente → OSError/FileNotFoundError; git rc!=0 → GitCommandError)
+        # entran TODOS al mismo saco: un bare no materializado o una rama que aún
+        # no existe deben ser un 404 neutro, NUNCA un 500. Antes `_safe_git_ref`
+        # y el cwd ausente caían fuera del except → 500 (bug: el endpoint corría
+        # en la api-server, que no monta el volumen agent-data → cwd inexistente).
+        safe_branch = _safe_git_ref(branch)
         default_branch = _safe_git_ref(
             _run_git("symbolic-ref", "--short", "HEAD", cwd=bare).strip()
         )
@@ -108,7 +114,7 @@ def plan_code_diff(
         head_sha = _run_git("rev-parse", safe_branch, cwd=bare).strip()
         numstat = _run_git("diff", "--numstat", f"{base_sha}..{safe_branch}", cwd=bare)
         raw = _run_git("diff", f"{base_sha}..{safe_branch}", cwd=bare)
-    except GitCommandError as exc:
+    except (GitCommandError, OSError, ValueError) as exc:
         # Nunca filtrar stderr crudo de git (puede llevar paths internos).
         logger.info(
             "code_diff.git_failed",

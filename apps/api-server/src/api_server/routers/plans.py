@@ -28,7 +28,6 @@ from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.concurrency import run_in_threadpool
 
 from api_server.auth.deps import (
     AuthPrincipal,
@@ -39,7 +38,11 @@ from api_server.auth.deps import (
     require_tenant_member,
     schedule_after_commit,
 )
-from api_server.celery_client import enqueue_compose_review_runtime, revoke_job_callback
+from api_server.celery_client import (
+    compute_plan_code_diff_and_wait,
+    enqueue_compose_review_runtime,
+    revoke_job_callback,
+)
 from api_server.chat.corrections_llm import generate_corrective_tasks
 from api_server.chat.cost import (
     DEFAULT_HOURLY_RATE_EUR,
@@ -344,9 +347,11 @@ async def get_plan_code_diff(
     clasificadas para el renderer del visor de docs. Tenant-safe via RLS; un
     plan sin rama material (aun sin commits) responde 404 con detalle neutro.
     """
-    from api_server.code_diff import PlanCodeDiffError, plan_code_diff
-    from api_server.config import get_settings
-
+    # Fix 2026-07-24: el diff se calcula EN EL WORKER. Antes corría en la
+    # api-server, que NO monta el volumen agent-data (data_root default
+    # /data/agent-platform inexistente allí) → subprocess.run(cwd=bare) lanzaba
+    # FileNotFoundError NO capturado → 500 SIEMPRE. El worker posee el data_root
+    # real + corre como owner de los bares; la api-server delega y relaya.
     tenant_id = require_tenant_id(principal)
     await _verify_project_visible(session, project_id)
     plan = await _load_plan(session, plan_id)
@@ -361,30 +366,27 @@ async def get_plan_code_diff(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="plan has no materialised branch yet",
         )
-    try:
-        diff = await run_in_threadpool(
-            plan_code_diff,
-            get_settings().data_root,
-            tenant_slug=org.slug,
-            project_slug=project.slug,
-            plan_id=str(plan.id),
-            plan_slug=plan.slug,
-        )
-    except PlanCodeDiffError as exc:
+    result = await compute_plan_code_diff_and_wait(
+        tenant_slug=org.slug,
+        project_slug=project.slug,
+        plan_id=str(plan.id),
+        plan_slug=plan.slug,
+    )
+    if not result.get("ok"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="no diff available for this plan (branch or repo not materialised)",
-        ) from exc
+        )
     return {
         "plan_id": str(plan.id),
-        "plan_branch": diff.plan_branch,
-        "default_branch": diff.default_branch,
-        "base_sha": diff.base_sha,
-        "head_sha": diff.head_sha,
-        "unchanged": diff.unchanged,
-        "truncated": diff.truncated,
-        "files": diff.files,
-        "lines": [{"kind": ln.kind, "content": ln.content} for ln in diff.lines],
+        "plan_branch": result.get("plan_branch"),
+        "default_branch": result.get("default_branch"),
+        "base_sha": result.get("base_sha"),
+        "head_sha": result.get("head_sha"),
+        "unchanged": result.get("unchanged"),
+        "truncated": result.get("truncated"),
+        "files": result.get("files") or [],
+        "lines": result.get("lines") or [],
     }
 
 
