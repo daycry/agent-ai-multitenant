@@ -2,14 +2,15 @@
 
 /**
  * La Oficina — renderer 2D en <canvas> (ADR 0118, sistema estilo miniverse:
- * grid + sprites + motor de animación). Pinta un piso cenital: salas (mesas por
- * plan), la puerta del humano y el sofá; los agentes son personajes-emoji que
- * CAMINAN a su sitio según su run real, con burbuja de diálogo y animación por
- * estado (teclear/mareo/dormir/esperar). Solo pinta lo que `buildWorld` decide.
+ * grid + sprites + motor de animación). Piso cenital: salas (mesas por plan), la
+ * puerta del humano y la planta común. Los agentes son personajes que se MUEVEN
+ * DE VERDAD, como en miniverse: los libres DEAMBULAN por la planta (caminan a un
+ * punto, pausan, vuelven a caminar), los que trabajan caminan a su mesa y teclean,
+ * los escalados pasean por la puerta del humano. Animación de andar (contoneo +
+ * sombra), burbujas de diálogo y estados. Solo refleja lo que `buildWorld` decide.
  *
- * Determinismo/estado: las posiciones-objetivo vienen del mundo (puro); aquí solo
- * se interpola la posición ACTUAL hacia el objetivo (efecto "andar"). Accesible:
- * el canvas es aria-hidden decorativo; la lista semántica vive en la página.
+ * El canvas es aria-hidden decorativo; la lista semántica (accesible + tests)
+ * vive en la página. jsdom-safe: sin contexto 2D es un no-op.
  */
 
 import { useEffect, useRef } from "react";
@@ -20,6 +21,7 @@ import {
   WORLD_H,
   WORLD_W,
   type Citizen,
+  type Rect,
   type World,
 } from "@/lib/office/world";
 
@@ -35,6 +37,7 @@ interface Palette {
   loungeStroke: string;
   zoneLabel: string;
   name: string;
+  shadow: string;
   bubbleFill: string;
   bubbleStroke: string;
   bubbleText: string;
@@ -52,6 +55,7 @@ const LIGHT: Palette = {
   loungeStroke: "rgba(120,120,120,0.28)",
   zoneLabel: "#6b6455",
   name: "#3a352c",
+  shadow: "rgba(0,0,0,0.14)",
   bubbleFill: "#ffffff",
   bubbleStroke: "#d9d2c4",
   bubbleText: "#2c2820",
@@ -69,20 +73,28 @@ const DARK: Palette = {
   loungeStroke: "rgba(255,255,255,0.14)",
   zoneLabel: "#9a9280",
   name: "#d6cfbe",
+  shadow: "rgba(0,0,0,0.35)",
   bubbleFill: "#26251f",
   bubbleStroke: "#3a382f",
   bubbleText: "#e6dfce",
 };
 
-interface LivePos {
+interface Mover {
   x: number;
   y: number;
-  born: boolean;
+  tx: number;
+  ty: number;
+  moving: boolean;
+  pauseUntil: number;
+  faceLeft: boolean;
+  seeded: boolean;
 }
 
 const HIT_RADIUS = 30;
+const WALK_SPEED = 115; // unidades-mundo por segundo
 const EMOJI_FONT =
   '30px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",system-ui,sans-serif';
+const BADGE_FONT = '15px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
 const LABEL_FONT = '600 13px system-ui,-apple-system,"Segoe UI",sans-serif';
 const NAME_FONT = '11px system-ui,-apple-system,"Segoe UI",sans-serif';
 const BUBBLE_FONT = '11px system-ui,-apple-system,"Segoe UI",sans-serif';
@@ -105,6 +117,13 @@ function roundRect(
   ctx.closePath();
 }
 
+function randInRect(r: Rect, pad = 26): { x: number; y: number } {
+  return {
+    x: r.x + pad + Math.random() * Math.max(1, r.w - pad * 2),
+    y: r.y + pad + Math.random() * Math.max(1, r.h - pad * 2),
+  };
+}
+
 export function OfficeCanvas({
   world,
   onSelect,
@@ -116,7 +135,7 @@ export function OfficeCanvas({
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const worldRef = useRef(world);
   const onSelectRef = useRef(onSelect);
-  const posRef = useRef<Map<string, LivePos>>(new Map());
+  const moversRef = useRef<Map<string, Mover>>(new Map());
   const scaleRef = useRef(1);
 
   worldRef.current = world;
@@ -126,8 +145,7 @@ export function OfficeCanvas({
     const canvas = canvasRef.current;
     const wrap = wrapRef.current;
     if (!canvas || !wrap) return;
-    // jsdom (tests) no implementa el contexto 2D ni ResizeObserver/rAF: getContext
-    // devuelve null o lanza → el renderer es un no-op y la capa semántica manda.
+    // jsdom (tests) no implementa el contexto 2D ni ResizeObserver/rAF → no-op.
     let ctx: CanvasRenderingContext2D | null = null;
     try {
       ctx = canvas.getContext("2d");
@@ -138,15 +156,16 @@ export function OfficeCanvas({
     if (typeof ResizeObserver === "undefined" || typeof requestAnimationFrame === "undefined") {
       return;
     }
+    const g = ctx;
 
     let raf = 0;
     let cssW = 0;
-    let cssH = 0;
+    let last = performance.now();
 
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       cssW = wrap.clientWidth;
-      cssH = (cssW * WORLD_H) / WORLD_W;
+      const cssH = (cssW * WORLD_H) / WORLD_W;
       scaleRef.current = cssW / WORLD_W;
       canvas.style.height = `${cssH}px`;
       canvas.width = Math.round(cssW * dpr);
@@ -156,130 +175,187 @@ export function OfficeCanvas({
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
 
-    const spawnPoint = () => ({ x: WORLD_W / 2, y: WORLD_H - 6 });
+    const entrance = { x: WORLD_W / 2, y: WORLD_H - 8 };
 
-    const draw = () => {
+    // Zona por la que se mueve/pasea cada ciudadano según su estado.
+    const roamRect = (c: Citizen, w: World): Rect | null => {
+      if (c.zone === "door") return w.door;
+      if (c.zone === "lounge") return w.commons; // los libres deambulan por la planta
+      return null; // desk: se queda en su silla (no deambula)
+    };
+
+    const draw = (nowMs: number) => {
       const w = worldRef.current;
       const pal = document.documentElement.classList.contains("dark") ? DARK : LIGHT;
-      const now = performance.now() / 1000;
+      const now = nowMs / 1000;
+      const dt = Math.min(0.05, (nowMs - last) / 1000);
+      last = nowMs;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const s = (cssW / WORLD_W) * dpr;
-      ctx.setTransform(s, 0, 0, s, 0, 0);
-      ctx.clearRect(0, 0, WORLD_W, WORLD_H);
+      g.setTransform(s, 0, 0, s, 0, 0);
+      g.clearRect(0, 0, WORLD_W, WORLD_H);
 
       // Suelo + baldosas.
-      ctx.fillStyle = pal.floor;
-      ctx.fillRect(0, 0, WORLD_W, WORLD_H);
-      ctx.strokeStyle = pal.tile;
-      ctx.lineWidth = 1;
+      g.fillStyle = pal.floor;
+      g.fillRect(0, 0, WORLD_W, WORLD_H);
+      g.strokeStyle = pal.tile;
+      g.lineWidth = 1;
       for (let x = 0; x <= WORLD_W; x += 40) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, WORLD_H);
-        ctx.stroke();
+        g.beginPath();
+        g.moveTo(x, 0);
+        g.lineTo(x, WORLD_H);
+        g.stroke();
       }
       for (let y = 0; y <= WORLD_H; y += 40) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(WORLD_W, y);
-        ctx.stroke();
+        g.beginPath();
+        g.moveTo(0, y);
+        g.lineTo(WORLD_W, y);
+        g.stroke();
       }
 
-      // Zonas: puerta del humano + sofá.
-      const drawZone = (r: typeof w.door, fill: string, stroke: string, label: string) => {
-        ctx.fillStyle = fill;
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth = 1.5;
-        roundRect(ctx, r.x, r.y, r.w, r.h, 14);
-        ctx.fill();
-        ctx.stroke();
-        ctx.fillStyle = pal.zoneLabel;
-        ctx.font = LABEL_FONT;
-        ctx.textAlign = "left";
-        ctx.textBaseline = "top";
-        ctx.fillText(label, r.x + 14, r.y + 12);
+      // Zonas.
+      const drawZone = (r: Rect, fill: string, stroke: string, label: string) => {
+        g.fillStyle = fill;
+        g.strokeStyle = stroke;
+        g.lineWidth = 1.5;
+        roundRect(g, r.x, r.y, r.w, r.h, 14);
+        g.fill();
+        g.stroke();
+        g.fillStyle = pal.zoneLabel;
+        g.font = LABEL_FONT;
+        g.textAlign = "left";
+        g.textBaseline = "top";
+        g.fillText(label, r.x + 14, r.y + 12);
       };
       drawZone(w.door, pal.doorFill, pal.doorStroke, "🚪  Puerta del humano");
-      drawZone(w.lounge, pal.loungeFill, pal.loungeStroke, "🛋️  Descanso");
+      drawZone(w.lounge, pal.loungeFill, pal.loungeStroke, "🛋️  Planta / descanso");
 
       // Mesas (salas por plan).
       for (const desk of w.desks) {
-        ctx.fillStyle = pal.deskFill;
-        ctx.strokeStyle = pal.deskStroke;
-        ctx.lineWidth = 1.5;
-        roundRect(ctx, desk.x, desk.y, desk.w, desk.h, 14);
-        ctx.fill();
-        ctx.stroke();
-        ctx.fillStyle = pal.deskLabel;
-        ctx.font = LABEL_FONT;
-        ctx.textAlign = "left";
-        ctx.textBaseline = "top";
+        g.fillStyle = pal.deskFill;
+        g.strokeStyle = pal.deskStroke;
+        g.lineWidth = 1.5;
+        roundRect(g, desk.x, desk.y, desk.w, desk.h, 14);
+        g.fill();
+        g.stroke();
+        g.fillStyle = pal.deskLabel;
+        g.font = LABEL_FONT;
+        g.textAlign = "left";
+        g.textBaseline = "top";
         const title = desk.title.length > 30 ? `${desk.title.slice(0, 30)}…` : desk.title;
-        ctx.fillText(`🗄️  ${title}`, desk.x + 12, desk.y + 10);
+        g.fillText(`🗄️  ${title}`, desk.x + 12, desk.y + 10);
       }
 
-      // Prune posiciones de ciudadanos que ya no están.
+      // Prune movers de ciudadanos que ya no están.
       const alive = new Set(w.citizens.map((c) => c.key));
-      for (const k of [...posRef.current.keys()]) if (!alive.has(k)) posRef.current.delete(k);
+      for (const k of [...moversRef.current.keys()]) if (!alive.has(k)) moversRef.current.delete(k);
 
-      // Ciudadanos: interpolar hacia su objetivo (efecto andar) y pintar.
       for (const c of w.citizens) {
-        let p = posRef.current.get(c.key);
-        if (!p) {
-          p = { ...spawnPoint(), born: true };
-          posRef.current.set(c.key, p);
+        let m = moversRef.current.get(c.key);
+        if (!m) {
+          // Entra caminando desde la puerta de la oficina.
+          m = {
+            x: entrance.x,
+            y: entrance.y,
+            tx: c.x,
+            ty: c.y,
+            moving: true,
+            pauseUntil: 0,
+            faceLeft: false,
+            seeded: true,
+          };
+          moversRef.current.set(c.key, m);
         }
-        p.x += (c.x - p.x) * 0.14;
-        p.y += (c.y - p.y) * 0.14;
 
-        ctx.save();
-        ctx.translate(p.x, p.y);
+        // Objetivo: la silla (desk) SIEMPRE la posición actual del asiento; en
+        // door/lounge el objetivo es el punto de deambulación (se renueva al llegar).
+        if (c.zone === "desk") {
+          m.tx = c.x;
+          m.ty = c.y;
+        }
 
-        // Animación por estado.
-        let bob = 0;
-        const phase = (c.key.charCodeAt(0) || 0) % 7;
-        if (c.state === "working") bob = Math.sin(now * 5 + phase) * 2.2;
-        else if (c.state === "waiting_human") bob = Math.sin(now * 3 + phase) * 1.6;
-        else if (c.state === "reviewing") bob = Math.sin(now * 3.5 + phase) * 1.4;
-
-        ctx.font = EMOJI_FONT;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        if (c.state === "dizzy") {
-          ctx.save();
-          ctx.rotate((now * 3 + phase) % (Math.PI * 2));
-          ctx.fillText(roleEmoji(c.role), 0, 0);
-          ctx.restore();
+        const dx = m.tx - m.x;
+        const dy = m.ty - m.y;
+        const dist = Math.hypot(dx, dy);
+        const canWalk = c.state !== "dizzy";
+        if (canWalk && dist > 1.5) {
+          const step = Math.min(dist, WALK_SPEED * dt);
+          m.x += (dx / dist) * step;
+          m.y += (dy / dist) * step;
+          m.moving = true;
+          if (Math.abs(dx) > 0.5) m.faceLeft = dx < 0;
         } else {
-          ctx.fillText(roleEmoji(c.role), 0, bob);
+          if (m.moving) {
+            // Acaba de llegar → pausa antes del próximo destino.
+            m.moving = false;
+            m.pauseUntil = now + 0.4 + Math.random() * (c.zone === "door" ? 1.4 : 2.2);
+          } else if (now > m.pauseUntil) {
+            const area = roamRect(c, w);
+            if (area) {
+              const p = randInRect(area);
+              m.tx = p.x;
+              m.ty = p.y;
+            }
+          }
         }
 
-        // Badge de estado (esquina).
-        ctx.font = '15px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
-        ctx.fillText(STATE_BADGE[c.state], 15, bob - 12);
-        if (c.state === "idle") ctx.fillText("💤", 16, bob - 20);
+        // Sombra en el suelo (vende el "andar/saltar").
+        const walkBob = m.moving ? Math.abs(Math.sin(now * 9)) * 4 : 0;
+        const waddle = m.moving ? Math.sin(now * 9) * 0.12 : 0;
+        g.fillStyle = pal.shadow;
+        g.beginPath();
+        g.ellipse(m.x, m.y + 16, 12, 4, 0, 0, Math.PI * 2);
+        g.fill();
+
+        g.save();
+        g.translate(m.x, m.y - walkBob);
+        // Animación por estado sobre el cuerpo.
+        let idleBob = 0;
+        const phase = (c.key.charCodeAt(0) || 0) % 7;
+        if (!m.moving) {
+          if (c.state === "working") idleBob = Math.sin(now * 6 + phase) * 2.2;
+          else if (c.state === "waiting_human") idleBob = Math.sin(now * 3 + phase) * 1.6;
+        }
+        g.font = EMOJI_FONT;
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        if (c.state === "dizzy") {
+          g.save();
+          g.rotate((now * 3 + phase) % (Math.PI * 2));
+          g.fillText(roleEmoji(c.role), 0, 0);
+          g.restore();
+        } else {
+          g.save();
+          g.rotate(waddle);
+          g.fillText(roleEmoji(c.role), 0, idleBob);
+          g.restore();
+        }
+
+        // Badge de estado.
+        g.font = BADGE_FONT;
+        g.fillText(STATE_BADGE[c.state], 15, -12);
+        if (c.state === "idle" && !m.moving) g.fillText("💤", 16, -20);
 
         // Nombre.
-        ctx.font = NAME_FONT;
-        ctx.fillStyle = pal.name;
-        ctx.textBaseline = "top";
+        g.font = NAME_FONT;
+        g.fillStyle = pal.name;
+        g.textBaseline = "top";
         const nm = c.name.length > 16 ? `${c.name.slice(0, 16)}…` : c.name;
-        ctx.fillText(nm, 0, 20);
+        g.fillText(nm, 0, 20);
 
-        // Burbuja de diálogo (solo con texto y en estados "hablando").
+        // Burbuja de diálogo (estados "hablando", quieto o andando).
         if (
           c.bubble &&
           (c.state === "working" || c.state === "reviewing" || c.state === "waiting_human")
         ) {
-          drawBubble(ctx, c.bubble, pal);
+          drawBubble(g, c.bubble, pal);
         }
-        ctx.restore();
+        g.restore();
       }
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
 
-    // Hit-test compartido por click y hover.
     const pick = (ev: MouseEvent): Citizen | null => {
       const rect = canvas.getBoundingClientRect();
       const wx = (ev.clientX - rect.left) / scaleRef.current;
@@ -287,8 +363,10 @@ export function OfficeCanvas({
       let best: Citizen | null = null;
       let bestD = HIT_RADIUS * HIT_RADIUS;
       for (const c of worldRef.current.citizens) {
-        const p = posRef.current.get(c.key) ?? c;
-        const d = (p.x - wx) ** 2 + (p.y - wy) ** 2;
+        const m = moversRef.current.get(c.key);
+        const px = m?.x ?? c.x;
+        const py = m?.y ?? c.y;
+        const d = (px - wx) ** 2 + (py - wy) ** 2;
         if (d < bestD) {
           bestD = d;
           best = c;
@@ -329,7 +407,6 @@ export function OfficeCanvas({
 function drawBubble(ctx: CanvasRenderingContext2D, text: string, pal: Palette): void {
   ctx.font = BUBBLE_FONT;
   const maxW = 168;
-  // Envolver a un máximo de 2 líneas.
   const words = text.split(/\s+/);
   const lines: string[] = [];
   let cur = "";
@@ -354,14 +431,13 @@ function drawBubble(ctx: CanvasRenderingContext2D, text: string, pal: Palette): 
   const boxW = Math.min(maxW + 16, Math.max(...lines.map((l) => ctx.measureText(l).width)) + 16);
   const boxH = lines.length * lineH + 10;
   const bx = -boxW / 2;
-  const by = -22 - boxH;
+  const by = -24 - boxH;
   ctx.fillStyle = pal.bubbleFill;
   ctx.strokeStyle = pal.bubbleStroke;
   ctx.lineWidth = 1;
   roundRect(ctx, bx, by, boxW, boxH, 8);
   ctx.fill();
   ctx.stroke();
-  // Rabito.
   ctx.beginPath();
   ctx.moveTo(-5, by + boxH);
   ctx.lineTo(0, by + boxH + 6);

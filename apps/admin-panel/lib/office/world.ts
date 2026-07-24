@@ -67,6 +67,10 @@ export interface World {
   desks: Desk[];
   door: Rect;
   lounge: Rect;
+  /** Franja inferior abierta por la que DEAMBULAN los agentes libres (idle) —
+   * la "planta" de la oficina; el canvas los pasea aquí (movimiento continuo,
+   * estilo miniverse), no los aparca en una silla. */
+  commons: Rect;
   citizens: Citizen[];
 }
 
@@ -249,7 +253,8 @@ export function buildWorld(input: {
     });
   });
 
-  return { width: WORLD_W, height: WORLD_H, desks, door, lounge, citizens };
+  const commons: Rect = { x: 30, y: ZONE_Y, w: WORLD_W - 60, h: ZONE_H };
+  return { width: WORLD_W, height: WORLD_H, desks, door, lounge, commons, citizens };
 }
 
 const ROLE_EMOJI: Record<string, string> = {
