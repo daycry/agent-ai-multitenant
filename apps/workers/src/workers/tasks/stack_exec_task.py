@@ -176,6 +176,7 @@ async def _run_stack_command(  # noqa: PLR0911, PLR0915
             allowed = [str(c) for c in (project.allowed_commands or [])]
             runtime_id = project.default_runtime_template
             org_slug, project_slug = org.slug, project.slug
+            repo_cfg = dict(project.repository_config or {})
     finally:
         await engine.dispose()
 
@@ -184,8 +185,14 @@ async def _run_stack_command(  # noqa: PLR0911, PLR0915
         return {"exit_code": -1, "logs": deny, "timed_out": False, "allowed": sorted(allowed)}
 
     try:
+        import dataclasses
+
         import docker
         from workers.git_repos import BareRepoLayout
+        from workers.runtime_services import (
+            RuntimeServicesConfigError,
+            build_project_runtime_services,
+        )
         from workers.test_runtime import (
             RuntimePlan,
             TestRuntimeRunner,
@@ -200,6 +207,18 @@ async def _run_stack_command(  # noqa: PLR0911, PLR0915
         return {"exit_code": -1, "logs": "docker daemon unavailable", "timed_out": False}
 
     template = resolve_run_runtime(project_default_runtime=runtime_id, tool_default_runtime=None)
+    # ADR 0129: project-declared runtime services (sidecars + connection env) +
+    # optional custom runtime image. Invalid config → actionable error, not crash.
+    try:
+        services = build_project_runtime_services(repo_cfg)
+    except RuntimeServicesConfigError as exc:
+        return {
+            "exit_code": -1,
+            "logs": f"runtime services config invalid: {exc}",
+            "timed_out": False,
+        }
+    if services.runtime_image:
+        template = dataclasses.replace(template, docker_image=services.runtime_image)
     layout = BareRepoLayout(
         data_root=Path(settings.data_root), tenant_slug=org_slug, project_slug=project_slug
     )
@@ -227,6 +246,10 @@ async def _run_stack_command(  # noqa: PLR0911, PLR0915
         # ADR 0094: stack_exec IS the install (composer install / npm ci / …) —
         # it needs proxied egress to the registries for the whole command.
         dep_egress=True,
+        # ADR 0129: bring up the project's declared services on the task bridge
+        # and inject their connection env so the command sees the DB/cache/queue.
+        aux_services=services.aux_services,
+        main_env=services.main_env,
     )
     # Audit: a stack_exec launch with registry egress (prod-12 requirement).
     _log.info(

@@ -502,6 +502,11 @@ class TestRuntimeSpec:
     dep_cache_host_path: str | None = None
     # Aux services to bring up on the task's bridge.
     aux_services: tuple[AuxServiceSpec, ...] = ()
+    # Extra env injected into the MAIN container (ADR 0129): the connection vars
+    # (DATABASE_URL, REDIS_URL, …) derived from the project's declared services
+    # plus the project's own `env`. Merged AFTER the template/cache/egress env,
+    # so it can override those; never overrides HOME (set from the template).
+    main_env: Mapping[str, str] = field(default_factory=dict)
     # Opt-in DinD proxy. Disabled by default — projects with
     # testcontainers tests turn this on per-task.
     testcontainers: TestcontainersMode = field(default_factory=TestcontainersMode)
@@ -905,6 +910,13 @@ class TestRuntimeRunner:
             for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
                 env[key] = proxy_url
             env.update(_GIT_HTTPS_ENV)
+
+        # ADR 0129: project connection env (DATABASE_URL/REDIS_URL/…) + the
+        # project's own env, applied LAST so it wins — but never clobber HOME
+        # (the template owns it and the toolchain caches hang off it).
+        for k, v in spec.main_env.items():
+            if k != "HOME":
+                env[str(k)] = str(v)
 
         return {
             # Keep the container alive for exec_run via ENTRYPOINT, NOT a

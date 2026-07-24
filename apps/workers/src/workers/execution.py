@@ -868,11 +868,41 @@ async def _run_task_tests(
         return
     from workers.tasks import _run_test_runtime
 
+    # ADR 0129: thread the project's repository_config so the test-runtime brings
+    # up the declared services (+ connection env) for the acceptance checks.
+    # Best-effort: a lookup failure just runs the checks without services.
+    repository_config: dict[str, Any] | None = None
+    try:
+        from api_server.db.domain import Project, Task
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        engine = create_async_engine(settings.database_url)
+        try:
+            sm = async_sessionmaker(engine, expire_on_commit=False)
+            async with sm() as session:
+                proj_id = (
+                    await session.execute(select(Task.project_id).where(Task.id == task_id))
+                ).scalar_one_or_none()
+                if proj_id is not None:
+                    rc = (
+                        await session.execute(
+                            select(Project.repository_config).where(Project.id == proj_id)
+                        )
+                    ).scalar_one_or_none()
+                    if isinstance(rc, dict):
+                        repository_config = rc
+        finally:
+            await engine.dispose()
+    except Exception as exc:  # pragma: no cover - best-effort enrichment
+        _log.warning("workers.task_tests_repo_cfg_failed", task_id=str(task_id), error=str(exc))
+
     test_request = {
         "tenant_id": str(tenant_id),
         "task_id": str(task_id),
         "acceptance_criteria": autos,
         "worktree_host_path": worktree_host_path,
+        "repository_config": repository_config,
     }
     try:
         await _run_test_runtime(test_request, settings)

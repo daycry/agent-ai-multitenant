@@ -132,6 +132,10 @@ async def _launch_test_runtime_plans(
     is unreachable (the caller emits a stub fallback in that case).
     """
     try:
+        from workers.runtime_services import (
+            RuntimeServicesConfigError,
+            build_project_runtime_services,
+        )
         from workers.test_runtime import (
             TestRuntimeRunner,
             TestRuntimeSpec,
@@ -154,6 +158,16 @@ async def _launch_test_runtime_plans(
         # is responsible for surfacing the bad config to the user.
         return []
 
+    # ADR 0129: the project's declared services (+ connection env). The request
+    # carries `repository_config` when the orchestrator threads it; absent →
+    # empty (backward-compatible, no services).
+    try:
+        services = build_project_runtime_services(request.get("repository_config"))
+    except RuntimeServicesConfigError:
+        # A bad services config must not sink the whole test run — run without
+        # them (the checks that need a DB will fail visibly, which is truthful).
+        services = build_project_runtime_services(None)
+
     runner = TestRuntimeRunner(settings)
     outcomes: list[dict[str, Any]] = []
     for plan in plans:
@@ -165,6 +179,9 @@ async def _launch_test_runtime_plans(
             # registries; the runner drops the proxy before the check phase so
             # the tests themselves still run offline.
             dep_egress=True,
+            # ADR 0129: services on the bridge + connection env for the checks.
+            aux_services=services.aux_services,
+            main_env=services.main_env,
         )
         result = runner.launch(spec)
         outcomes.append(
