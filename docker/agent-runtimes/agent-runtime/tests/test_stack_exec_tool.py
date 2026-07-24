@@ -29,8 +29,12 @@ class _FakeApi:
         self._raise = raise_exc
         self.calls: list[dict[str, Any]] = []
 
-    def run_stack(self, *, task_id: str, command: str, timeout_s: int = 600) -> dict[str, Any]:
-        self.calls.append({"task_id": task_id, "command": command, "timeout_s": timeout_s})
+    def run_stack(
+        self, *, task_id: str, command: str, timeout_s: int = 600, cwd: str | None = None
+    ) -> dict[str, Any]:
+        self.calls.append(
+            {"task_id": task_id, "command": command, "timeout_s": timeout_s, "cwd": cwd}
+        )
         if self._raise is not None:
             raise self._raise
         return self._result
@@ -44,7 +48,9 @@ def test_stack_exec_forwards_command_and_maps_rc0_to_ok() -> None:
 
     assert result.ok is True
     assert result.output == {"exit_code": 0, "logs": "composer done", "timed_out": False}
-    assert api.calls == [{"task_id": "task-1", "command": "composer install", "timeout_s": 600}]
+    assert api.calls == [
+        {"task_id": "task-1", "command": "composer install", "timeout_s": 600, "cwd": None}
+    ]
 
 
 def test_stack_exec_maps_nonzero_rc_to_failure() -> None:

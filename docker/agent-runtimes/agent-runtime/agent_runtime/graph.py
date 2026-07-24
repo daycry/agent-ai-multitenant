@@ -163,7 +163,9 @@ _PROGRESS_FILES_MAX = 12
 _PROGRESS_DIGESTS_MAX = 12
 
 
-def _abort_or_escalate_status(has_produced: bool, *, is_review: bool = False) -> str:
+def _abort_or_escalate_status(
+    has_produced: bool, *, is_review: bool = False, has_deliverable: bool = False
+) -> str:
     """The terminal status for a budget/loop trip, gated by whether work exists.
 
     ADR 0087 (B2/B3): a run that has ALREADY produced a deliverable must not be
@@ -175,25 +177,41 @@ def _abort_or_escalate_status(has_produced: bool, *, is_review: bool = False) ->
     ADR 0095: a REVIEW run is sterile by design (it produces a verdict, not a
     file), so a safeguard trip there ESCALATES to a human (the worker converges
     the task) instead of a silent hard abort that parks it in ``in_review``.
+
+    ADR 0130-fix (run 019f9323): ``has_produced`` only latches on a producing TOOL
+    (write_file/shell_exec/…). A REVIEW/ANALYSIS task's deliverable is the PROSE
+    report it submits via ``submit_result`` — it writes no files, so ``has_produced``
+    is structurally False and such a run was wrongly HARD-ABORTED (→ blocked) on a
+    safeguard trip. ``has_deliverable`` (latched in :meth:`finalize` when the agent
+    finished with a real result) fixes that: a produced prose deliverable escalates
+    to a human, same as a file deliverable.
     """
-    if is_review or has_produced:
+    if is_review or has_produced or has_deliverable:
         return STATUS_NEEDS_HUMAN_REVIEW
     return STATUS_ABORTED
 
 
-def _loop_trip_outcome(
-    *, review_retries: int, last_review_feedback: str, tool: str
+def _trip_outcome(
+    *,
+    review_retries: int,
+    last_review_feedback: str,
+    fallback_code: str,
+    fallback_summary: str,
 ) -> tuple[str, str, str | None]:
-    """Decide ``(abort_code, step_summary, output_override)`` for a mutating-tool
-    repetitive-loop trip.
+    """Decide ``(abort_code, step_summary, output_override)`` for a safeguard trip.
 
-    When the loop trips INSIDE a self-review retry cycle (``review_retries > 0``)
-    the identical re-writes are the SYMPTOM; the CAUSE is a self-review that keeps
-    rejecting the same output — usually a contradictory/unsatisfiable acceptance
-    spec. In that case we return the legible ``SELF_REVIEW_STALEMATE`` code and put
-    the reviewer's persistent feedback in the escalation ``output`` so the operator
-    sees WHY, instead of the opaque ``repetitive_loop_detected``. Outside a review
-    cycle it stays the historical repetitive-loop abort (unchanged contract)."""
+    When a trip fires INSIDE a self-review retry cycle (``review_retries > 0``) the
+    repeated action (identical re-writes, or sterile re-reads) is the SYMPTOM; the
+    CAUSE is a self-review that keeps rejecting the same output — usually a
+    contradictory/unsatisfiable acceptance spec. In that case we return the legible
+    ``SELF_REVIEW_STALEMATE`` code and put the reviewer's persistent feedback in the
+    escalation ``output`` so the operator sees WHY, instead of the opaque
+    per-safeguard code. Outside a review cycle it stays the caller's fallback
+    (``fallback_code``/``fallback_summary``) — unchanged contract.
+
+    ADR 0130-fix: shared by BOTH the repetitive-loop trip (:func:`_loop_trip_outcome`)
+    and the ``research_exhausted`` trip, so a self-review stalemate reads the same
+    whether the agent churned writes or reads."""
     feedback = (last_review_feedback or "").strip()
     if review_retries > 0:
         plural = "y" if review_retries == 1 else "ies"
@@ -205,17 +223,27 @@ def _loop_trip_outcome(
         # this output also re-enters later runs' prompts as the prior output.
         output = (
             "Escalated to human validation: the self-review repeatedly rejected the "
-            "implementation for the same reason, so the task's acceptance criteria "
+            "output for the same reason, so the task's acceptance criteria "
             "may be contradictory or unsatisfiable. "
             f"Reviewer feedback: {feedback}"
             if feedback
             else None
         )
         return str(SafeguardCode.SELF_REVIEW_STALEMATE), summary, output
-    return (
-        str(SafeguardCode.REPETITIVE_LOOP),
-        f"Repetitive loop detected on tool '{tool}'",
-        None,
+    return (fallback_code, fallback_summary, None)
+
+
+def _loop_trip_outcome(
+    *, review_retries: int, last_review_feedback: str, tool: str
+) -> tuple[str, str, str | None]:
+    """``(abort_code, step_summary, output_override)`` for a mutating-tool
+    repetitive-loop trip — a thin wrapper over :func:`_trip_outcome` with the
+    historical repetitive-loop fallback (unchanged contract)."""
+    return _trip_outcome(
+        review_retries=review_retries,
+        last_review_feedback=last_review_feedback,
+        fallback_code=str(SafeguardCode.REPETITIVE_LOOP),
+        fallback_summary=f"Repetitive loop detected on tool '{tool}'",
     )
 
 
@@ -374,6 +402,12 @@ class _AgentLoop:
         # Whether a producing tool (write_file/…) has run — flips the nudge from
         # "write the deliverable" to "you're done, FINISH" (avoids over-verification).
         self.has_produced = False
+        # ADR 0130-fix: whether the agent FINISHED with a real deliverable (a
+        # successful ``submit_result`` / non-empty final output), latched in
+        # ``finalize``. A REVIEW/ANALYSIS task writes no files (``has_produced``
+        # stays False) but its prose report IS a deliverable — so a later safeguard
+        # trip ESCALATES to a human instead of hard-aborting the task to ``blocked``.
+        self.has_deliverable = False
         # ADR 0087 (Option 1): path → latest content the agent wrote, harvested from
         # producing tool-call args. Fed to the self-review so it judges the ACTUAL
         # code (not the unverifiable prose summary). Empty for analysis/design runs.
@@ -488,7 +522,9 @@ class _AgentLoop:
             # the loop trip so a run that already produced work ESCALATES (preserving
             # the deliverable) instead of being discarded as a hard abort.
             self._count_safeguard(f"trip:{SafeguardCode.MAX_ITERATIONS}")
-            status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
+            status = _abort_or_escalate_status(
+                self.has_produced, is_review=self.is_review, has_deliverable=self.has_deliverable
+            )
             steps.append(
                 node_step(
                     base,
@@ -510,7 +546,9 @@ class _AgentLoop:
             # B3: same gating for the cumulative budgets (tool calls / wall clock /
             # tokens / cost) — preserve produced work, abort a sterile run.
             self._count_safeguard(f"trip:{tripped}")
-            status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
+            status = _abort_or_escalate_status(
+                self.has_produced, is_review=self.is_review, has_deliverable=self.has_deliverable
+            )
             steps.append(
                 node_step(
                     base,
@@ -543,28 +581,50 @@ class _AgentLoop:
             is_review=self.is_review,
         ):
             self._count_safeguard(f"trip:{SafeguardCode.RESEARCH_EXHAUSTED}")
-            status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
+            # ADR 0130-fix: `_research_exhausted` is eligible ONLY when the run has
+            # something worth preserving (produced / a prior self-review failed /
+            # is_review), so a trip here is never a sterile abort. When it fires
+            # DURING a self-review retry cycle the sterile re-reads are the SYMPTOM
+            # of a self-review stalemate (contradictory/unsatisfiable criteria) →
+            # report it legibly with the reviewer feedback (Fix B). Either way a
+            # produced deliverable escalates to a human, never hard-blocks (Fix A).
+            abort_code, summary, output_override = _trip_outcome(
+                review_retries=state["review_retries"],
+                last_review_feedback=state.get("last_review_feedback") or "",
+                fallback_code=str(SafeguardCode.RESEARCH_EXHAUSTED),
+                fallback_summary=f"Safeguard tripped: {SafeguardCode.RESEARCH_EXHAUSTED}",
+            )
+            status = _abort_or_escalate_status(
+                self.has_produced,
+                is_review=self.is_review,
+                has_deliverable=self.has_deliverable or state["review_retries"] > 0,
+            )
             steps.append(
                 node_step(
                     base + len(steps),
                     "plan",
-                    f"Safeguard tripped: {SafeguardCode.RESEARCH_EXHAUSTED}",
+                    summary,
                     status="aborted" if status == STATUS_ABORTED else status,
                 )
             )
-            return {
+            trip_result: dict[str, Any] = {
                 "status": status,
-                "abort_code": str(SafeguardCode.RESEARCH_EXHAUSTED),
+                "abort_code": abort_code,
                 "iteration": self.tracker.usage.iterations,
                 "steps": steps,
             }
+            if output_override and status != STATUS_ABORTED:
+                trip_result["output"] = output_override
+            return trip_result
 
         # AUD16-20: una cascada de fallos de TRANSPORTE de stack_exec es infra
         # rota — cortar aquí en vez de quemar el presupuesto (el 07-02 un 502
         # en cascada del docker-socket-proxy consumió las 50 iteraciones).
         if self._stack_exec_transport_streak >= _STACK_EXEC_TRANSPORT_TRIP:
             self._count_safeguard(f"trip:{SafeguardCode.STACK_EXEC_UNAVAILABLE}")
-            status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
+            status = _abort_or_escalate_status(
+                self.has_produced, is_review=self.is_review, has_deliverable=self.has_deliverable
+            )
             steps.append(
                 node_step(
                     base + len(steps),
@@ -669,7 +729,11 @@ class _AgentLoop:
                 # DURING a self-review retry cycle, report the legible
                 # SELF_REVIEW_STALEMATE + reviewer feedback instead of the opaque
                 # repetitive-loop code (systemic fix 2026-07-01).
-                status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
+                status = _abort_or_escalate_status(
+                    self.has_produced,
+                    is_review=self.is_review,
+                    has_deliverable=self.has_deliverable,
+                )
                 abort_code, summary, output_override = _loop_trip_outcome(
                     review_retries=state["review_retries"],
                     last_review_feedback=str(state.get("last_review_feedback") or ""),
@@ -753,7 +817,9 @@ class _AgentLoop:
         if self._assess_stuck_streak < _ASSESS_STUCK_TRIP:
             return None
         self._count_safeguard("trip:reflection_stalled")
-        trip_status = _abort_or_escalate_status(self.has_produced, is_review=self.is_review)
+        trip_status = _abort_or_escalate_status(
+            self.has_produced, is_review=self.is_review, has_deliverable=self.has_deliverable
+        )
         steps.append(
             node_step(
                 base + len(steps),
@@ -1344,7 +1410,17 @@ class _AgentLoop:
             step["safeguard_stats"] = stats
             return {"output": output, "steps": [step]}
         decision = state["last_decision"] or {}
-        output = decision.get("output") or "(no output produced)"
+        raw_output = decision.get("output")
+        output = raw_output or "(no output produced)"
+        # ADR 0130-fix: latch that a REAL deliverable was produced this run — either
+        # the agent finished via submit_result (finish_status set) or it wrote a
+        # non-empty final answer (analysis/review runs). This makes a LATER safeguard
+        # trip (on a self-review retry) escalate to a human instead of hard-aborting
+        # a task whose deliverable is prose, not files (has_produced stays False).
+        if decision.get("finish_status") in ("success", "partial") or (
+            isinstance(raw_output, str) and raw_output.strip()
+        ):
+            self.has_deliverable = True
         step = node_step(base, "finalize", "Finalized output")
         step["safeguard_stats"] = stats
         return {"output": output, "steps": [step]}
