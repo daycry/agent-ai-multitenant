@@ -13,6 +13,7 @@ import {
   type OfficeAgent,
   type OfficeRun,
 } from "@/lib/office/miniverse-bridge";
+import { useRunStepBubbles } from "@/lib/office/use-run-step-bubbles";
 import { apiFetch } from "@/lib/api";
 
 /**
@@ -51,10 +52,25 @@ export default function OfficePage() {
     [running, escalated, catalog],
   );
 
+  // v2 (ADR 0118): burbujas con el ÚLTIMO PASO real en vivo. Un WS por run activo
+  // (con agente) trae su step-summary; enriquece la "tarea" del ciudadano → el
+  // motor la pinta en la burbuja. Sin summary aún, cae al task_title del run.
+  const runIds = useMemo(() => running.filter((r) => r.agent_id).map((r) => r.id), [running]);
+  const liveSummaries = useRunStepBubbles(runIds);
+  const enriched = useMemo(
+    () =>
+      statuses.map((s) => {
+        const runId = runByAgent[s.id];
+        const live = runId ? liveSummaries[runId] : undefined;
+        return live ? { ...s, task: live } : s;
+      }),
+    [statuses, runByAgent, liveSummaries],
+  );
+
   // Refs para que el motor lea SIEMPRE el último snapshot sin re-montarse.
-  const statusesRef = useRef<AgentStatus[]>(statuses);
+  const statusesRef = useRef<AgentStatus[]>(enriched);
   const runByAgentRef = useRef<Record<string, string>>(runByAgent);
-  statusesRef.current = statuses;
+  statusesRef.current = enriched;
   runByAgentRef.current = runByAgent;
 
   const getStatuses = useCallback(() => statusesRef.current, []);
