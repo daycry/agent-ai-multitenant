@@ -93,6 +93,32 @@ _FILE_TOOLS = ("read-file", "write-file", "delete-file", "list-files")
 _BASE_TOOLS = ("shell-exec", "stack-exec", *_FILE_TOOLS, "semantic-search")
 
 
+# Guía de higiene de stack compartida por TODOS los agentes CI4 (fix 2026-07-24).
+# El proyecto debe vivir en la RAÍZ del worktree; si por lo que sea queda en un
+# subdirectorio, la toolchain se corre con `stack_exec(cwd=...)` — nunca con `cd`
+# ni encadenando (stack_exec ejecuta UN programa por llamada). Sin esto, un
+# proyecto anidado (visto en vivo con `ci4build/`, plan 019f8e47) hacía que
+# `vendor/bin/phpunit` diera 127 desde la raíz y el agente girara sin converger.
+_CI4_STACK_HYGIENE_ES = (
+    "\n\nESTRUCTURA Y TOOLCHAIN (obligatorio): mantén el proyecto CodeIgniter 4 en la RAÍZ del "
+    "workspace (donde ya está el repo); NO lo anides en un subdirectorio. Ejecuta la toolchain "
+    "(composer, vendor/bin/phpunit, php spark) con `stack_exec` desde esa raíz. Si el proyecto "
+    'YA está en un subdirectorio, pásalo como `cwd` a `stack_exec` (p.ej. cwd="ci4build") — '
+    "NUNCA uses `cd` ni encadenes comandos con `&&`/`;`/`|` (stack_exec corre un solo programa "
+    "por llamada). Si `vendor/bin/phpunit` da 'not found', es que estás en el directorio "
+    "equivocado: corrige el `cwd`, no cambies de comando a ciegas."
+)
+_CI4_STACK_HYGIENE_EN = (
+    "\n\nLAYOUT & TOOLCHAIN (required): keep the CodeIgniter 4 project at the ROOT of the "
+    "workspace (where the repo already is); do NOT nest it in a subdirectory. Run the toolchain "
+    "(composer, vendor/bin/phpunit, php spark) via `stack_exec` from that root. If the project "
+    'IS already in a subdirectory, pass it as `cwd` to `stack_exec` (e.g. cwd="ci4build") — '
+    "NEVER use `cd` or chain commands with `&&`/`;`/`|` (stack_exec runs one program per call). "
+    "If `vendor/bin/phpunit` reports 'not found', you are in the wrong directory: fix `cwd`, "
+    "don't blindly switch commands."
+)
+
+
 @dataclass(frozen=True)
 class CI4Agent:
     """Un agente built-in del equipo CodeIgniter 4.
@@ -133,8 +159,8 @@ class CI4Agent:
         """
         return {
             "system_prompts": {
-                "es": self.system_prompt_es,
-                "en": self.system_prompt_en,
+                "es": self.system_prompt_es + _CI4_STACK_HYGIENE_ES,
+                "en": self.system_prompt_en + _CI4_STACK_HYGIENE_EN,
             }
         }
 

@@ -134,7 +134,7 @@ def run_stack_command(request: dict[str, Any]) -> dict[str, Any]:
 
 # justified: guard-clause style — each early return is a distinct, named
 # failure mode with an actionable message for the agent (F0.3).
-async def _run_stack_command(  # noqa: PLR0911
+async def _run_stack_command(  # noqa: PLR0911, PLR0915
     request: dict[str, Any], settings: Settings
 ) -> dict[str, Any]:
     """Async core: resolve task→project (slug/runtime/allowlist) + the existing
@@ -150,6 +150,11 @@ async def _run_stack_command(  # noqa: PLR0911
     task_id = UUID(str(request["task_id"]))
     command = str(request.get("command") or "")
     timeout_s = int(request.get("timeout_s") or _STACK_EXEC_DEFAULT_TIMEOUT_S)
+    # Optional working directory (ADR 0093, 2026-07-24): a path relative to the
+    # worktree root so a project scaffolded under a subdir (e.g. ``ci4build/``)
+    # runs its toolchain there. Validated in ``_apply_cwd`` (test_runtime).
+    cwd_raw = request.get("cwd")
+    cwd = str(cwd_raw) if cwd_raw not in (None, "") else None
 
     engine = create_async_engine(settings.database_url)
     try:
@@ -233,7 +238,12 @@ async def _run_stack_command(  # noqa: PLR0911
     )
     runner = TestRuntimeRunner(settings)
     try:
-        rc, logs = await asyncio.to_thread(runner.run_command, spec, command, timeout_s=timeout_s)
+        rc, logs = await asyncio.to_thread(
+            runner.run_command, spec, command, timeout_s=timeout_s, cwd=cwd
+        )
+    except ValueError as exc:
+        # Invalid cwd (escape / unsafe chars) — actionable, not a crash.
+        return {"exit_code": -1, "logs": f"stack_exec: {exc}", "timed_out": False}
     except docker.errors.APIError as exc:
         # F0.3: un fallo del daemon al crear/lanzar el runtime NO debe matar la
         # task Celery (el agente veía un 502 «failed to reach the worker» cuando

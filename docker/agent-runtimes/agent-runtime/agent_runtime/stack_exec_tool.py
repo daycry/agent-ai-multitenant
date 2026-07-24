@@ -38,8 +38,15 @@ class StackExecTool:
             timeout_s = int(raw_timeout) if raw_timeout is not None else self.default_timeout_s
         except (TypeError, ValueError):
             return ToolResult(ok=False, error="'timeout_s' must be an integer")
+        # ADR 0093 (2026-07-24): optional working dir relative to the worktree
+        # root — for a project scaffolded under a subdir (e.g. "ci4build") so the
+        # toolchain runs there. Validated worker-side (no absolute / no `..`).
+        raw_cwd = args.get("cwd")
+        cwd = raw_cwd.strip() if isinstance(raw_cwd, str) and raw_cwd.strip() else None
         try:
-            result = self.api.run_stack(task_id=self.task_id, command=command, timeout_s=timeout_s)
+            result = self.api.run_stack(
+                task_id=self.task_id, command=command, timeout_s=timeout_s, cwd=cwd
+            )
         except InternalAPIError as exc:
             return ToolResult(ok=False, error=f"stack_exec failed to reach the worker: {exc}")
         exit_code = int(result.get("exit_code", -1))

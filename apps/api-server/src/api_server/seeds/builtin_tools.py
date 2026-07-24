@@ -438,7 +438,11 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         "the stack's runtime-template, on the task's worktree. The worker launches it (the "
         "sandbox has neither Docker nor the toolchain). Restricted to the project's allowlist "
         "(deny-by-default). Use it to install dependencies and run the stack's tests/build; "
-        "shell_exec CANNOT (it runs in the thin sandbox, which lacks the toolchain).",
+        "shell_exec CANNOT (it runs in the thin sandbox, which lacks the toolchain). The "
+        "command runs from the worktree ROOT by default; if the project lives in a "
+        "SUBDIRECTORY (e.g. it was scaffolded under 'ci4build/'), pass 'cwd' so the toolchain "
+        "bootstraps with the right relative paths — do NOT use 'cd' or shell chaining "
+        "(unsupported: one program per call).",
         "command",
         "builtin",
         "privileged",
@@ -451,6 +455,15 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
                         "Full command to run in the stack runtime; its first token must be "
                         "in the project's allowlist. E.g. 'composer install', "
                         "'vendor/bin/phpunit' or 'php spark migrate'."
+                    ),
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": (
+                        "Optional working directory RELATIVE to the worktree root (e.g. "
+                        "'ci4build'). Use it when the project is in a subdirectory so commands "
+                        "like 'vendor/bin/phpunit' resolve. Must stay inside the worktree (no "
+                        "absolute path, no '..'). Omit when the project is at the worktree root."
                     ),
                 },
                 "timeout_s": {

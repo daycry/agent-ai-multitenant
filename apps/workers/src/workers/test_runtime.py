@@ -614,7 +614,12 @@ class TestRuntimeRunner:
             )
 
     def run_command(
-        self, spec: TestRuntimeSpec, command: str, *, timeout_s: int = DEFAULT_TIMEOUT_S
+        self,
+        spec: TestRuntimeSpec,
+        command: str,
+        *,
+        timeout_s: int = DEFAULT_TIMEOUT_S,
+        cwd: str | None = None,
     ) -> tuple[int, str]:
         """Run ONE ad-hoc command in the stack runtime (ADR 0093 / ``stack_exec``).
 
@@ -642,8 +647,11 @@ class TestRuntimeRunner:
                 registry_proxy = self._attach_registry_proxy(network)
             main_container = self._start_main(spec, network.name, egress=registry_proxy is not None)
             # stack_exec: egress stays attached for the whole command — the
-            # command IS the install (ADR 0094 D2).
-            return self._exec(main_container, command, timeout_s=timeout_s)
+            # command IS the install (ADR 0094 D2). ``cwd`` (ADR 0093, 2026-07-24)
+            # runs the command in a SUBDIRECTORY of the worktree (e.g. a project
+            # scaffolded under ``ci4build/``) so the toolchain bootstraps with the
+            # right relative paths.
+            return self._exec(main_container, command, timeout_s=timeout_s, cwd=cwd)
         finally:
             self._cleanup(
                 main_container,
@@ -924,15 +932,24 @@ class TestRuntimeRunner:
             "labels": {**_TEST_LABELS, "com.agentic-platform.runtime": template.id},
         }
 
-    def _exec(self, container: Any, command: str, *, timeout_s: int) -> tuple[int, str]:
+    def _exec(
+        self, container: Any, command: str, *, timeout_s: int, cwd: str | None = None
+    ) -> tuple[int, str]:
         """Run one shell command inside the container, return rc + logs.
 
         We use ``exec_run`` rather than spawning a fresh container per
         check so the pre_install cost is amortised over all checks of
         the same runtime. ``timeout_s`` is not honored by ``exec_run``
         directly — we wrap the command in ``timeout`` so the test
-        cannot wedge indefinitely."""
-        wrapped = f"timeout {timeout_s} sh -c {_shell_quote(command)}"
+        cannot wedge indefinitely.
+
+        ``cwd`` (optional, ADR 0093) runs the command from a subdirectory of the
+        worktree (``cd <cwd> && …`` relative to the container's ``/workspace``
+        WORKDIR). Validated to stay INSIDE the worktree (no absolute path, no
+        ``..`` traversal) — a project scaffolded under e.g. ``ci4build/`` runs
+        its toolchain there instead of failing from the worktree root."""
+        effective = _apply_cwd(command, cwd)
+        wrapped = f"timeout {timeout_s} sh -c {_shell_quote(effective)}"
         result = container.exec_run(["sh", "-c", wrapped], demux=False)
         rc = getattr(result, "exit_code", 0) or 0
         out_bytes: bytes = getattr(result, "output", b"") or b""
@@ -965,6 +982,32 @@ class TestRuntimeRunner:
 def _shell_quote(command: str) -> str:
     """Single-quote a command for safe embedding inside ``sh -c``."""
     return "'" + command.replace("'", "'\"'\"'") + "'"
+
+
+class InvalidCwdError(ValueError):
+    """Raised when a ``stack_exec`` ``cwd`` would escape the worktree or carries
+    unsafe characters."""
+
+
+def _apply_cwd(command: str, cwd: str | None) -> str:
+    """Prefix ``command`` with ``cd <cwd> &&`` when a working directory is given.
+
+    ``cwd`` is a path RELATIVE to the worktree root (the container's
+    ``/workspace``). It is validated to stay inside the worktree: leading/
+    trailing slashes are trimmed (an absolute path becomes relative), and any
+    ``..``/empty/``.`` segment or non-``[A-Za-z0-9._/-]`` character is rejected —
+    the value is concatenated into the ``sh -c`` command, so this guards both
+    directory traversal and shell breakout. ``None``/empty → command unchanged
+    (runs from the worktree root, the pre-existing behaviour)."""
+    if not cwd or not cwd.strip():
+        return command
+    clean = cwd.strip().strip("/")
+    parts = clean.split("/")
+    if not clean or any(p in ("", ".", "..") for p in parts):
+        raise InvalidCwdError(f"cwd must be a relative path inside the worktree, got {cwd!r}")
+    if not all(c.isalnum() or c in "._-/" for c in clean):
+        raise InvalidCwdError(f"cwd has unsafe characters: {cwd!r}")
+    return f"cd {clean} && {command}"
 
 
 __all__ = [

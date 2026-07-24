@@ -146,7 +146,7 @@ async def enqueue_clone_project_repo(project_id: UUID) -> bool:
 
 
 async def run_stack_command_and_wait(
-    *, tenant_id: UUID, task_id: UUID, command: str, timeout_s: int
+    *, tenant_id: UUID, task_id: UUID, command: str, timeout_s: int, cwd: str | None = None
 ) -> dict[str, Any]:
     """Enqueue ``workers.run_stack_command`` and BLOCK for its result (ADR 0093).
 
@@ -162,6 +162,8 @@ async def run_stack_command_and_wait(
         "task_id": str(task_id),
         "command": command,
         "timeout_s": int(timeout_s),
+        # ADR 0093 (2026-07-24): optional working dir relative to the worktree.
+        "cwd": cwd,
     }
 
     def _send_and_wait() -> dict[str, Any]:

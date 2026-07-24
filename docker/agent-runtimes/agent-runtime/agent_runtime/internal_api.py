@@ -218,7 +218,9 @@ class InternalAgentAPI:
         hits: list[dict[str, Any]] = payload.get("hits") or []
         return hits
 
-    def run_stack(self, *, task_id: str, command: str, timeout_s: int = 600) -> dict[str, Any]:
+    def run_stack(
+        self, *, task_id: str, command: str, timeout_s: int = 600, cwd: str | None = None
+    ) -> dict[str, Any]:
         """Run a stack command (``composer install`` / ``vendor/bin/phpunit`` /
         ``php spark``) in the project's runtime template via the worker (ADR 0093).
 
@@ -231,9 +233,16 @@ class InternalAgentAPI:
         un ``ReadTimeout`` opaco en vez del 502 estructurado con causa que emite
         el api-server cuando es ÉL quien agota la espera (plan
         guardas-research-por-novedad D2, run 019f252e)."""
+        payload: dict[str, Any] = {
+            "task_id": task_id,
+            "command": command,
+            "timeout_s": int(timeout_s),
+        }
+        if cwd:
+            payload["cwd"] = cwd
         return self._post(
             "/internal/agent/run-stack",
-            {"task_id": task_id, "command": command, "timeout_s": int(timeout_s)},
+            payload,
             timeout=float(timeout_s) + 180.0,
         )
 

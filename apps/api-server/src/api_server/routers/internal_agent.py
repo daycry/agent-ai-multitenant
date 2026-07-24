@@ -85,6 +85,10 @@ class RunStackRequest(BaseModel):
     task_id: UUID
     command: str = Field(min_length=1, max_length=4000)
     timeout_s: int = Field(default=600, ge=1, le=3600)
+    # ADR 0093 (2026-07-24): optional working directory relative to the worktree
+    # root (e.g. "ci4build") so a project scaffolded under a subdir runs its
+    # toolchain there. Validated worker-side (no absolute path / no `..`).
+    cwd: str | None = Field(default=None, max_length=512)
 
 
 class RunStackResponse(BaseModel):
@@ -118,6 +122,7 @@ async def run_stack(
             task_id=payload.task_id,
             command=payload.command,
             timeout_s=payload.timeout_s,
+            cwd=payload.cwd,
         )
     except Exception as exc:  # broker / result-backend failure or worker timeout
         raise HTTPException(
