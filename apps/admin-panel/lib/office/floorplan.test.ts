@@ -5,7 +5,25 @@
 
 import { describe, expect, it } from "vitest";
 
-import { buildFloorplan, COLS, MAX_DESKS, ROWS } from "@/lib/office/floorplan";
+import {
+  buildFloorplan,
+  COLS,
+  DESKS_WITH_LOUNGE,
+  MAX_DESKS,
+  ROWS,
+  type Floorplan,
+} from "@/lib/office/floorplan";
+
+/** Tiles ocupados por props — misma cuenta que `PropSystem.getBlockedTiles`. */
+function blockedTiles(fp: Floorplan): Set<string> {
+  const blocked = new Set<string>();
+  for (const p of fp.props) {
+    for (let y = Math.floor(p.y); y < Math.ceil(p.y + p.h); y += 1) {
+      for (let x = Math.floor(p.x); x < Math.ceil(p.x + p.w); x += 1) blocked.add(`${x},${y}`);
+    }
+  }
+  return blocked;
+}
 
 describe("buildFloorplan", () => {
   it("da una mesa por agente (bandas completas de 5) hasta el máximo", () => {
@@ -62,5 +80,52 @@ describe("buildFloorplan", () => {
 
   it("es determinista (misma planta entre renders)", () => {
     expect(buildFloorplan(10)).toEqual(buildFloorplan(10));
+  });
+
+  // --- Zonificación (2026-07-25: "que no se vea todo cargado de mesas") -----
+  it("con la plantilla habitual hay zona de café, descanso y biblioteca abajo", () => {
+    const fp = buildFloorplan(DESKS_WITH_LOUNGE);
+    const ids = new Set(fp.props.map((p) => p.id));
+    expect(ids.has("coffee_bar_counter")).toBe(true); // rincón del café
+    expect(ids.has("coffee_machine")).toBe(true);
+    expect(ids.has("area_rug_lounge")).toBe(true); // zona de descanso
+    expect(ids.has("couch")).toBe(true);
+    expect(ids.has("bookshelf_packed")).toBe(true); // biblioteca
+    expect(ids.has("wooden_framed_whiteboard")).toBe(true);
+    // …y esa zona vive en la franja INFERIOR, no entre las mesas.
+    for (const id of ["coffee_bar_counter", "area_rug_lounge", "bookshelf_packed"]) {
+      const p = fp.props.find((q) => q.id === id)!;
+      expect(p.y).toBeGreaterThanOrEqual(9);
+    }
+  });
+
+  it("los anchors que usa el motor caen en tiles LIBRES (mesa, cafetera, pizarra)", () => {
+    for (const cap of [10, 15]) {
+      const fp = buildFloorplan(cap);
+      const blocked = blockedTiles(fp);
+      // anchor `work` de cada mesa: (x+0.5, y+h) → tile (x, y+h)
+      for (const d of fp.props.filter((p) => p.id === "wooden_desk_single")) {
+        expect(blocked.has(`${d.x},${d.y + d.h}`)).toBe(false);
+      }
+      // anchor `utility` de la cafetera: (x+0.5, y+1.8)
+      const machine = fp.props.find((p) => p.id === "coffee_machine")!;
+      const utilTile = `${Math.floor(machine.x + 0.5)},${Math.floor(machine.y + 1.8)}`;
+      expect(blocked.has(utilTile)).toBe(false);
+      // anchor `social` de la pizarra: (x+1, y+1.5) — solo cuando hay pizarra
+      const board = fp.props.find((p) => p.id === "wooden_framed_whiteboard");
+      if (board) {
+        const socialTile = `${Math.floor(board.x + 1)},${Math.floor(board.y + 1.5)}`;
+        expect(blocked.has(socialTile)).toBe(false);
+      }
+    }
+  });
+
+  it("deja un pasillo alto libre (fila 2) para circular y acercarse a la pizarra", () => {
+    const fp = buildFloorplan(10);
+    const blocked = blockedTiles(fp);
+    const freeInRow2 = Array.from({ length: COLS }, (_, x) => `${x},2`).filter(
+      (t) => !blocked.has(t),
+    );
+    expect(freeInRow2.length).toBe(COLS);
   });
 });

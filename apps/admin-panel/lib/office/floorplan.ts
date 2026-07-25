@@ -56,14 +56,26 @@ const FLOOR_TOP = 2;
 const DESK_W = 3;
 const DESK_H = 2;
 const BAND_XS = [0, 3, 6, 9, 12];
-const BAND_YS = [2, 5, 8];
+// Zonificación del piso (2026-07-25, petición del operador: "que no se vea todo
+// cargado de mesas"): fila 2 = pasillo alto (deja alcanzable el anchor social de
+// la pizarra), filas 3-8 = puestos de trabajo (2 bandas), filas 9-11 = zona común
+// (café + descanso + biblioteca). Con más de 10 agentes entra una 3ª banda de
+// mesas y la zona común se reduce al rincón de la derecha.
+const BAND_YS = [3, 6, 9];
+const AMENITY_TOP = 9;
 export const MAX_DESKS = BAND_XS.length * BAND_YS.length; // 15
+/** Puestos que caben SIN sacrificar la zona común de abajo. */
+export const DESKS_WITH_LOUNGE = BAND_XS.length * 2; // 10
 
 const PROP_IMAGES: Record<string, string> = {
   wooden_desk_single: "world_assets/props/prop_0_wooden_desk_single.png",
   ergonomic_chair: "world_assets/props/prop_1_ergonomic_chair.png",
   tall_potted_plant: "world_assets/props/prop_2_tall_potted_plant.png",
   bookshelf_packed: "world_assets/props/prop_3_bookshelf_packed.png",
+  coffee_bar_counter: "world_assets/props/prop_4_coffee_bar_counter.png",
+  mini_fridge: "world_assets/props/prop_6_mini_fridge.png",
+  bean_bag_chair_light: "world_assets/props/prop_8_bean_bag_chair_light.png",
+  wooden_framed_whiteboard: "world_assets/props/prop_11_wooden_framed_whiteboard.png",
   // ids LÓGICOS elegidos para que el motor derive su anchor por palabra clave:
   coffee_machine: "world_assets/props/prop_5_espresso_machine.png", // → utility
   couch: "world_assets/props/prop_7_bean_bag_chair_dark.png", // → rest
@@ -95,12 +107,15 @@ export function buildFloorplan(capacity: number): Floorplan {
   const props: FloorplanProp[] = [];
   const workAnchorTiles = new Set<string>();
 
-  // Ventanas en la pared (decorativas, sin anchors) — dan profundidad al piso.
-  for (const x of [1.25, 6.5, 11.75]) {
+  // --- Pared: ventanas + pizarra ------------------------------------------
+  // Las ventanas dan profundidad; la pizarra aporta un anchor `social` cuyo tile
+  // (x+1, 2) cae en el PASILLO ALTO libre, así los ociosos se acercan a ella.
+  for (const x of [0.75, 6.5, 12.25]) {
     props.push({ id: "large_window", x, y: 0, w: 3, h: 2, layer: "below" });
   }
+  props.push({ id: "wooden_framed_whiteboard", x: 4, y: 0.5, w: 2, h: 1, layer: "below" });
 
-  // Puestos de trabajo: mesa + silla, en bandas.
+  // --- Zona de puestos de trabajo (filas 3-8, y 9 si hay 3ª banda) ---------
   let deskCount = 0;
   for (const y of BAND_YS.slice(0, bands)) {
     for (const x of BAND_XS) {
@@ -111,24 +126,52 @@ export function buildFloorplan(capacity: number): Floorplan {
     }
   }
 
-  // Columna libre de la derecha: cafetera (anchor `utility`, donde va el
-  // revisor "pensando") + una planta. Nunca pisa las mesas (cols 0-14).
-  props.push({ id: "coffee_machine", x: COLS - 1, y: FLOOR_TOP, w: 1, h: 1, layer: "below" });
-  props.push({
-    id: "tall_potted_plant",
-    x: COLS - 1,
-    y: FLOOR_TOP + 4,
-    w: 1,
-    h: 2,
-    layer: "below",
-  });
-
-  // Zona de descanso solo si sobran filas abajo (con 3 bandas el piso está lleno).
   if (bands <= 2) {
-    props.push({ id: "area_rug_lounge", x: 10.5, y: 8.5, w: 4, h: 3, layer: "below" });
-    props.push({ id: "couch", x: 10, y: 9, w: 1.5, h: 1.5, layer: "below" });
-    props.push({ id: "low_coffee_table", x: 12, y: 9.5, w: 1.5, h: 1.5, layer: "below" });
-    props.push({ id: "bookshelf_packed", x: 0, y: 8.5, w: 2.3, h: 2, layer: "below" });
+    // --- Zona común abajo: café · descanso · biblioteca -------------------
+    // Rincón del café (izquierda): barra + cafetera (anchor `utility`, destino
+    // del revisor "pensando" y de los paseos ociosos) + nevera.
+    props.push({ id: "coffee_bar_counter", x: 0, y: AMENITY_TOP, w: 2.7, h: 2.5, layer: "below" });
+    props.push({ id: "coffee_machine", x: 3, y: AMENITY_TOP, w: 1, h: 1, layer: "below" });
+    props.push({ id: "mini_fridge", x: 4, y: AMENITY_TOP, w: 0.8, h: 1.1, layer: "below" });
+
+    // Zona de descanso (centro): alfombra con dos pufs y una mesita.
+    props.push({ id: "area_rug_lounge", x: 6, y: AMENITY_TOP, w: 4, h: 3, layer: "below" });
+    props.push({ id: "couch", x: 6.3, y: AMENITY_TOP + 0.4, w: 1.5, h: 1.5, layer: "below" });
+    props.push({
+      id: "bean_bag_chair_light",
+      x: 8.2,
+      y: AMENITY_TOP + 0.3,
+      w: 1.5,
+      h: 1.5,
+      layer: "below",
+    });
+    props.push({
+      id: "low_coffee_table",
+      x: 7.3,
+      y: AMENITY_TOP + 1.6,
+      w: 1.5,
+      h: 1.3,
+      layer: "below",
+    });
+
+    // Biblioteca (derecha): estantería + planta.
+    props.push({ id: "bookshelf_packed", x: 11, y: AMENITY_TOP, w: 2.3, h: 2, layer: "below" });
+    props.push({ id: "tall_potted_plant", x: 14, y: AMENITY_TOP, w: 1, h: 2, layer: "below" });
+
+    // Verde en la columna de circulación (derecha), fuera de las mesas.
+    props.push({ id: "tall_potted_plant", x: COLS - 1, y: BAND_YS[0], w: 1, h: 2, layer: "below" });
+  } else {
+    // Piso lleno de mesas: la zona común se reduce al rincón derecho, pero el
+    // anchor `utility` (cafetera) se conserva — es destino de paseo y de revisión.
+    props.push({ id: "coffee_machine", x: COLS - 1, y: BAND_YS[0], w: 1, h: 1, layer: "below" });
+    props.push({
+      id: "tall_potted_plant",
+      x: COLS - 1,
+      y: BAND_YS[1] + 1,
+      w: 1,
+      h: 2,
+      layer: "below",
+    });
   }
 
   // Puntos de deambular: TODO tile de suelo libre (ni bajo un prop ni asiento de
