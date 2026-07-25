@@ -481,7 +481,7 @@ Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
 
 #### `task_wf_30` — Una cabecera de plan, no cuatro secciones sueltas
 
-- [ ] **Título**: **un** endpoint `GET /plans/{id}/status` que devuelva progreso X/Y (sobre
+- [x] _(hecho 6e4c5f37 + 0a16f4ed)_ **Título**: **un** endpoint `GET /plans/{id}/status` que devuelva progreso X/Y (sobre
       `compute_plan_progress`, ya escrito y testeado), estado del PR (`pr_url` / `pr_branch` /
       `pr_error`) y coste real contra estimado, y **un** componente de cabecera que los pinte
       juntos en el detalle del plan, con la versión reducida en la tarjeta del tablero.
@@ -495,6 +495,14 @@ Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
   interesantes (sin PR, con PR, con `pr_error`, coste por encima del estimado).
 - **Criterio de aceptación**: abrir un plan cerrado muestra, sin desplazarse, en qué punto
   está, dónde está su PR y cuánto ha costado frente a lo previsto.
+- **Entregado**: `GET /plans/{id}/status` (`aggregate_actual_spend` + `build_plan_cost_status`)
+  y `PlanStatusHeader` en el detalle del plan. Tres decisiones que conviene no deshacer:
+  **no se resta EUR de USD** (la estimación de IA y el gasto real son USD y comparan directo;
+  la estimación humana es EUR y mide horas de persona — un número que mezclase las dos sería
+  inventado); **un run fallido cuenta como gasto** (excluirlo maquillaría el coste justo en
+  los planes que más cuestan); y **`over_estimate` solo se enciende si hay estimación**.
+- **Pendiente**: la versión reducida en la tarjeta del tablero gerencial (`app/admin/board`),
+  que va con `task_wf_32` (el WebSocket de plan que la refresca).
 
 #### `task_wf_32` — WebSocket de plan
 
