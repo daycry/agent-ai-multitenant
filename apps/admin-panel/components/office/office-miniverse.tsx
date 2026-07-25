@@ -39,10 +39,18 @@ interface WorldData {
   wanderPoints?: WanderPoint[];
 }
 
-/** Config de sprite del ciudadano — como el `createStandardSpriteConfig` del
- * motor pero con NUESTRA base (`/miniverse/universal_assets/citizens`). */
+/** Config de sprite del ciudadano — misma forma que el `createStandardSpriteConfig`
+ * del motor y la MISMA base absoluta que él usa por defecto.
+ *
+ * OJO (bug 2026-07-25, «no aparecen los muñequitos»): el motor pide los
+ * sprite-sheets con una ruta ABSOLUTA HARDCODEADA (`/universal_assets/citizens/
+ * {sprite}_walk.png`) y, en el auto-spawn, llama a `addCitizen(config)` SIN
+ * pasar `sheetConfig` → siempre cae a ese default. Con los assets bajo
+ * `/miniverse/universal_assets` daban 404 y no se dibujaba ningún personaje. Los
+ * sprites de ciudadano viven por tanto en la RAÍZ web (ruta canónica del motor);
+ * el mundo/props siguen namespaced bajo `/miniverse` (esos sí son relativos). */
 function spriteConfig(sprite: string): SpriteSheetConfig {
-  const b = "/miniverse/universal_assets/citizens";
+  const b = "/universal_assets/citizens";
   return {
     sheets: { walk: `${b}/${sprite}_walk.png`, actions: `${b}/${sprite}_actions.png` },
     animations: {

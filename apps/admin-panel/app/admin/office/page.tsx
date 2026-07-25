@@ -39,9 +39,15 @@ export default function OfficePage() {
     queryFn: () => apiFetch<OfficeRun[]>("/runs?verdict=needs_human_review&limit=20"),
     refetchInterval: 15000,
   });
+  // Solo los agentes ASIGNADOS A PROYECTOS pueblan la oficina (petición del
+  // operador 2026-07-25): `scope=project_local` ⇒ `project_id IS NOT NULL` (ver
+  // ck_agents_scope_project_consistency). Los `global_builtin` /
+  // `global_tenant_template` son plantillas de catálogo, no plantilla de nadie
+  // trabajando — no deben deambular por el piso. Un agente que SÍ está corriendo
+  // aparece igual (su run manda), aunque no estuviera en esta lista.
   const agents = useQuery({
-    queryKey: ["office-agents"],
-    queryFn: () => apiFetch<OfficeAgent[]>("/agents"),
+    queryKey: ["office-agents", "project_local"],
+    queryFn: () => apiFetch<OfficeAgent[]>("/agents?scope=project_local"),
   });
 
   const running = useMemo(() => runningRuns.data ?? [], [runningRuns.data]);
