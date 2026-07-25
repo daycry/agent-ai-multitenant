@@ -169,7 +169,7 @@ contexto después, sobre esa base ya estable.
 
 #### `task_wf_04` — «Generar Plan» es idempotente, y lo dice
 
-- [ ] **Título**: si la conversación ya tiene `related_plan_id` y ese plan sigue vivo (no
+- [x] _(hecho 2e40b0bb)_ **Título**: si la conversación ya tiene `related_plan_id` y ese plan sigue vivo (no
       `cancelled`/`rejected`), `create_plan` devuelve el plan existente (200) en vez de crear
       un gemelo. **La UI no se queda callada**: muestra «esta conversación ya generó el plan
       X» con enlace, y una acción explícita para crear otro si es lo que se quiere. Una
