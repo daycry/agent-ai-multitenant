@@ -235,6 +235,49 @@ def combine_tool_allowlists(
 # the tools of P's declared MCP servers. Builtins / role tools stay per-agent.
 
 
+async def _project_mcp_tool_rows(
+    session: AsyncSession, project: Any, *, role: str | None
+) -> list[Tool]:
+    """The project's MCP ``Tool`` rows, already narrowed by the role policy.
+
+    The single source both :func:`resolve_project_mcp_tool_names` (what the run
+    is ALLOWED to call) and :func:`serialize_project_mcp_tool_specs` (what the
+    model is TOLD about) derive from. Deriving them separately is how B-01
+    happened — the allowlist grew and the advertisement did not.
+    """
+    if project is None:
+        return []
+    declared = {
+        s.get("name")
+        for s in (getattr(project, "mcp_servers", None) or [])
+        if isinstance(s, dict) and s.get("name")
+    }
+    if not declared:
+        return []
+    rows = (
+        (
+            await session.execute(
+                select(Tool).where(
+                    Tool.tenant_id == project.tenant_id,
+                    Tool.implementation_type == "mcp_tool",
+                    Tool.deleted_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    of_declared_server = [
+        tool for tool in rows if "." in tool.name and tool.name.split(".", 1)[0] in declared
+    ]
+    permitted = filter_mcp_tools_by_role_policy(
+        (tool.name for tool in of_declared_server),
+        getattr(project, "mcp_tool_roles", None),
+        role,
+    )
+    return [tool for tool in of_declared_server if tool.name in permitted]
+
+
 async def resolve_project_mcp_tool_names(
     session: AsyncSession, project: Any, *, role: str | None = None
 ) -> frozenset[str]:
@@ -249,28 +292,48 @@ async def resolve_project_mcp_tool_names(
     per role. Without a policy (or ``role is None``) every declared MCP tool is
     returned — the default "all project agents get all project MCP tools".
     """
-    if project is None:
-        return frozenset()
-    declared = {
-        s.get("name")
-        for s in (getattr(project, "mcp_servers", None) or [])
-        if isinstance(s, dict) and s.get("name")
-    }
-    if not declared:
-        return frozenset()
-    rows = await session.execute(
-        select(Tool.name).where(
-            Tool.tenant_id == project.tenant_id,
-            Tool.implementation_type == "mcp_tool",
-            Tool.deleted_at.is_(None),
-        )
+    return frozenset(
+        tool.name for tool in await _project_mcp_tool_rows(session, project, role=role)
     )
-    names: set[str] = set()
-    for name in rows.scalars().all():
-        server = name.split(".", 1)[0] if "." in name else None
-        if server in declared:
-            names.add(name)
-    return filter_mcp_tools_by_role_policy(names, getattr(project, "mcp_tool_roles", None), role)
+
+
+async def serialize_project_mcp_tool_specs(
+    session: AsyncSession, project: Any, *, role: str | None = None
+) -> list[dict[str, Any]]:
+    """The ToolSpec dicts for the project's MCP tools (task_wf_10, B-01).
+
+    The run's allowlist already carried these tools (ADR 0128) but the model was
+    never TOLD they exist: ``build_model_tool_schemas`` sources its schemas from
+    the runtime-only set, the builtin catalog and ``tool_specs`` — and
+    ``tool_specs`` is per-AGENT, while MCP tools are contributed by the project.
+    Permitted but invisible means never called, so the ADR delivered nothing.
+
+    Emitting them as specs needs no change in the runtime: ``register_tool_specs``
+    skips ``mcp_tool`` entries (the MCP wiring owns their executors), so the spec
+    serves purely as the schema source the advertisement was missing.
+    """
+    return [
+        _tool_to_spec(tool) for tool in await _project_mcp_tool_rows(session, project, role=role)
+    ]
+
+
+def merge_tool_specs(
+    agent_specs: list[dict[str, Any]] | None,
+    project_specs: list[dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    """Union the per-agent specs with the project-contributed ones, by name.
+
+    Keeps the ``None`` sentinel — "key absent from the run request", i.e. no new
+    tool families — when there is genuinely nothing to say. The agent's own spec
+    wins a name collision: it is the one carrying the execution config the
+    runtime needs.
+    """
+    if not project_specs:
+        return agent_specs
+    out: list[dict[str, Any]] = list(agent_specs or [])
+    seen = {spec.get("name") for spec in out}
+    out.extend(spec for spec in project_specs if spec.get("name") not in seen)
+    return out
 
 
 def filter_mcp_tools_by_role_policy(
@@ -568,7 +631,9 @@ __all__ = [
     "compute_effective_tools",
     "extend_allowlist_with_project_mcp",
     "filter_mcp_tools_by_role_policy",
+    "merge_tool_specs",
     "resolve_agent_tool_names",
     "resolve_project_mcp_tool_names",
     "serialize_agent_tool_specs",
+    "serialize_project_mcp_tool_specs",
 ]

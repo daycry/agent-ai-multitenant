@@ -30,9 +30,11 @@ from api_server.agent_skills_enforcement import resolve_agent_skill_prompt_fragm
 from api_server.agent_tools_enforcement import (
     combine_tool_allowlists,
     extend_allowlist_with_project_mcp,
+    merge_tool_specs,
     resolve_agent_tool_names,
     resolve_project_mcp_tool_names,
     serialize_agent_tool_specs,
+    serialize_project_mcp_tool_specs,
 )
 from api_server.budgets import budget_pause_block, resolve_execution_budgets
 from api_server.chat.sync_to_kanban import PLAN_TASK_SPEC_ID_KEY
@@ -728,6 +730,14 @@ class TaskDispatcher:
         )
         allowed_tools = extend_allowlist_with_project_mcp(allowed_tools, project_mcp_tool_names)
         tool_specs = await serialize_agent_tool_specs(session, agent.id)
+        # task_wf_10 (B-01): permitir no es anunciar. `build_model_tool_schemas`
+        # saca los esquemas de `tool_specs`, que es POR AGENTE, así que una tool
+        # MCP de proyecto quedaba permitida pero invisible para el modelo — jamás
+        # la llamaba. Aportamos también sus especificadores, derivados del MISMO
+        # conjunto ya filtrado por la política de roles.
+        tool_specs = merge_tool_specs(
+            tool_specs, await serialize_project_mcp_tool_specs(session, project, role=agent.role)
+        )
         skill_prompt_fragments = await resolve_agent_skill_prompt_fragments(session, agent.id)
 
         # Per-run budget envelope (prod-06 budget_02): plataforma ← proyecto,
