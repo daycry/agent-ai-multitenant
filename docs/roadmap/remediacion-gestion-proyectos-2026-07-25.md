@@ -193,6 +193,8 @@ contexto después, sobre esa base ya estable.
 
 #### `task_wf_06` — Encender la compresión de conversaciones que ya existe
 
+- [x] _(hecho 8a095da1 + 5b49093d)_ Apartados a/b/c/d/e completos.
+
 > **No hay que construir una estrategia de contexto: hay una, completa y con tests
 > (`db/conversation_compression.py`), que nunca se enchufó.** Esta tarea la cablea. Sustituye
 > a la propuesta inicial de copiar el patrón del agent-runtime, que habría duplicado —peor— un
@@ -279,6 +281,20 @@ largas desborden igual.
 - **Criterio de aceptación**: una conversación de planning de 200 mensajes produce un plan que
   respeta los requisitos enunciados al principio **y** no vuelve a proponer nada que el
   usuario descartó por el camino.
+- **Entregado** (5b49093d): `chat/summariser.py` (`LLMSummariser` + parseo con las cuatro
+  causas), `SummaryRecord` / `split_window` / `render_record` / `aligned_window_size` /
+  `estimate_tokens` en `db/conversation_compression.py`,
+  `compress_conversation_best_effort` en `responder.py` (40/20, alineado a turnos, disparado
+  al **principio** del turno para reusar el provider ya abierto y que el turno lea el resumen
+  fresco), techo de 24 000 tokens en la ventana de contexto y tarjeta plegable en el feed.
+  Tests: 22 unit (`test_conversation_summary_record.py`, `test_chat_summariser.py`), 4
+  frontend (`summaryFoldedCount`) y 4 de integración nuevos — entre ellos **el decisivo**,
+  tres pisos reales encadenados con el requisito y el descarte del mensaje 1 llegando
+  literales al piso 3.
+- **Ajuste sobre el diseño escrito**: el registro se renderiza **dentro de `content`**, no solo
+  en `attachments`. `history_from_messages` únicamente pasa `content` al prompt, así que un
+  registro que viviera solo en el attachment sería invisible para el modelo y la garantía de
+  supervivencia sería falsa justo en el punto donde importa.
 - **Alcance**: el mecanismo vive sobre `Message`/`Conversation`, así que beneficia a **todos
   los modos de chat**, no solo a planning.
 - **Diferido**: `_load_all_messages` (`conversation_compression.py:93-99`) carga la
