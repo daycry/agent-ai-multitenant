@@ -39,7 +39,15 @@ class _HangingCM:
 
 class _HangingClient:
     @staticmethod
-    def connect(config: MCPServerConfig, vault_resolver: Any = None) -> _HangingCM:  # noqa: ARG004
+    # task_wf_12: `connect` pasa ahora el `httpx.Auth` del OAuth. El doble replica
+    # la firma REAL a propósito: hacerlo tolerante (`**kwargs`) sería quitarle
+    # justo la fragilidad que avisa de un cambio de contrato.
+    def connect(
+        config: MCPServerConfig,  # noqa: ARG004
+        vault_resolver: Any = None,  # noqa: ARG004
+        *,
+        auth: Any = None,  # noqa: ARG004
+    ) -> _HangingCM:
         return _HangingCM()
 
 
