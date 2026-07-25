@@ -44,6 +44,7 @@ import { CostBreakdownSection } from "./plan-cost-section";
 import { PlanCodeDiffSection } from "./plan-code-diff-section";
 import { PlanDeepLinksSection } from "./plan-deep-links-section";
 import { PlanLifecycleSection } from "./plan-lifecycle-section";
+import { PlanStatusHeader } from "./plan-status-header";
 import { SyncToKanbanSection } from "./plan-sync-section";
 import { HumanValidationSection } from "./plan-validation-section";
 
@@ -111,6 +112,9 @@ export default function PlanDetailPage() {
         </Card>
       )}
 
+      {/* task_wf_30: progreso, PR y coste real ARRIBA — el estado del plan se
+          lee sin desplazarse, en vez de estar repartido por cuatro secciones. */}
+      <PlanStatusHeader planId={plan.id} />
       <PlanLifecycleSection planId={plan.id} status={plan.status} />
       <HumanValidationSection planId={plan.id} status={plan.status} />
       {/* ADR 0130: preview on-demand de la rama del plan (24h, sin veredicto) —

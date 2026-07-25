@@ -87,6 +87,27 @@ function wireApi(planBody: Record<string, unknown>, session: Record<string, unkn
       return Promise.resolve(planBody);
     }
     if (path === "/plans/plan-1") return Promise.resolve(planBody);
+    // task_wf_30: la cabecera de estado (progreso + PR + coste real).
+    if (path === "/plans/plan-1/status") {
+      return Promise.resolve({
+        plan_id: "plan-1",
+        status: planBody.status,
+        progress: { total: 2, done: 1, open: 1, label: "1/2" },
+        pr: { url: null, branch: null, error: null },
+        cost: {
+          ai_currency: "USD",
+          human_currency: "EUR",
+          estimated_ai_min: "1.00",
+          estimated_ai_max: "4.00",
+          estimated_human_hours: "16.000",
+          estimated_human_cost: "800.00",
+          actual_ai_cost: "0",
+          actual_tokens: 0,
+          actual_runs: 0,
+          over_estimate: false,
+        },
+      });
+    }
     if (path === "/plans/plan-1/review-session") {
       return session ? Promise.resolve(session) : Promise.reject(new Error("404"));
     }
