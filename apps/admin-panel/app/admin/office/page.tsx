@@ -8,6 +8,7 @@ import { Building2 } from "lucide-react";
 import { OfficeMiniverse } from "@/components/office/office-miniverse";
 import { agentVisualState, stepBubble } from "@/lib/office/mapping";
 import {
+  officeCounts,
   toAgentStatuses,
   type AgentStatus,
   type OfficeAgent,
@@ -99,6 +100,7 @@ export default function OfficePage() {
   }, [running, escalated]);
 
   const idleAgents = catalog.filter((a) => !busyIds.has(a.id));
+  const counts = useMemo(() => officeCounts(enriched), [enriched]);
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 px-4 py-8">
@@ -113,6 +115,20 @@ export default function OfficePage() {
             su trabajo.
           </p>
         </div>
+      </div>
+
+      {/* HUD gerencial en vivo (datos compartidos del tenant, no privados): quién
+          trabaja / revisa / espera a un humano / está libre, de un vistazo. */}
+      <div
+        className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-xs"
+        data-testid="office-hud"
+      >
+        <span title="Agentes ejecutando una tarea">⌨️ {counts.working} trabajando</span>
+        <span title="Runs de revisión (reviewer)">🔍 {counts.reviewing} revisando</span>
+        <span title="Runs escalados a validación humana">
+          🚪 {counts.waiting} esperando a un humano
+        </span>
+        <span title="Agentes del catálogo sin run activo">😴 {counts.idle} libres</span>
       </div>
 
       <OfficeMiniverse getStatuses={getStatuses} onSelectAgent={onSelectAgent} />

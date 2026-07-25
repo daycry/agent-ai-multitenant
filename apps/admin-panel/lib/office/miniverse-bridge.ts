@@ -120,3 +120,25 @@ export function toAgentStatuses(input: {
 
   return { statuses: [...byId.values()], runByAgent };
 }
+
+export interface OfficeCounts {
+  working: number;
+  reviewing: number;
+  waiting: number;
+  idle: number;
+  total: number;
+}
+
+/** Recuento por estado para el HUD gerencial (¿quién trabaja/revisa/espera/libre?
+ * de un vistazo — ADR 0118). `thinking` = reviewer; `error/sleeping` cuentan como
+ * libres (no los pintamos aparte en el HUD). Puro/testeable. */
+export function officeCounts(statuses: Pick<AgentStatus, "state">[]): OfficeCounts {
+  const c: OfficeCounts = { working: 0, reviewing: 0, waiting: 0, idle: 0, total: statuses.length };
+  for (const s of statuses) {
+    if (s.state === "working") c.working += 1;
+    else if (s.state === "thinking") c.reviewing += 1;
+    else if (s.state === "waiting") c.waiting += 1;
+    else c.idle += 1;
+  }
+  return c;
+}

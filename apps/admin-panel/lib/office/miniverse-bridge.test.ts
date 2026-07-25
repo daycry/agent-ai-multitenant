@@ -4,7 +4,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { toAgentStatuses, type OfficeAgent, type OfficeRun } from "@/lib/office/miniverse-bridge";
+import {
+  officeCounts,
+  toAgentStatuses,
+  type OfficeAgent,
+  type OfficeRun,
+} from "@/lib/office/miniverse-bridge";
 
 const run = (over: Partial<OfficeRun>): OfficeRun => ({
   id: "run-x",
@@ -67,5 +72,19 @@ describe("toAgentStatuses", () => {
     });
     expect(statuses).toHaveLength(0);
     expect(Object.keys(runByAgent)).toHaveLength(0);
+  });
+});
+
+describe("officeCounts", () => {
+  it("cuenta por estado (thinking=revisando; error/idle=libres)", () => {
+    const c = officeCounts([
+      { state: "working" },
+      { state: "working" },
+      { state: "thinking" },
+      { state: "waiting" },
+      { state: "idle" },
+      { state: "error" },
+    ]);
+    expect(c).toEqual({ working: 2, reviewing: 1, waiting: 1, idle: 2, total: 6 });
   });
 });
