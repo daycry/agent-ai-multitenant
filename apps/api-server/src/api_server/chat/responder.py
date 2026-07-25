@@ -55,6 +55,7 @@ from api_server.chat.planning_graph import (
 )
 from api_server.chat.planning_llm import LLMPlanningModel
 from api_server.db.conversation import Conversation, Message
+from api_server.db.conversation_compression import load_context_window
 from api_server.db.domain import Agent, Plan, Project, Team, TeamMember
 from api_server.db.llm_providers import get_llm_provider
 from api_server.db.memory import MemoryEntry
@@ -78,6 +79,12 @@ _log = structlog.get_logger("api_server.chat.responder")
 # discussion/execution reply) is bounded independently so one slow/hung step never
 # sinks the whole turn; the orphaned worker thread is bounded by the provider's own
 # network timeout. A faster chat model (per-project chat model_config) keeps steps short.
+# A-02: cuántos mensajes de la conversación alimentan el prompt de planning.
+# `load_context_window` devuelve LOS MÁS RECIENTES y sustituye los tramos ya
+# comprimidos por su resumen, así que este tope acota el prompt sin perder el
+# arranque una vez la compresión esté cableada (task_wf_06).
+_PLANNING_CONTEXT_MESSAGES = 50
+
 _STEP_TIMEOUT_S = 150.0
 _DEFAULT_TEMPERATURE = 0.7
 
@@ -846,20 +853,22 @@ async def respond_to_conversation(
             default_agent_id = role_agents.get(PlanningRole.PROJECT_MANAGER) or next(
                 iter(role_agents.values()), None
             )
-            rows = (
-                (
-                    await session.execute(
-                        select(Message)
-                        .where(
-                            Message.conversation_id == conversation_id,
-                            Message.tenant_id == tenant_id,
-                        )
-                        .order_by(Message.created_at)
-                        .limit(50)
-                    )
-                )
-                .scalars()
-                .all()
+            # A-02/A-13: esto hacía su propia consulta `order_by(created_at).limit(50)`,
+            # es decir, alimentaba el prompt con los mensajes MÁS ANTIGUOS: pasado el
+            # 51 el equipo dejaba de ver lo que el usuario acababa de pedir y seguía
+            # razonando sobre el arranque de la conversación, sin ninguna señal visible.
+            #
+            # `load_context_window` (el cargador de `db.conversation_compression`, que
+            # `planning_context` YA usaba para el contexto auxiliar) devuelve los más
+            # RECIENTES y sustituye por su resumen los tramos ya comprimidos. Usarlo
+            # aquí alinea las dos vías: hasta ahora el cargador correcto alimentaba el
+            # contexto secundario y el roto la conversación que el modelo realmente lee.
+            #
+            # La compresión en sí (el `Summariser` de producción + su disparo) sigue
+            # pendiente — task_wf_06 b/c. Sin resúmenes esto ya devuelve la cola, que
+            # es lo que arregla A-02; con ellos, además, dejará de perderse lo viejo.
+            rows = await load_context_window(
+                session, conversation_id, max_messages=_PLANNING_CONTEXT_MESSAGES
             )
             # Ground the planning in the project's existing state (prior plans,
             # project memories, docs/code via RAG) — provider-agnostic context, not an
