@@ -409,7 +409,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
 #### `task_wf_23` — El run-lock sobrevive al hard kill
 
-- [ ] **Título**: derivar el TTL del lock del `execution_hard_time_limit_s` efectivo (más
+- [x] _(hecho, ver git log)_ **Título**: derivar el TTL del lock del `execution_hard_time_limit_s` efectivo (más
       margen), no del presupuesto de contenedor, para que nunca caduque antes que el run.
 - **Hallazgo**: C-05 (medio) · **Tiempo**: 0,25 d
 - **Ficheros**: `apps/workers/src/workers/tasks/run_cycle.py:218-228`
