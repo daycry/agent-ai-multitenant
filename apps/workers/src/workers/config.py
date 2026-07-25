@@ -190,6 +190,18 @@ class Settings(BaseSettings):
         "keeping HOME on its own tmpfs OUTSIDE /workspace stops that config from "
         "polluting the project worktree (and the agent's model context).",
     )
+    test_runtime_home_size: str = Field(
+        default="512m",
+        description="Size of the TEST/STACK runtime container's HOME tmpfs "
+        "(/home/agent). Deliberately much larger than container_home_size: the "
+        "agent container's HOME holds a CLI config (tens of KB), whereas a "
+        "toolchain's home holds dependency metadata and, when the project has no "
+        "warm dep-cache bind, the download cache itself (composer/npm/pip/maven). "
+        "Capping it at 64m would swap 'the worktree gets polluted' for "
+        "'a cold install fails with ENOSPC' (task_wf_20, C-01). The heavy path is "
+        "still the dep_cache bind mounted ON TOP of this tmpfs. Override with "
+        "WORKERS_TEST_RUNTIME_HOME_SIZE.",
+    )
 
     agent_max_iterations_claude_sdk: int = Field(
         default=50,

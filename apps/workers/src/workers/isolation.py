@@ -39,6 +39,13 @@ DOCKER_SOCKET_PATHS: tuple[str, ...] = ("/var/run/docker.sock", "/run/docker.soc
 # into the agent-runtime image.
 AGENT_UID_GID = "1000:1000"
 
+# The container HOME, declared by every runtime image (`ENV HOME=/home/agent`,
+# `mkdir -p /home/agent && chown 1000:1000`). It must live OUTSIDE /workspace:
+# with HOME pointing at the bind-mounted worktree, every dotfile the toolchain
+# (or the Claude Code CLI) writes lands in the project repo and gets committed
+# by `git add -A`. Shared with the test-runtime so both envelopes agree.
+AGENT_HOME = "/home/agent"
+
 
 class DockerSocketLeakError(RuntimeError):
     """Raised when a run config would expose the Docker socket to an agent."""
@@ -117,7 +124,7 @@ def build_hardened_run_kwargs(
     # HOME=/workspace that landed in the agent's project worktree and the agent
     # read it back, polluting every model_call's context. nosuid like the rest;
     # NOT noexec (the CLI may exec from its own cache), matching /workspace.
-    agent_home = "/home/agent"
+    agent_home = AGENT_HOME
     tmpfs = {
         "/tmp": f"rw,noexec,nosuid,size={settings.container_tmp_size}",
         agent_home: f"rw,nosuid,size={settings.container_home_size},uid=1000,gid=1000",

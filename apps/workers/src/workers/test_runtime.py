@@ -50,6 +50,7 @@ import docker
 from docker.types import Mount
 from workers.config import Settings
 from workers.isolation import (
+    AGENT_HOME,
     AGENT_UID_GID,
     DockerSocketLeakError,
     assert_no_docker_socket,
@@ -892,7 +893,15 @@ class TestRuntimeRunner:
                 )
             )
 
-        env: dict[str, str] = {"HOME": template.workspace_mount_path}
+        # C-01 (task_wf_20): esto era `HOME = workspace_mount_path`, o sea el
+        # WORKTREE bind-montado en RW. Todo lo que la toolchain escribe «en el
+        # home» (`~/.composer/auth.json`, `~/.npmrc`, `~/.cache/…`) aterrizaba
+        # dentro del repo del proyecto, y `commit_task` hace `git add -A`: acaba
+        # comiteado. Es el mismo bug que ya se corrigió en el agent-runtime, y
+        # contradecía a la vez el comentario de tres líneas más abajo y las
+        # propias imágenes, que declaran `ENV HOME=/home/agent` con el
+        # directorio creado y `chown 1000:1000` (prod-12 img_01).
+        env: dict[str, str] = {"HOME": AGENT_HOME}
         # Align the tool's $HOME-relative cache with the bind-mounted
         # dep_cache_mount (ADR 0094) — injected always; a warm cache helps even
         # offline acceptance runs. Won't override HOME (templates never set it).
@@ -935,7 +944,20 @@ class TestRuntimeRunner:
             "cap_drop": ["ALL"],
             "security_opt": ["no-new-privileges:true"],
             "read_only": True,
-            "tmpfs": {"/tmp": "rw,nosuid,size=64m"},
+            # La raíz va en solo lectura, así que el HOME necesita su propio
+            # tmpfs o la toolchain se come un EROFS al escribir en él. NO
+            # `noexec`: las toolchains ejecutan binarios desde su caché de home
+            # (`~/.composer/vendor/bin`, npx), igual que el `/workspace` del
+            # agent-runtime. El `dep_cache_mount` de la plantilla apunta DENTRO
+            # de este home y se monta encima (Docker ordena los montajes por
+            # profundidad del destino), así que la caché caliente sigue siendo
+            # el bind y el tmpfs solo carga metadatos sueltos.
+            "tmpfs": {
+                "/tmp": "rw,nosuid,size=64m",
+                AGENT_HOME: (
+                    f"rw,nosuid,size={self._settings.test_runtime_home_size},uid=1000,gid=1000"
+                ),
+            },
             "user": AGENT_UID_GID,
             # Use nano_cpus rather than --cpus so we round-trip safely
             # through json: int suffix vs float decimals.
