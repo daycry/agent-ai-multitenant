@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import json
 import secrets
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 import httpx
@@ -35,6 +37,7 @@ import structlog
 from mcp.client.auth import PKCEParameters
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from redis.asyncio import Redis
+from shared_mcp.catalog import uses_oauth
 from shared_mcp.oauth import VaultTokenStorage, oauth_vault_path
 
 from api_server.mcp.config import MCPServerConfigModel
@@ -304,6 +307,36 @@ def find_server_url(payload_servers: list[dict[str, object]], server_name: str) 
     return None
 
 
+def serialise_servers_for_run(
+    servers: Iterable[Mapping[str, Any]], *, tenant_id: str, project_id: str
+) -> list[dict[str, Any]]:
+    """Project ``project.mcp_servers`` into what the run request carries.
+
+    The one thing this adds is ``oauth_ref``: the Vault pointer to a server's
+    OAuth state (ADR 0127). The runtime cannot derive it — the persisted config
+    has no ``auth_kind`` (only the catalog does, keyed by URL) and the runtime
+    does not know its tenant/project. So the dispatch, which knows both,
+    resolves it here and the runtime just reads it (task_wf_12, B-03).
+
+    Without this the run opened the session with no ``auth=`` and the remote
+    server answered 401 — the interactive "Connect" flow was complete and
+    delivered nothing to the one place it existed for, autonomous execution.
+
+    Returns COPIES: mutating the JSONB list in place would mark the ``projects``
+    row dirty and write the pointer back to the database.
+    """
+    out: list[dict[str, Any]] = []
+    for raw in servers:
+        server = dict(raw)
+        name = str(server.get("name") or "")
+        if name and not server.get("oauth_ref") and uses_oauth(server.get("url")):
+            server["oauth_ref"] = oauth_vault_path(
+                tenant_id=tenant_id, project_id=project_id, server_name=name
+            )
+        out.append(server)
+    return out
+
+
 __all__ = [
     "AuthServerMeta",
     "McpOAuthError",
@@ -313,4 +346,5 @@ __all__ = [
     "discover_auth_server",
     "ensure_registered_client",
     "find_server_url",
+    "serialise_servers_for_run",
 ]

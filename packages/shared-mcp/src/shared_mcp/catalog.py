@@ -756,6 +756,42 @@ CATALOG: dict[str, McpServerTemplate] = {
 }
 
 
+#: ``auth_kind`` that means "OAuth 2.1, connected once from the admin panel"
+#: (ADR 0127). Kept here so callers match the string in one place.
+OAUTH_AUTH_KIND = "oauth"
+
+
+def template_for_url(url: str | None) -> McpServerTemplate | None:
+    """Find the catalog template a declared server URL corresponds to.
+
+    ``Project.mcp_servers`` does NOT persist ``auth_kind`` — the picker writes
+    the transport/url/headers a template implies and forgets which template it
+    came from. The admin panel already recovers it by URL; this is the same
+    lookup, shared so the dispatch does not re-implement it.
+
+    Tolerant to a trailing slash, since the operator may have edited the URL by
+    hand. Returns ``None`` for a tenant's own server (not in the catalog).
+    """
+    if not url:
+        return None
+    wanted = url.rstrip("/")
+    for template in CATALOG.values():
+        if template.url and template.url.rstrip("/") == wanted:
+            return template
+    return None
+
+
+def uses_oauth(url: str | None) -> bool:
+    """Whether the server at ``url`` authenticates with OAuth 2.1 (ADR 0127).
+
+    A URL the catalog does not know is NOT treated as OAuth: inventing a flow
+    nobody consented to would turn a plain misconfiguration into a confusing
+    "OAuth consent required" at the first tool call.
+    """
+    template = template_for_url(url)
+    return template is not None and template.auth_kind == OAUTH_AUTH_KIND
+
+
 def render_vault_path(template: McpServerTemplate, *, project_id: str) -> str | None:
     """Substitute ``{project_id}`` in the template's Vault path shape.
 
@@ -800,5 +836,8 @@ __all__ = [
     "SLACK_MCP",
     "TAVILY_MCP",
     "Transport",
+    "OAUTH_AUTH_KIND",
     "render_vault_path",
+    "template_for_url",
+    "uses_oauth",
 ]

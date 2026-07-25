@@ -342,6 +342,10 @@ def _to_mcp_config(raw: dict[str, Any]) -> Any:
         url=raw.get("url"),
         headers=dict(raw.get("headers") or {}),
         auth_ref=raw.get("auth_ref"),
+        # ADR 0127 / task_wf_12: puntero al estado OAuth en Vault, resuelto por
+        # el dispatch (el único que conoce tenant+proyecto). Ausente = el
+        # servidor no usa OAuth.
+        oauth_ref=raw.get("oauth_ref"),
         timeout_s=float(raw.get("timeout_s", 30.0)),
         max_output_bytes=int(raw.get("max_output_bytes", 65536)),
     )

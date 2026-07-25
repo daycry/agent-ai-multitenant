@@ -63,6 +63,7 @@ from api_server.db.platform_settings import (
     resolve_model_config_chain,
 )
 from api_server.events import publish_task_status_changed
+from api_server.mcp_oauth_flow import serialise_servers_for_run
 from api_server.plan_progress import (
     PlanStatus,
     TaskSnapshot,
@@ -787,8 +788,16 @@ class TaskDispatcher:
         if project_runtime:
             request["default_runtime_template"] = str(project_runtime)
         project_mcp_servers = getattr(project, "mcp_servers", None) if project else None
-        if project_mcp_servers:
-            request["mcp_servers"] = [dict(server) for server in project_mcp_servers]
+        if project_mcp_servers and project is not None:
+            # task_wf_12 (B-03): añade `oauth_ref` a los servidores OAuth. El
+            # runtime no puede deducirlo — el config persistido no lleva
+            # `auth_kind` (eso vive en el catálogo, por URL) ni el runtime sabe
+            # su tenant/proyecto. Aquí sí se sabe.
+            request["mcp_servers"] = serialise_servers_for_run(
+                project_mcp_servers,
+                tenant_id=str(task.tenant_id),
+                project_id=str(project.id),
+            )
         return request
 
     async def _build_review_request(

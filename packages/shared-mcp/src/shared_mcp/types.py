@@ -62,6 +62,18 @@ class MCPServerConfig:
     # servers that already trust the network they live on.
     auth_ref: str | None = None
 
+    # Vault path holding this server's OAuth 2.1 state — the access/refresh
+    # token plus the DCR client registration (ADR 0127). SEPARATE from
+    # `auth_ref` on purpose: `auth_ref` is a static secret that
+    # `apply_vault_auth` injects into headers/env, whereas this one drives an
+    # `httpx.Auth` that refreshes itself. Putting the OAuth blob in `auth_ref`
+    # would inject the serialised token record as a header.
+    #
+    # The dispatch resolves it (it is the layer that knows tenant+project, and
+    # the persisted server config carries no `auth_kind` — the catalog does).
+    # None means "this server does not use OAuth", the pre-0127 default.
+    oauth_ref: str | None = None
+
     # ----- ergonomics -----
     # Per-server timeout (seconds) for any single tool call. Tools
     # that hang past this raise MCPTransportError. Default 30s per

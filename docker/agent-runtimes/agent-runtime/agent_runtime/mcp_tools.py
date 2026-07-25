@@ -59,10 +59,60 @@ from shared_mcp import (
     MCPTransportError,
     VaultResolver,
 )
+from shared_mcp.oauth import VaultTokenStorage, build_oauth_provider
 
 from agent_runtime.tools import ToolFn, ToolRegistry, ToolResult
 
 logger = logging.getLogger(__name__)
+
+# El `redirect_uri` que el SDK necesita en los metadatos de cliente. En un run
+# NUNCA debería usarse: el registro DCR y el token ya están en Vault desde el
+# «Conectar» del panel, así que el proveedor lee el cliente guardado y refresca
+# sin registrar de nuevo. Si el SDK llegara a necesitarlo es que no hay registro,
+# y entonces el handler por defecto de `build_oauth_provider` aborta con un
+# `MCPAuthError` accionable («conecta este servidor desde el panel») en vez de
+# colgar el run esperando un consentimiento que nadie va a dar.
+_RUNTIME_REDIRECT_URI = "http://localhost/mcp-oauth/unused-at-runtime"
+
+
+def _oauth_base_url(url: str | None) -> str:
+    """The server's BASE url — the SDK derives discovery/token endpoints from it,
+    not from the ``/mcp`` path the transport posts to."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url or "")
+    return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else (url or "")
+
+
+def build_oauth_auth(config: MCPServerConfig, *, vault_resolver: VaultResolver | None) -> Any:
+    """The ``httpx.Auth`` for a server connected via OAuth 2.1, or ``None``.
+
+    The last hop of ADR 0127 (task_wf_12, B-03). The interactive flow was
+    complete — discovery, DCR, PKCE, token + registration in Vault — but the run
+    opened the session WITHOUT ``auth=``, so the remote server answered 401 and
+    the whole feature delivered nothing to autonomous execution, the one case it
+    was designed for.
+
+    ``None`` when the server does not use OAuth (``oauth_ref`` absent), so every
+    other server connects exactly as before. Raises :class:`MCPAuthError` when a
+    server DOES declare OAuth but there is no Vault resolver: without it there is
+    no token, and connecting anyway would surface as an opaque 401 from the
+    remote instead of saying what is missing.
+    """
+    if not config.oauth_ref:
+        return None
+    if vault_resolver is None:
+        raise MCPAuthError(
+            f"server {config.name!r} uses OAuth but no Vault resolver is available "
+            "(AGENT_VAULT_TOKEN missing) — its stored token cannot be read"
+        )
+    storage = VaultTokenStorage(vault_resolver, config.oauth_ref)
+    return build_oauth_provider(
+        server_url=_oauth_base_url(config.url),
+        storage=storage,
+        redirect_uri=_RUNTIME_REDIRECT_URI,
+    )
+
 
 # Fallback output ceiling (bytes, UTF-8) used when a tool's owning server
 # config is unavailable (e.g. a tool registered against a closed runner).
@@ -284,10 +334,12 @@ class MCPToolRunner:
         # sync caller; on failure it carries the exception instead.
         started: Future[tuple[MCPSession, list[MCPTool], asyncio.Event]] = Future()
 
+        auth = build_oauth_auth(config, vault_resolver=self._vault_resolver)
+
         async def _serve() -> None:
             try:
                 async with MCPClient.connect(
-                    config, vault_resolver=self._vault_resolver
+                    config, vault_resolver=self._vault_resolver, auth=auth
                 ) as session:
                     tools = await session.list_tools()
                     stop = asyncio.Event()
