@@ -256,6 +256,55 @@ async def test_bootstrap_from_conversation_creates_draft_and_back_links(
 
 
 @pytest.mark.asyncio
+async def test_generate_plan_twice_from_one_conversation_is_idempotent(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """A-05: «Generar Plan» dos veces NO crea dos planes.
+
+    `create_plan` no comprobaba si la conversación ya había producido uno: el
+    attachment seguía ahí, `_draft_from_conversation` lo volvía a levantar y
+    `related_plan_id` se SOBRESCRIBÍA. El primer plan quedaba huérfano del
+    back-link pero vivo, sincronizable y ejecutable — dos planes con las mismas
+    tareas sobre el mismo proyecto compitiendo por el mismo worktree.
+
+    El segundo POST devuelve el plan que ya existe, y con 200 (no 201): decir
+    «created» de algo que no se ha creado es mentirle al cliente, y es la señal
+    que la UI necesita para avisar en vez de quedarse muda."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        conv_id = (
+            await client.post(
+                f"/projects/{seeded['project_id']}/conversations",
+                json={"title": "Planning chat"},
+                headers=headers,
+            )
+        ).json()["id"]
+
+        first = await client.post(
+            f"/projects/{seeded['project_id']}/plans",
+            json={"conversation_id": conv_id},
+            headers=headers,
+        )
+        assert first.status_code == 201, first.text
+
+        second = await client.post(
+            f"/projects/{seeded['project_id']}/plans",
+            json={"conversation_id": conv_id},
+            headers=headers,
+        )
+        assert second.status_code == 200, second.text
+        assert second.json()["id"] == first.json()["id"]
+
+        listed = await client.get(f"/projects/{seeded['project_id']}/plans", headers=headers)
+        assert len(listed.json()) == 1, "la conversación no debe producir un plan gemelo"
+
+
+@pytest.mark.asyncio
 async def test_specification_with_dag_cycle_returns_422(
     configured_app, migrations_pg_dsn: str
 ) -> None:

@@ -22,7 +22,7 @@ from functools import partial
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select
@@ -217,6 +217,79 @@ async def _draft_from_conversation(
     return None
 
 
+# Estados en los que un plan ya NO retiene su conversación: volver a generar
+# desde ese mismo chat es legítimo (A-05).
+_SUPERSEDABLE_PLAN_STATUSES: frozenset[str] = frozenset({"cancelled", "rejected"})
+
+
+async def _resolve_initial_spec(
+    session: AsyncSession, payload: PlanCreateRequest
+) -> tuple[str | None, dict[str, Any]]:
+    """El spec con el que NACE un plan, ya normalizado y validado.
+
+    Tres orígenes, en orden: el cuerpo inline gana; si no, el attachment del
+    chat de planning (materialización chat→plan, task_03_14); si no, vacío.
+    Devuelve ``(título_del_borrador, spec)``.
+
+    Extraído de ``create_plan`` porque la función pasaba de 12 ramas: aquí vive
+    todo lo que decide QUÉ spec se persiste, y allí solo el ciclo de vida del
+    plan. Lanza 422 (nunca 500) ante un DAG inválido.
+    """
+    draft_title: str | None = None
+    if payload.specification is not None:
+        spec_dict: dict[str, Any] = payload.specification.model_dump()
+    elif payload.conversation_id is not None:
+        drafted = await _draft_from_conversation(session, payload.conversation_id)
+        spec_dict = drafted[1] if drafted is not None else {}
+        draft_title = drafted[0] if drafted is not None else None
+    else:
+        spec_dict = {}
+
+    # A-03: el draft de conversación NO pasa por Pydantic (ver abajo), así que un
+    # `summary` en forma antigua —cadena— se colaba al JSONB y hacía fallar con
+    # 422 cualquier `PUT` posterior que reenviara el spec, además de pintar una
+    # tarjeta «Resumen» vacía. El emisor ya manda el objeto; esto cubre los
+    # borradores viejos que sigan vivos en una conversación.
+    if isinstance(spec_dict.get("summary"), str):
+        text = spec_dict["summary"].strip()
+        spec_dict["summary"] = {"description": text} if text else {}
+
+    # Cycle check (task_03_15). The Pydantic validator handles unknown deps +
+    # duplicate ids for the INLINE spec; the conversation draft (PROY2-12)
+    # bypasses Pydantic, so validate_dag's ValueError (duplicate id, missing id)
+    # must land as 422, never a 500.
+    if spec_dict.get("tasks"):
+        try:
+            validate_dag(spec_dict["tasks"])
+        except DAGCycleError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"error": "dag_cycle", "cycle": exc.cycle},
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"error": "invalid_spec", "message": str(exc)},
+            ) from exc
+    return draft_title, spec_dict
+
+
+async def _live_plan_of_conversation(session: AsyncSession, conversation_id: UUID) -> Plan | None:
+    """El plan VIVO que esta conversación ya produjo, si lo hay (A-05).
+
+    Se resuelve por el back-link `conversation.related_plan_id`, que es el que
+    `create_plan` escribe. ``None`` cuando la conversación no existe, no tiene
+    plan, o el que tiene está cancelado/rechazado — en ese caso generar otro es
+    el comportamiento correcto, no un duplicado."""
+    conv = await session.get(Conversation, conversation_id)
+    if conv is None or conv.related_plan_id is None:
+        return None
+    plan = await session.get(Plan, conv.related_plan_id)
+    if plan is None or plan.status in _SUPERSEDABLE_PLAN_STATUSES:
+        return None
+    return plan
+
+
 # ===========================================================================
 # Project-scoped endpoints
 # ===========================================================================
@@ -224,6 +297,7 @@ async def _draft_from_conversation(
 async def create_plan(
     project_id: UUID,
     payload: PlanCreateRequest,
+    response: Response,
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanResponse:
@@ -231,6 +305,20 @@ async def create_plan(
     project = await _verify_project_visible(session, project_id)
     # P1-01: un proyecto pausado/archivado no acepta planes nuevos.
     require_project_active(project)
+
+    # A-05: idempotencia por conversación. Sin esto, volver al chat y pulsar
+    # «Generar Plan» otra vez creaba un plan GEMELO: el attachment sigue ahí,
+    # `_draft_from_conversation` lo vuelve a levantar y `related_plan_id` se
+    # sobrescribe — el primero queda huérfano del back-link pero vivo,
+    # sincronizable y ejecutable, compitiendo por el mismo worktree.
+    # Se devuelve el existente con 200 (no 201): decir «created» de algo que no
+    # se ha creado es mentir, y es la señal que la UI necesita para avisar.
+    # Un plan cancelado/rechazado NO cuenta: ahí re-planificar es legítimo.
+    if payload.conversation_id is not None:
+        existing = await _live_plan_of_conversation(session, payload.conversation_id)
+        if existing is not None:
+            response.status_code = status.HTTP_200_OK
+            return to_plan_response(existing)
 
     # PROY2-01: un plan solo puede NACER como borrador o pendiente de
     # aprobación — no `approved`/`in_progress`/`completed` (esquivaría approve,
@@ -250,42 +338,7 @@ async def create_plan(
 
     # Spec sources: inline body wins; else lift the planning chat's draft attachment
     # (chat→plan materialisation, task_03_14); else an empty draft.
-    draft_title: str | None = None
-    if payload.specification is not None:
-        spec_dict = payload.specification.model_dump()
-    elif payload.conversation_id is not None:
-        drafted = await _draft_from_conversation(session, payload.conversation_id)
-        spec_dict = drafted[1] if drafted is not None else {}
-        draft_title = drafted[0] if drafted is not None else None
-    else:
-        spec_dict = {}
-
-    # A-03: el draft de conversación NO pasa por Pydantic (ver el comentario de
-    # abajo), así que un `summary` en forma antigua —cadena— se colaba al JSONB y
-    # hacía fallar con 422 cualquier `PUT` posterior que reenviara el spec, además
-    # de pintar una tarjeta «Resumen» vacía. El emisor ya manda el objeto; esto
-    # cubre los borradores viejos que sigan vivos en una conversación.
-    if isinstance(spec_dict.get("summary"), str):
-        text = spec_dict["summary"].strip()
-        spec_dict["summary"] = {"description": text} if text else {}
-
-    # Cycle check (task_03_15). The Pydantic validator handles unknown
-    # deps + duplicate ids for the INLINE spec; the conversation draft
-    # (PROY2-12) bypasses Pydantic, so validate_dag's ValueError (duplicate
-    # id, missing id) must land as 422, never a 500.
-    if spec_dict.get("tasks"):
-        try:
-            validate_dag(spec_dict["tasks"])
-        except DAGCycleError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail={"error": "dag_cycle", "cycle": exc.cycle},
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail={"error": "invalid_spec", "message": str(exc)},
-            ) from exc
+    draft_title, spec_dict = await _resolve_initial_spec(session, payload)
 
     plan_title = payload.title or draft_title or "Borrador del plan"
     plan = Plan(
