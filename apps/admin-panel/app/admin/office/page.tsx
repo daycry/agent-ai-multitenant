@@ -116,6 +116,13 @@ export default function OfficePage() {
   const idleAgents = catalog.filter((a) => !busyIds.has(a.id));
   const counts = useMemo(() => officeCounts(enriched), [enriched]);
 
+  // Capacidad de la planta, redondeada a tramos de 5 (las bandas de mesas) para
+  // que pequeñas variaciones del recuento no remonten la escena.
+  const capacity = useMemo(
+    () => Math.max(5, Math.ceil(Math.max(enriched.length, 1) / 5) * 5),
+    [enriched.length],
+  );
+
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 px-4 py-8">
       <div className="flex items-center gap-3">
@@ -145,7 +152,15 @@ export default function OfficePage() {
         <span title="Agentes del catálogo sin run activo">😴 {counts.idle} libres</span>
       </div>
 
-      <OfficeMiniverse getStatuses={getStatuses} onSelectAgent={onSelectAgent} />
+      {/* La planta se dimensiona a la plantilla (una mesa por agente). `key` fuerza
+          un remonte SOLO cuando cambia el tramo de capacidad (bandas de 5), no en
+          cada refresco de datos — así la escena no se reinicia sin motivo. */}
+      <OfficeMiniverse
+        key={`cap-${capacity}`}
+        capacity={capacity}
+        getStatuses={getStatuses}
+        onSelectAgent={onSelectAgent}
+      />
 
       {desks.size === 0 && !runningRuns.isLoading && (
         <p className="text-muted-foreground text-sm" data-testid="office-empty">

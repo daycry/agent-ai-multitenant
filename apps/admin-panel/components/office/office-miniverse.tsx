@@ -17,6 +17,7 @@
 import { useEffect, useRef } from "react";
 
 import type { PropLayout, SceneConfig, SpriteSheetConfig } from "@/vendor/miniverse-core";
+import { buildFloorplan } from "@/lib/office/floorplan";
 import type { AgentStatus } from "@/lib/office/miniverse-bridge";
 
 const WORLD = "cozy-startup";
@@ -104,15 +105,22 @@ function buildSceneConfig(
 export function OfficeMiniverse({
   getStatuses,
   onSelectAgent,
+  capacity = 10,
 }: {
   getStatuses: () => AgentStatus[];
   onSelectAgent: (agentId: string) => void;
+  /** Cuántos agentes debe acomodar la planta (una mesa por agente). El mundo de
+   * serie solo traía 2 mesas y 2 puntos de deambular → los personajes nacían
+   * apilados y no se movían; la planta se genera a medida (ver floorplan.ts). */
+  capacity?: number;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const getStatusesRef = useRef(getStatuses);
   const onSelectRef = useRef(onSelectAgent);
+  const capacityRef = useRef(capacity);
   getStatusesRef.current = getStatuses;
   onSelectRef.current = onSelectAgent;
+  capacityRef.current = capacity;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -148,14 +156,18 @@ export function OfficeMiniverse({
         });
         mv = instance;
 
+        // Planta GENERADA a medida de la plantilla (una mesa por agente + muchos
+        // puntos de deambular). La del world.json (2 mesas / 2 puntos) apilaba a
+        // los personajes en un tile y los dejaba quietos — ver floorplan.ts.
+        const plan = buildFloorplan(capacityRef.current);
         const props = new mod.PropSystem(TILE, 2);
         await Promise.all(
-          Object.entries(wd.propImages ?? {}).map(([id, src]) =>
+          Object.entries(plan.propImages).map(([id, src]) =>
             props.loadSprite(id, `${BASE}/${String(src).replace(/^\//, "")}`),
           ),
         );
-        props.setLayout(wd.props ?? []);
-        if (wd.wanderPoints) props.setWanderPoints(wd.wanderPoints);
+        props.setLayout(plan.props as PropLayout);
+        props.setWanderPoints(plan.wanderPoints);
         props.setDeadspaceCheck((c, r) => (instance.getFloorLayer()?.[r]?.[c] ?? "") === "");
         instance.setTypedLocations(props.getLocations());
         instance.updateWalkability(props.getBlockedTiles());
