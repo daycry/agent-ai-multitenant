@@ -16,6 +16,8 @@ Creation paths:
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from functools import partial
@@ -79,6 +81,7 @@ from api_server.db.review_session_repo import (
 )
 from api_server.events import publish_task_status_changed
 from api_server.llm_providers.vault import LLMProviderVaultStore
+from api_server.plan_progress import TaskSnapshot, compute_plan_progress
 from api_server.preview_launch import build_preview_request
 from api_server.routers._helpers import (
     get_writable_or_404,
@@ -498,6 +501,125 @@ async def get_plan(
     return to_plan_response(await _load_plan(session, plan_id))
 
 
+class PlanProgressResponse(BaseModel):
+    total: int
+    done: int
+    open: int
+    label: str
+
+
+class PlanPRResponse(BaseModel):
+    url: str | None = None
+    branch: str | None = None
+    error: str | None = None
+
+
+class PlanCostStatusResponse(BaseModel):
+    ai_currency: str
+    human_currency: str
+    estimated_ai_min: Decimal
+    estimated_ai_max: Decimal
+    estimated_human_hours: Decimal
+    estimated_human_cost: Decimal
+    actual_ai_cost: Decimal
+    actual_tokens: int
+    actual_runs: int
+    over_estimate: bool
+
+
+class PlanStatusResponse(BaseModel):
+    """Everything the plan header shows, in ONE call (task_wf_30)."""
+
+    plan_id: UUID
+    status: str
+    progress: PlanProgressResponse
+    pr: PlanPRResponse
+    cost: PlanCostStatusResponse
+
+
+@plans_router.get("/{plan_id}/status", response_model=PlanStatusResponse)
+async def get_plan_status(
+    plan_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> PlanStatusResponse:
+    """The plan's state of play: progress, PR and estimated-vs-actual cost.
+
+    ONE endpoint instead of the four sections the first version of this plan
+    proposed — less code, and the operator reads the plan's state in one place
+    rather than four (task_wf_30). It folds three separate blind spots:
+
+    * **D-01** — ``compute_plan_progress`` has been written and tested since Plan
+      06 and its only consumer was the un-wired demo ``plan_runner``. No endpoint,
+      no progress anywhere in the product.
+    * **D-02** — ``pr_url``/``pr_branch``/``pr_error`` travelled in the plan
+      response with ZERO occurrences in the frontend: the operator approved a plan
+      and never saw the PR, nor why it failed.
+    * **D-04** — the estimate was computed in full (``/cost-breakdown``) and the
+      actual spend was aggregated nowhere. A budget that is never contrasted is
+      not a budget.
+    """
+    plan = await _load_plan(session, plan_id)
+
+    task_rows = (
+        (await session.execute(select(Task.id, Task.status).where(Task.plan_id == plan.id)))
+        .tuples()
+        .all()
+    )
+    progress = compute_plan_progress(
+        str(plan.id),
+        [TaskSnapshot(id=str(tid), status=str(tstatus)) for tid, tstatus in task_rows],
+    )
+
+    # Las filas de SQLAlchemy exponen las columnas como atributos, así que
+    # `aggregate_actual_spend` las lee igual que a un `Execution` completo — sin
+    # traer las columnas pesadas (steps_log, output) que la cabecera no usa.
+    executions: list[Any] = []
+    if task_rows:
+        executions = list(
+            (
+                await session.execute(
+                    select(Execution.total_cost_usd, Execution.total_tokens).where(
+                        Execution.task_id.in_([tid for tid, _ in task_rows])
+                    )
+                )
+            ).all()
+        )
+    spend = aggregate_actual_spend(executions)
+
+    tenant_rate, tenant_currency = await _resolve_tenant_rate(session, plan.tenant_id)
+    human = compute_human_cost(
+        plan.specification or {},
+        hourly_rate=tenant_rate if tenant_rate is not None else DEFAULT_HOURLY_RATE_EUR,
+        currency=tenant_currency or "EUR",
+    )
+    ai = await _compute_plan_ai_cost(session, plan)
+
+    cost = build_plan_cost_status(
+        estimated_ai_usd_min=ai.cost_min,
+        estimated_ai_usd_max=ai.cost_max,
+        estimated_human_hours=human.total_hours,
+        estimated_human_cost=human.total_cost,
+        human_currency=human.currency,
+        actual_cost_usd=spend.cost_usd,
+        actual_tokens=spend.tokens,
+        actual_runs=spend.runs,
+    )
+
+    return PlanStatusResponse(
+        plan_id=plan.id,
+        status=str(plan.status),
+        progress=PlanProgressResponse(
+            total=progress.total,
+            done=progress.done,
+            open=progress.open,
+            label=progress.label,
+        ),
+        pr=PlanPRResponse(url=plan.pr_url, branch=plan.pr_branch, error=plan.pr_error),
+        cost=PlanCostStatusResponse(**cost.__dict__),
+    )
+
+
 @plans_router.post("/{plan_id}/unblock")
 async def unblock_plan(
     plan_id: UUID,
@@ -839,6 +961,94 @@ async def list_plan_comments(
 # ===========================================================================
 # Cost breakdown (task_03_24)
 # ===========================================================================
+# ===========================================================================
+# Estado del plan de un vistazo (task_wf_30 — D-01, D-02, D-04)
+# ===========================================================================
+
+
+@dataclass(frozen=True)
+class ActualSpend:
+    """What a plan's runs REALLY cost, aggregated over its executions."""
+
+    cost_usd: Decimal
+    tokens: int
+    runs: int
+
+
+@dataclass(frozen=True)
+class PlanCostStatus:
+    """Estimated vs actual, with the two currencies kept apart."""
+
+    ai_currency: str
+    human_currency: str
+    estimated_ai_min: Decimal
+    estimated_ai_max: Decimal
+    estimated_human_hours: Decimal
+    estimated_human_cost: Decimal
+    actual_ai_cost: Decimal
+    actual_tokens: int
+    actual_runs: int
+    over_estimate: bool
+
+
+def aggregate_actual_spend(executions: Iterable[Any]) -> ActualSpend:
+    """Sum what a plan's executions actually spent.
+
+    A FAILED run still burned tokens, so it counts: excluding failures would
+    flatter the real cost exactly on the plans that cost the most. NULL columns
+    (a run still in flight) contribute zero rather than breaking the sum.
+    """
+    cost = Decimal("0")
+    tokens = 0
+    runs = 0
+    for row in executions:
+        runs += 1
+        raw_cost = getattr(row, "total_cost_usd", None)
+        if raw_cost is not None:
+            cost += Decimal(str(raw_cost))
+        raw_tokens = getattr(row, "total_tokens", None)
+        if raw_tokens:
+            tokens += int(raw_tokens)
+    return ActualSpend(cost_usd=cost, tokens=tokens, runs=runs)
+
+
+def build_plan_cost_status(
+    *,
+    estimated_ai_usd_min: Decimal,
+    estimated_ai_usd_max: Decimal,
+    estimated_human_hours: Decimal,
+    estimated_human_cost: Decimal,
+    human_currency: str,
+    actual_cost_usd: Decimal,
+    actual_tokens: int,
+    actual_runs: int,
+) -> PlanCostStatus:
+    """Put the estimate and the actual side by side (D-04).
+
+    The AI estimate and the actual spend are both USD, so they compare directly.
+    The HUMAN estimate is EUR and measures something else entirely (person-hours
+    a human would have spent), so it is reported alongside and never subtracted:
+    a single number mixing the two currencies would be fabricated.
+
+    ``over_estimate`` only fires when there IS an estimate to exceed. A plan with
+    no ``estimates`` in its spec spends what it spends, but calling that "over
+    budget" would assert something nobody computed.
+    """
+    has_estimate = estimated_ai_usd_max > 0
+    return PlanCostStatus(
+        ai_currency="USD",
+        human_currency=human_currency,
+        estimated_ai_min=estimated_ai_usd_min,
+        estimated_ai_max=estimated_ai_usd_max,
+        estimated_human_hours=estimated_human_hours,
+        estimated_human_cost=estimated_human_cost,
+        actual_ai_cost=actual_cost_usd,
+        actual_tokens=actual_tokens,
+        actual_runs=actual_runs,
+        over_estimate=has_estimate and actual_cost_usd > estimated_ai_usd_max,
+    )
+
+
 async def _compute_plan_ai_cost(
     session: AsyncSession,
     plan: Plan,
