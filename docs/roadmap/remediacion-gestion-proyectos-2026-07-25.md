@@ -409,7 +409,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
 #### `task_wf_20` — El test-runtime deja de contaminar el worktree
 
-- [ ] **Título**: `HOME` del test/stack-runtime pasa a `/home/agent` (lo que ya declaran las
+- [x] _(hecho 2fc6af07)_ **Título**: `HOME` del test/stack-runtime pasa a `/home/agent` (lo que ya declaran las
       imágenes) con su tmpfs correspondiente, replicando el patrón del agent-runtime. Verificar
       que las cachés del catálogo (`COMPOSER_HOME`, `npm_config_cache`…) siguen resolviendo, y
       que con `dep_cache_mount` activo el bind sigue ganando.
@@ -422,7 +422,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
 #### `task_wf_21` — El test-runtime hereda el envelope endurecido
 
-- [ ] **Título**: aplicar `pids_limit` y los perfiles seccomp/apparmor configurados al
+- [x] _(hecho f3843e6f)_ **Título**: aplicar `pids_limit` y los perfiles seccomp/apparmor configurados al
       contenedor de test/stack, reutilizando la lógica de `isolation.py` en vez de duplicarla
       — extraer el tronco común a una función compartida.
 - **Hallazgo**: C-02 (alto) · **Tiempo**: 0,5 d
@@ -440,6 +440,14 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
   `apps/workers/src/workers/celery_client.py:148-160`
 - **Tests**: unit de que la fase de tests despacha a la cola `test`; regresión de que un fallo
   de la fase de tests sigue sin romper un run ya terminado.
+- **PUNTO DE RETOMADA** (2026-07-25): es lo ÚNICO que queda de la ola 2. El patrón a copiar es
+  `run_stack_command_and_wait` (`apps/api-server/src/api_server/celery_client.py:148-177`):
+  `send_task(..., queue="test")` + `async_result.get(timeout=…)` dentro de un
+  `asyncio.to_thread`, con el comentario de deadlock que ya lleva. El sitio a cambiar es la
+  última línea de `_run_task_tests` (`execution.py:918`), que hoy hace
+  `await _run_test_runtime(test_request, settings)` **en proceso**, bloqueando el slot del
+  worker `default` hasta N×600 s. Ojo al `except` que lo envuelve: la fase de tests es
+  best-effort y un fallo suyo NO puede romper un run ya terminado — eso hay que conservarlo.
 
 #### `task_wf_23` — El run-lock sobrevive al hard kill
 
@@ -451,7 +459,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
 #### `task_wf_24` — Un reintento no reinstala las dependencias
 
-- [ ] **Título**: acotar el `clean` de `sync_to_head` para que no arrase los directorios de
+- [x] _(hecho 4725ff45)_ **Título**: acotar el `clean` de `sync_to_head` para que no arrase los directorios de
       dependencias (o `clean -fd` sin `-x` más una limpieza explícita de artefactos de build),
       conservando el determinismo que motivó el `-x`.
 - **Hallazgo**: C-06 (medio) · **Tiempo**: 0,5 d
@@ -459,6 +467,10 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 - **Tests**: unit de que `vendor/` sobrevive a un `sync_to_head` y un fichero de build no.
 - **Nota**: decidir si la exclusión se declara por runtime-template (el template sabe cuáles
   son sus directorios de dependencias) o por convención global. Preferible lo primero.
+- **Resuelto**: se declara por plantilla (`RuntimeTemplate.dependency_dirs`) **y** se pasa la
+  UNIÓN de todas al `clean`, porque un worktree puede tener varios stacks a la vez (monorepo
+  con backend PHP y frontend node): limitarse al template por defecto del proyecto seguiría
+  arrasando los del otro. Hay test que impide colar un directorio de BUILD en esa lista.
 
 ---
 
