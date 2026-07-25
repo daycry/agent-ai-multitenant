@@ -553,7 +553,7 @@ Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
 
 #### `task_wf_36` — Una sola definición de plan completado
 
-- [ ] **Título**: decidir y unificar. Recomendación: `completed` significa «validado por el
+- [x] _(hecho 482fe5a0)_ **Título**: decidir y unificar. Recomendación: `completed` significa «validado por el
       humano» (lo que hace hoy el camino real), y el estado del PR se refleja aparte
       (`task_wf_31`). Entonces `transition_to_completed` se ajusta o se retira, sus tests se
       migran, y `CLAUDE.md` se corrige.
@@ -563,6 +563,14 @@ Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
 - **Tests**: los de `test_plan_completion.py` migrados a la definición elegida.
 - **Nota**: es un cambio de criterio de producto. Si el operador prefiere la definición
   estricta (PR mergeado), la tarea cambia de forma y necesita el webhook de merge.
+- **Decidido** (2026-07-25): se aplica la recomendación — `completed` = validado por el
+  humano. La definición estricta habría exigido un webhook de merge que no existe y habría
+  dejado cada plan colgado de un evento que nadie emite. **Si el operador prefiere la
+  estricta, esto se revierte y se planifica el webhook.**
+- **Corrección al plan**: `CLAUDE.md` NO había que tocarlo. Su principio 5 ya dice «al
+  completar el plan se abre un PR automático» —completar primero, PR después—, el orden real.
+  Los criterios de cierre con «PR mergeado» de su protocolo de roadmap gobiernan las FASES de
+  desarrollo de esta plataforma, no la máquina de estados del producto: son otra cosa.
 
 ---
 
