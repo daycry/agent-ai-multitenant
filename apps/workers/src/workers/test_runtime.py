@@ -54,6 +54,7 @@ from workers.isolation import (
     AGENT_UID_GID,
     DockerSocketLeakError,
     assert_no_docker_socket,
+    build_security_opt,
 )
 
 _log = structlog.get_logger("workers.test_runtime")
@@ -942,7 +943,18 @@ class TestRuntimeRunner:
             "mounts": mounts,
             "environment": env,
             "cap_drop": ["ALL"],
-            "security_opt": ["no-new-privileges:true"],
+            # C-02 (task_wf_21): esto era `["no-new-privileges:true"]` a secas.
+            # Este contenedor ejecuta el MISMO tipo de código no controlado que
+            # el del agente — la toolchain del proyecto sobre el worktree — pero
+            # los perfiles seccomp/apparmor que el operador configura solo se
+            # aplicaban allí: existían en disco y aquí no se cableaban.
+            "security_opt": build_security_opt(self._settings),
+            # Y sin `pids_limit` un `make -j` desbocado o una fork-bomb del repo
+            # bajo prueba no tenían tope. Ajuste propio y MÁS alto que el del
+            # agente: un contenedor de tests arranca legítimamente más procesos
+            # (compiladores en paralelo, watchers, servidores de prueba), y
+            # heredar el 256 del agente cambiaría un riesgo por un falso negativo.
+            "pids_limit": self._settings.test_runtime_pids_limit,
             "read_only": True,
             # La raíz va en solo lectura, así que el HOME necesita su propio
             # tmpfs o la toolchain se come un EROFS al escribir en él. NO

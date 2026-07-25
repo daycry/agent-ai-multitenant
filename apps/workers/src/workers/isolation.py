@@ -92,6 +92,29 @@ def assert_no_docker_socket(run_kwargs: dict[str, Any]) -> None:
         )
 
 
+def build_security_opt(settings: Settings) -> list[str]:
+    """The ``security_opt`` list EVERY container running user code must carry.
+
+    Shared by the agent-runtime and the test/stack runtime (task_wf_21, C-02).
+    Both execute code we do not control — the principle in CLAUDE.md §2 does not
+    distinguish between them — yet the seccomp/apparmor wiring lived only in this
+    module, so the hardened profiles the operator configures existed on disk and
+    were silently NOT applied to the test container. Duplicating the logic is
+    exactly what let the two envelopes diverge; hence one helper.
+
+    The Docker SDK forwards the seccomp profile's CONTENT, not its path, so it is
+    read here and the daemon never needs the file.
+    """
+    security_opt = ["no-new-privileges:true"]
+    seccomp = settings.seccomp_profile_path.strip()
+    if seccomp:
+        security_opt.append("seccomp=" + Path(seccomp).read_text(encoding="utf-8"))
+    apparmor = settings.apparmor_profile.strip()
+    if apparmor:
+        security_opt.append("apparmor=" + apparmor)
+    return security_opt
+
+
 def build_hardened_run_kwargs(
     settings: Settings,
     *,
@@ -107,17 +130,7 @@ def build_hardened_run_kwargs(
     mutating it). Otherwise /workspace is an ephemeral tmpfs. Either way
     the container's root filesystem stays read-only.
     """
-    security_opt = ["no-new-privileges:true"]
-
-    seccomp = settings.seccomp_profile_path.strip()
-    if seccomp:
-        # The Docker SDK forwards the profile *content*, not the path —
-        # read it here so the daemon never needs the file.
-        security_opt.append("seccomp=" + Path(seccomp).read_text(encoding="utf-8"))
-
-    apparmor = settings.apparmor_profile.strip()
-    if apparmor:
-        security_opt.append("apparmor=" + apparmor)
+    security_opt = build_security_opt(settings)
 
     # HOME is the CLI's own size-capped tmpfs OUTSIDE /workspace. The Claude Code
     # CLI writes its config (.claude.json ~25KB, .claude/) into HOME; with

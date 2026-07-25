@@ -147,6 +147,16 @@ class Settings(BaseSettings):
         default=256,
         description="Max process count inside an agent container — caps " "fork bombs.",
     )
+    test_runtime_pids_limit: int = Field(
+        default=1024,
+        description="Max process count inside a TEST/STACK runtime container "
+        "(task_wf_21, C-02). Deliberately higher than container_pids_limit: a test "
+        "container legitimately spawns far more processes than the agent loop "
+        "(parallel compilers, watchers, test servers), so inheriting the agent's "
+        "256 would trade a real risk for a false test failure. Still a hard cap: "
+        "without one, a runaway `make -j` or a fork bomb in the repo under test "
+        "had nothing stopping it. Override with WORKERS_TEST_RUNTIME_PIDS_LIMIT.",
+    )
     container_tmp_size: str = Field(
         default="64m", description="Size of the /tmp tmpfs in an agent container."
     )
