@@ -310,7 +310,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
 #### `task_wf_10` — Las tools MCP del proyecto se anuncian al modelo
 
-- [ ] **Título**: propagar el `input_schema` de las tools MCP del proyecto hasta
+- [x] _(hecho 193ab8ea)_ **Título**: propagar el `input_schema` de las tools MCP del proyecto hasta
       `build_model_tool_schemas`. La vía limpia es que `_assemble_run_request` añada las tools
       MCP resueltas a `tool_specs` (con nombre `<server>.<tool>`, descripción y esquema), de
       modo que la fuente de esquemas ya existente las recoja sin tocar el resolvedor.
@@ -323,10 +323,17 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
   allowlist sigue filtrando por rol.
 - **Criterio de aceptación**: un run de un agente con una tool MCP de proyecto permitida
   recibe su esquema y puede invocarla en la primera iteración.
+- **Entregado**: `_project_mcp_tool_rows` es ahora la ÚNICA fuente de la que salen tanto los
+  nombres permitidos como los esquemas anunciados (derivarlos por separado es cómo apareció
+  B-01); `serialize_project_mcp_tool_specs` + `merge_tool_specs` en
+  `agent_tools_enforcement.py`. No hizo falta tocar el runtime: `register_tool_specs` ignora
+  las entradas `mcp_tool`, así que el spec sirve solo como fuente de esquemas. Test de
+  integración del camino entero (fila `Tool` → dispatch → `ExecutionRequest` → agent-spec) con
+  un agente **sin grants**.
 
 #### `task_wf_11` — Un agente sin grants ve las tools que puede ejecutar
 
-- [ ] **Título**: cuando `allowed_tools` está ausente (sin restricción por agente), anunciar
+- [x] _(hecho 43d1e74c)_ **Título**: cuando `allowed_tools` está ausente (sin restricción por agente), anunciar
       el conjunto de tools cableadas por defecto en vez de solo las de sistema — alineando lo
       que el modelo ve con lo que el registry deja ejecutar.
 - **Hallazgo**: B-02 (alto) · **Tiempo**: 0,5 d
@@ -339,7 +346,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
 #### `task_wf_12` — El OAuth de MCP llega al runtime
 
-- [ ] **Título**: construir el `httpx.Auth` con `build_oauth_provider` cuando el servidor
+- [x] _(hecho 18a8c2a8 + 6fb35e7c)_ **Título**: construir el `httpx.Auth` con `build_oauth_provider` cuando el servidor
       declara `auth_kind="oauth"` y pasarlo como `auth=` en `MCPToolRunner.connect`. El
       almacenamiento en Vault y el flujo interactivo ya existen; falta el último salto.
 - **Hallazgo**: B-03 (alto) · **Tiempo**: 0,5 d
@@ -349,6 +356,17 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
   regresión de que un servidor sin OAuth sigue conectando sin él.
 - **Criterio de aceptación**: un servidor MCP remoto con OAuth conectado desde la UI funciona
   dentro de un run.
+- **El plan subestimó el alcance**: daba por hecho que el servidor «declara `auth_kind`», y
+  **`auth_kind` no se persiste** en `project.mcp_servers` (el frontend lo deduce del catálogo
+  por URL). El runtime no tenía por tanto ni forma de saber que un servidor usa OAuth ni el
+  tenant/proyecto para la ruta de Vault. Entregado: `template_for_url`/`uses_oauth` en
+  `shared_mcp.catalog` (la misma búsqueda que ya hacía el panel, ahora compartida),
+  `MCPServerConfig.oauth_ref` **separado** de `auth_ref`, `serialise_servers_for_run` en el
+  dispatch (que es quien conoce tenant+proyecto) y `build_oauth_auth` en el runtime. Una URL
+  fuera del catálogo NO se trata como OAuth.
+- **Sigue pendiente el test humano** (`human_wf_03` extendido): el handshake real contra un
+  servidor OAuth vivo no se puede ejercitar sin navegador — es el mismo riesgo residual (c)
+  que el propio ADR 0127 declaró.
 
 #### `task_wf_13` — `send_notification` deja de ser una promesa falsa
 
@@ -364,7 +382,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
 #### `task_wf_15` — Un invariante que mata la familia entera
 
-- [ ] _(parcial f51c4fa5 — falta el cruce allowlist↔esquema)_ **Título**: test de contrato que fije, para cualquier combinación de agente / proyecto /
+- [x] _(hecho f51c4fa5 + ec461d8c)_ **Título**: test de contrato que fije, para cualquier combinación de agente / proyecto /
       modo: **toda tool del allowlist efectivo tiene esquema anunciado, y todo esquema
       anunciado corresponde a un ejecutor real que no devuelve `not wired`**. B-01, B-02 y
       B-04 son tres instancias del mismo fallo; sin el invariante volverán a aparecer con la
@@ -378,7 +396,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
 #### `task_wf_14` — El prompt sabe si un servidor MCP no conectó
 
-- [ ] **Título**: bloque nuevo del preámbulo con el estado de los servidores MCP, presente
+- [x] _(hecho 31279990)_ **Título**: bloque nuevo del preámbulo con el estado de los servidores MCP, presente
       solo cuando alguno falló, fenced como el resto de datos no confiables.
 - **Hallazgo**: B-07 (medio) · **Tiempo**: 0,5 d
 - **Ficheros**: `agent_runtime/__main__.py:350-425,692-751`
