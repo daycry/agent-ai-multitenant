@@ -564,6 +564,8 @@ async def _provision_worktree(
     lanza :class:`RepoHistoryLostError` en vez de fabricar un workspace vacío."""
     from pathlib import Path
 
+    from shared_test_runtimes import catalog as runtime_catalog
+
     from workers.git_repos import BareRepoManager, WorktreeManager
     from workers.plan_git import worktree_coordinates
 
@@ -593,7 +595,13 @@ async def _provision_worktree(
                 + " — el historial del proyecto se perdió (¿wipe/pérdida de data_root?)."
             )
         path = wt.add(task_id, branch=branch)
-        wt.sync_to_head(task_id, branch=branch)
+        # task_wf_24 (C-06): el `clean -fdx` del sync barría también `vendor/`,
+        # `node_modules/`, `.venv/`… así que cada reintento reinstalaba en frío.
+        # Los nombres los declara cada plantilla de runtime; se pasa la UNIÓN
+        # porque un worktree puede tener varios stacks a la vez (monorepo con
+        # backend PHP y frontend node) y limitarse al template por defecto del
+        # proyecto seguiría arrasando los del otro.
+        wt.sync_to_head(task_id, branch=branch, preserve=runtime_catalog.dependency_dirs())
         if expect_plan_history and not any(entry.name != ".git" for entry in Path(path).iterdir()):
             raise RepoHistoryLostError(
                 f"El checkout de la rama '{branch}' está VACÍO pese a que el plan tiene "

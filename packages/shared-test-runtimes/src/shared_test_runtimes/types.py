@@ -162,6 +162,21 @@ class RuntimeTemplate:
     # a dict with ``dict(template.cache_env)``.
     cache_env: tuple[tuple[str, str], ...] = ()
 
+    # Directories INSIDE the worktree that hold installed dependencies
+    # (``vendor``, ``node_modules``, ``.venv``…) — task_wf_24 / C-06.
+    #
+    # ``sync_to_head`` runs ``git clean -fdx`` before every run; the ``-x``
+    # sweeps IGNORED files too, so it wiped these and every retry reinstalled
+    # from cold (minutes of wall clock, egress through the allowlisted proxy,
+    # and a failure unrelated to the task whenever a registry is down). These
+    # names are excluded from that clean; everything else is still swept, so the
+    # determinism the ``-x`` bought is preserved.
+    #
+    # BUILD OUTPUTS (``target``, ``dist``, ``build``) must NOT be listed: keeping
+    # them would reintroduce exactly the contamination the ``-x`` exists to
+    # prevent. Only what an installer would re-download.
+    dependency_dirs: tuple[str, ...] = ()
+
     def __post_init__(self) -> None:
         if not self.id or not self.id.strip():
             raise ValueError("id must be a non-empty slug")

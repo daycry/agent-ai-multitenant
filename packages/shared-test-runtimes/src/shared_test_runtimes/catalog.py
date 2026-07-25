@@ -53,6 +53,7 @@ PYTHON_PYTEST = RuntimeTemplate(
     ),
     output_parsers=("junit_xml", "raw_text"),
     cache_env=(("PIP_CACHE_DIR", "/home/agent/.cache/pip"),),
+    dependency_dirs=(".venv", "venv"),
 )
 
 # --- Node -----------------------------------------------------------
@@ -64,6 +65,7 @@ NODE_JEST = RuntimeTemplate(
     default_pre_install=("npm ci",),
     output_parsers=("jest_json", "junit_xml", "raw_text"),
     cache_env=(("npm_config_cache", "/home/agent/.npm"),),
+    dependency_dirs=("node_modules",),
 )
 
 NODE_VITEST = RuntimeTemplate(
@@ -73,6 +75,7 @@ NODE_VITEST = RuntimeTemplate(
     default_pre_install=("npm ci",),
     output_parsers=("junit_xml", "raw_text"),
     cache_env=(("npm_config_cache", "/home/agent/.npm"),),
+    dependency_dirs=("node_modules",),
 )
 
 NODE_PLAYWRIGHT = RuntimeTemplate(
@@ -84,6 +87,7 @@ NODE_PLAYWRIGHT = RuntimeTemplate(
     default_resources=Resources(cpu=2.0, memory_mb=2048),
     output_parsers=("playwright_json", "junit_xml", "raw_text"),
     cache_env=(("npm_config_cache", "/home/agent/.npm"),),
+    dependency_dirs=("node_modules",),
 )
 
 # --- PHP ------------------------------------------------------------
@@ -95,6 +99,7 @@ PHP_PHPUNIT = RuntimeTemplate(
     default_pre_install=("composer install --no-interaction --no-progress",),
     output_parsers=("junit_xml", "raw_text"),
     cache_env=(("COMPOSER_CACHE_DIR", "/home/agent/.composer/cache"),),
+    dependency_dirs=("vendor",),
 )
 
 PHP_PEST = RuntimeTemplate(
@@ -104,6 +109,7 @@ PHP_PEST = RuntimeTemplate(
     default_pre_install=("composer install --no-interaction --no-progress",),
     output_parsers=("junit_xml", "raw_text"),
     cache_env=(("COMPOSER_CACHE_DIR", "/home/agent/.composer/cache"),),
+    dependency_dirs=("vendor",),
 )
 
 # --- Go -------------------------------------------------------------
@@ -154,6 +160,7 @@ RUBY_RSPEC = RuntimeTemplate(
     default_pre_install=("bundle install --jobs=4",),
     output_parsers=("junit_xml", "raw_text"),
     cache_env=(("BUNDLE_PATH", "/home/agent/.bundle"),),
+    dependency_dirs=("vendor",),
 )
 
 # --- Rust -----------------------------------------------------------
@@ -254,8 +261,22 @@ def list_ids() -> tuple[str, ...]:
     return tuple(CATALOG)
 
 
+def dependency_dirs() -> tuple[str, ...]:
+    """Every stack's dependency directories, deduplicated and sorted.
+
+    The UNION and not one template's list, because a worktree legitimately holds
+    several stacks at once — a monorepo with a PHP backend and a node frontend is
+    the common case, and preserving only the declared default template's dirs
+    would still wipe the other's on every sync (task_wf_24, C-06). The names are
+    unambiguous enough (``vendor``, ``node_modules``, ``.venv``) that the union
+    costs nothing.
+    """
+    return tuple(sorted({d for t in CATALOG.values() for d in t.dependency_dirs}))
+
+
 __all__ = [
     "CATALOG",
+    "dependency_dirs",
     "DOTNET_TEST",
     "GENERIC_HTTP",
     "GENERIC_SHELL",

@@ -39,6 +39,7 @@ from __future__ import annotations
 import contextlib
 import subprocess
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -109,6 +110,34 @@ class BareRepoLayout:
 
 class GitCommandError(RuntimeError):
     """Raised when a ``git`` invocation returns non-zero."""
+
+
+def clean_args(preserve: Sequence[str]) -> tuple[str, ...]:
+    """``git clean`` argv that sweeps the worktree but KEEPS the dependency dirs.
+
+    ``clean -fdx`` runs before every run so the agent starts deterministic, but
+    the ``-x`` also sweeps IGNORED paths — which is where installed dependencies
+    live. Every retry therefore reinstalled from cold: minutes of wall clock,
+    egress through the allowlisted proxy, and a failure unrelated to the task
+    whenever a registry is down (task_wf_24, C-06).
+
+    Dropping the ``-x`` would have been the easy and wrong fix: a previous run's
+    ignored build artifacts would contaminate the next one, which is exactly what
+    the ``-x`` is for. Instead the dependency directories — declared by each
+    runtime template, not invented here — are excluded and everything else is
+    still swept.
+
+    Names are validated rather than passed through: they come from the catalog
+    today, but handing unvalidated strings to a git command line is the kind of
+    hole one does not leave open.
+    """
+    args: list[str] = ["clean", "-fdx"]
+    for raw in preserve:
+        name = str(raw).strip()
+        if not name or name.startswith("-") or name.startswith("/") or ".." in name:
+            raise ValueError(f"invalid dependency directory to preserve: {raw!r}")
+        args.extend(("-e", name))
+    return tuple(args)
 
 
 def _run_git(*args: str, cwd: Path | None = None, env_extra: dict[str, str] | None = None) -> str:
@@ -483,8 +512,9 @@ class WorktreeManager:
         return True
 
     # --- task_06_19 — sync worktree to the plan branch HEAD ------------
+    # (`clean_args` lives at module level — see below.)
 
-    def sync_to_head(self, task_id: str, *, branch: str) -> None:
+    def sync_to_head(self, task_id: str, *, branch: str, preserve: Sequence[str] = ()) -> None:
         """Bring the worktree to ``branch``'s current HEAD.
 
         Called by the worker BEFORE handing control to the agent — so
@@ -492,10 +522,13 @@ class WorktreeManager:
         worktree was last touched are visible. The sequence:
             git -C <wt> fetch <bare-path> <branch>
             git -C <wt> reset --hard FETCH_HEAD
-            git -C <wt> clean -fdx
+            git -C <wt> clean -fdx [-e <preserved> ...]
         ``clean -fdx`` removes any leftover artifacts from a previous
         run (build outputs, untracked __pycache__) so the agent starts
         from a deterministic state.
+
+        ``preserve`` are dependency directories kept across the clean
+        (task_wf_24, C-06). See :func:`clean_args`.
         """
         wt = self._layout.worktree_path(task_id)
         if not wt.exists():
@@ -504,7 +537,7 @@ class WorktreeManager:
         # whether the bare is a real remote or a local on-disk repo.
         _run_git("fetch", str(self._repo_path), branch, cwd=wt)
         _run_git("reset", "--hard", "FETCH_HEAD", cwd=wt)
-        _run_git("clean", "-fdx", cwd=wt)
+        _run_git(*clean_args(preserve), cwd=wt)
         _log.info(
             "worktree.sync",
             tenant=self._layout.tenant_slug,
