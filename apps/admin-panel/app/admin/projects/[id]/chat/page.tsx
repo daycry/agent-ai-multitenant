@@ -69,6 +69,11 @@ interface Message {
 // `api_server.chat.planning_graph.PlanningRole`. Used by the @-mention
 // autocomplete (task_03_12) — the operator can address a specific
 // specialist directly from the chat composer.
+// A-01: cuántos mensajes carga el feed. Un turno de planning emite entre 6 y 10
+// (framing del PM → un especialista por rol → síntesis), así que 100 cubre unos
+// diez turnos completos. El endpoint devuelve LOS MÁS RECIENTES.
+const MESSAGE_WINDOW = 100;
+
 const PLANNING_ROLES = [
   "project_manager",
   "architect",
@@ -245,7 +250,14 @@ export default function ProjectChatPage() {
   // exercises this query because it doesn't mock /messages.
   const messagesQuery = useQuery({
     queryKey: ["messages", activeConversationId],
-    queryFn: () => apiFetch<Message[]>(`/conversations/${activeConversationId}/messages`),
+    // A-01: límite EXPLÍCITO. El endpoint devuelve los más RECIENTES (antes daba
+    // los primeros N, y pasada la ventana el feed se congelaba en el arranque de
+    // la conversación y «Generar Plan» desaparecía). Para releer lo anterior está
+    // `?before=<id>`, que este feed aún no usa: la ventana cubre de sobra un turno.
+    queryFn: () =>
+      apiFetch<Message[]>(
+        `/conversations/${activeConversationId}/messages?limit=${MESSAGE_WINDOW}`,
+      ),
     refetchOnWindowFocus: false,
     enabled: Boolean(activeConversationId),
     // Safety net for live updates: the WebSocket below pushes each step in real time, but if

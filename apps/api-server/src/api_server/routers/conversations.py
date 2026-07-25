@@ -409,19 +409,49 @@ async def list_messages(
             " chronologically without extra columns."
         ),
     ),
+    before: UUID | None = Query(
+        default=None,
+        description=(
+            "Return the messages immediately BEFORE this UUID (older ones), newest"
+            " of them last. Backward pagination for a chat that scrolls up; ignored"
+            " when `after` is set."
+        ),
+    ),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[MessageResponse]:
+    """La ventana del chat. Sin cursor devuelve los mensajes MÁS RECIENTES.
+
+    A-01: esto ordenaba ASC con `limit`, así que devolvía los N PRIMEROS. Pasada
+    la ventana el feed se quedaba congelado en el arranque de la conversación, el
+    botón «Generar Plan» —que mira el último mensaje `agent`— desaparecía para
+    siempre, y el poll de respaldo evaluaba un mensaje viejo. Un chat quiere su
+    cola, no su cabecera.
+
+    Tres modos, todos devolviendo orden cronológico ascendente:
+      * sin cursor  → los `limit` más recientes,
+      * `after`     → los `limit` siguientes (hacia delante; el que ya existía),
+      * `before`    → los `limit` anteriores (hacia atrás, para el scroll up).
+    """
     # Verify the conversation exists (also enforces RLS): otherwise a
     # tenant-B caller asking for tenant-A's id would get [] rather than 404.
     await _load_conversation(session, conversation_id)
 
     stmt = select(Message).where(Message.conversation_id == conversation_id)
     if after is not None:
-        stmt = stmt.where(Message.id > after)
-    stmt = stmt.order_by(Message.id).limit(limit)
-    result = await session.execute(stmt)
-    return [to_message_response(m) for m in result.scalars().all()]
+        # Hacia delante desde el cursor: la cabecera de ese tramo ya es la que se
+        # quiere, así que el orden de la consulta ya es el final.
+        rows = (
+            await session.execute(stmt.where(Message.id > after).order_by(Message.id).limit(limit))
+        ).scalars()
+        return [to_message_response(m) for m in rows]
+    # Sin cursor (los más recientes) y `before` (los anteriores a uno dado) se
+    # resuelven igual: tomar por la COLA con DESC y revertir para devolver
+    # cronológico. Sin el DESC la cláusula `limit` recorta por el lado equivocado.
+    if before is not None:
+        stmt = stmt.where(Message.id < before)
+    rows_desc = (await session.execute(stmt.order_by(Message.id.desc()).limit(limit))).scalars()
+    return [to_message_response(m) for m in reversed(list(rows_desc))]
 
 
 # ===========================================================================
