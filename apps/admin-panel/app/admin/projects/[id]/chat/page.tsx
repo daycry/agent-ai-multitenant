@@ -30,7 +30,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
-import { chatRefetchInterval, isReplyInFlight } from "@/lib/chat-feed";
+import { chatRefetchInterval, isReplyInFlight, summaryFoldedCount } from "@/lib/chat-feed";
 import { conversationLabel, nextActiveAfterDelete } from "@/lib/conversation-history";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { cn } from "@/lib/utils";
@@ -679,7 +679,59 @@ function MessageFeed({ messages, loading }: MessageFeedProps) {
   );
 }
 
+/**
+ * A folded-history summary (task_wf_06 d).
+ *
+ * Summaries are `system`-authored, so without this they rendered as the tiny
+ * italic centred banner used for "modo cambiado" — a multi-paragraph digest of
+ * a dozen messages squeezed into a notice the eye skips. The reader could not
+ * tell the team's memory had been rewritten, nor how much history sat behind it.
+ *
+ * Collapsed by default (it stands in for history the reader already scrolled
+ * past) and expandable. The originals are NOT hidden: `GET /messages` still
+ * returns them, so they remain above in the feed — folding only affects the
+ * context the model reads.
+ */
+function SummaryRow({ message, folded }: { message: Message; folded: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      className="rounded border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm"
+      data-testid="chat-message-summary"
+      data-message-id={message.id}
+    >
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-2 text-left"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        data-testid="chat-summary-toggle"
+      >
+        <span className="text-xs font-medium">
+          🗂️ Resumen de {folded} {folded === 1 ? "mensaje anterior" : "mensajes anteriores"}
+        </span>
+        <span className="text-muted-foreground text-[10px] uppercase tracking-wide">
+          {open ? "ocultar" : "ver resumen"}
+        </span>
+      </button>
+      {open ? (
+        <div className="mt-2 border-t border-amber-500/20 pt-2" data-testid="chat-summary-body">
+          {renderPlanDraft(message.content)}
+          <p className="text-muted-foreground mt-2 text-[10px]">
+            El equipo lee este resumen en lugar de esos mensajes. Los originales siguen más arriba
+            en la conversación.
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function MessageRow({ message }: { message: Message }) {
+  const folded = summaryFoldedCount(message.attachments);
+  if (message.is_summary && folded > 0) {
+    return <SummaryRow message={message} folded={folded} />;
+  }
   if (message.author_kind === "system") {
     return (
       <div

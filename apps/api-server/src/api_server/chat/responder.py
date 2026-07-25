@@ -54,8 +54,9 @@ from api_server.chat.planning_graph import (
     SpecialistContribution,
 )
 from api_server.chat.planning_llm import LLMPlanningModel
+from api_server.chat.summariser import LLMSummariser
 from api_server.db.conversation import Conversation, Message
-from api_server.db.conversation_compression import load_context_window
+from api_server.db.conversation_compression import compress_old_messages, load_context_window
 from api_server.db.domain import Agent, Plan, Project, Team, TeamMember
 from api_server.db.llm_providers import get_llm_provider
 from api_server.db.memory import MemoryEntry
@@ -84,6 +85,24 @@ _log = structlog.get_logger("api_server.chat.responder")
 # comprimidos por su resumen, así que este tope acota el prompt sin perder el
 # arranque una vez la compresión esté cableada (task_wf_06).
 _PLANNING_CONTEXT_MESSAGES = 50
+
+# A-13 / task_wf_06 e: segunda guarda del contexto. `_PLANNING_CONTEXT_MESSAGES` es
+# un contador y un contador no ve que 50 filas muy largas desbordan igual que 500
+# cortas. Con la compresión encendida el contador casi nunca muerde; esto cubre lo
+# que no puede ver.
+_PLANNING_CONTEXT_TOKENS = 24_000
+
+# task_wf_06 c: umbrales de compresión del chat de PROYECTO. Los defaults del
+# módulo (20/10) están pensados para un chat 1-a-1; aquí **un turno son 6-10
+# mensajes** (framing del PM + N especialistas + síntesis), así que 10 partiría un
+# turno por la mitad. Con 40/20 se pliegan 2-3 turnos enteros por pasada.
+#
+# INVARIANTE: el umbral tiene que quedar por DEBAJO de la ventana de contexto. Si
+# no, el contador truncaría la conversación antes de que la compresión llegase a
+# ejecutarse nunca, y lo viejo se perdería en silencio en vez de resumirse.
+# `test_chat_compression_thresholds` lo fija.
+_CHAT_COMPRESSION_THRESHOLD = 40
+_CHAT_COMPRESSION_WINDOW = 20
 
 _STEP_TIMEOUT_S = 150.0
 _DEFAULT_TEMPERATURE = 0.7
@@ -482,6 +501,72 @@ async def _persist_and_publish(
     )
 
 
+async def compress_conversation_best_effort(
+    *,
+    conversation_id: UUID,
+    provider: LLMProvider,
+    api_model: str,
+    redis: Redis,
+) -> Message | None:
+    """Fold the oldest whole turns of a long conversation into one summary row.
+
+    Called at the START of a turn, not the end, for three reasons: the user's
+    message is already durable (``schedule_after_commit``), so the feed ends on a
+    clean turn boundary and the in-flight turn cannot be folded; the provider the
+    turn just built is still open (``_produce_reply`` closes it in its ``finally``);
+    and THIS turn already reads the fresh summary instead of waiting for the next
+    one. A periodic beat would leave a window between "the conversation got long"
+    and "it got compressed" that the next turn falls into.
+
+    Best-effort in the strict sense: any failure leaves the conversation
+    uncompressed and the turn proceeds. Returns the summary row, or ``None``.
+    """
+    sm = get_admin_sessionmaker()
+    summary: Message | None = None
+    try:
+        async with sm() as session, session.begin():
+            summary = await compress_old_messages(
+                session,
+                conversation_id,
+                LLMSummariser(provider=provider, model=api_model),
+                threshold_messages=_CHAT_COMPRESSION_THRESHOLD,
+                window_messages=_CHAT_COMPRESSION_WINDOW,
+                align_to_turns=True,
+            )
+    except Exception as exc:
+        _log.warning(
+            "chat.compression_failed",
+            conversation_id=str(conversation_id),
+            error_type=exc.__class__.__name__,
+        )
+        return None
+    if summary is None:
+        return None
+    _log.info(
+        "chat.conversation_compressed",
+        conversation_id=str(conversation_id),
+        summary_id=str(summary.id),
+    )
+    # The summary IS a row of the feed, so an open chat must see it appear rather
+    # than discover it on the next reload.
+    await publish_conversation_event(
+        redis,
+        str(conversation_id),
+        event_type=EVENT_MESSAGE_CREATED,
+        payload={
+            "message_id": str(summary.id),
+            "author_kind": summary.author_kind,
+            "author_user_id": None,
+            "author_agent_id": None,
+            "content": summary.content,
+            "mode": summary.mode,
+            "attachments": summary.attachments,
+            "is_summary": True,
+        },
+    )
+    return summary
+
+
 async def _system_notice(
     *, tenant_id: UUID, conversation_id: UUID, mode: str, content: str, redis: Redis
 ) -> None:
@@ -864,11 +949,20 @@ async def respond_to_conversation(
             # aquí alinea las dos vías: hasta ahora el cargador correcto alimentaba el
             # contexto secundario y el roto la conversación que el modelo realmente lee.
             #
-            # La compresión en sí (el `Summariser` de producción + su disparo) sigue
-            # pendiente — task_wf_06 b/c. Sin resúmenes esto ya devuelve la cola, que
-            # es lo que arregla A-02; con ellos, además, dejará de perderse lo viejo.
+            # Y antes de leer la ventana, plegar los turnos viejos si toca: así este
+            # mismo turno ya razona sobre el resumen en lugar de esperar al siguiente
+            # (task_wf_06 c). Nunca lanza: si falla, se sigue sin comprimir.
+            await compress_conversation_best_effort(
+                conversation_id=conversation_id,
+                provider=provider,
+                api_model=api_model,
+                redis=redis,
+            )
             rows = await load_context_window(
-                session, conversation_id, max_messages=_PLANNING_CONTEXT_MESSAGES
+                session,
+                conversation_id,
+                max_messages=_PLANNING_CONTEXT_MESSAGES,
+                max_tokens=_PLANNING_CONTEXT_TOKENS,
             )
             # Ground the planning in the project's existing state (prior plans,
             # project memories, docs/code via RAG) — provider-agnostic context, not an
@@ -1065,6 +1159,7 @@ async def resume_pending_replies(*, vault: LLMProviderVaultStore | None, redis: 
 
 __all__ = [
     "build_chat_provider",
+    "compress_conversation_best_effort",
     "history_from_messages",
     "planning_roles_from_strings",
     "resolve_chat_model_config",
