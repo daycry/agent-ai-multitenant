@@ -336,7 +336,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
 #### `task_wf_13` — `send_notification` deja de ser una promesa falsa
 
-- [ ] **Título**: retirar `send_notification` del anuncio al modelo (igual que se hizo con
+- [x] _(hecho f51c4fa5)_ **Título**: retirar `send_notification` del anuncio al modelo (igual que se hizo con
       `kanban_update`/`agent_invoke` en AUD16-02) **y** de `RUNTIME_WIRED_TOOL_NAMES`, dejando
       las tres coherentes. Añadir un test-contrato que impida que una tool sin ejecutor real
       vuelva a entrar en la lista de cableadas.
@@ -348,7 +348,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
 #### `task_wf_15` — Un invariante que mata la familia entera
 
-- [ ] **Título**: test de contrato que fije, para cualquier combinación de agente / proyecto /
+- [ ] _(parcial f51c4fa5 — falta el cruce allowlist↔esquema)_ **Título**: test de contrato que fije, para cualquier combinación de agente / proyecto /
       modo: **toda tool del allowlist efectivo tiene esquema anunciado, y todo esquema
       anunciado corresponde a un ejecutor real que no devuelve `not wired`**. B-01, B-02 y
       B-04 son tres instancias del mismo fallo; sin el invariante volverán a aparecer con la
