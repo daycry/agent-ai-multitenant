@@ -284,16 +284,13 @@ class PlanRunner:
         )
         return bool(result.transitioned)
 
-    def try_complete(
-        self,
-        *,
-        human_verdict: str | None,
-        pr_merged: bool,
-    ) -> bool:
+    def try_complete(self, *, human_verdict: str | None) -> bool:
+        # task_wf_36 (D-07): `pr_merged` desapareció de la regla. Completar
+        # significa «validado por el humano» — el PR se abre DESPUÉS (ADR 0072
+        # fase 2) y su estado se refleja aparte, no como precondición.
         result = transition_to_completed(
             "pending_human_validation",
             human_verdict=human_verdict,  # type: ignore[arg-type]
-            pr_merged=pr_merged,
         )
         self._step(
             "plan:complete",

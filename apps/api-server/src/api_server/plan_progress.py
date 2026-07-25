@@ -308,13 +308,29 @@ def transition_to_completed(
     current_status: PlanStatus,
     *,
     human_verdict: Literal["approved", "rejected"] | None,
-    pr_merged: bool,
 ) -> TransitionResult:
-    """Plan goes to ``completed`` iff human approved AND PRs merged.
+    """A plan goes to ``completed`` iff the HUMAN approved it.
 
-    Called by the orchestrator after both the review-runtime emits an
-    ``approved`` verdict and the PR-merge webhook fires. Returns a
-    no-op when either condition isn't met yet."""
+    There used to be two definitions of the terminal state and they
+    contradicted each other (D-07, task_wf_36):
+
+    * The REAL path (``routers/review.py``) moves the plan to ``completed`` as
+      soon as the human verdict is ``approved``, and enqueues the auto-PR
+      AFTERWARDS (ADR 0072 fase 2). So a ``completed`` plan's PR may not exist
+      yet.
+    * This function additionally required ``pr_merged=True``. Its only caller was
+      the un-wired demo ``plan_runner``, so the written rule governed nothing and
+      said the opposite of the code that actually runs.
+
+    Resolved in favour of what the system does: ``completed`` means "validated by
+    the human", and the PR's state is reported separately (the plan header from
+    task_wf_30 shows it, including why it failed). Requiring the merge would have
+    needed a merge webhook that does not exist, and would have left every plan
+    hanging on an event nobody emits.
+
+    Returns a no-op when the plan is not awaiting validation, or when the human
+    has not approved it — the human gate is still the only way through.
+    """
     if current_status != "pending_human_validation":
         return TransitionResult(
             new_status=current_status,
@@ -326,12 +342,6 @@ def transition_to_completed(
             new_status=current_status,
             transitioned=False,
             reason=f"human verdict is {human_verdict!r}, not 'approved'",
-        )
-    if not pr_merged:
-        return TransitionResult(
-            new_status=current_status,
-            transitioned=False,
-            reason="PR not merged yet",
         )
     return TransitionResult(new_status="completed", transitioned=True)
 
