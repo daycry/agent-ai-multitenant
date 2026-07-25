@@ -47,17 +47,21 @@ from workers.tasks.stack_exec_task import (
 from workers.tasks.test_runtime_task import (
     _launch_test_runtime_plans,
     _run_test_runtime,
+    dispatch_test_runtime_and_wait,
     run_test_runtime,
+    test_phase_wait_budget_s,
 )
 
 __all__ = [
     "compose_review_runtime",
     "compute_plan_code_diff",
+    "dispatch_test_runtime_and_wait",
     "run_agent_container",
     "run_execution",
     "run_stack_command",
     "run_test_runtime",
     "tenant_cap_exceeded",
+    "test_phase_wait_budget_s",
     # Internos con consumidores externos (tests / workers.execution).
     "_DEAD_LETTER_STREAM",
     "_STACK_EXEC_DEFAULT_TIMEOUT_S",

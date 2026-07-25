@@ -23,6 +23,83 @@ from workers.docker_client import get_docker_client
 
 _log = structlog.get_logger("workers.tasks")
 
+# --- despacho de la FASE DE TESTS a la cola `test` (task_wf_22, C-04) --------
+#
+# Presupuesto de espera. Los checks corren EN SERIE dentro del mismo contenedor
+# (el `exec_run` amortiza el pre_install), así que el techo es la suma de sus
+# timeouts; el margen cubre lo que no es un check: pull/arranque de la imagen,
+# servicios auxiliares del proyecto (ADR 0129) y teardown.
+_TEST_PHASE_DEFAULT_CHECK_TIMEOUT_S = 600
+_TEST_PHASE_SPINUP_MARGIN_S = 180
+# Techo duro: cien checks de 600 s no pueden dejar un slot bloqueado 16 horas.
+_TEST_PHASE_MAX_WAIT_S = 3600
+
+
+def test_phase_wait_budget_s(acceptance_criteria: list[Any]) -> int:
+    """Cuánto esperar como mucho por la fase de tests de una tarea.
+
+    Un ``timeout_s`` ausente o basura cae al default en vez de restar: si un
+    valor corrupto produjera una espera de 0 s, la fase se cortaría antes de
+    empezar y el reviewer volvería a quedarse sin ``<test-report>`` — el
+    hallazgo C1/F51 otra vez, por la puerta de atrás.
+    """
+    if not acceptance_criteria:
+        return 0
+    total = 0
+    for check in acceptance_criteria:
+        raw = check.get("timeout_s") if isinstance(check, dict) else None
+        try:
+            per_check = int(raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            per_check = _TEST_PHASE_DEFAULT_CHECK_TIMEOUT_S
+        if per_check <= 0:
+            per_check = _TEST_PHASE_DEFAULT_CHECK_TIMEOUT_S
+        total += per_check
+    return min(total + _TEST_PHASE_SPINUP_MARGIN_S, _TEST_PHASE_MAX_WAIT_S)
+
+
+async def dispatch_test_runtime_and_wait(request: dict[str, Any]) -> dict[str, Any]:
+    """Encolar la fase de tests en la cola ``test`` y esperar su resultado.
+
+    Corría **en proceso** (``await _run_test_runtime(...)``) dentro del worker de
+    la cola ``default``: el slot que un run acababa de liberar se quedaba
+    orquestando Docker —levantar el runtime, los servicios auxiliares, N checks
+    de hasta 600 s, teardown— con los recursos del worker equivocado, y además
+    arrastraba al worker ``default`` el import del SDK de Docker y de
+    ``shared_test_runtimes`` que este módulo aplaza justamente para evitarlo.
+    ``stack_exec`` ya enruta a ``test`` por este motivo (ADR 0093); esta fase se
+    había quedado atrás (C-04, task_wf_22).
+
+    **Se sigue esperando, y a propósito**: el reviewer se despacha después y
+    necesita encontrar un ``<test-report>`` real — sin la espera volvería la
+    carrera que dejaba al reviewer a ciegas (C1/F51). Lo que cambia es DÓNDE se
+    hace el trabajo, no si se espera.
+
+    Best-effort en sentido estricto: el run YA terminó bien y la tarea ya se
+    movió a review, así que un broker caído, la ausencia de worker en ``test`` o
+    el vencimiento del presupuesto se registran y devuelven ``{}``. Nunca lanzan.
+    """
+    criteria = request.get("acceptance_criteria") or []
+    if not criteria:
+        return {}
+    budget = test_phase_wait_budget_s(list(criteria))
+
+    def _send_and_wait() -> dict[str, Any]:
+        async_result = app.send_task("workers.run_test_runtime", args=[request], queue="test")
+        result = async_result.get(timeout=budget)
+        return dict(result) if isinstance(result, dict) else {}
+
+    try:
+        return await asyncio.to_thread(_send_and_wait)
+    except Exception as exc:
+        _log.warning(
+            "workers.test_phase_dispatch_failed",
+            task_id=str(request.get("task_id", "")),
+            budget_s=budget,
+            error_type=exc.__class__.__name__,
+        )
+        return {}
+
 
 @app.task(name="workers.run_test_runtime")  # type: ignore[untyped-decorator]
 def run_test_runtime(request: dict[str, Any]) -> dict[str, Any]:

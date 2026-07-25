@@ -874,7 +874,7 @@ async def _run_task_tests(
     ]
     if not autos:
         return
-    from workers.tasks import _run_test_runtime
+    from workers.tasks import test_runtime_task
 
     # ADR 0129: thread the project's repository_config so the test-runtime brings
     # up the declared services (+ connection env) for the acceptance checks.
@@ -912,8 +912,14 @@ async def _run_task_tests(
         "worktree_host_path": worktree_host_path,
         "repository_config": repository_config,
     }
+    # task_wf_22 (C-04): esto era `await _run_test_runtime(...)` EN PROCESO, o sea
+    # el slot que este run acaba de liberar en la cola `default` se quedaba
+    # orquestando Docker (runtime + servicios auxiliares + N checks de hasta
+    # 600 s + teardown) con los recursos del worker equivocado. Ahora va a la cola
+    # `test`, como `stack_exec` desde ADR 0093. Se sigue ESPERANDO a propósito: el
+    # reviewer se despacha después y necesita un `<test-report>` real (C1/F51).
     try:
-        await _run_test_runtime(test_request, settings)
+        await test_runtime_task.dispatch_test_runtime_and_wait(test_request)
     except Exception as exc:  # pragma: no cover - never break a finished run on tests
         _log.warning("workers.task_tests_failed", task_id=str(task_id), error=str(exc))
 

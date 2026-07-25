@@ -152,16 +152,23 @@ async def test_run_task_tests_threads_worktree_and_filters_criteria(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """prod-18 test_01: the test-runtime is invoked with the worktree path and ONLY
-    the automated acceptance criteria (manual/human checks dropped)."""
+    the automated acceptance criteria (manual/human checks dropped).
+
+    task_wf_22: el seam observado cambió de `_run_test_runtime` (en proceso) a
+    `dispatch_test_runtime_and_wait` (cola `test`). Lo que este test fija —qué
+    request se construye— es exactamente igual de válido; lo que cambió es DÓNDE
+    se ejecuta ese request."""
     from workers.execution import _run_task_tests
 
     captured: dict = {}
 
-    async def _fake_run(request: dict, _settings: Settings) -> dict:
+    async def _fake_dispatch(request: dict) -> dict:
         captured["request"] = request
         return {"status": "completed"}
 
-    monkeypatch.setattr("workers.tasks._run_test_runtime", _fake_run)
+    monkeypatch.setattr(
+        "workers.tasks.test_runtime_task.dispatch_test_runtime_and_wait", _fake_dispatch
+    )
     tenant, task = uuid4(), uuid4()
     criteria = [
         {"id": "a", "runtime": "python-pytest", "command": "pytest -q"},
@@ -188,12 +195,14 @@ async def test_run_task_tests_noop_without_automated_criteria(
 
     called = False
 
-    async def _fake_run(request: dict, _settings: Settings) -> dict:
+    async def _fake_dispatch(request: dict) -> dict:
         nonlocal called
         called = True
         return {}
 
-    monkeypatch.setattr("workers.tasks._run_test_runtime", _fake_run)
+    monkeypatch.setattr(
+        "workers.tasks.test_runtime_task.dispatch_test_runtime_and_wait", _fake_dispatch
+    )
     await _run_task_tests(
         Settings(data_root=str(tmp_path)),
         tenant_id=uuid4(),
