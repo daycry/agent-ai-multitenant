@@ -90,7 +90,7 @@ def test_system_tools_advertised_for_unassigned_agent_when_requested() -> None:
     # worker-side no existe y anunciarlas producía llamadas con éxito falso
     # (hoy, error honesto en el runtime). task_comment sí tiene consumidor.
     out = build_model_tool_schemas(None, None, include_system_tools=True)
-    assert set(_names(out)) == {
+    assert {
         "memory_recall",
         "memory_store",
         "task_comment",
@@ -98,7 +98,104 @@ def test_system_tools_advertised_for_unassigned_agent_when_requested() -> None:
         "update_plan",
         # ADR 0114: la pregunta no terminal a humano es capacidad universal.
         "ask_human",
-    }
+    } <= set(_names(out))
+
+
+# ---------------------------------------------------------------------------
+# task_wf_11 (B-02) — un agente SIN restricción ve las tools que puede ejecutar.
+#
+# `allowed_tools=None` significa «el registry no le restringe nada»: el runtime
+# le deja ejecutar todas las tools cableadas. Pero el anuncio partía de
+# `list(tool_names or [])`, así que ese mismo agente solo veía las seis de
+# sistema — ni `read_file`, ni `write_file`, ni `stack_exec`. Asimetría pura
+# entre lo que puede hacer y lo que sabe que puede hacer: un agente recién
+# creado, sin asignaciones, era incapaz de tocar un fichero porque nadie le
+# dijo que existiera la herramienta.
+# ---------------------------------------------------------------------------
+def test_unrestricted_agent_sees_the_wired_catalog() -> None:
+    out = build_model_tool_schemas(None, None, include_system_tools=True)
+    names = set(_names(out))
+    assert {"read_file", "write_file", "stack_exec"} <= names
+
+
+def test_deny_all_is_still_deny_all() -> None:
+    """`[]` es el bloqueo explícito del modo discusión y NO debe cambiar."""
+    assert build_model_tool_schemas([], None, include_system_tools=True) == []
+
+
+def test_a_concrete_allowlist_is_still_respected() -> None:
+    """Una lista concreta sigue siendo una restricción: solo esas + las de
+    sistema. Si el catálogo por defecto se colase aquí, la asignación por agente
+    dejaría de significar nada."""
+    names = set(_names(build_model_tool_schemas(["read_file"], None, include_system_tools=True)))
+    assert "read_file" in names
+    assert "write_file" not in names
+    assert "stack_exec" not in names
+
+
+def test_the_default_set_never_advertises_an_unwired_tool() -> None:
+    """El catálogo por defecto se deriva de `RUNTIME_WIRED_TOOL_NAMES`, así que
+    no puede reintroducir la promesa falsa que B-04 acaba de retirar."""
+    from shared_domain.tool_names import is_runtime_wired
+
+    out = build_model_tool_schemas(None, None, include_system_tools=True)
+    unwired = {n for n in _names(out) if not is_runtime_wired(n)}
+    # Las de sistema (`update_plan`, `ask_human`) son capacidades del GRAFO, no
+    # del registry, y por eso no están en la lista de cableadas.
+    assert unwired <= {"update_plan", "ask_human"}
+
+
+def test_shell_exec_is_not_offered_by_default() -> None:
+    """`shell_exec` se cablea por proyecto desde `allowed_commands`, que esta
+    función no ve. Anunciarlo sin saber si hay comandos permitidos sería la
+    misma promesa falsa de B-04 con otro nombre; con un grant explícito sí se
+    anuncia, como hasta ahora."""
+    assert "shell_exec" not in set(
+        _names(build_model_tool_schemas(None, None, include_system_tools=True))
+    )
+    assert "shell_exec" in set(
+        _names(build_model_tool_schemas(["shell_exec"], None, include_system_tools=True))
+    )
+
+
+def test_unrestricted_agent_also_sees_the_tools_this_run_wires() -> None:
+    """Las tools de tenant/proyecto (custom, docker_command, MCP del proyecto)
+    no están en el catálogo cableado — son de tenant, no de plataforma — pero el
+    registry del runtime sí las registra. Sin esto, un agente sin grants seguiría
+    sin ver justo las tools que el proyecto acaba de darle (B-01 + B-02 juntos)."""
+    specs = [
+        {
+            "name": "context7.query_docs",
+            "implementation_type": "mcp_tool",
+            "config": {},
+            "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}},
+            "description": "Busca en la documentación.",
+        }
+    ]
+    names = set(_names(build_model_tool_schemas(None, specs, include_system_tools=True)))
+    assert "context7.query_docs" in names
+    assert "read_file" in names
+
+
+def test_a_restricted_agent_does_not_get_the_specs_for_free() -> None:
+    """Con allowlist concreta manda la allowlist: un spec presente pero no
+    permitido no se anuncia."""
+    specs = [
+        {
+            "name": "context7.query_docs",
+            "input_schema": {"type": "object"},
+            "description": "x",
+        }
+    ]
+    names = set(_names(build_model_tool_schemas(["read_file"], specs, include_system_tools=True)))
+    assert "context7.query_docs" not in names
+
+
+def test_the_chat_path_is_untouched() -> None:
+    """Sin `include_system_tools` (el chat y los modos) `None` sigue sin anunciar
+    nada: ahí la ausencia de allowlist no significa «dale todo», significa que
+    la restricción la pone el modo."""
+    assert build_model_tool_schemas(None, None) == []
 
 
 def test_system_tools_advertised_alongside_assigned_tools() -> None:

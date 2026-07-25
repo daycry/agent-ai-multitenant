@@ -181,6 +181,36 @@ SYSTEM_TOOL_NAMES: tuple[str, ...] = (
 )
 
 
+# `shell_exec` está cableado POR PROYECTO desde `allowed_commands` (Plan 06.16),
+# un dato que esta función no ve. Anunciarlo al agente sin restricción, sin saber
+# si el proyecto permite algún comando, sería la misma promesa falsa que B-04
+# acaba de retirar. Con un grant explícito sí se anuncia (comportamiento previo).
+_PROJECT_WIRED_TOOL_NAMES: frozenset[str] = frozenset({"shell_exec"})
+
+
+def _default_unrestricted_tool_names() -> list[str]:
+    """Las tools que un agente SIN restricción por-agente puede ya ejecutar.
+
+    ``allowed_tools=None`` significa «el registry no le restringe nada»: el
+    runtime le deja llamar todas las tools cableadas. El anuncio, en cambio,
+    partía de ``list(tool_names or [])``, así que ese mismo agente solo veía las
+    de sistema — ni ``read_file``, ni ``write_file``, ni ``stack_exec`` (B-02).
+    Asimetría pura entre lo que puede hacer y lo que sabe que puede hacer.
+
+    Se deriva de ``RUNTIME_WIRED_TOOL_NAMES``, la misma fuente que decide qué es
+    ejecutable, para que no pueda reintroducirse una tool sin ejecutor. Import
+    defensivo por el mismo motivo que :func:`_catalog_by_canonical`.
+    """
+    try:
+        import importlib
+
+        tool_names = importlib.import_module("shared_domain.tool_names")
+    except Exception:  # pragma: no cover - defensive: domain package optional
+        return []
+    wired: frozenset[str] = tool_names.RUNTIME_WIRED_TOOL_NAMES
+    return sorted(wired - _PROJECT_WIRED_TOOL_NAMES)
+
+
 def _catalog_by_canonical() -> dict[str, dict[str, Any]]:
     """Catalog tool schemas keyed by CANONICAL runtime name (alias-expanded).
 
@@ -245,6 +275,14 @@ def build_model_tool_schemas(
     discussion mode's "block every tool" and suppresses everything, system tools
     included.
 
+    The flag also decides what ``tool_names=None`` means (task_wf_11, B-02). On
+    the task-execution path it means "no per-agent restriction", so the agent is
+    told about the whole wired catalog — what the registry already lets it run.
+    On the chat path the absence of an allowlist does NOT mean "give it
+    everything": there the restriction comes from the mode, and advertising the
+    catalog would bypass it. Same sentinel, two honest readings, and the flag is
+    exactly the axis that distinguishes them.
+
     Returns ``[]`` when there is nothing to advertise — the caller then omits the
     ``tools`` key (no change for tool-less agents that opt out of system tools)."""
     # An explicit empty allowlist means "block every tool" (discussion mode):
@@ -254,6 +292,16 @@ def build_model_tool_schemas(
         return []
 
     effective: list[str] = list(tool_names or [])
+    if tool_names is None and include_system_tools:
+        effective.extend(_default_unrestricted_tool_names())
+        # Y las tools que ESTE run cablea explícitamente (custom, docker_command
+        # y, desde task_wf_10, las MCP del proyecto). No están en el catálogo
+        # cableado porque son de tenant/proyecto, pero el registry del runtime
+        # sí las registra: sin esto, un agente sin grants seguiría sin ver
+        # justo las tools que el proyecto acaba de darle.
+        effective.extend(
+            str(spec["name"]) for spec in (tool_specs or []) if isinstance(spec.get("name"), str)
+        )
     if include_system_tools:
         for system_name in SYSTEM_TOOL_NAMES:
             if system_name not in effective:
