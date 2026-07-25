@@ -38,6 +38,11 @@ def _wire_db(
         slug=project_slug,
         allowed_commands=["composer"],
         default_runtime_template="php-phpunit",
+        # ADR 0129: `_run_stack_command` lee `project.repository_config` para
+        # levantar los servicios auxiliares del proyecto. Un proyecto sin
+        # servicios declarados lo tiene a NULL, que es el caso que ejercitan
+        # estos tests (el código hace `dict(... or {})`).
+        repository_config=None,
     )
     task = SimpleNamespace(id=uuid4(), project_id=project.id)
     org = SimpleNamespace(slug=org_slug)
@@ -98,7 +103,9 @@ async def test_missing_worktree_returns_actionable_error_without_launch(
     class _NeverRunner:
         def __init__(self, settings: object) -> None: ...
 
-        def run_command(self, spec: object, command: str, *, timeout_s: int) -> tuple[int, str]:
+        def run_command(
+            self, spec: object, command: str, *, timeout_s: int, cwd: str | None = None
+        ) -> tuple[int, str]:
             launched["yes"] = True
             return 0, "ok"
 
@@ -134,7 +141,9 @@ async def test_empty_slug_returns_not_resolvable_without_launch(
     class _NeverRunner:
         def __init__(self, settings: object) -> None: ...
 
-        def run_command(self, spec: object, command: str, *, timeout_s: int) -> tuple[int, str]:
+        def run_command(
+            self, spec: object, command: str, *, timeout_s: int, cwd: str | None = None
+        ) -> tuple[int, str]:
             launched["yes"] = True
             return 0, "ok"
 
@@ -164,7 +173,9 @@ async def test_docker_apierror_is_returned_structured(
     class _ExplodingRunner:
         def __init__(self, settings: object) -> None: ...
 
-        def run_command(self, spec: object, command: str, *, timeout_s: int) -> tuple[int, str]:
+        def run_command(
+            self, spec: object, command: str, *, timeout_s: int, cwd: str | None = None
+        ) -> tuple[int, str]:
             raise docker.errors.APIError(
                 "400 Client Error",
                 explanation="invalid mount config: bind source path does not exist",

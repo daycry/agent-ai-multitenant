@@ -33,7 +33,9 @@ def _result_capture(captured: dict) -> type:
                 network_name="n",
             )
 
-        def run_command(self, spec: object, command: str, *, timeout_s: int) -> tuple[int, str]:
+        def run_command(
+            self, spec: object, command: str, *, timeout_s: int, cwd: str | None = None
+        ) -> tuple[int, str]:
             captured["spec"] = spec
             return 0, "ok"
 
@@ -138,6 +140,10 @@ async def test_stack_exec_requests_dep_egress(
         slug="api-ci",
         allowed_commands=["composer"],
         default_runtime_template="php-phpunit",
+        # ADR 0129: `_run_stack_command` lee `project.repository_config` para
+        # levantar los servicios auxiliares del proyecto. NULL = sin servicios
+        # declarados, que es el caso de este test (el código hace `dict(... or {})`).
+        repository_config=None,
     )
     task = SimpleNamespace(id=task_id, project_id=project.id)
     org = SimpleNamespace(slug="demo")
