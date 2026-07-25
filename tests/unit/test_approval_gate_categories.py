@@ -66,12 +66,24 @@ def test_old_broken_categories_are_not_canonical() -> None:
 # DEBEN estar gateadas: destructivas, ejecutan código, o comunican al exterior.
 _MUST_BE_GATED = {
     "delete_file",  # destructiva (write_file ya se gateaba, delete no)
-    "send_notification",  # comunicación externa — el preset la promete
     "run_pytest",  # ejecutan código arbitrario del repo
     "run_lint",
     "run_typecheck",
     "run_build",
 }
+
+
+def test_send_notification_keeps_its_category_while_unwired() -> None:
+    """`send_notification` salió de `RUNTIME_WIRED_TOOL_NAMES` (B-04: su ejecutor
+    devuelve «not wired», así que anunciarla era una promesa falsa), pero
+    CONSERVA su categoría de gate.
+
+    El día que se cablee su consumidor volverá a anunciarse, y debe reaparecer ya
+    gateada como `external_communication` — no colarse sin categoría y escapar al
+    gate incluso bajo customer-external (prod-03 A8). Por eso la categoría se
+    verifica aquí aunque la tool no esté wired hoy."""
+    assert "send_notification" in DEFAULT_TOOL_CATEGORIES
+    assert DEFAULT_TOOL_CATEGORIES["send_notification"] == "external_communication"
 
 
 def test_sensitive_wired_tools_are_gated() -> None:

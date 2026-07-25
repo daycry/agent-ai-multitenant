@@ -234,7 +234,7 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             "ambiguous, ask ONE concrete question before proceeding. Get human "
             "approval before moving a Plan to status='approved'."
         ),
-        tool_slugs=(*_BASE_TOOLS, "send-notification"),
+        tool_slugs=_BASE_TOOLS,
     ),
     CI4Agent(
         slug="ci4-architect",
@@ -654,7 +654,7 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             "not a fix. You document every toolchain gotcha as you fix it. You "
             "don't touch business logic except to add instrumentation."
         ),
-        tool_slugs=(*_BASE_TOOLS, "http-get", "http-post", "send-notification"),
+        tool_slugs=(*_BASE_TOOLS, "http-get", "http-post"),
     ),
 )
 

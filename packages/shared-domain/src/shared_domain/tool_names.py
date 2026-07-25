@@ -116,12 +116,18 @@ RUNTIME_WIRED_TOOL_NAMES: frozenset[str] = frozenset(
         # network family
         "http_get",
         "http_post",
-        # orchestration family
-        "kanban_update",
+        # orchestration family — SOLO `task_comment`. Las otras tres
+        # (`kanban_update`, `agent_invoke`, `send_notification`) validan sus
+        # argumentos y devuelven `ok=False, "not wired"` porque el drain
+        # worker-side previsto nunca aterrizó: anunciarlas al modelo es una
+        # promesa falsa que le quema un turno con un error que no puede
+        # resolver. AUD16-02 retiró las dos primeras del ANUNCIO pero no de
+        # esta lista, y por esa divergencia `send_notification` siguió
+        # llegando al esquema. Se reincorporan cuando exista su consumidor;
+        # `tests/unit/test_runtime_wired_contract.py` fija el invariante.
+        # `task_comment` SÍ tiene drain real (el worker lo persiste como
+        # comentario del plan al cerrar el run).
         "task_comment",
-        "agent_invoke",
-        # notification family
-        "send_notification",
         # knowledge family (semantic_search aliases onto rag_search)
         "rag_search",
         "document_convert",
