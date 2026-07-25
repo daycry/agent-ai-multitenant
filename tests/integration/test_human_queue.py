@@ -30,6 +30,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
     project = uuid4()
     plan = uuid4()
     task = uuid4()
+    stranded = uuid4()
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
@@ -106,9 +107,50 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             tenant,
             project,
         )
+        # V-2: plan `blocked` SIN tareas abiertas — la firma del bloqueo por review
+        # expirada, que por diseño levanta el humano. DEBE salir en la bandeja.
+        await conn.execute(
+            "INSERT INTO plans (id, tenant_id, project_id, title, status, specification)"
+            " VALUES ($1,$2,$3,'Plan varado','blocked','{}'::jsonb)",
+            stranded,
+            tenant,
+            project,
+        )
+        await conn.execute(
+            "INSERT INTO tasks (id, tenant_id, project_id, plan_id, title, status)"
+            " VALUES ($1,$2,$3,$4,'Tarea acabada','done')",
+            uuid4(),
+            tenant,
+            project,
+            stranded,
+        )
+        # Ruido: plan `blocked` CON una tarea abierta — está bloqueado por trabajo
+        # pendiente, no esperando un gesto humano. NO debe salir.
+        blocked_with_work = uuid4()
+        await conn.execute(
+            "INSERT INTO plans (id, tenant_id, project_id, title, status, specification)"
+            " VALUES ($1,$2,$3,'Bloqueado con trabajo','blocked','{}'::jsonb)",
+            blocked_with_work,
+            tenant,
+            project,
+        )
+        await conn.execute(
+            "INSERT INTO tasks (id, tenant_id, project_id, plan_id, title, status)"
+            " VALUES ($1,$2,$3,$4,'Tarea abierta','blocked')",
+            uuid4(),
+            tenant,
+            project,
+            blocked_with_work,
+        )
     finally:
         await conn.close()
-    return {"tenant": tenant, "user": user, "plan": plan}
+    return {
+        "tenant": tenant,
+        "user": user,
+        "plan": plan,
+        "project": project,
+        "stranded": stranded,
+    }
 
 
 @pytest.fixture()
@@ -172,7 +214,7 @@ async def test_queue_aggregates_the_four_sources_oldest_first(
     items = resp.json()
     kinds = [i["kind"] for i in items]
     assert sorted(kinds) == sorted(
-        ["plan_validation", "approval_request", "run_review", "run_approval"]
+        ["plan_validation", "plan_unblock", "approval_request", "run_review", "run_approval"]
     )
     # El plan (30 h de antigüedad) va PRIMERO — lo más viejo arriba.
     assert items[0]["kind"] == "plan_validation"
@@ -180,3 +222,39 @@ async def test_queue_aggregates_the_four_sources_oldest_first(
     assert items[0]["age_seconds"] > 24 * 3600
     # Cada item lleva la ruta del panel donde se resuelve.
     assert all(i["url_path"].startswith("/admin/") for i in items)
+
+
+@pytest.mark.asyncio
+async def test_plan_blocked_without_open_tasks_is_surfaced_and_links_to_a_real_page(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """V-2: el plan varado esperando desbloqueo humano SALE en la bandeja, y su
+    enlace apunta a una página que EXISTE.
+
+    Dos hallazgos en el mismo sitio: (a) el bloqueo por review expirada lo levanta
+    el humano por diseño, pero nada se lo decía — se observaron 3 planes esperando
+    entre 2 y 5 días; (b) B-5, la bandeja apuntaba a `/admin/plans/{id}`, que es un
+    404: el detalle de plan vive anidado bajo su proyecto."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _token(seeded["user"], seeded["tenant"])
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/human-queue", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200, resp.text
+    items = resp.json()
+
+    unblock = [i for i in items if i["kind"] == "plan_unblock"]
+    assert len(unblock) == 1, "solo el plan SIN tareas abiertas espera al humano"
+    assert unblock[0]["title"] == "Plan varado"
+    assert unblock[0]["id"] == str(seeded["stranded"])
+
+    # Un plan `blocked` CON trabajo pendiente está bloqueado por el trabajo, no por
+    # un gesto humano: no debe aparecer.
+    assert "Bloqueado con trabajo" not in [i["title"] for i in items]
+
+    # B-5: la ruta del plan es la anidada bajo proyecto, no `/admin/plans/{id}`.
+    expected = f"/admin/projects/{seeded['project']}/plans/{seeded['stranded']}"
+    assert unblock[0]["url_path"] == expected
+    validation = next(i for i in items if i["kind"] == "plan_validation")
+    assert validation["url_path"] == (f"/admin/projects/{seeded['project']}/plans/{seeded['plan']}")

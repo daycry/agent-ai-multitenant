@@ -27,12 +27,29 @@ router = APIRouter(tags=["human-queue"])
 
 
 class HumanQueueItem(BaseModel):
-    kind: str = Field(description="plan_validation | approval_request | run_review | run_approval")
+    kind: str = Field(
+        description=(
+            "plan_validation | plan_unblock | approval_request | run_review | run_approval"
+        )
+    )
     id: UUID
     title: str
     project_name: str | None
     age_seconds: float = Field(description="Segundos esperando una decisión humana.")
     url_path: str = Field(description="Ruta del panel donde se resuelve.")
+
+
+def _plan_path(project_id: UUID | None, plan_id: UUID) -> str:
+    """Ruta del detalle de un plan en el panel.
+
+    El detalle de plan vive ANIDADO bajo su proyecto
+    (``/admin/projects/{project_id}/plans/{plan_id}``); ``/admin/plans/{id}``
+    NO existe — bajo esa ruta solo hay ``/escalated``. La bandeja apuntaba ahí
+    y su ítem nº1 llevaba a un 404 (hallazgo B-5). Sin proyecto (dato
+    inconsistente) se cae a la vista de planes, que sí existe."""
+    if project_id is None:
+        return "/admin/board"
+    return f"/admin/projects/{project_id}/plans/{plan_id}"
 
 
 def _age(now: datetime, since: datetime | None) -> float:
@@ -60,7 +77,7 @@ async def human_queue(
 
     plans = await session.execute(
         sa_text(
-            "SELECT p.id, p.title, pr.name, p.updated_at FROM plans p"
+            "SELECT p.id, p.title, pr.name, p.updated_at, p.project_id FROM plans p"
             " LEFT JOIN projects pr ON pr.id = p.project_id"
             " WHERE p.tenant_id = :tid AND p.status = 'pending_human_validation'"
         ),
@@ -74,7 +91,39 @@ async def human_queue(
                 title=str(row[1]),
                 project_name=row[2],
                 age_seconds=_age(now, row[3]),
-                url_path=f"/admin/plans/{row[0]}",
+                url_path=_plan_path(row[4], row[0]),
+            )
+        )
+
+    # V-2 (auditoría de comportamiento 2026-07-25): un plan `blocked` SIN tareas
+    # abiertas es la firma del bloqueo por review expirada (C8 F40). El reconciler
+    # lo excluye a propósito —revertirlo re-armaría el autostart en bucle de 48 h
+    # (C-1, auditoría 2026-07-10)— porque, por diseño, «ese bloqueo lo levanta el
+    # humano». Pero nada se lo decía al humano: se observaron 3 planes esperando
+    # entre 2 y 5 días un clic que nadie sabía que había que dar. Con tareas
+    # abiertas NO entra: ese sí está bloqueado por trabajo pendiente, no por un
+    # gesto humano.
+    stranded = await session.execute(
+        sa_text(
+            "SELECT p.id, p.title, pr.name, p.updated_at, p.project_id FROM plans p"
+            " LEFT JOIN projects pr ON pr.id = p.project_id"
+            " WHERE p.tenant_id = :tid AND p.status = 'blocked'"
+            "   AND NOT EXISTS ("
+            "     SELECT 1 FROM tasks t"
+            "     WHERE t.plan_id = p.id AND t.status NOT IN ('done', 'cancelled')"
+            "   )"
+        ),
+        {"tid": tenant_id},
+    )
+    for row in stranded.fetchall():
+        items.append(
+            HumanQueueItem(
+                kind="plan_unblock",
+                id=row[0],
+                title=str(row[1]),
+                project_name=row[2],
+                age_seconds=_age(now, row[3]),
+                url_path=_plan_path(row[4], row[0]),
             )
         )
 
