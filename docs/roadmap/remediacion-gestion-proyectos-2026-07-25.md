@@ -433,21 +433,22 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
 #### `task_wf_22` — Los tests de aceptación salen del worker `default`
 
-- [ ] **Título**: encolar `_run_task_tests` a la cola `test` con espera acotada, siguiendo el
+- [x] _(hecho 78bce8eb)_ **Título**: encolar `_run_task_tests` a la cola `test` con espera acotada, siguiendo el
       patrón que `stack_exec` ya aplica por riesgo de deadlock, en vez del `await` inline.
 - **Hallazgo**: C-04 (medio) · **Tiempo**: 0,5 d
 - **Ficheros**: `apps/workers/src/workers/execution.py:846-911,1500-1510`,
   `apps/workers/src/workers/celery_client.py:148-160`
 - **Tests**: unit de que la fase de tests despacha a la cola `test`; regresión de que un fallo
   de la fase de tests sigue sin romper un run ya terminado.
-- **PUNTO DE RETOMADA** (2026-07-25): es lo ÚNICO que queda de la ola 2. El patrón a copiar es
-  `run_stack_command_and_wait` (`apps/api-server/src/api_server/celery_client.py:148-177`):
-  `send_task(..., queue="test")` + `async_result.get(timeout=…)` dentro de un
-  `asyncio.to_thread`, con el comentario de deadlock que ya lleva. El sitio a cambiar es la
-  última línea de `_run_task_tests` (`execution.py:918`), que hoy hace
-  `await _run_test_runtime(test_request, settings)` **en proceso**, bloqueando el slot del
-  worker `default` hasta N×600 s. Ojo al `except` que lo envuelve: la fase de tests es
-  best-effort y un fallo suyo NO puede romper un run ya terminado — eso hay que conservarlo.
+- **Entregado** (78bce8eb): `dispatch_test_runtime_and_wait` + `test_phase_wait_budget_s` en
+  `workers/tasks/test_runtime_task.py`, siguiendo el patrón de `run_stack_command_and_wait`.
+- **Se sigue esperando el resultado a propósito**: el reviewer se despacha después y necesita
+  un `<test-report>` real; convertirlo en fire-and-forget reabriría la carrera de C1/F51. Lo
+  que cambia es DÓNDE se hace el trabajo, no si se espera. Presupuesto = suma de los timeouts
+  de los checks (corren en serie en el mismo contenedor) + margen de arranque/teardown, con
+  techo duro de 1 h; un `timeout_s` corrupto cae al default en vez de restar. Se conserva el
+  invariante best-effort: broker caído, sin worker en `test` o presupuesto vencido → `{}`,
+  nunca una excepción sobre un run ya terminado.
 
 #### `task_wf_23` — El run-lock sobrevive al hard kill
 
