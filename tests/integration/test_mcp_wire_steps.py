@@ -51,16 +51,17 @@ def test_connected_server_emits_an_ok_wire_step(emitted: list[dict]) -> None:
             }
         ]
     }
-    runner = _wire_mcp_servers(ToolRegistry(), spec)
-    assert runner is not None
+    wiring = _wire_mcp_servers(ToolRegistry(), spec)
+    assert wiring.runner is not None
     try:
         steps = _wire_steps(emitted)
         assert len(steps) == 1
         assert steps[0]["status"] == "ok"
         assert steps[0]["server"] == "toy"
         assert "toy.add" in steps[0]["tools"]
+        assert wiring.failures == []
     finally:
-        runner.close()
+        wiring.runner.close()
 
 
 def test_failed_server_emits_an_error_wire_step(emitted: list[dict]) -> None:
@@ -74,8 +75,8 @@ def test_failed_server_emits_an_error_wire_step(emitted: list[dict]) -> None:
             }
         ]
     }
-    runner = _wire_mcp_servers(ToolRegistry(), spec)
-    assert runner is not None
+    wiring = _wire_mcp_servers(ToolRegistry(), spec)
+    assert wiring.runner is not None
     try:
         steps = _wire_steps(emitted)
         assert len(steps) == 1
@@ -84,5 +85,9 @@ def test_failed_server_emits_an_error_wire_step(emitted: list[dict]) -> None:
         assert "muerto" not in [s.get("server") for s in steps if s["status"] == "ok"]
         # el evento efímero de Redis se mantiene (compat con consumidores).
         assert any(e.get("event") == "mcp.server_failed" for e in emitted)
+        # task_wf_14: y además el fallo vuelve al caller para que entre en el
+        # preámbulo — hasta ahora el operador lo veía y el AGENTE no.
+        assert [f["server"] for f in wiring.failures] == ["muerto"]
+        assert "muerto" in wiring.failures[0]["error"] or wiring.failures[0]["error"]
     finally:
-        runner.close()
+        wiring.runner.close()
