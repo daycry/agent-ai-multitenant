@@ -20,7 +20,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from workers.celery_app import app
+from workers.celery_app import EXECUTION_VISIBILITY_TIMEOUT_S, app
 from workers.config import Settings, get_settings
 from workers.container import AgentContainerRunner, ContainerSpec
 from workers.execution import ExecutionRequest, conduct_execution
@@ -206,6 +206,31 @@ async def _push_execution_dead_letter(
         await redis.aclose()
 
 
+def run_lock_ttl_s() -> int:
+    """TTL del run-lock: la ventana de visibilidad del broker (C-05).
+
+    El lock impide que una re-entrega (`acks_late`) arranque un SEGUNDO run de
+    la misma tarea mientras el primero vive — su `sync_to_head` hace
+    `reset --hard` + `clean -fdx` y se llevaría por delante el trabajo en vuelo.
+
+    Se calculaba desde el presupuesto de CONTENEDOR
+    (``container_timeout_with_grace_for_kind("claude_sdk") + 300`` = 7620 s), por
+    debajo del `execution_hard_time_limit_s` (7800 s por defecto, hasta 6 h si el
+    operador lo sube). Un run que llegara al límite duro **perdía el lock antes de
+    morir**, y en esa ventana la re-entrega podía adquirirlo: exactamente lo que
+    el lock existe para impedir.
+
+    El ancla correcta no es el presupuesto del contenedor sino
+    :data:`EXECUTION_VISIBILITY_TIMEOUT_S`: es el instante en que Redis re-entrega
+    el mensaje, o sea el primer momento en que puede existir un competidor.
+    Mientras el lock viva exactamente eso, no queda hueco — y tampoco retiene la
+    tarea de más, porque pasado ese punto la re-entrega ya es legítima (el run
+    anterior está muerto: el hard limit tiene su techo POR DEBAJO, cosa que
+    `test_hard_limit_registry_validation` fija).
+    """
+    return EXECUTION_VISIBILITY_TIMEOUT_S
+
+
 async def _run_execution(
     request: ExecutionRequest, settings: Settings, *, celery_task_id: str | None = None
 ) -> dict[str, Any]:
@@ -221,7 +246,7 @@ async def _run_execution(
     # work. TTL = the longest container budget + margin, so a crashed holder frees
     # the lock roughly when its orphaned container would time out anyway.
     lock_token = celery_task_id or "1"
-    lock_ttl = settings.container_timeout_with_grace_for_kind("claude_sdk") + 300
+    lock_ttl = run_lock_ttl_s()
     acquired = False
     outcome: ExecutionOutcome | None = None
     try:
