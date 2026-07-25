@@ -236,6 +236,51 @@ def test_normalise_plan_draft_fills_ids_and_drops_bad_deps() -> None:
     assert out["tasks"][2]["title"] == "POST saludar"  # name → title
 
 
+def test_normalise_plan_draft_summary_is_an_object_not_a_string() -> None:
+    """A-03: `PlanSpecification.summary` es un `dict`, no un `str`.
+
+    El draft del chat lo emitía como cadena y `create_plan` lo persiste SIN pasar
+    por Pydantic, así que el 422 aparecía después, en cualquier `PUT` que
+    reenviara el spec. Y la UI hacía `Object.keys("texto")` → `["0","1",…]`,
+    concluía que había resumen y pintaba una tarjeta vacía (busca
+    `summary.description`, que en una cadena no existe)."""
+    out = _normalise_plan_draft(
+        {"title": "X", "summary": "Sin BD", "tasks": [{"id": "t1", "title": "A"}]}
+    )
+    assert isinstance(out["summary"], dict)
+    assert out["summary"]["description"] == "Sin BD"
+
+
+def test_normalise_plan_draft_accepts_a_structured_summary() -> None:
+    """Si el modelo YA emite el objeto (con alcance), se respeta tal cual."""
+    rich = {"description": "API de inventario", "scope_in": ["CRUD"], "scope_out": ["pagos"]}
+    out = _normalise_plan_draft(
+        {"title": "X", "summary": rich, "tasks": [{"id": "t1", "title": "A"}]}
+    )
+    assert out["summary"] == rich
+
+
+def test_normalise_plan_draft_derives_hours_from_complexity() -> None:
+    """A-04: sin `estimated_hours` el Gantt pintaba barras IDÉNTICAS y el coste
+    humano era `nº_tareas × 4 h × tarifa` — un número con aspecto de dato y sin
+    información. El planner emite `complexity`, así que las horas se derivan de
+    ahí; si el modelo da un valor explícito, ese gana."""
+    out = _normalise_plan_draft(
+        {
+            "title": "X",
+            "tasks": [
+                {"id": "t1", "title": "Diminuta", "complexity": "xs"},
+                {"id": "t2", "title": "Enorme", "complexity": "xl"},
+                {"id": "t3", "title": "Con horas propias", "complexity": "s", "estimated_hours": 9},
+            ],
+        }
+    )
+    by_id = {t["id"]: t for t in out["tasks"]}
+    assert by_id["t1"]["estimated_hours"] < by_id["t2"]["estimated_hours"]
+    assert by_id["t3"]["estimated_hours"] == 9.0  # el explícito manda
+    assert all(t["estimated_hours"] > 0 for t in out["tasks"])
+
+
 def test_normalise_plan_draft_empty_when_no_tasks() -> None:
     out = _normalise_plan_draft({"title": "x"})
     assert out["tasks"] == []

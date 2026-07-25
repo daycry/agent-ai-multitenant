@@ -430,6 +430,43 @@ _MAX_CRITERION_LEN = 300
 _VALID_COMPLEXITY = frozenset({"xs", "s", "m", "l", "xl"})
 _DEFAULT_COMPLEXITY = "m"
 
+# A-04: horas por nivel de complejidad. El planner emite `complexity` pero NUNCA
+# `estimated_hours`, así que `cost.py` caía a su default de 4 h para TODA tarea: el
+# Gantt pintaba barras idénticas (camino crítico arbitrario) y el «coste humano»
+# era `nº_tareas * 4 h * tarifa`. Un número con aspecto de dato y sin información.
+#
+# Estos valores son un punto de partida deliberadamente grosero. La mejora real es
+# calibrarlos con el histórico REAL del proyecto (`plan_retro` + duraciones de
+# `executions`) — task_wf_33; por eso el mapa vive en UN solo sitio y se sustituye
+# entero, no se parchea.
+_COMPLEXITY_HOURS: dict[str, float] = {"xs": 1.0, "s": 3.0, "m": 8.0, "l": 20.0, "xl": 40.0}
+
+
+def _coerce_estimated_hours(raw: Any, complexity: str) -> float:
+    """Horas de una tarea: las que declare el modelo, si son usables; si no, las
+    derivadas de su complejidad. Nunca ``0`` ni negativas (romperían el Gantt)."""
+    try:
+        hours = float(raw)
+    except (TypeError, ValueError):
+        hours = 0.0
+    if hours > 0:
+        return hours
+    return _COMPLEXITY_HOURS.get(complexity, _COMPLEXITY_HOURS[_DEFAULT_COMPLEXITY])
+
+
+def _normalise_summary(raw: Any) -> dict[str, Any]:
+    """El `summary` del spec es un OBJETO (``PlanSpecification.summary: dict``).
+
+    A-03: el draft del chat lo emitía como cadena y `create_plan` lo persiste sin
+    pasar por Pydantic, así que el 422 asomaba más tarde, en cualquier `PUT` que
+    reenviara el spec; y la UI, al hacer `Object.keys()` sobre una cadena, creía
+    que había resumen y pintaba una tarjeta vacía. Una cadena se envuelve en
+    ``{"description": …}``, que es la clave que la UI ya lee."""
+    if isinstance(raw, dict):
+        return dict(raw)
+    text = str(raw or "").strip()
+    return {"description": text} if text else {}
+
 
 def _clean_acceptance_criteria(raw: Any) -> list[str]:
     """Coerce a task's ``acceptance_criteria`` into a clean list of descriptive,
@@ -483,6 +520,9 @@ def _normalise_plan_draft(obj: dict[str, Any]) -> dict[str, Any]:
                 "description": str(t.get("description") or "").strip(),
                 "role": str(t.get("role") or "").strip(),
                 "complexity": complexity,
+                # A-04: derivadas de la complejidad salvo que el modelo dé un valor
+                # usable. Sin esto, `cost.py` caía a 4 h para TODAS.
+                "estimated_hours": _coerce_estimated_hours(t.get("estimated_hours"), complexity),
                 "depends_on": [str(d) for d in (t.get("depends_on") or []) if isinstance(d, str)],
                 "acceptance_criteria": _clean_acceptance_criteria(t.get("acceptance_criteria")),
             }
@@ -492,7 +532,7 @@ def _normalise_plan_draft(obj: dict[str, Any]) -> dict[str, Any]:
         t["depends_on"] = [d for d in t["depends_on"] if d in id_set and d != t["id"]]
     return {
         "title": str(obj.get("title") or "Plan del proyecto").strip()[:255],
-        "summary": str(obj.get("summary") or "").strip(),
+        "summary": _normalise_summary(obj.get("summary")),
         "phases": _normalise_phases(obj.get("phases"), id_set),
         "tasks": tasks,
     }

@@ -531,7 +531,11 @@ def _finish_planning_attachment(draft: dict[str, Any]) -> list[dict[str, Any]] |
             "intent": "finish_planning",
             "title": draft.get("title") or "Plan del proyecto",
             "specification": {
-                "summary": draft.get("summary") or "",
+                # A-03: OBJETO, no cadena — `PlanSpecification.summary` es un dict
+                # y el draft se persiste sin pasar por Pydantic, así que emitir la
+                # forma correcta AQUÍ es lo que evita el 422 posterior.
+                # `_normalise_plan_draft` ya lo deja normalizado.
+                "summary": draft.get("summary") or {},
                 "phases": draft.get("phases") or [],
                 "tasks": draft["tasks"],
             },

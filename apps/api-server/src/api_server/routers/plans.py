@@ -260,6 +260,15 @@ async def create_plan(
     else:
         spec_dict = {}
 
+    # A-03: el draft de conversación NO pasa por Pydantic (ver el comentario de
+    # abajo), así que un `summary` en forma antigua —cadena— se colaba al JSONB y
+    # hacía fallar con 422 cualquier `PUT` posterior que reenviara el spec, además
+    # de pintar una tarjeta «Resumen» vacía. El emisor ya manda el objeto; esto
+    # cubre los borradores viejos que sigan vivos en una conversación.
+    if isinstance(spec_dict.get("summary"), str):
+        text = spec_dict["summary"].strip()
+        spec_dict["summary"] = {"description": text} if text else {}
+
     # Cycle check (task_03_15). The Pydantic validator handles unknown
     # deps + duplicate ids for the INLINE spec; the conversation draft
     # (PROY2-12) bypasses Pydantic, so validate_dag's ValueError (duplicate

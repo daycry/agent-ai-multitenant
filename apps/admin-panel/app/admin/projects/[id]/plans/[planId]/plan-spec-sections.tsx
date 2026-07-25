@@ -16,7 +16,7 @@ import { PlanDAG } from "@/lib/plan-dag";
 import { PlanGantt } from "@/lib/plan-gantt";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 
-import { type PlanSpecification, formatCostRange } from "./plan-spec-types";
+import { type PlanSpecification, formatCostRange, phaseLabel } from "./plan-spec-types";
 
 // --------------------------------------------------------------------------
 // Gantt visualisation with critical path (task_03_20)
@@ -199,7 +199,7 @@ export function PhasesSection({
         <ol className="space-y-3 list-decimal pl-5">
           {phases.map((phase, i) => (
             <li key={i} data-testid={`plan-phase-${i}`}>
-              <p className="font-medium">{phase.name}</p>
+              <p className="font-medium">{phaseLabel(phase, i)}</p>
               {phase.description ? (
                 <p className="text-muted-foreground text-xs">{phase.description}</p>
               ) : null}

@@ -18,7 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ApiError, apiFetch } from "@/lib/api";
-import type { PlanPhaseSpec } from "./plan-spec-types";
+import { type PlanPhaseSpec, phaseLabel } from "./plan-spec-types";
 
 // --------------------------------------------------------------------------
 // Sync to Kanban (task_03_27)
@@ -162,7 +162,7 @@ export function SyncToKanbanSection({
                   >
                     {phases.map((p, i) => (
                       <option key={i} value={i}>
-                        {p.name}
+                        {phaseLabel(p, i)}
                       </option>
                     ))}
                   </select>

@@ -35,9 +35,22 @@ interface PlanCorrectionEntry {
 }
 
 export interface PlanPhaseSpec {
-  name: string;
+  /**
+   * A-12: el planner del chat emite `title` (`_normalise_phases`), no `name`.
+   * La UI leía sólo `name`, así que la lista de fases salía SIN título y el
+   * desplegable de «sincronizar una fase» mostraba opciones EN BLANCO — el
+   * operador elegía a ciegas. Ambas claves son opcionales y se resuelven con
+   * `phaseLabel()`, que además tolera los specs ya persistidos con `name`.
+   */
+  title?: string;
+  name?: string;
   description?: string;
   tasks?: string[];
+}
+
+/** Etiqueta visible de una fase, sea cual sea la clave con la que se guardó. */
+export function phaseLabel(phase: PlanPhaseSpec, index: number): string {
+  return (phase.title || phase.name || "").trim() || `Fase ${index + 1}`;
 }
 
 export interface PlanSpecification {
