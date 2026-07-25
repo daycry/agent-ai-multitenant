@@ -132,7 +132,7 @@ contexto después, sobre esa base ya estable.
 
 #### `task_wf_01` — El equipo planifica sobre el contexto reciente (corrección)
 
-- [ ] **Título**: misma inversión en la carga del histórico que alimenta el prompt de
+- [x] _(hecho, ver task_wf_06a)_ **Título**: misma inversión en la carga del histórico que alimenta el prompt de
       planning, verificando que `latest_user_text` recupera el mensaje de usuario realmente
       más reciente. **Es la corrección urgente; el rediseño es `task_wf_06`.**
 - **Hallazgo**: A-02 (crítico) · **Tiempo**: 0,25 d
