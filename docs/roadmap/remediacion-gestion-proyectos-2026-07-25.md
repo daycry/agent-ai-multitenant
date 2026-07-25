@@ -54,7 +54,7 @@ todo lo demás**: hay 5 de 10 planes en un estado del que no pueden salir solos.
 
 #### `task_wf_m1` — Tarea `in_progress` sin ejecución: rescatarla y cerrar el agujero
 
-- [ ] **Título**: el barrido de tareas atascadas trata hoy solo «tarea `in_progress` cuyo
+- [x] _(hecho 8ca290dd)_ **Título**: el barrido de tareas atascadas trata hoy solo «tarea `in_progress` cuyo
       último run es terminal»; con `latest is None` hace `continue`
       (`reconciler.py:164`) y la tarea se queda `in_progress` **para siempre**, congelando el
       DAG y el plan. Añadir el caso: una tarea `in_progress` **sin ninguna ejecución** y más
@@ -83,7 +83,7 @@ todo lo demás**: hay 5 de 10 planes en un estado del que no pueden salir solos.
 
 #### `task_wf_m3` — Que un plan que espera al humano se vea
 
-- [ ] **Título**: el diseño dice «este bloqueo lo levanta el humano» y **no hay nada que le
+- [x] _(hecho 71798ca0)_ **Título**: el diseño dice «este bloqueo lo levanta el humano» y **no hay nada que le
       diga al humano que tiene algo que levantar**: tres planes llevan entre 2 y 5 días
       esperando un clic que nadie sabe que hay que dar. Añadir a la bandeja unificada
       (`routers/human_queue.py`) un ítem nuevo — plan `blocked` **sin tareas abiertas** (la
@@ -116,7 +116,7 @@ contexto después, sobre esa base ya estable.
 
 #### `task_wf_00` — El chat de planning carga los mensajes RECIENTES
 
-- [ ] **Título**: invertir la ventana de `list_messages` para que devuelva los **últimos** N
+- [x] _(hecho 66e683b1)_ **Título**: invertir la ventana de `list_messages` para que devuelva los **últimos** N
       mensajes (orden descendente en la consulta, ascendente en la respuesta) manteniendo la
       paginación `after` intacta, y consumir el endpoint con un límite explícito desde la UI.
       Añadir `before` para que la UI pueda cargar hacia atrás: sin él, cualquier ventana fija
@@ -141,7 +141,7 @@ contexto después, sobre esa base ya estable.
 
 #### `task_wf_02` — `summary` respeta su contrato
 
-- [ ] **Título**: emitir `summary` como objeto (`{"description": …}`) desde
+- [x] _(hecho 47f27efc)_ **Título**: emitir `summary` como objeto (`{"description": …}`) desde
       `_finish_planning_attachment` y `_normalise_plan_draft`, con coerción retrocompatible en
       `create_plan` para los planes ya persistidos con string. Validar el draft de
       conversación contra `PlanSpecification` antes de persistir, en vez de saltarse Pydantic.
@@ -155,7 +155,7 @@ contexto después, sobre esa base ya estable.
 
 #### `task_wf_03` — Estimaciones reales en el plan
 
-- [ ] **Título**: derivar `estimated_hours` de `complexity` con un mapa explícito
+- [x] _(hecho 47f27efc)_ **Título**: derivar `estimated_hours` de `complexity` con un mapa explícito
       (xs/s/m/l/xl → horas) en `_normalise_plan_draft`, y permitir que el LLM lo sobrescriba
       si lo emite. El default de 4 h de `cost.py` pasa a ser el último recurso, no la norma.
       **El mapa debe vivir en un solo sitio y ser configurable**, porque `task_wf_07` lo
@@ -184,7 +184,7 @@ contexto después, sobre esa base ya estable.
 
 #### `task_wf_05` — Las fases del plan tienen nombre
 
-- [ ] **Título**: alinear el contrato de fase entre backend y frontend (`title`, con lectura
+- [x] _(hecho 47f27efc)_ **Título**: alinear el contrato de fase entre backend y frontend (`title`, con lectura
       tolerante de `name` para specs antiguos) en las dos vistas que lo consumen.
 - **Hallazgo**: A-12 (bajo) · **Tiempo**: 0,25 d
 - **Ficheros**: `plan-spec-sections.tsx:202`, `plan-sync-section.tsx:165`
