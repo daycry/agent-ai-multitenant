@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 from workers.maintenance import (
+    _orphan_claim_needs_revert,
     _orphan_review_needs_reannounce,
     _orphan_review_should_escalate,
     _stuck_task_needs_reconcile,
@@ -50,6 +51,36 @@ def test_stuck_task_non_terminal_is_left_alone(status: str | None) -> None:
 def test_stuck_task_without_completed_at_is_left_alone() -> None:
     """A terminal status with no ``completed_at`` (mid-finalize) is not yet settled."""
     assert _stuck_task_needs_reconcile("done", None, now=_NOW, min_age=_MIN_AGE) is False
+
+
+# ------------------------------------------------------------------- case (a2) V-1
+# Auditoría de comportamiento 2026-07-25: una tarea que el dispatch RECLAMÓ
+# (`ready`→`in_progress`, claim atómico) pero cuya ejecución nunca llegó a crearse
+# caía por TODAS las redes — `_stuck_task_needs_reconcile` la descarta por diseño
+# (`latest is None` no es su caso), el sweeper de ejecuciones rancias no tiene fila
+# que barrer y el reaper de huérfanos no tiene contenedor. Observadas 2 tareas así
+# 7 DÍAS en `in_progress`, congelando su plan entero (no puede completarse nunca).
+_ORPHAN_MIN_AGE = timedelta(minutes=30)
+
+
+def test_orphan_claim_past_the_age_reverts() -> None:
+    """Reclamada hace mucho y sin ninguna ejecución → vuelve a `ready`."""
+    started = _NOW - timedelta(hours=2)
+    assert _orphan_claim_needs_revert(started, now=_NOW, min_age=_ORPHAN_MIN_AGE) is True
+
+
+def test_orphan_claim_recent_is_left_alone() -> None:
+    """Un dispatch recién reclamado puede tener su run aún encolado: no se toca.
+
+    Es la guarda que impide que el reconciler pise una entrega en vuelo cuando la
+    cola de Celery va con retraso."""
+    started = _NOW - timedelta(minutes=2)
+    assert _orphan_claim_needs_revert(started, now=_NOW, min_age=_ORPHAN_MIN_AGE) is False
+
+
+def test_orphan_claim_without_started_at_is_left_alone() -> None:
+    """Sin `started_at` no se puede envejecer la reclamación: se deja estar."""
+    assert _orphan_claim_needs_revert(None, now=_NOW, min_age=_ORPHAN_MIN_AGE) is False
 
 
 # --------------------------------------------------------------------------- case (b)

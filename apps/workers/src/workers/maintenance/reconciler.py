@@ -37,6 +37,14 @@ _RECONCILE_STUCK_TASK_MIN_AGE = timedelta(minutes=5)
 # review run before we re-announce it — avoids double-dispatching a review whose
 # `in_review` event the orchestrator is still processing.
 _RECONCILE_REVIEW_MIN_AGE = timedelta(minutes=5)
+
+# V-1 (auditoría de comportamiento 2026-07-25): antigüedad mínima de una
+# reclamación de dispatch SIN ejecución antes de devolver la tarea a `ready`.
+# Mucho más holgado que `_RECONCILE_STUCK_TASK_MIN_AGE` a propósito: ahí el run ya
+# terminó (la fila está y es terminal), aquí puede que el worker todavía no haya
+# sacado el mensaje de la cola. 30 min no corre ningún riesgo de pisar una entrega
+# en vuelo y sobra para el caso real observado (7 días).
+_RECONCILE_ORPHAN_CLAIM_MIN_AGE = timedelta(minutes=30)
 # The reconciler's OWN escalation cap (M5), independent of the ADR 0095-D3 cap that
 # only advances when a review execution reaches `_apply_review_verdict`. Two real
 # paths leave D3 stuck forever: the Celery broker down (no dispatch → no execution →
@@ -76,6 +84,33 @@ def _stuck_task_needs_reconcile(
     return latest_exec_completed_at <= now - min_age
 
 
+def _orphan_claim_needs_revert(
+    started_at: datetime | None,
+    *,
+    now: datetime,
+    min_age: timedelta,
+) -> bool:
+    """True cuando una tarea `in_progress` SIN NINGUNA ejecución lleva reclamada
+    más de ``min_age`` y hay que devolverla a `ready` (caso a2, hallazgo V-1).
+
+    El dispatch reclama la tarea con un UPDATE atómico (`ready`→`in_progress`)
+    ANTES de encolar el run; si algo revienta entre el claim y la creación de la
+    fila de `executions` sin pasar por ``_revert_to_ready``, la tarea queda
+    `in_progress` para siempre: :func:`_stuck_task_needs_reconcile` la descarta
+    por diseño (su caso es "el último run es terminal", no "no hay run"), el
+    sweeper de ejecuciones rancias no tiene fila que barrer y el reaper de
+    huérfanos no tiene contenedor. Y como retiene el DAG, congela el plan entero.
+
+    Decisión pura — sin BD — para poder testear el filtro en aislamiento.
+    ``min_age`` es deliberadamente holgado: entre el claim y la creación de la
+    ejecución hay una cola de Celery de por medio, y este barrido NUNCA debe
+    pisar una entrega en vuelo. Sin ``started_at`` no se puede envejecer la
+    reclamación, así que se deja estar."""
+    if started_at is None:
+        return False
+    return started_at <= now - min_age
+
+
 def _orphan_review_needs_reannounce(
     *,
     reviewer_is_ai: bool,
@@ -112,6 +147,60 @@ def _orphan_review_should_escalate(
     return task_updated_at <= now - max_stuck
 
 
+async def _revert_orphan_claim(
+    db: AsyncSession,
+    task_id: Any,
+    *,
+    now: datetime,
+    min_age: timedelta,
+) -> tuple[Any, str, str] | None:
+    """Devuelve a `ready` una tarea reclamada cuya ejecución nunca se creó (V-1).
+
+    Espejo de ``orchestrator._revert_to_ready``: limpia la asignación y el
+    `started_at` para que el siguiente dispatch la trate como nueva. Devuelve la
+    terna ``(task, old, new)`` para que el caller publique el evento, o ``None``
+    si la tarea ya no cumple (otro camino ganó la carrera).
+
+    Tres guardas, todas dentro de la MISMA transacción con la fila bloqueada:
+    la tarea sigue `in_progress`, la reclamación es lo bastante vieja
+    (:func:`_orphan_claim_needs_revert` con el umbral holgado de V-1) y sigue sin
+    haber ninguna ejecución. Entre el SELECT de candidatos y este punto un
+    dispatch puede haber creado su fila; en ese caso no se toca nada.
+
+    La transición va por ``transition_task_status`` (la puerta de la máquina de
+    estados §7.2, donde `in_progress → ready` es legal), nunca por asignación
+    cruda de ``.status`` — lo vigila ``test_state_mutation_guard``."""
+    from api_server.db.domain import Execution, Task, TaskStatus
+    from api_server.task_state_machine import transition_task_status
+    from sqlalchemy import func, select
+
+    task = (
+        await db.execute(select(Task).where(Task.id == task_id).with_for_update())
+    ).scalar_one_or_none()
+    if task is None or task.status != TaskStatus.IN_PROGRESS.value:
+        return None
+    # El umbral de la reclamación huérfana es MÁS HOLGADO que el del caso (a): el
+    # filtro SQL de candidatos usa el de (a), así que aquí se re-filtra.
+    if not _orphan_claim_needs_revert(task.started_at, now=now, min_age=min_age):
+        return None
+    # Re-check bajo el lock: si mientras tanto apareció una ejecución, el run está
+    # vivo y esta tarea NO es una reclamación huérfana.
+    live = (
+        await db.execute(
+            select(func.count()).select_from(Execution).where(Execution.task_id == task_id)
+        )
+    ).scalar_one()
+    if live:
+        return None
+    old = task.status
+    transition_task_status(task, TaskStatus.READY.value)
+    task.assigned_agent_id = None
+    task.started_at = None
+    task.updated_at = now
+    await db.flush()
+    return (task, old, TaskStatus.READY.value)
+
+
 async def _reconcile_stuck_tasks(
     sessionmaker: async_sessionmaker[AsyncSession],
     redis: Any,
@@ -119,14 +208,24 @@ async def _reconcile_stuck_tasks(
     now: datetime,
     min_age: timedelta,
 ) -> int:
-    """Case (a): transition tasks stuck `in_progress` whose last run is terminal.
+    """Case (a): transition tasks stuck `in_progress` whose last run is terminal,
+    AND (a2) revert tasks stuck `in_progress` with NO run at all.
 
     Reuses ``workers.execution.transition_task_after_run`` (the SAME dag_01 policy
     the worker applies: done→in_review/done, cancelled→cancelled, else→blocked) and
     re-emits the resulting ``task.status_changed`` so the board + the orchestrator
     converge. Per-task transaction + the `in_progress` guard inside
     ``transition_task_after_run`` make it idempotent and safe against a worker that
-    wins the race. Returns how many tasks were transitioned."""
+    wins the race.
+
+    Caso (a2), hallazgo V-1: una tarea reclamada por el dispatch cuya ejecución
+    nunca se creó no tiene run terminal que consultar, así que (a) la descartaba y
+    quedaba `in_progress` PARA SIEMPRE, reteniendo el DAG y congelando su plan.
+    Pasado ``_RECONCILE_ORPHAN_CLAIM_MIN_AGE`` se devuelve a `ready` — que es lo
+    que ``orchestrator._revert_to_ready`` habría hecho si el dispatch hubiera
+    fallado limpiamente — para que el ciclo la vuelva a repartir.
+
+    Returns how many tasks were transitioned (ambos casos)."""
     from api_server.db.domain import Execution, Task, TaskStatus
     from api_server.events import publish_task_status_changed
     from sqlalchemy import select
@@ -161,11 +260,20 @@ async def _reconcile_stuck_tasks(
                 .scalars()
                 .first()
             )
-            if latest is None or not _stuck_task_needs_reconcile(
+            if latest is None:
+                # (a2) V-1: reclamación huérfana. Se relee la tarea DENTRO de la
+                # transacción y se re-verifica `in_progress` + ausencia de run,
+                # para no pisar un dispatch que haya ganado la carrera entre el
+                # SELECT de candidatos y este punto.
+                event = await _revert_orphan_claim(
+                    db, task_id, now=now, min_age=_RECONCILE_ORPHAN_CLAIM_MIN_AGE
+                )
+            elif not _stuck_task_needs_reconcile(
                 latest.status, latest.completed_at, now=now, min_age=min_age
             ):
                 continue
-            event = await transition_task_after_run(db, task_id, latest.status)
+            else:
+                event = await transition_task_after_run(db, task_id, latest.status)
         if event is not None:
             task_obj, old, new = event
             await publish_task_status_changed(redis, task_obj, old_status=old, new_status=new)
