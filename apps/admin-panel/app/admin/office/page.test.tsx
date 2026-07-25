@@ -42,11 +42,18 @@ const RUN_ESCALATED = {
   plan_id: "plan-1",
   plan_title: "Plan CI4",
 };
+// Solo los agentes ASIGNADOS A PROYECTOS pueblan la oficina (2026-07-25): la
+// asignación se resuelve por el EQUIPO del proyecto (project.team_id) o por
+// project_local. `ag-9` es una plantilla de catálogo SIN equipo de proyecto → no
+// debe aparecer.
+const TEAM = "team-ci4";
 const AGENTS = [
-  { id: "ag-1", name: "Backend Dev", role: "backend_dev" },
-  { id: "ag-2", name: "QA", role: "qa" },
-  { id: "ag-3", name: "Arquitecta", role: "architect" },
+  { id: "ag-1", name: "Backend Dev", role: "backend_dev", teams: [{ id: TEAM }] },
+  { id: "ag-2", name: "QA", role: "qa", teams: [{ id: TEAM }] },
+  { id: "ag-3", name: "Arquitecta", role: "architect", teams: [{ id: TEAM }] },
+  { id: "ag-9", name: "Plantilla Suelta", role: "qa", teams: [] },
 ];
+const PROJECTS = [{ id: "proj-1", team_id: TEAM }];
 
 function mockApi() {
   apiFetchMock.mockImplementation((path: string) => {
@@ -57,6 +64,7 @@ function mockApi() {
       return Promise.resolve([RUN_ESCALATED]);
     }
     if (path.startsWith("/agents")) return Promise.resolve(AGENTS);
+    if (path.startsWith("/projects")) return Promise.resolve(PROJECTS);
     return Promise.resolve([]);
   });
 }
@@ -97,6 +105,14 @@ describe("OfficePage (La Oficina v1)", () => {
     const door = screen.getByTestId("office-human-door");
     expect(door.textContent).toContain("QA");
     expect(door.textContent).toContain("Validar despliegue");
+  });
+
+  it("un agente NO asignado a ningún proyecto no entra en la oficina", async () => {
+    mockApi();
+    renderPage();
+    await screen.findByText(/Arquitecta/);
+    expect(screen.queryByTestId("office-agent-ag-9")).toBeNull();
+    expect(screen.getByTestId("office-bench").textContent).not.toContain("Plantilla Suelta");
   });
 
   it("clic en un personaje activo abre su run real", async () => {

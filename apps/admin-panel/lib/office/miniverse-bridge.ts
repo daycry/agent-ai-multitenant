@@ -45,6 +45,47 @@ export interface OfficeAgent {
   id: string;
   name: string;
   role: string | null;
+  /** Pertenencias a equipos (ADR 0071) — la vía por la que un agente queda
+   * asignado a un proyecto (`project.team_id`). */
+  teams?: { id: string; name?: string }[] | null;
+  /** Solo en `scope=project_local`: proyecto al que está atado directamente. */
+  project_id?: string | null;
+}
+
+export interface OfficeProject {
+  id: string;
+  team_id: string | null;
+}
+
+/**
+ * Los agentes ASIGNADOS A PROYECTOS — los únicos que pueblan la oficina
+ * (petición del operador 2026-07-25).
+ *
+ * Dos vías de asignación, ambas reales en la plataforma:
+ *   1. por EQUIPO: el agente es miembro de un equipo que algún proyecto usa
+ *      (`project.team_id`) — el caso normal al adoptar un equipo builtin, donde
+ *      los agentes quedan `global_tenant_template` (NO `project_local`);
+ *   2. por SCOPE: `project_local`, atado directamente vía `agent.project_id`.
+ *
+ * Filtrar solo por `scope=project_local` vaciaba la oficina de un tenant real
+ * (todos sus agentes despachables eran templates de equipo) — de ahí las dos vías.
+ * Los agentes de catálogo sin equipo-de-proyecto quedan fuera: son plantillas,
+ * no gente trabajando. Puro/testeable.
+ */
+export function projectAssignedAgents(
+  agents: OfficeAgent[],
+  projects: OfficeProject[],
+): OfficeAgent[] {
+  const teamIds = new Set<string>();
+  const projectIds = new Set<string>();
+  for (const p of projects ?? []) {
+    projectIds.add(p.id);
+    if (p.team_id) teamIds.add(p.team_id);
+  }
+  return (agents ?? []).filter((a) => {
+    if (a.project_id && projectIds.has(a.project_id)) return true;
+    return (a.teams ?? []).some((t) => t?.id && teamIds.has(t.id));
+  });
 }
 
 /** Nuestro estado visual (mapping) → estado del motor miniverse. */

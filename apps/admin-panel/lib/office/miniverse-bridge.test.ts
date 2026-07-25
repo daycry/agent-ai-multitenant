@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   officeCounts,
+  projectAssignedAgents,
   toAgentStatuses,
   type OfficeAgent,
   type OfficeRun,
@@ -72,6 +73,51 @@ describe("toAgentStatuses", () => {
     });
     expect(statuses).toHaveLength(0);
     expect(Object.keys(runByAgent)).toHaveLength(0);
+  });
+});
+
+describe("projectAssignedAgents", () => {
+  const projects = [
+    { id: "p1", team_id: "team-1" },
+    { id: "p2", team_id: null },
+  ];
+
+  it("incluye al agente por EQUIPO del proyecto (caso real: templates de equipo, no project_local)", () => {
+    // Regresión 2026-07-25: filtrar por scope=project_local vaciaba la oficina de
+    // un tenant cuyos agentes despachables son global_tenant_template de un equipo.
+    const out = projectAssignedAgents(
+      [
+        agent({ id: "a1", name: "CI4 Backend", teams: [{ id: "team-1" }], project_id: null }),
+        agent({ id: "a2", name: "Plantilla suelta", teams: [], project_id: null }),
+      ],
+      projects,
+    );
+    expect(out.map((a) => a.id)).toEqual(["a1"]);
+  });
+
+  it("incluye al agente project_local por su project_id", () => {
+    const out = projectAssignedAgents(
+      [agent({ id: "a3", teams: [], project_id: "p2" }), agent({ id: "a4", teams: [] })],
+      projects,
+    );
+    expect(out.map((a) => a.id)).toEqual(["a3"]);
+  });
+
+  it("excluye equipos que ningún proyecto usa y tolera campos ausentes", () => {
+    const out = projectAssignedAgents(
+      [
+        agent({ id: "a5", teams: [{ id: "team-huerfano" }] }),
+        agent({ id: "a6", teams: null, project_id: null }),
+      ],
+      projects,
+    );
+    expect(out).toHaveLength(0);
+  });
+
+  it("sin proyectos, nadie puebla la oficina", () => {
+    expect(
+      projectAssignedAgents([agent({ id: "a7", teams: [{ id: "team-1" }] })], []),
+    ).toHaveLength(0);
   });
 });
 

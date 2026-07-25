@@ -9,9 +9,11 @@ import { OfficeMiniverse } from "@/components/office/office-miniverse";
 import { agentVisualState, stepBubble } from "@/lib/office/mapping";
 import {
   officeCounts,
+  projectAssignedAgents,
   toAgentStatuses,
   type AgentStatus,
   type OfficeAgent,
+  type OfficeProject,
   type OfficeRun,
 } from "@/lib/office/miniverse-bridge";
 import { useRunStepBubbles } from "@/lib/office/use-run-step-bubbles";
@@ -39,20 +41,26 @@ export default function OfficePage() {
     queryFn: () => apiFetch<OfficeRun[]>("/runs?verdict=needs_human_review&limit=20"),
     refetchInterval: 15000,
   });
-  // Solo los agentes ASIGNADOS A PROYECTOS pueblan la oficina (petición del
-  // operador 2026-07-25): `scope=project_local` ⇒ `project_id IS NOT NULL` (ver
-  // ck_agents_scope_project_consistency). Los `global_builtin` /
-  // `global_tenant_template` son plantillas de catálogo, no plantilla de nadie
-  // trabajando — no deben deambular por el piso. Un agente que SÍ está corriendo
-  // aparece igual (su run manda), aunque no estuviera en esta lista.
   const agents = useQuery({
-    queryKey: ["office-agents", "project_local"],
-    queryFn: () => apiFetch<OfficeAgent[]>("/agents?scope=project_local"),
+    queryKey: ["office-agents"],
+    queryFn: () => apiFetch<OfficeAgent[]>("/agents"),
+  });
+  // Solo los agentes ASIGNADOS A PROYECTOS pueblan la oficina (petición del
+  // operador 2026-07-25). La asignación se resuelve por el EQUIPO del proyecto
+  // (`project.team_id`) o por `project_local` — ver projectAssignedAgents. Hace
+  // falta la lista de proyectos para conocer esos equipos.
+  const projects = useQuery({
+    queryKey: ["office-projects"],
+    queryFn: () => apiFetch<OfficeProject[]>("/projects"),
   });
 
   const running = useMemo(() => runningRuns.data ?? [], [runningRuns.data]);
   const escalated = useMemo(() => escalatedRuns.data ?? [], [escalatedRuns.data]);
-  const catalog = useMemo(() => agents.data ?? [], [agents.data]);
+  // Catálogo EFECTIVO de la oficina: solo los agentes asignados a proyectos.
+  const catalog = useMemo(
+    () => projectAssignedAgents(agents.data ?? [], projects.data ?? []),
+    [agents.data, projects.data],
+  );
 
   const { statuses, runByAgent } = useMemo(
     () => toAgentStatuses({ running, escalated, agents: catalog }),
