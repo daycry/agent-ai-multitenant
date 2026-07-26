@@ -524,6 +524,10 @@ async def finalize_execution(
     # ADR 0087: persist the structured finish status (None when absent / for
     # older result shapes without the field).
     execution.finish_status = getattr(result, "finish_status", None)
+    # `task_wf_52`: la etiqueta del conjunto de prompts que produjo el run. Con
+    # `getattr` porque el Protocol admite formas de resultado más viejas — un
+    # run de una imagen anterior al versionado simplemente la deja a NULL.
+    execution.prompt_version = getattr(result, "prompt_version", None)
     execution.steps_log = steps
     _apply_price_snapshot(execution, rollup)
     execution.iterations = result.iterations

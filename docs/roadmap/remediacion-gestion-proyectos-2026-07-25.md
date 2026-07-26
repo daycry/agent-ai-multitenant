@@ -739,10 +739,18 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 #### `task_wf_52` — Versionado de prompts
 
-- [ ] **Título**: hash estable del conjunto de prompts del runtime (system prompts +
-      preámbulos + nudges), expuesto por el runtime y propagado a
-      `EvalRun.subject_prompt_version`. Enciende el dashboard de calidad por release que ya
-      está construido.
+- [x] _(hecho la etiqueta y su persistencia; la propagación a `EvalRun` la cierra
+      `task_wf_52b`, que es quien crea el productor)_ **Título**: hash estable del conjunto de
+      prompts del runtime, expuesto por el runtime y persistido en `executions.prompt_version`
+      (migración **0119**, con índice `(tenant_id, prompt_version)`).
+- **Cómo se calcula**: por AST, todos los **literales de cadena largos** de los módulos que
+  hablan con el modelo, excluidos los docstrings. Ni el módulo entero (un refactor movería
+  la versión sin mover ningún prompt) ni solo las constantes (los nudges están escritos EN
+  LÍNEA dentro de las funciones, y se quedarían fuera la mitad de los prompts).
+- **Tests**: 10, y los dos que importan son opuestos — la etiqueta **se mueve** al editar un
+  prompt (incluido un nudge en línea) y **no se mueve** al renombrar una constante o mejorar
+  un docstring. Más uno que falla si el descubrimiento deja de encontrar prompts: el hash
+  del vacío también es estable, y ése es el modo de fallo silencioso de esta pieza.
 - **Hallazgo**: B-08 (medio), F-4 · **Tiempo**: 1 d
 - **Ficheros**: `agent_runtime/providers.py`, `__main__.py`, `evals/shadow.py:198`
 - **Tests**: unit de que el hash cambia al tocar un prompt y no cambia entre dos arranques

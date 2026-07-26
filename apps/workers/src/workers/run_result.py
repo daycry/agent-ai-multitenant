@@ -42,6 +42,9 @@ class _RuntimeResult:
     # Guardrail events (ADR 0102 / g1): triggered post_tool guardrails from the
     # runtime's execution.finished result; persisted tenant-scoped after finalize.
     guardrail_events: list[dict[str, Any]] = field(default_factory=list)
+    # `task_wf_52`: etiqueta del conjunto de prompts del runtime que produjo el
+    # run. La calcula el propio runtime al cerrar; el worker solo la transporta.
+    prompt_version: str | None = None
 
 
 def _parse_line(line: str) -> dict[str, Any] | None:
@@ -116,6 +119,7 @@ def _assemble_result(
             usage=final_result.get("usage") or dict(_EMPTY_USAGE),
             finish_status=final_result.get("finish_status"),
             guardrail_events=final_result.get("guardrail_events") or [],
+            prompt_version=final_result.get("prompt_version"),
         )
 
     # F16/P1.1: a clean exit with no result on the live stream — recover from the

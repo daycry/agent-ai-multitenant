@@ -49,6 +49,7 @@ from agent_runtime.nudges import (
     _same_target_nudge,
     _sterile_hard_limit,
 )
+from agent_runtime.prompt_version import prompt_version
 from agent_runtime.providers import ProviderTimeout
 from agent_runtime.review_harvest import (
     _harvest_worktree_files,
@@ -327,6 +328,10 @@ class ExecutionResult:
     # Guardrail events triggered during the run (ADR 0102 / g1); the worker
     # persists them tenant-scoped from the result envelope.
     guardrail_events: list[dict[str, Any]] = field(default_factory=list)
+    # `task_wf_52`: etiqueta del conjunto de prompts que produjo este run. Sin
+    # ella, dos runs con resultados distintos son indistinguibles y no se puede
+    # atribuir una mejora (ni una regresión) a un cambio de prompt.
+    prompt_version: str | None = None
 
     def succeeded(self) -> bool:
         return self.status == STATUS_DONE
@@ -342,6 +347,7 @@ class ExecutionResult:
             "approval": self.approval,
             "finish_status": self.finish_status,
             "guardrail_events": self.guardrail_events,
+            "prompt_version": self.prompt_version,
         }
 
 
@@ -1875,4 +1881,8 @@ def run_agent(
         # is set only when the agent finished via `submit_result`.
         finish_status=last_decision.get("finish_status"),
         guardrail_events=final.get("guardrail_events") or [],
+        # `task_wf_52`: se calcula al CERRAR el run, del código que acaba de
+        # correr — no se pasa desde fuera, que es como se acaba etiquetando un
+        # run con la versión de otra imagen.
+        prompt_version=prompt_version(),
     )

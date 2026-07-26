@@ -1195,6 +1195,13 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     # distinct from `status` (the execution lifecycle outcome).
     finish_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
+    # `task_wf_52`: etiqueta del conjunto de PROMPTS del runtime que produjo el
+    # run. `EvalRun.subject_prompt_version` existía desde el Plan 14 y nadie lo
+    # poblaba, así que el dashboard de calidad agrupaba todo bajo «(sin
+    # versión)»: se medía la calidad sin poder atribuirla a un cambio. NULL en
+    # los runs anteriores al versionado y en los que no lo reportan.
+    prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # Por qué el Memorizer NO produjo memoria a partir de este run, como código
     # canónico (:class:`~api_server.memorizer.policy.MemorizeSkipReason`):
     # ``not_done`` / ``skip_private`` / ``no_team`` / ``no_scope`` / ``llm_empty``
