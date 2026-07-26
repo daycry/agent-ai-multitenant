@@ -118,3 +118,26 @@ def test_a_well_formed_guardrails_config_is_accepted() -> None:
 
 def test_no_guardrails_override_stays_valid() -> None:
     assert _update(guardrails_config=None).guardrails_config is None
+
+
+# --- secrets_vault_id retirado (task_wf_35) -------------------------------
+
+
+def test_secrets_vault_id_is_no_longer_accepted() -> None:
+    """La columna está DEPRECATED desde P1-04 y no tiene ni un lector. El plan
+    pedía darle UI; la decisión (aprobada por el operador) fue la contraria:
+    retirarla. Aceptarla era el mismo no-op mudo que los presupuestos — el
+    operador rellena un campo y no pasa nada."""
+    from api_server.schemas.projects import ProjectCreateRequest, ProjectUpdateRequest
+
+    assert "secrets_vault_id" not in ProjectCreateRequest.model_fields
+    assert "secrets_vault_id" not in ProjectUpdateRequest.model_fields
+
+
+def test_secrets_vault_id_still_travels_in_the_response() -> None:
+    """No se retira de la RESPUESTA: romperia los SDK generados (python y
+    typescript) sin darle nada a nadie. Viaja siempre `null` hasta que se borre
+    la columna, y ese día se retira también de aquí."""
+    from api_server.schemas.projects import ProjectResponse
+
+    assert "secrets_vault_id" in ProjectResponse.model_fields

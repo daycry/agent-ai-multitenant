@@ -316,7 +316,12 @@ class ProjectCreateRequest(BaseModel):
     worker_config: dict[str, Any] = Field(default_factory=dict)
     repository_config: dict[str, Any] | None = None
     human_approval_policy: dict[str, Any] | None = None
-    secrets_vault_id: UUID | None = None
+    # `secrets_vault_id` NO se acepta (task_wf_35): la columna está DEPRECATED
+    # desde P1-04 y no tiene ni un lector en todo el sistema. Aceptarlo era el
+    # mismo no-op mudo que se acaba de tapar en `execution_budgets` — el
+    # operador rellena un campo y no pasa nada. Sigue en la RESPUESTA (siempre
+    # `null`) porque retirarlo de ahí rompería los SDK generados sin darle nada
+    # a nadie; el día que se borre la columna se retira también de la respuesta.
 
     # Plan 06.16 task_06_16_01: shell_exec allowlist (deny-by-default —
     # empty list runs nothing) + the stack's default runtime template.
@@ -401,8 +406,6 @@ class ProjectUpdateRequest(BaseModel):
     worker_config: dict[str, Any] | None = None
     repository_config: dict[str, Any] | None = None
     human_approval_policy: dict[str, Any] | None = None
-    # DEPRECATED (P1-04): sin lectores.
-    secrets_vault_id: UUID | None = None
     # P1-03: presupuestos de ejecución (clamp en dispatch) y guardrails del
     # proyecto (merge en el worker) — el PUT exige tenant_admin.
     execution_budgets: dict[str, Any] | None = None

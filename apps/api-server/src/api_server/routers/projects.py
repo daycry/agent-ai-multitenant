@@ -373,7 +373,6 @@ async def create_project(
         worker_config=payload.worker_config,
         repository_config=payload.repository_config,
         human_approval_policy=payload.human_approval_policy,
-        secrets_vault_id=payload.secrets_vault_id,
         allowed_commands=payload.allowed_commands,
         default_runtime_template=payload.default_runtime_template,
         allowed_domains=payload.allowed_domains,
