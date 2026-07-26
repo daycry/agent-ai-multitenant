@@ -812,12 +812,22 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 #### `task_wf_57` — Retirar el código muerto
 
-- [ ] **Título**: eliminar `runtime_pool.py`, `TestcontainersMode` +
-      `build_dind_proxy_run_kwargs` (con su script de demo y sus tests) y el
-      `ReviewRuntimeManager` en memoria. Prioridad al camino de testcontainers: es el único
-      que monta el socket Docker y no lo ejercita nada en producción.
+- [x] _(hecho — ~1.400 líneas fuera)_ **Título**: eliminar `runtime_pool.py`,
+      `TestcontainersMode` + `build_dind_proxy_run_kwargs` y el `ReviewRuntimeManager` en
+      memoria.
 - **Hallazgo**: C-08 (bajo) · **Tiempo**: 0,5 d
-- **Tests**: suites verdes tras el borrado; `assert_no_docker_socket` sigue cubierto.
+- **Alcance real**: además de lo listado, `plan_runner.py` (único importador de
+  `runtime_pool`, demo sin cablear), `TenantCapExceeded`, los ajustes huérfanos
+  `dind_proxy_*` y **9 ficheros de test** que solo ejercitaban lo borrado.
+- **Lo que NO se borró**: `workers/review_runtime.py` sigue vivo — `sign_review_url`,
+  `verify_review_url`, `ReviewRuntimeSpec` y `DEFAULT_TENANT_CAP` están en producción. Solo
+  se fue la clase en memoria. El **cap por tenant** sigue cubierto por
+  `tests/unit/test_review_tenant_cap.py`, que prueba el camino real (el de
+  `review_runtime_task`), no el del manager muerto.
+- **Tests**: el test de seguridad que endurecía el proxy DinD se sustituye por un
+  invariante **más fuerte**: ningún módulo del worker ni del agent-runtime puede volver a
+  nombrar `/var/run/docker.sock`. Endurecer una vía de escape que nadie usa valía menos que
+  no tenerla. `assert_no_docker_socket` sigue cubierto.
 
 #### `task_wf_58` — Test-contrato reconciler ↔ dispatch
 

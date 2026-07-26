@@ -22,10 +22,13 @@ The four tasks of Fase B all live here:
     (task_06_06) — describe the postgres-test / redis-test sidecars
     each project can opt into, run them on the task's private bridge
     network, and tear them down at end-of-task.
-  * :class:`TestcontainersMode` (task_06_07) — opt-in path that proxies
-    Docker API calls through a dedicated DinD socket-proxy container
-    (the test container talks to a *restricted* DOCKER_HOST, NEVER the
-    host's ``/var/run/docker.sock``).
+
+`task_wf_57`: aquí vivía además un modo «testcontainers» que levantaba un
+proxy del socket de Docker como sidecar para que las librerías de
+testcontainers pudieran hablar con el daemon. Se ha RETIRADO: era el único
+camino del sistema que montaba el socket en algún sitio, nunca se ejercitó en
+producción, y una vía de escape que nadie usa no compensa por muy endurecida
+que esté. Si algún día hace falta, vuelve con su ADR.
 
 Implementation note: ``container.py``'s ``AgentContainerRunner`` exists
 for *one container per task*. ``TestRuntimeRunner`` exists for *one
@@ -393,99 +396,6 @@ def build_aux_run_kwargs(
     }
 
 
-def build_dind_proxy_run_kwargs(
-    settings: Settings,
-    mode: TestcontainersMode,
-    network_name: str,
-) -> dict[str, Any]:
-    """Build the hardened kwargs for the DinD socket-proxy sidecar.
-
-    The proxy already had cap_drop ALL + read-only root + no-new-privileges;
-    task_06_14_11 (container-isolation-2) adds the missing mem/pids caps so a
-    misbehaving testcontainer cannot exhaust the host through the proxy. The
-    host docker.sock bind onto the *proxy only* (never the test container)
-    stays exactly as before — see :class:`TestcontainersMode`.
-    """
-    return {
-        "detach": True,
-        "environment": dict(mode.acl),
-        "network": network_name,
-        "hostname": mode.proxy_alias(),
-        "mounts": [
-            Mount(
-                target="/var/run/docker.sock",
-                source="/var/run/docker.sock",
-                type="bind",
-                read_only=False,
-            )
-        ],
-        "read_only": True,
-        "cap_drop": ["ALL"],
-        "security_opt": list(_AUX_SECURITY_OPT),
-        "mem_limit": settings.dind_proxy_mem_limit,
-        "pids_limit": settings.dind_proxy_pids_limit,
-        "labels": {**_TEST_LABELS, "com.agentic-platform.role": "dind-proxy"},
-    }
-
-
-# ---------------------------------------------------------------------------
-# task_06_07 — Testcontainers opt-in mode
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class TestcontainersMode:
-    """Opt-in: the test-runtime gets a DinD-proxy at ``DOCKER_HOST``.
-
-    Standard testcontainers libraries (java, node, python) need to
-    talk to a Docker daemon. We **never** mount ``/var/run/docker.sock``
-    into the test container — that would defeat the entire isolation
-    story (a container with daemon access trivially escapes to the
-    host). Instead, when ``enabled=True``, the worker:
-
-      1. Spawns a docker-socket-proxy sidecar on the task's private
-         bridge with a hardened ACL (``CONTAINERS=1, IMAGES=1, ...``
-         only — no ``EXEC``, no ``VOLUMES``, no host network).
-      2. Exposes its tcp port to the test-runtime as
-         ``DOCKER_HOST=tcp://docker-proxy:2375``.
-      3. Tears down the proxy at end-of-task.
-
-    This isn't bulletproof — a sufficiently determined testcontainer
-    *can* DOS by spawning runaway sibling containers — but it bounds
-    the attack surface (no ``--privileged``, no socket on host fs, no
-    host network) to "noisy neighbour", not "escape".
-    """
-
-    enabled: bool = False
-    # Image of the socket-proxy. Defaults to the well-maintained
-    # tecnativa one; projects can pin a specific tag for reproducibility.
-    proxy_image: str = "tecnativa/docker-socket-proxy:0.3.0"
-    # ACL — what subset of the Docker API the proxy exposes. The defaults
-    # are the smallest set testcontainers needs (CONTAINERS lets it spin
-    # one up, IMAGES lets it pull). EXEC and VOLUMES are *not* in here on
-    # purpose — turning them on without thought is the canonical way to
-    # void the sandbox.
-    acl: Mapping[str, str] = field(
-        default_factory=lambda: {
-            "CONTAINERS": "1",
-            "IMAGES": "1",
-            "NETWORKS": "1",
-            "POST": "1",
-            "EXEC": "0",
-            "VOLUMES": "0",
-            "INFO": "1",
-            "PING": "1",
-            "VERSION": "1",
-        }
-    )
-
-    def proxy_alias(self) -> str:
-        return "docker-proxy"
-
-    def docker_host_url(self) -> str:
-        return f"tcp://{self.proxy_alias()}:2375"
-
-
 # ---------------------------------------------------------------------------
 # task_06_05 — Launching the test-runtime
 # ---------------------------------------------------------------------------
@@ -509,9 +419,6 @@ class TestRuntimeSpec:
     # plus the project's own `env`. Merged AFTER the template/cache/egress env,
     # so it can override those; never overrides HOME (set from the template).
     main_env: Mapping[str, str] = field(default_factory=dict)
-    # Opt-in DinD proxy. Disabled by default — projects with
-    # testcontainers tests turn this on per-task.
-    testcontainers: TestcontainersMode = field(default_factory=TestcontainersMode)
     # Override the template's default cpu/memory caps.
     cpu: float | None = None
     memory_mb: int | None = None
@@ -578,13 +485,10 @@ class TestRuntimeRunner:
         """
         network = self._create_bridge(spec)
         aux_containers: list[Any] = []
-        proxy_container: Any = None
         registry_proxy: Any = None
         main_container: Any = None
         try:
             aux_containers = self._start_aux_services(spec, network.name)
-            if spec.testcontainers.enabled:
-                proxy_container = self._start_dind_proxy(spec, network.name)
             if self._egress_enabled(spec):
                 registry_proxy = self._attach_registry_proxy(network)
             main_container = self._start_main(spec, network.name, egress=registry_proxy is not None)
@@ -614,7 +518,6 @@ class TestRuntimeRunner:
         finally:
             self._cleanup(
                 main_container,
-                proxy_container,
                 aux_containers,
                 network,
                 registry_proxy=registry_proxy,
@@ -643,13 +546,10 @@ class TestRuntimeRunner:
         """
         network = self._create_bridge(spec)
         aux_containers: list[Any] = []
-        proxy_container: Any = None
         registry_proxy: Any = None
         main_container: Any = None
         try:
             aux_containers = self._start_aux_services(spec, network.name)
-            if spec.testcontainers.enabled:
-                proxy_container = self._start_dind_proxy(spec, network.name)
             if self._egress_enabled(spec):
                 registry_proxy = self._attach_registry_proxy(network)
             main_container = self._start_main(spec, network.name, egress=registry_proxy is not None)
@@ -662,7 +562,6 @@ class TestRuntimeRunner:
         finally:
             self._cleanup(
                 main_container,
-                proxy_container,
                 aux_containers,
                 network,
                 registry_proxy=registry_proxy,
@@ -776,21 +675,6 @@ class TestRuntimeRunner:
         )
 
     # --- DinD proxy -----------------------------------------------------
-
-    def _start_dind_proxy(self, spec: TestRuntimeSpec, network_name: str) -> Any:
-        """Spawn the docker-socket-proxy sidecar.
-
-        We mount the host's ``/var/run/docker.sock`` *into the proxy
-        only* — the test container never sees it. The proxy's ACL
-        environment variables enforce the API subset the test
-        container can use. See :class:`TestcontainersMode` for the
-        rationale."""
-        # The proxy itself needs the docker socket — but ONLY the
-        # proxy, never the test container. Assert this is intentional
-        # by labeling it differently from the test container.
-        mode = spec.testcontainers
-        run_kwargs = build_dind_proxy_run_kwargs(self._settings, mode, network_name)
-        return self.client.containers.run(mode.proxy_image, **run_kwargs)
 
     # --- main container -------------------------------------------------
 
@@ -907,10 +791,6 @@ class TestRuntimeRunner:
         # dep_cache_mount (ADR 0094) — injected always; a warm cache helps even
         # offline acceptance runs. Won't override HOME (templates never set it).
         env.update(dict(template.cache_env))
-        if spec.testcontainers.enabled:
-            env["DOCKER_HOST"] = spec.testcontainers.docker_host_url()
-            # testcontainers java/node libs respect TESTCONTAINERS_HOST_OVERRIDE
-            env["TESTCONTAINERS_HOST_OVERRIDE"] = spec.testcontainers.proxy_alias()
         if egress:
             # Route the runtime's HTTP(S) through the allowlisted registry-proxy
             # the worker attached to this bridge, and force git deps to HTTPS so
@@ -1006,7 +886,6 @@ class TestRuntimeRunner:
     def _cleanup(
         self,
         main_container: Any,
-        proxy_container: Any,
         aux_containers: list[Any],
         network: Any,
         *,
@@ -1016,7 +895,7 @@ class TestRuntimeRunner:
         # endpoint makes network.remove() fail (ADR 0094). No-op if already
         # detached before the check phase, or if egress was never attached.
         self._detach_proxy(network, registry_proxy)
-        for container in [main_container, proxy_container, *aux_containers]:
+        for container in [main_container, *aux_containers]:
             if container is None:
                 continue
             with contextlib.suppress(Exception):
@@ -1067,9 +946,7 @@ __all__ = [
     "TestRuntimeResult",
     "TestRuntimeRunner",
     "TestRuntimeSpec",
-    "TestcontainersMode",
     "build_aux_run_kwargs",
-    "build_dind_proxy_run_kwargs",
     "default_aux_services",
     "group_tasks_by_runtime",
     "resolve_run_runtime",

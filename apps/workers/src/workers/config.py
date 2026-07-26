@@ -341,14 +341,6 @@ class Settings(BaseSettings):
         default=128,
         description="Max process count inside an aux-service container — caps fork bombs.",
     )
-    dind_proxy_mem_limit: str = Field(
-        default="128m",
-        description="Hard memory cap for the testcontainers DinD socket-proxy sidecar.",
-    )
-    dind_proxy_pids_limit: int = Field(
-        default=64,
-        description="Max process count inside the DinD socket-proxy sidecar.",
-    )
 
     # ----- Memorizer (Plan 04.5 task_04_5_02) -----
     memorizer_llm_base_url: str = Field(

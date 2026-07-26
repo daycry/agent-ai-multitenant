@@ -29,11 +29,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import secrets
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal
 
 import structlog
 
@@ -187,204 +186,15 @@ class ReviewSession:
         return max(0.0, ref - self.last_activity_at)
 
 
-# ---------------------------------------------------------------------------
-# task_06_32 / 06_33 / 06_34 — Manager
-# ---------------------------------------------------------------------------
-
-
-class TenantCapExceeded(RuntimeError):  # noqa: N818 - "exceeded" reads cleaner than "Error"
-    """Raised when a tenant has too many concurrent review-runtimes."""
-
-
-# Factory hook for tests — returns a tuple of container ids that were
-# spawned. In production this is workers.container's compose layer.
-ContainerSpawner = Any  # Callable[[ReviewRuntimeSpec], tuple[str, ...]]
-ContainerDestroyer = Any  # Callable[[tuple[str, ...]], None]
-ContainerPauser = Any  # Callable[[tuple[str, ...]], None]
-
-
-class ReviewRuntimeManager:
-    """Lifecycle of review-runtime sessions across the platform.
-
-    The manager keeps an in-memory index per tenant + per session id.
-    Persistence (so the manager survives a worker restart mid-review)
-    is handled by writing each transition to a ``review_sessions``
-    DB row in production; the in-memory dict here is what tests
-    inspect.
-    """
-
-    def __init__(
-        self,
-        *,
-        spawn: ContainerSpawner,
-        destroy: ContainerDestroyer | None = None,
-        pause: ContainerPauser | None = None,
-        verdict_timeout_s: int = DEFAULT_VERDICT_TIMEOUT_S,
-        idle_suspend_s: int = DEFAULT_IDLE_SUSPEND_S,
-        tenant_cap: int = DEFAULT_TENANT_CAP,
-    ) -> None:
-        self._spawn = spawn
-        self._destroy = destroy or (lambda _ids: None)
-        self._pause = pause or (lambda _ids: None)
-        self._sessions: dict[str, ReviewSession] = {}
-        self._verdict_timeout_s = verdict_timeout_s
-        self._idle_suspend_s = idle_suspend_s
-        self._tenant_cap = tenant_cap
-
-    # --- task_06_26 — create -----------------------------------------
-
-    def create(self, spec: ReviewRuntimeSpec) -> ReviewSession:
-        """Spawn the review-runtime; raise on tenant cap."""
-        active = [
-            s
-            for s in self._sessions.values()
-            if s.spec.tenant_id == spec.tenant_id and not s.is_terminal()
-        ]
-        if len(active) >= self._tenant_cap:
-            raise TenantCapExceeded(
-                f"tenant {spec.tenant_id!r} has {len(active)} active "
-                f"review-runtimes (cap {self._tenant_cap})"
-            )
-
-        now = time.time()
-        session_id = secrets.token_urlsafe(16)
-        container_ids = self._spawn(spec)
-        spec_with_expiry = ReviewRuntimeSpec(
-            **{**spec.__dict__, "expires_at": now + self._verdict_timeout_s},
-        )
-        session = ReviewSession(
-            id=session_id,
-            spec=spec_with_expiry,
-            status="running",
-            created_at=now,
-            last_activity_at=now,
-            expires_at=spec_with_expiry.expires_at,
-            container_ids=tuple(container_ids),
-        )
-        self._sessions[session_id] = session
-        _log.info(
-            "review_runtime.created",
-            session=session_id,
-            plan=spec.plan_id,
-            tenant=spec.tenant_id,
-        )
-        return session
-
-    # --- touch / activity --------------------------------------------
-
-    def touch(self, session_id: str, *, now: float | None = None) -> None:
-        """Update ``last_activity_at`` on every reviewer interaction.
-
-        The api-server calls this from the review router (page load,
-        WS message, terminal keystroke). It's what keeps the idle
-        suspend timer at bay."""
-        session = self._sessions.get(session_id)
-        if session is None or session.is_terminal():
-            return
-        session.last_activity_at = now if now is not None else time.time()
-        # Resume if paused.
-        if session.status == "suspended":
-            session.status = "running"
-
-    # --- task_06_30 — re-run tests ----------------------------------
-
-    def queue_rerun(self, session_id: str) -> None:
-        """Mark the session for a re-run of the plan's automated tests.
-
-        The actual celery task that does the work polls this flag and
-        clears it once the rerun finishes. We keep the flag (rather
-        than scheduling directly) so a flurry of clicks doesn't queue
-        N reruns."""
-        session = self._sessions.get(session_id)
-        if session is None or session.is_terminal():
-            return
-        session.rerun_requested = True
-        self.touch(session_id)
-        _log.info("review_runtime.rerun_queued", session=session_id)
-
-    # --- task_06_32 — idle suspend -----------------------------------
-
-    def suspend_idle(self, *, now: float | None = None) -> list[str]:
-        """Pause sessions idle past ``idle_suspend_s``. Returns ids."""
-        ref = now if now is not None else time.time()
-        suspended: list[str] = []
-        for session in self._sessions.values():
-            if session.status != "running":
-                continue
-            if (ref - session.last_activity_at) > self._idle_suspend_s:
-                self._pause(session.container_ids)
-                session.status = "suspended"
-                suspended.append(session.id)
-                _log.info("review_runtime.suspended", session=session.id)
-        return suspended
-
-    # --- task_06_33 — verdict timeout --------------------------------
-
-    def expire_overdue(self, *, now: float | None = None) -> list[str]:
-        """Mark sessions past their ``expires_at`` as expired.
-
-        The orchestrator polls ``status`` and flips the plan to
-        ``blocked`` + sends a notification for any session that lands
-        here. Returns the ids freshly expired."""
-        ref = now if now is not None else time.time()
-        expired: list[str] = []
-        for session in self._sessions.values():
-            if session.is_terminal():
-                continue
-            if ref < session.expires_at:
-                continue
-            self._destroy(session.container_ids)
-            session.status = "expired"
-            expired.append(session.id)
-            _log.info(
-                "review_runtime.expired",
-                session=session.id,
-                plan=session.spec.plan_id,
-            )
-        return expired
-
-    # --- verdicts ----------------------------------------------------
-
-    def approve(self, session_id: str) -> None:
-        session = self._sessions[session_id]
-        if session.is_terminal():
-            return
-        self._destroy(session.container_ids)
-        session.status = "approved"
-        session.verdict = "approved"
-
-    def reject(self, session_id: str, *, reason: str) -> None:
-        session = self._sessions[session_id]
-        if session.is_terminal():
-            return
-        self._destroy(session.container_ids)
-        session.status = "rejected"
-        session.verdict = "rejected"
-        session.rejection_reason = reason
-
-    # --- accessors ---------------------------------------------------
-
-    def get(self, session_id: str) -> ReviewSession | None:
-        return self._sessions.get(session_id)
-
-    def list_for_tenant(self, tenant_id: str) -> tuple[ReviewSession, ...]:
-        return tuple(s for s in self._sessions.values() if s.spec.tenant_id == tenant_id)
-
-
 __all__ = [
     "AuxComposeService",
-    "ContainerDestroyer",
-    "ContainerPauser",
-    "ContainerSpawner",
     "DEFAULT_IDLE_SUSPEND_S",
     "DEFAULT_TENANT_CAP",
     "DEFAULT_VERDICT_TIMEOUT_S",
     "HumanCheckItem",
-    "ReviewRuntimeManager",
     "ReviewRuntimeSpec",
     "ReviewSession",
     "ReviewStatus",
-    "TenantCapExceeded",
     "sign_review_url",
     "verify_review_url",
 ]

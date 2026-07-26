@@ -9,7 +9,7 @@ launch WITHOUT ``cap_drop``/``no-new-privileges``/``mem_limit``/
 ``pids_limit`` — a leak or a fork-bomb in a transient sidecar could reach
 the host. This pins the fix two ways:
 
-  * unit-style: ``build_aux_run_kwargs`` / ``build_dind_proxy_run_kwargs``
+  * unit-style: ``build_aux_run_kwargs``
     return the hardened kwargs (cap_drop ALL + no-new-priv + mem/pids
     caps), mirroring how ``build_hardened_run_kwargs`` is asserted.
   * behavioural: the runner actually wires those kwargs into
@@ -30,10 +30,8 @@ from workers.test_runtime import (
     DEFAULT_POSTGRES,
     DEFAULT_REDIS,
     AuxServiceSpec,
-    TestcontainersMode,
     TestRuntimeRunner,
     build_aux_run_kwargs,
-    build_dind_proxy_run_kwargs,
 )
 
 pytestmark = pytest.mark.integration
@@ -64,7 +62,7 @@ def _client_with_started_list() -> tuple[MagicMock, list[Any]]:
     return client, started
 
 
-def _spec(*aux: Any, testcontainers: bool = False) -> Any:
+def _spec(*aux: Any) -> Any:
     from shared_test_runtimes.catalog import get
     from workers.test_runtime import (
         AcceptanceCheck,
@@ -87,7 +85,6 @@ def _spec(*aux: Any, testcontainers: bool = False) -> Any:
         worktree_host_path="/data/worktrees/h",
         dep_cache_host_path="/data/dep-cache/pip-h",
         aux_services=tuple(aux),
-        testcontainers=TestcontainersMode(enabled=testcontainers),
     )
 
 
@@ -159,42 +156,6 @@ def test_aux_kwargs_preserve_network_hostname_and_env() -> None:
 
 
 # ---------------------------------------------------------------------------
-# build_dind_proxy_run_kwargs — the hardened envelope for the DinD proxy
-# ---------------------------------------------------------------------------
-
-
-def test_dind_proxy_kwargs_drop_caps_and_block_privilege_escalation() -> None:
-    mode = TestcontainersMode(enabled=True)
-    kwargs = build_dind_proxy_run_kwargs(Settings(), mode, "net-x")
-    assert kwargs["cap_drop"] == ["ALL"]
-    assert "no-new-privileges:true" in kwargs["security_opt"]
-    assert kwargs["read_only"] is True
-
-
-def test_dind_proxy_kwargs_carry_mem_and_pids_caps() -> None:
-    settings = Settings(dind_proxy_mem_limit="128m", dind_proxy_pids_limit=64)
-    kwargs = build_dind_proxy_run_kwargs(settings, TestcontainersMode(enabled=True), "net-x")
-    assert kwargs["mem_limit"] == "128m"
-    assert kwargs["pids_limit"] == 64
-
-
-def test_dind_proxy_mem_pids_are_operator_tunable() -> None:
-    settings = Settings(dind_proxy_mem_limit="55m", dind_proxy_pids_limit=7)
-    kwargs = build_dind_proxy_run_kwargs(settings, TestcontainersMode(enabled=True), "net-x")
-    assert kwargs["mem_limit"] == "55m"
-    assert kwargs["pids_limit"] == 7
-
-
-def test_dind_proxy_still_mounts_socket_onto_itself_only() -> None:
-    # Hardening must not drop the socket bind onto the proxy (the whole
-    # point of testcontainers mode) nor leak the socket elsewhere.
-    kwargs = build_dind_proxy_run_kwargs(Settings(), TestcontainersMode(enabled=True), "net-x")
-    sources = {m["Source"] for m in kwargs["mounts"]}
-    assert "/var/run/docker.sock" in sources
-    assert kwargs["labels"]["com.agentic-platform.role"] == "dind-proxy"
-
-
-# ---------------------------------------------------------------------------
 # Behavioural: the runner actually applies the hardened kwargs
 # ---------------------------------------------------------------------------
 
@@ -209,18 +170,6 @@ def test_runner_launches_aux_with_hardening() -> None:
     assert "no-new-privileges:true" in pg.kwargs["security_opt"]
     assert pg.kwargs["mem_limit"] == "256m"
     assert pg.kwargs["pids_limit"] == Settings().aux_default_pids_limit
-
-
-def test_runner_launches_dind_proxy_with_hardening() -> None:
-    client, started = _client_with_started_list()
-    runner = TestRuntimeRunner(Settings(), client=client)
-    runner.launch(_spec(testcontainers=True))
-
-    proxy = next(c for c in started if "docker-socket-proxy" in str(c.image))
-    assert proxy.kwargs["cap_drop"] == ["ALL"]
-    assert "no-new-privileges:true" in proxy.kwargs["security_opt"]
-    assert proxy.kwargs["mem_limit"] == Settings().dind_proxy_mem_limit
-    assert proxy.kwargs["pids_limit"] == Settings().dind_proxy_pids_limit
 
 
 def test_every_aux_sidecar_is_hardened() -> None:

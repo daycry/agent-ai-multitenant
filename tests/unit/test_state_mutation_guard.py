@@ -58,10 +58,6 @@ _ALLOWED: frozenset[tuple[str, str]] = frozenset(
         # Edge documentado en la state machine: revert de un dispatch que no
         # pudo encolarse (in_progress → ready).
         ("apps/orchestrator/src/orchestrator/dispatch.py", "_revert_to_ready"),
-        # Runner scriptado del Plan 01 (previo a la state machine; sin uso en
-        # el camino de producción actual).
-        ("apps/orchestrator/src/orchestrator/plan_runner.py", "execute_task"),
-        ("apps/orchestrator/src/orchestrator/plan_runner.py", "reject_task"),
     }
 )
 
