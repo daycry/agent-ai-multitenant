@@ -544,12 +544,23 @@ Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
 
 #### `task_wf_35` — Configuración de proyecto sin agujeros
 
-- [ ] **Título**: UI para `execution_budgets`, `guardrails_config` de proyecto,
-      `budget_*`, `secrets_vault_id` y `human_task_review_mode` en el hub del proyecto.
-      `allowed_domains` **ya tiene UI**: no tocar.
+- [x] _(hecho, en tres tramos)_ **Título**: UI para `execution_budgets`, `guardrails_config`
+      de proyecto, `budget_*` y `human_task_review_mode` en el hub del proyecto.
+      `allowed_domains` **ya tenía UI**: no se tocó. `secrets_vault_id` **se retiró** en vez
+      de dársela (está deprecated y no lo lee nadie).
 - **Hallazgo**: D-06 (medio) · **Tiempo**: 1 d
-- **Ficheros**: `app/admin/projects/[id]/page.tsx` y una sección nueva
-- **Tests**: e2e de guardar y releer cada campo.
+- **Ficheros**: `components/projects/governance-section.tsx` + `lib/project-governance.ts`
+  (nuevos), `app/admin/projects/[id]/page.tsx`
+- **Tres tramos**: `39f1ebbf` cerrar el no-op mudo (la API aceptaba los dos primeros sin
+  validar y aguas abajo se descartaban en silencio; sin esto la pantalla habría mentido
+  igual) · `8566be6b` retirar `secrets_vault_id` · esta sección.
+- **Tests**: 11 unit de la conversión formulario↔API + 6 de render. El que más importa:
+  **un campo vacío viaja como `null`, no como `0`** — un presupuesto de cero impediría
+  arrancar cualquier run.
+- **Decisión**: los guardrails se editan como **JSON**, no con un formulario. Su forma es
+  `{guardrails: {hook: [{type, …}]}}` con parámetros propios por tipo; un formulario
+  tendría que replicar ese catálogo y divergiría del esquema a la primera. El backend valida
+  con el MISMO parser que el worker, así que un error aquí es el que habría en ejecución.
 
 #### `task_wf_36` — Una sola definición de plan completado
 
