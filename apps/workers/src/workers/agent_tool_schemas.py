@@ -211,6 +211,24 @@ def _default_unrestricted_tool_names() -> list[str]:
     return sorted(wired - _PROJECT_WIRED_TOOL_NAMES)
 
 
+def _unwired_platform_builtins() -> frozenset[str]:
+    """Platform builtin names that have NO runtime executor.
+
+    These must never reach the model, by ANY route. Tenant-owned names (custom
+    tools, project MCP ``<server>.<tool>``) are not in the platform's canonical
+    set, so they are never filtered here — the runtime really does register them
+    from their spec.
+    """
+    try:
+        import importlib
+
+        tool_names = importlib.import_module("shared_domain.tool_names")
+    except Exception:  # pragma: no cover - defensive: domain package optional
+        return frozenset()
+    canonical: frozenset[str] = tool_names.CANONICAL_TOOL_NAMES
+    return frozenset(name for name in canonical if not tool_names.is_runtime_wired(name))
+
+
 def _catalog_by_canonical() -> dict[str, dict[str, Any]]:
     """Catalog tool schemas keyed by CANONICAL runtime name (alias-expanded).
 
@@ -250,6 +268,45 @@ def _catalog_by_canonical() -> dict[str, dict[str, Any]]:
             # the runtime registry expects to execute.
             out[canonical] = {**entry, "name": canonical}
     return out
+
+
+def _schema_index(tool_specs: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    """Every schema this run can advertise, keyed by canonical tool name.
+
+    Sources in order: the runtime-only tools, the builtin catalog, and the
+    serialised ``tool_specs``. Extracted from ``build_model_tool_schemas`` so the
+    filtering rule below has one home instead of living inside a long function.
+    """
+    by_name: dict[str, dict[str, Any]] = dict(_RUNTIME_ONLY_SCHEMAS)
+    for canonical_name, catalog_entry in _catalog_by_canonical().items():
+        by_name.setdefault(canonical_name, catalog_entry)
+
+    # Custom / typed tools serialized by the orchestrator (input_schema if present).
+    unwired_platform = _unwired_platform_builtins()
+    for spec in tool_specs or []:
+        spec_name = spec.get("name")
+        if not spec_name or spec_name in by_name:
+            continue
+        # La puerta de atrás de B-04 (auditoría adversarial 2026-07-25): retirar
+        # una tool de `RUNTIME_WIRED_TOOL_NAMES` la saca del catálogo, pero eso
+        # deja su nombre LIBRE aquí y este bucle la reponía con su esquema —
+        # `serialize_agent_tool_specs` serializa todas las filas asignadas. A un
+        # agente con `send_notification` concedida se le seguía anunciando.
+        #
+        # Solo se filtran los builtins de PLATAFORMA sin ejecutor: las tools de
+        # tenant (custom, MCP del proyecto) tienen que pasar por aquí, porque
+        # `register_tool_specs` sí las registra (task_wf_10).
+        if spec_name in unwired_platform:
+            continue
+        schema = spec.get("input_schema")
+        if isinstance(schema, dict):
+            by_name[spec_name] = {
+                "name": spec_name,
+                "description": spec.get("description") or spec_name,
+                "parameters": schema,
+            }
+
+    return by_name
 
 
 def build_model_tool_schemas(
@@ -325,22 +382,7 @@ def build_model_tool_schemas(
     if not effective:
         return []
 
-    by_name: dict[str, dict[str, Any]] = dict(_RUNTIME_ONLY_SCHEMAS)
-    for canonical_name, catalog_entry in _catalog_by_canonical().items():
-        by_name.setdefault(canonical_name, catalog_entry)
-
-    # Custom / typed tools serialized by the orchestrator (input_schema if present).
-    for spec in tool_specs or []:
-        spec_name = spec.get("name")
-        if not spec_name or spec_name in by_name:
-            continue
-        schema = spec.get("input_schema")
-        if isinstance(schema, dict):
-            by_name[spec_name] = {
-                "name": spec_name,
-                "description": spec.get("description") or spec_name,
-                "parameters": schema,
-            }
+    by_name = _schema_index(tool_specs)
 
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
