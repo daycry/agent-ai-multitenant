@@ -73,6 +73,7 @@ def _agent_spec(  # noqa: PLR0912, PLR0915 - secuencia lineal de claves opcional
     guardrails: dict[str, Any] | None = None,
     conversation_thread: bool = False,
     reflection_assess: bool = False,
+    code_diff: str | None = None,
 ) -> dict[str, Any]:
     """The `AGENT_TASK_SPEC` payload for the container.
 
@@ -183,8 +184,15 @@ def _agent_spec(  # noqa: PLR0912, PLR0915 - secuencia lineal de claves opcional
     # reviewer's verdict-instruction preamble (`build_review_preamble`).
     if request.review:
         spec["review"] = True
-        if request.review_context is not None:
-            spec["review_context"] = request.review_context
+        if request.review_context is not None or code_diff:
+            context = dict(request.review_context or {})
+            # `task_wf_60`: el DIFF de la tarea, calculado por el worker (es
+            # quien tiene worktree + git; al sandbox no se le da git). Entra en
+            # el mismo bloque que el resto del contexto de review, no en una
+            # clave nueva del spec: para el runtime es «lo que hay que juzgar».
+            if code_diff:
+                context["code_diff"] = code_diff
+            spec["review_context"] = context
     # Inter-run reviewer feedback (A2): a re-dispatched IMPLEMENTER run carries the
     # AI reviewer's prior rejection payloads so the runtime can fold them into a
     # corrective preamble (`build_prior_feedback_preamble`). Only emit when present

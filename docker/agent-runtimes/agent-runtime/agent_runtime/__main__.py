@@ -509,9 +509,23 @@ def build_review_preamble(review_context: dict[str, Any]) -> str:
     criteria = str(review_context.get("acceptance_criteria") or "").strip()
     implementer_output = str(review_context.get("implementer_output") or "").strip()
     test_report = str(review_context.get("test_report") or "").strip()
+    code_diff = str(review_context.get("code_diff") or "").strip()
     sections: list[str] = []
     if criteria:
         sections.append(f"Acceptance criteria to certify against:\n{criteria}")
+    # `task_wf_60`: el DIFF va PRIMERO entre las evidencias, antes del resumen
+    # en prosa del implementador. De las tres es la única verificable: la prosa
+    # dice lo que el agente CREE que hizo, el diff dice lo que hizo. Lo calcula
+    # el worker (tiene worktree + git) y llega ya hecho — al sandbox no se le da
+    # git. Sin diff (runs de análisis/diseño, o sin worktree) la sección
+    # simplemente no aparece y el review sigue como antes.
+    if code_diff:
+        sections.append(
+            "Code change under review (unified diff of THIS task). Judge the "
+            "acceptance criteria against these lines and cite them when you "
+            "reject; use read_file for whatever surrounding context you need:\n"
+            f"{code_diff}"
+        )
     if implementer_output:
         sections.append(f"Implementer's output to review:\n{implementer_output}")
     if test_report:

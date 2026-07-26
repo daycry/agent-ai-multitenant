@@ -896,25 +896,23 @@ impacto/esfuerzo de toda la auditoría. Detalle y evidencia en §7c del informe.
 
 #### `task_wf_60` — El reviewer juzga el DIFF, no ficheros enteros
 
-- [ ] **Título**: entregar al review-runtime el **diff del rango de la tarea** como artefacto
+- [x] _(hecho)_ **Título**: entregar al review-runtime el **diff de la tarea** como artefacto
       primario del prompt, dejando `read_file` para el contexto de alrededor. Lo calcula el
-      **worker** antes de lanzar el runtime —es quien tiene `data_root` y git— contra el HEAD
-      de la rama del plan, porque en un primer run el trabajo aún no está commiteado. Se
-      entrega ya hecho, igual que el `<test-report>`: **no hay que dar git al contenedor**.
-      Reutilizar la maquinaria de `tasks/code_diff_task.py`, que ya hace exactamente esto para
-      el visor de la UI.
+      **worker** (es quien tiene `data_root` y git) y se entrega ya hecho, igual que el
+      `<test-report>`: **al sandbox no se le da git**.
 - **Hallazgo**: M-2 · **Tiempo**: 1,5 d
-- **Ficheros**: `apps/workers/src/workers/tasks/code_diff_task.py` (reutilizar),
-  `apps/workers/src/workers/execution.py` (montar el diff en el `review_context`),
-  `agent_runtime/providers.py:403-496` (`_review_messages`),
-  `agent_runtime/review_harvest.py:79-110`
-- **Tests**: unit de que el prompt de review contiene el diff y no el volcado completo; unit
-  de que un cambio de 30 ficheros ya no se trunca a 15; e2e de un review real que rechaza
-  citando líneas concretas del diff.
-- **Criterio de aceptación**: en una tarea que toca 12 líneas de un fichero de 800, el prompt
-  de review contiene las 12 líneas y su contexto, no las 800.
-- **Nota**: conservar el harvest de ficheros como _fallback_ para runs sin worktree (análisis
-  y diseño), donde hoy el review en prosa funciona bien.
+- **Ficheros**: `workers/review_diff.py` (nuevo), `workers/execution.py` (lo calcula la
+  provisión del workspace — único punto con worktree resuelto + git), `workers/run_spec.py`,
+  `agent_runtime/__main__.py::build_review_preamble`
+- **DOS fuentes, no una**, porque el momento del review no siempre es el mismo: el trabajo
+  **sin commitear** (`git diff HEAD`, primer review) y, si no hay, **los commits de ESTA
+  tarea** localizados por el trailer `Task-Id` (re-review tras un rechazo, donde el trabajo
+  ya está commiteado y `git diff HEAD` saldría vacío). El plan solo contemplaba la primera.
+- **Tests**: 14 — las dos fuentes, que los commits de una tarea HERMANA no se cuelan (un plan
+  es una rama compartida), el truncado que avisa, que un fallo de git **no impide el review**,
+  y que el diff va ANTES de la prosa del implementador y dentro del cerco de datos.
+- **Fallback conservado**: sin diff (runs de análisis/diseño, o sin worktree) la sección no
+  aparece y el review sigue con la cosecha de ficheros de siempre.
 
 #### `task_wf_61` — Veredicto por criterio
 

@@ -52,6 +52,7 @@ from workers.model_resolver import (
     resolve_model_spec,
     safe_spec_summary,
 )
+from workers.review_diff import compute_task_review_diff
 from workers.run_contract import (
     CrossTenantExecutionError,
     ExecutionOutcome,
@@ -134,6 +135,7 @@ def _build_runtime_env(
     guardrails: dict[str, Any] | None = None,
     conversation_thread: bool = False,
     reflection_assess: bool = False,
+    code_diff: str | None = None,
 ) -> dict[str, str]:
     """El env del contenedor `agent-runtime` para una ejecución (función PURA).
 
@@ -171,6 +173,7 @@ def _build_runtime_env(
                 guardrails=guardrails,
                 conversation_thread=conversation_thread,
                 reflection_assess=reflection_assess,
+                code_diff=code_diff,
             )
         ),
     }
@@ -1157,6 +1160,10 @@ class _Workspace:
     read_only: bool = False
     error: str | None = None
     error_code: str = "workspace_unavailable"
+    # `task_wf_60`: el diff que el reviewer debe juzgar (solo en runs de review;
+    # `None` cuando no hay worktree o git no da nada — el reviewer cae entonces
+    # a la cosecha de ficheros de siempre).
+    code_diff: str | None = None
 
 
 async def _provision_workspace(
@@ -1210,6 +1217,11 @@ async def _provision_workspace(
             settings, r_tenant_slug, r_project_slug, str(task_id)
         )
         ws.read_only = ws.host_path is not None
+        # `task_wf_60`: el DIFF de la tarea, calculado aquí porque este es el
+        # único punto que tiene a la vez el worktree resuelto y git. Se entrega
+        # ya hecho en el prompt del reviewer, igual que el `<test-report>`: al
+        # sandbox no se le da git (principio 2).
+        ws.code_diff = compute_task_review_diff(ws.host_path, str(task_id))
     return ws
 
 
@@ -1299,6 +1311,10 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
             conversation_thread=settings.runtime_conversation_thread,
             # ADR 0112 fase 2 (EXPERIMENTAL, default OFF).
             reflection_assess=settings.runtime_reflection_assess,
+            # `task_wf_60`: el diff de la tarea para el prompt del reviewer, que
+            # lo calculó la provisión del workspace (único punto con worktree +
+            # git). `None` en runs de implementación y en reviews sin worktree.
+            code_diff=workspace.code_diff,
             # Budget interno del loop = el del contenedor MENOS el grace (F19):
             # el aborto limpio del loop gana al kill duro del contenedor.
             wall_clock_budget_s=wall_clock_budget_s,
