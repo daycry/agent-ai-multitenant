@@ -293,12 +293,28 @@ def build_model_tool_schemas(
 
     effective: list[str] = list(tool_names or [])
     if tool_names is None and include_system_tools:
-        effective.extend(_default_unrestricted_tool_names())
-        # Y las tools que ESTE run cablea explícitamente (custom, docker_command
-        # y, desde task_wf_10, las MCP del proyecto). No están en el catálogo
-        # cableado porque son de tenant/proyecto, pero el registry del runtime
-        # sí las registra: sin esto, un agente sin grants seguiría sin ver
-        # justo las tools que el proyecto acaba de darle.
+        # REVERTIDO (auditoría adversarial 2026-07-25). Aquí se anunciaba además
+        # `_default_unrestricted_tool_names()` —el catálogo cableado— con la
+        # premisa de que «sin restricción por agente el runtime le deja llamar
+        # todas las tools cableadas». **Esa premisa es falsa**, y justo en este
+        # caso: `allowed_tools` es None exactamente cuando el agente no tiene
+        # filas en `agent_tools`, que es cuando `tool_specs` también viene None
+        # (mismo `if not rows: return None`); y sin `tool_specs` el runtime NO
+        # llama a `register_builtin_families`, solo a `_wire_system_families`
+        # (`agent_runtime/__main__.py:850-853`). Resultado: se anunciaban
+        # `read_file`/`write_file`/`stack_exec`… sin ejecutor, y cada llamada
+        # moría en «unknown tool» — la promesa falsa de B-04 reintroducida
+        # mientras se arreglaba B-04.
+        #
+        # Lo que SÍ se anuncia son las tools que este run cablea de verdad por
+        # spec (custom, docker_command y las MCP del proyecto, task_wf_10):
+        # `register_tool_specs` las registra, así que la promesa se cumple.
+        #
+        # task_wf_11 queda REABIERTO: entregar su criterio —que un agente sin
+        # grants pueda usar `read_file`— exige que el runtime cablee también las
+        # familias de catálogo en esa rama, y eso ensancha la capacidad del
+        # sandbox para todo agente sin asignaciones. Es una decisión de diseño,
+        # no un ajuste del anuncio.
         effective.extend(
             str(spec["name"]) for spec in (tool_specs or []) if isinstance(spec.get("name"), str)
         )

@@ -106,22 +106,16 @@ def test_a_mode_restricted_run_advertises_its_intersection() -> None:
     assert unadvertised(allowlist, None) == set()
 
 
-def test_an_unrestricted_agent_is_told_about_what_it_can_run() -> None:
-    """B-02: `None` = sin restricción; el registry le deja ejecutar el catálogo
-    cableado, así que tiene que verlo.
+def test_an_unrestricted_agent_is_only_told_about_what_this_run_wires() -> None:
+    """La simetría que este test afirmaba antes NO se sostiene, y afirmarla era el
+    bug: sin `tool_specs` el runtime solo cablea las familias de sistema, así que
+    anunciar el catálogo era prometer ejecutores que no existen.
 
-    La aserción es de SIMETRÍA y no una lista escrita a mano: si nombrar una
-    tool explícitamente la anuncia, no nombrar ninguna (= no restringir) no
-    puede anunciar menos. Cualquier hueco ahí es exactamente B-02.
-    """
-    from workers.agent_tool_schemas import _default_unrestricted_tool_names
-
-    unrestricted = _advertised(None, [_MCP_SPEC])
-    candidates = [*_default_unrestricted_tool_names(), str(_MCP_SPEC["name"])]
-    missing = {
-        name for name in candidates if name in _advertised([name], [_MCP_SPEC])
-    } - unrestricted
-    assert missing == set()
+    Lo que sí se sostiene: todo lo anunciado en esta rama viene de un spec —que
+    `register_tool_specs` sí registra— o es capacidad del grafo."""
+    advertised = _advertised(None, [_MCP_SPEC])
+    assert _MCP_SPEC["name"] in advertised
+    assert advertised - {_MCP_SPEC["name"]} <= set(SYSTEM_TOOL_NAMES)
 
 
 def test_deny_all_advertises_nothing_and_allows_nothing() -> None:

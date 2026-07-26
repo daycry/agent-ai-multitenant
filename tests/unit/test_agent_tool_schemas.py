@@ -112,10 +112,23 @@ def test_system_tools_advertised_for_unassigned_agent_when_requested() -> None:
 # creado, sin asignaciones, era incapaz de tocar un fichero porque nadie le
 # dijo que existiera la herramienta.
 # ---------------------------------------------------------------------------
-def test_unrestricted_agent_sees_the_wired_catalog() -> None:
-    out = build_model_tool_schemas(None, None, include_system_tools=True)
-    names = set(_names(out))
-    assert {"read_file", "write_file", "stack_exec"} <= names
+def test_unrestricted_agent_is_not_promised_tools_the_runtime_will_not_register() -> None:
+    """REVERTIDO tras la auditoría adversarial: aquí se afirmaba que un agente sin
+    grants ve `read_file`/`write_file`/`stack_exec`.
+
+    La premisa era falsa. `allowed_tools` es None exactamente cuando el agente no
+    tiene filas en `agent_tools`, que es cuando `tool_specs` también viene None
+    (mismo `if not rows: return None`), y sin `tool_specs` el runtime NO llama a
+    `register_builtin_families` — solo a `_wire_system_families`. Anunciarlas ahí
+    reintroducía la promesa falsa de B-04 mientras se arreglaba B-04: el modelo
+    las llamaba y se comía «unknown tool».
+
+    task_wf_11 queda reabierto: su criterio exige cablear también las familias de
+    catálogo en esa rama, que es una decisión de diseño sobre la capacidad del
+    sandbox, no un ajuste del anuncio."""
+    names = set(_names(build_model_tool_schemas(None, None, include_system_tools=True)))
+    assert "read_file" not in names
+    assert "stack_exec" not in names
 
 
 def test_deny_all_is_still_deny_all() -> None:
@@ -174,7 +187,6 @@ def test_unrestricted_agent_also_sees_the_tools_this_run_wires() -> None:
     ]
     names = set(_names(build_model_tool_schemas(None, specs, include_system_tools=True)))
     assert "context7.query_docs" in names
-    assert "read_file" in names
 
 
 def test_a_restricted_agent_does_not_get_the_specs_for_free() -> None:
