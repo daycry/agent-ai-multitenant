@@ -978,10 +978,10 @@ refutadores. Solo **2 commits salieron limpios** (`5c11f592`, `4725ff45`).
       choca con el principio 2 de `CLAUDE.md`. **Necesita ADR**: o el worker resuelve el
       token y lo inyecta canjeado, o la llamada MCP va mediada por el worker como
       `stack_exec`.
-- [ ] **`2e40b0bb`**: `_live_plan_of_conversation` no filtra `deleted_at`, así que un plan
+- [x] _(hecho c49c3430 — la regla vive ahora en `plan_is_live`)_ **`2e40b0bb`**: `_live_plan_of_conversation` no filtraba `deleted_at`, así que un plan
       borrado retiene su conversación para siempre. Arreglo: un `select` con
       `Plan.deleted_at.is_(None)` en vez del `session.get`.
-- [ ] **`f51c4fa5`**: `send_notification` se sigue anunciando por la vía de `tool_specs`
+- [x] _(hecho a348e264 — filtrado en `_schema_index`; queda abierto solo `tool_is_runtime_wired`)_ **`f51c4fa5`**: `send_notification` se seguía anunciando por la vía de `tool_specs`
       (el drop del catálogo deja el nombre libre y el bucle de specs lo rellena), y
       `tool_is_runtime_wired` sigue diciendo que es ejecutable porque cortocircuita por
       `implementation_type`.
