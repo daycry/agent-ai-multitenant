@@ -578,14 +578,19 @@ Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
 
 #### `task_wf_40` — Acciones humanas en la ficha de tarea
 
-- [ ] **Título**: reintentar, reasignar con guía y desbloquear desde `TaskDetailSheet`,
-      cableados a los endpoints de `task_lifecycle.py` que ya existen. Resuelve la tarea
-      `blocked` que no está escalada sin desbloquear el plan entero.
+- [x] _(hecho, solo frontend)_ **Título**: reintentar, reasignar con guía y desbloquear desde
+      `TaskDetailSheet`, cableados a los endpoints de `task_lifecycle.py` que ya existen.
+      Resuelve la tarea `blocked` que no está escalada sin desbloquear el plan entero.
 - **Hallazgo**: A-09 (medio), F-6 · **Tiempo**: 1 d
-- **Ficheros**: `components/tasks/task-detail-sheet.tsx`,
-  `apps/api-server/src/api_server/routers/task_lifecycle.py:111-201`
-- **Tests**: e2e de cada acción; regresión de RBAC (un miembro no-admin no ve las que exigen
-  admin).
+- **Ficheros**: `components/tasks/task-human-actions.tsx` (nuevo, extraído del panel de
+  escaladas), `components/tasks/task-detail-sheet.tsx`,
+  `app/admin/plans/[id]/escalated/page.tsx`
+- **Tests**: 10 de render (`task-human-actions.test.tsx` + `task-detail-sheet.test.tsx`),
+  incluida la regresión de RBAC (un miembro no-admin no las ve) y el espejo del gate de
+  estados del backend. Los e2e existentes del panel de escaladas siguen valiendo porque los
+  `data-testid` se conservaron.
+- **Nota**: el backend estaba entero, no se tocó. `retry` **es** el «desbloquear»: no había
+  una quinta acción que añadir.
 
 #### `task_wf_41` — «Aprobar y arrancar»
 

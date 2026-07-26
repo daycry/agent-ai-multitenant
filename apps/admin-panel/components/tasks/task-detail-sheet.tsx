@@ -7,12 +7,18 @@
  * for description / acceptance criteria / dependencies, its runs (`GET /runs?task_id=`),
  * and its comments (reusing PlanComment with `target_kind=task`, `target_ref=<spec id>`).
  * Comments added here are threaded into the agent's prompt (Feature C).
+ *
+ * `task_wf_40`: desde aquí también se actúa sobre la tarea cuando está parada
+ * esperando a un humano. Hasta ahora esas acciones solo existían en el panel de
+ * tareas escaladas del plan, así que una tarea `blocked` por un run que falló
+ * de forma ordinaria —que no escala— se veía pero no se podía desatascar.
  */
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { acceptsHumanAction, TaskHumanActions } from "@/components/tasks/task-human-actions";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +31,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
+import { RoleGuard } from "@/components/ui/role-guard";
 import { cleanCriteria, criterionText, type CriterionDraft } from "@/lib/acceptance-criteria";
 import { ApiError, apiFetch } from "@/lib/api";
 import { fetchAllPages } from "@/lib/paginate";
@@ -75,6 +82,7 @@ export function TaskDetailSheet({
   onOpenChange: (next: boolean) => void;
 }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const taskId = task?.id ?? null;
   const projectId = task?.project_id ?? null;
 
@@ -106,6 +114,18 @@ export function TaskDetailSheet({
   function openRun(id: string) {
     onOpenChange(false);
     router.push(`/admin/executions/${id}`);
+  }
+
+  // Una acción humana cambia el estado de la tarea y puede reactivar su plan,
+  // así que además del detalle se invalidan las DOS listas que montan esta
+  // ficha (el tablero por plan y el Kanban del proyecto). Invalidar una clave
+  // que no está montada no cuesta nada; dejarse la que sí lo está deja al
+  // operador mirando una tarjeta que ya no dice la verdad.
+  function onActionApplied() {
+    void queryClient.invalidateQueries({ queryKey: ["task-detail", taskId] });
+    void queryClient.invalidateQueries({ queryKey: ["task-runs", taskId] });
+    void queryClient.invalidateQueries({ queryKey: ["project-tasks"] });
+    void queryClient.invalidateQueries({ queryKey: ["tasks", "by-plan"] });
   }
 
   return (
@@ -190,6 +210,17 @@ export function TaskDetailSheet({
           )}
         </DialogBody>
         <DialogFooter>
+          {/* Las acciones humanas solo desde los estados que el backend acepta
+              (el resto es un 409 garantizado) y solo para quien las puede
+              ejecutar. `mr-auto` sobre el hueco vacío mantiene «Cerrar» a la
+              derecha también cuando no se ofrece ninguna. */}
+          <div className="mr-auto">
+            {taskId && acceptsHumanAction(detail?.status) ? (
+              <RoleGuard min="tenant_admin">
+                <TaskHumanActions taskId={taskId} onApplied={onActionApplied} />
+              </RoleGuard>
+            ) : null}
+          </div>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
             Cerrar
           </Button>
