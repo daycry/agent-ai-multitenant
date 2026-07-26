@@ -978,3 +978,57 @@ def _resolve_store_owner(*, scope: str, project: Project | None) -> dict[str, UU
         return {"user_id": None, "team_id": project.team_id, "project_id": None}
     # MemoryScope.PRIVATE — no user attribution for an AI agent.
     return None
+
+
+# ---------------------------------------------------------------------------
+# /pending-guidance (`task_wf_71`)
+# ---------------------------------------------------------------------------
+class PendingGuidanceRequest(BaseModel):
+    task_id: UUID
+
+
+class PendingGuidanceResponse(BaseModel):
+    guidance: str | None = None
+
+
+@router.post("/pending-guidance", response_model=PendingGuidanceResponse)
+async def pending_guidance(
+    payload: PendingGuidanceRequest,
+    principal: AgentPrincipal = Depends(get_agent_principal),
+) -> PendingGuidanceResponse:
+    """La guía que un humano ha escrito para ESTE run, si la hay (`task_wf_71`).
+
+    POST y no GET porque **consume**: la guía se borra al entregarla. Dejarla
+    puesta la repetiría en cada iteración y el agente acabaría re-aplicando una
+    corrección que ya hizo.
+
+    Se busca por la tarea del token —no por un `execution_id` que el sandbox no
+    conoce— y solo sobre la ejecución `running`: el run-lock garantiza que solo
+    hay una. El tenant lo fija el token minteado, así que un run no puede leer
+    la guía de otro.
+    """
+    from sqlalchemy import select
+
+    from api_server.db.domain import Execution
+    from api_server.db.session import get_sessionmaker
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        row = (
+            await session.execute(
+                select(Execution)
+                .where(
+                    Execution.task_id == payload.task_id,
+                    Execution.tenant_id == principal.tenant_id,
+                    Execution.status == "running",
+                )
+                .order_by(Execution.created_at.desc())
+                .limit(1)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if row is None or not row.pending_guidance:
+            return PendingGuidanceResponse(guidance=None)
+        guidance = str(row.pending_guidance)
+        row.pending_guidance = None
+    return PendingGuidanceResponse(guidance=guidance)

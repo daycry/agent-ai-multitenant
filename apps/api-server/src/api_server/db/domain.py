@@ -1209,6 +1209,14 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     # cuando el daemon no lo reporta — es trazabilidad, nunca bloquea un run.
     runtime_image_digest: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
+    # `task_wf_71`: guía que un humano escribe sobre un run EN MARCHA. Hasta
+    # ahora la única intervención posible era matarlo: si el agente iba por mal
+    # camino se tiraba todo el trabajo y se relanzaba a ciegas. El bucle la
+    # consulta una vez por iteración y la inyecta como sticky del turno
+    # siguiente. Se BORRA al entregarla — es una intervención puntual, no una
+    # instrucción permanente que se repita cada turno.
+    pending_guidance: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Por qué el Memorizer NO produjo memoria a partir de este run, como código
     # canónico (:class:`~api_server.memorizer.policy.MemorizeSkipReason`):
     # ``not_done`` / ``skip_private`` / ``no_team`` / ``no_scope`` / ``llm_empty``

@@ -307,6 +307,11 @@ class AgentDeps:
     # AUD16-15: el KIND del proveedor del run (claude_sdk/ollama/...) — viaja
     # en cada step model_call para que el price-snapshot resuelva el catálogo.
     provider_kind: str | None = None
+    # `task_wf_71`: sondeo de la guía humana sobre un run EN MARCHA. Devuelve el
+    # texto que un humano acaba de escribir desde el visor, o `None`. Se
+    # consulta una vez por iteración; `None` (el default) desactiva la
+    # intervención — un run sin API interna se comporta igual que antes.
+    guidance_poll: Callable[[], str | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -655,6 +660,20 @@ class _AgentLoop:
         # __main__ → execution.error → the worker doubling it to a hard `failed`
         # and losing all progress. Only LLM-layer errors are caught — a real bug
         # (KeyError/TypeError/…) is NOT an LLMError and still propagates.
+        # `task_wf_71`: ¿ha escrito un humano una corrección para este run? Se
+        # pregunta ANTES de construir el turno para que entre en ESTE prompt y
+        # no en el siguiente — media iteración de retraso en una intervención
+        # manual es media iteración quemada en la dirección equivocada.
+        human_guidance = self._poll_human_guidance()
+        if human_guidance:
+            steps.append(
+                node_step(
+                    base + len(steps),
+                    "plan",
+                    f"Human guidance received: {human_guidance[:120]}",
+                )
+            )
+
         # `task_wf_50`: de los cuatro hooks del principio rector 10, `pre_llm` y
         # `post_llm` estaban declarados y sin cablear — solo se tamizaban las
         # tools. Justo el prompt, que es donde se pliegan el contenido de
@@ -841,7 +860,29 @@ class _AgentLoop:
             "iteration": self.tracker.usage.iterations,
             "steps": steps,
             "guardrail_events": guardrail_events,
+            # `task_wf_71`: la corrección humana vale para el turno siguiente y
+            # se limpia. Es una intervención puntual: dejarla pegada la
+            # repetiría hasta el final del run y el agente re-aplicaría una
+            # corrección que ya hizo.
+            "human_guidance": human_guidance,
         }
+
+    def _poll_human_guidance(self) -> str | None:
+        """La corrección que un humano acaba de escribir para este run, si la hay.
+
+        `task_wf_71`. Best-effort y con timeout corto: es una comodidad del
+        operador, no puede hacer esperar al run ni tumbarlo si el api-server va
+        lento. Sin sondeo configurado (bare run, sin API interna) devuelve
+        ``None`` y el bucle se comporta exactamente como antes.
+        """
+        poll = self.deps.guidance_poll
+        if poll is None:
+            return None
+        try:
+            return poll()
+        except Exception:  # pragma: no cover - la intervención jamás rompe el run
+            _log.warning("human guidance poll failed; continuing without it", exc_info=True)
+            return None
 
     # ---- pre_llm / post_llm (task_wf_50) --------------------------------
 

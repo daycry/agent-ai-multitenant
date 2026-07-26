@@ -188,6 +188,29 @@ _AUTO_RAG_LIMIT = 3
 _AUTO_RAG_CONTENT_CAP = 700
 
 
+def _build_guidance_poll(api: Any | None, spec: dict[str, Any]) -> Any | None:
+    """Sondeo de la guía humana sobre este run (`task_wf_71`).
+
+    Devuelve el callable que el bucle invoca una vez por iteración, o ``None``
+    cuando no hay API interna o el spec no trae `task_id` (bare run): sin él, el
+    bucle se comporta exactamente como antes.
+
+    El servidor CONSUME la guía al entregarla, así que cada corrección llega una
+    sola vez — repetirla cada turno haría al agente re-aplicar algo ya hecho.
+    """
+    task_id = str((spec.get("task") or {}).get("id") or spec.get("task_id") or "")
+    if api is None or not task_id:
+        return None
+
+    def _poll() -> str | None:
+        try:
+            return api.pending_guidance(task_id=task_id)  # type: ignore[no-any-return]
+        except Exception:  # best-effort: una comodidad nunca rompe el run
+            return None
+
+    return _poll
+
+
 def _build_auto_rag(api: Any | None) -> Any | None:
     """Pre-fetch de pasajes de KB para el nodo ``recall`` del grafo (P0-2).
 
@@ -1013,6 +1036,13 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
             # AUD16-15: el kind resuelto viaja a cada step model_call para que
             # el price-snapshot del api-server resuelva el catálogo de precios.
             provider_kind=str((spec.get("model") or {}).get("kind") or "") or None,
+            # `task_wf_71`: sondeo de la corrección humana sobre el run vivo.
+            # Sin API interna o sin task_id el bucle se comporta como antes.
+            **(
+                {"guidance_poll": guidance_poll}
+                if (guidance_poll := _build_guidance_poll(recall_api, spec)) is not None
+                else {}
+            ),
             **({"recall": auto_recall} if auto_recall is not None else {}),
             **({"knowledge": auto_rag} if auto_rag is not None else {}),
         )

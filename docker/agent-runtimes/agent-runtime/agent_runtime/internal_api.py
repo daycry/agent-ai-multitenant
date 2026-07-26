@@ -189,6 +189,17 @@ class InternalAgentAPI:
         hits: list[dict[str, Any]] = payload.get("hits") or []
         return hits
 
+    def pending_guidance(self, *, task_id: str) -> str | None:
+        """La guía que un humano acaba de escribir para este run, o ``None``.
+
+        CONSUME: el servidor la borra al entregarla. El bucle la pide una vez
+        por iteración; el timeout es corto a propósito — es una comodidad, y no
+        puede hacer esperar al run si el api-server va lento.
+        """
+        payload = self._post("/internal/agent/pending-guidance", {"task_id": task_id}, timeout=5.0)
+        guidance = payload.get("guidance")
+        return str(guidance) if guidance else None
+
     def memory_store(
         self,
         *,

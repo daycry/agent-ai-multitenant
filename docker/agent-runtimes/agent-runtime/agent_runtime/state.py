@@ -96,6 +96,11 @@ class AgentState(TypedDict):
     # items de `context` evictables por esa misma ventana.
     progress_summary: str | None
     guidance_nudge: str | None
+    # `task_wf_71`: corrección que un HUMANO escribió sobre este run en marcha.
+    # Slot propio y no `guidance_nudge` a propósito: los nudges automáticos se
+    # sobrescriben entre turnos, y uno de ellos podría borrar la corrección de
+    # una persona antes de que el modelo la atendiera.
+    human_guidance: str | None
     # P1-6 (investigación 2026-07-11): el scratchpad del agente — la estrategia
     # que ÉL mantiene con la tool `update_plan`. Sticky escalar: el modelo la ve
     # todos los turnos (compensa la reconstrucción single-turn del prompt).
@@ -158,6 +163,7 @@ def initial_state(
         repetition_warning=None,
         progress_summary=None,
         guidance_nudge=None,
+        human_guidance=None,
         agent_plan=None,
         self_check_nudge=None,
         output=None,

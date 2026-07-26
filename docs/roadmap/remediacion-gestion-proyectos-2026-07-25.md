@@ -1003,18 +1003,24 @@ Justificación en §7 del informe.
 
 #### `task_wf_71` — Intervención en caliente sobre un run vivo
 
-- [ ] **Título**: poder **redirigir** un run en vuelo en lugar de solo matarlo. Campo de guía
-      en la ejecución; el bucle del agente lo consulta una vez por iteración vía la API interna
-      (canal que ya existe) y lo inyecta como sticky del turno siguiente, igual que el feedback
-      de review. Botón en el visor de runs.
+- [x] _(hecho)_ **Título**: poder **redirigir** un run en vuelo en lugar de solo matarlo.
+      Campo de guía en la ejecución (migración **0121**); el bucle lo consulta una vez por
+      iteración por la API interna y lo inyecta como sticky del turno siguiente. Botón en el
+      visor de runs.
 - **Hallazgo**: N-2 (feature) · **Tiempo**: 2 d
-- **Ficheros**: `apps/workers/src/workers/execution.py:1318-1330` (el sondeo ya existe),
-  `apps/api-server/src/api_server/routers/internal_agent.py`, `agent_runtime/graph.py`,
-  `app/admin/executions/[id]/page.tsx`, migración para la columna
-- **Tests**: unit de que la guía entra como sticky en la iteración siguiente; integración de
-  que un run sin guía no paga coste adicional apreciable; e2e de redirigir un run vivo.
-- **Nota de diseño**: la comprobación por iteración añade un _round-trip_. Medir su coste; si
-  molesta, piggyback sobre una llamada existente a la API interna en vez de una dedicada.
+- **Ficheros**: migración 0121, `db/domain.py`, `routers/executions.py`
+  (`POST /executions/{id}/guidance`, tenant_admin), `routers/internal_agent.py`
+  (`POST /internal/agent/pending-guidance`), `agent_runtime/{internal_api,graph,providers,
+state,__main__}.py`, `components/executions/execution-guidance.tsx`
+- **Tres decisiones**: la guía se **consume** al entregarla (repetirla cada turno haría al
+  agente re-aplicar una corrección ya hecha) y se lee **con lock de fila**; **sustituye** en
+  vez de acumular (dos correcciones encadenadas serían instrucciones contradictorias en el
+  mismo turno); y va en un sticky **propio**, no en `guidance_nudge` — un nudge automático
+  podría sobrescribir la corrección de una persona antes de que el modelo la atendiera.
+- **Coste del sondeo**: un round-trip por iteración con timeout de 5 s, best-effort. Sin API
+  interna o sin `task_id` el sondeo no se instala y el bucle es byte a byte el de antes; un
+  fallo del api-server no puede tumbar un run que está trabajando. Hay test de las dos cosas.
+- **Tests**: 6 de runtime + 5 del contrato servidor.
 
 #### `task_wf_72` — Preflight del plan antes de aprobar
 

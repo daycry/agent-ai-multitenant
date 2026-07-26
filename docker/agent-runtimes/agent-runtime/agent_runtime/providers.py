@@ -381,6 +381,17 @@ def _decide_messages(state: dict[str, Any]) -> list[Message]:
     feedback = state.get("last_review_feedback")
     if feedback:
         lines.append(f"REVIEW FEEDBACK (fix this): {str(feedback)[:_STICKY_FEEDBACK_MAX_CHARS]}")
+    # `task_wf_71`: la corrección de un HUMANO sobre el run en marcha. Va por
+    # ENCIMA del nudge automático y con esa etiqueta: si el modelo tiene que
+    # elegir entre lo que le empuja la heurística y lo que le acaba de decir
+    # una persona, gana la persona.
+    human = state.get("human_guidance")
+    if human:
+        text = str(human)[:_STICKY_FEEDBACK_MAX_CHARS]
+        lines.append(
+            "HUMAN OPERATOR INSTRUCTION (a person is watching this run and just "
+            f"told you this — it takes precedence over the guidance below): {text}"
+        )
     # F2b.3: los nudges de research/churn también son sticky (antes viajaban en
     # `context` y la ventana de 8 items podía evictarlos antes de ser atendidos).
     nudge = state.get("guidance_nudge")

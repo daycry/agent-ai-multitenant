@@ -21,6 +21,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ExecutionGuidance } from "@/components/executions/execution-guidance";
 import { PromoteToDataset } from "@/components/evals/promote-to-dataset";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -226,6 +227,7 @@ export default function ExecutionTimelinePage() {
                 {cancelMutation.isPending ? "Cancelando…" : "Cancelar ejecución"}
               </Button>
             )}
+            {execution.status === "running" && <ExecutionGuidance executionId={execution.id} />}
             <PromoteToDataset taskId={execution.task_id} executionId={execution.id} />
           </div>
           <ExecutionSummary execution={execution} liveCount={liveSteps.length} />
