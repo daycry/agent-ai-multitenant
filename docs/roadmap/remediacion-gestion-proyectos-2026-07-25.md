@@ -916,17 +916,25 @@ impacto/esfuerzo de toda la auditoría. Detalle y evidencia en §7c del informe.
 
 #### `task_wf_61` — Veredicto por criterio
 
-- [ ] **Título**: que el reviewer emita un resultado **estructurado** —cada criterio de
-      aceptación con `pass`/`fail` y su evidencia— en vez de prosa con un único
-      `<failed_criterion>`. Continuación natural del ADR 0087. Habilita tres cosas: la UI
-      enseña al humano qué criterio falló, el `what_to_fix` tiene diana, y los resultados son
-      medibles entre runs (alimenta el sistema de evals, hoy ciego — ver `task_wf_52`).
-- **Hallazgo**: M-3 · **Tiempo**: 1 d · **Depende de**: `task_wf_54` (fusión de los dos
-  canales de veredicto — no tiene sentido estructurar dos contratos que van a unificarse)
-- **Ficheros**: `agent_runtime/providers.py:124-147`, `__main__.py:436-497`,
-  `apps/workers/src/workers/execution.py` (`_apply_review_verdict`), UI del detalle de tarea
-- **Tests**: unit del parseo del veredicto estructurado; regresión de que un veredicto en el
-  formato antiguo sigue siendo aceptado durante la transición.
+- [x] _(hecho)_ **Título**: que el reviewer emita un resultado **estructurado** —cada criterio
+      con `pass`/`fail` y su evidencia— en vez de prosa con un único `<failed_criterion>`.
+- **Hallazgo**: M-3 · **Tiempo**: 1 d · **Dependía de**: `task_wf_54` (resuelto: el ADR 0108
+  decidió NO unificar, así que se estructura el canal que emite veredicto ENTRE runs).
+- **ADITIVO por diseño**: el `<verdict>` sigue mandando. Un reviewer que no emita el bloque
+  —modelo que se lo salta, run de una imagen anterior— se comporta **exactamente** como
+  antes, y hay test de esa propiedad: es lo que hace seguro encenderlo.
+- **Formato de LÍNEA** (`- [pass] criterio — evidence: …`) y no tags anidados: el modelo lo
+  produce sin equivocarse, el humano lo lee tal cual, y el marcador resiste la deriva de
+  redacción que ya obligó a parsear el `<verdict>` con tolerancia.
+- **Las tres cosas que habilita, entregadas**: la UI enseña qué criterio falló y con qué
+  evidencia (`task-review-criteria.tsx`, sobre el historial de auditoría que ya existía); el
+  `what_to_fix` tiene diana (un reject sin `<failed_criterion>` la deriva del desglose); y
+  el resultado es medible entre runs, que es lo que `task_wf_52b` necesita.
+- **Un APPROVE también deja desglose**: sin él, «aprobado» es indistinguible de «aprobado sin
+  mirar». Ojo — eso obligó a filtrar los eventos de aprobación en
+  `_read_prior_review_feedback`, o el implementador habría recibido un bloque VACÍO de
+  «rechazos previos».
+- **Tests**: 14 unit + 7 de render.
 
 #### `task_wf_62` — Trazabilidad del runtime: digest en vez de etiqueta flotante
 

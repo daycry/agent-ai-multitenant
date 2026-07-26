@@ -19,6 +19,7 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { acceptsHumanAction, TaskHumanActions } from "@/components/tasks/task-human-actions";
+import { TaskReviewCriteria } from "@/components/tasks/task-review-criteria";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -151,6 +152,11 @@ export function TaskDetailSheet({
           {detail && projectId && taskId ? (
             <CriteriaSection projectId={projectId} taskId={taskId} criteria={criteria} />
           ) : null}
+
+          {/* task_wf_61: el veredicto del reviewer, criterio a criterio. Va
+              justo DEBAJO de los criterios porque es su respuesta: qué se
+              comprobó de cada uno y con qué evidencia. */}
+          {taskId ? <TaskReviewCriteria taskId={taskId} /> : null}
 
           {/* Dependencias (resueltas a título, no UUID) */}
           {detail?.depends_on?.length && projectId ? (

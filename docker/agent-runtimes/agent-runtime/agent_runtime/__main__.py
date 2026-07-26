@@ -22,7 +22,11 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from agent_runtime.review_contract import VERDICT_APPROVE, VERDICT_REJECT
+from agent_runtime.review_contract import (
+    CRITERIA_INSTRUCTION,
+    VERDICT_APPROVE,
+    VERDICT_REJECT,
+)
 
 # Where the worker drops a task spec when it does not pass AGENT_TASK_SPEC.
 _TASK_SPEC_FILE = "/workspace/agent_task.json"
@@ -469,7 +473,8 @@ _REVIEW_VERDICT_INSTRUCTION = (
     "    <rejection><failed_criterion>...</failed_criterion>"
     "<testreport_evidence>...</testreport_evidence>"
     "<what_to_fix>...</what_to_fix></rejection>\n"
-    "The verdict tag is MANDATORY — without it the review cannot be applied."
+    "The verdict tag is MANDATORY — without it the review cannot be applied.\n"
+    + CRITERIA_INSTRUCTION
 )
 
 # Hallazgo H1 (refactor 2026-07-07): los preámbulos pliegan texto que un adversario

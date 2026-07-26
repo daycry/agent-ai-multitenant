@@ -1481,13 +1481,20 @@ class TaskDispatcher:
         for payload in rows:
             if not isinstance(payload, dict):
                 continue
-            feedback.append(
-                {
-                    "failed_criterion": str(payload.get("failed_criterion") or ""),
-                    "what_to_fix": str(payload.get("what_to_fix") or ""),
-                    "testreport_evidence": str(payload.get("testreport_evidence") or ""),
-                }
-            )
+            # `task_wf_61`: un `review_comment` de APROBACIÓN (el desglose por
+            # criterio de un review que pasó) no es feedback de rechazo. Sin
+            # este filtro entraría como un bloque VACÍO en el preámbulo del
+            # implementador — «te rechazaron por: (nada)», que confunde más que
+            # no decir nada. Filtra también los rechazos sin contenido, que
+            # tienen el mismo problema y ya existían.
+            entry = {
+                "failed_criterion": str(payload.get("failed_criterion") or ""),
+                "what_to_fix": str(payload.get("what_to_fix") or ""),
+                "testreport_evidence": str(payload.get("testreport_evidence") or ""),
+            }
+            if payload.get("approved") or not any(entry.values()):
+                continue
+            feedback.append(entry)
         return feedback
 
     # P0-7: cola del output del run muerto — suficiente para orientar sin

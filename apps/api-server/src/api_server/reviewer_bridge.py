@@ -49,17 +49,34 @@ VerdictLabel = Literal["approve", "reject", "unknown"]
 
 
 @dataclass(frozen=True)
+class CriterionOutcome:
+    """El veredicto de UN criterio de aceptación (`task_wf_61`)."""
+
+    text: str
+    passed: bool
+    evidence: str = ""
+
+    def as_dict(self) -> dict[str, object]:
+        return {"text": self.text, "passed": self.passed, "evidence": self.evidence}
+
+
+@dataclass(frozen=True)
 class ReviewerVerdict:
     """Structured outcome of one reviewer turn.
 
     ``label`` is the parsed `<verdict>` tag. The three rejection fields
     are non-empty only when ``label == 'reject'``.
+
+    `task_wf_61`: ``criteria`` es el desglose POR CRITERIO cuando el reviewer lo
+    emite. Es ADITIVO — el `<verdict>` sigue mandando — así que un reviewer que
+    no lo emita (o un modelo que se lo salte) se comporta exactamente como antes.
     """
 
     label: VerdictLabel
     failed_criterion: str = ""
     testreport_evidence: str = ""
     what_to_fix: str = ""
+    criteria: tuple[CriterionOutcome, ...] = ()
 
 
 # Audit cluster C1 (F37): capture the `<verdict>` tag BODY and normalise it,
@@ -75,6 +92,41 @@ _EVIDENCE_RE = re.compile(
     r"<testreport_evidence>(.*?)</testreport_evidence>", re.IGNORECASE | re.DOTALL
 )
 _WHAT_TO_FIX_RE = re.compile(r"<what_to_fix>(.*?)</what_to_fix>", re.IGNORECASE | re.DOTALL)
+
+# `task_wf_61`: el desglose por criterio. Formato de LÍNEA y no de tags
+# anidados: el modelo lo produce sin equivocarse, un humano lo lee tal cual en
+# la UI, y el marcador `[pass]`/`[fail]` resiste la deriva de redacción que ya
+# obligó a parsear el `<verdict>` con tolerancia.
+_CRITERIA_BLOCK_RE = re.compile(r"<criteria>(.*?)</criteria>", re.IGNORECASE | re.DOTALL)
+_CRITERION_LINE_RE = re.compile(r"^\s*[-*]?\s*\[\s*(pass|fail)\s*\]\s*(.+?)$", re.IGNORECASE)
+# La evidencia va tras un guión largo o el literal `evidence:`; las dos formas
+# porque el modelo alterna entre ellas y perder la evidencia por el separador
+# sería tirar justo la parte accionable.
+_EVIDENCE_SPLIT_RE = re.compile(r"\s+(?:—|--)\s+evidence:\s*|\s+evidence:\s*", re.IGNORECASE)
+
+
+def parse_criteria_block(text: str) -> tuple[CriterionOutcome, ...]:
+    """El desglose por criterio del veredicto, o `()` si no lo hay.
+
+    Tolerante por diseño: una línea que no encaje se ignora en vez de tirar el
+    bloque entero — un desglose parcial informa más que ninguno, y el
+    `<verdict>` sigue siendo la fuente autoritativa pase lo que pase aquí.
+    """
+    block = _CRITERIA_BLOCK_RE.search(text or "")
+    if not block:
+        return ()
+    out: list[CriterionOutcome] = []
+    for raw_line in block.group(1).splitlines():
+        match = _CRITERION_LINE_RE.match(raw_line)
+        if not match:
+            continue
+        status, rest = match.group(1).lower(), match.group(2).strip()
+        parts = _EVIDENCE_SPLIT_RE.split(rest, maxsplit=1)
+        criterion = parts[0].strip(" .—-")
+        evidence = parts[1].strip() if len(parts) > 1 else ""
+        if criterion:
+            out.append(CriterionOutcome(text=criterion, passed=status == "pass", evidence=evidence))
+    return tuple(out)
 
 
 def _normalise_verdict(body: str) -> VerdictLabel:
@@ -117,18 +169,28 @@ def parse_reviewer_output(text: str) -> ReviewerVerdict:
         candidate = _normalise_verdict(body)
         if candidate != "unknown":
             label = candidate
+    criteria = parse_criteria_block(text or "")
     if label != "reject":
-        return ReviewerVerdict(label=label)
+        # El desglose viaja también en un APPROVE: saber qué se comprobó vale
+        # tanto como saber qué falló, y es lo que hace medible el review.
+        return ReviewerVerdict(label=label, criteria=criteria)
 
     def _grab(pattern: re.Pattern[str]) -> str:
         m = pattern.search(text)
         return m.group(1).strip() if m else ""
 
+    failed_criterion = _grab(_FAILED_RE)
+    if not failed_criterion and criteria:
+        # Diana derivada: con el desglose, el criterio que falló ya está dicho.
+        # Antes un reject sin `<failed_criterion>` dejaba al implementador sin
+        # saber QUÉ arreglar.
+        failed_criterion = "; ".join(c.text for c in criteria if not c.passed)
     return ReviewerVerdict(
         label="reject",
-        failed_criterion=_grab(_FAILED_RE),
+        failed_criterion=failed_criterion,
         testreport_evidence=_grab(_EVIDENCE_RE),
         what_to_fix=_grab(_WHAT_TO_FIX_RE),
+        criteria=criteria,
     )
 
 
@@ -182,6 +244,21 @@ async def apply_reviewer_verdict(
     if verdict.label == "approve":
         transition_task_status(task_row, TaskStatus.DONE.value)
         task_row.completed_at = datetime.now(UTC)
+        # `task_wf_61`: un APPROVE con desglose también deja constancia de QUÉ
+        # se comprobó. Sin esto, «aprobado» es indistinguible de «aprobado sin
+        # mirar», que es justo lo que el desglose viene a resolver.
+        if verdict.criteria:
+            await append_audit_event(
+                session,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                kind="review_comment",
+                actor=reviewer_actor,
+                payload={
+                    "approved": True,
+                    "criteria": [c.as_dict() for c in verdict.criteria],
+                },
+            )
         await session.flush()
         return {
             "action": "approved",
@@ -209,6 +286,11 @@ async def apply_reviewer_verdict(
             "what_to_fix": verdict.what_to_fix,
             "escalated": exhausted,
             "reason": "max_retries" if exhausted else None,
+            # `task_wf_61`: el desglose por criterio. Va al MISMO evento que ya
+            # consume la UI y `prior_review_feedback`, no a una tabla nueva:
+            # quien lea el rechazo tiene ahí qué se comprobó y qué falló.
+            # `[]` cuando el reviewer no lo emitió (comportamiento de antes).
+            "criteria": [c.as_dict() for c in verdict.criteria],
         },
     )
 
