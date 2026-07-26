@@ -473,3 +473,140 @@ async def test_approve_from_wrong_state_returns_409(configured_app, migrations_p
         detail = resp.json()["detail"]
         assert detail["error"] == "invalid_plan_transition"
         assert detail["from"] == "draft"
+
+
+# ---------------------------------------------------------------------------
+# «Aprobar y arrancar» (task_wf_41)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_approve_and_start_signs_and_launches_in_one_call(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """El atajo hace las DOS cosas: firma y deja el plan en curso con sus tareas
+    materializadas. Entre «plan generado» y «agentes trabajando» había cuatro
+    clics, y estos dos los da siempre la misma persona seguidos."""
+    seeded = await _seed(migrations_pg_dsn, threshold="1000")
+    headers = {
+        "Authorization": f"Bearer {await _mint_token(seeded['alice_id'], seeded['tenant_id'])}"
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        plan_id = await _create_and_open(client, seeded, _CHEAP_SPEC, headers)
+        resp = await client.post(f"/plans/{plan_id}/approve-and-start", headers=headers)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "in_progress"
+        assert body["approved_by"] == str(seeded["alice_id"])
+
+        # Un re-sync idempotente devuelve las tareas como ya materializadas:
+        # el atajo tiene que haber sembrado el Kanban, no solo cambiar el estado.
+        resync = await client.post(
+            f"/plans/{plan_id}/sync-to-kanban", json={"scope": "total"}, headers=headers
+        )
+        assert resync.status_code == 200, resync.text
+        assert resync.json()["skipped_task_ids"]
+
+
+@pytest.mark.asyncio
+async def test_approve_and_start_does_not_skip_the_second_signature(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """La garantía que hace que este atajo sea aceptable. Con el plan por encima
+    del umbral, «aprobar y arrancar» deja la PRIMERA firma y PARA: ni aprueba ni
+    arranca. Si se saltara la segunda firma, la revisión a cuatro ojos sería
+    opcional con solo pulsar el otro botón."""
+    seeded = await _seed(migrations_pg_dsn, threshold="0.00000001")
+    headers = {
+        "Authorization": f"Bearer {await _mint_token(seeded['alice_id'], seeded['tenant_id'])}"
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        plan_id = await _create_and_open(client, seeded, _EXPENSIVE_SPEC, headers)
+        resp = await client.post(f"/plans/{plan_id}/approve-and-start", headers=headers)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "pending_second_approval"
+        assert body["first_approved_by"] == str(seeded["alice_id"])
+        assert body["approved_by"] is None, "no puede quedar aprobado con una sola firma"
+
+
+@pytest.mark.asyncio
+async def test_approve_and_start_needs_the_approval_role(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """El atajo lleva el gate ESTRICTO, no `require_tenant_member`: si aceptara
+    a cualquier miembro sería una puerta trasera para arrancar planes sin
+    aprobación."""
+    seeded = await _seed(migrations_pg_dsn, threshold="1000")
+    admin_headers = {
+        "Authorization": f"Bearer {await _mint_token(seeded['alice_id'], seeded['tenant_id'])}"
+    }
+    dan_headers = {
+        "Authorization": f"Bearer {await _mint_token(seeded['dan_id'], seeded['tenant_id'])}"
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        plan_id = await _create_and_open(client, seeded, _CHEAP_SPEC, admin_headers)
+        resp = await client.post(f"/plans/{plan_id}/approve-and-start", headers=dan_headers)
+        assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.asyncio
+async def test_approve_and_start_only_from_pending_approval(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Desde un draft, 409. Aceptar más estados convertiría el atajo en una vía
+    para arrancar planes esquivando la aprobación."""
+    seeded = await _seed(migrations_pg_dsn, threshold="0")
+    headers = {
+        "Authorization": f"Bearer {await _mint_token(seeded['alice_id'], seeded['tenant_id'])}"
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        create = await client.post(
+            f"/projects/{seeded['project_id']}/plans",
+            json={"title": "Draft plan"},
+            headers=headers,
+        )
+        plan_id = create.json()["id"]
+        resp = await client.post(f"/plans/{plan_id}/approve-and-start", headers=headers)
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["from"] == "draft"
+
+
+@pytest.mark.asyncio
+async def test_approve_and_start_leaves_nothing_signed_when_it_cannot_start(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """O las dos cosas o ninguna. Con el proyecto pausado no se firma nada: el
+    plan sigue en `pending_approval` y el operador reanuda y repite. Firmar y
+    luego fallar dejaría el plan aprobado sin arrancar — y en una sola
+    transacción, ni eso: el rollback se llevaría también la firma."""
+    seeded = await _seed(migrations_pg_dsn, threshold="1000")
+    headers = {
+        "Authorization": f"Bearer {await _mint_token(seeded['alice_id'], seeded['tenant_id'])}"
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        plan_id = await _create_and_open(client, seeded, _CHEAP_SPEC, headers)
+        conn = await asyncpg.connect(migrations_pg_dsn)
+        try:
+            await conn.execute(
+                "UPDATE projects SET status = 'paused' WHERE id = $1", seeded["project_id"]
+            )
+        finally:
+            await conn.close()
+
+        resp = await client.post(f"/plans/{plan_id}/approve-and-start", headers=headers)
+        assert resp.status_code == 409, resp.text
+
+        after = await client.get(f"/plans/{plan_id}", headers=headers)
+        assert after.json()["status"] == "pending_approval", "la firma no debe quedar a medias"
+        assert after.json()["approved_by"] is None

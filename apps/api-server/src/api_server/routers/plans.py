@@ -1261,6 +1261,21 @@ async def approve_plan(
     if not await _plan_has_any_tasks(session, plan):
         raise _plan_has_no_tasks_error()
 
+    _cast_approval_signature(plan, target, principal)
+
+    await session.flush()
+    await session.refresh(plan)
+    _schedule_plan_approved_notification(session, plan)
+    return to_plan_response(plan)
+
+
+def _cast_approval_signature(plan: Plan, target: str, principal: AuthPrincipal) -> None:
+    """Firma el plan hacia ``target``, traduciendo los fallos a 409 tipados.
+
+    Extraído para que ``/approve`` y ``/approve-and-start`` firmen por el MISMO
+    camino: dos endpoints que aprueban con dos copias de la lógica de firma es
+    exactamente cómo se acaba pudiendo saltar la doble firma por uno de los dos.
+    """
     try:
         transition_plan_status(plan, target, actor=principal.user_id)
     except SameSignerError as exc:
@@ -1281,27 +1296,27 @@ async def approve_plan(
             },
         ) from exc
 
-    await session.flush()
-    await session.refresh(plan)
-    # NOTIF-3 (auditoría 2026-07-12): plan_approved estaba registrado (+plantillas
-    # ES/EN) pero NADIE lo emitía. Solo cuando la aprobación queda COMPLETA
-    # (no en la primera de dos firmas). Post-commit y best-effort.
-    if plan.status == PlanStatus.APPROVED.value:
-        plan_title, plan_tenant, plan_id_str = plan.title or "", str(plan.tenant_id), str(plan.id)
 
-        async def _notify_plan_approved() -> None:
-            from api_server.celery_client import enqueue_event_dispatch
+def _schedule_plan_approved_notification(session: AsyncSession, plan: Plan) -> None:
+    """NOTIF-3 (auditoría 2026-07-12): ``plan_approved`` estaba registrado (+
+    plantillas ES/EN) pero NADIE lo emitía. Solo cuando la aprobación queda
+    COMPLETA (no en la primera de dos firmas). Post-commit y best-effort."""
+    if plan.status != PlanStatus.APPROVED.value:
+        return
+    plan_title, plan_tenant, plan_id_str = plan.title or "", str(plan.tenant_id), str(plan.id)
 
-            await enqueue_event_dispatch(
-                {
-                    "event_type": "plan_approved",
-                    "tenant_id": plan_tenant,
-                    "context": {"plan_name": plan_title, "plan_id": plan_id_str},
-                }
-            )
+    async def _notify_plan_approved() -> None:
+        from api_server.celery_client import enqueue_event_dispatch
 
-        schedule_after_commit(session, _notify_plan_approved)
-    return to_plan_response(plan)
+        await enqueue_event_dispatch(
+            {
+                "event_type": "plan_approved",
+                "tenant_id": plan_tenant,
+                "context": {"plan_name": plan_title, "plan_id": plan_id_str},
+            }
+        )
+
+    schedule_after_commit(session, _notify_plan_approved)
 
 
 async def _resolve_tenant_rate(
@@ -1387,6 +1402,19 @@ async def start_plan_execution(
     )
     # P1-01: un proyecto pausado/archivado no arranca ejecuciones.
     require_project_active(await _verify_project_visible(session, plan.project_id))
+    await _start_approved_plan(session, redis, plan, principal)
+    return to_plan_response(plan)
+
+
+async def _start_approved_plan(
+    session: AsyncSession, redis: Redis, plan: Plan, principal: AuthPrincipal
+) -> None:
+    """Pasa un plan APROBADO a ``in_progress`` y lo pone a rodar.
+
+    El cuerpo compartido por ``/start-execution`` y ``/approve-and-start``. NO
+    comprueba que el proyecto esté activo: eso lo hace cada caller, porque
+    ``/approve-and-start`` tiene que comprobarlo ANTES de firmar (ver allí).
+    """
     try:
         transition_plan_status(plan, PlanStatus.IN_PROGRESS.value, actor=principal.user_id)
     except PlanTransitionError as exc:
@@ -1415,6 +1443,71 @@ async def start_plan_execution(
     await session.flush()
     await session.refresh(plan)
     await announce_ready_tasks(redis, ready_tasks)
+
+
+@plans_router.post("/{plan_id}/approve-and-start", response_model=PlanResponse)
+async def approve_and_start_plan(
+    plan_id: UUID,
+    principal: AuthPrincipal = Depends(require_can_approve_plan),
+    session: AsyncSession = Depends(get_tenant_session),
+    redis: Redis = Depends(get_redis),
+) -> PlanResponse:
+    """Aprobar y arrancar en un solo gesto (`task_wf_41`).
+
+    Entre «plan generado» y «agentes trabajando» había cuatro clics obligatorios,
+    y dos de ellos —aprobar y empezar— los da siempre la misma persona seguidos.
+    Esto une esos dos, sin relajar ninguna de las dos puertas.
+
+    **Solo desde `pending_approval`**, con el gate ESTRICTO de aprobación
+    (`require_can_approve_plan`, no `require_tenant_member`). Desde cualquier
+    otro estado devuelve 409: un atajo que aceptara más estados sería una vía
+    para arrancar planes esquivando la aprobación, que es exactamente lo que la
+    máquina de estados existe para impedir.
+
+    **La doble firma no se salta.** Si el coste del plan supera el umbral, esta
+    llamada deja la PRIMERA firma y PARA, devolviendo `pending_second_approval`.
+    El segundo firmante —que tiene que ser otra persona— cierra por la vía
+    normal. Un «aprobar y arrancar» que se saltara la segunda firma convertiría
+    la revisión a cuatro ojos en opcional con solo pulsar el otro botón.
+
+    **O las dos cosas o ninguna**: las condiciones de arranque (proyecto activo,
+    plan no vacío) se comprueban ANTES de firmar. Si el proyecto está pausado, no
+    se firma nada y el plan sigue en `pending_approval`; el operador reanuda el
+    proyecto y repite. La alternativa —firmar y luego fallar— dejaría el plan
+    aprobado sin arrancar, y en una sola transacción ni siquiera eso: el rollback
+    se llevaría también la firma.
+    """
+    require_tenant_id(principal)
+    plan = await get_writable_or_404(
+        session, Plan, plan_id, principal, not_found_detail="plan not found"
+    )
+    if plan.status != PlanStatus.PENDING_APPROVAL.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "invalid_plan_transition",
+                "from": plan.status,
+                "to": PlanStatus.IN_PROGRESS.value,
+                "reason": "POST /approve-and-start solo es válido desde pending_approval",
+            },
+        )
+
+    # Precondiciones del ARRANQUE, antes de firmar (ver el docstring).
+    require_project_active(await _verify_project_visible(session, plan.project_id))
+    if not await _plan_has_any_tasks(session, plan):
+        raise _plan_has_no_tasks_error()
+
+    target = await _resolve_first_signature_target(session, plan)
+    _cast_approval_signature(plan, target, principal)
+
+    if target == PlanStatus.PENDING_SECOND_APPROVAL.value:
+        # Primera de dos firmas: queda registrada y aquí se acaba.
+        await session.flush()
+        await session.refresh(plan)
+        return to_plan_response(plan)
+
+    _schedule_plan_approved_notification(session, plan)
+    await _start_approved_plan(session, redis, plan, principal)
     return to_plan_response(plan)
 
 

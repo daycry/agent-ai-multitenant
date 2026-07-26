@@ -19,6 +19,25 @@ import { ApiError, apiFetch } from "@/lib/api";
 // plan through approval or to start its execution. This action bar surfaces only
 // the transition that's legal for the current status.
 // --------------------------------------------------------------------------
+/**
+ * Qué transiciones ofrece la barra para un estado dado.
+ *
+ * Exportado y puro para poder fijarlo con un test: la regla que importa es que
+ * «Aprobar y arrancar» (task_wf_41) SOLO aparece desde `pending_approval`. En
+ * `pending_second_approval` no aplica —falta la segunda firma, y arrancar no es
+ * cosa del primer firmante—, y ofrecerlo ahí insinuaría que el atajo se salta
+ * la doble firma, que es justo lo que el backend impide.
+ */
+export function lifecycleActions(status: string) {
+  return {
+    canSendToApproval: status === "draft",
+    canApprove: status === "pending_approval" || status === "pending_second_approval",
+    canApproveAndStart: status === "pending_approval",
+    canStart: status === "approved",
+    canUnblock: status === "blocked",
+  };
+}
+
 export function PlanLifecycleSection({ planId, status }: { planId: string; status: string }) {
   const queryClient = useQueryClient();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -49,6 +68,19 @@ export function PlanLifecycleSection({ planId, status }: { planId: string; statu
     },
     onError: onErr,
   });
+  // task_wf_41: aprobar y arrancar en un gesto. El backend lleva el gate
+  // estricto y NO se salta la doble firma — si el plan la necesita, deja la
+  // primera y devuelve `pending_second_approval`, así que la UI vuelve a
+  // ofrecer «Aprobar plan» para el segundo firmante sin más lógica aquí.
+  const approveAndStart = useMutation({
+    mutationFn: () =>
+      apiFetch<{ status: string }>(`/plans/${planId}/approve-and-start`, { method: "POST" }),
+    onSuccess: () => {
+      setErrorMsg(null);
+      invalidate();
+    },
+    onError: onErr,
+  });
   const startExecution = useMutation({
     mutationFn: () =>
       apiFetch<{ status: string }>(`/plans/${planId}/start-execution`, { method: "POST" }),
@@ -69,15 +101,17 @@ export function PlanLifecycleSection({ planId, status }: { planId: string; statu
     onError: onErr,
   });
 
-  const canSendToApproval = status === "draft";
-  const canApprove = status === "pending_approval" || status === "pending_second_approval";
-  const canStart = status === "approved";
-  const canUnblock = status === "blocked";
+  const { canSendToApproval, canApprove, canApproveAndStart, canStart, canUnblock } =
+    lifecycleActions(status);
   // Action bar, not a status display: render nothing when no transition is offered.
   if (!canSendToApproval && !canApprove && !canStart && !canUnblock) return null;
 
   const pending =
-    sendToApproval.isPending || approve.isPending || startExecution.isPending || unblock.isPending;
+    sendToApproval.isPending ||
+    approve.isPending ||
+    approveAndStart.isPending ||
+    startExecution.isPending ||
+    unblock.isPending;
 
   return (
     <Card className="mt-6" data-testid="plan-lifecycle">
@@ -97,9 +131,19 @@ export function PlanLifecycleSection({ planId, status }: { planId: string; statu
             <Button
               onClick={() => approve.mutate()}
               disabled={pending}
+              variant={canApproveAndStart ? "outline" : "default"}
               data-testid="plan-lifecycle-approve"
             >
               Aprobar plan
+            </Button>
+          ) : null}
+          {canApproveAndStart ? (
+            <Button
+              onClick={() => approveAndStart.mutate()}
+              disabled={pending}
+              data-testid="plan-approve-and-start"
+            >
+              Aprobar y arrancar
             </Button>
           ) : null}
           {canStart ? (
@@ -127,7 +171,9 @@ export function PlanLifecycleSection({ planId, status }: { planId: string; statu
           {canSendToApproval
             ? "El plan está en borrador. Envíalo a aprobación para revisarlo y aprobarlo."
             : canApprove
-              ? "El plan espera aprobación. Al aprobarlo podrás sincronizar sus tareas al Kanban."
+              ? canApproveAndStart
+                ? "El plan espera aprobación. «Aprobar y arrancar» lo firma y lo pone en marcha en un paso; «Aprobar plan» solo lo firma. Si el plan necesita dos firmas, ambos botones dejan la primera y esperan a la segunda."
+                : "El plan tiene la primera firma y espera la segunda, que debe dar otra persona."
               : canUnblock
                 ? "El plan está bloqueado: ninguna tarea abierta puede avanzar. «Desbloquear plan» lo reactiva y re-encola todas sus tareas bloqueadas (reinicia sus reintentos)."
                 : "El plan está aprobado. «Empezar ejecución» lo marca en curso y crea las tareas en el Kanban."}

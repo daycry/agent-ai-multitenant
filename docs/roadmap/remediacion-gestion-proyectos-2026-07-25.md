@@ -589,7 +589,7 @@ Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
 
 #### `task_wf_41` — «Aprobar y arrancar»
 
-- [ ] **Título**: acción combinada que encadena las transiciones cuando la política del
+- [x] _(hecho, backend + UI)_ **Título**: acción combinada que encadena las transiciones cuando la política del
       proyecto no exige doble firma. La cadena sigue pasando por los mismos gates; solo se
       ahorra clics.
 - **Hallazgo**: A-08 (medio), F-5 · **Tiempo**: 0,5 d
