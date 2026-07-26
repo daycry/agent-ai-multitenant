@@ -40,6 +40,21 @@ despliegue, aprobar planes nuevos).
 **ADR en `proposed`: ninguno.** Los cuatro que quedaban se cerraron el 2026-07-26
 (0076, 0110, 0117, 0128).
 
+## Las 83 casillas sin marcar NO son 83 tareas pendientes
+
+`grep -c '^- \[ \]' docs/roadmap/*.md` da ~83 casillas vivas. **Verificado el
+2026-07-26 una a una**: ninguna es trabajo de código que se pueda hacer ahora.
+
+| Dónde                                    |  N  | Qué son de verdad                                                                                                                                                               |
+| ---------------------------------------- | :-: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cortex-f1`…`f5`                         | 76  | **Rancias.** El córtex está implementado y desplegado; los planes quedaron sin marcar. Comprobado: migración 0093, `CortexAffectSnapshot`, `PADState`, `decay_emotion` existen. |
+| `prod-06`                                |  1  | **Rancia.** «Dar caller a `apply_reviewer_verdict`» — ya lo tiene (`workers/execution.py:473`), llegó con el ADR 0087.                                                          |
+| `15-instalador`                          |  2  | Pentest externo y release v1.0.0: **decisión y contratación tuya**, no código.                                                                                                  |
+| `prod-17`, `prod-18`, `guardas-research` |  4  | **e2e bloqueados**: exigen runner Docker y lanzar runs reales.                                                                                                                  |
+
+Antes de ponerte a implementar cualquiera de ellas, comprueba contra el código
+que sigue sin hacer. Cuesta un `grep` y evita reescribir lo que ya existe.
+
 ## Qué necesita al operador (por orden de coste)
 
 1. **Desplegar y validar.** Es el cuello de botella de las 45 fases en
