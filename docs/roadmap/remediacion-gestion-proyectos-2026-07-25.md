@@ -932,3 +932,69 @@ sobre una propuesta, la respuesta correcta ha resultado ser **buscar si el probl
 resuelto en otra capa de este repositorio** antes de diseñar nada. Con A-13 la primera
 propuesta era invertir una línea, la segunda construir un mecanismo nuevo, y la correcta era
 encender uno que llevaba escrito y testeado desde el Plan 03.
+
+---
+
+## Revisión adversarial de lo entregado (2026-07-25/26)
+
+Tres workflows de solo lectura sobre los 24 commits de la tanda: 24 revisores y 13
+refutadores. Solo **2 commits salieron limpios** (`5c11f592`, `4725ff45`).
+
+### Regresiones CONFIRMADAS y ya arregladas
+
+| commit del arreglo | qué rompía                                                                                                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `1540f5e6`         | `8ca290dd` devolvía a `ready` toda tarea HUMANA aceptada hace >30 min: no tienen fila en `executions` por diseño. Su entrega daba 409 y un agente de IA se ponía a hacer su trabajo. |
+| `b77591e2`         | `8a095da1` abrió una vía para que un miembro del tenant borrase mensajes AJENOS del contexto del equipo publicando un mensaje propio con `is_summary=true`. Sin rastro en el feed.   |
+| `239e042b`         | `43d1e74c` anunciaba 17 tools de las que 11 no tienen ejecutor en esa rama del runtime. **`task_wf_11` queda REABIERTO.**                                                            |
+| (en `b77591e2`)    | `f51c4fa5` dejó 2 tests de integración en rojo un día. El invariante lista↔ejecutor era una igualdad y el diseño no la sostiene: es direccional.                                     |
+
+### Confirmados y PENDIENTES — no tocar sin leer esto entero
+
+- [ ] **`f3843e6f` × `2fc6af07` se contradicen** (alto). El perfil AppArmor
+      `agent-runtime` tiene `deny /home/** wklx` (`docker/apparmor/agent-runtime.profile:93`)
+      y el commit anterior puso ahí el HOME del test-runtime, donde apuntan los
+      `dep_cache_mount` y `cache_env` de TODAS las plantillas. Con
+      `WORKERS_APPARMOR_PROFILE=agent-runtime` —que el instalador exporta por defecto,
+      `compose_generator.py:721-722`, con test que lo fija— cada `composer install` /
+      `npm ci` / `pip install` muere en «Permission denied», y si el perfil no está
+      cargado en el host el daemon ni crea el contenedor. **Corrige de paso al informe**:
+      C-03 afirmaba que ningún compose exporta esas variables y es falso para el
+      instalador. Salidas: no aplicar AppArmor al test-runtime (conserva `pids_limit` +
+      seccomp), o dar al perfil una excepción para `/home/agent`. Verificar antes si el
+      agent-runtime sufre ya lo mismo: su HOME también es `/home/agent`.
+- [ ] **`619f2a7b` alarga demasiado el veto** (alto). El TTL pasó a 25200 s. El lock solo
+      se suelta en el `finally`, que un SIGKILL no ejecuta, así que tras un OOM o un
+      `docker stop` la tarea queda in-despachable hasta ~7 h; en la ruta del hard-kill el
+      veto pasa de 0 s a 17400 s. Y el reintento se PIERDE: `concurrent_run_locked`
+      devuelve éxito, así que Celery ACKea el mensaje re-encolado por
+      `task_reject_on_worker_lost`. `stale_sweeper.py:132-135` ya había decidido cerrar
+      huérfanos a los 5 min «en vez de dejarlo 7 h de zombi vetando el re-despacho».
+      El plan pedía anclar al `execution_hard_time_limit_s` **efectivo más margen**, no a
+      la ventana de visibilidad. Ojo: el arreglo tiene que resolver las DOS caras — el
+      hueco que motivó C-05 y este veto—, probablemente soltando el lock en el sweeper.
+- [ ] **`task_wf_12` no funciona de punta a punta**: nadie fija `AGENT_VAULT_TOKEN` en
+      todo el repo (solo se lee, en el runtime). Meter un token de Vault en el sandbox
+      choca con el principio 2 de `CLAUDE.md`. **Necesita ADR**: o el worker resuelve el
+      token y lo inyecta canjeado, o la llamada MCP va mediada por el worker como
+      `stack_exec`.
+- [ ] **`2e40b0bb`**: `_live_plan_of_conversation` no filtra `deleted_at`, así que un plan
+      borrado retiene su conversación para siempre. Arreglo: un `select` con
+      `Plan.deleted_at.is_(None)` en vez del `session.get`.
+- [ ] **`f51c4fa5`**: `send_notification` se sigue anunciando por la vía de `tool_specs`
+      (el drop del catálogo deja el nombre libre y el bucle de specs lo rellena), y
+      `tool_is_runtime_wired` sigue diciendo que es ejecutable porque cortocircuita por
+      `implementation_type`.
+
+### Los ~30 hallazgos restantes
+
+Verificados uno a uno y **refutados**, o de severidad baja. Están en los journals de los
+workflows `wf_a8e61154-c98`, `wf_4af6bb33-5cd` y `wf_a0ebb673-bd0`.
+
+### Lección de la tanda
+
+Las tres regresiones tienen la misma forma: **generalizar una inferencia que solo valía
+en un caso**. «Sin ejecución ⇒ el run no arrancó» (falso en la ruta humana), «sin
+restricción ⇒ puede llamarlo todo» (falso sin `tool_specs`), «el lector honra la
+cobertura» (falso si el cliente la escribe). Y en dos de los tres, **el test que escribí
+bendecía la generalización** en vez de cuestionarla.
