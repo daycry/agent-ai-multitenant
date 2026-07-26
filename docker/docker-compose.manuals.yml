@@ -247,6 +247,22 @@ services:
       WORKERS_BROWSER_RUNTIME_IMAGE: browser-runtime:v1
       WORKERS_DATA_ROOT: /var/lib/docker/volumes/agentic-platform-agent-data/_data
       WORKERS_EGRESS_PROXY_URL: http://egress-proxy:8888
+      # task_wf_55: los perfiles ENDURECIDOS que el worker pina sobre los
+      # sandboxes que lanza. Existían en disco (y el instalador ya los pinaba en
+      # el compose que genera) pero el stack de dev corría con los perfiles por
+      # DEFECTO de Docker — o sea, el entorno donde se prueba todo era el menos
+      # protegido de los dos. El JSON viene del bind de ./seccomp de abajo.
+      #
+      # Sobrescribibles desde el .env: si un toolchain choca con el perfil
+      # estricto, `WORKERS_SECCOMP_PROFILE_PATH=` en el .env lo desactiva sin
+      # tocar el compose.
+      WORKERS_SECCOMP_PROFILE_PATH: ${WORKERS_SECCOMP_PROFILE_PATH-/etc/agentic/seccomp/agent-runtime.json}
+      # AppArmor queda VACÍO por defecto a propósito: pinar un perfil que el
+      # host no tiene cargado hace fallar la creación del contenedor, y el dev
+      # típico es Docker Desktop sobre WSL2, que no trae AppArmor. En un host
+      # Linux con el perfil cargado (`apparmor_parser docker/apparmor/
+      # agent-runtime.profile`) se activa con WORKERS_APPARMOR_PROFILE=agent-runtime.
+      WORKERS_APPARMOR_PROFILE: ${WORKERS_APPARMOR_PROFILE-}
       # ADR 0072: el worker resuelve la credencial git del proyecto desde Vault
       # (mismo Vault dev que el api-server) al clonar/fetch repos privados.
       WORKERS_VAULT_URL: http://vault:8200
@@ -343,6 +359,22 @@ services:
       WORKERS_BROWSER_RUNTIME_IMAGE: browser-runtime:v1
       WORKERS_DATA_ROOT: /var/lib/docker/volumes/agentic-platform-agent-data/_data
       WORKERS_EGRESS_PROXY_URL: http://egress-proxy:8888
+      # task_wf_55: los perfiles ENDURECIDOS que el worker pina sobre los
+      # sandboxes que lanza. Existían en disco (y el instalador ya los pinaba en
+      # el compose que genera) pero el stack de dev corría con los perfiles por
+      # DEFECTO de Docker — o sea, el entorno donde se prueba todo era el menos
+      # protegido de los dos. El JSON viene del bind de ./seccomp de abajo.
+      #
+      # Sobrescribibles desde el .env: si un toolchain choca con el perfil
+      # estricto, `WORKERS_SECCOMP_PROFILE_PATH=` en el .env lo desactiva sin
+      # tocar el compose.
+      WORKERS_SECCOMP_PROFILE_PATH: ${WORKERS_SECCOMP_PROFILE_PATH-/etc/agentic/seccomp/agent-runtime.json}
+      # AppArmor queda VACÍO por defecto a propósito: pinar un perfil que el
+      # host no tiene cargado hace fallar la creación del contenedor, y el dev
+      # típico es Docker Desktop sobre WSL2, que no trae AppArmor. En un host
+      # Linux con el perfil cargado (`apparmor_parser docker/apparmor/
+      # agent-runtime.profile`) se activa con WORKERS_APPARMOR_PROFILE=agent-runtime.
+      WORKERS_APPARMOR_PROFILE: ${WORKERS_APPARMOR_PROFILE-}
       WORKERS_VAULT_URL: http://vault:8200
       WORKERS_VAULT_TOKEN: ${API_SERVER_VAULT_TOKEN:-dev-root-token}
       DOCKER_HOST: tcp://docker-socket-proxy:2375

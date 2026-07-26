@@ -795,12 +795,25 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 #### `task_wf_55` — Pinear los perfiles seccomp/apparmor
 
-- [ ] **Título**: exportar `WORKERS_SECCOMP_PROFILE` y `WORKERS_APPARMOR_PROFILE` en los
-      compose, verificando en dev que los runs siguen funcionando con el perfil endurecido.
+- [x] _(hecho el cableado; el smoke en dev es del operador)_ **Título**: exportar los
+      perfiles en el compose de dev.
 - **Hallazgo**: C-03 (medio) · **Tiempo**: 0,5 d
-- **Ficheros**: `docker/docker-compose*.yml`, `docker/.env.example`
-- **Tests**: `tests/security/test_seccomp_profiles.py` + smoke de un run real en dev.
-- **Nota**: gated para producción hasta validar en dev que ningún toolchain rompe.
+- **Ficheros**: `docker/docker-compose.manuals.yml` (workers + workers-aux),
+  `docker/.env.example`, `tests/security/test_seccomp_profiles.py`
+- **Corrección del hallazgo**: C-03 decía «no están cableados en NINGÚN entorno». Es falso
+  para el instalador, que ya los pina en el compose que genera (y hay test desde entonces).
+  Lo que faltaba era el stack de **dev**, o sea: el entorno donde se prueba todo era el
+  menos protegido de los dos, y un choque con el allowlist estricto solo aparecería en
+  producción.
+- **seccomp**: pinado, con override por env (`WORKERS_SECCOMP_PROFILE_PATH=` lo desactiva
+  sin tocar el compose — si la vía rápida fuera borrar la línea, nadie se enteraría de que
+  se relajó).
+- **AppArmor**: **vacío por defecto a propósito**. Pinar un perfil que el host no tiene
+  cargado hace fallar la creación del contenedor, y el dev típico es Docker Desktop sobre
+  WSL2, que no trae AppArmor: pinarlo rompería TODOS los runs. Se activa por env en un host
+  Linux con el perfil cargado. Hay test de que no se hard-pine.
+- **PENDIENTE del operador**: el smoke de un run real con el perfil estricto. No se puede
+  hacer desde aquí (exige desplegar) y es la única parte de la tarea que queda.
 
 #### `task_wf_56` — `pump.join()` acotado
 
