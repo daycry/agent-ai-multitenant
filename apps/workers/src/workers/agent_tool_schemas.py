@@ -226,7 +226,10 @@ def _unwired_platform_builtins() -> frozenset[str]:
     except Exception:  # pragma: no cover - defensive: domain package optional
         return frozenset()
     canonical: frozenset[str] = tool_names.CANONICAL_TOOL_NAMES
-    return frozenset(name for name in canonical if not tool_names.is_runtime_wired(name))
+    # Misma regla que usa el diagnóstico del api-server
+    # (`schemas.catalog.tool_is_runtime_wired`), importada del dominio en vez de
+    # reescrita: las dos copias anteriores de este criterio ya divergieron una vez.
+    return frozenset(name for name in canonical if tool_names.is_unwired_platform_builtin(name))
 
 
 def _catalog_by_canonical() -> dict[str, dict[str, Any]]:

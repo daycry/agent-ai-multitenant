@@ -182,10 +182,35 @@ def is_runtime_wired(name: str) -> bool:
     return bool(to_canonical(name) & RUNTIME_WIRED_TOOL_NAMES)
 
 
+def is_unwired_platform_builtin(name: str) -> bool:
+    """Un nombre CANÓNICO de plataforma que el runtime no sabe ejecutar.
+
+    La distinción que hay que tener clara: una tool de tenant con
+    ``implementation_type`` tipado (``http_endpoint``, ``python_function``, …)
+    la cablea ``register_tool_specs`` **se llame como se llame** — su tipo es la
+    autoridad. Un builtin de plataforma, no: su nombre está en el catálogo
+    canónico y lo que decide si existe ejecutor es
+    :data:`RUNTIME_WIRED_TOOL_NAMES`, no lo que ponga la fila sembrada.
+
+    ``send_notification`` es el caso que lo demuestra: la semilla lo declara
+    ``python_function``, así que cualquier comprobación que cortocircuite por el
+    tipo dirá que es ejecutable — y no lo es, porque su drain worker-side nunca
+    aterrizó y devuelve ``ok=False, "not wired"``. Anunciárselo al modelo le
+    quema un turno con un error que no puede resolver, y decírselo al operador
+    en el diagnóstico le hace perseguir un fantasma.
+
+    Vive aquí, en el dominio, porque la regla la necesitan a la vez el worker
+    (para no anunciar la tool) y el api-server (para no declararla ejecutable), y
+    dos copias de esta misma frase es exactamente cómo se separaron la última vez.
+    """
+    return name in CANONICAL_TOOL_NAMES and not is_runtime_wired(name)
+
+
 __all__ = [
     "CANONICAL_TOOL_NAMES",
     "RUNTIME_WIRED_TOOL_NAMES",
     "is_runtime_wired",
+    "is_unwired_platform_builtin",
     "to_canonical",
     "to_canonical_set",
 ]

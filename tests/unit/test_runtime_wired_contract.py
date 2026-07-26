@@ -111,3 +111,55 @@ def test_a_tenant_tool_still_comes_through_its_spec() -> None:
         t["function"]["name"] for t in build_model_tool_schemas(["context7.query_docs"], spec)
     }
     assert "context7.query_docs" in advertised
+
+
+# ---------------------------------------------------------------------------
+# El diagnóstico del api-server tiene que decir lo MISMO que el anuncio al modelo
+# ---------------------------------------------------------------------------
+
+
+def test_the_diagnostic_does_not_call_send_notification_executable() -> None:
+    """La otra mitad del hallazgo B-04. Retirar la tool del anuncio al modelo
+    arregla lo que ve el agente; el operador seguía viendo en el diagnóstico que
+    `send_notification` es ejecutable, porque `tool_is_runtime_wired`
+    cortocircuitaba por `implementation_type` y la semilla la declara
+    `python_function`. Un diagnóstico que existe para decir qué funciona de
+    verdad no puede enseñar un fantasma.
+    """
+    from api_server.schemas.catalog import tool_is_runtime_wired
+
+    assert tool_is_runtime_wired("send_notification", "python_function") is False
+
+
+def test_a_tenant_tool_is_still_wired_by_its_implementation_type() -> None:
+    """La cara contraria, que es la que el atajo protegía: una tool de tenant con
+    tipo tipado la cablea `register_tool_specs` se llame como se llame. Cerrar el
+    caso de los builtins no puede llevarse por delante las tools personalizadas
+    ni las MCP del proyecto."""
+    from api_server.schemas.catalog import tool_is_runtime_wired
+
+    assert tool_is_runtime_wired("acme_crm_lookup", "http_endpoint") is True
+    assert tool_is_runtime_wired("atlassian-remote.search", "mcp_tool") is True
+
+
+def test_a_wired_builtin_stays_wired() -> None:
+    """Regresión: los builtins que SÍ tienen ejecutor no se ven afectados,
+    incluido el alias `semantic_search` → `rag_search`."""
+    from api_server.schemas.catalog import tool_is_runtime_wired
+
+    assert tool_is_runtime_wired("read_file", "builtin") is True
+    assert tool_is_runtime_wired("semantic_search", "builtin") is True
+    assert tool_is_runtime_wired("stack_exec", "builtin") is True
+
+
+def test_both_sides_read_the_same_rule_from_the_domain() -> None:
+    """El worker (qué se anuncia) y el api-server (qué se declara ejecutable)
+    tienen que salir del MISMO predicado: estas dos vistas ya divergieron una vez
+    y por eso el fantasma sobrevivió a la primera corrección."""
+    from shared_domain.tool_names import is_unwired_platform_builtin
+    from workers.agent_tool_schemas import _unwired_platform_builtins
+
+    assert "send_notification" in _unwired_platform_builtins()
+    assert is_unwired_platform_builtin("send_notification") is True
+    # Un nombre que no es de plataforma nunca cae aquí: es de tenant y su tipo manda.
+    assert is_unwired_platform_builtin("acme_crm_lookup") is False

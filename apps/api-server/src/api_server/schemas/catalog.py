@@ -12,7 +12,12 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from shared_domain.tool_names import is_runtime_wired as _name_is_runtime_wired
+from shared_domain.tool_names import (
+    is_runtime_wired as _name_is_runtime_wired,
+)
+from shared_domain.tool_names import (
+    is_unwired_platform_builtin as _is_unwired_platform_builtin,
+)
 
 from api_server.db.domain import (
     Skill,
@@ -46,7 +51,17 @@ def tool_is_runtime_wired(name: str, implementation_type: str) -> bool:
     builtin registrable set — so ``read_file`` / ``run_pytest`` /
     ``semantic_search`` (→ ``rag_search``) are wired, while ``apply_patch`` /
     ``search_code`` / ``summarize_text`` (and the retired ``git_*``) are not.
+
+    El atajo por ``implementation_type`` NO vale para un builtin de plataforma
+    (auditoría adversarial 2026-07-25). ``send_notification`` está sembrado como
+    ``python_function``, así que el atajo lo declaraba ejecutable — y no lo es:
+    su drain worker-side nunca aterrizó y devuelve ``ok=False, "not wired"``. El
+    diagnóstico que existe para decirle al operador qué funciona de verdad le
+    estaba enseñando un fantasma. Para un nombre canónico manda
+    :data:`RUNTIME_WIRED_TOOL_NAMES`, no lo que ponga la fila.
     """
+    if _is_unwired_platform_builtin(name):
+        return False
     if implementation_type in _SPEC_WIRED_IMPL_TYPES:
         return True
     return bool(_name_is_runtime_wired(name))
